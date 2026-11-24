@@ -10,6 +10,12 @@
  * (`updateSingleSchema`) is refused before its migration file is written or run: the file changes
  * the Single's own table first, and its reconcile would drop the index only after.
  *
+ * What the plugin built elsewhere on those tables stops no change and is kept: its own column, index
+ * and values, on the collection's table, its per-language table and the field group's shared table,
+ * through a field removed (a text one and a number one), a number field moved into a group,
+ * translation turned on, and a field group's field removed. A text field's move into a group is not
+ * among them: it is refused on this layout, as its values cannot be carried yet.
+ *
  * On SQLite, PostgreSQL and MySQL. The rest of the cases run on the earlier layout in
  * `field-change-keeps-others-elements.integration.test.ts` and `push-keeps-others-elements.integration.test.ts`.
  */
@@ -25,6 +31,7 @@ import { perLanguageStorageSuite } from "../../../../__tests__/storage-layout";
 import { defineCollection, number, text } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
@@ -40,6 +47,7 @@ import { clearRegistryRowCache } from "../../../dynamic-collections/services/col
 import { companionTableOf } from "../../../i18n/migration/derive-companion-spec";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { applyDesiredSchema } from "../../pipeline/index";
+import { resolveComponentTableName } from "../../utils/resolve-table-name";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
 
 perLanguageStorageSuite();
@@ -52,6 +60,12 @@ const INDEX = "plc_code_idx";
 /** The Builder's collection and the one declared in code. */
 const BUILT = "plc_posts";
 const BUILT_TABLE = `dc_${BUILT}`;
+/** A collection and a field group nothing of the plugin's stands on a field column of. */
+const KEPT = "plc_kept";
+const KEPT_TABLE = `dc_${KEPT}`;
+const CARDS = "plc_cards";
+const CARDS_TABLE = resolveComponentTableName(CARDS);
+const MARKER = "marker";
 const HOME = "plc_home";
 const HOME_TABLE = `single_${HOME}`;
 const CODED = "plc_coded";
@@ -234,10 +248,241 @@ describe.each(getConfiguredTestDialects())(
     ) {
       expect(NextlyError.is(refused), String(refused)).toBe(true);
       const message = (refused as NextlyError).publicMessage;
-      for (const part of [`Removing "${field}"`, PLUGIN, INDEX, table]) {
+      for (const part of [
+        `Removing "${field}"`,
+        PLUGIN,
+        INDEX,
+        table,
+        "Its owner removes it first",
+      ]) {
         expect(message).toContain(part);
       }
     }
+
+    const KEPT_FIELDS: Field[] = [
+      ...FIELDS,
+      {
+        name: "meta",
+        type: "group",
+        fields: [{ name: "summary", type: "text" }],
+      },
+    ];
+
+    async function versionOf(t: TestNextly, registry: string, slug: string) {
+      const [row] = await t.adapter.executeQuery<{ v: number | string | null }>(
+        `SELECT schema_version AS v FROM ${registry} WHERE slug = '${slug}'`
+      );
+      return Number(row?.v ?? 1);
+    }
+
+    const answered = (save: Promise<unknown>) =>
+      save.then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+    async function saveKept(
+      t: TestNextly,
+      fields: Field[],
+      extra: Record<string, unknown> = {}
+    ) {
+      return answered(
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: KEPT },
+          {
+            fields,
+            confirmed: true,
+            schemaVersion: await versionOf(t, "dynamic_collections", KEPT),
+            ...extra,
+          }
+        )
+      );
+    }
+
+    async function saveCards(
+      t: TestNextly,
+      fields: Field[],
+      extra: Record<string, unknown> = {}
+    ) {
+      return answered(
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: CARDS },
+          {
+            fields,
+            confirmed: true,
+            schemaVersion: await versionOf(t, "dynamic_components", CARDS),
+            ...extra,
+          }
+        )
+      );
+    }
+
+    /** The tables the plugin's own columns are on: each entity's, and their per-language tables. */
+    const markedTables = [
+      KEPT_TABLE,
+      companionTableOf(KEPT_TABLE),
+      CARDS_TABLE,
+    ];
+    const markerIndex = (table: string) => `plc_${table}_marker_idx`;
+
+    /** KEPT and CARDS with a row each, and the plugin's own column, index and value on their tables. */
+    async function bootKept(): Promise<TestNextly> {
+      const t = await start();
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: KEPT, label: KEPT, fields: KEPT_FIELDS }
+      );
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: CARDS, label: "Card", fields: FIELDS }
+      );
+      clearRegistryRowCache();
+      await t.nextly.create({
+        collection: KEPT,
+        data: { code: "c", note: "n", rank: 1 },
+      } as never);
+      await t.adapter.executeQuery(
+        `INSERT INTO ${q(CARDS_TABLE)} (${["id", "_parent_id", "_parent_table", "_parent_field", "rank"].map(q).join(", ")}) VALUES ('card-1', 'entry-1', '${KEPT_TABLE}', 'card', 1)`
+      );
+      for (const table of markedTables) {
+        await t.adapter.executeQuery(
+          `ALTER TABLE ${q(table)} ADD COLUMN ${q(MARKER)} ${dialect === "mysql" ? "varchar(64)" : "text"}`
+        );
+        await t.adapter.executeQuery(
+          `CREATE INDEX ${q(markerIndex(table))} ON ${q(table)} (${q(MARKER)})`
+        );
+        await t.adapter.executeQuery(
+          `UPDATE ${q(table)} SET ${q(MARKER)} = 'kept by the plugin'`
+        );
+      }
+      await new SchemaOwnersRepository(
+        (t.adapter as unknown as DrizzleAdapter).getDrizzle(),
+        dialect
+      ).upsert(
+        markedTables.flatMap(tableName =>
+          (
+            [
+              ["column", MARKER],
+              ["index", markerIndex(tableName)],
+            ] as const
+          ).map(([elementKind, elementName]) => ({
+            tableName,
+            elementKind,
+            elementName,
+            ownerKind: "plugin" as const,
+            ownerId: PLUGIN,
+            migratedBy: `plugin:${PLUGIN}`,
+            ownerVersion: "1.0.0",
+            schemaVersion: null,
+            state: "active" as const,
+          }))
+        )
+      );
+      return t;
+    }
+
+    /** The plugin's index and its column's values on each table, as the database has them. */
+    async function markersOf(t: TestNextly) {
+      const found = [];
+      for (const table of markedTables) {
+        found.push({
+          table,
+          indexes: (await shapeOf(t, table)).indexes.filter(
+            name => name === markerIndex(table)
+          ),
+          values: (
+            await t.adapter.executeQuery<{ v: unknown }>(
+              `SELECT ${q(MARKER)} AS v FROM ${q(table)}`
+            )
+          ).map(row => row.v),
+        });
+      }
+      return found;
+    }
+
+    const keptWithout = (name: string) =>
+      KEPT_FIELDS.filter(field => field.name !== name);
+
+    // Nothing of the plugin's is built on a column any of these removes. Turning translation on
+    // removes no column on this layout: a text field's is the per-language table's already.
+    it.each([
+      {
+        change: "removing a text field, whose column is per language",
+        gone: [companionTableOf(KEPT_TABLE), "note"],
+        save: (t: TestNextly) =>
+          saveKept(t, keptWithout("note"), dropping("note")),
+      },
+      {
+        change: "removing a number field",
+        gone: [KEPT_TABLE, "rank"],
+        save: (t: TestNextly) =>
+          saveKept(t, keptWithout("rank"), dropping("rank")),
+      },
+      {
+        change: "moving a number field into a group",
+        gone: [KEPT_TABLE, "rank"],
+        save: (t: TestNextly) =>
+          saveKept(
+            t,
+            keptWithout("rank").map(field =>
+              field.name === "meta"
+                ? {
+                    ...field,
+                    fields: [
+                      ...(field.fields as Field[]),
+                      { name: "rank", type: "number" },
+                    ],
+                  }
+                : field
+            ),
+            { hints: { moves: [{ from: ["rank"], to: ["meta", "rank"] }] } }
+          ),
+      },
+      {
+        change: "turning translation on",
+        gone: undefined,
+        save: (t: TestNextly) => saveKept(t, KEPT_FIELDS, { localized: true }),
+      },
+      {
+        change: "removing a field group's number field",
+        gone: [CARDS_TABLE, "rank"],
+        save: (t: TestNextly) =>
+          saveCards(
+            t,
+            FIELDS.filter(field => field.name !== "rank"),
+            dropping("rank")
+          ),
+      },
+    ])(
+      "applies $change where the plugin's column and index are elsewhere on the table, keeping them and their values",
+      async ({ save: change, gone }) => {
+        const t = await bootKept();
+        const before = await markersOf(t);
+        for (const each of before) {
+          expect(each.indexes, each.table).toHaveLength(1);
+          expect(each.values.length, each.table).toBeGreaterThan(0);
+          expect(new Set(each.values), each.table).toEqual(
+            new Set(["kept by the plugin"])
+          );
+        }
+        if (gone !== undefined) {
+          expect((await shapeOf(t, gone[0]!)).columns).toContain(gone[1]);
+        }
+
+        expect(await change(t)).toBeUndefined();
+
+        if (gone !== undefined) {
+          expect((await shapeOf(t, gone[0]!)).columns).not.toContain(gone[1]);
+        }
+        expect(await markersOf(t)).toEqual(before);
+      }
+    );
 
     it("refuses a Builder save removing a translated field whose per-language column a plugin's index is built on, changing nothing", async () => {
       const t = await bootBuilt();

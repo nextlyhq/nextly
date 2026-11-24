@@ -7,6 +7,11 @@
  * refusal names the field, the plugin, the index and its table. Where `migrate:create` finds no
  * database to read, it writes the file and says it was not checked there.
  *
+ * So is moving that field into a group, on both storage layouts, and turning translation on where it
+ * moves the field's column (the earlier layout: on per-language storage a text field's column is the
+ * per-language table's already). What the plugin built elsewhere on the table stops none of these,
+ * and is kept with its values once `nextly migrate` has run the file.
+ *
  * As it happens: the app declares a collection in code and migrates; a plugin's migration builds an
  * index on one of its columns and records it as the plugin's; then the app removes that field,
  * either before writing the file or after the file was written elsewhere. The commands run for
@@ -34,6 +39,7 @@ import {
   defineConfig,
   defineFieldGroup,
   fieldGroup,
+  group,
   number,
   text,
 } from "../../../../config";
@@ -45,6 +51,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { companionTableOf } from "../../../i18n/migration/derive-companion-spec";
+import { setPerLanguageStorage } from "../../../i18n/per-language-storage";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 import { setNonInteractive } from "../../migrate/can-prompt";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
@@ -134,6 +141,56 @@ const configWith = (withCode: boolean, withExtra = false) =>
     ],
     db: { migrationsDir: "./migrations" },
   });
+
+/** A column of the plugin's own, and the index on it. */
+const MARKER = "marker";
+const MARKER_INDEX = "mko_marker_idx";
+
+/**
+ * The app's configuration with a group, its fields `code` and `extra` on the row, inside the group
+ * or left out, and the collection translated or not.
+ */
+const shaped = (
+  shape: {
+    inGroup?: readonly string[];
+    without?: readonly string[];
+    localized?: boolean;
+  },
+  type: typeof number | typeof text = number
+) => {
+  const all = ["code", "extra"].filter(name => !shape.without?.includes(name));
+  const inside = all.filter(name => shape.inGroup?.includes(name));
+  return defineConfig({
+    localization: { locales: ["en", "es"], defaultLocale: "en" },
+    collections: [
+      defineCollection({
+        slug: SLUG,
+        access: { read: () => true },
+        ...(shape.localized === true ? { localized: true } : {}),
+        fields: [
+          text({ name: "title" }),
+          ...all
+            .filter(name => !inside.includes(name))
+            .map(name => type({ name })),
+          group({
+            name: "meta",
+            fields: [
+              text({ name: "summary" }),
+              ...inside.map(name => type({ name })),
+            ],
+          }),
+        ],
+      }),
+    ],
+    db: { migrationsDir: "./migrations" },
+  });
+};
+
+/** The layouts a site's tables may be on: the one every installation runs, and the earlier one. */
+const LAYOUTS = [
+  { layout: "per-language storage", earlier: false },
+  { layout: "the earlier layout", earlier: true },
+] as const;
 
 describe.each(getConfiguredTestDialects())(
   "migrate:create and nextly migrate keep what a plugin built on a removed field's column (%s)",
@@ -251,13 +308,21 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** `nextly migrate:create` with `config`: its exit code and what it said. */
-    async function migrateCreate(name: string, config: unknown) {
+    async function migrateCreate(
+      name: string,
+      config: unknown,
+      answers: { acceptMoves?: boolean } = {}
+    ) {
       state.config = config;
       tick();
       const { context, said } = command();
       setNonInteractive(true);
       const code = await run(said, () =>
-        runMigrateCreate(name, { cwd: state.dir, ...CONSENT }, context)
+        runMigrateCreate(
+          name,
+          { cwd: state.dir, ...CONSENT, ...answers },
+          context
+        )
       ).finally(() => setNonInteractive(false));
       return { code, said: said.join("\n") };
     }
@@ -321,9 +386,17 @@ describe.each(getConfiguredTestDialects())(
       if (table === undefined) throw new Error(`no table holds ${column}`);
       const q = (name: string) =>
         dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      // MySQL indexes a text column only by a prefix, which a plugin writes.
+      const isText =
+        snapshot.tables
+          .find(each => each.name === table)
+          ?.columns.find(each => each.name === column)
+          ?.type.toLowerCase()
+          .includes("text") === true;
+      const prefix = dialect === "mysql" && isText ? "(64)" : "";
       await on(url, async adapter => {
         await adapter.executeQuery(
-          `CREATE INDEX ${q(INDEX)} ON ${q(table)} (${q(column)})`
+          `CREATE INDEX ${q(INDEX)} ON ${q(table)} (${q(column)}${prefix})`
         );
         await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert([
           {
@@ -342,6 +415,75 @@ describe.each(getConfiguredTestDialects())(
       return table;
     }
 
+    /**
+     * The plugin's own column on the collection's table, with its index, as its migration makes and
+     * records them, and one row there holding a value in it.
+     */
+    async function plantMarker(url: string): Promise<void> {
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const snapshot = await snapshotOf(url, [TABLE]);
+      const columns =
+        snapshot.tables.find(each => each.name === TABLE)?.columns ?? [];
+      // A value for each column a row cannot leave out.
+      const required = columns.filter(
+        column => !column.nullable && column.default === undefined
+      );
+      const value = (type: string) =>
+        /int|real|numeric|double|decimal|float/i.test(type) ? "1" : "'row-1'";
+      await on(url, async adapter => {
+        await adapter.executeQuery(
+          `INSERT INTO ${q(TABLE)} (${required.map(column => q(column.name)).join(", ")}) VALUES (${required.map(column => value(column.type)).join(", ")})`
+        );
+        await adapter.executeQuery(
+          `ALTER TABLE ${q(TABLE)} ADD COLUMN ${q(MARKER)} ${dialect === "mysql" ? "varchar(64)" : "text"}`
+        );
+        await adapter.executeQuery(
+          `CREATE INDEX ${q(MARKER_INDEX)} ON ${q(TABLE)} (${q(MARKER)})`
+        );
+        await adapter.executeQuery(
+          `UPDATE ${q(TABLE)} SET ${q(MARKER)} = 'kept by the plugin'`
+        );
+        await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert(
+          (
+            [
+              ["column", MARKER],
+              ["index", MARKER_INDEX],
+            ] as const
+          ).map(([elementKind, elementName]) => ({
+            tableName: TABLE,
+            elementKind,
+            elementName,
+            ownerKind: "plugin" as const,
+            ownerId: PLUGIN,
+            migratedBy: `plugin:${PLUGIN}`,
+            ownerVersion: "1.0.0",
+            schemaVersion: null,
+            state: "active" as const,
+          }))
+        );
+      });
+    }
+
+    /** The plugin's index and its column's values on the collection's table. */
+    async function markerOf(url: string) {
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const snapshot = await snapshotOf(url, [TABLE]);
+      return {
+        index: snapshot.tables
+          .find(each => each.name === TABLE)
+          ?.indexes?.find(index => index.name === MARKER_INDEX)?.columns,
+        values: await on(url, async adapter =>
+          (
+            await adapter.executeQuery<{ v: unknown }>(
+              `SELECT ${q(MARKER)} AS v FROM ${q(TABLE)}`
+            )
+          ).map(row => row.v)
+        ),
+      };
+    }
+
     /** `table`'s columns and index names, as the database has them. */
     async function shapeOf(url: string, table: string) {
       const snapshot = await snapshotOf(url, [table]);
@@ -352,9 +494,15 @@ describe.each(getConfiguredTestDialects())(
       };
     }
 
-    /** The refusal names the field, the plugin, the index and its table. */
+    /** The refusal names the field, the plugin, the index and its table, and says what to do. */
     function expectNamesTheIndex(said: string, table: string): void {
-      for (const part of ["code", PLUGIN, INDEX, table]) {
+      for (const part of [
+        "code",
+        PLUGIN,
+        INDEX,
+        table,
+        "Its owner removes it first",
+      ]) {
         expect(said).toContain(part);
       }
     }
@@ -448,6 +596,114 @@ describe.each(getConfiguredTestDialects())(
       expect(files()).toEqual(written);
       expect((await shapeOf(url, table)).indexes).toContain(INDEX);
     });
+
+    it.each(LAYOUTS)(
+      "migrate:create refuses moving that field into a group, writing nothing, on $layout",
+      async ({ earlier }) => {
+        if (earlier) setPerLanguageStorage(false);
+        const url = await emptyDatabase();
+        use(url);
+        expect((await migrateCreate("add_posts", shaped({}))).code).toBe(
+          undefined
+        );
+        expect((await migrate(shaped({}))).code).toBe(undefined);
+        const table = await buildIndex(url);
+        const before = await shapeOf(url, table);
+        const written = files();
+
+        const created = await migrateCreate(
+          "move_code",
+          shaped({ inGroup: ["code"] }),
+          { acceptMoves: true }
+        );
+
+        expect(created.code, created.said).not.toBe(undefined);
+        expectNamesTheIndex(created.said, table);
+        expect(files()).toEqual(written);
+        expect(await shapeOf(url, table)).toEqual(before);
+      }
+    );
+
+    it("migrate:create refuses turning translation on where it moves that field's column, writing nothing", async () => {
+      setPerLanguageStorage(false);
+      const url = await emptyDatabase();
+      use(url);
+      expect((await migrateCreate("add_posts", shaped({}, text))).code).toBe(
+        undefined
+      );
+      expect((await migrate(shaped({}, text))).code).toBe(undefined);
+      const table = await buildIndex(url);
+      expect(table).toBe(TABLE);
+      const before = await shapeOf(url, table);
+      const written = files();
+
+      const created = await migrateCreate(
+        "translate_posts",
+        shaped({ localized: true }, text)
+      );
+
+      expect(created.code, created.said).not.toBe(undefined);
+      expectNamesTheIndex(created.said, table);
+      expect(files()).toEqual(written);
+      expect(await shapeOf(url, table)).toEqual(before);
+    });
+
+    // Nothing of the plugin's is built on a column any of these takes off the table.
+    it.each(
+      LAYOUTS.flatMap(layout => [
+        {
+          ...layout,
+          change: "removing a field",
+          after: { without: ["extra"] },
+          gone: "extra" as string | undefined,
+        },
+        {
+          ...layout,
+          change: "moving a field into a group",
+          after: { inGroup: ["extra"] },
+          gone: "extra" as string | undefined,
+        },
+        {
+          ...layout,
+          change: "turning translation on",
+          after: { localized: true },
+          // Of text fields, the title's column, where the earlier layout holds it on this table.
+          gone: layout.earlier ? "title" : undefined,
+        },
+      ])
+    )(
+      "migrate:create and nextly migrate apply $change on $layout, keeping the plugin's column, its index and its values",
+      async ({ earlier, after, gone }) => {
+        if (earlier) setPerLanguageStorage(false);
+        const url = await emptyDatabase();
+        use(url);
+        expect((await migrateCreate("add_posts", shaped({}))).code).toBe(
+          undefined
+        );
+        expect((await migrate(shaped({}))).code).toBe(undefined);
+        await plantMarker(url);
+        const before = await markerOf(url);
+        expect(before).toEqual({
+          index: [MARKER],
+          values: ["kept by the plugin"],
+        });
+        if (gone !== undefined) {
+          expect((await shapeOf(url, TABLE)).columns).toContain(gone);
+        }
+
+        const created = await migrateCreate("change_posts", shaped(after), {
+          acceptMoves: true,
+        });
+        expect(created.code, created.said).toBe(undefined);
+        const migrated = await migrate(shaped(after));
+        expect(migrated.code, migrated.said).toBe(undefined);
+
+        if (gone !== undefined) {
+          expect((await shapeOf(url, TABLE)).columns).not.toContain(gone);
+        }
+        expect(await markerOf(url)).toEqual(before);
+      }
+    );
 
     it("migrate:create writes the file and says it was not checked where no database is there", async () => {
       use(absentDatabase());

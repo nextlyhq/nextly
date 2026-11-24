@@ -270,6 +270,7 @@ function expectNamesTheElement(
   for (const part of [parts.field, PLUGIN, parts.kind, parts.table]) {
     expect(message).toContain(part);
   }
+  expect(message).toContain("Its owner removes it first");
 }
 
 const without = (fields: Field[], name: string): Field[] =>
@@ -474,10 +475,15 @@ describe.each(getConfiguredTestDialects())(
     it("refuses removing a field group's field whose column in its shared table a plugin's index is built on", async () => {
       const t = await boot(dialect);
       await build(t, codeIndex(CARDS_TABLE));
+      const registryRow = () =>
+        t.adapter.executeQuery(
+          `SELECT fields, schema_version FROM dynamic_components WHERE slug = '${CARDS}'`
+        );
       const before = {
         columns: await columnsOf(t, CARDS_TABLE),
         indexes: await indexesOf(t, CARDS_TABLE),
         files: await filesWritten(),
+        registry: await registryRow(),
       };
 
       const refused = await saveCards(
@@ -495,6 +501,7 @@ describe.each(getConfiguredTestDialects())(
         columns: await columnsOf(t, CARDS_TABLE),
         indexes: await indexesOf(t, CARDS_TABLE),
         files: await filesWritten(),
+        registry: await registryRow(),
       }).toEqual(before);
     });
 
@@ -794,40 +801,102 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
-    it("applies a removal where the plugin's column and index are elsewhere on the table, keeping them and their values", async () => {
-      const t = await boot(dialect);
+    /**
+     * The plugin's own column, with its index, on the collection's table and on the field group's
+     * shared table, each holding a value, and one row of each entity for it to be in.
+     */
+    async function plantMarkers(t: TestNextly): Promise<void> {
       await build(t, ...marker(POSTS_TABLE), ...marker(CARDS_TABLE));
       await t.nextly.create({
         collection: POSTS,
         data: { code: "c", note: "n" },
       } as never);
-      // Past the runtime model, which knows only the collection's own columns.
       await t.adapter.executeQuery(
-        `UPDATE ${q(POSTS_TABLE)} SET ${q(MARKER)} = 'kept by the plugin'`
+        `INSERT INTO ${q(CARDS_TABLE)} (${["id", "_parent_id", "_parent_table", "_parent_field", "code", "note"].map(q).join(", ")}) VALUES ('card-1', 'entry-1', '${POSTS_TABLE}', 'card', 'c', 'n')`
       );
-      const markerIndexes = (await indexesOf(t, POSTS_TABLE)).filter(name =>
-        name.includes(MARKER)
-      );
-      expect(markerIndexes).toHaveLength(1);
+      // Past the runtime model, which knows only the entities' own columns.
+      for (const table of [POSTS_TABLE, CARDS_TABLE]) {
+        await t.adapter.executeQuery(
+          `UPDATE ${q(table)} SET ${q(MARKER)} = 'kept by the plugin'`
+        );
+      }
+    }
 
-      expect(
-        await savePosts(t, without(await stored(t), "note"), dropping("note"))
-      ).toBeUndefined();
-      expect(
-        await saveCards(t, without(CARDS_FIELDS, "note"), dropping("note"))
-      ).toBeUndefined();
+    /** The plugin's index and its column's values on both tables, as the database has them. */
+    async function markersOf(t: TestNextly) {
+      const of = async (table: string) => ({
+        table,
+        indexes: (await indexesOf(t, table)).filter(name =>
+          name.includes(MARKER)
+        ),
+        values: (
+          await t.adapter.executeQuery<{ v: unknown }>(
+            `SELECT ${q(MARKER)} AS v FROM ${q(table)}`
+          )
+        ).map(row => row.v),
+      });
+      return [await of(POSTS_TABLE), await of(CARDS_TABLE)];
+    }
 
-      expect(await columnsOf(t, POSTS_TABLE)).not.toContain("note");
-      expect(await columnsOf(t, POSTS_TABLE)).toContain(MARKER);
-      expect(
-        (await indexesOf(t, POSTS_TABLE)).filter(name => name.includes(MARKER))
-      ).toEqual(markerIndexes);
-      const [row] = await t.adapter.executeQuery<{ v: unknown }>(
-        `SELECT ${q(MARKER)} AS v FROM ${q(POSTS_TABLE)}`
+    const moved = (fields: Field[], name: string): Field[] =>
+      without(fields, name).map(field =>
+        field.name === "meta"
+          ? {
+              ...field,
+              fields: [
+                ...((field.fields as Field[]) ?? []),
+                fields.find(each => each.name === name),
+              ],
+            }
+          : field
       );
-      expect(row?.v).toBe("kept by the plugin");
-      expect(await columnsOf(t, CARDS_TABLE)).toContain(MARKER);
-    });
+
+    // Nothing of the plugin's is built on a column any of these removes.
+    it.each([
+      {
+        change: "removing a field of the collection",
+        gone: { table: POSTS_TABLE, column: "note" },
+        save: async (t: TestNextly) =>
+          savePosts(t, without(await stored(t), "note"), dropping("note")),
+      },
+      {
+        change: "moving a field of the collection into a group",
+        gone: { table: POSTS_TABLE, column: "note" },
+        save: async (t: TestNextly) =>
+          savePosts(t, moved(await stored(t), "note"), {
+            hints: { moves: [{ from: ["note"], to: ["meta", "note"] }] },
+          }),
+      },
+      {
+        change: "turning translation on for the collection",
+        gone: { table: POSTS_TABLE, column: "note" },
+        save: async (t: TestNextly) =>
+          savePosts(t, await stored(t), { localized: true }),
+      },
+      {
+        change: "removing a field of the field group",
+        gone: { table: CARDS_TABLE, column: "note" },
+        save: (t: TestNextly) =>
+          saveCards(t, without(CARDS_FIELDS, "note"), dropping("note")),
+      },
+    ])(
+      "applies $change where the plugin's column and index are elsewhere on the table, keeping them and their values",
+      async ({ save, gone }) => {
+        const t = await boot(dialect);
+        await plantMarkers(t);
+        const before = await markersOf(t);
+        for (const each of before) {
+          expect(each.indexes, each.table).toHaveLength(1);
+          expect(each.values, each.table).toEqual(["kept by the plugin"]);
+        }
+        expect(await columnsOf(t, gone.table)).toContain(gone.column);
+
+        expect(await save(t)).toBeUndefined();
+
+        expect(await columnsOf(t, gone.table)).not.toContain(gone.column);
+        expect(await markersOf(t)).toEqual(before);
+      }
+    );
 
     it("refuses a removal where the record of other owners' elements cannot be read, changing nothing", async () => {
       const t = await boot(dialect);

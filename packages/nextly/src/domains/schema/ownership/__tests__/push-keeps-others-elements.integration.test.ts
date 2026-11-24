@@ -2,7 +2,11 @@
  * A schema push that removes a field of an entity declared in code never takes with it an index a
  * plugin built on the field's column. The push is refused before anything runs, naming the field,
  * the plugin, the element, its kind and its table, and the column, the index and their values are
- * left as they were. A field whose column nothing else stands on is still removed.
+ * left as they were. So is one that moves the field into a group, or turns translation on where that
+ * takes the field's column off the table. A field whose column nothing else stands on is still
+ * removed, moved or translated, and what the plugin built elsewhere on the table is kept with its
+ * values. A reload holds a moved field back before it reaches the push (`init/code-first-moves.ts`);
+ * the push itself, which `db:sync` and a restart run, reads it as the column's removal.
  *
  * An index a plugin's migration built is judged from the owner record even where the push's first
  * read of it gave nothing, as when the question whether the record exists went unanswered: the
@@ -24,6 +28,7 @@ import {
   defineCollection,
   defineFieldGroup,
   fieldGroup,
+  group,
   text,
 } from "../../../../config";
 import { describeEachDialect } from "../../../../plugins/__tests__/helpers/dialect-matrix";
@@ -61,6 +66,12 @@ const TABLE = `dc_${SLUG}`;
 const PLUGIN = "@test/code-indexer";
 /** An index on `code` a plugin's migration built, as its run records it. */
 const MIGRATED_INDEX = "rk_migrated_code_idx";
+/** A column of the plugin's own, and the index on it. */
+const MARKER = "marker";
+const MARKER_INDEX = "rk_marker_idx";
+const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
+
+type FieldList = Parameters<typeof defineCollection>[0]["fields"];
 
 /** The plugin: an index on the collection's own `code` column. */
 const indexer = definePlugin({
@@ -125,20 +136,34 @@ async function shapeOf(instance: TestNextly, dialect: TestDialect) {
 }
 
 /** The schema the push applies: the collection with `fieldList`. */
-const desiredWith = (fieldList: ReturnType<typeof fields>) => ({
+const desiredWith = (
+  fieldList: FieldList,
+  settings: { localized?: boolean } = {}
+) => ({
   collections: {
-    [SLUG]: { slug: SLUG, tableName: TABLE, fields: fieldList },
+    [SLUG]: { slug: SLUG, tableName: TABLE, fields: fieldList, ...settings },
   },
   singles: {},
   components: {},
 });
 
 /** The push of `fieldList` for the collection, as a restart or a reload pushes it. */
-function push(fieldList: ReturnType<typeof fields>) {
-  return applyDesiredSchema(desiredWith(fieldList), "code", {
+function push(fieldList: FieldList, settings: { localized?: boolean } = {}) {
+  return applyDesiredSchema(desiredWith(fieldList, settings), "code", {
     promptChannel: "terminal",
   });
 }
+
+/** The collection with a group, `inGroup` of its text fields inside it and the others on the row. */
+const withGroup = (inGroup: readonly string[]): FieldList => [
+  ...["title", "code", "note"]
+    .filter(name => !inGroup.includes(name))
+    .map(name => text({ name })),
+  group({
+    name: "meta",
+    fields: ["summary", ...inGroup].map(name => text({ name })),
+  }),
+];
 
 /**
  * The push of `fieldList` with each rename it proposes answered as a rename, as a person answers
@@ -147,7 +172,7 @@ function push(fieldList: ReturnType<typeof fields>) {
 async function pushAnsweringRenames(
   instance: TestNextly,
   dialect: TestDialect,
-  fieldList: ReturnType<typeof fields>
+  fieldList: FieldList
 ) {
   const db = instance.adapter.getDrizzle();
   const pipeline = new PushSchemaPipeline({
@@ -209,6 +234,77 @@ async function buildMigratedIndex(
   ]);
 }
 
+/**
+ * The plugin's own column on `table`, with its index, as its migration makes and records them, and
+ * a value in every row there.
+ */
+async function plantMarker(
+  instance: TestNextly,
+  dialect: TestDialect,
+  table = TABLE
+): Promise<void> {
+  const q = (name: string) =>
+    dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+  await instance.adapter.executeQuery(
+    `ALTER TABLE ${q(table)} ADD COLUMN ${q(MARKER)} ${dialect === "mysql" ? "varchar(64)" : "text"}`
+  );
+  await instance.adapter.executeQuery(
+    `CREATE INDEX ${q(MARKER_INDEX)} ON ${q(table)} (${q(MARKER)})`
+  );
+  await instance.adapter.executeQuery(
+    `UPDATE ${q(table)} SET ${q(MARKER)} = 'kept by the plugin'`
+  );
+  await new SchemaOwnersRepository(
+    (instance.adapter as unknown as DrizzleAdapter).getDrizzle(),
+    dialect
+  ).upsert(
+    (
+      [
+        ["column", MARKER],
+        ["index", MARKER_INDEX],
+      ] as const
+    ).map(([elementKind, elementName]) => ({
+      tableName: table,
+      elementKind,
+      elementName,
+      ownerKind: "plugin" as const,
+      ownerId: PLUGIN,
+      migratedBy: `plugin:${PLUGIN}`,
+      ownerVersion: "1.0.0",
+      schemaVersion: null,
+      state: "active" as const,
+    }))
+  );
+}
+
+/** The plugin's index and its column's values on `table`, and the table's columns. */
+async function markerOf(
+  instance: TestNextly,
+  dialect: TestDialect,
+  table = TABLE
+) {
+  const q = (name: string) =>
+    dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+  const snapshot = await introspectLiveSnapshot(
+    instance.adapter.getDrizzle(),
+    dialect,
+    [table]
+  );
+  const found = snapshot.tables.find(t => t.name === table);
+  return {
+    columns: (found?.columns ?? []).map(c => c.name).sort(),
+    kept: {
+      index: found?.indexes?.find(index => index.name === MARKER_INDEX)
+        ?.columns,
+      values: (
+        await instance.adapter.executeQuery<{ v: unknown }>(
+          `SELECT ${q(MARKER)} AS v FROM ${q(table)}`
+        )
+      ).map(row => row.v),
+    },
+  };
+}
+
 /** The columns the migrated index stands on, or undefined where the table has no such index. */
 async function migratedIndexColumns(
   instance: TestNextly,
@@ -263,6 +359,170 @@ describeEachDialect(
       const after = await shapeOf(handle, dialect);
       expect(after.columns).not.toContain("note");
       expect(after.indexes).toContain("code");
+    });
+
+    // What each change would take off the table, the plugin's index with it.
+    it.each([
+      {
+        change: "moving a field into a group",
+        before: withGroup([]),
+        after: withGroup(["code"]),
+        settings: {},
+        dropped: ["code"],
+      },
+      {
+        change: "turning translation on",
+        before: fields(true),
+        after: fields(true),
+        settings: { localized: true },
+        dropped: ["title", "code", "note"],
+      },
+    ])(
+      "refuses $change where a plugin's index stands on the field's column, changing nothing",
+      async ({ before: first, after, settings, dropped }) => {
+        handle = await createTestNextly({
+          dialect,
+          localization: LOCALIZATION,
+          collections: [defineCollection({ slug: SLUG, fields: first })],
+        });
+        await buildMigratedIndex(handle, dialect, "code");
+        const before = await shapeOf(handle, dialect);
+        vi.stubEnv(
+          "NEXTLY_ACCEPT_DATA_LOSS",
+          dropped.map(column => `${TABLE}.${column}`).join(",")
+        );
+
+        const pushed = await push(after, settings);
+
+        expect(pushed.success, JSON.stringify(pushed)).toBe(false);
+        const message = pushed.success ? "" : pushed.error.message;
+        for (const part of [
+          "code",
+          PLUGIN,
+          MIGRATED_INDEX,
+          TABLE,
+          "Its owner removes it first",
+        ]) {
+          expect(message).toContain(part);
+        }
+        expect(await shapeOf(handle, dialect)).toEqual(before);
+      }
+    );
+
+    // Nothing of the plugin's is built on a column any of these takes off the table.
+    it.each([
+      {
+        change: "removing a field",
+        before: fields(true),
+        after: fields(true, false),
+        settings: {},
+        dropped: ["note"],
+      },
+      {
+        change: "moving a field into a group",
+        before: withGroup([]),
+        after: withGroup(["note"]),
+        settings: {},
+        dropped: ["note"],
+      },
+      {
+        change: "turning translation on",
+        before: fields(true),
+        after: fields(true),
+        settings: { localized: true },
+        dropped: ["title", "code", "note"],
+      },
+    ])(
+      "applies $change, keeping the plugin's column, its index and its values",
+      async ({ before: first, after, settings, dropped }) => {
+        handle = await createTestNextly({
+          dialect,
+          localization: LOCALIZATION,
+          collections: [defineCollection({ slug: SLUG, fields: first })],
+        });
+        await handle.nextly.create({
+          collection: SLUG,
+          data: { title: "t", code: "c", note: "n" },
+        } as never);
+        await plantMarker(handle, dialect);
+        const before = await markerOf(handle, dialect);
+        expect(before.kept).toEqual({
+          index: [MARKER],
+          values: ["kept by the plugin"],
+        });
+        expect(before.columns).toEqual(expect.arrayContaining(dropped));
+        vi.stubEnv(
+          "NEXTLY_ACCEPT_DATA_LOSS",
+          dropped.map(column => `${TABLE}.${column}`).join(",")
+        );
+
+        const pushed = await push(after, settings);
+
+        expect(pushed.success, JSON.stringify(pushed)).toBe(true);
+        const now = await markerOf(handle, dialect);
+        for (const column of dropped) expect(now.columns).not.toContain(column);
+        expect(now.kept).toEqual(before.kept);
+      }
+    );
+
+    it("applies removing a field group's field, keeping the plugin's column, its index and its values on the shared table", async () => {
+      const GROUP = "rk_kept_cards";
+      const groupTable = resolveComponentTableName(GROUP);
+      const card = (withNote: boolean) =>
+        defineFieldGroup({
+          slug: GROUP,
+          fields: [
+            text({ name: "code" }),
+            ...(withNote ? [text({ name: "note" })] : []),
+          ],
+        });
+      const posts = defineCollection({
+        slug: SLUG,
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "card", component: GROUP }),
+        ],
+      });
+      handle = await createTestNextly({
+        dialect,
+        fieldGroups: [card(true)],
+        collections: [posts],
+      });
+      await handle.nextly.create({
+        collection: SLUG,
+        data: { title: "t", card: { code: "c", note: "n" } },
+      } as never);
+      await plantMarker(handle, dialect, groupTable);
+      const before = await markerOf(handle, dialect, groupTable);
+      expect(before.kept).toEqual({
+        index: [MARKER],
+        values: ["kept by the plugin"],
+      });
+      expect(before.columns).toContain("note");
+      vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", `${groupTable}.note`);
+
+      const pushed = await applyDesiredSchema(
+        {
+          collections: {
+            [SLUG]: { slug: SLUG, tableName: TABLE, fields: posts.fields },
+          },
+          singles: {},
+          components: {
+            [GROUP]: {
+              slug: GROUP,
+              tableName: groupTable,
+              fields: card(false).fields,
+            },
+          },
+        },
+        "code",
+        { promptChannel: "terminal" }
+      );
+
+      expect(pushed.success, JSON.stringify(pushed)).toBe(true);
+      const now = await markerOf(handle, dialect, groupTable);
+      expect(now.columns).not.toContain("note");
+      expect(now.kept).toEqual(before.kept);
     });
 
     it("refuses removing a field a plugin's migration indexed where the push's first read of the owner record gave nothing", async () => {
