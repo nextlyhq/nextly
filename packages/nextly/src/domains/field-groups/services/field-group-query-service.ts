@@ -52,9 +52,8 @@ import { directFieldGroupFields } from "../field-group-write-access";
 import {
   followMovedFieldGroupTable,
   followingMovedRegistry,
-  hasMovedStorageCause,
   isMovedStorageError,
-  refusedOnTransaction,
+  refusalOnTransaction,
 } from "../migration/moved-storage";
 import { passwordReachOf } from "../password-reach";
 import {
@@ -2065,7 +2064,7 @@ export class FieldGroupQueryService extends BaseService {
    * (`followMovedFieldGroupTable`), registered in this process; `undefined` otherwise.
    *
    * A read on a write's transaction is not retried: a failed statement has aborted it on
-   * PostgreSQL. The write it serves is refused instead (`refusedOnTransaction`), and the table is
+   * PostgreSQL. The write it serves is refused instead (`refusalOnTransaction`), and the table is
    * followed once the transaction has let its connection go, so the whole write succeeds when
    * retried.
    */
@@ -2076,19 +2075,17 @@ export class FieldGroupQueryService extends BaseService {
     // Set on the read that already followed a move once: it is not followed again.
     followed: boolean
   ): Promise<string | undefined> {
-    // On a write's transaction only the database's own missing table or column counts: a table
-    // this process never registered keeps the refusal its write already raises for it.
-    const isMove =
-      executor === undefined
-        ? isMovedStorageError(error)
-        : hasMovedStorageCause(error);
-    if (followed || !isMove) return undefined;
+    if (followed || !isMovedStorageError(error)) return undefined;
     if (executor !== undefined) {
-      throw refusedOnTransaction({
+      const refusal = await refusalOnTransaction({
         adapter: this.adapter,
         rows: this.registryService,
+        executor,
+        error,
         tableNames: [tableName],
       });
+      if (refusal !== undefined) throw refusal;
+      return undefined;
     }
     return followMovedFieldGroupTable({
       adapter: this.adapter,

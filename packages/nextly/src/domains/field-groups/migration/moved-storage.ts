@@ -16,91 +16,186 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import {
+  firstIdentifierNamed,
+  missingSchemaObject,
+  statementTableOf,
+  tableOfMissingColumn,
+} from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { introspectLiveColumns } from "../../schema/pipeline/diff/introspect-live";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import { registerComponentRuntimeSchema } from "../services/field-group-table-provisioning";
 import {
   forgetFieldGroupStorageNames,
   resolveTableColumns,
+  type CatalogReadAdapter,
 } from "../storage/resolve-storage-names";
 
-import { retargetName } from "./manifest";
+import { MIGRATION_TARGET, retargetName } from "./manifest";
 
-/** The text of `error` and of its cause, where the driver's own message usually is. */
-function errorText(error: unknown): string {
-  return [
-    error instanceof Error ? error.message : String(error),
-    error instanceof Error && error.cause instanceof Error
-      ? error.cause.message
-      : "",
-  ].join(" ");
+/**
+ * Storage the migration may have moved, as the database named it missing: a table or a
+ * discriminator column, and the name the migration's other generation gives it.
+ */
+type MoveCandidate = {
+  kind: "table" | "column";
+  missing: string;
+  other: string;
+  /** The table a missing column belongs to, where the error says. */
+  table?: string;
+};
+
+/** The two generations of every name the migration gives, in both directions. */
+const TABLE_PREFIXES = [
+  [STORAGE_FORMAT.tablePrefix, MIGRATION_TARGET.tablePrefix],
+  [MIGRATION_TARGET.tablePrefix, STORAGE_FORMAT.tablePrefix],
+] as const;
+const REGISTRY_TABLES = [
+  STORAGE_FORMAT.registryTable,
+  MIGRATION_TARGET.registryTable,
+] as const;
+const TYPE_COLUMNS = [
+  STORAGE_FORMAT.columns.type,
+  MIGRATION_TARGET.columnType,
+] as const;
+
+/** The name the other generation gives `table`, or undefined for a name of neither. */
+function otherTableName(table: string): string | undefined {
+  if (table === REGISTRY_TABLES[0]) return REGISTRY_TABLES[1];
+  if (table === REGISTRY_TABLES[1]) return REGISTRY_TABLES[0];
+  for (const [from, to] of TABLE_PREFIXES) {
+    if (table.startsWith(from)) return `${to}${table.slice(from.length)}`;
+  }
+  return undefined;
 }
 
-/** Whether `error` is the database saying a table is missing. */
-function isMissingTableError(error: unknown): boolean {
-  const message = errorText(error);
-  return (
-    message.includes("no such table") ||
-    message.includes("doesn't exist") ||
-    (message.includes("relation") && message.includes("does not exist"))
-  );
-}
+/** A field-group table or registry name standing as an identifier in a driver's message. */
+const FIELD_GROUP_TABLE = new RegExp(
+  `(?:^|['"\\x60.\\s:])((?:${TABLE_PREFIXES.map(([from]) => from).join("|")})[\\w$-]+|${REGISTRY_TABLES.join("|")})(?![\\w$.-])`
+);
 
-/** Whether `error` is the database saying a column is missing. */
-function isMissingColumnError(error: unknown): boolean {
-  const message = errorText(error);
-  return (
-    message.includes("no such column") ||
-    message.includes("Unknown column") ||
-    (message.includes("column") && message.includes("does not exist"))
-  );
+/**
+ * What `error` says is missing that the migration could have moved, or undefined. Read by the one
+ * classifier of missing schema objects (`missingSchemaObject`), past any NextlyError: one raised
+ * as a refusal has decided its answer, and only the database error it carries says what is
+ * missing. A column counts only when it is the discriminator, the one column the migration renames:
+ * any other is the project's own, missing because its migration has not run.
+ */
+function moveCandidate(error: unknown): MoveCandidate | undefined {
+  let cause: unknown = error;
+  for (let depth = 0; NextlyError.is(cause) && depth < 8; depth += 1) {
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  const found = missingSchemaObject(cause);
+  if (found?.object === "table") {
+    const missing = FIELD_GROUP_TABLE.exec(found.text)?.[1];
+    const other = missing === undefined ? undefined : otherTableName(missing);
+    return missing === undefined || other === undefined
+      ? undefined
+      : { kind: "table", missing, other };
+  }
+  if (found?.object !== "column") return undefined;
+  const missing = firstIdentifierNamed(found.text, TYPE_COLUMNS);
+  if (missing === undefined) return undefined;
+  const table =
+    tableOfMissingColumn(found.text, missing) ?? statementTableOf(cause);
+  return {
+    kind: "column",
+    missing,
+    other: missing === TYPE_COLUMNS[0] ? TYPE_COLUMNS[1] : TYPE_COLUMNS[0],
+    ...(table === undefined ? {} : { table }),
+  };
 }
 
 /**
- * Whether `error` is what a statement meets once the storage migration moved a field group's
- * storage: its table gone under the old name, its new name not yet registered in this process, or
- * its discriminator column renamed under a table this process registered before the rename.
+ * Whether the database holds what `candidate` names missing under its other name: what tells
+ * storage that moved from storage that was never created. A field group whose table or column no
+ * migration has made yet is in neither place, and its failure stays the failure it was.
+ */
+async function heldUnderOtherName(
+  candidate: MoveCandidate,
+  catalog: CatalogReadAdapter,
+  tables: readonly string[]
+): Promise<boolean> {
+  const asked =
+    candidate.kind === "table"
+      ? [candidate.other]
+      : [candidate.table, ...tables].flatMap(table =>
+          table === undefined ? [] : [table, otherTableName(table) ?? table]
+        );
+  if (asked.length === 0) return false;
+  const snapshot = await introspectLiveColumns(
+    catalog.getDrizzle(),
+    catalog.dialect,
+    [...new Set(asked)]
+  );
+  if (candidate.kind === "table") {
+    return snapshot.tables.some(table => table.columns.length > 0);
+  }
+  return snapshot.tables.some(table => {
+    const names = table.columns.map(column => column.name);
+    return (
+      names.includes(candidate.other) && !names.includes(candidate.missing)
+    );
+  });
+}
+
+/**
+ * Whether a read that failed with `error` is worth following: storage the migration could have
+ * moved, or a table this process has not registered, as a name the migration gave is until then.
  */
 export function isMovedStorageError(error: unknown): boolean {
   return (
-    isMissingTableError(error) ||
-    isMissingColumnError(error) ||
-    errorText(error).includes("not found in schema registry")
+    moveCandidate(error) !== undefined ||
+    missingSchemaObject(error)?.object === "unregistered"
   );
 }
 
-/**
- * Whether `error`, or any error it was raised from, is the database saying a table or column is
- * missing. A NextlyError's own message is not read: one raised as a refusal has decided its answer,
- * and only the database errors it may carry say that storage moved.
- */
-export function hasMovedStorageCause(error: unknown): boolean {
-  for (
-    let link: unknown = error, depth = 0;
-    link !== undefined && link !== null && depth < 8;
-    link = (link as { cause?: unknown }).cause, depth += 1
-  ) {
-    if (NextlyError.is(link)) continue;
-    if (isMissingTableError(link) || isMissingColumnError(link)) return true;
+/** Whether `error`'s storage was moved by the migration, as the database holds it now. */
+async function isMovedStorage(
+  catalog: CatalogReadAdapter,
+  error: unknown,
+  tables: readonly string[]
+): Promise<boolean> {
+  const candidate = moveCandidate(error);
+  if (candidate === undefined) return false;
+  try {
+    return await heldUnderOtherName(candidate, catalog, tables);
+  } catch {
+    // A catalog that cannot be read says nothing: the caller's own error stands.
+    return false;
   }
-  return false;
+}
+
+/** Every table a follow of `error` looks for: those named, and the one the database named. */
+function tablesToFollow(error: unknown, tables: readonly string[]): string[] {
+  const candidate = moveCandidate(error);
+  const named =
+    candidate?.kind === "table" ? candidate.missing : candidate?.table;
+  return [
+    ...new Set([
+      ...tables,
+      // A companion is registered with the group's own table.
+      ...(named === undefined ? [] : [named.replace(/_locales$/, "")]),
+    ]),
+  ];
 }
 
 /**
  * `registry`, its lookups following a registry the storage migration moved: a lookup that fails as
- * moved storage fails (`hasMovedStorageCause`) forgets what this process resolved about storage
+ * moved storage fails (`moveCandidate`) forgets what this process resolved about storage
  * names and runs once more, so it reads the registry under the name it holds now. The migration
  * renames the registry last, after the tables, so a name re-resolved between the two goes stale
  * again; this is where that is caught, whichever lookup meets it first.
  *
- * A lookup on a caller's transaction (an argument that is a database executor) does not run again
- * and reads nothing more: the failure has aborted that transaction on PostgreSQL, and a read on
- * another connection would wait for the one the transaction holds where the pool has no other. It
- * is refused to be retried instead (`refusedOnTransaction`), the names re-resolved once the
- * transaction has let its connection go.
+ * A lookup on a caller's transaction (an argument that is a database executor) does not run again:
+ * the failure has aborted that transaction on PostgreSQL. It is refused to be retried when the
+ * registry moved (`refusalOnTransaction`), and raised as it was otherwise.
  */
 export function followingMovedRegistry<T extends object>(
   registry: T,
@@ -115,13 +210,17 @@ export function followingMovedRegistry<T extends object>(
         const first = run();
         if (!(first instanceof Promise)) return first;
         return first.catch(async (error: unknown) => {
-          if (!hasMovedStorageCause(error)) throw error;
-          if (args.some(isExecutor)) {
-            throw refusedOnTransaction({
-              adapter,
-              rows: undefined,
-              tableNames: [],
-            });
+          if (moveCandidate(error) === undefined) throw error;
+          const executor = args.find(isExecutor);
+          if (executor !== undefined) {
+            throw (
+              (await refusalOnTransaction({
+                adapter,
+                executor,
+                error,
+                tableNames: [],
+              })) ?? error
+            );
           }
           forgetFieldGroupStorageNames(adapter);
           clearRegistryRowCache();
@@ -149,33 +248,88 @@ function isExecutor(value: unknown): boolean {
   );
 }
 
+/** How long a failed write on PostgreSQL waits to learn whether storage moved, in milliseconds. */
+const POSTGRES_ANSWER_MS = 1000;
+
 /**
- * The refusal for a statement on a caller's transaction that failed as moved storage fails, with
- * the move followed once the transaction is done with its connection.
+ * The refusal for a statement on a caller's transaction that failed because the migration moved
+ * its storage, or undefined when it did not move: the caller's own error then stands.
  *
- * Nothing is read on the transaction, which PostgreSQL has aborted, or on another connection while
- * it is open: where the pool has one connection the transaction holds it, and a read waiting for it
- * inside the transaction would wait for ever. What this process resolved is forgotten at once, and
- * `tableNames` are followed (`followMovedFieldGroupTable`) without being awaited, so each follow
- * runs once the caller has rolled back and its connection is free. The caller's retry then
- * addresses storage under its current names.
+ * SQLite and MySQL are asked on the transaction's own connection. PostgreSQL has aborted the
+ * transaction, so it is asked on another, and for a bounded time only: where the pool has no other
+ * connection the transaction holds it, and waiting for it would wait for ever. Unanswered, the
+ * failure is raised as it was.
+ *
+ * The tables are followed without being awaited, so each follow runs once the caller has rolled
+ * back and its connection is free, and the retry addresses storage under its current names.
  */
-export function refusedOnTransaction(args: {
+export async function refusalOnTransaction(args: {
   adapter: DrizzleAdapter;
-  /** What the tables' registry rows are read through; absent when there are no tables to follow. */
-  rows: FieldGroupRows | undefined;
+  /** What the tables' registry rows are read through; absent when there are none to follow. */
+  rows?: FieldGroupRows;
+  executor: unknown;
+  error: unknown;
   tableNames: readonly string[];
-}): NextlyError {
-  const { adapter, rows, tableNames } = args;
+}): Promise<NextlyError | undefined> {
+  const { adapter, rows, executor, error, tableNames } = args;
+  if (moveCandidate(error) === undefined) return undefined;
+  const moved =
+    adapter.dialect === "postgresql"
+      ? await withinMs(
+          isMovedStorage(adapter, error, tableNames),
+          POSTGRES_ANSWER_MS
+        )
+      : await isMovedStorage(
+          { dialect: adapter.dialect, getDrizzle: <T>() => executor as T },
+          error,
+          tableNames
+        );
+  if (moved === false) return undefined;
   forgetFieldGroupStorageNames(adapter);
   clearRegistryRowCache();
-  if (rows !== undefined && tableNames.length > 0) {
-    // Not awaited: a follow never rejects, and it needs a connection the caller still holds.
-    void followMovedFieldGroupTables({ adapter, rows, tableNames });
+  const follow = tablesToFollow(error, tableNames);
+  if (rows !== undefined) {
+    // Not awaited: a follow never rejects, and it may need the connection the caller still holds.
+    void followMovedFieldGroupTables({ adapter, rows, tableNames: follow });
   }
-  return storageMovingRefusal(
-    tableNames.length > 0 ? tableNames.join(", ") : "the field-group registry"
-  );
+  return moved === true
+    ? storageMovingRefusal(follow.join(", ") || "the field-group registry")
+    : undefined;
+}
+
+/** `work`'s answer, or undefined when it has not come within `ms`. */
+async function withinMs<T>(
+  work: Promise<T>,
+  ms: number
+): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<undefined>(resolve => {
+        timer = setTimeout(() => resolve(undefined), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The refusal for a save off any transaction that failed because the migration moved its storage,
+ * every table it may have met followed first; undefined when nothing moved.
+ */
+export async function refusalAfterFollowing(args: {
+  adapter: DrizzleAdapter;
+  rows: FieldGroupRows;
+  error: unknown;
+  tableNames: readonly string[];
+}): Promise<NextlyError | undefined> {
+  const { adapter, rows, error, tableNames } = args;
+  if (!(await isMovedStorage(adapter, error, tableNames))) return undefined;
+  const follow = tablesToFollow(error, tableNames);
+  await followMovedFieldGroupTables({ adapter, rows, tableNames: follow });
+  return storageMovingRefusal(follow.join(", "));
 }
 
 /**
@@ -183,7 +337,7 @@ export function refusedOnTransaction(args: {
  * first that answers: a save names every field group it may write, and the one whose table failed
  * need not be the first. The names they are stored under now, for those that moved.
  */
-export async function followMovedFieldGroupTables(args: {
+async function followMovedFieldGroupTables(args: {
   adapter: DrizzleAdapter;
   rows: FieldGroupRows;
   tableNames: readonly string[];

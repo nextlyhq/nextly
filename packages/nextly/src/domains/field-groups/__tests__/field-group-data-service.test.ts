@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { missingSchemaObject } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
+import { introspectLiveColumns } from "../../schema/pipeline/diff/introspect-live";
 import {
   _resetPerLanguageStorage,
   setPerLanguageStorage,
@@ -28,6 +29,25 @@ import {
   heroComponentMeta,
   ctaComponentMeta,
 } from "./field-group-test-helpers";
+
+vi.mock("../../schema/pipeline/diff/introspect-live", async original => ({
+  ...(await original<
+    typeof import("../../schema/pipeline/diff/introspect-live")
+  >()),
+  introspectLiveColumns: vi.fn(),
+}));
+
+/** Makes the catalog hold `tables` alone, each with a discriminator under its current name. */
+function catalogHolds(...tables: string[]): void {
+  vi.mocked(introspectLiveColumns).mockImplementation(
+    async (_db, _dialect, names) =>
+      ({
+        tables: names
+          .filter(name => tables.includes(name))
+          .map(name => ({ name, columns: [{ name: "_field_group_type" }] })),
+      }) as never
+  );
+}
 
 /**
  * Trusted server code: these cases are about how instances are stored, so
@@ -658,6 +678,7 @@ describe("FieldGroupDataService", () => {
           ctx.registry.getAllComponents = vi.fn(
             () => new Promise<never>(() => {})
           );
+          catalogHolds("fg_moved");
           const tx = createMockTxContext({
             insert: vi
               .fn()
@@ -689,6 +710,40 @@ describe("FieldGroupDataService", () => {
           ).toMatchObject({ errors: [{ code: "FIELD_GROUP_STORAGE_MOVING" }] });
         }
       );
+
+      it("keeps the save's own error when no migration has made its table yet", async () => {
+        catalogHolds();
+        const tx = createMockTxContext({
+          insert: vi
+            .fn()
+            .mockRejectedValue(new Error("no such table: comp_moved")),
+        });
+
+        const error = await ctx.service
+          .saveComponentDataInTransaction(
+            tx as unknown as Parameters<
+              typeof ctx.service.saveComponentDataInTransaction
+            >[0],
+            {
+              parentId: "entry-1",
+              parentTable: "dc_pages",
+              access: TRUSTED,
+              fields: [seoComponentField()],
+              data: { seo: { metaTitle: "About" } },
+            } as unknown as Parameters<
+              typeof ctx.service.saveComponentDataInTransaction
+            >[1]
+          )
+          .then(
+            () => undefined,
+            (caught: unknown) => caught
+          );
+
+        expect(error).toBeInstanceOf(Error);
+        expect(JSON.stringify(error)).not.toContain(
+          "FIELD_GROUP_STORAGE_MOVING"
+        );
+      });
     });
   });
 
@@ -1188,6 +1243,7 @@ describe("FieldGroupDataService", () => {
       ctx.adapter.select.mockRejectedValue(
         new Error("no such table: comp_seo")
       );
+      catalogHolds("fg_seo");
 
       await expect(
         ctx.service.populateComponentData({
@@ -1201,6 +1257,24 @@ describe("FieldGroupDataService", () => {
       ).rejects.toMatchObject({
         publicData: { errors: [{ code: "FIELD_GROUP_STORAGE_MOVING" }] },
       });
+    });
+
+    it("reads the group as empty when no migration has made its table yet", async () => {
+      ctx.adapter.select.mockRejectedValue(
+        new Error("no such table: comp_seo")
+      );
+      catalogHolds();
+
+      await expect(
+        ctx.service.populateComponentData({
+          entry: { id: "entry-1" },
+          parentTable: "dc_pages",
+          fields: [seoComponentField()] as never,
+          executor: TX_DRIZZLE_HANDLE,
+          strict: true,
+          depth: 0,
+        })
+      ).resolves.toMatchObject({ seo: null });
     });
   });
 

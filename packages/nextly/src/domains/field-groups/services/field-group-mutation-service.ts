@@ -91,11 +91,9 @@ import {
   directFieldGroupFields,
 } from "../field-group-write-access";
 import {
-  followMovedFieldGroupTables,
   followingMovedRegistry,
-  hasMovedStorageCause,
-  refusedOnTransaction,
-  storageMovingRefusal,
+  refusalAfterFollowing,
+  refusalOnTransaction,
 } from "../migration/moved-storage";
 import {
   isFieldGroupFieldType,
@@ -1278,11 +1276,7 @@ export class FieldGroupMutationService extends BaseService {
         { locale, req, write: params.write, assembledFromStorage }
       );
     } catch (error) {
-      throw await this.saveFailure(
-        { onTransaction: false },
-        [componentSlug],
-        error
-      );
+      throw await this.saveFailure(undefined, [componentSlug], error);
     }
   }
 
@@ -1412,11 +1406,7 @@ export class FieldGroupMutationService extends BaseService {
         false
       );
     } catch (error) {
-      throw await this.saveFailure(
-        { onTransaction: true },
-        [componentSlug],
-        error
-      );
+      throw await this.saveFailure(tx.getDrizzle(), [componentSlug], error);
     }
   }
 
@@ -1532,11 +1522,7 @@ export class FieldGroupMutationService extends BaseService {
         count: instances.length,
       });
     } catch (error) {
-      throw await this.saveFailure(
-        { onTransaction: false },
-        [componentSlug],
-        error
-      );
+      throw await this.saveFailure(undefined, [componentSlug], error);
     }
   }
 
@@ -1692,11 +1678,7 @@ export class FieldGroupMutationService extends BaseService {
         incomingIds
       );
     } catch (error) {
-      throw await this.saveFailure(
-        { onTransaction: true },
-        [componentSlug],
-        error
-      );
+      throw await this.saveFailure(tx.getDrizzle(), [componentSlug], error);
     }
   }
 
@@ -1863,11 +1845,7 @@ export class FieldGroupMutationService extends BaseService {
         count: instances.length,
       });
     } catch (error) {
-      throw await this.saveFailure(
-        { onTransaction: false },
-        allowedSlugs,
-        error
-      );
+      throw await this.saveFailure(undefined, allowedSlugs, error);
     }
   }
 
@@ -2047,11 +2025,7 @@ export class FieldGroupMutationService extends BaseService {
         incomingIds
       );
     } catch (error) {
-      throw await this.saveFailure(
-        { onTransaction: true },
-        allowedSlugs,
-        error
-      );
+      throw await this.saveFailure(tx.getDrizzle(), allowedSlugs, error);
     }
   }
 
@@ -2147,27 +2121,26 @@ export class FieldGroupMutationService extends BaseService {
    * anything else as a raw database error, normalised first (toDbError) so its kind survives.
    *
    * Every slug's table is followed, not the first that answers: the field group whose table failed
-   * need not be the first the field allows. A save on the caller's transaction follows them once
-   * the transaction has let its connection go (`refusedOnTransaction`), reading nothing while it
-   * holds it.
+   * need not be the first the field allows. Storage no migration has made yet is not a move, and
+   * keeps the error it raised.
    */
   private async saveFailure(
-    where: { onTransaction: boolean },
+    // The caller's transaction, when the save runs on one.
+    executor: unknown,
     slugs: readonly string[],
     error: unknown
   ): Promise<NextlyError> {
-    // A refusal already decided carries no database error and is left as it is; a database error
-    // saying a table or column is missing, however it was wrapped, may be storage that moved.
-    if (hasMovedStorageCause(error)) {
-      const follow = {
-        adapter: this.adapter,
-        rows: this.registryService,
-        tableNames: slugs.map(slug => resolveComponentTableName(slug)),
-      };
-      if (where.onTransaction) return refusedOnTransaction(follow);
-      const moved = await followMovedFieldGroupTables(follow);
-      if (moved.length > 0) return storageMovingRefusal(moved.join(", "));
-    }
+    const failure = {
+      adapter: this.adapter,
+      rows: this.registryService,
+      error,
+      tableNames: slugs.map(slug => resolveComponentTableName(slug)),
+    };
+    const refusal =
+      executor === undefined
+        ? await refusalAfterFollowing(failure)
+        : await refusalOnTransaction({ ...failure, executor });
+    if (refusal !== undefined) return refusal;
     if (NextlyError.is(error)) return error;
     return NextlyError.fromDatabaseError(toDbError(this.dialect, error));
   }
