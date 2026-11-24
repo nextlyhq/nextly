@@ -1,6 +1,6 @@
 /**
- * Scheduling a document from its editor, in a real browser: the Publish
- * split's arrow offers Schedule… beside Publish now and Choose what to
+ * Scheduling a document from its editor, in a real browser: the main
+ * button's arrow offers Schedule… beside Save draft and Choose what to
  * publish…, and one dialog puts the
  * document on its own at a time, with an existing release, or in a new one,
  * to go live or come down. The banner above the document then lists each
@@ -42,7 +42,7 @@ async function openPost(page: Page, title: string, id: string): Promise<void> {
   ).toHaveValue(title, { timeout: 30_000 });
 }
 
-/** Opens Schedule… from the Publish split's arrow. */
+/** Opens Schedule… from the main button's arrow. */
 async function openSchedule(page: Page, title: string) {
   await page.getByRole("button", { name: "More ways to publish" }).click();
   await page.getByRole("menuitem", { name: "Schedule…" }).click();
@@ -72,20 +72,26 @@ test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
 });
 
-test("offers Publish now and Schedule… on the Publish split", async ({
+test("offers Schedule… on the main button's menu, the press not repeated", async ({
   page,
 }) => {
   const stamp = stamped();
   const id = await post(page, stamp);
   await openPost(page, `Release e2e ${stamp}`, id);
   await page.getByRole("button", { name: "More ways to publish" }).click();
-  // Every way to publish, Schedule… last: "Choose what to publish…" picks
-  // the languages and shared fields that go live, and is offered beside it.
-  await expect(page.getByRole("menuitem")).toHaveText([
-    "Publish now",
+  // Saving first, then every way to publish, Schedule… last of them:
+  // "Choose what to publish…" picks the languages and shared fields that go
+  // live, and is offered beside it. The preview and the document's other
+  // views follow. Publish itself is the button, not a row again.
+  const rows = page.getByRole("menuitem");
+  await expect(rows).toContainText([
+    "Save draft",
     "Choose what to publish…",
     "Schedule…",
   ]);
+  await expect(page.getByRole("menuitem", { name: "Publish now" })).toHaveCount(
+    0
+  );
   await page.keyboard.press("Escape");
   // Add to release no longer sits in More.
   await page.getByRole("button", { name: /more actions/i }).click();
@@ -373,7 +379,7 @@ test.describe("a reader who may not create releases", () => {
     await reader?.context.close();
   });
 
-  test("is offered no Schedule… on the Publish split's arrow", async ({
+  test("is offered no Schedule… on the main button's menu", async ({
     page,
   }) => {
     const stamp = stamped();
@@ -388,10 +394,12 @@ test.describe("a reader who may not create releases", () => {
       await readerPage
         .getByRole("button", { name: "More ways to publish" })
         .click();
-      await expect(readerPage.getByRole("menuitem")).toHaveText([
-        "Publish now",
+      await expect(readerPage.getByRole("menuitem")).toContainText([
         "Choose what to publish…",
       ]);
+      await expect(
+        readerPage.getByRole("menuitem", { name: "Schedule…" })
+      ).toHaveCount(0);
     } finally {
       await readerPage.close();
     }
