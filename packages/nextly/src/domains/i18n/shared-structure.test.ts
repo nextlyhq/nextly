@@ -317,10 +317,13 @@ describe("componentStructureShape", () => {
   // A field offering several component types holds one instance unless it is repeatable: its
   // value is an object, so its shape is a group's, and the instance's text is the language's.
   it("reads a component field offering several types but not repeatable as one instance", () => {
-    const shape = componentStructureShape(
-      { name: "lead", type: "component", components: ["hero", "cta"] },
-      fieldsOf
-    );
+    // A field as its config declares it, the components it offers among its keys.
+    const lead = {
+      name: "lead",
+      type: "component",
+      components: ["hero", "cta"],
+    };
+    const shape = componentStructureShape(lead, fieldsOf);
     expect(shape?.kind).toBe("group");
     const { structure, overlay } = splitSharedStructure(
       { _componentType: "hero", title: "Hello" },
@@ -331,15 +334,13 @@ describe("componentStructureShape", () => {
   });
 
   it("reads a repeatable one as a list of instances", () => {
-    const shape = componentStructureShape(
-      {
-        name: "layout",
-        type: "component",
-        components: ["hero", "cta"],
-        repeatable: true,
-      },
-      fieldsOf
-    );
+    const layout = {
+      name: "layout",
+      type: "component",
+      components: ["hero", "cta"],
+      repeatable: true,
+    };
+    const shape = componentStructureShape(layout, fieldsOf);
     expect(shape?.kind).toBe("repeater");
   });
 });

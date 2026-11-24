@@ -60,10 +60,7 @@ import {
 } from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import { copyLiveness } from "../../i18n/migration/generate-down";
-import {
-  buildDefaultLocaleRefreshStatements,
-  buildMissingDefaultRowsInsert,
-} from "../../i18n/migration/generate-up";
+import { buildOverlaySeedStatements } from "../../i18n/migration/generate-up";
 import {
   planCompanionMigration,
   type CompanionMigrationPlan,
@@ -4130,17 +4127,9 @@ function overlaysEntryFor(
     const column = fieldToLocalizedColumnSpec(field, dialect, builtBy);
     return column && onMain.has(column.name) ? [column.name] : [];
   });
-  // The default language's rows take the main row's value; an entry with no such row gets one,
-  // with the main row's publishing state where each language has its own.
-  const seed =
-    columns.length === 0
-      ? []
-      : [
-          ...buildDefaultLocaleRefreshStatements(planned.spec, columns),
-          buildMissingDefaultRowsInsert(planned.spec, columns, {
-            status: planned.spec.status === true,
-          }),
-        ];
+  const seed = buildOverlaySeedStatements(planned.spec, columns, {
+    status: planned.spec.status === true,
+  });
   return {
     spec: planned.spec,
     plan: {

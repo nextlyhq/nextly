@@ -459,6 +459,31 @@ export function buildDefaultLocaleRefreshStatements(
 }
 
 /**
+ * Seed the default language's overlay of each container in `columnNames` from the main table:
+ * a container whose main column already holds its text (its entity turning translation on, or a
+ * container starting to keep its text apart) has that value copied, whole, into the default
+ * language's overlay, which every read takes as that language's text (`assembleSharedStructure`),
+ * so no other language's first save leaves the default without it. The default rows there take
+ * the main row's value, then an entry with no such row gets one, with the main row's publishing
+ * state where each language has its own (`status`). The one seed every road that adds an overlay
+ * column takes. Only for containers whose main column was there before: one new in the same
+ * change holds nothing yet, and its column may not be there when this runs.
+ */
+export function buildOverlaySeedStatements(
+  spec: CompanionCopyRef,
+  columnNames: readonly string[],
+  options: { status?: boolean } = {}
+): string[] {
+  if (columnNames.length === 0) return [];
+  return [
+    ...buildDefaultLocaleRefreshStatements(spec, columnNames),
+    buildMissingDefaultRowsInsert(spec, columnNames, {
+      status: options.status === true,
+    }),
+  ];
+}
+
+/**
  * Make one main-table column nullable, keeping the rest of its definition.
  *
  * PostgreSQL states the change directly. MySQL has no such statement and restates the whole column
