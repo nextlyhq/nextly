@@ -11,6 +11,11 @@
  * One whose plugin has left the configuration cannot be told from the app's own, so it is listed
  * as an orphan until the plugin is configured again.
  *
+ * A host may rename a plugin's collection (`renameMap`). The configuration holds it under its new
+ * slug, so that is the slug that is the plugin's; the one it vacated is free, and a collection the
+ * app declares there is the app's own, handed to the Schema Builder or not. The start and the
+ * reload answer by the same map.
+ *
  * Each case owns its database: a throwaway database on PostgreSQL and MySQL, a temporary file on
  * SQLite.
  */
@@ -40,6 +45,7 @@ import {
   toCodeFirstCollectionConfig,
 } from "../../../domains/collections/services/collection-sync-service";
 import { DEMOTED_FROM_CODE } from "../../../domains/schema/pipeline/demoted-from-code";
+import { calculateSchemaHash } from "../../../domains/schema/services/schema-hash";
 import {
   clearCachedSnapshot,
   clearLiveSnapshots,
@@ -95,6 +101,25 @@ function withPlugin(...own: Declared[]) {
   });
 }
 
+/**
+ * The configuration with the plugin's collection `declared` renamed to `EVENTS.slug`, as the loader
+ * holds it: the collection under its new slug, and the plugin's definition as written.
+ */
+function withRenamedPlugin(declared: string, ...own: Declared[]) {
+  return defineConfig({
+    collections: [...own, EVENTS],
+    plugins: [
+      {
+        name: PLUGIN,
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        renameMap: { [declared]: EVENTS.slug },
+        contributes: { collections: [{ slug: declared, fields: [] }] },
+      },
+    ] as never,
+  });
+}
+
 /** The configuration once the plugin is gone. */
 function withoutPlugin(...own: Declared[]) {
   return defineConfig({ collections: own });
@@ -112,6 +137,8 @@ for (const dialect of getConfiguredTestDialects()) {
     let dir: string;
     let drop: () => Promise<void>;
     let adapter: DrizzleAdapter;
+    /** Closes the case's connection; nothing to close until one is open. */
+    let close: () => Promise<void>;
 
     function context(): CommandContext {
       return {
@@ -179,7 +206,15 @@ for (const dialect of getConfiguredTestDialects()) {
         >[1],
         { ...base, logger }
       )({ config, dependencies: [] } as unknown as LoadConfigResult);
-      await done;
+      // Bounded, so a re-sync that ends without either line fails naming what is missing.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("the re-sync neither finished nor failed")),
+          60_000
+        );
+      });
+      await Promise.race([done, timedOut]).finally(() => clearTimeout(timer));
       // The schema lock is released after the seeding returns.
       await new Promise(resolve => setTimeout(resolve, 500));
       expect(errors).toEqual([]);
@@ -219,6 +254,7 @@ for (const dialect of getConfiguredTestDialects()) {
       dir = mkdtempSync(join(tmpdir(), "nextly-dbsync-plugin-owner-"));
       let url = `file:${join(dir, "test.db")}`;
       drop = async () => {};
+      close = async () => {};
       if (dialect !== "sqlite") {
         const scratch = await createScratchDatabase(dialect, "nextly_dkp");
         url = scratch.url;
@@ -233,15 +269,19 @@ for (const dialect of getConfiguredTestDialects()) {
       );
       if (opened === undefined) throw new Error("the database is not there");
       adapter = opened.adapter;
+      close = () => opened.adapter.disconnect();
     }, 60_000);
 
     afterEach(async () => {
       vi.restoreAllMocks();
-      await adapter.disconnect().catch(() => {});
-      await drop();
-      vi.unstubAllEnvs();
-      _resetEnvCache();
-      rmSync(dir, { recursive: true, force: true });
+      try {
+        await close().catch(() => {});
+        await drop();
+      } finally {
+        vi.unstubAllEnvs();
+        _resetEnvCache();
+        rmSync(dir, { recursive: true, force: true });
+      }
     }, 60_000);
 
     it("records the collection as the plugin's on its first run, and the app's own as the app's", async () => {
@@ -365,5 +405,87 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(taken).toMatchObject({ source: PLUGIN_SOURCE, locked: true });
       expect(taken?.configPath ?? null).toBeNull();
     }, 120_000);
+
+    describe("a collection the host renamed", () => {
+      it("is recorded as the plugin's, and kept from --remove-orphaned once the plugin leaves", async () => {
+        await dbSync(withRenamedPlugin("dkp_shows", NOTES, DRAFTS));
+        expect(await record(EVENTS.slug)).toMatchObject({
+          source: PLUGIN_SOURCE,
+          locked: true,
+        });
+
+        await dbSync(withoutPlugin(NOTES), {
+          removeOrphaned: true,
+          acceptDataLoss: true,
+        });
+
+        expect(await adapter.tableExists(EVENTS_TABLE)).toBe(true);
+        expect(await adapter.tableExists(DRAFTS_TABLE)).toBe(false);
+      }, 180_000);
+
+      it("leaves the app's own collection on the slug it vacated the app's", async () => {
+        await dbSync(withRenamedPlugin(DRAFTS.slug, NOTES, DRAFTS));
+
+        expect((await record(EVENTS.slug))?.source).toBe(PLUGIN_SOURCE);
+        expect((await record(DRAFTS.slug))?.source).toBe("code");
+        // So it is listed when the app removes it.
+        expect(
+          await orphanTables(withRenamedPlugin(DRAFTS.slug, NOTES))
+        ).toEqual([DRAFTS_TABLE]);
+      }, 120_000);
+
+      it("leaves the app's collection on that slug to the Schema Builder it was handed to", async () => {
+        await dbSync(withRenamedPlugin(DRAFTS.slug, NOTES, DRAFTS));
+        // Handed over as `db:sync --demote` does, whatever owner the sync above recorded, then
+        // given a field by the Builder.
+        await adapter.update(
+          "dynamic_collections",
+          { source: "code", locked: true },
+          { and: [{ column: "slug", op: "=", value: DRAFTS.slug }] }
+        );
+        await registry().updateCollection(
+          DRAFTS.slug,
+          { source: "ui", locked: false },
+          { handOver: "builder" }
+        );
+        const held = await record(DRAFTS.slug);
+        const fields = [
+          ...(held?.fields ?? []),
+          { name: "subtitle", type: "text" },
+        ] as never;
+        await registry().updateCollection(DRAFTS.slug, {
+          fields,
+          schemaHash: calculateSchemaHash(fields),
+        });
+
+        await dbSync(withRenamedPlugin(DRAFTS.slug, NOTES, DRAFTS));
+
+        const kept = await record(DRAFTS.slug);
+        expect(kept).toMatchObject({
+          source: "ui",
+          locked: false,
+          configPath: DEMOTED_FROM_CODE,
+        });
+        expect((kept?.fields ?? []).map(field => field.name)).toContain(
+          "subtitle"
+        );
+      }, 180_000);
+
+      it("takes a row handed to the Schema Builder at its new slug for the plugin", async () => {
+        await dbSync(withoutPlugin(NOTES, EVENTS));
+        await registry().updateCollection(
+          EVENTS.slug,
+          { source: "ui", locked: false },
+          { handOver: "builder" }
+        );
+
+        await dbSync(withRenamedPlugin("dkp_shows", NOTES));
+
+        expect(await record(EVENTS.slug)).toMatchObject({
+          source: PLUGIN_SOURCE,
+          locked: true,
+        });
+      }, 120_000);
+    });
   });
 }
