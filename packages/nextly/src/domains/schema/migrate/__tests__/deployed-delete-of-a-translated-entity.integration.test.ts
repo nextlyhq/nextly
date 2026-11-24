@@ -59,7 +59,14 @@ import { clearRegistryRowCache } from "../../../dynamic-collections/services/col
 import { ensureI18nArchive } from "../../../i18n/migration/ensure-archive";
 import type { SingleEntryService } from "../../../singles/services/single-entry-service";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
-import { fieldGroupTableNameFor } from "../../../field-groups/services/field-group-storage-names";
+import {
+  eachSite,
+  seedSite,
+} from "../../../field-groups/__tests__/helpers/both-sites";
+import {
+  type FieldGroupNaming,
+  fieldGroupTableNameFor,
+} from "../../../field-groups/services/field-group-storage-names";
 import { setNonInteractive } from "../can-prompt";
 
 /** The configuration the commands load. */
@@ -281,7 +288,9 @@ const KINDS: Kind[] = [
   },
   {
     word: "field group",
-    table: fieldGroupTableNameFor("current", CARD),
+    get table() {
+      return fieldGroupTableNameFor(siteNaming, CARD);
+    },
     create: () =>
       dispatchComponents(
         "createComponent",
@@ -296,6 +305,12 @@ const KINDS: Kind[] = [
     remove: () => dispatchComponents("deleteComponent", { slug: CARD }, {}),
   },
 ];
+
+/**
+ * The names the case's site keeps its field groups on: what its Builder saves write its history on,
+ * and so what the database it deploys to is set up on.
+ */
+let siteNaming: FieldGroupNaming = "current";
 
 let dir: string;
 let closers: Array<() => Promise<void>> = [];
@@ -470,9 +485,13 @@ async function leftOf(
   };
 }
 
-describe.each(getConfiguredTestDialects())(
-  "a translated entity deleted in the Builder, on a deployed database (%s)",
-  dialect => {
+describe.each(eachSite())(
+  "a translated entity deleted in the Builder, on a deployed database (%s, a site on the %s names)",
+  (dialect, naming) => {
+    beforeEach(() => {
+      siteNaming = naming;
+    });
+
     /**
      * Create the entity in the Builder, apply it to the deployed database with
      * an entry there, delete it in the Builder, and apply the delete to the
@@ -484,6 +503,7 @@ describe.each(getConfiguredTestDialects())(
       consent: AcceptDataLossOption = true
     ) {
       const own = await openDatabase(dialect, "builder");
+      await seedSite(siteNaming, own.adapter, dialect);
       const deployed = await openDatabase(dialect, "deployed");
 
       reach(dialect, own.url);
@@ -678,11 +698,15 @@ describe.skipIf(!getConfiguredTestDialects().includes("sqlite"))(
   }
 );
 
-describe.each(getConfiguredTestDialects())(
-  "what a deleted translated collection left, on a deployed database (%s)",
-  dialect => {
+describe.each(eachSite())(
+  "what a deleted translated collection left, on a deployed database (%s, a site on the %s names)",
+  (dialect, naming) => {
+    beforeEach(() => {
+      siteNaming = naming;
+    });
+
     const KEPT = "dpl_kept";
-    const META_TABLE = fieldGroupTableNameFor("current", META);
+    const META_TABLE = fieldGroupTableNameFor(naming, META);
     const notes = KINDS[0]!;
 
     const q = (name: string) =>
@@ -722,6 +746,7 @@ describe.each(getConfiguredTestDialects())(
       options: { legacyArchive?: boolean } = {}
     ) {
       const own = await openDatabase(dialect, "builder");
+      await seedSite(siteNaming, own.adapter, dialect);
       const deployed = await openDatabase(dialect, "deployed");
 
       reach(dialect, own.url);

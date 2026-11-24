@@ -76,14 +76,11 @@ import { createAdapter } from "../../database/factory";
 import { shutdownServices } from "../../di/register";
 import { columnsOf } from "../../domains/field-groups/__tests__/helpers/storage-generation-site";
 import {
-  MARKER_COLUMN,
-  markerPluginOn,
-} from "../../domains/field-groups/__tests__/helpers/used-field-group-fixtures";
-import {
   fieldGroupTableNameFor,
   storageNamesFor,
 } from "../../domains/field-groups/services/field-group-storage-names";
 import { _resetPerLanguageStorage } from "../../domains/i18n/per-language-storage";
+import { col } from "../../domains/schema/extension/dsl";
 import { setNonInteractive } from "../../domains/schema/migrate/can-prompt";
 import { getNextly, shutdownNextly, startSettled } from "../../init";
 import {
@@ -590,9 +587,10 @@ describe.each(getConfiguredTestDialects())(
     }, 600_000);
 
     // The names an empty database starts its field groups on are its history's, at a production
-    // start as in `nextly migrate`, and the compile beside it reads a plugin's column on the same.
+    // start as in `nextly migrate`, and the compile beside it reads a column the app adds on the same.
+    // (A plugin's cannot be there yet: one with a schema is refused until it is installed.)
     for (const naming of ["current", "legacy"] as const) {
-      it(`sets an empty database up on the ${naming} field-group names its history keeps, with a plugin's column on a group`, async () => {
+      it(`sets an empty database up on the ${naming} field-group names its history keeps, with the app's own column on a group`, async () => {
         const { registryTable, typeColumn } = storageNamesFor(naming);
         const group = fieldGroupTableNameFor(naming, "mas_card");
         const card = defineFieldGroup({
@@ -611,8 +609,16 @@ describe.each(getConfiguredTestDialects())(
             }),
           ],
           fieldGroups: [card],
-          plugins: [markerPluginOn(group)],
           db: {
+            schema: {
+              extend: [
+                ({ schema }) => {
+                  schema.extendTable(group, {
+                    columns: { marker: col.shortText({ nullable: true }) },
+                  });
+                },
+              ],
+            },
             migrationsDir: join(state.dir, "migrations"),
             runMigrationsOnBoot: true,
           },
@@ -645,7 +651,7 @@ describe.each(getConfiguredTestDialects())(
           ).toBe(false);
           const columns = await columnsOf(adapter, dialect, group);
           expect(columns).toContain(typeColumn);
-          expect(columns).toContain(MARKER_COLUMN);
+          expect(columns).toContain("marker");
         } finally {
           await adapter.disconnect().catch(() => undefined);
         }

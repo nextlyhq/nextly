@@ -46,6 +46,8 @@ import {
   text,
 } from "../../../config";
 import { createAdapter } from "../../../database/factory";
+import { getDialectTables } from "../../../database/index";
+import { SchemaRegistry } from "../../../database/schema-registry";
 import { clearServices, shutdownServices } from "../../../di/register";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
@@ -55,10 +57,19 @@ import {
   type TestDialect,
 } from "../../../plugins/test-nextly";
 import { _resetEnvCache } from "../../../shared/lib/env";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../i18n/per-language-storage";
 import { setNonInteractive } from "../../schema/migrate/can-prompt";
+import { runFieldGroupMigration } from "../migration/run";
+import { getFieldGroupRegistryAliases } from "../storage/registry-schemas";
 import { forgetFieldGroupStorageNames } from "../storage/resolve-storage-names";
 
 import { hasTable } from "./helpers/storage-generation-site";
+
+/** The layout this project's suites run on, put back after a case that chose another. */
+const useEarlierLayout = () => setPerLanguageStorage(false);
 
 /** The configuration the commands load. */
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -108,14 +119,18 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   _resetEnvCache();
   setNonInteractive(false);
+  useEarlierLayout();
   rmSync(dir, { recursive: true, force: true });
 });
 
 /** An empty database of this test's own, which the commands reach through `DATABASE_URL`. */
-async function emptyDatabase(dialect: TestDialect): Promise<string> {
+async function emptyDatabase(
+  dialect: TestDialect,
+  name = "app"
+): Promise<string> {
   let url: string;
   if (dialect === "sqlite") {
-    url = `file:${join(dir, "app.db")}`;
+    url = `file:${join(dir, `${name}.db`)}`;
   } else {
     const scratch = await createScratchDatabase(dialect, "nextly_fdh");
     url = scratch.url;
@@ -137,6 +152,16 @@ async function connect(
   } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
   closers.unshift(() => adapter.disconnect().catch(() => {}));
   return adapter;
+}
+
+/** The table resolver a command installs, with both registry names. */
+function registerResolver(adapter: DrizzleAdapter, dialect: TestDialect): void {
+  const registry = new SchemaRegistry(dialect);
+  registry.registerStaticSchemas({
+    ...getDialectTables(dialect),
+    ...getFieldGroupRegistryAliases(dialect),
+  });
+  adapter.setTableResolver(registry);
 }
 
 /** A development start of the project over the database at `url`. */
@@ -267,6 +292,55 @@ describe.each(getConfiguredTestDialects())(
         expect(await hasTable(adapter, "fg_fdh_card")).toBe(false);
       }, 180_000);
 
+      // A history that moved part-way is legacy up to its move and current after it: the newest file
+      // says which names the project is on now, and the files before it are not replayed here.
+      it(`starts on the current names of a history that moved, set up by ${road}, and a Builder save and nextly migrate go on`, async () => {
+        const first = await emptyDatabase(dialect);
+        await legacyHistory(dialect);
+        const applied = await migrate();
+        expect(applied.exit, applied.said).toBeUndefined();
+        await developmentStart(dialect, first);
+        const site = await connect(dialect, first);
+        registerResolver(site, dialect);
+        forgetFieldGroupStorageNames();
+        const outcome = await runFieldGroupMigration({
+          adapter: site,
+          logger: SILENT as never,
+          direction: "up",
+          dryRun: false,
+          backupConfirmed: true,
+        });
+        expect(outcome).toMatchObject({ ran: true });
+        await shutdownServices().catch(() => {});
+        const moved = await run(context =>
+          runMigrateCreate(
+            undefined,
+            { cwd: dir, fieldGroupNames: "current" } as Parameters<
+              typeof runMigrateCreate
+            >[1],
+            context
+          )
+        );
+        expect(moved.exit, moved.said).toBeUndefined();
+
+        const url = await emptyDatabase(dialect, "fresh");
+        await setUp(url);
+
+        const adapter = await connect(dialect, url);
+        expect(await hasTable(adapter, "dynamic_field_groups")).toBe(true);
+        expect(await hasTable(adapter, "fg_fdh_card")).toBe(true);
+        expect(await hasTable(adapter, "dynamic_components")).toBe(false);
+        const recorded = await migrate();
+        expect(recorded.exit, recorded.said).toBeUndefined();
+        await developmentStart(dialect, url);
+        await builderCreate("fdh_banner");
+        expect(await hasTable(adapter, "fg_fdh_banner")).toBe(true);
+        await shutdownServices().catch(() => {});
+        const after = await migrate();
+        expect(after.exit, after.said).toBeUndefined();
+        expect(await hasTable(adapter, "comp_fdh_card")).toBe(false);
+      }, 240_000);
+
       // The reverse: a project whose history is on the current names.
       it(`starts on the current names its history is on, set up by ${road}, and a Builder save and nextly migrate go on`, async () => {
         const url = await emptyDatabase(dialect);
@@ -314,6 +388,8 @@ describe.each(getConfiguredTestDialects())(
      * it: as it ships, or as it shipped before it could say which names it is on.
      */
     function templateHistory(ships: "now" | "before"): void {
+      // Laid out as every installation is, which its SQL is written for.
+      _resetPerLanguageStorage();
       const from = fileURLToPath(
         new URL("../../../../../../templates/blog/migrations/", import.meta.url)
       );

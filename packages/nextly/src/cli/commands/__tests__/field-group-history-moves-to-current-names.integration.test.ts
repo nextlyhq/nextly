@@ -160,6 +160,18 @@ async function openDatabase(dialect: TestDialect): Promise<string> {
   return url;
 }
 
+/** Another empty database for the same project, which the commands then reach. */
+async function openAnother(
+  dialect: TestDialect,
+  name: string
+): Promise<string> {
+  if (dialect !== "sqlite") return openDatabase(dialect);
+  const url = `file:${join(dir, `${name}.db`)}`;
+  vi.stubEnv("DATABASE_URL", url);
+  _resetEnvCache();
+  return url;
+}
+
 /** An adapter of the test's own on the database at `url`. */
 async function connect(
   dialect: TestDialect,
@@ -419,9 +431,13 @@ describe.each(getConfiguredTestDialects())(
       const checked = await check();
       expect(checked.exit, checked.said).toBeUndefined();
       expect(checked.said).toMatch(/no drift/);
-      expect(checked.said).not.toMatch(
-        /\bcomp_|dynamic_components|_component_type/
-      );
+      // Only the first file's own line does, for the legacy table its DOWN drops.
+      expect(
+        checked.said
+          .split("\n")
+          .filter(line => !/_init(?:\.sql)?\b/.test(line))
+          .join("\n")
+      ).not.toMatch(/\bcomp_|dynamic_components|_component_type/);
 
       // A code-first edit after the move is planned against the current names.
       loaded.config = configOf(WITH_SUBTITLE);
@@ -925,5 +941,37 @@ describe.each(getConfiguredTestDialects())(
         expect(applied.exit, applied.said).toBeUndefined();
       }, 180_000);
     }
+
+    // A history that moved is legacy up to its move and current after it. Replayed on an empty
+    // database, its first files make the legacy storage they describe, the run stops at the move
+    // naming the storage migration, and goes on once that has run.
+    it("replays a moved history on an empty database up to the move, and goes on once the storage moves", async () => {
+      await movedProject();
+      loaded.config = configOf(WITH_SUBTITLE);
+      const edit = await create("add_subtitle");
+      expect(edit.exit, edit.said).toBeUndefined();
+      const edited = await migrate();
+      expect(edited.exit, edited.said).toBeUndefined();
+
+      const fresh = await openAnother(dialect, "fresh");
+      const stopped = await migrate();
+      expect(stopped.exit, stopped.said).not.toBeUndefined();
+      expect(stopped.said).toContain("FIELD_GROUP_STORAGE_NOT_MIGRATED");
+      const adapter = await connect(dialect, fresh);
+      expect(await adapter.tableExists("comp_fh_card")).toBe(true);
+      expect(await adapter.tableExists("fg_fh_card")).toBe(false);
+
+      await migrateStorage(dialect, fresh);
+      const rest = await migrate();
+      expect(rest.exit, rest.said).toBeUndefined();
+      expect(await adapter.tableExists("fg_fh_card")).toBe(true);
+      expect(await adapter.tableExists("comp_fh_card")).toBe(false);
+      const app = await start(dialect, fresh, WITH_SUBTITLE);
+      const created = await app.nextly.create({
+        collection: "fh_posts" as never,
+        data: { title: "P", card: { heading: "H", subtitle: "S" } } as never,
+      });
+      expect(created.item).toBeTruthy();
+    }, 240_000);
   }
 );

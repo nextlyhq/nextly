@@ -57,7 +57,14 @@ import { _resetEnvCache } from "../../../../shared/lib/env";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { ensureI18nArchive } from "../../../i18n/migration/ensure-archive";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
-import { fieldGroupTableNameFor } from "../../../field-groups/services/field-group-storage-names";
+import {
+  eachSite,
+  seedSite,
+} from "../../../field-groups/__tests__/helpers/both-sites";
+import {
+  type FieldGroupNaming,
+  fieldGroupTableNameFor,
+} from "../../../field-groups/services/field-group-storage-names";
 import { setNonInteractive } from "../can-prompt";
 import { KILL_AT_VARIABLE, withStopPoints } from "../stop-points";
 
@@ -86,7 +93,7 @@ const OTHER = "dpr_other";
 const TAGS = "dpr_tags";
 const NOTES_TABLE = `dc_${NOTES}`;
 const OTHER_TABLE = `dc_${OTHER}`;
-const META_TABLE = fieldGroupTableNameFor("current", META);
+const metaTable = () => fieldGroupTableNameFor(siteNaming, META);
 
 /**
  * The points a run reaches once the delete file is recorded, in order, as a stop names them after
@@ -106,6 +113,12 @@ const AFTER_THE_FILE = [
 /** Whether `point` is the one named `at`, after the file's or the collection's name, or alone. */
 const isPoint = (point: string, at: string) =>
   point === at || point.endsWith(`: ${at}`);
+
+/**
+ * The names the case's site keeps its field groups on: what its Builder saves write its history on,
+ * and so what the database it deploys to is set up on.
+ */
+let siteNaming: FieldGroupNaming = "current";
 
 let dir: string;
 let closers: Array<() => Promise<void>> = [];
@@ -379,7 +392,7 @@ async function rowsOf(
   const scoped = `${q("scope_kind")} = ${p(1)} AND ${q("scope_slug")} = ${p(2)}`;
   return {
     fieldGroupValues: await count(
-      META_TABLE,
+      metaTable(),
       `${q("_parent_table")} = ${p(1)}`,
       [table]
     ),
@@ -460,9 +473,13 @@ function deleteFile(): { name: string; drops: number } {
   return { name, drops: (sql.match(/DROP TABLE/gi) ?? []).length };
 }
 
-describe.each(getConfiguredTestDialects())(
-  "a collection deleted in the Builder, on a deployed database (%s)",
-  dialect => {
+describe.each(eachSite())(
+  "a collection deleted in the Builder, on a deployed database (%s, a site on the %s names)",
+  (dialect, naming) => {
+    beforeEach(() => {
+      siteNaming = naming;
+    });
+
     /**
      * The Builder's create, applied to the deployed database with an entry in each collection and
      * the shared rows of both, then the Builder's delete of `dpr_notes`, written and not yet
@@ -470,6 +487,7 @@ describe.each(getConfiguredTestDialects())(
      */
     async function readyToDelete() {
       const own = await openDatabase(dialect, "builder");
+      await seedSite(siteNaming, own.adapter, dialect);
       const deployed = await openDatabase(dialect, "deployed");
 
       reach(dialect, own.url);
