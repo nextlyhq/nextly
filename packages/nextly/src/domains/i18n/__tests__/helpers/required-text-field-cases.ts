@@ -7,13 +7,17 @@
  * deleted with every language's row; an entry that has the value keeps it, and a value in another
  * language is kept.
  *
- * Both roads a save takes are covered: the dialog's apply, which takes the road the dispatcher
- * picks (the migration file of an untranslated collection on the earlier layout, the push with its
- * translations table brought in step otherwise), and the save's own migration file, run as
- * `nextly migrate` runs it on a deploy. The review counts the entries each answer settles.
+ * Every road a save takes is covered: the dialog's apply, which takes the road the dispatcher
+ * picks for it (here the save's migration file, run in development, with the translations table
+ * brought in step after it); the save's own migration file, run as `nextly migrate` runs it on a
+ * deploy; and the push, which applies a change whose values the file cannot carry (a column's type
+ * changing beside it) and which settles the answers itself once the translations table is in step.
+ * The review counts the entries each answer settles. An answer for a field the save leaves
+ * optional is refused by the save, and passed over by the push, which asks it nothing.
  *
  * A Single's dialog save that adds a text field stating a default gives the Single's document that
- * default in the default language, wherever the field's values are kept.
+ * default in the default language, wherever the field's values are kept: in development, where its
+ * file runs, and outside it, where its push applies the change once the files are written.
  *
  * Shared by the suite on the earlier layout and the one on per-language storage, as every
  * installation runs it, so both layouts answer the same cases.
@@ -34,11 +38,14 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { UiSchemaEntity } from "../../../../schemas/_zod/ui-schema";
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../../../services";
 import {
   previewCollectionSave,
   writeCollectionSave,
 } from "../../../schema/builder-save/collection-save";
+import type { Resolution } from "../../../schema/pipeline/resolution/types";
+import { applyCollectionSchemaChange } from "../../../schema/services/collection-schema-apply";
 import { loadUiSchema } from "../../../schema/ui-schema/loader";
 
 interface Entries {
@@ -73,6 +80,10 @@ interface CollectionsHandler {
   ): Promise<{ success: boolean; message?: string }>;
   getEntryService(): Entries;
 }
+
+/** The roads a collection's change takes: the dialog's choice, the save's file, the push. */
+const ROADS = ["dialog", "file", "push"] as const;
+type Road = (typeof ROADS)[number];
 
 /** The person's answer for the entries without a value. */
 type Answer =
@@ -306,29 +317,92 @@ export function requiredTextFieldCases(
         answer: Answer,
         change: Change = NOTE_REQUIRED
       ): Promise<void> {
+        const { deps, save } = await fileSave(slug, answer, change);
+        const review = await previewCollectionSave(deps, save);
+        expect(review.notices).toEqual([noticeOf(change, answer)]);
+        await writeCollectionSave(deps, save);
+      }
+
+      /** The same file save, written without its review first. */
+      async function writtenWithout(
+        slug: string,
+        answer: Answer,
+        change: Change
+      ): Promise<void> {
+        const { deps, save } = await fileSave(slug, answer, change);
+        await writeCollectionSave(deps, save);
+      }
+
+      /**
+       * The same change applied by the push, as the dialog's save has it applied where the push
+       * carries values the file cannot: over the fields the registry records, answered as the
+       * dialog answers.
+       */
+      async function throughPush(
+        slug: string,
+        translated: boolean,
+        answer: Answer,
+        change: Change = NOTE_REQUIRED
+      ): Promise<void> {
+        const [row] = await query<{ fields: unknown }>(
+          `SELECT ${quote(dialect, "fields")} AS fields FROM ${quote(dialect, "dynamic_collections")} WHERE ${quote(dialect, "slug")} = '${slug}'`
+        );
+        const recorded: unknown =
+          typeof row?.fields === "string"
+            ? JSON.parse(row.fields)
+            : row?.fields;
+        await applyCollectionSchemaChange({
+          slug,
+          collection: { tableName: `dc_${slug}`, fields: recorded },
+          fields: change.fields as unknown as FieldDefinition[],
+          wasLocalized: translated,
+          isLocalized: translated,
+          status: false,
+          wasStatus: false,
+          renameResolutions: [],
+          eventResolutions: [
+            resolutionOf(slug, change, answer) as unknown as Resolution,
+          ],
+        });
+      }
+
+      /** `change` through `road`, answered with `answer`. */
+      async function through(
+        road: Road,
+        slug: string,
+        translated: boolean,
+        answer: Answer,
+        change: Change = NOTE_REQUIRED
+      ): Promise<void> {
+        if (road === "dialog")
+          await throughDialog(slug, translated, answer, change);
+        else if (road === "file") await throughFile(slug, answer, change);
+        else await throughPush(slug, translated, answer, change);
+      }
+
+      /** The writer's dependencies and the save of `change` answered with `answer`. */
+      async function fileSave(slug: string, answer: Answer, change: Change) {
         const deps = builderSaveDeps();
-        expect(deps).toBeDefined();
-        if (deps === undefined) return;
+        if (deps === undefined) throw new Error("no Builder save writer");
         const definition = await loadUiSchema({
           projectRoot: deps.projectRoot,
           uiSchemaFile: deps.config.db.uiSchemaFile,
         });
         const previous = definition.collections.find(c => c.slug === slug);
-        expect(previous).toBeDefined();
-        if (previous === undefined) return;
-        const save = {
-          slug,
-          previous,
-          entity: {
-            ...previous,
-            fields: change.fields as unknown as UiSchemaEntity["fields"],
+        if (previous === undefined) throw new Error(`${slug} is not defined`);
+        return {
+          deps,
+          save: {
+            slug,
+            previous,
+            entity: {
+              ...previous,
+              fields: change.fields as unknown as UiSchemaEntity["fields"],
+            },
+            change: "update",
+            resolutions: [{ column: change.field, ...answer }],
           },
-          change: "update",
-          resolutions: [{ column: change.field, ...answer }],
         };
-        const review = await previewCollectionSave(deps, save);
-        expect(review.notices).toEqual([noticeOf(change, answer)]);
-        await writeCollectionSave(deps, save);
       }
 
       /**
@@ -358,20 +432,18 @@ export function requiredTextFieldCases(
         return [...new Set(rows.map(row => String(row.id)))].sort();
       }
 
-      for (const road of ["dialog", "file"] as const) {
+      for (const road of ROADS) {
         for (const translated of [false, true]) {
           const kind = translated ? "a translated" : "an untranslated";
           const slugOf = (answer: Answer) =>
-            `${prefix}_${road === "dialog" ? "dlg" : "file"}_${translated ? "t" : "p"}_${answer.kind === "fill" ? "f" : "d"}`;
+            `${prefix}_${road === "dialog" ? "dlg" : road}_${translated ? "t" : "p"}_${answer.kind === "fill" ? "f" : "d"}`;
 
           it(`fills ${kind} collection's entries without a value in the default language (${road})`, async () => {
             const answer: Answer = { kind: "fill", value: "filled" };
             const slug = slugOf(answer);
             const ids = await notesWithEntries(slug, translated);
 
-            if (road === "dialog")
-              await throughDialog(slug, translated, answer);
-            else await throughFile(slug, answer);
+            await through(road, slug, translated, answer);
 
             expect(await readIn(slug, ids.kept, "en")).toMatchObject({
               note: "kept",
@@ -394,9 +466,7 @@ export function requiredTextFieldCases(
             const slug = slugOf(answer);
             const ids = await notesWithEntries(slug, translated);
 
-            if (road === "dialog")
-              await throughDialog(slug, translated, answer);
-            else await throughFile(slug, answer);
+            await through(road, slug, translated, answer);
 
             expect(await idsOf(`dc_${slug}`)).toEqual([ids.kept]);
             if (keptPerLanguage(translated)) {
@@ -410,14 +480,61 @@ export function requiredTextFieldCases(
             });
           });
 
+          it(`refuses an answer for ${kind} collection's text field the save leaves optional (${road})`, async () => {
+            const answer: Answer = { kind: "delete_nonconforming" };
+            const slug = `${slugOf(answer)}_opt`;
+            const ids = await notesWithEntries(slug, translated);
+            const optional: Change = {
+              ...NOTE_REQUIRED,
+              fields: [
+                { name: "heading", type: "text" },
+                { name: "note", type: "text" },
+              ],
+            };
+
+            if (road === "push") {
+              // The push asks nothing of a field the change leaves optional, so it settles nothing.
+              await throughPush(slug, translated, answer, optional);
+              expect(await idsOf(`dc_${slug}`)).toEqual(
+                [ids.kept, ids.empty, ids.bare].sort()
+              );
+              return;
+            }
+            // The apply itself, not only its review, refuses it.
+            const refused =
+              road === "dialog"
+                ? dispatchCollections(
+                    {} as ServiceContainer,
+                    "applySchemaChanges",
+                    { collectionName: slug },
+                    {
+                      fields: optional.fields,
+                      confirmed: true,
+                      ...(translated ? { localized: true } : {}),
+                      eventResolutions: [resolutionOf(slug, optional, answer)],
+                      schemaVersion: await schemaVersionOf(
+                        "dynamic_collections",
+                        slug
+                      ),
+                    }
+                  )
+                : writtenWithout(slug, answer, optional);
+            await expect(refused).rejects.toMatchObject({
+              code: "VALIDATION_ERROR",
+            });
+
+            // Nothing was deleted.
+            expect(await idsOf(`dc_${slug}`)).toEqual(
+              [ids.kept, ids.empty, ids.bare].sort()
+            );
+          });
+
           it(`fills a required field added to ${kind} collection in every entry's default language (${road})`, async () => {
             const answer: Answer = { kind: "fill", value: "summed" };
             const slug = `${slugOf(answer)}_new`;
             const ids = await notesWithEntries(slug, translated);
 
-            if (road === "dialog")
-              await throughDialog(slug, translated, answer, SUMMARY_ADDED);
-            else await throughFile(slug, answer, SUMMARY_ADDED);
+            await through(road, slug, translated, answer, SUMMARY_ADDED);
 
             // Read from the tables: the save's own file, run on its own, leaves the running
             // shape to the registry, which does not name the field yet.
@@ -432,41 +549,52 @@ export function requiredTextFieldCases(
         }
       }
 
-      it("gives a Single's document the default a text field it adds states", async () => {
-        const slug = `${prefix}_site`;
-        await dispatchSingles(
-          "createSingle",
-          {},
-          {
+      // Outside development, a Single's push settles a field kept per language itself. An optional
+      // field's default on the main table reaches the row by the file alone, as before, so that
+      // layout's Single is not asked it there.
+      const environments =
+        layout === "per-language"
+          ? (["development", "production"] as const)
+          : (["development"] as const);
+      for (const environment of environments) {
+        it(`gives a Single's document the default a text field it adds states (${environment})`, async () => {
+          const slug = `${prefix}_site_${environment === "development" ? "dev" : "prod"}`;
+          await dispatchSingles(
+            "createSingle",
+            {},
+            {
+              slug,
+              label: "Site",
+              fields: [{ name: "heading", type: "text" }],
+            }
+          );
+          await current.nextly.updateSingle({
             slug,
-            label: "Site",
-            fields: [{ name: "heading", type: "text" }],
-          }
-        );
-        await current.nextly.updateSingle({
-          slug,
-          data: { heading: "Hello", _overwrite: true },
+            data: { heading: "Hello", _overwrite: true },
+          });
+
+          // Outside development the save writes its files and its push applies the change.
+          vi.stubEnv("NODE_ENV", environment);
+          await dispatchSingles(
+            "applySingleSchemaChanges",
+            { slug },
+            {
+              fields: [
+                { name: "heading", type: "text" },
+                { name: "tagline", type: "text", defaultValue: "Welcome" },
+              ],
+              confirmed: true,
+              schemaVersion: await schemaVersionOf("dynamic_singles", slug),
+            }
+          );
+
+          const read = (await current.nextly.findSingle({
+            slug,
+            locale: "en",
+          } as never)) as Record<string, unknown>;
+          expect(read).toMatchObject({ heading: "Hello", tagline: "Welcome" });
         });
-
-        await dispatchSingles(
-          "applySingleSchemaChanges",
-          { slug },
-          {
-            fields: [
-              { name: "heading", type: "text" },
-              { name: "tagline", type: "text", defaultValue: "Welcome" },
-            ],
-            confirmed: true,
-            schemaVersion: await schemaVersionOf("dynamic_singles", slug),
-          }
-        );
-
-        const read = (await current.nextly.findSingle({
-          slug,
-          locale: "en",
-        } as never)) as Record<string, unknown>;
-        expect(read).toMatchObject({ heading: "Hello", tagline: "Welcome" });
-      });
+      }
     }
   );
 }
