@@ -672,11 +672,13 @@ describe.each(getConfiguredTestDialects())(
     fills(
       "writes the fill into a deploy's own empty rows, before the file makes the column required, under its consent alone",
       async () => {
+        // Every mark the file's one line could be split or ended by, and the escape it is kept under.
+        const fill = 'a, b\'s "c"\n-- UP\n50% %2C %0A;';
         const created = await savedWithFill(
           [{ name: "v", type: "chips" }],
           { v: [] },
-          to("text"),
-          { kept: 1, changed: 0, lost: 0, fill: 'a, b\'s "c"' }
+          to("textarea"),
+          { kept: 1, changed: 0, lost: 0, fill }
         );
         const second = await boot(dialect);
         await migrate(second, created);
@@ -688,7 +690,7 @@ describe.each(getConfiguredTestDialects())(
         // that a real run would refuse them.
         const said = await dryRun(second);
         expect(said).toContain(
-          '2 rows left with no value, replaced with "a, b\'s \\"c\\""'
+          `2 rows left with no value, replaced with ${JSON.stringify(fill)}`
         );
         expect(said).not.toContain("cannot become required");
 
@@ -710,8 +712,8 @@ describe.each(getConfiguredTestDialects())(
         await migrate(second, undefined, ANY_LOSS());
         expect(await read(second)).toEqual({
           one: "x",
-          empty: 'a, b\'s "c"',
-          none: 'a, b\'s "c"',
+          empty: fill,
+          none: fill,
         });
         expect(await takesNull(second)).toBe(false);
       }
