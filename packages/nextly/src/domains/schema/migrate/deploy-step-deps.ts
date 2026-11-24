@@ -154,11 +154,15 @@ export function deployStepDeps(run: DeployStepRun): DeployStepDeps {
     // here, the registry keeps its definitions and the next run is refused the same way.
     // Judged only once no file is pending, since a later one may still change the column.
     beforeMetadata: async () => {
-      const [{ findPendingFiles }, { refuseCompanionColumnsThatCannotHold }] =
-        await Promise.all([
-          import("../../../cli/commands/migrate"),
-          import("../../i18n/runtime/companion-io"),
-        ]);
+      const [
+        { findPendingFiles },
+        { refuseCompanionColumnsThatCannotHold },
+        { configTheCodeOwnsIn },
+      ] = await Promise.all([
+        import("../../../cli/commands/migrate"),
+        import("../../i18n/runtime/companion-io"),
+        import("../../../di/load-dynamic-tables"),
+      ]);
       const pending = await findPendingFiles(
         adapter,
         run.db,
@@ -179,9 +183,13 @@ export function deployStepDeps(run: DeployStepRun): DeployStepDeps {
       // would be the legacy ones, and the check would judge a translations table that is not
       // there and let the registry record definitions the real one cannot hold.
       if (!stored.usable) throw fieldGroupRegistryUnreadable(stored.reason);
+      // Judged for the configuration code still owns, as the run's translations-table pass
+      // provisions it (`ensureLocalizedCompanions`): a collection a demote handed to the Schema
+      // Builder keeps its translations table as the Builder has it, so its code entry refuses
+      // nothing here.
       await refuseCompanionColumnsThatCannotHold(
         adapter,
-        config,
+        await configTheCodeOwnsIn(adapter, config),
         run.recordedBefore,
         slug => storedOrNewTableName(stored, slug)
       );

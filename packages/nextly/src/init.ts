@@ -95,6 +95,7 @@ import {
   ensureHmrListener,
   consumeHmrReloadFlag,
   markHmrReloadInFlight,
+  stopHmrListener,
 } from "./runtime/hmr-listener";
 import { consoleLogger } from "./shared/types";
 
@@ -294,6 +295,9 @@ function buildNextlyInstance(
 
     // Shutdown method
     shutdown: async () => {
+      // A Nextly shut down applies no config edit: its start watched the
+      // config, and the next start watches it again.
+      stopHmrListener();
       // Loaded on use, as the boot loads it: see `getNextly` below.
       const { shutdownServices } = await import("./di/register");
       await shutdownServices();

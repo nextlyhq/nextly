@@ -92,6 +92,15 @@ const CASES = [
     : []),
 ];
 
+// With no server dialect configured (the SQLite leg), `each([])` declares no suite at all, and
+// Vitest fails a file that declares none. This skipped suite keeps the file reported as skipped.
+describe.skipIf(CASES.length > 0)(
+  "a translated date keeps its instant through the Builder",
+  () => {
+    it.skip("needs PostgreSQL or MySQL, since SQLite keeps no zone", () => {});
+  }
+);
+
 describe.runIf(CASES.length > 0).each(CASES)(
   "a translated date keeps its instant through the Builder on $dialect in $zone",
   ({ dialect, zone, companionType, mainType }) => {

@@ -24,10 +24,9 @@
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import type { MigrationGroup } from "../../../cli/utils/migration-discovery";
 import { NextlyError } from "../../../errors/nextly-error";
 import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
-
-import type { MigrationGroup } from "../../../cli/utils/migration-discovery";
 
 import { groupMigrationFiles } from "./migration-groups";
 import { compareMigrationBaseNames } from "./migration-order";
@@ -62,6 +61,13 @@ export interface UnrecordedMerge {
 
 /** The `logContext.reason` of a refusal over a forked history. */
 export const HISTORY_FORKED_REASON = "migration history forked";
+
+/**
+ * The `logContext.reason` of a refusal over a migration whose files (its base file and a
+ * dialect's variant) state different places in the line (`placeStatedTwiceError`).
+ */
+export const MIGRATION_PLACE_STATED_TWICE_REASON =
+  "migration place stated twice";
 
 /** A migration of the folder, as its snapshot places it in the line. */
 interface Placed {
@@ -138,18 +144,179 @@ function placedByHeader(content: string, base: string): Placed | undefined {
   };
 }
 
-/**
- * The migrations a blank migration's `content` says it was written after: the parent and the
- * merges its header states (`blankLineHeader`), none where it states no place. For a reader that
- * must not take a file away from under a migration written from it.
- */
-export function blankWrittenFrom(content: string): string[] {
-  const placed = placedByHeader(content, "");
-  if (placed === undefined) return [];
+/** The migrations a stated place names: its parent, and the merges it records. */
+function writtenFromPlace(placed: Placed): string[] {
   return [
     ...(typeof placed.parent === "string" ? [placed.parent] : []),
     ...placed.merges,
   ];
+}
+
+/** One file of a migration, as its header reads (`headerLinesOf`). */
+interface FileStatement {
+  file: string;
+  /** Whether it marks its migration blank (`isBlankMigration`). */
+  marked: boolean;
+  /** Where it places its migration, undefined where it states no place. */
+  placed: Placed | undefined;
+}
+
+/**
+ * The folder's migrations whose names are not in `withSnapshot`, each read once with its
+ * dialect variants as the runner groups them (`groupMigrationFiles`): every file's header, the
+ * base file first. A migration states what it is once, in any of its files, so each reader of a
+ * blank migration reads all of them, never one file as a migration of its own.
+ */
+async function unsnapshottedIn(
+  migrationsDir: string,
+  withSnapshot: ReadonlySet<string>
+): Promise<{ base: string; files: FileStatement[] }[]> {
+  const read: { base: string; files: FileStatement[] }[] = [];
+  const groups = groupMigrationFiles(await sqlFilesIn(migrationsDir));
+  for (const group of groups.values()) {
+    if (withSnapshot.has(group.baseName)) continue;
+    const files: FileStatement[] = [];
+    for (const { file } of baseFileFirst(group)) {
+      const content = await readIfPresent(resolve(migrationsDir, file));
+      // Gone since the folder was listed (a writer taking its own files back): no file of it.
+      if (content === undefined) continue;
+      files.push({
+        file,
+        marked: isBlankMigration(content),
+        placed: placedByHeader(content, group.baseName),
+      });
+    }
+    read.push({ base: group.baseName, files });
+  }
+  return read;
+}
+
+/** The text of the file at `path`, or undefined where there is none. */
+async function readIfPresent(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+/** A migration group's files, its base file (`<base>.sql`) first and its variants after. */
+function baseFileFirst(group: MigrationGroup): MigrationGroup["variants"] {
+  return [
+    ...group.variants.filter(variant => variant.dialect === undefined),
+    ...group.variants.filter(variant => variant.dialect !== undefined),
+  ];
+}
+
+/**
+ * The one place a migration's files state: a file that states none follows the others, and
+ * undefined where none does. Two files that state different places leave no one place to read,
+ * and are refused (`placeStatedTwiceError`) rather than either followed.
+ */
+function agreedPlace(
+  base: string,
+  files: readonly FileStatement[]
+): Placed | undefined {
+  const stating = files.flatMap(({ file, placed }) =>
+    placed === undefined ? [] : [{ file, placed }]
+  );
+  const [first] = stating;
+  if (first === undefined) return undefined;
+  const other = stating.find(
+    each => placeLines(each.placed) !== placeLines(first.placed)
+  );
+  if (other !== undefined) throw placeStatedTwiceError(base, first, other);
+  return first.placed;
+}
+
+/** What a header states of a migration's place: the migration it was written after, and merges. */
+type StatedPlace = Pick<Placed, "parent" | "merges">;
+
+/**
+ * A stated place as the header lines that state it (`blankLineHeader`, its merges in name
+ * order), each in backticks: two files state the same place where these are equal.
+ */
+function placeLines(placed: StatedPlace): string {
+  return blankLineHeader({
+    parent: placed.parent ?? null,
+    merges: placed.merges,
+  })
+    .trim()
+    .split("\n")
+    .map(line => `\`${line}\``)
+    .join(" ");
+}
+
+/**
+ * The refusal of a migration two of whose files state different places: what each states, why a
+ * migration has one place, and what to edit. Laid out as three sentences, kept in the log
+ * context as its parts for the CLI's error shape.
+ */
+export function placeStatedTwiceError(
+  base: string,
+  first: { file: string; placed: StatedPlace },
+  other: { file: string; placed: StatedPlace }
+): NextlyError {
+  const what = `The files of migration ${base} state different places in the history: \`${first.file}\` states ${placeLines(first.placed)}, and \`${other.file}\` states ${placeLines(other.placed)}.`;
+  const why =
+    "A dialect's variant runs in place of the base file on its dialect and is the same migration, so the migration has one place in the history.";
+  const next = `Make the \`-- Parent:\` and \`-- Merges:\` lines the same in every file of ${base} that states them, or keep them in the base file alone.`;
+  return NextlyError.conflict({
+    reason: "state",
+    message: `${what} ${why} ${next}`,
+    logContext: {
+      // Spelt out, as `MIGRATION_PLACE_STATED_TWICE_REASON` holds it, for the CLI's mapping.
+      reason: "migration place stated twice",
+      migration: base,
+      files: [first.file, other.file],
+      parts: { what, why, next },
+    },
+  });
+}
+
+/**
+ * The folder's blank migrations whose names are not in `withSnapshot`, by name: those any of
+ * whose files carries the blank mark (`isBlankMigration`), read once with their dialect variants.
+ * For `migrate:check`, which pairs a blank migration's files with no snapshot.
+ */
+export async function blankMigrationNames(
+  migrationsDir: string,
+  withSnapshot: ReadonlySet<string>
+): Promise<Set<string>> {
+  const names = new Set<string>();
+  for (const { base, files } of await unsnapshottedIn(
+    migrationsDir,
+    withSnapshot
+  )) {
+    if (files.some(each => each.marked)) names.add(base);
+  }
+  return names;
+}
+
+/**
+ * Each blank migration of the folder whose name is not in `withSnapshot`, by name, with every
+ * migration any of its files states it was written from (`blankLineHeader`). Files that state
+ * different places are not refused here: every one's is counted. For a reader that must not take
+ * a file away from under a migration written from it.
+ */
+export async function blankMigrationsWrittenFrom(
+  migrationsDir: string,
+  withSnapshot: ReadonlySet<string>
+): Promise<Map<string, string[]>> {
+  const writtenFrom = new Map<string, string[]>();
+  for (const { base, files } of await unsnapshottedIn(
+    migrationsDir,
+    withSnapshot
+  )) {
+    const from = new Set(
+      files.flatMap(({ placed }) =>
+        placed === undefined ? [] : writtenFromPlace(placed)
+      )
+    );
+    if (from.size > 0) writtenFrom.set(base, [...from]);
+  }
+  return writtenFrom;
 }
 
 /**
@@ -304,29 +471,17 @@ async function placedIn(migrationsDir: string): Promise<Placed[]> {
   }
   // And each blank migration that states its own place: a migration with no
   // snapshot, read once with its dialect variants (`<base>.mysql.sql`) as the
-  // runner groups them, so a variant is no migration of its own.
+  // runner groups them, so a variant is no migration of its own, and placed
+  // where any of its files says (`agreedPlace`).
   const withSnapshot = new Set(placed.map(each => each.base));
-  const groups = groupMigrationFiles(await sqlFilesIn(migrationsDir));
-  for (const group of groups.values()) {
-    if (withSnapshot.has(group.baseName)) continue;
-    const blank = placedByHeader(
-      await readFile(resolve(migrationsDir, statingFileOf(group)), "utf-8"),
-      group.baseName
-    );
+  for (const { base, files } of await unsnapshottedIn(
+    migrationsDir,
+    withSnapshot
+  )) {
+    const blank = agreedPlace(base, files);
     if (blank !== undefined) placed.push(blank);
   }
   return placed.sort((a, b) => compareMigrationBaseNames(a.base, b.base));
-}
-
-/**
- * The file of a migration group whose header states the group's place: its base file
- * (`<base>.sql`), or where it was written only as variants, the first of them.
- */
-function statingFileOf(group: MigrationGroup): string {
-  return (
-    group.variants.find(variant => variant.dialect === undefined) ??
-    group.variants[0]
-  ).file;
 }
 
 /** The `.sql` files of a folder, or none where there is no such folder. */
