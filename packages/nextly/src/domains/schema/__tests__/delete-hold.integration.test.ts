@@ -304,6 +304,28 @@ const NOTED: unknown[] = [
   { name: "label", type: "text" },
   { name: "note", type: "text" },
 ];
+/** A write sent while a save holds the collection, and the hook that runs before it. */
+const HOOKED_WRITES = [
+  {
+    op: "update",
+    phase: "beforeUpdate",
+    write: (t: TestNextly, id: string) =>
+      t.nextly.update({
+        collection: SLUG,
+        id,
+        data: { label: "sent", _overwrite: true },
+      } as never),
+  },
+  {
+    op: "create",
+    phase: "beforeCreate",
+    write: (t: TestNextly) =>
+      t.nextly.create({
+        collection: SLUG,
+        data: { title: "made", slug: "made", label: "sent" },
+      }),
+  },
+] as const;
 /**
  * `fields` with `note` laid out in a group with no name, whose fields are stored on the row: a
  * shape only the definition file holds at the top level, which the API takes no part of.
@@ -1418,6 +1440,128 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(row?.label).toBe(id);
     }, 60_000);
+
+    // A before hook is the site's own code: it may send mail, call another service or count. A write
+    // made again after the save it waited for is made from what its hooks left the first time, so
+    // each hook runs once however often the write is made. The count separates that from making the
+    // whole write again, which stores the same value and runs the hook twice; the value stored
+    // separates it from making the write from what the caller sent, which loses the hook's part.
+    it.each(HOOKED_WRITES)(
+      "runs a before hook once for a held $op made again from the definition the save left, and stores what the hook set",
+      async ({ phase, write }) => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        const [first] = await sql<{ id: unknown }>(
+          t,
+          `SELECT ${q("id")} AS id FROM ${q(TABLE)} ORDER BY ${q("id")}`
+        );
+        let runs = 0;
+        t.hooks.register(phase, SLUG, context => {
+          runs += 1;
+          return {
+            ...(context.data as Record<string, unknown>),
+            label: `set by run ${String(runs)}`,
+          };
+        });
+        const { paused, release } = gated(afterCount);
+        const applying = apply(t, 3).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+        const reached = await Promise.race([
+          paused.then(() => true),
+          applying.then(() => false),
+        ]);
+        expect(reached || (await applying)).toBe(true);
+
+        let settled = false;
+        const writing = write(t, String(first?.id))
+          .then(
+            () => "written",
+            (error: unknown) => error
+          )
+          .finally(() => {
+            settled = true;
+          });
+        await new Promise(resolve => setTimeout(resolve, 1_000));
+        // Held with its hook already run, so the definition changes under what the hook left.
+        const before = { heldBack: !settled, runs };
+        release();
+        expect(before).toEqual({ heldBack: true, runs: 1 });
+        expect(await applying).toBe("applied");
+        const outcome = await writing;
+        expect(outcome, told(outcome)).toBe("written");
+        expect(runs).toBe(1);
+        const stored = await sql<{ label: unknown }>(
+          t,
+          `SELECT ${q("label")} AS label FROM ${q(TABLE)} WHERE ${q("label")} LIKE 'set by%'`
+        );
+        expect(stored.map(row => row.label)).toEqual(["set by run 1"]);
+        expect(await hasNoteColumn(t)).toBe(false);
+      },
+      60_000
+    );
+
+    // What a hook sets is the write's data as much as what the caller sent, so a field only the hook
+    // set is named too, rather than left out of the write or sent to a column that is gone.
+    it.each(HOOKED_WRITES)(
+      "refuses a held $op naming the removed field only its before hook set, the hook run once",
+      async ({ phase, write }) => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        const [first] = await sql<{ id: unknown }>(
+          t,
+          `SELECT ${q("id")} AS id FROM ${q(TABLE)} ORDER BY ${q("id")}`
+        );
+        let runs = 0;
+        t.hooks.register(phase, SLUG, context => {
+          runs += 1;
+          return {
+            ...(context.data as Record<string, unknown>),
+            note: "set by the hook",
+          };
+        });
+        const { paused, release } = gated(afterCount);
+        const applying = apply(t, 3).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+        const reached = await Promise.race([
+          paused.then(() => true),
+          applying.then(() => false),
+        ]);
+        expect(reached || (await applying)).toBe(true);
+        const writing = write(t, String(first?.id)).then(
+          () => "written",
+          (error: unknown) => error
+        );
+        await new Promise(resolve => setTimeout(resolve, 1_000));
+        const runsWhileHeld = runs;
+        release();
+        expect(runsWhileHeld).toBe(1);
+        expect(await applying).toBe("applied");
+        const outcome = await writing;
+        expect(outcome, told(outcome)).toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "fields.note",
+                code: "FIELD_REMOVED",
+              }),
+            ],
+          },
+        });
+        expect(runs).toBe(1);
+        const [after] = await sql<{ rows: number | string; sent: unknown }>(
+          t,
+          `SELECT COUNT(*) AS ${q("rows")}, SUM(CASE WHEN ${q("label")} = 'sent' THEN 1 ELSE 0 END) AS ${q("sent")} FROM ${q(TABLE)}`
+        );
+        expect(Number(after?.rows)).toBe(3);
+        expect(Number(after?.sent ?? 0)).toBe(0);
+      },
+      60_000
+    );
 
     // MySQL's default isolation answers a transaction's plain reads from the snapshot its first read
     // fixed. A transaction the caller opened that read anything before the save has the collection's
