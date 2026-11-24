@@ -234,7 +234,7 @@ describe.each(getConfiguredTestDialects())(
 
     // Freed during the first pause, after the first try ended waiting: the next try judges and converts
     // afresh, and a value the holder's end let through is converted with the rest.
-    converts.skipIf(dialect === "sqlite")(
+    it.skipIf(!rewritesValuesOn(dialect) || dialect === "sqlite")(
       "converts the values on a later try once the table is free",
       async () => {
         const t = await boot();
