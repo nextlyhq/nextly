@@ -27,6 +27,7 @@ import {
 } from "../../domains/i18n/migration/field-leaves-translation-rules";
 import { retypedCompanionColumns } from "../../domains/i18n/migration/plan-companion-type-change";
 import { fieldsLeavingTranslation } from "../../domains/i18n/migration/reconcile-companion";
+import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import type {
   ColumnOrigin,
   SupportedDialect,
@@ -50,6 +51,7 @@ import {
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import {
+  isRequired,
   numberRule,
   selectOptionValues,
 } from "../../shared/lib/entry-validation";
@@ -200,24 +202,75 @@ function patternOf(field: FieldDefinition): string | undefined {
 }
 
 /**
- * Whether `to`'s own rules may refuse a value `from`'s allow: a bound added or tightened, or a
- * pattern added or changed, since no pattern is known to allow all another does. The save asks the
- * new field's rules of each stored value (`fieldAccepts`); which of them a rule refuses, only the
- * values say. A rule carried over, loosened or dropped refuses none.
+ * What the save asks of a field's values by its own settings, beyond what its type holds, each read
+ * as the entry validator reads it: in either spelling, a bound left out as the one that refuses none.
+ * Both what a change may newly refuse (`saveMayRefuse`) and whether the stored field is the one the
+ * page knows (`savedAsKnown`) are read from this, so the answer is made from what is compared.
  */
-function rulesTightened(from: FieldDefinition, to: FieldDefinition): boolean {
-  const pattern = patternOf(to);
+function asksOf(field: FieldDefinition) {
+  return {
+    required: isRequired(field),
+    unique: field.unique === true,
+    atLeast: Object.entries(AT_LEAST).map(
+      ([rule, none]) => numberRule(field, rule) ?? none
+    ),
+    atMost: AT_MOST.map(rule => numberRule(field, rule) ?? Infinity),
+    pattern: patternOf(field),
+  };
+}
+
+/** Whether `after` asks more of a value than `before` by a bound or a pattern: no pattern is known to allow all another does. */
+function asksMore(
+  before: ReturnType<typeof asksOf>,
+  after: ReturnType<typeof asksOf>
+): boolean {
   return (
-    (pattern !== undefined && pattern !== patternOf(from)) ||
-    Object.entries(AT_LEAST).some(
-      ([rule, none]) =>
-        (numberRule(to, rule) ?? none) > (numberRule(from, rule) ?? none)
-    ) ||
-    AT_MOST.some(
-      rule =>
-        (numberRule(to, rule) ?? Infinity) <
-        (numberRule(from, rule) ?? Infinity)
-    )
+    after.atLeast.some((bound, i) => bound > before.atLeast[i]) ||
+    after.atMost.some((bound, i) => bound < before.atMost[i]) ||
+    (after.pattern !== undefined && after.pattern !== before.pattern)
+  );
+}
+
+/** The rules read elsewhere here, and a message, which refuses nothing. */
+const RULES_READ: ReadonlySet<string> = new Set([
+  ...Object.keys(AT_LEAST),
+  ...AT_MOST,
+  "pattern",
+  "required",
+  "message",
+]);
+
+/** Whether `to` states a rule no reader here knows that `from` does not state the same. */
+function statesAnotherRule(
+  from: FieldDefinition,
+  to: FieldDefinition
+): boolean {
+  const before: Readonly<Record<string, unknown>> = { ...from.validation };
+  return Object.entries({ ...to.validation }).some(
+    ([rule, value]) =>
+      !RULES_READ.has(rule) &&
+      Boolean(value) &&
+      JSON.stringify(value) !== JSON.stringify(before[rule])
+  );
+}
+
+/**
+ * Whether the save could refuse a value of `from` for something `to` asks that the pair of types does
+ * not say (`pairOutcome`): Required or Unique newly on, a bound added or tightened, a pattern added or
+ * changed, a plugin type's own check, or a rule none of these is. Which values are refused only the
+ * values say, and the save judges each. What is carried over, loosened or turned off refuses none.
+ */
+function saveMayRefuse(from: FieldDefinition, to: FieldDefinition): boolean {
+  const before = asksOf(from);
+  const after = asksOf(to);
+  const newly = (["required", "unique"] as const).some(
+    ask => after[ask] && !before[ask]
+  );
+  return (
+    newly ||
+    asksMore(before, after) ||
+    getFieldType(to.type)?.validate !== undefined ||
+    statesAnotherRule(from, to)
   );
 }
 
@@ -272,7 +325,7 @@ export function typeChangeTargets(args: {
         type,
         blocked: null,
         refusal: null,
-        outcome: rulesTightened(args.field, candidate)
+        outcome: saveMayRefuse(args.field, candidate)
           ? "may-lose"
           : pairOutcome(from, to),
       };
@@ -300,6 +353,9 @@ const SavedSettings = z.object({
   /** Left out where the saved definition does not say: the type's own default. */
   localized: z.boolean().optional(),
   options: z.array(z.string()),
+  /** Its rules, and the settings stated on the field itself that the Builder carries as they are. */
+  validation: z.record(z.string(), z.unknown()).default({}),
+  own: z.record(z.string(), z.unknown()).default({}),
 });
 
 /**
@@ -324,18 +380,25 @@ const TargetsRequest = z.object({
 /**
  * Whether the stored field reads by the settings the page knows it as saved by. Each is compared as
  * it reads, never as it is written, so a definition that leaves a default out and one that states it
- * are the same: whether it is translated by `isFieldLocalized`, its options by their values.
+ * are the same: whether it is translated by `isFieldLocalized`, its options by their values, and what
+ * it asks of a value by `asksOf`. A rule the Builder's save never writes, and a number's or a text's
+ * storage, which no Builder save changes and the page does not keep as stored, are not compared.
  */
 function savedAsKnown(
   stored: FieldDefinition,
   known: z.infer<typeof SavedSettings>
 ): boolean {
   const asKnown = { ...stored, localized: known.localized };
+  const page = {
+    ...known.own,
+    unique: known.unique,
+    validation: known.validation,
+  } as unknown as FieldDefinition;
   const values = (options: readonly string[]) =>
     JSON.stringify([...options].sort());
   return (
     (stored.hasMany === true) === known.hasMany &&
-    (stored.unique === true) === known.unique &&
+    JSON.stringify(asksOf(stored)) === JSON.stringify(asksOf(page)) &&
     isFieldLocalized(stored, true) === isFieldLocalized(asKnown, true) &&
     values(selectOptionValues(stored)) === values(known.options)
   );

@@ -404,6 +404,69 @@ describe("Change type… on a saved field", () => {
     });
   });
 
+  it("asks of no rule an ordinary field does not have, whatever the type", async () => {
+    answer = async () => [];
+    const bare = convertToBuilderField(
+      { name: "kind", label: "Kind", type: "text" } as FieldDefinition,
+      0
+    );
+    render(
+      <BuilderChangeType
+        config={COLLECTION_BUILDER_CONFIG}
+        fields={[bare]}
+        fieldId={bare.id}
+        entitySlug="posts"
+        savedFields={[bare]}
+        onCancel={vi.fn()}
+        onChanged={vi.fn()}
+      />
+    );
+    await waitFor(() => expect(asked).toHaveLength(1));
+    const candidates = asked[0]?.question.candidates ?? [];
+    expect(candidates.length).toBeGreaterThan(5);
+    for (const { type, field } of candidates) {
+      expect(field.validation, type).toBeUndefined();
+      expect(field.required, type).toBe(false);
+      expect(field.unique, type).toBe(false);
+    }
+  });
+
+  it("asks by the rules a field was saved with, as the Builder has always saved one", async () => {
+    answer = async () => [];
+    const saved = convertToBuilderField(
+      {
+        name: "kind",
+        label: "Kind",
+        type: "text",
+        required: true,
+        unique: false,
+        index: false,
+        validation: { maxLength: 40, message: "Too long" },
+        admin: { width: "50%" },
+      } as FieldDefinition,
+      0
+    );
+    render(
+      <BuilderChangeType
+        config={COLLECTION_BUILDER_CONFIG}
+        fields={[saved]}
+        fieldId={saved.id}
+        entitySlug="posts"
+        savedFields={[saved]}
+        onCancel={vi.fn()}
+        onChanged={vi.fn()}
+      />
+    );
+    await waitFor(() => expect(asked).toHaveLength(1));
+    expect(JSON.parse(JSON.stringify(asked[0]?.question.saved))).toEqual({
+      hasMany: false,
+      unique: false,
+      options: [],
+      validation: { required: true, maxLength: 40, message: "Too long" },
+      own: {},
+    });
+  });
+
   it("changed already, it offers its type as saved back, as keeping every value", async () => {
     answer = async () => [];
     const { user, onChanged } = renderChange("f-kind", [

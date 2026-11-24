@@ -132,6 +132,8 @@ function savedSettingsOf(saved: BuilderField): SavedFieldSettings {
     options: (saved.options ?? [])
       .map(option => option.value)
       .filter(value => typeof value === "string"),
+    validation: { ...saved.validation },
+    own: { ...saved.pluginOptions },
   };
 }
 

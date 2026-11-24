@@ -80,6 +80,34 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       );
     });
 
+    // The field as the Builder's change saves an ordinary one: every setting said, none of them on.
+    it("marks every type of a field with no rules by its pair alone", () => {
+      for (const type of ["text", "number", "date", "checkbox", "chips"]) {
+        const marks = (field?: Record<string, unknown>) =>
+          typeChangeTargets({
+            field: { name: "f", label: "F", type } as FieldDefinition,
+            candidates: CANDIDATES.map(to => ({
+              type: to,
+              ...(field === undefined ? {} : { field: { ...field, type: to } }),
+            })),
+            dialect,
+            builtBy: "collection",
+          });
+        expect(
+          marks({
+            name: "f",
+            label: "F",
+            required: false,
+            unique: false,
+            index: false,
+            defaultValue: undefined,
+            hasMany: undefined,
+          }),
+          type
+        ).toEqual(marks());
+      }
+    });
+
     it("a saved group: every type unavailable", () => {
       const targets = targetsOf({ type: "group", fields: [] });
       for (const target of targets.values()) {
@@ -470,6 +498,24 @@ describe("the route's answer for a field found by its path", () => {
           validation: { pattern: "", minLength: 0 },
         },
         UNSET,
+      ],
+      // As the Builder wrote a field before it sent any of these, and loads it.
+      [
+        "saved as the Builder has always saved one",
+        {
+          name: "v",
+          label: "V",
+          type: "text",
+          required: true,
+          unique: false,
+          index: false,
+          validation: { maxLength: 40, message: "Too long" },
+          admin: { width: "50%" },
+        },
+        {
+          ...UNSET,
+          validation: { required: true, maxLength: 40, message: "Too long" },
+        },
       ],
       [
         "with no rules at all",
