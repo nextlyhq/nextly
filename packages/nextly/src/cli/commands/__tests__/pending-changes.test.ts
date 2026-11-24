@@ -101,8 +101,13 @@ describe("a Schema Builder definition file", () => {
     expect(saidBy(created)).toMatch(
       /ui-schema\.json, is ignored by git[\s\S]*Commit \S*ui-schema\.json/
     );
-    // Written from the file all the same.
-    expect(sqlFiles()).toHaveLength(1);
+    // Written from the file all the same: its collection's table, in the one file's UP section.
+    const written = sqlFiles();
+    expect(written).toHaveLength(1);
+    const { upSql } = parseSqlSections(
+      await readFile(join(dir, "migrations", written[0]), "utf-8")
+    );
+    expect(upSql).toMatch(/CREATE TABLE "dc_cases" \([\s\S]*"summary"/);
 
     const checked = await check(builderProject);
     expect(checked.code).toBe(1);

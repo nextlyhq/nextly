@@ -1206,7 +1206,11 @@ describe("runChecks (F11 PR 4)", () => {
         ]);
 
         expect(text).toContain("2 pending permission changes detected.");
-        expect(listed(text)).toHaveLength(2);
+        // Both owners, and so not one of them listed twice.
+        expect(listed(text)).toEqual([
+          expect.stringContaining("@acme/reports: + export"),
+          expect.stringContaining("@acme/forms: + archive"),
+        ]);
       });
 
       it("counts one owner's two permissions once, as the one line it lists them in", async () => {
