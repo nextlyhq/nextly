@@ -596,8 +596,14 @@ async function writeCollectionSaveHeld(
             deps.adapter.getCapabilities().dialect
           );
         }
-        const hold = deletionHoldOfSave(deps, save, written.table);
-        await heldForFileRoad(deps, save.slug, hold, scope);
+        // Where the caller writes the registry row after the file, the hold lasts until it does.
+        const hold = await heldForFileRoad(
+          deps,
+          save.slug,
+          deletionHoldOfSave(deps, save, written.table),
+          scope,
+          options.inLastTransaction !== undefined
+        );
         await runWritten(
           deps,
           written.files,
@@ -4464,8 +4470,22 @@ function triedHoldOf(
   if (deps.adapter.getCapabilities().dialect !== "mysql") {
     return { before: check };
   }
-  const { slug } = hold;
   const standing = hold.standingIn(scope);
+  if (hold.heldOutside === true) {
+    // Held through the save's scope on a connection of its own for the whole run
+    // (`heldForFileRoad`): each try counts, and a resumed try counts again what still stands.
+    return {
+      before: check,
+      beforeResume: async db => {
+        try {
+          await standing(db);
+        } catch (error) {
+          throw resumedRefusal(error);
+        }
+      },
+    };
+  }
+  const { slug } = hold;
   // This try's hold: `before` (or `beforeResume`) and `settled` run in turn, one pair per try.
   let held: Awaited<ReturnType<typeof holdCollectionOnConnection>> | undefined;
   return {
@@ -4482,13 +4502,7 @@ function triedHoldOf(
         held = await holdCollectionOnConnection(deps.adapter, db, slug);
         await standing(db);
       } catch (error) {
-        const refusal = holdRefusalOf(error);
-        throw NextlyError.is(refusal)
-          ? refusedPartway(
-              refusal,
-              "What of its migration file ran stayed applied, so the file is kept: settle it with `nextly migrate:resolve` before saving again."
-            )
-          : error;
+        throw resumedRefusal(error);
       }
     },
     settled: async () => {
@@ -4505,6 +4519,22 @@ function triedHoldOf(
       });
     },
   };
+}
+
+/**
+ * A failure met by a resumed MySQL try, which runs past statements an earlier try made durable: a
+ * hold's refusal there comes after part of the file landed, schema or data, so it is told as
+ * part-way (`refusedPartway`), with the step to settle it, and the file is kept rather than
+ * withdrawn. Any other failure, a wait that ends the try among them, goes on as it is.
+ */
+function resumedRefusal(error: unknown): unknown {
+  const refusal = holdRefusalOf(error);
+  return NextlyError.is(refusal)
+    ? refusedPartway(
+        refusal,
+        "What of its migration file ran stayed applied, so the file is kept: settle it with `nextly migrate:resolve` before saving again."
+      )
+    : error;
 }
 
 /**
@@ -4533,20 +4563,32 @@ async function runHeld<T>(
 }
 
 /**
- * The save's hold for its file road, taken through `scope` where it deletes values (`hold`): on
- * PostgreSQL and SQLite the collection is held from before the file's count until the caller has
- * written the registry row, so an entry write that waited meets the definition the save recorded.
- * On MySQL the file's try holds it on its own connection instead (`runHeld`).
+ * The save's hold for its file road, where it deletes values (`hold`), and the hold its file's
+ * tries count under:
+ *
+ * - PostgreSQL and SQLite: taken through `scope` here, from before the file's count until the
+ *   caller has written the registry row, so an entry write that waited meets the definition the
+ *   save recorded (`heldOutside`).
+ * - MySQL, where the row is written in the file's last transaction (`registryInFile`): the file's
+ *   try holds the collection on its own connection instead (`triedHoldOf`), until that
+ *   transaction ends with the row written.
+ * - MySQL, where the caller writes the row after the file (a translations table brought in step
+ *   after it): taken through `scope` here, as on the other databases, on a session of its own
+ *   outside the pool, and the tries only count, so no write lands between the file and the row.
  */
 async function heldForFileRoad(
   deps: CollectionSaveDeps,
   slug: string,
   hold: SaveDeletionHold | undefined,
-  scope: SaveHoldScope
-): Promise<void> {
-  if (hold === undefined) return;
-  if (deps.adapter.getCapabilities().dialect === "mysql") return;
+  scope: SaveHoldScope,
+  registryInFile: boolean
+): Promise<SaveDeletionHold | undefined> {
+  if (hold === undefined) return undefined;
+  if (deps.adapter.getCapabilities().dialect === "mysql" && registryInFile) {
+    return hold;
+  }
   await scope.take(deps.adapter, slug);
+  return { ...hold, heldOutside: true };
 }
 
 /**
@@ -4740,6 +4782,11 @@ function deletionHoldOfSave(
 /** A save's deletion hold, with the collection it holds on MySQL (`triedHoldOf`). */
 interface SaveDeletionHold extends DeletionHold {
   readonly slug: string;
+  /**
+   * Held through the save's scope on a connection of its own for the whole file run
+   * (`heldForFileRoad`), so a MySQL try takes no hold of its own and only counts.
+   */
+  readonly heldOutside?: boolean;
 }
 
 /**

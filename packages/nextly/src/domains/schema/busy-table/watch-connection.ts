@@ -160,7 +160,7 @@ export async function openWatchConnection(
   if (poolHasFreeConnection(adapter, dialect)) return pool;
   try {
     if (dialect === "postgresql") {
-      return (await openPostgresWatch(driverPool(adapter), pool)) ?? pool;
+      return (await openPostgresWatch(adapter, pool)) ?? pool;
     }
     if (dialect === "mysql") return (await openMysqlWatch(adapter)) ?? pool;
   } catch {
@@ -169,43 +169,73 @@ export async function openWatchConnection(
   return pool;
 }
 
+/** A connection opened beside the adapter's pool (`openPostgresBesidePool`). */
+export interface ConnectionBesidePool {
+  /** Runs one statement, as compiled SQL text and its parameters, and returns its rows. */
+  execute<T>(text: string, params: readonly unknown[]): Promise<T[]>;
+  /** Whether the connection has reported an error since it opened: it answers nothing then. */
+  broken(): boolean;
+  /** Closes it, once only, and never fails: a broken connection's end has nothing left to close. */
+  close(): Promise<void>;
+}
+
 /**
- * A PostgreSQL connection beside the pool, made with the pool's own client class and options so
- * it connects exactly as the pool's connections do, under a name of its own.
+ * A PostgreSQL connection beside the adapter's pool, made with the pool's own client class and
+ * options so it connects exactly as the pool's connections do, under `applicationName`: for a
+ * caller that needs a connection of its own where the pool cannot spare one. Undefined where the
+ * adapter shows no node-postgres pool to make one with.
  */
-async function openPostgresWatch(
-  client: unknown,
-  pool: WatchConnection
-): Promise<WatchConnection | undefined> {
-  const pgPool = client as PgPoolLike | undefined;
+export async function openPostgresBesidePool(
+  adapter: DrizzleAdapter,
+  applicationName: string
+): Promise<ConnectionBesidePool | undefined> {
+  const pgPool = driverPool(adapter) as PgPoolLike | undefined;
   if (pgPool?.Client === undefined) return undefined;
   const connection = new pgPool.Client({
     ...pgPool.options,
-    application_name: WATCH_APPLICATION_NAME,
+    application_name: applicationName,
   });
-  // A connection that drops between asks is reported as an event rather than through a query.
-  // Unheard, that event would end the process; heard, the connection is given up and the asks go
-  // back through the pool.
+  // A connection that drops is reported as an event rather than through a query. Unheard, that
+  // event would end the process; heard, the connection is marked broken for its caller.
   let broken = false;
   connection.on("error", () => {
     broken = true;
   });
   await connection.connect();
-  const { PgDialect } = await import("drizzle-orm/pg-core");
-  const compiler = new PgDialect();
   let closed: Promise<void> | undefined;
   return {
-    query: async <T>(statement: SQL): Promise<T[]> => {
-      if (broken) return pool.query<T>(statement);
-      const compiled = compiler.sqlToQuery(statement);
-      return (await connection.query(compiled.sql, compiled.params))
-        .rows as T[];
-    },
-    // Once only, and never failing: a broken connection's end has nothing left to close.
+    execute: async <T>(text: string, params: readonly unknown[]) =>
+      (await connection.query(text, [...params])).rows as T[],
+    broken: () => broken,
     close: () => {
       closed ??= connection.end().catch(() => undefined);
       return closed;
     },
+  };
+}
+
+/**
+ * The watch's PostgreSQL connection beside the pool (`openPostgresBesidePool`), under the watch's
+ * own name. Once it is broken, the asks go back through the pool.
+ */
+async function openPostgresWatch(
+  adapter: DrizzleAdapter,
+  pool: WatchConnection
+): Promise<WatchConnection | undefined> {
+  const connection = await openPostgresBesidePool(
+    adapter,
+    WATCH_APPLICATION_NAME
+  );
+  if (connection === undefined) return undefined;
+  const { PgDialect } = await import("drizzle-orm/pg-core");
+  const compiler = new PgDialect();
+  return {
+    query: async <T>(statement: SQL): Promise<T[]> => {
+      if (connection.broken()) return pool.query<T>(statement);
+      const compiled = compiler.sqlToQuery(statement);
+      return connection.execute<T>(compiled.sql, compiled.params);
+    },
+    close: () => connection.close(),
   };
 }
 

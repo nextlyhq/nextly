@@ -17,13 +17,20 @@
  * @module domains/schema/builder-save/save-hold
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { StatementSession } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SqlParam,
+  StatementSession,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import { holdCollectionOnSession } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import {
   holdEntityInProcess,
   holdEntityOnPostgresSession,
 } from "../../dynamic-collections/services/entity-hold";
+import {
+  openPostgresBesidePool,
+  poolCanSpareOne,
+} from "../busy-table/watch-connection";
 
 /** A save's hold, kept until `end`. */
 export interface SaveHoldScope {
@@ -80,7 +87,8 @@ async function takeSaveHold(
     });
     return () => Promise.resolve(release());
   }
-  const { session, close } = await sessionKeptOpen(adapter);
+  const { session, close } =
+    (await sessionBesidePool(adapter)) ?? (await sessionKeptOpen(adapter));
   let release: () => Promise<void>;
   try {
     ({ release } =
@@ -101,6 +109,44 @@ async function takeSaveHold(
     } finally {
       await close();
     }
+  };
+}
+
+/** What a save's hold connection beside the pool is named, so an operator can tell what it is. */
+const SAVE_HOLD_APPLICATION_NAME = "nextly save hold";
+
+/**
+ * On PostgreSQL with a pool of one connection, a connection opened beside the pool for the hold
+ * (`openPostgresBesidePool`), as the busy-table watch and the schema lock's renewals open one:
+ * kept on the pool's only connection, the hold would leave the save's own count and statements
+ * waiting for a second one that never comes. Undefined elsewhere: a pool that can spare a
+ * connection keeps the hold on one of its own (`sessionKeptOpen`), and MySQL's sessions open
+ * outside its pool.
+ */
+async function sessionBesidePool(adapter: DrizzleAdapter): Promise<
+  | {
+      session: StatementSession;
+      close: () => Promise<void>;
+    }
+  | undefined
+> {
+  if (
+    adapter.getCapabilities().dialect !== "postgresql" ||
+    poolCanSpareOne(adapter, "postgresql")
+  ) {
+    return undefined;
+  }
+  const connection = await openPostgresBesidePool(
+    adapter,
+    SAVE_HOLD_APPLICATION_NAME
+  );
+  if (connection === undefined) return undefined;
+  return {
+    session: {
+      execute: <T>(text: string, params?: SqlParam[]) =>
+        connection.execute<T>(text, params ?? []),
+    },
+    close: () => connection.close(),
   };
 }
 

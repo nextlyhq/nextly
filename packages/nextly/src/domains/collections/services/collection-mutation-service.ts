@@ -9881,8 +9881,11 @@ export class CollectionMutationService extends BaseService {
         // written, before it commits; a gate that throws takes the create back.
         if (settleCreateGate) await settleCreateGate();
         // Compared, under the hold, with the registry row this create loaded its fields from: a
-        // field it sets that a save removed while it waited is refused by name.
-      }, transactionOptions, loadedRegistryRowOf(collection, body));
+        // field it sets that a save removed while it waited is refused by name. A create writes
+        // only the columns it sets, so a save that took out others lets it go on.
+      }, transactionOptions, loadedRegistryRowOf(collection, body, {
+        insertsOnly: true,
+      }));
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
       // there; from here a post-commit hook failure must not hide the delivery.
@@ -22981,10 +22984,12 @@ export class CollectionMutationService extends BaseService {
    */
   async loadedRegistryRowFor(
     collectionName: string,
-    items: readonly Readonly<Record<string, unknown>>[] = []
+    items: readonly Readonly<Record<string, unknown>>[] = [],
+    /** A batch of creates (`loadedRegistryRowOf`'s `insertsOnly`). */
+    options?: { insertsOnly?: boolean }
   ): Promise<LoadedRegistryRow | undefined> {
     const row = await this.collectionService.getCollection(collectionName);
-    return loadedRegistryRowOf(row, Object.assign({}, ...items));
+    return loadedRegistryRowOf(row, items, options);
   }
 
   /**

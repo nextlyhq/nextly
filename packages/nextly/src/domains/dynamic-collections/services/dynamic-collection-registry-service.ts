@@ -771,12 +771,13 @@ export class DynamicCollectionRegistryService extends BaseService {
             slugs
           )
         : { release: none };
-    let rows: { slug: string; id: unknown; schema_version: unknown }[];
+    // Keyed by the table's property names, as a row read through the adapter is.
+    let rows: { slug: string; id: unknown; schemaVersion: unknown }[];
     try {
       rows = await tx.select<{
         slug: string;
         id: unknown;
-        schema_version: unknown;
+        schemaVersion: unknown;
       }>("dynamic_collections", {
         columns: ["slug", "id", "schema_version"],
         where: { and: [{ column: "slug", op: "IN", value: [...slugs] }] },
@@ -792,7 +793,7 @@ export class DynamicCollectionRegistryService extends BaseService {
     const existing = rows.map(row => row.slug);
     const ids = new Map(rows.map(row => [row.slug, String(row.id)]));
     const versions = new Map(
-      rows.map(row => [row.slug, Number(row.schema_version)])
+      rows.map(row => [row.slug, Number(row.schemaVersion)])
     );
     if (strength === "share") {
       await named.release();

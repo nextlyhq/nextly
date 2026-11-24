@@ -40,7 +40,7 @@ import {
   toSnakeCase,
   usesJunctionTable,
 } from "../services/field-column-descriptor";
-import { linkMoveOf } from "../services/field-storage-moves";
+import { relationshipsDroppingLinks } from "../services/field-storage-moves";
 
 /** A removed field's values, as far as they could be counted. */
 export interface RemovedCount {
@@ -291,19 +291,18 @@ export function deletionHoldOf(args: {
     .map(rename => rename.from);
   const kept = new Set([...after, ...renamedAway]);
   // The links a many-to-many's link table holds go with it where the save removes the field, or
-  // keeps it by name but moves its links out of the table or to another (`linkMoveOf`): counted
-  // in that table, as a column's values are counted in their column. A field renamed is kept.
-  const nextByName = new Map(
-    fieldsStoredOnRow(args.next).map(field => [field.name, field])
-  );
-  const renamedFrom = new Set((args.renamed ?? []).map(rename => rename.from));
-  const linksDropped = fieldsStoredOnRow(args.previous).filter(field => {
-    if (!usesJunctionTable(field)) return false;
-    const after = nextByName.get(field.name);
-    if (after === undefined) return !renamedFrom.has(field.name);
-    const move = linkMoveOf(field, after);
-    return move === "leaving" || move === "retargeted";
-  });
+  // keeps it by name but moves its links out of the table or to another: counted in that table, as
+  // a column's values are counted in their column. Which ones go is the save's own decision
+  // (`relationshipsDroppingLinks`): a field renamed under the same target is carried, its table
+  // renamed with every link, only where the save pairs the two itself, so a rename answer that
+  // pairs nothing leaves the old field's links counted. A Builder collection's table is built by
+  // the collection's generator.
+  const linksDropped = relationshipsDroppingLinks(
+    args.previous,
+    args.next,
+    "collection",
+    dialect
+  ).filter(usesJunctionTable);
   const removed = [
     ...fieldsStoredOnRow(args.previous).filter(
       field => inAColumn(field) && !kept.has(columnOf(field.name))

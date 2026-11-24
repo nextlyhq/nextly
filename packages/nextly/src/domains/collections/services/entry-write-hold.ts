@@ -34,6 +34,7 @@ import type {
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
   type EntityRef,
   entityHoldKey,
@@ -59,22 +60,33 @@ export interface HoldingAdapter {
 
 /**
  * The registry row a write was made for: the id and schema version of the row its operation loaded
- * its fields from, and the fields of that definition the write sets.
+ * its fields from, the fields of that definition (`fields`), and those of them the write sets.
+ * `insertsOnly` marks a create, which writes only the columns its data sets and reads no entry
+ * through the definition first.
  */
 export interface LoadedRegistryRow {
   readonly id: string;
   readonly schemaVersion: number | undefined;
+  readonly fields: readonly string[];
   readonly setsFields: readonly string[];
+  readonly insertsOnly?: true;
 }
+
+/** An entry's data, or a batch's items, each an entry's data. */
+type WrittenData =
+  | Readonly<Record<string, unknown>>
+  | readonly Readonly<Record<string, unknown>>[];
 
 /**
  * The registry row `row` (a collection's, as `getCollection` answers it) as a write made from it
- * holds it: its id, its schema version, and the fields of its definition that `data` sets.
- * Undefined where the row carries no id, so nothing is compared.
+ * holds it: its id, its schema version, its definition's fields, and those of them that `data`
+ * (an entry's data, or a batch's items) sets. With `insertsOnly`, for a create. Undefined where the
+ * row carries no id, so nothing is compared.
  */
 export function loadedRegistryRowOf(
   row: unknown,
-  data?: Readonly<Record<string, unknown>>
+  data?: WrittenData,
+  options?: { insertsOnly?: boolean }
 ): LoadedRegistryRow | undefined {
   const { id, schemaVersion, fields } = (row ?? {}) as {
     id?: unknown;
@@ -83,15 +95,34 @@ export function loadedRegistryRowOf(
   };
   if (typeof id !== "string" && typeof id !== "number") return undefined;
   const version = Number(schemaVersion);
-  const sets =
-    data === undefined
-      ? []
-      : fieldNamesOf(fields).filter(name => Object.hasOwn(data, name));
+  const names = fieldNamesOf(fields);
+  const sets = data === undefined ? [] : names.filter(setBy(data));
   return {
     id: String(id),
     schemaVersion: Number.isFinite(version) ? version : undefined,
+    fields: names,
     setsFields: sets,
+    ...(options?.insertsOnly === true ? { insertsOnly: true as const } : {}),
   };
+}
+
+/**
+ * Whether `data` sets a field, by its name: an entry's own keys, or any of a batch's items'. A
+ * batch's keys are gathered one item at a time, since a batch has no upper size.
+ */
+function setBy(data: WrittenData): (name: string) => boolean {
+  if (!isItems(data)) return name => Object.hasOwn(data, name);
+  const keys = new Set<string>();
+  for (const item of data) {
+    for (const key of Object.keys(item)) keys.add(key);
+  }
+  return name => keys.has(name);
+}
+
+function isItems(
+  data: WrittenData
+): data is readonly Readonly<Record<string, unknown>>[] {
+  return Array.isArray(data);
 }
 
 /** The names a definition's `fields` answer to in an entry's data (`fieldsStoredOnRow`). */
@@ -141,11 +172,12 @@ export async function holdEntityForWrite(
   }
   // The registry row as it stands once held: on MySQL the share side's own read, `FOR SHARE`;
   // elsewhere a plain read, the entity's lock being the hold, so concurrent writes lock no row of
-  // the registry.
+  // the registry. A row read through the adapter is keyed by the table's property names, so the
+  // version is `schemaVersion`.
   const row =
     dialect === "mysql"
       ? await heldRegistryRowOnMysql(tx, entity, holder)
-      : await tx.selectOne<{ id: unknown; schema_version: unknown }>(
+      : await tx.selectOne<{ id: unknown; schemaVersion: unknown }>(
           "dynamic_collections",
           {
             columns: ["id", "schema_version"],
@@ -159,7 +191,7 @@ export async function holdEntityForWrite(
       version:
         row === null || row === undefined
           ? undefined
-          : Number(row.schema_version),
+          : Number(row.schemaVersion),
     });
   }
   if (held === undefined) heldIn.set(tx, new Set([key]));
@@ -171,7 +203,7 @@ async function heldRegistryRowOnMysql(
   tx: TransactionContext,
   entity: EntityRef,
   holder: CollectionHolder
-): Promise<{ id: unknown; schema_version: unknown } | undefined> {
+): Promise<{ id: unknown; schemaVersion: unknown } | undefined> {
   const { existing, ids, versions } = await holder.holdCollectionsIn(
     tx,
     [entity.slug],
@@ -180,7 +212,7 @@ async function heldRegistryRowOnMysql(
   if (!existing.includes(entity.slug)) return undefined;
   return {
     id: ids.get(entity.slug),
-    schema_version: versions.get(entity.slug),
+    schemaVersion: versions.get(entity.slug),
   };
 }
 
@@ -189,7 +221,10 @@ async function heldRegistryRowOnMysql(
  * (`loaded`): gone (`NOT_FOUND`), or another row under the same slug, made while the write waited
  * (`COLLECTION_BEING_CHANGED`). Where the row is the same and a save changed its definition since
  * (its schema version moved), a field the write sets that the held definition no longer has is
- * refused by name. Nothing of the write has run.
+ * refused by name; and a write that reads the entry as it stands, made from a definition with a
+ * field the held one no longer has, is refused as made for a definition that changed
+ * (`COLLECTION_BEING_CHANGED`), since its read names that field's column. A create reads no entry
+ * first and writes only the columns its data sets, so it goes on. Nothing of the write has run.
  */
 async function refuseChanged(
   tx: TransactionContext,
@@ -212,7 +247,6 @@ async function refuseChanged(
   }
   if (held.id !== loaded.id) throw replacedWhileHeld(entity.slug);
   if (
-    loaded.setsFields.length === 0 ||
     loaded.schemaVersion === undefined ||
     held.version === loaded.schemaVersion
   ) {
@@ -224,7 +258,20 @@ async function refuseChanged(
   });
   const remaining = new Set(fieldNamesOf(row?.fields));
   const removed = loaded.setsFields.filter(name => !remaining.has(name));
-  if (removed.length === 0) return;
+  if (removed.length === 0) {
+    // A save that only added fields leaves every one the write was made from, and a create reads
+    // nothing through them: either goes on.
+    if (
+      loaded.insertsOnly === true ||
+      loaded.fields.every(name => remaining.has(name))
+    ) {
+      return;
+    }
+    // Made again from the definition as it stands: the rows this process keeps of it are cleared,
+    // so a retry reads it rather than the one the write was made from.
+    clearRegistryRowCache();
+    throw changedWhileHeld(entity.slug);
+  }
   throw NextlyError.validation({
     errors: removed.map(name => ({
       path: `fields.${name}`,
@@ -236,6 +283,19 @@ async function refuseChanged(
       slug: entity.slug,
       fields: removed,
     },
+  });
+}
+
+/**
+ * The refusal of a write made from a definition a save changed while it waited, taking out a field
+ * the write does not set: to be made again from the definition as it stands.
+ */
+function changedWhileHeld(slug: string): NextlyError {
+  return new NextlyError({
+    code: "COLLECTION_BEING_CHANGED",
+    publicMessage:
+      "This collection was changed while this write waited for it, so nothing was written. Try again.",
+    logContext: { reason: "definition-changed-while-held", slug },
   });
 }
 
