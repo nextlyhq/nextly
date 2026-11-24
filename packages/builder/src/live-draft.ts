@@ -14,7 +14,9 @@
  *   not a value yet (`12p`, half a hex colour, an emptied field) writes
  *   nothing, so the document and the canvas keep the last value that was one.
  *   The field shows its own message as it does on blur, and leaving the field
- *   settles the text as before.
+ *   settles the text as before. A field may also take back what its
+ *   keystrokes wrote when the edit ends on refused text (`withdraw`), as a
+ *   colour field does.
  * - **The field's own writes leave its text alone.** The document answers a
  *   write in its own spelling (`24` is stored as `24px`), and a draft that
  *   followed it would move the caret and the text under the author's fingers.
@@ -58,6 +60,13 @@ export interface LiveDraft {
    * last keystroke wrote takes the stored spelling ("24" shows as stored).
    */
   readonly end: () => void;
+  /**
+   * Take back what this stretch's keystrokes wrote, recording nothing, and
+   * keep the text shown: for an edit that ends on text the field refuses, so
+   * the document does not keep a value the field says it is not. Answers
+   * whether the document went back.
+   */
+  readonly withdraw: () => boolean;
 }
 
 /**
@@ -127,7 +136,16 @@ export function useLiveDraft(
     wrote: null,
     answered: null,
   }).current;
+  // The stored text a withdrawal puts back, which the draft does not follow:
+  // the refused text stays in the field for the author to correct.
+  const withdrawnTo = React.useRef<string | null>(null);
   React.useEffect(() => {
+    const kept = withdrawnTo.current;
+    withdrawnTo.current = null;
+    if (kept === stored) {
+      idle(stretch);
+      return;
+    }
     if (stretch.own) {
       stretch.own = false;
       stretch.answered = stored;
@@ -180,6 +198,15 @@ export function useLiveDraft(
         }
         idle(stretch);
         edit.end();
+      },
+      withdraw: () => {
+        const { run, wrote, before } = stretch;
+        // Nothing written, or the document already back where it began.
+        if (run === null || wrote === null) return false;
+        if (storedNow.current === before) return false;
+        if (cancelTyping?.(run) !== true) return false;
+        withdrawnTo.current = before;
+        return true;
       },
     };
   }, [draft, setDraft, stored, stretch, edit, cancelTyping]);
