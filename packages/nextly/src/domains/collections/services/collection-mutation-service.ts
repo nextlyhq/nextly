@@ -21819,6 +21819,84 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
+  /**
+   * The hooks an entry delete runs before it, of its own or in a caller's
+   * transaction: `beforeOperation`, then the code-registered `beforeDelete`,
+   * then the stored ones. Any of them throws to abort the delete.
+   */
+  private async beforeDeleteHooks({
+    collectionName,
+    entryId,
+    entry,
+    user,
+    storedHooks,
+    sharedContext,
+    requestFacts,
+    executor,
+  }: {
+    collectionName: string;
+    entryId: string;
+    /** The entry as fetched, which the hooks are handed. */
+    entry: Record<string, unknown>;
+    user?: UserContext;
+    storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
+    sharedContext: Record<string, unknown>;
+    requestFacts: ReturnType<typeof resolveRequestFacts>;
+    /**
+     * The caller's transaction, where the delete is made in one: bound to each
+     * hook's context, so a hook's read (a code hook's through
+     * `context.executor`, a stored hook's uniqueness read) stays on the
+     * connection that transaction holds rather than re-entering the pool.
+     */
+    executor?: unknown;
+  }): Promise<void> {
+    const onTransaction = executor === undefined ? {} : { executor };
+    // Execute beforeOperation hooks FIRST (before operation-specific hooks)
+    // Can modify operation arguments (id) or throw to abort
+    await this.hookService.hookRegistry.executeBeforeOperation({
+      collection: collectionName,
+      operation: "delete",
+      args: { id: entryId },
+      user: user ? { id: user.id, email: user.email } : undefined,
+      context: sharedContext,
+      req: requestFacts,
+      ...onTransaction,
+    });
+
+    // Note: For delete, we don't use modified id since we already fetched the entry
+    // and checked access. The hook can throw to abort if needed.
+
+    // Execute beforeDelete hooks (code-registered)
+    // Hooks run before deletion and can prevent deletion by throwing error
+    const beforeContext = this.hookService.buildHookContext({
+      collection: collectionName,
+      operation: "delete" as const,
+      data: entry,
+      user,
+      context: sharedContext,
+      req: requestFacts,
+      ...onTransaction,
+    });
+
+    await this.hookService.hookRegistry.execute("beforeDelete", beforeContext);
+
+    // Execute stored beforeDelete hooks (UI-configured)
+    await this.hookService.storedHookExecutor.execute(
+      "beforeDelete",
+      storedHooks,
+      this.hookService.buildPrebuiltHookContext({
+        collection: collectionName,
+        operation: "delete",
+        data: entry,
+        queryDatabase: this.queryDatabaseFn,
+        user,
+        sharedContext,
+        req: requestFacts,
+        ...onTransaction,
+      })
+    );
+  }
+
   /** {@link deleteEntry}, inside the scope that says what it moves. */
   private async deleteEntryInParts(
     params: {
@@ -21918,54 +21996,17 @@ export class CollectionMutationService extends BaseService {
       entryTable = tableName;
 
       // Run once for a delete, however often it is made.
-      await tries.once("beforeDelete", async () => {
-        // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-        // Can modify operation arguments (id) or throw to abort
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "delete",
-          args: { id: params.entryId },
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: sharedContext,
-          req: requestFacts,
-        });
-
-        // Note: For delete, we don't use modified id since we already fetched the entry
-        // and checked access. The hook can throw to abort if needed.
-
-        // Execute beforeDelete hooks (code-registered)
-        // Hooks run before deletion and can prevent deletion by throwing error
-        const beforeContext = this.hookService.buildHookContext({
-          collection: params.collectionName,
-          operation: "delete" as const,
-          data: entry,
+      await tries.once("beforeDelete", () =>
+        this.beforeDeleteHooks({
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          entry,
           user: params.user,
-          context: sharedContext,
-          req: requestFacts,
-        });
-
-        await this.hookService.hookRegistry.execute(
-          "beforeDelete",
-          beforeContext
-        );
-
-        // Execute stored beforeDelete hooks (UI-configured)
-        await this.hookService.storedHookExecutor.execute(
-          "beforeDelete",
           storedHooks,
-          this.hookService.buildPrebuiltHookContext({
-            collection: params.collectionName,
-            operation: "delete",
-            data: entry,
-            queryDatabase: this.queryDatabaseFn,
-            user: params.user,
-            sharedContext,
-            req: requestFacts,
-          })
-        );
-      });
+          sharedContext,
+          requestFacts,
+        })
+      );
 
       // The collection schema, viewed two ways: the component cascade takes
       // FieldConfig, the outbox snapshot takes FieldDefinition. Both are the
@@ -25407,60 +25448,16 @@ export class CollectionMutationService extends BaseService {
 
       // Execute hooks (unless skipped)
       if (options.runHooks) {
-        // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-        // Can modify operation arguments (id) or throw to abort
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "delete",
-          args: { id: entryId },
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: sharedContext,
-          req: requestFacts,
-          // Bind a beforeOperation hook that reads via context.executor to the
-          // caller's transaction connection so it does not re-enter the pool.
-          executor: tx.getDrizzle(),
-        });
-
-        // Note: For delete, we don't use modified id since we already fetched the entry
-        // and checked access. The hook can throw to abort if needed.
-
-        // Execute beforeDelete hooks (code-registered)
-        const beforeContext = this.hookService.buildHookContext({
-          collection: params.collectionName,
-          operation: "delete" as const,
-          data: entry,
+        await this.beforeDeleteHooks({
+          collectionName: params.collectionName,
+          entryId,
+          entry,
           user: params.user,
-          context: sharedContext,
-          // Bind a code beforeDelete hook that reads via context.executor to the
-          // caller's transaction connection so it does not re-enter the pool.
-          executor: tx.getDrizzle(),
-          req: requestFacts,
-        });
-
-        await this.hookService.hookRegistry.execute(
-          "beforeDelete",
-          beforeContext
-        );
-
-        // Execute stored beforeDelete hooks (UI-configured)
-        await this.hookService.storedHookExecutor.execute(
-          "beforeDelete",
           storedHooks,
-          this.hookService.buildPrebuiltHookContext({
-            collection: params.collectionName,
-            operation: "delete",
-            data: entry,
-            queryDatabase: this.queryDatabaseFn,
-            user: params.user,
-            sharedContext,
-            req: requestFacts,
-            // Bind a stored hook's uniqueness read to the caller's transaction
-            // connection so it does not re-enter the pool from inside the tx.
-            executor: tx.getDrizzle(),
-          })
-        );
+          sharedContext,
+          requestFacts,
+          executor: tx.getDrizzle(),
+        });
       }
 
       // The collection schema, two views: FieldConfig for the component cascade,
