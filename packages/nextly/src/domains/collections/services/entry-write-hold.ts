@@ -95,6 +95,8 @@ export interface HeldTries {
   compared(changed: boolean): void;
   /** What is left of `whole`, the time the write may wait for its hold over all its tries. */
   waitLeft(whole: number): number;
+  /** Whether the write can be made again, so refusing it as made earlier costs it nothing. */
+  readonly remakes: boolean;
 }
 
 /** How a write is made from the row it loads (`loadedRegistryRowOf`). */
@@ -435,10 +437,12 @@ function refuseUnlessSameRow(
  * (`fieldsStoredDifferently`), is refused naming it; so is a write that reads the entry as it
  * stands, made from a definition with a field that is gone or stored differently, as one made for a
  * definition that changed (`COLLECTION_BEING_CHANGED`), since its read names that field's column.
- * A create reads no entry first and writes only the columns its data names, so it goes on where
- * none of those changed. A lifecycle that came or went, or translation, changes what every write
- * writes or reads; a write that sets the status of a lifecycle that went is refused naming it, as
- * one that sets a removed field is.
+ * A create reads no entry first and writes only the columns its data names, so one that cannot be
+ * made again goes on where none of those changed; one that can is made again like any other write,
+ * since it reads back what it wrote through the tables this process built from the earlier
+ * definition. A lifecycle that came or went, or translation, changes what every write writes or
+ * reads; a write that sets the status of a lifecycle that went is refused naming it, as one that
+ * sets a removed field is.
  *
  * A write refused as made for a definition that changed has its tries told: one that can be
  * made again, from what its hooks left, is (`WriteTries`). A field it sets is named instead, since
@@ -462,8 +466,9 @@ function refuseMadeFromEarlier(
     loaded.lifecycle === held.lifecycle &&
     loaded.localized === held.localized
   ) {
-    const reads =
-      loaded.insertsOnly === true ? loaded.namesFields : loaded.fields;
+    const goesOn =
+      loaded.insertsOnly === true && loaded.tries?.remakes !== true;
+    const reads = goesOn ? loaded.namesFields : loaded.fields;
     if (madeFromWhatHolds(reads, loaded, held.fields, dialect)) return;
   }
   loaded.tries?.compared(true);

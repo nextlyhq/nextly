@@ -66,12 +66,7 @@ if (way === "direct") {
     await rest("POST", ["collections", slug, "entries"], warm)
   ).json()) as { item?: { id?: unknown } };
   if (made.item?.id === undefined) throw new Error("the warm-up write failed");
-  await rest("DELETE", [
-    "collections",
-    slug,
-    "entries",
-    String(made.item.id),
-  ]);
+  await rest("DELETE", ["collections", slug, "entries", String(made.item.id)]);
 }
 say("ready");
 // Sent once the test's save holds the collection.
@@ -81,7 +76,7 @@ await new Promise<void>(resolve => {
 
 type Outcome =
   | { ok: true }
-  | { code?: unknown; message?: unknown; errors?: unknown };
+  | { code?: unknown; message?: unknown; errors?: unknown; failed?: string };
 let outcome: Outcome;
 try {
   if (way === "direct") {
@@ -91,11 +86,7 @@ try {
     } as never);
     outcome = { ok: true };
   } else {
-    const response = await rest(
-      "POST",
-      ["collections", slug, "entries"],
-      data
-    );
+    const response = await rest("POST", ["collections", slug, "entries"], data);
     const body = (await response.json().catch(() => ({}))) as {
       error?: {
         code?: unknown;
@@ -116,8 +107,18 @@ try {
   const refused = error as {
     code?: unknown;
     publicData?: { errors?: unknown };
+    cause?: unknown;
+    logContext?: unknown;
   };
-  outcome = { code: refused.code, errors: refused.publicData?.errors };
+  outcome = {
+    code: refused.code,
+    errors: refused.publicData?.errors,
+    // What it failed on, told by the test when it expected another end.
+    failed: JSON.stringify({
+      cause: String(refused.cause),
+      log: refused.logContext,
+    }),
+  };
 }
 say(JSON.stringify(outcome));
 await copy.destroy();

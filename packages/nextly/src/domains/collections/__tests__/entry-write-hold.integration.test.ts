@@ -33,6 +33,7 @@ import {
   holdEntityForWrite,
   type HoldingAdapter,
   type LoadedRegistryRow,
+  type LoadedRegistryRowOptions,
   loadedRegistryRowOf,
 } from "../services/entry-write-hold";
 
@@ -329,7 +330,7 @@ describe.each(getConfiguredTestDialects())(
     async function loadedNow(
       t: TestNextly,
       data?: Record<string, unknown>,
-      options?: { insertsOnly?: boolean }
+      options?: LoadedRegistryRowOptions
     ): Promise<LoadedRegistryRow | undefined> {
       clearRegistryRowCache();
       const registry = new DynamicCollectionService(t.adapter, consoleLogger);
@@ -471,6 +472,16 @@ describe.each(getConfiguredTestDialects())(
         { title: "t" },
         { insertsOnly: true }
       );
+      // The same create, in tries of which another is left, and none.
+      const tries = { compared: () => undefined, waitLeft: (ms: number) => ms };
+      const inTries = (remakes: boolean) =>
+        loadedNow(
+          t,
+          { title: "t" },
+          { insertsOnly: true, tries: { ...tries, remakes } }
+        );
+      const madeAgain = await inTries(true);
+      const lastTry = await inTries(false);
       expect(setsNote?.setsFields).toEqual(["title", "note"]);
       // The save's registry write: the definition without `note`, its version moved.
       const registry = new DynamicCollectionService(t.adapter, consoleLogger);
@@ -498,8 +509,13 @@ describe.each(getConfiguredTestDialects())(
       await expect(heldFor(t, setsTitle)).rejects.toMatchObject({
         code: "COLLECTION_BEING_CHANGED",
       });
-      // A create reads no entry through the earlier definition and writes only what it sets.
+      // A create reads no entry through the earlier definition and writes only what it sets, so one
+      // that cannot be made again goes on; one that can is, since it reads back what it wrote.
       await expect(heldFor(t, createsTitle)).resolves.toBeUndefined();
+      await expect(heldFor(t, lastTry)).resolves.toBeUndefined();
+      await expect(heldFor(t, madeAgain)).rejects.toMatchObject({
+        code: "COLLECTION_BEING_CHANGED",
+      });
       // Made from the definition as the save left it, the write goes on.
       await expect(
         heldFor(t, await loadedNow(t, { title: "t" }))

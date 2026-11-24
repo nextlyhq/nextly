@@ -80,22 +80,27 @@ export class WriteTries implements HeldTries {
     return this.madeAgain && !this.holds;
   }
 
+  /** Whether the try under way can be made again, so refusing it costs the write nothing. */
+  get remakes(): boolean {
+    return this.again && this.made < WRITE_TRIES;
+  }
+
   /**
    * Makes the write, and makes it again while a try is refused as made from a definition that
-   * changed, up to `WRITE_TRIES` in all. `reload` reads the definitions afresh before each later
-   * try, and answers whether it could; where it could not, or no try is left, the refusal stands.
+   * changed, up to `WRITE_TRIES` in all, `reload` reading the definitions afresh before each later
+   * try; where no try is left, the refusal stands.
    */
   async make<T>(
     write: () => Promise<T>,
-    reload: () => Promise<boolean>
+    reload: () => Promise<void>
   ): Promise<T> {
     for (;;) {
       this.made += 1;
       this.changed = false;
       this.holds = false;
       const outcome = await running.run(this, () => settled(write));
-      const again = this.again && this.changed && this.made < WRITE_TRIES;
-      if (!again || !(await reload())) return valueOf(outcome);
+      if (!this.changed || !this.remakes) return valueOf(outcome);
+      await reload();
     }
   }
 

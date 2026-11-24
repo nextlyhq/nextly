@@ -18,7 +18,7 @@ import {
   WriteTries,
 } from "../write-tries";
 
-const reloads = () => vi.fn(async () => true);
+const reloads = () => vi.fn(async () => undefined);
 
 describe("the tries of an entry write", () => {
   it("makes a write once where its definition stands", async () => {
@@ -46,7 +46,6 @@ describe("the tries of an entry write", () => {
     };
     const reload = async () => {
       order.push("reload");
-      return true;
     };
 
     expect(await tries.make(write, reload)).toBe("written");
@@ -86,28 +85,24 @@ describe("the tries of an entry write", () => {
     expect(retried).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves the last refusal standing after its last try, or where nothing could be read afresh", async () => {
+  it("leaves the last refusal standing after its last try, which is told it is not made again", async () => {
     const changing = new WriteTries();
     const refusals: Error[] = [];
+    const remakes: boolean[] = [];
+    const reload = reloads();
     const write = vi.fn(async () => {
+      remakes.push(changing.remakes);
       changing.compared(true);
       refusals.push(new Error(`refused ${String(refusals.length + 1)}`));
       throw refusals.at(-1);
     });
-    await expect(changing.make(write, reloads())).rejects.toThrow(
+    await expect(changing.make(write, reload)).rejects.toThrow(
       `refused ${String(WRITE_TRIES)}`
     );
     expect(write).toHaveBeenCalledTimes(WRITE_TRIES);
-
-    const inside = new WriteTries();
-    const once = vi.fn(async () => {
-      inside.compared(true);
-      throw new Error("refused");
-    });
-    await expect(inside.make(once, async () => false)).rejects.toThrow(
-      "refused"
-    );
-    expect(once).toHaveBeenCalledTimes(1);
+    // Nothing is read afresh after the last, with no try to read it for.
+    expect(reload).toHaveBeenCalledTimes(WRITE_TRIES - 1);
+    expect(remakes).toEqual([true, true, false]);
   });
 
   it("runs a step once, and hands a later try a copy of what it left", async () => {
@@ -137,6 +132,7 @@ describe("the tries of an entry write", () => {
     const left = { data: { title: "t" } };
     const run = vi.fn(() => left);
     const write = vi.fn(async () => {
+      expect(tries.remakes).toBe(false);
       // The thing itself, each time it is asked for: no copy is made for a try that cannot come.
       expect(await tries.kept("hooks", run)).toBe(left);
       expect(await tries.kept("hooks", run)).toBe(left);

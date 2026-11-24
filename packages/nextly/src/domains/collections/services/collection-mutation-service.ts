@@ -595,7 +595,11 @@ import {
   type FilteredWriteMatch,
   type ReadReach,
 } from "./write-filter-match";
-import { replayingWrite, WriteTries } from "./write-tries";
+import {
+  replayingWrite,
+  savesHoldEntriesHere,
+  WriteTries,
+} from "./write-tries";
 
 /** The Drizzle executor shape the companion-join readers accept (a transaction
  * handle's `getDrizzle()` result, or the pooled `this.db`). */
@@ -10053,8 +10057,9 @@ export class CollectionMutationService extends BaseService {
         if (settleCreateGate) await settleCreateGate();
         // Compared, under the hold, with the registry row this create loaded its fields from: a
         // field it sets, its hooks' included, that a save removed while it waited is refused by
-        // name. A create writes only the columns it names, so a save that took out others lets it
-        // go on, and one that took out a default nobody changed has it made again.
+        // name. Where it can, it is made again when a save took out any other, a default nobody
+        // changed included. Where it cannot, a save that took out none of the columns it names lets
+        // it go on.
       }, transactionOptions, loadedRegistryRowOf(collection, writtenNames, {
         insertsOnly: true,
         untouchedDefaults,
@@ -23258,7 +23263,11 @@ export class CollectionMutationService extends BaseService {
    * for it, with the definitions read afresh before each later try.
    */
   inWriteTries<T>(write: (tries: WriteTries) => Promise<T>): Promise<T> {
-    const tries = new WriteTries();
+    // Inside a transaction the flow opened nothing can be read afresh, and the write keeps its
+    // refusal.
+    const tries = new WriteTries(
+      savesHoldEntriesHere() && !this.adapter.transactionOpenInFlow()
+    );
     return tries.make(
       () => write(tries),
       () => this.readDefinitionsAfresh()
@@ -23269,14 +23278,10 @@ export class CollectionMutationService extends BaseService {
    * Reads the definitions this process serves again where a save changed them:
    * the registry rows, and the tables built from them, which a save made in
    * another process leaves here as they were until a request follows it.
-   * Answers whether it did: inside a transaction the flow opened nothing is
-   * read afresh, and the write keeps its refusal.
    */
-  private async readDefinitionsAfresh(): Promise<boolean> {
-    if (this.adapter.transactionOpenInFlow()) return false;
+  private async readDefinitionsAfresh(): Promise<void> {
     bumpSchemaVersion();
     await servedSchemaVersion();
-    return true;
   }
 
   /**
