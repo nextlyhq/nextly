@@ -1168,6 +1168,74 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // A change under an update trigger goes by its file's own statement where no value needs writing,
+    // judged again in the file's transaction: a value written since that does meets the refusal there.
+    it.runIf(dialect === "postgresql")(
+      "asks again where it runs whether any value needs writing under an update trigger",
+      async () => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await write(t, "a", { v: "12" });
+        const { db, conversion } = await judgedThenConversion(t, "unconfirmed");
+        await exec(
+          t,
+          `CREATE FUNCTION tcc_touch_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql`
+        );
+        await exec(
+          t,
+          `CREATE TRIGGER tcc_touch AFTER UPDATE ON ${q(`dc_${SLUG}`)} FOR EACH ROW EXECUTE FUNCTION tcc_touch_fn()`
+        );
+
+        // Nothing to write: the column is left to the statement that follows.
+        await conversion.run(db);
+        expect(await stored(t)).toEqual({ a: "12" });
+
+        await exec(t, `UPDATE ${q(`dc_${SLUG}`)} SET ${q("v")} = '012'`);
+        await expect(conversion.run(db)).rejects.toMatchObject(
+          refusedSaying("tcc_touch")
+        );
+        expect(await stored(t)).toEqual({ a: "012" });
+      }
+    );
+
+    // A number has no collation, so nothing is lost with the text's where no value needs writing: the
+    // file's own statement changes the column, as it did before any value was converted. Into a text
+    // of another column type the collation would go, and stays refused.
+    it.runIf(dialect === "postgresql")(
+      "changes a column of another collation into a number where no value needs writing",
+      async () => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await exec(
+          t,
+          `ALTER TABLE ${q(`dc_${SLUG}`)} ALTER COLUMN ${q("v")} TYPE text COLLATE "C"`
+        );
+        await write(t, "a", { v: "12" });
+
+        expect(await save(t, [{ name: "v", type: "number" }])).toBeUndefined();
+
+        expect(await read(t, "v")).toEqual({ a: 12 });
+      }
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "refuses a column of another collation becoming a text of another column type, no value needing writing",
+      async () => {
+        const t = await boot([{ name: "v", type: "email" }]);
+        await exec(
+          t,
+          `ALTER TABLE ${q(`dc_${SLUG}`)} ALTER COLUMN ${q("v")} TYPE text COLLATE "C"`
+        );
+        await write(t, "a", { v: "a@b.co" });
+
+        expect(
+          await save(t, [
+            { name: "v", type: "text", options: { variant: "short" } },
+          ])
+        ).toMatchObject(refusedSaying("compares by the collation C"));
+
+        expect(await read(t, "v")).toEqual({ a: "a@b.co" });
+      }
+    );
+
     it.runIf(dialect === "postgresql")(
       "refuses a unique text under a nondeterministic collation becoming JSON, and changes nothing",
       async () => {

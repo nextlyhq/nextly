@@ -487,6 +487,32 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
+    /** An update trigger on the collection's table that says each time it fires (`fired`). */
+    async function withLoggingTrigger(t: TestNextly): Promise<void> {
+      await exec(t, `CREATE TABLE tcf_fired (n integer)`);
+      if (dialect === "postgresql") {
+        await exec(
+          t,
+          `CREATE FUNCTION tcf_touch_fn() RETURNS trigger AS $$ BEGIN INSERT INTO tcf_fired VALUES (1); RETURN NEW; END $$ LANGUAGE plpgsql`
+        );
+      }
+      await exec(
+        t,
+        dialect === "postgresql"
+          ? `CREATE TRIGGER tcf_touch AFTER UPDATE ON dc_tcf_posts FOR EACH ROW EXECUTE FUNCTION tcf_touch_fn()`
+          : `CREATE TRIGGER tcf_touch AFTER UPDATE ON dc_tcf_posts BEGIN INSERT INTO tcf_fired VALUES (1); END`
+      );
+    }
+
+    /** How many times the logging trigger has fired. */
+    async function fired(t: TestNextly): Promise<number> {
+      const [row] = await exec<{ n: unknown }>(
+        t,
+        `SELECT COUNT(*) AS n FROM tcf_fired`
+      );
+      return Number(row?.n);
+    }
+
     /** A first database's text field becoming a number, its file written; its folder kept. */
     async function textBecomesNumber(): Promise<number> {
       const first = await boot(dialect);
@@ -897,20 +923,79 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // A rollback too, where a value is written back in another form: a text as a list of it.
     converts(
       "refuses a rollback over an update trigger, and changes nothing",
       async () => {
-        const created = await textBecomesNumber();
+        const first = await boot(dialect);
+        await createPosts([{ name: "v", type: "chips" }]);
+        const created = await filesWritten();
+        await write(first, "kept", { v: ["x"] });
+        await save(first, [{ name: "v", type: "text" }]);
+        await first.destroy();
+        instance = undefined;
         const second = await boot(dialect);
         await migrateFolder(second, created);
-        await write(second, "whole", { v: "034" });
+        await write(second, "one", { v: ["y"] });
         await migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"));
         await withTrigger(second);
 
         await expect(migrateDown(second)).rejects.toMatchObject(
           refusedSaying("tcf_touch")
         );
+        expect(await read(second)).toEqual({ one: "y" });
+      }
+    );
+
+    // Where every value is stored as the new type reads it, the file's own statement changes the
+    // column as it did before any value was converted: PostgreSQL's `ALTER … TYPE` updates no row, so
+    // nothing sets a trigger off. SQLite's file rebuilds the table, which its own guard refuses over a
+    // trigger, so there the change stays refused by name before the file is written.
+    converts.each([
+      ["an entry", "12"],
+      ["no entry", undefined],
+    ])(
+      "changes a column under an update trigger where no value needs writing, and sets it off for none (%s)",
+      async (_, value) => {
+        const t = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        if (value !== undefined) await write(t, "a", { v: value });
+        await withLoggingTrigger(t);
+        const saved = save(t, [{ name: "v", type: "number" }]);
+        if (dialect === "sqlite") {
+          await expect(saved).rejects.toMatchObject(refusedSaying("tcf_touch"));
+          return;
+        }
+
+        await saved;
+
+        expect(await read(t)).toEqual(value === undefined ? {} : { a: 12 });
+        expect(await fired(t)).toBe(0);
+        // The control: the trigger is there still, and fires on an update.
+        await exec(
+          t,
+          `INSERT INTO dc_tcf_posts (id, title, v) VALUES ('x', 'x', 1)`
+        );
+        await exec(t, `UPDATE dc_tcf_posts SET v = 2 WHERE id = 'x'`);
+        expect(await fired(t)).toBe(1);
+      }
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "deploys and rolls back a column under an update trigger where no value needs writing",
+      async () => {
+        const created = await textBecomesNumber();
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await write(second, "whole", { v: "34" });
+        await withLoggingTrigger(second);
+
+        await migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"));
         expect(await read(second)).toEqual({ whole: 34 });
+
+        await migrateDown(second);
+        expect(await storedV(second)).toEqual({ whole: "34" });
+        expect(await fired(second)).toBe(0);
       }
     );
 
