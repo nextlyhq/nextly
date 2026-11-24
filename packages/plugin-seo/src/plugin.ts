@@ -723,6 +723,23 @@ function goneAnswerOf(page: string | undefined): GoneAnswerOptions {
   return { gonePage: address };
 }
 
+/**
+ * `fields` each translated per language unless it says otherwise: a field that names its own
+ * `localized` keeps it, and a repeater or group inside keeps one structure in every language (its
+ * own fields say what of it is translated), so it is left as it is.
+ */
+function perLanguageFields<F extends { type?: unknown; localized?: unknown }>(
+  fields: readonly F[]
+): F[] {
+  return fields.map(field =>
+    field.localized !== undefined ||
+    field.type === "repeater" ||
+    field.type === "group"
+      ? field
+      : { ...field, localized: true }
+  );
+}
+
 export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Always nest the fields (default or custom) under a single `seo` group so
   // every project exposes SEO consistently at `entry.seo.*`.
@@ -734,11 +751,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const seoGroup = group({
     name: "seo",
     label: "SEO",
-    fields: seoFields,
     // Kept per language wherever the content is translated, so each language
-    // has its own title, description and canonical; on a type that is not
-    // translated, one value as before.
-    localized: true,
+    // has its own title, description, canonical and the rest; on a type that
+    // is not translated, one value as before. A group keeps one structure in
+    // every language and cannot itself be translated, so each field inside
+    // says so (`perLanguageFields`).
+    fields: perLanguageFields(seoFields),
     // Where a page's SEO has its own permission, a write of it by anyone
     // without that permission for the page's type keeps the stored SEO, and
     // the rest of the page is saved. Reading it is the page's own read.
