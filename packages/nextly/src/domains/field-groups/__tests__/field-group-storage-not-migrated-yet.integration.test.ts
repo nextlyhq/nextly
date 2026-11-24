@@ -25,6 +25,7 @@ vi.mock("../../../cli/utils/config-loader", async importOriginal => ({
   }),
 }));
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { recordStatements } from "../../../__tests__/helpers/record-statements";
 import {
   defineCollection,
@@ -34,7 +35,11 @@ import {
   text,
 } from "../../../config";
 import { getConfiguredTestDialects } from "../../../plugins/test-nextly";
-import { takeAbortedTransactionSightings } from "../../../plugins/aborted-transaction-sightings";
+import {
+  PG_ABORTED_TRANSACTION,
+  takeAbortedTransactionSightings,
+} from "../../../plugins/aborted-transaction-sightings";
+import { restoreVersion } from "../../versions/restore-version";
 import { underSavepoint } from "../../versions/version-capture-service";
 import { refusingMovedStorage } from "../migration/moved-storage";
 
@@ -133,7 +138,11 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.item as { id: string }).id;
       await nextly.updateSingle({
         slug: "fgnm_home" as never,
-        data: { title: "H", card: { heading: "Kept" } } as never,
+        data: {
+          title: "H",
+          card: { heading: "Kept" },
+          _overwrite: true,
+        } as never,
       });
       if (options.migrated === true) {
         expect((await site.migrateStorage()).ran).toBe(true);
@@ -169,7 +178,50 @@ describe.each(getConfiguredTestDialects())(
         const found = await nextly.findSingle({ slug: "fgnm_home" as never });
         return (found as { card?: { heading?: unknown } }).card?.heading;
       };
-      return { save, read, heading, remove, saveSingle, singleHeading };
+      /** Puts the Single's first version back, as a person in the admin does. */
+      const restoreSingle = async () => {
+        const found = (await nextly.findSingle({
+          slug: "fgnm_home" as never,
+        })) as { id?: string };
+        const user = {
+          id: await superAdminUser(site!.current!, "fgnm-admin"),
+          roles: ["super-admin"],
+        };
+        return outcome(
+          restoreVersion({
+            scopeKind: "single",
+            slug: "fgnm_home",
+            entryId: found.id!,
+            versionNo: 1,
+            user: user as never,
+            version: { _overwrite: true },
+          })
+        );
+      };
+      const bulkRemove = async () => {
+        const made = await nextly.create({
+          collection: "fgnm_posts" as never,
+          data: { title: "B", card: { heading: "B" } } as never,
+        });
+        const also = (made.item as { id: string }).id;
+        return () =>
+          outcome(
+            nextly.bulkDelete({
+              collection: "fgnm_posts" as never,
+              ids: [also],
+            })
+          );
+      };
+      return {
+        save,
+        read,
+        heading,
+        remove,
+        saveSingle,
+        singleHeading,
+        restoreSingle,
+        bulkRemove,
+      };
     };
 
     /** The whole migration's renames, under a server that keeps running. */
@@ -257,6 +309,16 @@ describe.each(getConfiguredTestDialects())(
 
       await tried(() => saveSingle("First"), [MOVING]);
       expect(await singleHeading()).toBe("First");
+    });
+
+    it("refuses a restore of a Single's version meeting a moved table, and restores it on the retry", async () => {
+      const { saveSingle, singleHeading, restoreSingle } = await openSite();
+      expect(await saveSingle("Second")).toBe("ok");
+      // The entry's row and the Single's id are read before the move, as a person's screen has them.
+      await moveEverything();
+
+      await tried(restoreSingle, [MOVING]);
+      expect(await singleHeading()).toBe("Kept");
     });
 
     it("refuses a delete meeting a moved table, rather than leaving the group's rows behind", async () => {
@@ -348,7 +410,9 @@ describe.each(getConfiguredTestDialects())(
           expect(done).not.toBe("ok");
           expect(await marks()).toEqual([]);
           // Gone on past on purpose: the statement after it met the aborted transaction.
-          expect(takeAbortedTransactionSightings().length).toBeGreaterThan(0);
+          expect(takeAbortedTransactionSightings()).toEqual([
+            expect.stringContaining(PG_ABORTED_TRANSACTION),
+          ]);
         });
 
         it("cannot be reported as done by a caller that goes on and runs nothing more", async () => {
@@ -364,7 +428,9 @@ describe.each(getConfiguredTestDialects())(
           // The commit itself fails: the transaction was rolled back, not committed.
           expect(done).not.toBe("ok");
           expect(await marks()).toEqual([]);
-          takeAbortedTransactionSightings();
+          expect(takeAbortedTransactionSightings()).toEqual([
+            expect.stringContaining("rolled back, not committed"),
+          ]);
         });
 
         it("inside another part's savepoint, undoes that part alone when it is the first to take its own", async () => {
@@ -401,7 +467,10 @@ describe.each(getConfiguredTestDialects())(
           expect(seen).toEqual([MOVING]);
           expect(done).not.toBe("ok");
           expect(await marks()).toEqual([]);
-          takeAbortedTransactionSightings();
+          // The step after it, run on purpose, met the aborted transaction.
+          expect(takeAbortedTransactionSightings()).toEqual([
+            expect.stringContaining(PG_ABORTED_TRANSACTION),
+          ]);
         });
       }
     );
@@ -423,22 +492,32 @@ describe.each(getConfiguredTestDialects())(
             statements: recorder.statements.length,
           };
         };
-        const legacy = await openSite();
-        await legacy.save();
-        const before = await counted(() => legacy.save("Counted"));
-        await site!.close();
-        const current = await openSite({ migrated: true });
-        await current.save();
-        const after = await counted(() => current.save("Counted"));
-
-        console.log(
-          `[statement counts] legacy ${before.statements} (${before.savepoints.length} for savepoints), current ${after.statements} (${after.savepoints.length})`
-        );
-        expect(before.savepoints.length).toBeGreaterThan(0);
-        expect(after.savepoints).toEqual([]);
-        expect(before.statements - after.statements).toBe(
-          before.savepoints.length
-        );
+        const measured = async (migrated: boolean) => {
+          const at = await openSite({ migrated });
+          await at.save();
+          await at.saveSingle();
+          const bulkRemove = await at.bulkRemove();
+          const counts = {
+            "collection save": await counted(() => at.save("Counted")),
+            "Single save": await counted(() => at.saveSingle("Counted")),
+            "bulk delete of one": await counted(bulkRemove),
+            delete: await counted(at.remove),
+          };
+          await site!.close();
+          return counts;
+        };
+        const legacy = await measured(false);
+        const current = await measured(true);
+        for (const kind of Object.keys(legacy) as (keyof typeof legacy)[]) {
+          const before = legacy[kind];
+          const after = current[kind];
+          console.log(
+            `[statement counts] ${kind}: legacy ${before.statements} (${before.savepoints.length} savepoint), current ${after.statements} (${after.savepoints.length})`
+          );
+          expect(before.savepoints, kind).toHaveLength(1);
+          expect(after.savepoints, kind).toEqual([]);
+          expect(before.statements - after.statements, kind).toBe(1);
+        }
       }
     );
   }
