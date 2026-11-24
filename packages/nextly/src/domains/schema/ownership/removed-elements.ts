@@ -412,19 +412,17 @@ export async function refuseRemovingOthersElements(args: {
     const removedBy = removedOwners(
       all,
       schema,
-      await args.sources.tableOwners(tables)
+      await args.sources.tableOwners(tables),
+      spellings
     );
     const found: Taken[] = [];
     for (const element of all) {
       if (element.owner.kind === "app") continue;
-      const one = await elementTaken(
-        args,
-        element,
-        schema,
-        removedBy,
+      const one = await elementTaken(args, element, schema, removedBy, {
         tablesRemoved,
-        columnsRemoved
-      );
+        columnsRemoved,
+        spellings,
+      });
       if (one !== undefined) found.push(one);
     }
     found.push(
@@ -460,14 +458,31 @@ export async function refuseRemovingOthersElements(args: {
 interface TableSpellings {
   /** Every spelling an owner record or the compiled schema may give it. */
   all: readonly string[];
-  /** The database's spellings, or the change's own where it has none. */
+  /** The database's tables of the name the change touches, or the change's own where it has none. */
   live: readonly string[];
+  /** Every table the database has whose name folds alike, the ones the change does not touch too. */
+  alike: readonly string[];
+}
+
+/** The removed table `name` is, by its folded name, or undefined where the change touches none so. */
+function removedTableOf(
+  spellings: ReadonlyMap<string, TableSpellings>,
+  name: string
+): string | undefined {
+  const key = fold(name);
+  const spelled = spellings.get(key);
+  if (spelled === undefined) return undefined;
+  // Where the database has another table of that name in another case, it is the one so spelled.
+  return spelled.live.includes(name) || !spelled.alike.includes(name)
+    ? key
+    : undefined;
 }
 
 /**
  * The spellings of each removed table, by its folded name: as the change wrote it, and as the
- * database has it (`posts` for a quoted `"Posts"`, say). A table the database lacks is asked by the
- * change's own spelling.
+ * database has it (`posts` for a quoted `"Posts"`, say). Where the database has the very name the
+ * change wrote, that one table is meant; only where it has none does another spelling of the name
+ * count. A table the database lacks is asked by the change's own spelling.
  */
 async function tableSpellings(
   sources: RemovedElementsSources,
@@ -477,10 +492,12 @@ async function tableSpellings(
   const spellings = new Map<string, TableSpellings>();
   for (const table of folded) {
     const own = written.get(table) ?? table;
-    const live = await sources.liveNames(own);
+    const alike = await sources.liveNames(own);
+    const meant = alike.includes(own) ? [own] : alike;
     spellings.set(table, {
-      all: [...new Set([own, ...live])],
-      live: live.length > 0 ? live : [own],
+      all: [...new Set([own, ...meant])],
+      live: meant.length > 0 ? meant : [own],
+      alike,
     });
   }
   return spellings;
@@ -535,7 +552,8 @@ interface RemovedOwners {
 function removedOwners(
   all: readonly ElementOnTable[],
   schema: ExtensionSchemaRecord | null,
-  recorded: ReadonlyMap<string, SchemaOwner>
+  recorded: ReadonlyMap<string, SchemaOwner>,
+  spellings: ReadonlyMap<string, TableSpellings>
 ): RemovedOwners {
   const compiled = new Map(
     [...(schema?.owners ?? [])].map(([name, owner]) => [fold(name), owner])
@@ -548,7 +566,7 @@ function removedOwners(
       all.find(
         element =>
           element.kind === "column" &&
-          fold(element.table) === fold(table) &&
+          removedTableOf(spellings, element.table) === fold(table) &&
           fold(element.name) === fold(column)
       )?.owner ??
       tableOwner(table) ?? { kind: "app" },
@@ -575,21 +593,40 @@ async function elementTaken(
   element: ElementOnTable,
   schema: ExtensionSchemaRecord | null,
   removedBy: RemovedOwners,
-  tablesRemoved: ReadonlySet<string>,
-  columnsRemoved: ReadonlyMap<string, ReadonlySet<string>>
+  removal: Removal
 ): Promise<Taken | undefined> {
-  if (tablesRemoved.has(fold(element.table))) {
+  const { columnsRemoved } = removal;
+  const at = removedTableOf(removal.spellings, element.table);
+  if (at === undefined) return undefined;
+  if (removal.tablesRemoved.has(at)) {
     return sameOwner(removedBy.table(element.table), element.owner)
       ? undefined
       : { element, ...fieldOf(args, element.table) };
   }
   const removed = new Set(
-    [...(columnsRemoved.get(fold(element.table)) ?? [])].filter(
+    [...(columnsRemoved.get(at) ?? [])].filter(
       column =>
         !sameOwner(removedBy.column(element.table, column), element.owner)
     )
   );
   if (removed.size === 0 || element.kind === "column") return undefined;
+  return standsOnRemoved(args, element, schema, removed);
+}
+
+/**
+ * The element, taken by a removed column of its table it stands on: the column where it can be
+ * told, or every column it may stand on where its columns cannot.
+ */
+async function standsOnRemoved(
+  args: {
+    sources: RemovedElementsSources;
+    dialect: SupportedDialect;
+    fieldOf?: (table: string, column?: string) => string | undefined;
+  },
+  element: ElementOnTable,
+  schema: ExtensionSchemaRecord | null,
+  removed: ReadonlySet<string>
+): Promise<Taken | undefined> {
   const stands = await columnsOf(
     element,
     schema,
@@ -678,13 +715,7 @@ async function keysIntoTaken(
   for (const name of spelled)
     found.push(...(await args.sources.keysInto(name)));
   const keys = found.filter(
-    key =>
-      pointsAtRemoved(
-        key,
-        removed,
-        removal.tablesRemoved,
-        removal.columnsRemoved
-      ) && !named.has(keyId(key))
+    key => pointsAtRemoved(key, removed, removal) && !named.has(keyId(key))
   );
   if (keys.length === 0) return [];
   const on = [...new Set(keys.map(key => key.table))];
@@ -753,13 +784,12 @@ function ownsWhatItPointsAt(
 function pointsAtRemoved(
   key: KeyInto,
   removed: ReadonlySet<string> | undefined,
-  tablesRemoved: ReadonlySet<string>,
-  columnsRemoved: ReadonlyMap<string, ReadonlySet<string>>
+  removal: Removal
 ): boolean {
   if (removed !== undefined) {
     return key.referencesColumns.some(column => removed.has(fold(column)));
   }
-  return !goesWithItsColumns(key, tablesRemoved, columnsRemoved);
+  return !goesWithItsColumns(key, removal);
 }
 
 /** A key into `target` as a taken element: the removed columns it points at, and their fields. */
@@ -818,13 +848,11 @@ function ownerOfKey(
 }
 
 /** Whether the change removes the key's own table, or every column it is on. */
-function goesWithItsColumns(
-  key: KeyInto,
-  tablesRemoved: ReadonlySet<string>,
-  columnsRemoved: ReadonlyMap<string, ReadonlySet<string>>
-): boolean {
-  if (tablesRemoved.has(fold(key.table))) return true;
-  const removed = columnsRemoved.get(fold(key.table));
+function goesWithItsColumns(key: KeyInto, removal: Removal): boolean {
+  const at = removedTableOf(removal.spellings, key.table);
+  if (at === undefined) return false;
+  if (removal.tablesRemoved.has(at)) return true;
+  const removed = removal.columnsRemoved.get(at);
   return (
     removed !== undefined &&
     key.columns.length > 0 &&

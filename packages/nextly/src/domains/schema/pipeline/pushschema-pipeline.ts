@@ -1725,9 +1725,20 @@ export class PushSchemaPipeline {
           // The owner rows this push planned (`pushElementOwners`), written once every refusal
           // above has passed, before the first statement: on the apply's own transaction where its
           // statements are transactional, so a refusal still to come (the executor's own) rolls
-          // them back with it. MySQL commits each statement as it runs, so there they wait for the
-          // apply's last statement (below).
-          if (dialect !== "mysql") await elementOwners?.write(tx);
+          // them back with it. MySQL commits each statement as it runs, so there they are written
+          // once the executor's own refusals have passed too (`refusalsPassed`), or before the first
+          // schema statement where it runs none, so a push refused before then records no row and
+          // rows that cannot be written build nothing. Written after the statements, a failure there
+          // would leave what they built unrecorded, which a later field change could then remove. A
+          // statement that fails after the rows are written leaves a row for an element not yet
+          // built, which claims nothing the database does not have.
+          let ownersRecorded = false;
+          const recordOwners = async (): Promise<void> => {
+            if (ownersRecorded) return;
+            ownersRecorded = true;
+            await elementOwners?.write(tx);
+          };
+          if (dialect !== "mysql") await recordOwners();
 
           // Phase C: pre-resolution executor runs renames + drops, led by the
           // kit route's check and foreign-key drops: a constraint still in
@@ -1782,6 +1793,9 @@ export class PushSchemaPipeline {
                   nextIsSchema = false;
                   inFlight = false;
                 },
+                ...(dialect === "mysql"
+                  ? { refusalsPassed: recordOwners }
+                  : {}),
               }
             );
             // An executor that tells nothing (a stand-in) is counted once it returns, as it reports
@@ -1918,6 +1932,8 @@ export class PushSchemaPipeline {
                   ),
                   dialect
                 );
+                // The first statement where Phase C ran none.
+                if (dialect === "mysql") await recordOwners();
                 try {
                   await executor.executeStatements(tx, createStatements);
                 } catch (err) {
@@ -2222,6 +2238,8 @@ export class PushSchemaPipeline {
             safe,
             useFastPath ? [] : resolvedOps
           );
+          // The first schema statement where neither Phase C nor the creates above ran one.
+          if (dialect === "mysql") await recordOwners();
           try {
             // On MySQL a unique index replacing a key's plain index is created before that index
             // is dropped: the kit's drop comes ahead of the restored create, and MySQL refuses to
@@ -2275,9 +2293,8 @@ export class PushSchemaPipeline {
           // that connection (`assertHeld`), so the lease extended commits with the change and
           // outlasts a push however long it ran.
           if (dialect !== "mysql") await assertSchemaLockHeld();
-          // MySQL: the owner rows once every statement has run, so a refused or failed apply
-          // records no element it did not build.
-          if (dialect === "mysql") await elementOwners?.write(tx);
+          // MySQL: an apply with no statement of its own still records what it found.
+          if (dialect === "mysql") await recordOwners();
           return (
             safe.length +
             preCreatedStatements +

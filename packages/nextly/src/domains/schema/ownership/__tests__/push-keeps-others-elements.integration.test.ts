@@ -8,7 +8,8 @@
  * read of it gave nothing, as when the question whether the record exists went unanswered: the
  * check asks again, and refuses rather than count none. A field renamed, answered as a rename, is
  * no removal: its column keeps what stands on it. A refused push records no owner row for what the
- * configuration contributes, since it builds none of it.
+ * configuration contributes, since it builds none of it, and a push whose owner rows cannot be
+ * written runs no statement, so nothing is built that no row records.
  *
  * As it happens: the app declares a collection in code, a plugin's schema hook indexes one of its
  * columns, and the app then removes that field and the change is pushed, as a restart, an HMR
@@ -285,6 +286,38 @@ describeEachDialect(
       for (const part of ["code", PLUGIN, MIGRATED_INDEX, TABLE]) {
         expect(message).toContain(part);
       }
+      expect(await shapeOf(handle, dialect)).toEqual(before);
+    });
+
+    it("runs no statement where its owner rows cannot be written, so nothing is built unrecorded", async () => {
+      handle = await createTestNextly({
+        dialect,
+        collections: [defineCollection({ slug: SLUG, fields: fields(true) })],
+        plugins: [indexer],
+      });
+      const before = await shapeOf(handle, dialect);
+      const actual =
+        await vi.importActual<typeof keptElements>("../kept-elements");
+      vi.mocked(keptElements.pushElementOwners).mockImplementationOnce(
+        async input => {
+          const owners = await actual.pushElementOwners(input);
+          return (
+            owners && {
+              ...owners,
+              write: () =>
+                Promise.reject(
+                  new Error("the owner registry cannot be written")
+                ),
+            }
+          );
+        }
+      );
+
+      // A change with a statement of its own: a column the collection lacks.
+      const pushed = await push([...fields(true), text({ name: "added" })]);
+
+      expect(keptElements.pushElementOwners).toHaveBeenCalled();
+      expect(pushed.success, JSON.stringify(pushed)).toBe(false);
       expect(await shapeOf(handle, dialect)).toEqual(before);
     });
 

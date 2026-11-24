@@ -46,9 +46,14 @@ function sources(live: {
 }): RemovedElementsSources {
   return {
     extensionSchema: () => Promise.resolve(live.schema ?? null),
+    // Matched by folded name, as the owner rows a push has read are (`removedElementsSourcesOn`).
     recordedElements: tables =>
       Promise.resolve(
-        (live.recorded ?? []).filter(element => tables.includes(element.table))
+        (live.recorded ?? []).filter(element =>
+          tables.some(
+            table => table.toLowerCase() === element.table.toLowerCase()
+          )
+        )
       ),
     indexColumns: () =>
       Promise.resolve(new Map(Object.entries(live.indexColumns ?? {}))),
@@ -277,6 +282,50 @@ describe("a table the change spells otherwise than the database", () => {
       sources({
         liveNames: { [TABLE]: ["Dc_Posts"] },
         recorded: [{ ...recordedIndex, table: "Dc_Posts" }],
+        indexColumns: { idx_code: ["code"] },
+      })
+    );
+
+    expect(refused?.publicMessage).toContain('index "idx_code"');
+  });
+});
+
+describe("two tables whose names differ only in letter case", () => {
+  const onTheOther: ElementOnTable = { ...recordedIndex, table: "Dc_Posts" };
+
+  it("keeps an element on the one the change leaves, removing from the other", async () => {
+    const refused = await judged(
+      columns("code"),
+      sources({
+        liveNames: { [TABLE]: [TABLE, "Dc_Posts"] },
+        recorded: [onTheOther],
+        indexColumns: { idx_code: ["code"] },
+      })
+    );
+
+    expect(refused).toBeUndefined();
+  });
+
+  it("refuses an element on the one the change removes from", async () => {
+    const refused = await judged(
+      columns("code"),
+      sources({
+        liveNames: { [TABLE]: [TABLE, "Dc_Posts"] },
+        recorded: [recordedIndex, onTheOther],
+        indexColumns: { idx_code: ["code"] },
+      })
+    );
+
+    expect(refused?.publicMessage).toContain(`on ${TABLE}`);
+    expect(refused?.publicMessage).not.toContain("on Dc_Posts");
+  });
+
+  it("judges a table the change spells in a case of its own by the one the database has", async () => {
+    const refused = await judged(
+      columns("code"),
+      sources({
+        liveNames: { [TABLE]: ["Dc_Posts"] },
+        recorded: [{ ...recordedIndex, table: "DC_POSTS" }],
         indexColumns: { idx_code: ["code"] },
       })
     );
