@@ -182,3 +182,105 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+// A field group whose group places another component holds that component's values inline in the
+// group, and the component's text is translated: the write splits it by the component's fields,
+// read before the split, so each language keeps its own. Broken (split by the group's own text
+// alone), the component's text stays in the shared structure, and the Spanish save overwrites what
+// English reads.
+describe.each(getConfiguredTestDialects())(
+  "a field group's group placing a component, translated (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    const INNER = `fgin_${dialect.slice(0, 2)}`;
+    const OUTER = `fgou_${dialect.slice(0, 2)}`;
+    const COLLECTION = `fgic_${dialect.slice(0, 2)}`;
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        localization: {
+          locales: ["en", "es"],
+          defaultLocale: "en",
+          fallback: false,
+        },
+        fieldGroups: [
+          defineFieldGroup({
+            slug: INNER,
+            localized: true,
+            fields: [text({ name: "blurb" })],
+          }),
+          defineFieldGroup({
+            slug: OUTER,
+            localized: true,
+            fields: [
+              group({
+                name: "box",
+                fields: [
+                  text({ name: "label" }),
+                  fieldGroup({ name: "card", component: INNER }),
+                ],
+              }),
+            ],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: COLLECTION,
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "badge", component: OUTER }),
+            ],
+          }),
+        ],
+      } as never);
+    }, 180_000);
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    const read = async (id: string, locale: string) =>
+      (
+        (await t.nextly.findByID({
+          collection: COLLECTION,
+          id,
+          locale,
+          depth: 2,
+        } as never)) as Record<string, unknown>
+      ).badge as Record<string, unknown>;
+
+    it("keeps the placed component's text for each language", async () => {
+      const { item } = await t.nextly.create({
+        collection: COLLECTION,
+        data: {
+          title: "One",
+          badge: { box: { label: "EN", card: { blurb: "en blurb" } } },
+        },
+      } as never);
+      const id = String(item.id);
+      const badge = String((await read(id, "en")).id);
+      await t.nextly.update({
+        collection: COLLECTION,
+        id,
+        locale: "es",
+        data: {
+          badge: {
+            id: badge,
+            box: { label: "ES", card: { blurb: "es blurb" } },
+          },
+          _overwrite: true,
+        },
+      } as never);
+
+      const box = (locale: string) =>
+        read(id, locale).then(b => b.box as Record<string, unknown>);
+      expect(((await box("en")).card as Record<string, unknown>).blurb).toBe(
+        "en blurb"
+      );
+      expect(((await box("es")).card as Record<string, unknown>).blurb).toBe(
+        "es blurb"
+      );
+    });
+  }
+);

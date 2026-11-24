@@ -83,6 +83,7 @@ import {
   companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
 import {
   containedComponentResolver,
@@ -585,6 +586,8 @@ export class FieldGroupMutationService extends BaseService {
           params?: unknown[]
         ): Promise<T[]>;
       };
+      /** The transaction's own handle, which a container's component shape is read on. */
+      executor?: unknown;
     }
   ): Promise<{
     schema: ReturnType<typeof buildCompanionSchema>;
@@ -689,17 +692,27 @@ export class FieldGroupMutationService extends BaseService {
         companionExists,
       };
     }
+    // A container placing a component is split by its component's fields, read on the write's
+    // own handle (`withComponentShapes`), as a collection's and a Single's write are: split by
+    // its own text alone, the component's text would stay in the shared structure, and a save in
+    // one language would overwrite what every language reads. The shapes go back with the schema,
+    // so what the caller prunes and reads goes by them too.
+    const localizedFields = await withComponentShapes(
+      schema.localizedFields,
+      tx?.executor
+    );
+    const shaped = { ...schema, localizedFields };
     const { main, companion, sharedStructures } = splitLocalizedWrite(
       data,
-      schema.localizedFields
+      localizedFields
     );
     // The main row goes through serializeComponentRow, but the companion is upserted directly.
     // Serialize the companion values the same way so a JSON-backed localized field (richText/
     // group/json) is JSON-stringified and a Date is stored as text, not written as a raw object.
     return {
-      schema,
+      schema: shaped,
       main,
-      companion: this.serializeCompanionValues(companion, schema, meta.fields),
+      companion: this.serializeCompanionValues(companion, shaped, meta.fields),
       sharedStructures,
       companionExists,
     };
@@ -1401,7 +1414,7 @@ export class FieldGroupMutationService extends BaseService {
           // Never probe from in here: the answer was resolved before this transaction
           // opened, because asking now would mean querying a possibly-absent relation,
           // and on PostgreSQL that aborts the transaction outright.
-          { adapter: this.txWriteAdapter(tx) }
+          { adapter: this.txWriteAdapter(tx), executor: tx.getDrizzle() }
         );
 
       let instanceId: string;
@@ -1685,7 +1698,7 @@ export class FieldGroupMutationService extends BaseService {
             // Never probe from in here: the answer was resolved before this transaction
             // opened, because asking now would mean querying a possibly-absent relation,
             // and on PostgreSQL that aborts the transaction outright.
-            { adapter: this.txWriteAdapter(tx) }
+            { adapter: this.txWriteAdapter(tx), executor: tx.getDrizzle() }
           );
 
         const existingRow =
@@ -2039,7 +2052,7 @@ export class FieldGroupMutationService extends BaseService {
             // Never probe from in here: the answer was resolved before this transaction
             // opened, because asking now would mean querying a possibly-absent relation,
             // and on PostgreSQL that aborts the transaction outright.
-            { adapter: this.txWriteAdapter(tx) }
+            { adapter: this.txWriteAdapter(tx), executor: tx.getDrizzle() }
           );
 
         const existingRow =
