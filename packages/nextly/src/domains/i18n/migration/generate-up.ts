@@ -393,7 +393,9 @@ export function buildMissingDefaultRowsInsert(
     `${options.status ? `, ${q(COMPANION_STATUS_COLUMN, dialect)}` : ""}) ` +
     `SELECT ${mainId}, ${lit(defaultLocale)}, ` +
     `${columnNames.map(name => `${main}.${q(name, dialect)}`).join(", ")}` +
-    `${options.status ? `, ${main}.${q("status", dialect)}` : ""} ` +
+    // The companion's `_status` is NOT NULL DEFAULT 'draft' while main's `status` need not be (an
+    // older shape, or a column added nullable, can hold NULL): defaulted as the refresh does.
+    `${options.status ? `, COALESCE(${main}.${q("status", dialect)}, ${lit(COMPANION_DEFAULT_STATUS)})` : ""} ` +
     `FROM ${main} WHERE NOT EXISTS (SELECT 1 FROM ${comp} WHERE ${comp}.${q("_parent", dialect)} = ${mainId} ` +
     `AND ${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)})`
   );

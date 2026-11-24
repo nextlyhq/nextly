@@ -333,6 +333,30 @@ describe("componentStructureShape", () => {
     expect(structure).toEqual({ _componentType: "hero" });
   });
 
+  // Each type's text is its own: a hero instance reads no cta field, and the reverse.
+  it("reads a single instance by its own type's fields", () => {
+    const fields = (slug: string) =>
+      slug === "hero"
+        ? [{ name: "title", type: "text" }]
+        : slug === "cta"
+          ? [{ name: "label", type: "text" }]
+          : undefined;
+    const lead = {
+      name: "lead",
+      type: "component",
+      components: ["hero", "cta"],
+    };
+    const shape = componentStructureShape(lead, fields)!;
+    const { structure, overlay } = splitSharedStructure(
+      { _componentType: "hero", title: "Hello" },
+      shape
+    );
+    expect(assembleSharedStructure(structure, [overlay], shape)).toEqual({
+      _componentType: "hero",
+      title: "Hello",
+    });
+  });
+
   it("reads a repeatable one as a list of instances", () => {
     const layout = {
       name: "layout",

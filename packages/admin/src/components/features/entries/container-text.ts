@@ -79,7 +79,9 @@ export function holdsTranslatedText(
   documentLocalized: boolean
 ): boolean {
   const shape = field as FieldShape;
-  if (!isContainer(shape)) return false;
+  // A container saying it is not translated is shared whole, its text inside the same in every
+  // language, as storage keeps it.
+  if (!isContainer(shape) || shape.localized === false) return false;
   return levelHoldsText(childrenOf(shape), documentLocalized, new Set());
 }
 
@@ -94,6 +96,9 @@ function levelHoldsText(
   open: Set<FieldShape[]>
 ): boolean {
   return fields.some(child => {
+    // A field inside saying it is not translated, a container or a component among them, holds
+    // no language's text.
+    if (child.localized === false) return false;
     if (isComponent(child)) {
       return componentFieldLists(child).some(list => {
         if (open.has(list)) return false;
@@ -156,6 +161,7 @@ function fieldTextFrom(
   field: FieldShape,
   documentLocalized: boolean
 ): unknown {
+  if (field.localized === false) return undefined;
   if (isComponent(field)) {
     return componentTextFrom(current, source, field, documentLocalized);
   }
@@ -190,16 +196,12 @@ function componentTextFrom(
     );
   if (Array.isArray(current)) {
     if (!Array.isArray(source)) return current;
-    const byId = new Map<unknown, Record<string, unknown>>();
-    for (const instance of source) {
-      if (isRecord(instance) && instance.id !== undefined) {
-        byId.set(instance.id, instance);
-      }
-    }
-    return current.map(instance => {
-      if (!isRecord(instance)) return instance;
-      const from = byId.get(instance.id);
-      return from ? onto(instance, from) : instance;
+    const byKey = keyedRows(source);
+    const keys = rowKeys(current);
+    return current.map((instance, index) => {
+      const key = keys[index];
+      const from = key === undefined ? undefined : byKey.get(key);
+      return isRecord(instance) && from ? onto(instance, from) : instance;
     });
   }
   return isRecord(current) && isRecord(source) && sameInstance(current, source)
@@ -237,6 +239,7 @@ export function withTextFrom(
   documentLocalized: boolean
 ): unknown {
   const shape = field as FieldShape;
+  if (shape.localized === false) return current;
   const fields = childrenOf(shape);
   if (shape.type === "group") {
     return isRecord(current) && isRecord(source)
@@ -244,14 +247,14 @@ export function withTextFrom(
       : current;
   }
   if (!Array.isArray(current) || !Array.isArray(source)) return current;
-  const byId = new Map<unknown, Record<string, unknown>>();
-  for (const row of source) {
-    if (isRecord(row) && row.id !== undefined) byId.set(row.id, row);
-  }
-  return current.map(row => {
-    if (!isRecord(row)) return row;
-    const from = byId.get(row.id);
-    return from ? textOntoLevel(row, from, fields, documentLocalized) : row;
+  const byKey = keyedRows(source);
+  const keys = rowKeys(current);
+  return current.map((row, index) => {
+    const key = keys[index];
+    const from = key === undefined ? undefined : byKey.get(key);
+    return isRecord(row) && from
+      ? textOntoLevel(row, from, fields, documentLocalized)
+      : row;
   });
 }
 
@@ -259,7 +262,8 @@ export function withTextFrom(
  * The value `source` holds for the field at `path` (a form path such as `slides.1.caption`) of
  * `target`, the form being edited: each repeater row on the way is matched by its id, so a row
  * the translator moved or inserted takes the text of the same row in the source, never the row
- * that happens to sit at its position there. A row with no id is matched by position.
+ * that happens to sit at its position there. A row with no unique id has no source row: storage
+ * keeps its text shared, so it has no text of the source's own to take (`rowKeys`).
  */
 export function sourceValueAt(
   source: unknown,
@@ -272,7 +276,7 @@ export function sourceValueAt(
     const index = /^\d+$/.test(segment) ? Number(segment) : undefined;
     if (index !== undefined && Array.isArray(at)) {
       const row: unknown = at[index];
-      from = sourceRowFor(from, row, index);
+      from = sourceRowFor(from, at, index);
       at = row;
     } else {
       from = isRecord(from) ? from[segment] : undefined;
@@ -283,12 +287,53 @@ export function sourceValueAt(
 }
 
 /**
- * The row of `rows` (the source's list) that the form's `row` at `index` is: the one with its id,
- * or the one at its place where it has none. `undefined` where `rows` is no list.
+ * The row of `rows` (the source's list) that the form's row at `index` of `formRows` is: the one
+ * under its key ({@link rowKeys}). `undefined` where `rows` is no list, or the form's row has no
+ * key.
  */
-function sourceRowFor(rows: unknown, row: unknown, index: number): unknown {
+function sourceRowFor(
+  rows: unknown,
+  formRows: readonly unknown[],
+  index: number
+): unknown {
   if (!Array.isArray(rows)) return undefined;
-  const id = isRecord(row) ? row.id : undefined;
-  if (id === undefined) return rows[index];
-  return rows.find(candidate => isRecord(candidate) && candidate.id === id);
+  const key = rowKeys(formRows)[index];
+  return key === undefined ? undefined : keyedRows(rows).get(key);
+}
+
+/**
+ * The key each row of a list keeps its translations under, by the rule storage keeps it
+ * (`rowKeys` in nextly's shared structure): its id, a non-empty string, or a finite number by its
+ * text. A row with no such id, or whose id an earlier row already holds, has none: storage keeps
+ * its text shared, so nothing is copied into it.
+ */
+function rowKeys(rows: readonly unknown[]): (string | undefined)[] {
+  const taken = new Set<string>();
+  return rows.map(row => {
+    const id = isRecord(row) ? row.id : undefined;
+    const key =
+      typeof id === "string"
+        ? id === ""
+          ? undefined
+          : id
+        : typeof id === "number" && Number.isFinite(id)
+          ? String(id)
+          : undefined;
+    if (key === undefined || taken.has(key)) return undefined;
+    taken.add(key);
+    return key;
+  });
+}
+
+/** The rows of `rows` that have a key ({@link rowKeys}), by it. */
+function keyedRows(
+  rows: readonly unknown[]
+): Map<string, Record<string, unknown>> {
+  const keys = rowKeys(rows);
+  const byKey = new Map<string, Record<string, unknown>>();
+  rows.forEach((row, index) => {
+    const key = keys[index];
+    if (key !== undefined && isRecord(row)) byKey.set(key, row);
+  });
+  return byKey;
 }

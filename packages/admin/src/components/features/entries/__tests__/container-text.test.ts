@@ -232,10 +232,32 @@ describe("sourceValueAt", () => {
     expect(sourceValueAt(source, target, "slides.1.caption")).toBe("first");
   });
 
-  it("reads a row with no id by its place, and nothing where the source holds no list there", () => {
+  // A row with no unique id keeps its text shared in storage: it has no source text of its own,
+  // and filling it would write the source's text into every language.
+  it("reads no source text for a row with no unique id, nor where the source holds no list there", () => {
     expect(
       sourceValueAt(source, { plain: [{ caption: "" }] }, "plain.0.caption")
-    ).toBe("only");
+    ).toBeUndefined();
+    expect(
+      sourceValueAt(
+        {
+          lines: [
+            { id: 7, caption: "seven" },
+            { id: 7, caption: "again" },
+          ],
+        },
+        { lines: [{ id: 7 }, { id: 7 }] },
+        "lines.1.caption"
+      )
+    ).toBeUndefined();
+    // A numeric id, unique in its list, is a key as storage takes it.
+    expect(
+      sourceValueAt(
+        { lines: [{ id: 7, caption: "seven" }] },
+        { lines: [{ id: 7 }] },
+        "lines.0.caption"
+      )
+    ).toBe("seven");
     expect(
       sourceValueAt(
         { slides: "none" },
@@ -270,5 +292,35 @@ describe("withTextFrom, field by field", () => {
         true
       )
     ).toEqual({ title: "Hello", size: 1, code: "x" });
+  });
+});
+
+describe("a container saying it is not translated", () => {
+  const SHARED = {
+    type: "group",
+    name: "settings",
+    localized: false,
+    fields: [{ type: "text", name: "visibility" }],
+  };
+
+  // Storage keeps it whole, the same in every language: no badge, nothing to copy.
+  it("holds no translated text and takes none from another language", () => {
+    expect(holdsTranslatedText(SHARED, true)).toBe(false);
+    expect(
+      withTextFrom({ visibility: "" }, { visibility: "private" }, SHARED, true)
+    ).toEqual({ visibility: "" });
+    const PAGE = {
+      type: "group",
+      name: "page",
+      fields: [{ type: "text", name: "heading" }, SHARED],
+    };
+    expect(
+      withTextFrom(
+        { heading: "", settings: { visibility: "" } },
+        { heading: "Hello", settings: { visibility: "private" } },
+        PAGE,
+        true
+      )
+    ).toEqual({ heading: "Hello", settings: { visibility: "" } });
   });
 });

@@ -450,6 +450,60 @@ describeEachDialect(
       BOOT_TIMEOUT
     );
 
+    // A pending change kept under no language and one kept under the default language both become
+    // that language's draft. Where they hold different text inside the repeater and were saved at
+    // the same moment, nothing says which is the later: refused, as for a field of the language.
+    it(
+      "refuses a no-language and a default-language pending change saved at the same moment with different text inside the repeater",
+      async () => {
+        await boot();
+        const created = await t!.nextly.create({
+          collection: SLUG,
+          locale: "en",
+          data: { title: "Show", slides: [{ caption: "first", rank: 1 }] },
+        });
+        const id = (created.item as { id: string }).id;
+        const [first] = (await read(id, "en")).slides;
+        const ref = {
+          scopeKind: "collection" as const,
+          scopeSlug: SLUG,
+          entryId: id,
+        };
+        const at = new Date("2026-08-01T10:00:00Z");
+        const draft = (locale: string | null, caption: string) =>
+          database!.adapter.insert(
+            VERSIONS_TABLE,
+            {
+              id: crypto.randomUUID(),
+              scopeKind: "collection",
+              scopeSlug: SLUG,
+              entryId: id,
+              versionNo: null,
+              status: "draft",
+              isAutosave: false,
+              snapshot: JSON.stringify({
+                slides: [{ id: first!.id, caption, rank: 1 }],
+              }),
+              label: null,
+              locale,
+              draftKey: workingDraftKey(ref, locale),
+              sourceVersionNo: null,
+              createdBy: null,
+              createdAt: at,
+              updatedAt: at,
+            },
+            { returning: [] }
+          );
+        await draft(null, "first, edited");
+        await draft("en", "first, edited otherwise");
+
+        await expect(
+          migrateData(database!.adapter, SITE, DRAFTS_STEP)
+        ).rejects.toThrow(new RegExp(`${id}[\\s\\S]*slides`));
+      },
+      BOOT_TIMEOUT
+    );
+
     /**
      * An entry of `upboards` stored as an earlier release stored a repeater translated whole whose
      * rows hold a list of component instances: no structure on the main table, and each language's

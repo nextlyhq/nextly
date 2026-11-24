@@ -363,7 +363,11 @@ export function splitSharedStructure(
   const parsed = valueOf(value);
   if (shape.kind === "group") {
     if (!isPlainRecord(parsed)) return { structure: value, overlay: undefined };
-    const { structure, overlay } = splitLevel(parsed, shape);
+    // A single component instance offering several types is read by its own type's shape.
+    const { structure, overlay } = splitLevel(
+      parsed,
+      shapeOfRow(parsed, shape)
+    );
     return { structure, overlay };
   }
   if (!Array.isArray(parsed)) return { structure: value, overlay: undefined };
@@ -422,7 +426,7 @@ export function assembleSharedStructure(
     .map(o => (isPlainRecord(o) ? o : {}));
   if (shape.kind === "group") {
     return isPlainRecord(parsed)
-      ? assembleLevel(parsed, levels, shape)
+      ? assembleLevel(parsed, levels, shapeOfRow(parsed, shape))
       : structure;
   }
   if (!Array.isArray(parsed)) return structure;
@@ -530,7 +534,8 @@ export function pruneOverlay(
   const level = isPlainRecord(parsed) ? parsed : {};
   const kept = valueOf(structure);
   if (shape.kind === "group") {
-    return pruneLevel(level, isPlainRecord(kept) ? kept : {}, shape);
+    const structureKept = isPlainRecord(kept) ? kept : {};
+    return pruneLevel(level, structureKept, shapeOfRow(structureKept, shape));
   }
   const rows = new Map<string, Record<string, unknown>>();
   if (Array.isArray(kept)) {

@@ -300,20 +300,22 @@ function structureOfDraftValue(
 ): unknown {
   const shape = document.keys.structured.get(key);
   if (!shape) return held;
+  // The language's text, kept as a language value is: two drafts saved at one moment for one
+  // language that hold different text is a tie the order rows are read in would settle.
+  const keepText = (text: unknown) => {
+    const tie = languageValueTie(state.languageOrigins, slot, key, text, draft);
+    if (tie) state.ties.push(tie);
+    state.languages.set(slot, { ...state.languages.get(slot), [key]: text });
+  };
   if (
     draft.locale !== null &&
     !structuredKeptWhole(draft.locale, held, shape)
   ) {
-    state.languages.set(slot, { ...state.languages.get(slot), [key]: held });
+    keepText(held);
     return undefined;
   }
   const split = splitSharedStructure(held, shape);
-  if (split.overlay !== undefined) {
-    state.languages.set(slot, {
-      ...state.languages.get(slot),
-      [key]: split.overlay,
-    });
-  }
+  if (split.overlay !== undefined) keepText(split.overlay);
   return split.structure;
 }
 
