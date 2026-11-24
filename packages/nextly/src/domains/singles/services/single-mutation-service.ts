@@ -4779,19 +4779,22 @@ export class SingleMutationService extends BaseService {
           // A repeater's or group's structure written as it is stored changes nothing the live
           // row's version covers: its text went to the language's row. Left out of the UPDATE,
           // so a save of translated values alone moves only that language's counter
-          // (`sameSharedStructure`), as a collection entry's does.
+          // (`sameSharedStructure`), as a collection entry's does. Left out of a copy:
+          // `mainPayload` keeps every structure the save wrote, which the language's provenance
+          // record lays its text out by, row by row.
+          const livePayload: Record<string, unknown> = { ...mainPayload };
           if (!holdEdit) {
             const stored = existingDoc as Record<string, unknown>;
             for (const written of sharedStructuresIn(mainPayload, shapedRefs)) {
               const key =
-                written.column in mainPayload ? written.column : written.field;
+                written.column in livePayload ? written.column : written.field;
               if (
                 sameSharedStructure(
-                  (mainPayload as Record<string, unknown>)[key],
+                  livePayload[key],
                   stored[key] ?? stored[written.field] ?? stored[written.column]
                 )
               ) {
-                delete (mainPayload as Record<string, unknown>)[key];
+                delete livePayload[key];
               }
             }
           }
@@ -4801,13 +4804,13 @@ export class SingleMutationService extends BaseService {
             : await tx.update<SingleDocument>(
                 singleMeta.tableName,
                 {
-                  ...mainPayload,
+                  ...livePayload,
                   // The document's counter moves unless this save changed
                   // translated fields alone, which move only that
                   // language's row.
                   ...mainRowBump(
                     {
-                      updatePayload: mainPayload,
+                      updatePayload: livePayload,
                       componentFieldData: attemptComponentFields,
                       // Links alone are a change of the document too.
                       manyToManyData: manyToManyLinks,
