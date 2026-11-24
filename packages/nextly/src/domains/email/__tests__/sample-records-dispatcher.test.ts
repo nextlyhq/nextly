@@ -4,14 +4,14 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../helpers/di", () => ({
+vi.mock("../../../dispatcher/helpers/di", () => ({
   getEmailProviderServiceFromDI: vi.fn(),
   getEmailTemplateServiceFromDI: vi.fn(),
 }));
-vi.mock("../../helpers/authenticated-user", () => ({
+vi.mock("../../../dispatcher/helpers/authenticated-user", () => ({
   requireAuthenticatedUser: () => ({ id: "u-1", roles: [] }),
 }));
-vi.mock("../../../domains/email/sample-records", () => ({
+vi.mock("../sample-records", () => ({
   listSampleRecords: vi.fn().mockResolvedValue({
     label: "A real order",
     items: [{ id: "o-1", label: "2026-01-01T00:00:00.000Z" }],
@@ -22,8 +22,8 @@ vi.mock("../../../domains/email/sample-records", () => ({
 }));
 
 import { SKIP_DATE_FORMATTING_HEADER } from "../../../api/response-shapes";
-import { getEmailTemplateServiceFromDI } from "../../helpers/di";
-import { dispatchEmailTemplates } from "../email-dispatcher";
+import { getEmailTemplateServiceFromDI } from "../../../dispatcher/helpers/di";
+import { dispatchEmailTemplates } from "../../../dispatcher/handlers/email-dispatcher";
 
 function wireTemplates() {
   vi.mocked(getEmailTemplateServiceFromDI).mockReturnValue({

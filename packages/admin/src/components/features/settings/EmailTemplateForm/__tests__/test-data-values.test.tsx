@@ -56,7 +56,7 @@ const VARIABLES = [{ name: "orderNumber" }, { name: "note" }];
 
 describe("a real record in the test data", () => {
   it("replaces the last record's values, so two records never mix", () => {
-    const { result } = renderHook(() => useSampleEdits(VARIABLES));
+    const { result } = renderHook(() => useSampleEdits(VARIABLES, "t-1"));
     act(() => result.current.onRecord({ orderNumber: "A-1", note: "Fragile" }));
     act(() => result.current.onRecord({ orderNumber: "B-2" }));
     expect(editedValues(result.current.sampleEdits)).toEqual({
@@ -65,7 +65,7 @@ describe("a real record in the test data", () => {
   });
 
   it("keeps a value the author typed after the last record", () => {
-    const { result } = renderHook(() => useSampleEdits(VARIABLES));
+    const { result } = renderHook(() => useSampleEdits(VARIABLES, "t-1"));
     act(() => result.current.onRecord({ orderNumber: "A-1", note: "Fragile" }));
     act(() => result.current.onFieldChange("note", "Leave at the door"));
     act(() => result.current.onRecord({ orderNumber: "B-2" }));
@@ -73,6 +73,28 @@ describe("a real record in the test data", () => {
       orderNumber: "B-2",
       note: "Leave at the door",
     });
+  });
+});
+
+describe("the test data of one template", () => {
+  it("never reaches another the editor moves to, nor comes back once that one is edited", () => {
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useSampleEdits(VARIABLES, id),
+      { initialProps: { id: "t-1" } }
+    );
+    act(() => result.current.onRecord({ orderNumber: "A-1", note: "Fragile" }));
+    rerender({ id: "t-2" });
+    expect(result.current.sampleEdits).toBeNull();
+
+    // A record loaded here drops no value of its own for the other's sake.
+    act(() => result.current.onFieldChange("note", "Mine"));
+    act(() => result.current.onRecord({ orderNumber: "B-2" }));
+    expect(editedValues(result.current.sampleEdits)).toEqual({
+      orderNumber: "B-2",
+      note: "Mine",
+    });
+    rerender({ id: "t-1" });
+    expect(result.current.sampleEdits).toBeNull();
   });
 });
 

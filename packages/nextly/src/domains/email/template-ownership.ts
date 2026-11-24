@@ -15,6 +15,8 @@
 import { createHash } from "crypto";
 
 import type { PluginEmailTemplate } from "../../plugins/contributions";
+import type { PluginDefinition } from "../../plugins/plugin-context";
+import { renamedSlug } from "../../plugins/plugin-slug";
 import type {
   EmailTemplateInsert,
   EmailTemplateOwner,
@@ -451,18 +453,16 @@ export type KeptBase = EmailTemplateVersion & {
 
 /** The configuration ownership is read from: the plugins and `email.templates`. */
 export interface OwnershipConfig {
-  plugins?: ReadonlyArray<{
-    name: string;
-    enabled?: boolean;
-    contributes?: { emailTemplates?: ReadonlyArray<PluginEmailTemplate> };
-  }>;
+  plugins?: ReadonlyArray<PluginDefinition>;
   email?: { templates?: EmailConfig["templates"] };
 }
 
 /**
  * The owners a configuration declares: each enabled plugin with the templates
  * it contributes, and the templates the site's code sets. Every boot path
- * reads ownership through this, so they cannot disagree.
+ * reads ownership through this, so they cannot disagree. A template's real
+ * records name their collection as the plugin declared it, so it is read here
+ * under the name the host gave it.
  */
 export function ownershipFromConfig(
   config: OwnershipConfig
@@ -472,9 +472,37 @@ export function ownershipFromConfig(
       .filter(plugin => plugin.enabled !== false)
       .map(plugin => ({
         name: plugin.name,
-        templates: plugin.contributes?.emailTemplates ?? [],
+        templates: (plugin.contributes?.emailTemplates ?? []).map(template =>
+          withRenamedRecords(plugin, template)
+        ),
       })),
     codeTemplates: config.email?.templates,
+  };
+}
+
+/**
+ * `template` with the collection its real records are read from under the
+ * name the host gave it. A malformed loader is left as it is, for the
+ * registration to offer nothing of.
+ */
+function withRenamedRecords(
+  plugin: PluginDefinition,
+  template: PluginEmailTemplate
+): PluginEmailTemplate {
+  const records = sampleRecordsOf(template.sampleRecords);
+  if (!records || records.reads === "users") return template;
+  const collection = renamedSlug(plugin, records.reads.collection);
+  if (collection === records.reads.collection) return template;
+  return {
+    ...template,
+    sampleRecords: {
+      label: records.label,
+      reads: { collection },
+      // Called on the loader as declared, so one written as a class keeps its
+      // own `this`.
+      list: args => records.list(args),
+      load: id => records.load(id),
+    },
   };
 }
 

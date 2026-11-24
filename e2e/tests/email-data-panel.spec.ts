@@ -171,6 +171,13 @@ for (const size of WIDTHS) {
       }
     );
 
+    // A phone shows one panel at a time, so its preview is opened after.
+    const follows = () =>
+      expect
+        .poll(() => previewHtml(page), { timeout: 30_000 })
+        .toContain(chosen.replaceAll("&", "&amp;"));
+    if (!phone) await follows();
+
     expect(await scrollsSideways(page), `at ${size.width}`).toBe(false);
     const shot = await page.screenshot({ fullPage: true });
     const name = `real-record-${size.width}`;
@@ -178,9 +185,9 @@ for (const size of WIDTHS) {
     const dir = process.env.WORKBENCH_SHOTS_DIR;
     if (dir) writeFileSync(path.join(dir, `${name}.png`), shot);
 
-    if (phone) await page.getByRole("tab", { name: "Preview" }).click();
-    await expect
-      .poll(() => previewHtml(page), { timeout: 30_000 })
-      .toContain(chosen.replaceAll("&", "&amp;"));
+    if (phone) {
+      await page.getByRole("tab", { name: "Preview" }).click();
+      await follows();
+    }
   });
 }

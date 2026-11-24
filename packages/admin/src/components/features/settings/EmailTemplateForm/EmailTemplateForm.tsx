@@ -310,7 +310,10 @@ export function EmailTemplateForm({
 
   // The declared variables, none while the form holds none.
   const declaredVariables = useMemo(() => variables ?? [], [variables]);
-  const sampleEditing = useSampleEdits(declaredVariables);
+  const sampleEditing = useSampleEdits(
+    declaredVariables,
+    savedIdOf(mode, template)
+  );
   const derived = useDerivedTemplateState({
     variables,
     sampleEdits: sampleEditing.sampleEdits,
