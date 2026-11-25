@@ -212,16 +212,14 @@ describe.each(getConfiguredTestDialects())(
         await probe.disconnect();
         return recorder.statements;
       };
-      /** How often the collections' registry is read for their fields. */
-      const registryReads = (sent: readonly string[]) =>
-        sent
-          .map(statement => statement.trim().toLowerCase())
-          .filter(
-            statement =>
-              statement.startsWith("select") &&
-              statement.includes("dynamic_collections") &&
-              statement.includes("fields")
-          ).length;
+      /** The Builder loader's own reads of the registries (`loadBuilderEntities`), beyond the start's. */
+      const ownReads = (sent: readonly string[]) =>
+        sent.filter(statement =>
+          statement
+            .trim()
+            .toLowerCase()
+            .startsWith("select slug, table_name, fields")
+        );
       // The first production start of a database settles what later ones find settled.
       await statements();
       const sound = await statements();
@@ -229,8 +227,8 @@ describe.each(getConfiguredTestDialects())(
       const withProblem = await statements();
 
       expect(withProblem).toHaveLength(sound.length);
-      // Judged from the one read of it the start makes anyway.
-      expect(registryReads(withProblem)).toBe(1);
+      // Judged from the rows the start has read: none is read for it.
+      expect(ownReads(withProblem)).toEqual([]);
       expect(said(AT_START)).toHaveLength(1);
     }, 300_000);
 
