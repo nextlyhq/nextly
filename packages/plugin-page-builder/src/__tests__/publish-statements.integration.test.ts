@@ -100,10 +100,15 @@ type Route = "direct" | "rest";
  * row's id and version under the hold, and on PostgreSQL takes the
  * collection's advisory lock before it. Measured with the hold and without
  * it, on each route.
+ *
+ * Two fewer on the REST save (from 88 and 95) since a value sent as it was
+ * keeps the record of where it came from: the save sends the title and slug
+ * unchanged, so their records are read and not written again. Measured
+ * without the hold as two fewer too (85 and 91).
  */
 const PINS: Readonly<Record<TestDialect, Readonly<Record<Route, number>>>> = {
-  sqlite: { direct: 79, rest: 88 },
-  postgresql: { direct: 85, rest: 95 },
+  sqlite: { direct: 79, rest: 86 },
+  postgresql: { direct: 85, rest: 93 },
   mysql: { direct: 89, rest: 98 },
 };
 
