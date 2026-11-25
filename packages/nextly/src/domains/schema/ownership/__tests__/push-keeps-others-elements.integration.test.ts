@@ -407,6 +407,8 @@ describeEachDialect(
           TABLE,
           "is no longer in the configuration",
           "nothing was applied",
+          // An uninstall looks the plugin up in the configuration, so it is put back first.
+          `Add "${PLUGIN}" back to the configuration, uninstall it with \`nextly plugins uninstall ${PLUGIN}\`, then remove it from the configuration and apply the change again.`,
         ]) {
           expect(message).toContain(part);
         }
