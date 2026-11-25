@@ -1107,6 +1107,7 @@ interface GoingLiveArgs {
   localizedUpdate: {
     writeLocale: string;
     localizedFieldValues?: Record<string, unknown>;
+    sharedStructures?: readonly SharedStructureWritten[];
     hasStatus?: boolean;
   } | null;
 }
@@ -2261,11 +2262,12 @@ interface StructureSelect {
 }
 
 /**
- * `data` with each repeater or group keeping one structure that `split` wrote laid back as written
- * (`localizedFieldValues`), its text with its structure, where the split left the structure alone.
- * `data` as it is where there is no split or none of its fields keeps one structure.
+ * `data` with the translated values `split` wrote laid back as written (`localizedFieldValues`):
+ * each the split took off it, and a repeater or group keeping one structure with its text, where
+ * the split left the structure alone. A value written as `undefined` is none, as a key left out is.
+ * `data` as it is where there is no split.
  */
-function withWrittenStructures(
+function withWrittenTranslations(
   data: Record<string, unknown>,
   split:
     | {
@@ -2276,13 +2278,16 @@ function withWrittenStructures(
     | undefined
 ): Record<string, unknown> {
   const written = split?.localizedFieldValues;
-  if (!written || !split?.sharedStructures?.length) return data;
+  if (!written) return data;
+  const structureColumns = new Map(
+    (split.sharedStructures ?? []).map(({ field, column }) => [field, column])
+  );
   const out = { ...data };
-  for (const structure of split.sharedStructures) {
-    if (!Object.hasOwn(written, structure.field)) continue;
+  for (const [field, value] of Object.entries(written)) {
+    const column = structureColumns.get(field);
     // Held under the field's name; a column of another spelling goes with it.
-    if (structure.column !== structure.field) delete out[structure.column];
-    out[structure.field] = written[structure.field];
+    if (column !== undefined && column !== field) delete out[column];
+    if (column !== undefined || value !== undefined) out[field] = value;
   }
   return out;
 }
@@ -5336,7 +5341,14 @@ export class CollectionMutationService extends BaseService {
       if (advisoryDraft) {
         promotesDraft = true;
         promoted = this.promotedDocumentOf(
-          args,
+          {
+            ...args,
+            // What the write folds over the draft (`foldWorkingDraft`).
+            finalData: withWrittenTranslations(
+              args.finalData,
+              args.localizedUpdate
+            ),
+          },
           buildRestorePayload(
             advisoryDraft.snapshot,
             args.fields as unknown as FieldConfig[],
@@ -14988,9 +15000,9 @@ export class CollectionMutationService extends BaseService {
       /** The caller's shaped payload, after its translated values were split off. */
       finalData: Record<string, unknown>;
       /**
-       * The split those values went to: a repeater or group keeping one structure is left in
-       * `finalData` as its structure alone, and is laid back as written from here, and the
-       * language's status is here alone.
+       * The split those values went to, which are laid back as written from here: each is here
+       * alone, as the language's status is, and a repeater or group keeping one structure is left
+       * in `finalData` as its structure alone.
        */
       callerSplit?: {
         companionData?: Record<string, unknown>;
@@ -15021,10 +15033,11 @@ export class CollectionMutationService extends BaseService {
     const { fields, manyToManyFields, componentSchemas, componentFieldData } =
       args;
     const { manyToManyData } = args;
-    // The caller's repeaters and groups keeping one structure as written, their text with them:
-    // the split left each in `finalData` as its structure alone, which would replace the pending
-    // change's whole value and lose both its text and the caller's.
-    const finalData = withWrittenStructures(args.finalData, args.callerSplit);
+    // The caller's translated values as written, over the pending change's: the split moved them
+    // off `finalData`, so folded without them the change would win over what the caller sent. It
+    // left a repeater or group keeping one structure there as its structure alone, which would
+    // replace the change's whole value and lose both its text and the caller's.
+    const finalData = withWrittenTranslations(args.finalData, args.callerSplit);
     const { payload: draftInput } = buildRestorePayload(
       args.snapshot,
       fields as unknown as FieldConfig[],

@@ -30,3 +30,5 @@
 ---
 
 A status saved in a language that holds a change takes effect. Saving a language other than the default as a draft takes it offline and puts none of its held text in front of readers, and the document's history no longer records that as a publish; publishing one that was offline publishes it. Both used to answer success and leave the language's status as it was. A save that trusted code makes in a published language is held like a person's, though the default language is a draft; it used to go straight live.
+
+Translated text sent in the same save as a status is kept where the language already holds a change. It was dropped for the held text, in every language, the default one included, so text typed and published in one step could be lost. What the save sends now goes over the change; what it leaves out keeps the change's value.
