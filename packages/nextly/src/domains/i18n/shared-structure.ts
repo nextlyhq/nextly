@@ -124,12 +124,18 @@ export function placesComponent(field: StructuredField): boolean {
  * placing a component (whose text, if any, is known only from its own fields). Decided from the
  * entity's own definition, so its tables never depend on another entity's. False on an entity
  * that is not translated, and for a container carrying its own flag.
+ *
+ * False for a group with no name: a layout wrapper, not a container of its own. It has no column
+ * to keep an overlay in, and its fields are stored at the row it sits in (`addressableFields`),
+ * so taken for a container it would ask for a translations column with no name.
  */
 export function keepsTranslationsInside(
   field: StructuredField,
   entityLocalized: boolean
 ): boolean {
   if (!entityLocalized) return false;
+  const { name } = field as { name?: unknown };
+  if (typeof name !== "string" || name === "") return false;
   if (field.localized !== undefined || neverTranslatable(field)) return false;
   return sharedStructureShape(field) !== null || placesComponent(field);
 }
