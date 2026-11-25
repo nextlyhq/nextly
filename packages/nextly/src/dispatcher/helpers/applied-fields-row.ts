@@ -14,8 +14,9 @@ import { bumpSchemaVersion } from "../../route-handler/schema-version";
 
 /**
  * Record on `slug`'s row of the registry table `table` the fields a save
- * applied, whether it is translated, and its advanced schema version, with
- * its migration marked applied. The row and the stored schema version are
+ * applied, whether it is translated, whether it has Draft/Published where
+ * given (a save that does not turn it leaves the row's), and its advanced
+ * schema version, with its migration marked applied. The row and the stored schema version are
  * written in one transaction, so the version's count moves with the save it
  * records (`writeRegistryRows`). The write is made past the registry
  * services, so the cached registry rows are cleared here: a read before or
@@ -28,6 +29,7 @@ export async function writeAppliedFieldsRow(
     slug: string;
     fields: FieldConfig[];
     localized: boolean;
+    status?: boolean;
     schemaVersion: number;
   }
 ): Promise<void> {
@@ -39,6 +41,7 @@ export async function writeAppliedFieldsRow(
         schema_hash: calculateSchemaHash(row.fields),
         migration_status: "applied",
         localized: row.localized,
+        ...(row.status === undefined ? {} : { status: row.status }),
         schema_version: row.schemaVersion,
         updated_at: new Date(),
       },

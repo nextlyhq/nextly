@@ -183,6 +183,8 @@ export interface SettleDeps {
 export interface SavedEntity {
   fields: unknown[];
   localized?: boolean;
+  /** Draft/Published, where the definition says; a field group has none. */
+  status?: boolean;
   tableName?: string;
 }
 
@@ -1577,6 +1579,9 @@ function savedEntity(
     fields: Array.isArray(entity.fields) ? entity.fields : [],
     ...(typeof entity.localized === "boolean"
       ? { localized: entity.localized }
+      : {}),
+    ...(kind !== "fieldGroup" && typeof entity.status === "boolean"
+      ? { status: entity.status }
       : {}),
   };
 }

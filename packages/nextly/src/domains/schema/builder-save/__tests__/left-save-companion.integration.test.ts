@@ -495,10 +495,16 @@ describe.each(LEFT_SAVE_SUITES)(
 
     // A settings update writes its registry row last, after its push and the translations table's
     // step: settled whole, the row is brought to all the save asked, its switches among it.
-    it.runIf(perLanguage)(
-      "a settings update that turned Draft/Published off, killed before its row was written, is settled with the row's switch off",
-      async () => {
-        const t = await boot({ translatable: true, status: true });
+    it.runIf(perLanguage).each([
+      ["off", false],
+      ["on", true],
+    ])(
+      "a settings update that turned Draft/Published %s, killed before its row was written, is settled with the row's switch %s",
+      async (_turned, status) => {
+        const t = await boot({
+          translatable: true,
+          ...(status ? {} : { status: true }),
+        });
         await killSave(
           t,
           point => point === "companion: before",
@@ -507,7 +513,7 @@ describe.each(LEFT_SAVE_SUITES)(
               {} as ServiceContainer,
               "updateCollection",
               { collectionName: slug },
-              { fields: [text("heading"), field("note")], status: false }
+              { fields: [text("heading"), field("note")], status }
             )
         );
 
@@ -518,7 +524,7 @@ describe.each(LEFT_SAVE_SUITES)(
           "dynamic_collections",
           { where: { and: [{ column: "slug", op: "=", value: slug }] } }
         );
-        expect.soft(Boolean(row?.status), "the row's switch").toBe(false);
+        expect.soft(Boolean(row?.status), "the row's switch").toBe(status);
         // Nothing holds the collection now, so what the row says is what reads and writes meet.
         for (const answer of await fromAnotherProcess([
           { kind: "read", via: "rest" },

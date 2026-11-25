@@ -35,7 +35,7 @@ export function settleRegistryWriter(
       await removeRow(adapter, kind, slug);
       return true;
     }
-    const row = await registryRow(adapter, table, slug);
+    const row = await registryRow(adapter, table, slug, saved);
     // No row: a create stopped before its row was written, or one gone since. There is nothing to
     // bring up, and the settle does not make a row: answered so, the record stays.
     if (row === undefined) return false;
@@ -48,6 +48,7 @@ export function settleRegistryWriter(
       slug,
       fields: saved.fields as FieldConfig[],
       localized: saved.localized === true,
+      ...(saved.status === undefined ? {} : { status: saved.status }),
       // Moved on, as a save's own write moves it, so a Builder holding the old version re-reads.
       schemaVersion: Number.isFinite(current) ? current + 1 : 1,
     });
@@ -86,22 +87,30 @@ interface RegistryRow {
   schema_version: unknown;
   fields: unknown;
   localized: unknown;
+  status?: unknown;
 }
 
 async function registryRow(
   adapter: DrizzleAdapter,
   table: string,
-  slug: string
+  slug: string,
+  saved: SavedEntity
 ): Promise<RegistryRow | undefined> {
   const [row] = await adapter.select<RegistryRow>(table, {
-    columns: ["schema_version", "fields", "localized"],
+    // Draft/Published only where the saved entity says it: a field group's table has no such column.
+    columns: [
+      "schema_version",
+      "fields",
+      "localized",
+      ...(saved.status === undefined ? [] : ["status"]),
+    ],
     where: { and: [{ column: "slug", op: "=", value: slug }] },
   });
   return row;
 }
 
 /**
- * Whether `row` holds `saved`'s fields and translation flag. Compared by content
+ * Whether `row` holds `saved`'s fields and switches. Compared by content
  * (`canonicalJson`): the registry and the definition file write a field's keys in their own
  * order, which says nothing of what the field is.
  */
@@ -117,6 +126,7 @@ function holds(row: RegistryRow, saved: SavedEntity): boolean {
   }
   return (
     canonicalJson(stored) === canonicalJson(saved.fields) &&
-    Boolean(row.localized) === (saved.localized === true)
+    Boolean(row.localized) === (saved.localized === true) &&
+    (saved.status === undefined || Boolean(row.status) === saved.status)
   );
 }
