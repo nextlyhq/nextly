@@ -5775,7 +5775,8 @@ export async function runFileMigrations(args: {
       if (isFieldGroupTransition(beforeFile, targetFile)) {
         await refuseFieldGroupTransitionOnLegacy(
           adapter as unknown as DrizzleAdapter,
-          filename
+          filename,
+          beforeFile === null
         );
       }
 

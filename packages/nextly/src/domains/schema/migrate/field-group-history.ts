@@ -137,10 +137,36 @@ export function isFieldGroupTransition(
  */
 export async function refuseFieldGroupTransitionOnLegacy(
   adapter: CatalogReadAdapter,
-  filename: string
+  filename: string,
+  /** Whether the history has no snapshot before the file: it begins on the current names. */
+  beginsHistory: boolean
 ): Promise<void> {
   if ((await databaseFieldGroupNaming(adapter)) === "current") return;
-  throw fieldGroupStorageNotMigratedError(filename);
+  throw beginsHistory
+    ? fieldGroupHistoryBeginsOnCurrentError(filename)
+    : fieldGroupStorageNotMigratedError(filename);
+}
+
+/**
+ * The refusal of a history that begins on the current names, on a database whose field groups are
+ * on the legacy ones. Its first file was written where this database could not be read, or records
+ * a database that moved: which of the two, only its author can tell.
+ */
+export function fieldGroupHistoryBeginsOnCurrentError(
+  filename: string
+): NextlyError {
+  return new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage:
+      `${filename} begins the migration history on the current field-group names (${CURRENT_NAMES_SHOWN}), and this database's field groups are on the legacy ones (${LEGACY_NAMES_SHOWN}). ` +
+      "Applying it would record names the database does not have. " +
+      "It was not applied. If no database has applied it, delete it with its snapshot and the translations migrations written with it, and run `nextly migrate:create` again where this database can be reached: it is then written under the names this database holds. " +
+      `If another database has applied it, move this one's field groups with \`${FIELD_GROUP_STORAGE_MIGRATION_COMMAND}\`, then run \`nextly migrate\` again.`,
+    logContext: {
+      reason: "field-group-storage-not-migrated",
+      file: filename,
+    },
+  });
 }
 
 /**

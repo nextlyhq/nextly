@@ -261,6 +261,18 @@ const legacyHistory = (dialect: TestDialect) =>
     name: "init",
   });
 
+/** A `DATABASE_URL` no database answers at. */
+function unreachable(dialect: TestDialect): void {
+  vi.stubEnv("DB_DIALECT", dialect);
+  vi.stubEnv(
+    "DATABASE_URL",
+    dialect === "sqlite"
+      ? `file:${join(dir, "absent", "none.db")}`
+      : `${dialect}://nobody:nothing@127.0.0.1:1/absent`
+  );
+  _resetEnvCache();
+}
+
 /** A field group made through the Schema Builder, as its screen saves one. */
 const builderCreate = (slug: string) =>
   dispatchComponents(
@@ -295,6 +307,11 @@ describe.each(getConfiguredTestDialects())(
         },
       ],
     ] as const) {
+      // On MySQL `nextly migrate` refuses the first migration of any database db:sync set up with a
+      // field group, as not baselined, whatever its names. What db:sync sets up is asserted there,
+      // and what goes on from it is not.
+      const goesOn = !(dialect === "mysql" && road === "nextly db:sync");
+
       it(`starts on the legacy names its history keeps, set up by ${road}, and a Builder save and nextly migrate go on`, async () => {
         const url = await emptyDatabase(dialect);
         await legacyHistory(dialect);
@@ -306,6 +323,7 @@ describe.each(getConfiguredTestDialects())(
         expect(await hasTable(adapter, "comp_fdh_card")).toBe(true);
         expect(await hasTable(adapter, "dynamic_field_groups")).toBe(false);
         expect(await hasTable(adapter, "fg_fdh_card")).toBe(false);
+        if (!goesOn) return;
 
         const recorded = await migrate();
         expect(recorded.exit, recorded.said).toBeUndefined();
@@ -349,6 +367,7 @@ describe.each(getConfiguredTestDialects())(
         expect(await hasTable(adapter, "dynamic_components")).toBe(true);
         expect(await hasTable(adapter, "comp_fdh_card")).toBe(true);
         expect(await hasTable(adapter, "dynamic_field_groups")).toBe(false);
+        if (!goesOn) return;
         // The move is the next step, and is named.
         await shutdownServices().catch(() => {});
         const stopped = await migrate();
@@ -384,6 +403,7 @@ describe.each(getConfiguredTestDialects())(
         expect(await hasTable(adapter, "dynamic_field_groups")).toBe(true);
         expect(await hasTable(adapter, "fg_fdh_card")).toBe(true);
         expect(await hasTable(adapter, "dynamic_components")).toBe(false);
+        if (!goesOn) return;
 
         const recorded = await migrate();
         expect(recorded.exit, recorded.said).toBeUndefined();
@@ -408,6 +428,54 @@ describe.each(getConfiguredTestDialects())(
         expect(await hasTable(adapter, "dynamic_components")).toBe(false);
       }, 180_000);
     }
+
+    // The road a deploy takes: nextly migrate meets the empty database first. It stops at the file
+    // that moves the history, and goes on to the files after it once the storage moved.
+    it("stops at the move on a moved project's empty database nextly migrate sets up, and goes on once it moved", async () => {
+      const first = await emptyDatabase(dialect);
+      await legacyHistory(dialect);
+      const applied = await migrate();
+      expect(applied.exit, applied.said).toBeUndefined();
+      await moveStorage(dialect, first);
+      const moved = await run(context =>
+        runMigrateCreate(
+          undefined,
+          { cwd: dir, fieldGroupNames: "current" },
+          context
+        )
+      );
+      expect(moved.exit, moved.said).toBeUndefined();
+      loaded.config = defineConfig({
+        ...DECLARED,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "fdh_card",
+            fields: [text({ name: "heading" }), text({ name: "subheading" })],
+          }),
+        ],
+        db: DB,
+      });
+      const later = await run(context =>
+        runMigrateCreate("later", { cwd: dir }, context)
+      );
+      expect(later.exit, later.said).toBeUndefined();
+
+      const url = await emptyDatabase(dialect, "fresh");
+      const stopped = await migrate();
+      expect(stopped.exit, stopped.said).not.toBeUndefined();
+      expect(stopped.said).toContain("FIELD_GROUP_STORAGE_NOT_MIGRATED");
+      expect(stopped.said).toContain("migrate:field-groups --apply");
+
+      await moveStorage(dialect, url);
+      const recorded = await migrate();
+      expect(recorded.exit, recorded.said).toBeUndefined();
+      const adapter = await connect(dialect, url);
+      expect(await hasTable(adapter, "fg_fdh_card")).toBe(true);
+      expect(await hasTable(adapter, "comp_fdh_card")).toBe(false);
+      expect(await hasTable(adapter, "dynamic_components")).toBe(false);
+      const again = await migrate();
+      expect(again.exit, again.said).toBeUndefined();
+    }, 240_000);
 
     /**
      * The blog template's own migration in the project's folder, as a visual blog is scaffolded with
@@ -520,8 +588,84 @@ describe.each(getConfiguredTestDialects())(
           project.fieldGroups.length > 0
         );
         expect(await hasTable(adapter, "fg_fdh_card")).toBe(false);
-      }, 180_000);
+
+        // Another developer's empty database runs that first file.
+        const other = await emptyDatabase(dialect, "other");
+        const applied = await migrate();
+        expect(applied.exit, applied.said).toBeUndefined();
+        const otherAdapter = await connect(dialect, other);
+        expect(await hasTable(otherAdapter, "dynamic_components")).toBe(true);
+        expect(await hasTable(otherAdapter, "dynamic_field_groups")).toBe(
+          false
+        );
+      }, 240_000);
     }
+
+    it("writes the same first migration in a dry run, and reading the database changes nothing in it", async () => {
+      const url = await emptyDatabase(dialect);
+      const adapter = await connect(dialect, url);
+      await seedLegacyCoreTables(adapter, dialect);
+      const before = (await adapter.listTables()).sort();
+
+      const dry = await run(context =>
+        runMigrateCreate("init", { cwd: dir, dryRun: true }, context)
+      );
+      expect(dry.exit, dry.said).toBeUndefined();
+      expect(dry.said).toContain("comp_fdh_card");
+      expect(dry.said).not.toContain("fg_fdh_card");
+      expect(readdirSync(join(dir, "migrations"))).toEqual([]);
+      expect((await adapter.listTables()).sort()).toEqual(before);
+    }, 120_000);
+
+    // As every reader that finds both registries takes the legacy one.
+    it("writes the first migration under the legacy names where the database holds both registries", async () => {
+      const url = await emptyDatabase(dialect);
+      const adapter = await connect(dialect, url);
+      await seedLegacyCoreTables(adapter, dialect);
+      await adapter.executeQuery(
+        dialect === "mysql"
+          ? "CREATE TABLE `dynamic_field_groups` (`id` int)"
+          : 'CREATE TABLE "dynamic_field_groups" ("id" integer)'
+      );
+      const created = await run(context =>
+        runMigrateCreate("init", { cwd: dir }, context)
+      );
+      expect(created.exit, created.said).toBeUndefined();
+      expect(newestSnapshot()).toMatchObject({ version: 1 });
+    }, 120_000);
+
+    // Written where the database could not be read: refused, with the way out that works.
+    it("refuses a first migration on the current names on a legacy site, and the one it says to write again is recorded", async () => {
+      const url = await emptyDatabase(dialect);
+      const adapter = await connect(dialect, url);
+      await seedLegacyCoreTables(adapter, dialect);
+      await developmentStart(dialect, url);
+      await shutdownServices().catch(() => {});
+      unreachable(dialect);
+      const offline = await run(context =>
+        runMigrateCreate("init", { cwd: dir }, context)
+      );
+      expect(offline.exit, offline.said).toBeUndefined();
+
+      vi.stubEnv("DATABASE_URL", url);
+      _resetEnvCache();
+      const refused = await migrate();
+      expect(refused.exit, refused.said).not.toBeUndefined();
+      expect(refused.said).toContain("FIELD_GROUP_STORAGE_NOT_MIGRATED");
+      expect(refused.said).toMatch(
+        /delete it with its snapshot .* run `nextly migrate:create` again where this database can be reached/
+      );
+
+      rmSync(join(dir, "migrations"), { recursive: true, force: true });
+      mkdirSync(join(dir, "migrations"));
+      const again = await run(context =>
+        runMigrateCreate("init", { cwd: dir }, context)
+      );
+      expect(again.exit, again.said).toBeUndefined();
+      const recorded = await migrate();
+      expect(recorded.exit, recorded.said).toBeUndefined();
+      expect(await hasTable(adapter, "comp_fdh_card")).toBe(true);
+    }, 240_000);
 
     it("writes the first migration on the current names where the database is empty", async () => {
       await emptyDatabase(dialect);
@@ -538,14 +682,7 @@ describe.each(getConfiguredTestDialects())(
     }, 180_000);
 
     it("writes the first migration on the current names where no database can be reached", async () => {
-      vi.stubEnv("DB_DIALECT", dialect);
-      vi.stubEnv(
-        "DATABASE_URL",
-        dialect === "sqlite"
-          ? `file:${join(dir, "absent", "none.db")}`
-          : `${dialect}://nobody:nothing@127.0.0.1:1/absent`
-      );
-      _resetEnvCache();
+      unreachable(dialect);
       const created = await run(context =>
         runMigrateCreate("init", { cwd: dir }, context)
       );
@@ -554,6 +691,8 @@ describe.each(getConfiguredTestDialects())(
         version: 2,
         fieldGroupStorage: "current",
       });
+      // Looked for, and not made.
+      expect(readdirSync(dir)).not.toContain("absent");
     }, 60_000);
 
     it("refuses by name to set an empty database up where the history's names cannot be told", async () => {
