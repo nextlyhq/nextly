@@ -15,6 +15,8 @@
  *
  * @module domains/i18n/pipeline/document-access
  */
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
 import {
   registeredReadLanguagesFor,
   registeredWriteLanguagesFor,
@@ -45,6 +47,10 @@ export interface DocumentCaller {
   authenticatedScope?: AuthenticatedScope;
   /** Trusted server code, which no rule is asked of. */
   overrideAccess?: boolean;
+  /** Field read rules are asked of a trusted caller too. */
+  enforceFieldAccess?: boolean;
+  /** Whom the field read rules are asked of, where that is not `user`. */
+  fieldAccessUser?: UserContext;
   request?: Request;
   context?: Record<string, unknown>;
 }
@@ -115,6 +121,8 @@ export async function readDocumentIn(
     request: caller.request,
     context: caller.context,
     overrideAccess: caller.overrideAccess === true,
+    enforceFieldAccess: caller.enforceFieldAccess,
+    fieldAccessUser: caller.fieldAccessUser,
     locale,
     fallbackLocale: false as const,
     status: "all" as const,
@@ -158,31 +166,51 @@ export function documentIdOf(
     : resolveSingleDocumentId(document.slug);
 }
 
+/**
+ * Whether a caller may update a document, as it was asked, and again of the row once a transaction
+ * has locked it: a filter its rule answered is matched a second time there, as a save matches it,
+ * so a document moved out of it in between is not changed.
+ */
+interface DocumentEdit {
+  readonly allowed: boolean;
+  stillAllowed(tx: TransactionContext): Promise<boolean>;
+}
+
+/** An answer no row decides, and so none of it is asked again. */
+const settledEdit = (allowed: boolean): DocumentEdit => ({
+  allowed,
+  stillAllowed: () => Promise.resolve(allowed),
+});
+
 /** Whether the caller may update the document in `locale`, by the gate its update asks. */
-async function documentEditable(
+async function documentEdit(
   document: TranslatedDocument,
   caller: DocumentCaller,
   locale: string
-): Promise<boolean> {
+): Promise<DocumentEdit> {
   if (caller.overrideAccess === true) {
-    return (await readDocumentIn(document, caller, locale)) !== null;
+    return settledEdit(
+      (await readDocumentIn(document, caller, locale)) !== null
+    );
   }
   // Nobody to judge: an update is no visitor's.
-  if (caller.user === undefined) return false;
+  if (caller.user === undefined) return settledEdit(false);
   if (document.kind === "single") {
-    // Sets its own rule language, as the Single's update does.
-    return singleDocumentEditable(document.slug, {
-      user: caller.user,
-      routeAuthorized: false,
-      locale,
-      actor: caller.authenticatedScope,
-      request: caller.request,
-      context: caller.context,
-    });
+    // Sets its own rule language, as the Single's update does, which asks its rule once too.
+    return settledEdit(
+      await singleDocumentEditable(document.slug, {
+        user: caller.user,
+        routeAuthorized: false,
+        locale,
+        actor: caller.authenticatedScope,
+        request: caller.request,
+        context: caller.context,
+      })
+    );
   }
   const { user, authenticatedScope } = caller;
   return withRuleLanguage(registeredWriteLanguagesFor(locale), () =>
-    getService("collectionsHandler").canUpdateEntry({
+    getService("collectionsHandler").judgeEntryUpdate({
       collectionName: document.slug,
       entryId: document.id,
       user,
@@ -192,22 +220,31 @@ async function documentEditable(
   );
 }
 
-/** Refuses, as not found, a document the caller may not update in `locale`. */
-async function assertDocumentEditable(
+/**
+ * Whether a read of the document that asked for its held draft (`read`) was given it. An entry's
+ * read says so. A Single's does not: its draft is given to whoever may update it.
+ */
+export async function showsHeldDraft(
   document: TranslatedDocument,
   caller: DocumentCaller,
-  locale: string
-): Promise<void> {
-  if (!(await documentEditable(document, caller, locale))) {
-    throw NextlyError.notFound({
-      logContext: {
-        reason: "translation-document-not-editable",
-        kind: document.kind,
-        slug: document.slug,
-        locale,
-      },
-    });
-  }
+  locale: string,
+  read: Readonly<Record<string, unknown>>
+): Promise<boolean> {
+  return document.kind === "collection"
+    ? read._isWorkingDraft === true
+    : (await documentEdit(document, caller, locale)).allowed;
+}
+
+/** The refusal, as not found, of a document the caller may not update in `locale`. */
+function notEditable(document: TranslatedDocument, locale: string) {
+  return NextlyError.notFound({
+    logContext: {
+      reason: "translation-document-not-editable",
+      kind: document.kind,
+      slug: document.slug,
+      locale,
+    },
+  });
 }
 
 /**
@@ -225,7 +262,7 @@ async function editablePaths(
   body: Readonly<Record<string, unknown>>,
   paths: readonly FieldPath[]
 ): Promise<FieldPath[]> {
-  if (!(await documentEditable(document, caller, locale))) return [];
+  if (!(await documentEdit(document, caller, locale)).allowed) return [];
   if (caller.overrideAccess === true) return [...paths];
   const data: Record<string, unknown> = structuredClone({ ...body });
   const id = await documentIdOf(document);
@@ -243,17 +280,26 @@ async function editablePaths(
   return paths.filter(path => holdsPath(data, path));
 }
 
-/** Refuses a change of any of `paths` the caller may not make; see {@link editablePaths}. */
+/**
+ * Refuses a change of any of `paths` the caller may not make; see {@link editablePaths}. Answers
+ * what refuses it again once a transaction holds the document's row, which the change asks before
+ * it writes.
+ */
 export async function assertFieldsEditable(
   document: TranslatedDocument,
   caller: DocumentCaller,
   locale: string,
   body: Readonly<Record<string, unknown>>,
   paths: readonly FieldPath[]
-): Promise<void> {
-  await assertDocumentEditable(document, caller, locale);
+): Promise<(tx: TransactionContext) => Promise<void>> {
+  const edit = await documentEdit(document, caller, locale);
+  if (!edit.allowed) throw notEditable(document, locale);
   const editable = await editablePaths(document, caller, locale, body, paths);
-  if (editable.length === paths.length) return;
+  if (editable.length === paths.length) {
+    return async tx => {
+      if (!(await edit.stillAllowed(tx))) throw notEditable(document, locale);
+    };
+  }
   throw NextlyError.forbidden({
     logContext: {
       reason: "translation-field-not-editable",

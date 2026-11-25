@@ -126,6 +126,19 @@ export async function fieldRecords(
   };
 }
 
+/**
+ * The records of the value a person is shown, its own first: the held draft's where they are shown
+ * that, and the live one's, which is the only one where they are shown the live value.
+ */
+export function shownRecords(
+  records: { draft?: FieldRecord; live?: FieldRecord },
+  heldDraft: boolean
+): FieldRecord[] {
+  return [heldDraft ? records.draft : undefined, records.live].filter(
+    record => record !== undefined
+  );
+}
+
 /** The fingerprint of a field's live value in `locale`, as its record there says. */
 export async function liveFingerprint(
   db: Pick<SourceTextDb, "select">,
@@ -176,6 +189,8 @@ export async function fieldSource(
 
 /** A review of one field, as the person was shown it. */
 export interface FieldReview extends TranslatedField {
+  /** Whether the value shown was the held draft's, where there is one. */
+  heldDraft: boolean;
   /** The translation shown. */
   valueFingerprint: string;
   /** The source shown beside it. */
@@ -210,9 +225,9 @@ function nothingToReview(code: string, message: string): never {
  * who wrote it and the fingerprint of its value. The text is not written, so nothing a reader sees
  * changes, and no version, draft or review moves.
  *
- * The value marked is the one the person was shown: the held draft's where there is one, and the
- * live one too where the draft holds the same value. Where they differ, the live value stays as it
- * was until the draft is published. A value with no record is given one, of unknown origin.
+ * The value marked is the one the person was shown: the held draft's where they were shown that, and
+ * the live one too where the draft holds the same value. Where they differ, the live value stays as
+ * it was until the draft is published. A value with no record is given one, of unknown origin.
  */
 export async function reviewField(
   db: ReviewDb,
@@ -220,8 +235,11 @@ export async function reviewField(
   sources: WriteSources,
   now: Date
 ): Promise<void> {
-  const { draft, live } = await fieldRecords(db, review);
-  const shown = draft ?? live;
+  const records = shownRecords(
+    await fieldRecords(db, review),
+    review.heldDraft
+  );
+  const shown = records.at(0);
   if (shown?.origin === "original") {
     nothingToReview(
       "TRANSLATION_HAS_NO_SOURCE",
@@ -261,8 +279,8 @@ export async function reviewField(
       now
     );
   }
-  for (const record of [draft, live]) {
-    if (record?.valueFingerprint !== review.valueFingerprint) continue;
+  for (const record of records) {
+    if (record.valueFingerprint !== review.valueFingerprint) continue;
     await moveSource(db, review, record, { sourceLocale, source });
   }
   if (!sources.kept) return;

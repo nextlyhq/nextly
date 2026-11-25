@@ -698,12 +698,14 @@ async function handleSchemaRequest(
 /**
  * The collection entry methods whose dispatcher handler reads through the
  * query service's filtered read: a list, a count and a read by id, which
- * answers an entry outside a read rule's filter as missing.
+ * answers an entry outside a read rule's filter as missing, and what changed
+ * in a translation's source, which is asked through that read.
  */
 const FILTERED_READ_METHODS: ReadonlySet<string> = new Set([
   "listEntries",
   "countEntries",
   "getEntry",
+  "getEntrySourceChange",
 ]);
 
 /**
@@ -719,6 +721,7 @@ const FILTERED_WRITE_METHODS: ReadonlySet<string> = new Set([
   "discardWorkingDraft",
   "takeLiveSharedValues",
   "autosaveEntry",
+  "keepEntryTranslation",
   "bulkUpdateEntries",
   "bulkDeleteEntries",
   "bulkUpdateByQuery",

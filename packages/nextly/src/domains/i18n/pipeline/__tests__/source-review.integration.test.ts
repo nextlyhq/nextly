@@ -2,23 +2,33 @@
  * What changed in a translated field's source since its translation was made, and "Keep current":
  * who may ask, what each answer is, and that keeping a translation moves its record alone.
  */
-import { afterEach, describe, expect, it } from "vitest";
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   grantTo,
   userWhoMay,
 } from "../../../../__tests__/fixtures/permission-holders";
+import { clearRuleFilterReports } from "../../../../auth/access/rule-answer";
 import { apiKeyScope } from "../../../../auth/authenticated-scope";
+import { buildClaims } from "../../../../auth/jwt/claims";
+import { signAccessToken } from "../../../../auth/jwt/sign";
+import { resetSessionStandingForTests } from "../../../../auth/session/session-standing";
 import { defineCollection, defineSingle, text } from "../../../../config";
 import { container } from "../../../../di/container";
 import type { Nextly } from "../../../../direct-api/nextly";
 import { NextlyError } from "../../../../errors";
+import { getActiveHookRegistry } from "../../../../hooks/hook-registry";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import { createDynamicHandlers } from "../../../../routeHandler";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
 import { valueFingerprint } from "../../provenance/value-fingerprint";
 import type { DocumentCaller, TranslatedDocument } from "../document-access";
@@ -27,12 +37,18 @@ import { keepCurrent, sourceChange } from "../source-review";
 let t: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  resetSessionStandingForTests();
   await t?.destroy();
   t = undefined;
+  clearRuleFilterReports();
 });
 
 const notEnglish = ({ locale }: { locale?: string }) => locale !== "en";
 const notSpanish = ({ locale }: { locale?: string }) => locale !== "es";
+/** The caller's own entries: a filter over the entry's `owner`. */
+const ownEntries = ({ user }: { user: { id: string } | null }) =>
+  ({ owner: { equals: user?.id ?? "" } }) as unknown as boolean;
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   t = await createTestNextly({
@@ -83,6 +99,23 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         access: { update: notSpanish },
         fields: [text({ name: "title", localized: true })],
       }),
+      // Read and changed by their owner alone.
+      defineCollection({
+        slug: "owned",
+        localized: true,
+        access: { read: ownEntries, update: ownEntries },
+        fields: [
+          text({ name: "title", localized: true }),
+          text({ name: "owner", localized: false }),
+        ],
+      }),
+      // Changed in Spanish alone.
+      defineCollection({
+        slug: "spanish",
+        localized: true,
+        access: { update: ({ locale }) => locale === "es" },
+        fields: [text({ name: "title", localized: true })],
+      }),
       // Read by nobody.
       defineCollection({
         slug: "secrets",
@@ -104,7 +137,16 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
   });
-  const slugs = ["posts", "notes", "guarded", "secrets", "banner", "unwritten"];
+  const slugs = [
+    "posts",
+    "notes",
+    "guarded",
+    "owned",
+    "spanish",
+    "secrets",
+    "banner",
+    "unwritten",
+  ];
   await userWhoMay(t, "ann", "read", slugs);
   await grantTo(t, "ann", "update", slugs);
   // May read, and change nothing.
@@ -202,6 +244,53 @@ async function refusalOf(work: Promise<unknown>): Promise<string> {
   }
   return "not refused";
 }
+
+/** A REST request as Ann, and what it was answered. */
+async function rest(
+  method: "GET" | "POST",
+  path: string[],
+  query = "",
+  body?: unknown
+): Promise<{ status: number; data: Record<string, unknown> }> {
+  const token = await signAccessToken(
+    buildClaims({
+      userId: "ann",
+      email: "ann@x.test",
+      name: "Ann",
+      image: null,
+      roleIds: [],
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET!
+  );
+  const handlers = createDynamicHandlers() as unknown as Record<
+    string,
+    (request: Request, context: unknown) => Promise<Response>
+  >;
+  const res = await handlers[method]!(
+    new Request(`http://localhost/api/${path.join("/")}${query}`, {
+      method,
+      headers: {
+        cookie: `nextly_session=${token}`,
+        origin: "http://localhost",
+        "content-type": "application/json",
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+    { params: Promise.resolve({ params: path }) }
+  );
+  const json = (await res.json()) as Record<string, unknown>;
+  return {
+    status: res.status,
+    data: (json.data ?? json) as Record<string, unknown>,
+  };
+}
+
+/** An entry's REST path for one of the two operations. */
+const entryPath = (
+  document: TranslatedDocument & { kind: "collection" },
+  action: "source-change" | "keep-current"
+) => ["collections", document.slug, "entries", document.id, action];
 
 const inSpanish = (field = "title") => ({ locale: "es", field });
 
@@ -361,6 +450,116 @@ describe.each(getConfiguredTestDialects())(
         after: "***",
       });
       expect(JSON.stringify(change)).not.toContain("Secret");
+    });
+
+    it("shows no older text where a hook may change the field, though it left today's value as it is", async () => {
+      await boot(dialect);
+      const post = await entry("posts", { title: "Secret" });
+      await save(post, "es", { title: "Secreto" });
+      await save(post, "en", { title: "" });
+      // The control: nothing changes the read, so the older text is shown.
+      expect(await sourceChange(post, ANN, inSpanish())).toMatchObject({
+        available: true,
+        before: "Secret",
+      });
+
+      // Withholds the title. It is empty now, so today's reads as it is stored.
+      getActiveHookRegistry().register(
+        "afterRead",
+        "posts",
+        ({ data }) => ({ ...(data as object), title: "" }) as never
+      );
+      const change = await sourceChange(post, ANN, inSpanish());
+      expect(change).toMatchObject({ available: false, reason: "not-kept" });
+      expect(JSON.stringify(change)).not.toContain("Secret");
+
+      const banner = { kind: "single", slug: "banner" } as const;
+      await save(banner, "en", { headline: "Secret" });
+      await save(banner, "es", { headline: "Secreto" });
+      await save(banner, "en", { headline: "" });
+      expect(
+        await sourceChange(banner, ANN, inSpanish("headline"))
+      ).toMatchObject({ available: true, before: "Secret" });
+      getActiveHookRegistry().register(
+        "afterRead",
+        "single:banner",
+        ({ data }) => ({ ...(data as object), headline: "" }) as never
+      );
+      expect(
+        await sourceChange(banner, ANN, inSpanish("headline"))
+      ).toMatchObject({ available: false, reason: "not-kept" });
+    });
+
+    it("is of the live value for a reader who is not shown the held draft", async () => {
+      await boot(dialect);
+      const note = await entry("notes", { title: "Hi" });
+      await save(note, "en", { status: "published" });
+      await save(note, "es", { title: "Hola", status: "published" });
+      await save(note, "en", { title: "Hello" });
+      await save(note, "en", { status: "published" });
+      // Held, and made from the source as it is now.
+      await save(note, "es", { title: "Borrador" });
+
+      expect(await sourceChange(note, BEN, inSpanish())).toMatchObject({
+        available: true,
+        before: "Hi",
+        after: "Hello",
+        valueFingerprint: valueFingerprint("Hola"),
+      });
+      // The control: an editor is shown the draft, and is told of it.
+      expect(await sourceChange(note, ANN, inSpanish())).toMatchObject({
+        before: "Hello",
+        valueFingerprint: valueFingerprint("Borrador"),
+      });
+    });
+
+    it("asks the field rules of a trusted call that asks for them, as whoever it names", async () => {
+      await boot(dialect);
+      const post = await entry("posts", { hidden: "Secret" });
+      await save(post, "es", { hidden: "Secreto" });
+      await save(post, "en", { hidden: "Other" });
+      const { translations } = t!.nextly as unknown as Nextly;
+      const named = {
+        collection: "posts",
+        id: post.id,
+        ...inSpanish("hidden"),
+      };
+      for (const narrowed of [
+        { enforceFieldAccess: true },
+        { enforceFieldAccess: true, fieldAccessUser: { id: "ben" } },
+      ]) {
+        expect(
+          await refusalOf(
+            translations.sourceChange({
+              ...named,
+              overrideAccess: true,
+              ...narrowed,
+            })
+          )
+        ).toBe("NOT_FOUND");
+      }
+      // The control: a trusted call that does not.
+      expect(await translations.sourceChange(named)).toMatchObject({
+        available: true,
+        before: "Secret",
+      });
+    });
+
+    it("is read over REST by a person whose rule matches the entry, and by no other", async () => {
+      await boot(dialect);
+      const own = await entry("owned", { title: "Hi", owner: "ann" });
+      const others = await entry("owned", { title: "Hi", owner: "ben" });
+      for (const document of [own, others]) {
+        await save(document, "es", { title: "Hola" });
+        await save(document, "en", { title: "Hello" });
+      }
+      const query = "?locale=es&field=title";
+      const shown = await rest("GET", entryPath(own, "source-change"), query);
+      expect(shown.status, JSON.stringify(shown.data)).toBe(200);
+      expect(shown.data).toMatchObject({ available: true, before: "Hi" });
+      expect(
+        (await rest("GET", entryPath(others, "source-change"), query)).status
+      ).toBe(404);
     });
 
     it("answers not found, the same, for a document or field the reader may not read", async () => {
@@ -632,6 +831,94 @@ describe.each(getConfiguredTestDialects())(
       ).toMatchObject({ item: inSpanish() });
       expect((await recordsOf())[0]?.sourceFingerprint).toBe(
         valueFingerprint("Hello")
+      );
+    });
+
+    it("is made over REST by a person whose rule matches the entry, and by no other", async () => {
+      await boot(dialect);
+      const own = await entry("owned", { title: "Hi", owner: "ann" });
+      const others = await entry("owned", { title: "Hi", owner: "ben" });
+      for (const document of [own, others]) {
+        await save(document, "es", { title: "Hola" });
+        await save(document, "en", { title: "Hello" });
+      }
+      const body = {
+        ...inSpanish(),
+        valueFingerprint: valueFingerprint("Hola"),
+        sourceFingerprint: valueFingerprint("Hello"),
+      };
+      expect(
+        (await rest("POST", entryPath(others, "keep-current"), "", body)).status
+      ).toBe(404);
+      const kept = await rest("POST", entryPath(own, "keep-current"), "", body);
+      expect(kept.status, JSON.stringify(kept.data)).toBe(200);
+      const made = (await recordsOf()).map(row => [
+        row.entryId,
+        row.sourceFingerprint,
+      ]);
+      expect(made).toContainEqual([own.id, valueFingerprint("Hello")]);
+      expect(made).toContainEqual([others.id, valueFingerprint("Hi")]);
+    });
+
+    it("is made over REST where the rule admits the body's language alone, and in no other", async () => {
+      await boot(dialect);
+      const post = await entry("spanish", { title: "Hi" });
+      await save(post, "es", { title: "Hola" });
+      await save(post, "fr", { title: "Salut" });
+      await save(post, "en", { title: "Hello" });
+      const body = (locale: string, value: string) => ({
+        locale,
+        field: "title",
+        valueFingerprint: valueFingerprint(value),
+        sourceFingerprint: valueFingerprint("Hello"),
+      });
+      const path = entryPath(post, "keep-current");
+      const kept = await rest("POST", path, "", body("es", "Hola"));
+      expect(kept.status, JSON.stringify(kept.data)).toBe(200);
+      // Admitted at the gate for Spanish, and refused French behind it.
+      expect((await rest("POST", path, "", body("fr", "Salut"))).status).toBe(
+        404
+      );
+    });
+
+    it("is refused where the entry leaves the rule's filter before its row is held", async () => {
+      await boot(dialect);
+      const post = await entry("owned", { title: "Hi", owner: "ann" });
+      await save(post, "es", { title: "Hola" });
+      await save(post, "en", { title: "Hello" });
+      // Given to Ben in the transaction that locks it: what a write committed just before the lock
+      // leaves behind, which a check made before it has not seen.
+      let given = 0;
+      const transaction = t!.adapter.transaction.bind(t!.adapter);
+      vi.spyOn(t!.adapter, "transaction").mockImplementation(
+        (callback, options) =>
+          transaction(tx => {
+            const lockRow = tx.lockRow.bind(tx);
+            tx.lockRow = async (table, id) => {
+              await lockRow(table, id);
+              if (table !== "dc_owned") return;
+              given += 1;
+              await tx.update(
+                "dc_owned",
+                { owner: "ben" },
+                { and: [{ column: "id", op: "=", value: post.id }] }
+              );
+            };
+            return callback(tx);
+          }, options)
+      );
+      expect(
+        await refusalOf(
+          keepCurrent(post, ANN, {
+            ...inSpanish(),
+            valueFingerprint: valueFingerprint("Hola"),
+            sourceFingerprint: valueFingerprint("Hello"),
+          })
+        )
+      ).toBe("NOT_FOUND");
+      expect(given).toBe(1);
+      expect((await recordsOf())[0]?.sourceFingerprint).toBe(
+        valueFingerprint("Hi")
       );
     });
 

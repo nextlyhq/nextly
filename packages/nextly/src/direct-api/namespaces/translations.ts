@@ -62,7 +62,7 @@ function documentOf(target: TranslationTarget): TranslatedDocument {
 /** The caller a call names, over the instance's defaults. */
 function callerOf(ctx: NextlyContext, args: DirectAPIConfig): DocumentCaller {
   const config = mergeConfig(ctx.defaultConfig, args);
-  const { user, authenticatedScope, request, overrideAccess } =
+  const { user, authenticatedScope, request, overrideAccess, ...fields } =
     accessOptions(config);
   return {
     user,
@@ -70,6 +70,9 @@ function callerOf(ctx: NextlyContext, args: DirectAPIConfig): DocumentCaller {
     request,
     context: config.context,
     overrideAccess: overrideAccess !== false,
+    // A trusted call may still ask for the field rules, as whoever it names.
+    enforceFieldAccess: fields.enforceFieldAccess,
+    fieldAccessUser: fields.fieldAccessUser,
   };
 }
 

@@ -10,8 +10,12 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
+import { getActiveHookRegistry } from "../../../hooks/hook-registry";
+import { storedHookExecutor } from "../../../hooks/stored-hook-executor";
+import { getFieldFunctions } from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
 import { transactionTableProbe } from "../../dashboard/table-presence";
+import { getSingleHookCollection } from "../../singles/services/single-query-service";
 import { isBlank } from "../blank-value";
 import type { SanitizedLocalizationConfig } from "../config/types";
 import { appLocalization } from "../configured-locales";
@@ -30,6 +34,7 @@ import {
   fieldSource,
   liveFingerprint,
   reviewField,
+  shownRecords,
   type SourceUnavailable,
   type TranslatedField,
 } from "../provenance/translation-review";
@@ -46,6 +51,7 @@ import {
   assertSignedInPerson,
   documentIdOf,
   readDocumentIn,
+  showsHeldDraft,
   type DocumentCaller,
   type TranslatedDocument,
 } from "./document-access";
@@ -103,6 +109,8 @@ interface TranslationStore {
   mainTable: string;
   companion: CompanionSchema;
   field: TranslatedField;
+  /** Whether a hook may change the field as it is read. */
+  readThroughHook: boolean;
 }
 
 /** A refusal of a request naming a language or a field that is not one to ask about. */
@@ -157,6 +165,31 @@ function registeredEntity(document: TranslatedDocument) {
   return document.kind === "collection"
     ? getService("collectionRegistryService").getCollectionBySlug(document.slug)
     : getService("singleRegistryService").getSingleBySlug(document.slug);
+}
+
+/**
+ * Whether a hook may change `field` as it is read: one of the entity's, in code or kept with it, a
+ * global one, or the field's own. Asked of what is registered, since what a hook makes of today's
+ * value says nothing of what it would make of another.
+ */
+function readThroughHook(
+  document: TranslatedDocument,
+  record: NonNullable<Awaited<ReturnType<typeof registeredEntity>>>,
+  field: string
+): boolean {
+  const named =
+    document.kind === "collection"
+      ? document.slug
+      : getSingleHookCollection(document.slug);
+  if (getActiveHookRegistry().hasHooks("afterRead", named)) return true;
+  if (
+    "hooks" in record &&
+    storedHookExecutor.hasHooks("afterRead", record.hooks)
+  ) {
+    return true;
+  }
+  const own = getFieldFunctions(document.kind, document.slug)?.[field];
+  return (own?.hooks?.afterRead?.length ?? 0) > 0;
 }
 
 /** The translation table that stores `field`, or null where the entity does not translate it. */
@@ -219,21 +252,53 @@ async function translationStore(
       defaultLocale: localization.defaultLocale,
       fieldPath: named.field,
     },
+    readThroughHook: readThroughHook(document, record, named.field),
   };
 }
 
-/** The field's value in `locale` as the caller reads it, refused where they may not read it. */
-async function readableValue(
+/** The document as the caller reads it, refused where they may not read the field in it. */
+async function readableField(
   document: TranslatedDocument,
   caller: DocumentCaller,
   named: FieldInLanguage,
   locale: string,
   draft: boolean
-): Promise<unknown> {
+): Promise<Record<string, unknown>> {
   const read = await readDocumentIn(document, caller, locale, { draft });
   if (read === null || !Object.hasOwn(read, named.field)) {
     throw notFound(document, named);
   }
+  return read;
+}
+
+/** The translation as the caller is shown it, and whether that is the held draft's value. */
+async function shownTranslation(
+  document: TranslatedDocument,
+  caller: DocumentCaller,
+  named: FieldInLanguage,
+  locale: string
+): Promise<{ value: unknown; heldDraft: boolean }> {
+  const read = await readableField(document, caller, named, locale, true);
+  return {
+    value: read[named.field],
+    heldDraft: await showsHeldDraft(document, caller, locale, read),
+  };
+}
+
+/** The source's live value as the caller reads it. */
+async function readableSource(
+  document: TranslatedDocument,
+  caller: DocumentCaller,
+  named: FieldInLanguage,
+  sourceLocale: string
+): Promise<unknown> {
+  const read = await readableField(
+    document,
+    caller,
+    named,
+    sourceLocale,
+    false
+  );
   return read[named.field];
 }
 
@@ -241,9 +306,12 @@ async function readableValue(
  * What changed in the source of one translated field since its translation was made.
  *
  * The caller must be able to read the field in both languages now: the kept text is content, and a
- * person who has lost the right to it is told nothing of what it was. No hook saw that text, so it
- * is shown only where the source reads to this caller as it is stored: where a hook changes what
- * they read, what it would have made of the older text is not known, and none is shown.
+ * person who has lost the right to it is told nothing of what it was. No hook saw that text, so none
+ * is shown where one may change the field as it is read: what it would have made of the older text
+ * is not known. Nor where the source does not read to this caller as it is stored, for any reason.
+ *
+ * Everything told is of the value the caller is shown: the held draft's, or the live one where they
+ * are shown that.
  */
 export async function sourceChange(
   document: TranslatedDocument,
@@ -251,12 +319,13 @@ export async function sourceChange(
   named: FieldInLanguage
 ): Promise<SourceChange> {
   const locale = translationLanguage(appLocalization(), named.locale);
-  await readableValue(document, caller, named, locale, true);
+  const { heldDraft } = await shownTranslation(document, caller, named, locale);
   const store = await translationStore(document, named);
   const { adapter, field } = store;
   const recorded = await translationProvenancePresent(adapter, store.logger);
-  const { draft, live } = recorded ? await fieldRecords(adapter, field) : {};
-  const record = draft ?? live;
+  const record = recorded
+    ? shownRecords(await fieldRecords(adapter, field), heldDraft).at(0)
+    : undefined;
   const source = await fieldSource(
     adapter,
     field,
@@ -272,12 +341,11 @@ export async function sourceChange(
   if (source.sourceLocale === undefined) {
     return { ...shown, available: false, reason: "original" };
   }
-  const after = await readableValue(
+  const after = await readableSource(
     document,
     caller,
     named,
-    source.sourceLocale,
-    false
+    source.sourceLocale
   );
   const now =
     (recorded
@@ -286,7 +354,7 @@ export async function sourceChange(
     (await reads(source.sourceLocale)).get(named.field)?.fingerprint;
   if (now !== undefined) shown.sourceFingerprint = now;
   if (!source.available) return { ...shown, ...source, after };
-  return readsAsStored(after, now)
+  return !store.readThroughHook && readsAsStored(after, now)
     ? { ...shown, ...source, after }
     : {
         ...shown,
@@ -334,8 +402,13 @@ export async function keepCurrent(
 ): Promise<void> {
   assertSignedInPerson(caller, "mark a translation as reviewed");
   const locale = translationLanguage(appLocalization(), input.locale);
-  const value = await readableValue(document, caller, input, locale, true);
-  await assertFieldsEditable(
+  const { value, heldDraft } = await shownTranslation(
+    document,
+    caller,
+    input,
+    locale
+  );
+  const assertStillEditable = await assertFieldsEditable(
     document,
     caller,
     locale,
@@ -352,24 +425,26 @@ export async function keepCurrent(
       logContext: { reason: "translation-provenance-missing" },
     });
   }
-  const { draft, live } = await fieldRecords(adapter, field);
-  const record = draft ?? live;
+  const record = shownRecords(await fieldRecords(adapter, field), heldDraft).at(
+    0
+  );
   if (record?.origin !== "original") {
-    await readableValue(
+    await readableSource(
       document,
       caller,
       input,
-      record?.sourceLocale ?? field.defaultLocale,
-      false
+      record?.sourceLocale ?? field.defaultLocale
     );
   }
   await adapter.transaction(async tx => {
     // Held as a save holds it, so the records cannot move between their read and their write.
     await tx.lockRow(store.mainTable, store.document.entryId);
+    await assertStillEditable(tx);
     await reviewField(
       tx,
       {
         ...field,
+        heldDraft,
         valueFingerprint: input.valueFingerprint,
         sourceFingerprint: input.sourceFingerprint,
       },
