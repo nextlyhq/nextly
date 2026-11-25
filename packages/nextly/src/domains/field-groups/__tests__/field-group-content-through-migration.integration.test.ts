@@ -335,41 +335,37 @@ describe.each(getConfiguredTestDialects())(
         expect(await listed()).toHaveLength(1);
       }, 300_000);
 
-      it("is a write a rule judges by a filter on the group, saves it on the retry it is told to make", async () => {
-        let id = "";
+      it("is a write a rule judges by a filter on the group, is made on the retry it is told to make", async () => {
+        const ids: string[] = [];
         await openMigratedUnder({
           before: async () => {
-            // The user and the entry are made beside the server, then the same write made before
+            // The user and the entries are made beside the server, then the same write made before
             // the migration: the control, and what leaves the server holding what it resolved.
             const suite = site!.current!;
             await userWhoMay(suite, LIVE_WRITER, "read", [LIVE_RULED]);
-            await grantTo(suite, LIVE_WRITER, "update", [LIVE_RULED]);
-            const made = await suite.nextly.create({
-              collection: LIVE_RULED as never,
-              data: {
-                title: "R",
-                card: { heading: "Kept", tagline: "Kept" },
-              } as never,
-            });
-            id = (made.item as { id: string }).id;
-            expect(await ask(server!, `save-ruled ${id} before`)).toBe("OK");
+            await grantTo(suite, LIVE_WRITER, "delete", [LIVE_RULED]);
+            for (const heading of ["Kept", "Kept", "Other"]) {
+              const made = await suite.nextly.create({
+                collection: LIVE_RULED as never,
+                data: {
+                  title: heading,
+                  card: { heading, tagline: heading },
+                } as never,
+              });
+              ids.push((made.item as { id: string }).id);
+            }
+            expect(await ask(server!, `delete-ruled ${ids[0]}`)).toBe("OK");
             // Not matched by the rule, so refused: the rule is what decides.
-            const other = await suite.nextly.create({
-              collection: LIVE_RULED as never,
-              data: {
-                title: "O",
-                card: { heading: "Other", tagline: "Other" },
-              } as never,
-            });
-            expect(
-              await ask(
-                server!,
-                `save-ruled ${(other.item as { id: string }).id} refused`
-              )
-            ).not.toBe("OK");
+            expect(await ask(server!, `delete-ruled ${ids[2]}`)).toMatch(
+              /^ERROR FORBIDDEN /
+            );
           },
         });
-        await untilDone(`save-ruled ${id} after`);
+        await untilDone(`delete-ruled ${ids[1]}`);
+        // And it still decides: the entry outside it is refused, and kept.
+        expect(await ask(server!, `delete-ruled ${ids[2]}`)).toMatch(
+          /^ERROR FORBIDDEN /
+        );
       }, 300_000);
 
       it("is a list filtered as before it, sees the moved table's name without any other request", async () => {

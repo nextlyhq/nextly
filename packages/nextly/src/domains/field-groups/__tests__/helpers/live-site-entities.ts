@@ -48,12 +48,12 @@ export const livePosts = defineCollection({
   ],
 });
 
-/** A collection whose update rule is a filter on the group: only an entry that holds `Kept`. */
+/** A collection whose delete rule is a filter on the group: only an entry that holds `Kept`. */
 export const liveRuled = defineCollection({
   slug: LIVE_RULED,
   access: {
     read: () => true,
-    update: () =>
+    delete: () =>
       ({ "card.heading": { equals: "Kept" } }) as unknown as boolean,
   },
   fields: [

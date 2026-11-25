@@ -13,7 +13,7 @@
  *   the group's translated tagline too.
  * - `<id> list [<field> <value>]` answers `OK <json>`: the group of each entry, or of those whose
  *   group holds that value.
- * - `<id> save-ruled <entryId> <title>` saves an entry whose rule filters on the group.
+ * - `<id> delete-ruled <entryId>` deletes an entry whose rule filters on the group.
  * - `<id> duplicate <entryId>` answers `OK <new entryId>`.
  * - `<id> plugin-save <entryId> <heading>` and `plugin-tx-save` save through a plugin's context;
  *   `plugin-tx-save-unwarmed` does so without warming the collection's readiness first.
@@ -196,11 +196,10 @@ const COMMANDS: Record<string, (args: string[]) => Promise<string>> = {
     )}`;
   },
   // A write its collection's rule judges by a filter on the group, as the user who may make it.
-  "save-ruled": async ([id, title]) => {
-    await instance.nextly.update({
+  "delete-ruled": async ([id]) => {
+    await instance.nextly.delete({
       collection: LIVE_RULED as never,
       id: id!,
-      data: { title, _overwrite: true } as never,
       overrideAccess: false,
       user: { id: LIVE_WRITER },
     });
