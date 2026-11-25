@@ -320,7 +320,8 @@ export function matchColumn(condition: SQLWrapper | undefined): SQL<number> {
 
 /**
  * What a filter on a localized field reads: the companion table's rows in the
- * read's language, the head of `localeChain`. `null` for a collection with no
+ * read's language, the head of `localeChain`. A container keeping one structure
+ * is no such field: it is filtered on its structure, on the main table. `null` for a collection with no
  * companion or a read with no language. `statusFilterValues` is the read's
  * Draft/Published filter, resolved before this is built, so a per-locale
  * check constrains by the same status (a public read never matches a draft).
@@ -334,7 +335,14 @@ export function localizedFilterContext(
   if (!companion || !localeChain || localeChain.length === 0) return null;
   return {
     companionTableName: companion.companionTableName,
-    localizedFields: companion.localizedFields,
+    // A repeater or group keeping one structure is filtered and sorted on its
+    // structure, the main table's column, which every language reads: its
+    // translations column holds a language's text alone, keyed by row id, so
+    // judged there a document whose rows hold no text would read as having no
+    // rows, and a whole value would never equal it.
+    localizedFields: companion.localizedFields.filter(
+      field => field.sharedStructure === undefined
+    ),
     mainIdColumn: schema.id,
     locale: localeChain[0],
     localeChain,
