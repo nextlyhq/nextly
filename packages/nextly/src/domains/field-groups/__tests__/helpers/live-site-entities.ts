@@ -15,6 +15,7 @@ import {
 } from "../../../../config";
 
 export const LIVE_COLLECTION = "fglive_posts";
+export const LIVE_DRAFTS = "fglive_drafts";
 export const LIVE_SINGLE = "fglive_home";
 export const LIVE_GROUP = "fglive_card";
 /** The legacy table the group's rows live in before the migration. */
@@ -45,6 +46,24 @@ export const livePosts = defineCollection({
   ],
 });
 
+/** A translated collection with drafts, which publishing every language and a release move. */
+export const liveDrafts = defineCollection({
+  slug: LIVE_DRAFTS,
+  localized: true,
+  status: true,
+  versions: { drafts: true },
+  access: {
+    read: () => true,
+    update: () => true,
+    publish: () => true,
+    unpublish: () => true,
+  },
+  fields: [
+    text({ name: "title", localized: true }),
+    fieldGroup({ name: "card", component: LIVE_GROUP }),
+  ],
+});
+
 /** A Single holding the same group: it reads the groups it holds on its transaction to save. */
 export const liveHome = defineSingle({
   slug: LIVE_SINGLE,
@@ -56,7 +75,7 @@ export const liveHome = defineSingle({
 });
 
 export const LIVE_DECLARED = {
-  collections: [livePosts],
+  collections: [livePosts, liveDrafts],
   singles: [liveHome],
   fieldGroups: [liveCard],
 };

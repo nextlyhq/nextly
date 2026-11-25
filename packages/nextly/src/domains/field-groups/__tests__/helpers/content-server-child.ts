@@ -26,6 +26,7 @@
  */
 import { createInterface } from "node:readline";
 
+import type { CollectionsHandler } from "../../../../services/collections-handler";
 import type { CollectionService } from "../../../collections/services/collection-service";
 
 const [dialect, url, layout] = process.argv.slice(2) as [
@@ -45,8 +46,13 @@ const { setPerLanguageStorage } = await import(
 );
 setPerLanguageStorage(layout === "on");
 const { createTestNextly } = await import("../../../../plugins/test-nextly");
-const { LIVE_COLLECTION, LIVE_DECLARED, LIVE_LOCALIZATION, LIVE_SINGLE } =
-  await import("./live-site-entities");
+const {
+  LIVE_COLLECTION,
+  LIVE_DECLARED,
+  LIVE_DRAFTS,
+  LIVE_LOCALIZATION,
+  LIVE_SINGLE,
+} = await import("./live-site-entities");
 
 const { definePlugin } = await import("../../../../plugins/plugin-context");
 
@@ -159,7 +165,101 @@ async function pluginSaveInTransaction(
   return "OK";
 }
 
+const handler = () =>
+  instance.getService("collectionsHandler") as CollectionsHandler;
+
+/** A service's answer as a command gives it: thrown as the error it carries, for `describeError`. */
+function answered(result: {
+  success: boolean;
+  code?: unknown;
+  publicData?: unknown;
+  message?: unknown;
+}): string {
+  if (result.success) return "OK";
+  throw Object.assign(new Error(String(result.message)), {
+    code: result.code,
+    publicData: result.publicData,
+  });
+}
+
+/** One pass over the releases that are due, as the drain job makes it. */
+async function applyReleases(): Promise<string> {
+  const { applyDueReleases } = await import(
+    "../../../releases/apply-due-releases"
+  );
+  const { createReleaseMutations } = await import(
+    "../../../releases/release-mutations"
+  );
+  const { ReleasesRepository } = await import(
+    "../../../releases/releases-repository"
+  );
+  const { lockServerOf } = await import(
+    "../../../releases/__tests__/helpers/release-writes"
+  );
+  const pass = await applyDueReleases({
+    repository: new ReleasesRepository(adapter as never),
+    mutations: createReleaseMutations({
+      contentApi: instance.nextly,
+      lockServer: lockServerOf(instance),
+    }),
+    runAs: {
+      findUser: async id => ({ id, isActive: true }),
+      listRoleSlugs: async () => [],
+    },
+  });
+  return `OK ${JSON.stringify({ due: pass.due, applied: pass.applied, failed: pass.failed, deferred: pass.deferred, blocked: pass.blocked })}`;
+}
+
 const COMMANDS: Record<string, (args: string[]) => Promise<string>> = {
+  "bulk-save": async ([id, heading]) => {
+    const done = await handler().bulkUpdateEntries({
+      collectionName: LIVE_COLLECTION,
+      ids: [id!],
+      data: saved(heading),
+      overrideAccess: true,
+    });
+    const failure = done.failures?.[0] as
+      | { code?: unknown; publicData?: unknown; message?: unknown }
+      | undefined;
+    return answered({ success: failure === undefined, ...failure });
+  },
+  "publish-all": async ([id]) =>
+    answered(
+      await handler().publishAllLocales({
+        collectionName: LIVE_DRAFTS,
+        entryId: id!,
+        overrideAccess: true,
+        data: { _overwrite: true },
+      } as never)
+    ),
+  "apply-releases": applyReleases,
+  // The draft collection's entry as the public reads it: published, or nothing.
+  "read-published": async ([id]) => {
+    const found = await instance.nextly.find({
+      collection: LIVE_DRAFTS as never,
+      where: { id: { equals: id } } as never,
+      status: "published",
+    } as never);
+    const item = found.items[0] as { card?: unknown } | undefined;
+    return `OK ${JSON.stringify(item === undefined ? "not published" : (item.card ?? null))}`;
+  },
+  group: async ([field, value]) => {
+    const { buckets } = await instance.nextly.group({
+      collection: LIVE_COLLECTION as never,
+      groupBy: "title",
+      where: { [`card.${field!}`]: { equals: value } } as never,
+    });
+    return `OK ${String(buckets.length)}`;
+  },
+  timeseries: async ([field, value]) => {
+    const { points } = (await instance.nextly.timeseries({
+      collection: LIVE_COLLECTION as never,
+      dateField: "createdAt",
+      interval: "day",
+      where: { [`card.${field!}`]: { equals: value } } as never,
+    })) as unknown as { points: { total?: number; count?: number }[] };
+    return `OK ${String(points.reduce((sum, point) => sum + Number(point.total ?? point.count ?? 0), 0))}`;
+  },
   read: async ([id]) => {
     const read = await instance.nextly.findByID({
       collection: LIVE_COLLECTION as never,

@@ -45,11 +45,19 @@ import {
   type Holder,
 } from "../../schema/pipeline/__tests__/helpers/schema-lock-world";
 import { getConfiguredTestDialects } from "../../../plugins/test-nextly";
+import type { CollectionsHandler } from "../../../services/collections-handler";
+import { seedLiveAuthor } from "../../releases/__tests__/helpers/live-author";
+import {
+  ANY_EDITABLE_STATE,
+  scheduleAsItStands,
+} from "../../releases/__tests__/helpers/release-writes";
+import { ReleasesRepository } from "../../releases/releases-repository";
 import { perLanguageStorageEnabled } from "../../i18n/per-language-storage";
 
 import {
   LIVE_COLLECTION,
   LIVE_DECLARED,
+  LIVE_DRAFTS,
   LIVE_LOCALIZATION,
   LIVE_SINGLE,
 } from "./helpers/live-site-entities";
@@ -313,6 +321,87 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
+      it("is a bulk save, saves it on the retry it is told to make", async () => {
+        const id = await openMigratedUnder();
+        await untilDone(`bulk-save ${id} in-bulk`);
+        expect(await readHeading(server!, id)).toBe("in-bulk");
+        expect(await legacyObjects(site!.adapter, dialect)).toEqual([]);
+      }, 300_000);
+
+      /** A draft made beside the server, which it has not read, held by a release when asked. */
+      const draftBeside = async (release: boolean): Promise<string> => {
+        const suite = site!.current!;
+        const made = await (
+          suite.getService("collectionsHandler") as CollectionsHandler
+        ).createEntry(
+          {
+            collectionName: LIVE_DRAFTS,
+            overrideAccess: true,
+            locale: "en",
+          },
+          { title: "D", card: { heading: "Kept", tagline: "Kept" } }
+        );
+        const id = (made.data as { id: string }).id;
+        if (release) {
+          const author = await seedLiveAuthor(suite);
+          const repository = new ReleasesRepository(suite.adapter);
+          const created = await repository.createRelease({ title: "Go live" });
+          await repository.addMember(
+            {
+              releaseId: created.id,
+              scopeKind: "collection",
+              scopeSlug: LIVE_DRAFTS,
+              entryId: id,
+              locale: null,
+              action: "publish",
+              createdBy: author,
+            },
+            ANY_EDITABLE_STATE
+          );
+          await scheduleAsItStands(
+            repository,
+            created.id,
+            new Date("2020-01-01T00:00:00Z"),
+            "UTC"
+          );
+        }
+        return id;
+      };
+
+      it("is publishing every language, does it on the retry it is told to make", async () => {
+        let id = "";
+        await openMigratedUnder({
+          before: async () => {
+            id = await draftBeside(false);
+          },
+        });
+        await untilDone(`publish-all ${id}`);
+        expect(headingOf(await ask(server!, `read-published ${id}`))).toBe(
+          "Kept"
+        );
+        expect(await legacyObjects(site!.adapter, dialect)).toEqual([]);
+      }, 300_000);
+
+      it("is applying a release that is due, publishes what it holds within three passes", async () => {
+        let id = "";
+        await openMigratedUnder({
+          before: async () => {
+            id = await draftBeside(true);
+          },
+        });
+        // A pass that meets the move leaves the release due, and the job passes again.
+        const passes: string[] = [];
+        for (let n = 0; n < 3; n++) {
+          passes.push(await ask(server!, "apply-releases"));
+          if (/"applied":1/.test(passes.at(-1)!)) break;
+        }
+        expect(passes.at(-1), passes.join(" / ")).toMatch(/"applied":1/);
+        expect(headingOf(await ask(server!, `read-published ${id}`))).toBe(
+          "Kept"
+        );
+        expect(await legacyObjects(site!.adapter, dialect)).toEqual([]);
+      }, 300_000);
+
       it("is a list of every entry, finds the entry with its group and translation", async () => {
         const kept = [{ heading: "Kept", tagline: "Kept" }];
         const listed = async () => {
@@ -332,6 +421,8 @@ describe.each(getConfiguredTestDialects())(
       it.each([
         ["a list", "list heading Kept", /^OK .*"heading":"Kept"/],
         ["a count", "count heading Kept", /^OK 1$/],
+        ["a grouping", "group heading Kept", /^OK 1$/],
+        ["a timeseries", "timeseries heading Kept", /^OK 1$/],
       ])(
         "is %s filtered as before it, answers at the first try",
         async (_what, request, expected) => {
