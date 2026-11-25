@@ -147,9 +147,8 @@ export function madeByMigrate(file: BesideFile): boolean {
 
 /**
  * The notice every surface gives of the files a run would write beside the main migration where the
- * newest snapshot does not say what the translations tables hold (`recordsTranslationsTables`), so
- * none is a change of what it recorded. It sends nobody to `migrate:create`: written once
- * `nextly migrate` has made the column, the file fills it in again over text edited since.
+ * newest snapshot recorded none and nothing declared since asks for them (`besideNotRecorded`). It
+ * names no migration to write: `nextly migrate` makes what is missing with no file.
  */
 export function translationsNotRecordedNotice(
   files: readonly BesideFile[]

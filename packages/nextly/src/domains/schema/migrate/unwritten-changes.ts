@@ -237,7 +237,7 @@ const DECLARED_LIST = {
  * - Over one that does: only what a repeater's or group's text is kept in, where nothing declared of
  *   its entity changed, neither a setting nor its main table. A release that keeps such text apart
  *   asks for it under an unchanged declaration, and `nextly migrate` makes it and records nothing.
- *   Every other file comes of a change, and is one.
+ *   Every other file is a change.
  */
 function besideNotRecorded(args: {
   pending: Pick<PendingChanges, "beside" | "diffed">;
