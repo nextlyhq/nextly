@@ -204,6 +204,8 @@ vi.mock("../builder-save/push-carries-values", async importOriginal => {
 // A pause before each registry write a save makes once its change applied (`writeRegistryRows`), while
 // `ms` is set: the span a hold let go before the registry write would leave a write to land in.
 const slowRegistry = vi.hoisted(() => ({ ms: 0 }));
+// A switch that refuses each such registry write, and how many were refused.
+const refusedRegistry = vi.hoisted(() => ({ on: false, refused: 0 }));
 // A gate before the next such registry write, while armed: the save waits there, its change made
 // and its row not yet written, until the case lets it go.
 const registryWrite = vi.hoisted(() => ({
@@ -226,6 +228,10 @@ vi.mock("../schema-version", async importOriginal => {
         registryWrite.armed = false;
         registryWrite.paused?.();
         await registryWrite.release;
+      }
+      if (refusedRegistry.on) {
+        refusedRegistry.refused += 1;
+        throw new Error("the registry write was refused");
       }
       return real.writeRegistryRows(...args);
     },
@@ -250,6 +256,47 @@ vi.mock("../../i18n/migration/held-leaving-drops", async importOriginal => {
         throw new Error("the translations step was refused");
       }
       return real.applyCompanionTransition(...args);
+    },
+  };
+});
+
+// How often the translations step's plan was made.
+const plans = vi.hoisted(() => ({ made: 0 }));
+vi.mock("../../i18n/migration/reconcile-companion", async importOriginal => {
+  const real =
+    await importOriginal<
+      typeof import("../../i18n/migration/reconcile-companion")
+    >();
+  return {
+    ...real,
+    buildCompanionTransitionStatements: (
+      ...args: Parameters<typeof real.buildCompanionTransitionStatements>
+    ) => {
+      plans.made += 1;
+      return real.buildCompanionTransitionStatements(...args);
+    },
+  };
+});
+
+// What the last dialog save's change does on the file road, for a case that asks it directly.
+const lastRoad = vi.hoisted(() => ({
+  inFile: undefined as
+    | undefined
+    | (() => Promise<(() => Promise<void>) | undefined>),
+}));
+vi.mock("../services/collection-schema-apply", async importOriginal => {
+  const real =
+    await importOriginal<
+      typeof import("../services/collection-schema-apply")
+    >();
+  return {
+    ...real,
+    collectionFileRoad: (
+      ...args: Parameters<typeof real.collectionFileRoad>
+    ) => {
+      const road = real.collectionFileRoad(...args);
+      lastRoad.inFile = road.inFile;
+      return road;
     },
   };
 });
@@ -305,6 +352,9 @@ let instance: TestNextly | undefined;
 afterEach(async () => {
   pushRoad.forced = false;
   slowRegistry.ms = 0;
+  refusedRegistry.on = false;
+  refusedRegistry.refused = 0;
+  lastRoad.inFile = undefined;
   releaseFails.on = false;
   tryRelease.fails = false;
   tryRelease.refused = 0;
@@ -3261,6 +3311,103 @@ describe.each(getConfiguredTestDialects())(
           kept.map(field => field.name)
         );
         expect((await recorded(t)).version).toBeGreaterThan(before.version);
+      },
+      60_000
+    );
+
+    // The drops join the file's transaction: the registry row refused after them takes them back,
+    // with the file. Run in a transaction of their own they would be gone by then.
+    it.skipIf(dialect === "mysql")(
+      "drops nothing when its registry row is refused after the drops",
+      async () => {
+        const t = await bootWithMemo();
+        const before = await recorded(t);
+        const dir = join(t.basePath, "database", "history");
+        const filesBefore = readdirSync(dir).sort();
+        refusedRegistry.on = true;
+        expect(
+          await saveRemoving(
+            t,
+            [{ name: "label", type: "text" }],
+            ["note", "memo"]
+          )
+        ).not.toBe("applied");
+        expect(refusedRegistry.refused).toBe(1);
+        refusedRegistry.on = false;
+        expect(await recorded(t)).toEqual(before);
+        expect(await valuesIn(t, "note")).toBe(3);
+        expect(await valuesIn(t, "memo")).toBe(3);
+        expect(readdirSync(dir).sort()).toEqual(filesBefore);
+      },
+      60_000
+    );
+
+    // With no transaction open to join, the drops refuse to run, rather than commit on their own
+    // while the file and the registry row may not land.
+    it.skipIf(dialect === "mysql")(
+      "refuses to drop outside the file's transaction, dropping nothing",
+      async () => {
+        const t = await bootWithMemo();
+        // A save refused before it changes anything leaves what its file would have dropped to ask.
+        refusedRegistry.on = true;
+        await saveRemoving(
+          t,
+          [
+            { name: "label", type: "text" },
+            { name: "memo", type: "text" },
+          ],
+          ["note"]
+        );
+        refusedRegistry.on = false;
+        const drops = await lastRoad.inFile?.();
+        expect(drops).toBeTypeOf("function");
+        await expect(drops?.()).rejects.toMatchObject({
+          code: "INTERNAL_ERROR",
+        });
+        expect(await valuesIn(t, "note")).toBe(3);
+      },
+      60_000
+    );
+
+    // Only the file's transaction runs the drops, so only a save whose file runs asks what they are:
+    // not one the push applies, and not one outside development, which changes nothing here.
+    it.skipIf(dialect === "mysql")(
+      "asks what its file would drop only where its file runs",
+      async () => {
+        const t = await bootWithMemo();
+        const fields = [
+          { name: "label", type: "text" },
+          { name: "memo", type: "text" },
+        ];
+        const { paused, release } = gated(afterCount);
+        pushRoad.forced = true;
+        plans.made = 0;
+        const pushing = saveRemoving(t, fields, ["note"]);
+        const reached = await Promise.race([
+          paused.then(() => true),
+          pushing.then(() => false),
+        ]);
+        const beforeThePush = plans.made;
+        const { version } = await recorded(t);
+        release();
+        expect(reached).toBe(true);
+        expect(beforeThePush).toBe(0);
+        // The push's own step drops the field, and its row is written once, after it.
+        expect(await pushing).toBe("applied");
+        expect(await recorded(t)).toEqual({
+          fields: ["label", "memo"],
+          version: version + 1,
+        });
+        expect(await valuesIn(t, "note")).toBe("gone");
+
+        pushRoad.forced = false;
+        vi.stubEnv("NODE_ENV", "production");
+        plans.made = 0;
+        expect(
+          await saveRemoving(t, [{ name: "label", type: "text" }], ["memo"])
+        ).toBe("applied");
+        expect(plans.made).toBe(0);
+        expect(await valuesIn(t, "memo")).toBe(3);
       },
       60_000
     );
