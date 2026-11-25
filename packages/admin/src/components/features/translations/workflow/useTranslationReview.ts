@@ -26,6 +26,7 @@ import {
   STEP_NOT_OFFERED,
   useStepTaker,
 } from "@admin/components/features/entries/review/useStepTaker";
+import { useReviewState } from "@admin/hooks/queries/useReviewState";
 import type { PartReview } from "@admin/types/workflows";
 
 export interface TranslationReviewInput
@@ -40,6 +41,12 @@ export interface TranslationReview {
    * they are not known yet. Absent where no workflow holds the language.
    */
   binding: DocumentReviewBinding | undefined;
+  /**
+   * Whether a workflow holds the document's publishing, or may: one is attached,
+   * or it isn't known yet. A language with nothing waiting stands in no stage,
+   * and a save still puts it in one.
+   */
+  attached: boolean;
   /** The language's part, while it stands in a stage. */
   part: PartReview | undefined;
   /** Why the last step was refused, in words; null otherwise. */
@@ -58,7 +65,9 @@ export function useTranslationReview({
   // A taker of this page's own, so a step is sent for the language alone.
   const taker = useStepTaker(input.document);
   const { refusal, clearRefusal, dialog } = taker;
-  const said = { refusal, clearRefusal, dialog };
+  const { data: answer } = useReviewState(input.document);
+  const attached = answer?.attached === true || review.binding !== undefined;
+  const said = { attached, refusal, clearRefusal, dialog };
 
   // No part waits, or none is known yet: the editor's answer says which.
   if (review.part === undefined) {

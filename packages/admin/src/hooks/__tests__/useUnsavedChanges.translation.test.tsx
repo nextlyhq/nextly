@@ -43,6 +43,43 @@ describe.each([
     unmount();
   });
 
+  it("lets its history through: opened, on a version, with a restore, and closed", () => {
+    const { result, unmount } = renderHook(() =>
+      useUnsavedChanges({ isDirty: true })
+    );
+    for (const query of [
+      "&history=1",
+      "&history=1&version=3",
+      "&history=1&version=3&restore=title",
+      // Opened beside another source.
+      "&source=fr&history=1",
+      "",
+    ]) {
+      write(`${page}?locale=es${query}`);
+      expect(here()).toBe(`${page}?locale=es${query}`);
+    }
+    expect(result.current.showDialog).toBe(false);
+    unmount();
+  });
+
+  it.each([
+    ["another language, its history open", `${page}?locale=ar&history=1`],
+    ["another language alone", `${page}?locale=ar`],
+  ])("from an open history, still asks about %s", (_where, url) => {
+    replaceState.call(
+      window.history,
+      null,
+      "",
+      `${page}?locale=es&history=1&version=3`
+    );
+    const { result, unmount } = renderHook(() =>
+      useUnsavedChanges({ isDirty: true })
+    );
+    write(url);
+    expect(result.current.showDialog).toBe(true);
+    unmount();
+  });
+
   it.each([
     ["another language", `${page}?locale=ar`],
     ["another language with a source", `${page}?locale=ar&source=fr`],

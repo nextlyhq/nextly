@@ -6,7 +6,11 @@
 import type { FieldConfig } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
-import { translationFields, valuesPerLanguage } from "../translation-fields";
+import {
+  fieldsWrittenPerLanguage,
+  translationFields,
+  valuesPerLanguage,
+} from "../translation-fields";
 
 const field = (
   name: string,
@@ -168,5 +172,19 @@ describe("valuesPerLanguage", () => {
     expect(
       valuesPerLanguage({ _allLocales: { title: { en: "x" }, odd: "x" } })
     ).toEqual({ title: { en: "x" } });
+  });
+});
+
+describe("fieldsWrittenPerLanguage", () => {
+  it("names the text of its own kept per language, and nothing else", () => {
+    const written = fieldsWrittenPerLanguage([
+      field("title", "text"),
+      field("slug", "text", { localized: false }),
+      field("price", "number"),
+      field("page", "blocks"),
+      field("slides", "repeater", { fields: [field("caption", "text")] }),
+      field("", "group", { fields: [field("summary", "textarea")] }),
+    ]);
+    expect([...written].sort()).toEqual(["summary", "title"]);
   });
 });

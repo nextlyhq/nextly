@@ -32,7 +32,7 @@ export interface ActionFacts {
   removed: boolean;
   isDirty: boolean;
   isSaving: boolean;
-  /** Whether a workflow holds the language: its step leads, not these. */
+  /** Whether a workflow is attached: a save puts the language in review. */
   inWorkflow: boolean;
 }
 

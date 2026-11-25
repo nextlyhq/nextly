@@ -430,6 +430,52 @@ describe("publishing a language a workflow holds", () => {
   });
 });
 
+describe("a live language nothing of which waits, under a workflow", () => {
+  beforeEach(() => {
+    spanish = PUBLISHED;
+    attach(part({ stage: null, stageLabel: null, steps: [] }));
+  });
+
+  it("is saved before it can be published: the save puts it back in review", async () => {
+    render();
+    const publish = await screen.findByRole("button", {
+      name: "Publish Spanish",
+    });
+    await userEvent.type(bio(), "!");
+
+    expect(publish).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByText(/^Save your changes before publishing Spanish/)
+    ).toBeInTheDocument();
+    await userEvent.click(publish);
+    expect(api.update).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("dialog", { name: "Publish Spanish?" })
+    ).toBeNull();
+  });
+
+  it("offers its step once the save made it wait", async () => {
+    render();
+    await screen.findByRole("button", { name: "Publish Spanish" });
+    await userEvent.type(bio(), "!");
+    attach(part());
+    const saved = {
+      bio: "Una pionera!",
+      _rev: "8.es:4",
+      updatedAt: "2026-03-02T10:00:00.000Z",
+    };
+    api.update.mockResolvedValue({ item: { ...answer({}), ...saved } });
+    api.findByID.mockImplementation((_s: string, _i: string, read: Read) =>
+      Promise.resolve({ ...answer(read), ...saved })
+    );
+    await userEvent.click(screen.getByRole("button", { name: /^Save/ }));
+
+    expect(
+      await screen.findByRole("button", { name: "Submit for review" })
+    ).toBeInTheDocument();
+  });
+});
+
 describe("a language the workflow says nothing of", () => {
   it("has the page's own actions, and no stage, where no workflow is attached", async () => {
     schema.value = { ...COLLECTION, workflow: null };
@@ -444,6 +490,8 @@ describe("a language the workflow says nothing of", () => {
   });
 
   it("has them where nothing of it waits, and only the shared fields do", async () => {
+    // Live, with nothing pending: the one part that stands in no stage.
+    spanish = PUBLISHED;
     attach(
       part({ part: null }),
       part({ stage: null, stageLabel: null, steps: [] })

@@ -267,6 +267,49 @@ describe("history on the translation page", () => {
     ).toBeNull();
   });
 
+  it("opens over unsaved work without asking to leave it, and keeps it", async () => {
+    render();
+    await actions();
+    await userEvent.type(bio(), "!");
+    await userEvent.click(
+      (await actions()).getByRole("button", { name: "History" })
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "History" })
+    ).toBeInTheDocument();
+    expect(new URLSearchParams(window.location.search).get("history")).toBe(
+      "1"
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(bio()).toHaveValue("Ahora!");
+  });
+
+  it("restores from history opened by its button, and closing it asks nothing of the restored text", async () => {
+    render();
+    await userEvent.click(
+      (await actions()).getByRole("button", { name: "History" })
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Version 1\b/ })
+    );
+    const dialog = await openRestore();
+    await userEvent.click(
+      dialog.getByRole("button", { name: "Restore 1 field" })
+    );
+
+    // Closing steps back off the entry opening added, which the form is now
+    // unsaved on.
+    await waitFor(() =>
+      expect(new URLSearchParams(window.location.search).has("history")).toBe(
+        false
+      )
+    );
+    await waitFor(() => expect(bio()).toHaveValue("Antes"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(api.update).not.toHaveBeenCalled();
+  });
+
   it("puts the version's actions in place of the page's, which act on the live text", async () => {
     await readingVersion();
 

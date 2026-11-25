@@ -50,6 +50,24 @@ describe("an entry's comparison page", () => {
     });
   });
 
+  it("is told which fields each language writes by itself, once the schema says", () => {
+    schema.mockReturnValue({
+      data: {
+        localized: true,
+        fields: [
+          { name: "title", type: "text" },
+          { name: "price", type: "number" },
+        ],
+      },
+    });
+    expect(renderPage()).toMatchObject({
+      writtenPerLanguage: new Set(["title"]),
+    });
+
+    schema.mockReturnValue({ data: undefined });
+    expect(renderPage()).toMatchObject({ writtenPerLanguage: undefined });
+  });
+
   it("is told a collection that says nothing of languages is not translated", () => {
     schema.mockReturnValue({ data: { labels: { plural: "Posts" } } });
 

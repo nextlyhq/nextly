@@ -13,7 +13,7 @@
  * @module components/features/translations/page/translation-fields
  */
 
-import type { FieldConfig } from "nextly/config";
+import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 import { fieldAdminGates } from "@admin/components/features/entries/fields/field-admin-gates";
@@ -82,6 +82,30 @@ function labelOf(field: FieldConfig, name: string): string {
     name,
     label: typeof label === "string" ? label : undefined,
   });
+}
+
+/**
+ * The fields the page writes, by their declarations alone, for a page that
+ * hasn't read the document: text of their own, kept per language.
+ */
+export function fieldsWrittenPerLanguage(
+  fields: readonly FieldConfig[]
+): ReadonlySet<string> {
+  const written = addressableFieldsWithin(fields).filter(
+    ({ field, path }) =>
+      path !== "" &&
+      !isContainer(field) &&
+      !OWN_EDITOR_TYPES.has(field.type) &&
+      isFieldLocalized(
+        {
+          type: field.type,
+          name: path,
+          localized: (field as { localized?: boolean }).localized,
+        },
+        true
+      )
+  );
+  return new Set(written.map(({ path }) => path));
 }
 
 /** Where the page shows one field; undefined where the reader may not read it. */
