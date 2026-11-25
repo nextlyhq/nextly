@@ -532,3 +532,102 @@ describe("Publish without review", () => {
     );
   });
 });
+
+describe("the shared fields a first publish takes", () => {
+  const APPROVED_ES = part({
+    stage: "approved",
+    stageLabel: "Approved",
+    publishable: true,
+    steps: [],
+  });
+  const DRAFTED_SHARED = part({ part: null });
+  const SHARED_PROBLEM = "Shared fields: not approved (Drafting)";
+  const readyList = () =>
+    screen.findByRole("region", { name: "Ready to publish?" });
+
+  /** The gate's refusal of a publish that takes the shared fields, described or made. */
+  const heldBack = refusal([
+    {
+      path: "shared",
+      code: "NOT_APPROVED",
+      message: "The shared fields have no current approval.",
+    },
+  ]);
+
+  it("are listed with their next step where the server refuses the publish for their approval", async () => {
+    const user = userEvent.setup();
+    api.publishParts.mockRejectedValue(heldBack);
+    open(review([APPROVED_ES, DRAFTED_SHARED]));
+
+    const ready = await readyList();
+    await waitFor(() => expect(ready).toHaveTextContent(SHARED_PROBLEM));
+    // Said once, with its step, and not again as a field called "shared".
+    expect(ready).not.toHaveTextContent("shared: ");
+    await user.click(
+      within(ready).getByRole("button", { name: /Submit for review/ })
+    );
+    await waitFor(() => expect(api.takeStep).toHaveBeenCalled());
+  });
+
+  it("can be published without review by a person who may", async () => {
+    const user = userEvent.setup();
+    api.publishParts.mockImplementation(
+      (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
+        choice.describe === true
+          ? Promise.reject(heldBack)
+          : Promise.resolve(describing(choice))
+    );
+    open(review([APPROVED_ES, DRAFTED_SHARED], true));
+
+    await user.click(
+      await screen.findByRole("button", { name: "Publish without review…" })
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Reason" }),
+      "Legal deadline today."
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Publish without review" })
+    );
+
+    // The server adds the shared fields itself.
+    await waitFor(() =>
+      expect(moves()).toEqual([
+        expect.objectContaining({
+          locales: ["es"],
+          shared: false,
+          withoutReview: { reason: "Legal deadline today." },
+        }),
+      ])
+    );
+  });
+
+  it("are listed where the description says it takes them", async () => {
+    api.publishParts.mockImplementation(
+      (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
+        Promise.resolve({
+          ...describing(choice),
+          shared: { changes: true, added: choice.locales !== "all" },
+        })
+    );
+    open(review([APPROVED_ES, DRAFTED_SHARED]));
+
+    await waitFor(async () =>
+      expect(await readyList()).toHaveTextContent(SHARED_PROBLEM)
+    );
+    expect(
+      screen.getByRole("button", { name: "Publish selected" })
+    ).toBeDisabled();
+  });
+
+  it("are not listed where they are live and left alone", async () => {
+    open(review([APPROVED_ES, DRAFTED_SHARED]));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Publish selected" })
+      ).toBeEnabled()
+    );
+    expect(screen.queryByText(SHARED_PROBLEM)).toBeNull();
+  });
+});

@@ -60,6 +60,7 @@ import type { LanguageLabel } from "../publishAllOutcomes";
 
 import type { TranslationOverview } from "./out-of-date";
 import {
+  movedParts,
   offeredChoice,
   publishChoices,
   type PublishChoiceRow,
@@ -523,7 +524,7 @@ export function PublishPartsDialog(
   // What holds Publish where a workflow governs the document, each with its fix. A field it
   // lists is said there, and not again among the general refusals.
   const problems = problemsOf(review, direction, {
-    choice: request,
+    choice: movedParts(request, { languages, ...parts }),
     refusal,
     translated,
     labelOf,
