@@ -33,8 +33,10 @@ import {
   UnsavedWorkProvider,
   useUnsavedWork,
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
-import { usePublishPartsAction } from "@admin/components/features/entries/publish-parts/usePublishPartsAction";
-import { languageLabelOf } from "@admin/components/features/entries/publishAllOutcomes";
+import {
+  pageActions,
+  useDocumentPublishing,
+} from "@admin/components/features/entries/publish-parts/useDocumentPublishing";
 import {
   isRemovedFromCode,
   removedEntityHasNoTable,
@@ -346,30 +348,27 @@ export default function EditEntryPage({
         ? locales.map(each => each.label)
         : undefined,
   });
-  // "Choose what to publish…", on the Publish split: each language, and separately the shared
-  // fields. A translated entry offers its languages; one that is not offers the shared fields,
-  // which are the whole document.
-  const translatedLanguages =
-    localizationEnabled &&
-    collection !== undefined &&
-    "localized" in collection &&
-    collection.localized === true
-      ? locales.map(each => each.code)
-      : [];
   // How to read the copy the editor shows, filled by the editor once it is drawn, so a publish
   // of chosen parts is refused when the entry changed since the editor opened it.
   const shownCopy = useRef<(() => ShownCopy) | null>(null);
-  const publishParts = usePublishPartsAction({
+  // What Publish runs, and "Choose what to publish…" on its menu: each language, and separately
+  // the shared fields. A translated entry offers its languages; one that is not offers the
+  // shared fields, which are the whole document.
+  const publishing = useDocumentPublishing({
     target: slug && id ? { kind: "collection", slug, id } : undefined,
+    document: entry,
     shown: () => shownCopy.current?.(),
     lifecycleEnabled: collection?.status,
-    languages: translatedLanguages,
-    labelOf: languageLabelOf(locales),
+    translated:
+      localizationEnabled &&
+      collection !== undefined &&
+      "localized" in collection &&
+      collection.localized === true,
+    locales,
     currentLocale: locale,
     defaultLocale,
-    sharedPending:
-      (entry as { _sharedChangesPending?: unknown } | undefined)
-        ?._sharedChangesPending === true,
+    editorPath:
+      slug && id ? buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id }) : "",
   });
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({ activeLocale: locale, defaultLocale });
@@ -849,9 +848,10 @@ export default function EditEntryPage({
             </div>
           )}
           {schedule.dialog}
-          {publishParts.dialog}
+          {publishing.dialog}
           <EntryForm
             shownCopy={shownCopy}
+            smartPublish={publishing.smartPublish}
             revealOutline={<EditEntryPageSkeleton />}
             revealWaiting={partsStartup.pending}
             /* A standing fact about the whole document, so a band across the
@@ -885,6 +885,7 @@ export default function EditEntryPage({
                   }}
                   onDefaultLocale={!isNonDefaultLocale}
                 />
+                {publishing.notice}
               </>
             }
             collection={collection as unknown as EntryFormCollection}
@@ -906,18 +907,7 @@ export default function EditEntryPage({
             documentActions={
               removedFromCode
                 ? []
-                : [
-                    ...(publishParts.contributed === null
-                      ? []
-                      : [publishParts.contributed]),
-                    ...(schedule.contributed === null
-                      ? []
-                      : [schedule.contributed]),
-                    ...(publishParts.withoutReview === null
-                      ? []
-                      : [publishParts.withoutReview]),
-                    ...(pin === null ? [] : [pin]),
-                  ]
+                : pageActions(publishing, schedule.contributed, pin)
             }
             locale={locale}
             onLocaleChange={changeLocale}
