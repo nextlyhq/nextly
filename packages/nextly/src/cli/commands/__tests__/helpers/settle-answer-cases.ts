@@ -1042,6 +1042,8 @@ export function settleAnswerCases(args: {
             const { before, after, path } = await answered();
             const target = await seeded(before, translated);
             reach(target.url);
+            // No row in the translations table, which would tell of the entries by itself.
+            await target.adapter.executeQuery(`DELETE FROM ${q(COMPANION)}`);
             // The entries are under another name, and the answering file brings them back first.
             const rename = (from: string, to: string) =>
               `ALTER TABLE ${q(from)} RENAME TO ${q(to)};`;
