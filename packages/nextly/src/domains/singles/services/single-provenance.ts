@@ -21,9 +21,13 @@ import {
   translationProvenancePresent,
 } from "../../i18n/provenance/record-provenance";
 import {
-  assembleStoredValue,
-  type SharedStructureShape,
-} from "../../i18n/shared-structure";
+  sourceReaderOf,
+  translationSourcesPresent,
+  type TranslatedColumn,
+  type WriteSources,
+} from "../../i18n/provenance/source-text";
+import { cachedCompanionReadiness } from "../../i18n/runtime/companion-readiness";
+import { assembleStoredValue } from "../../i18n/shared-structure";
 import type { SelectsRows } from "../../versions/document-revision";
 
 /** What recording needs of the service writing. */
@@ -54,14 +58,14 @@ export interface SingleProvenanceWrite {
    * The Single's translated fields: each one's column, whether its storage is JSON, and the
    * shape of a container with one structure in every language.
    */
-  localizedFields: ReadonlyArray<{
-    name: string;
-    column: string;
-    json?: boolean;
-    sharedStructure?: SharedStructureShape;
-  }>;
+  localizedFields: readonly TranslatedColumn[];
   /** The Single's translation table, which holds each language's counter. */
   languagesTable?: string;
+  /**
+   * That table as it is read, for the values the translations written are made from. A write in
+   * the default language, which is made from no other, names none.
+   */
+  companionTable?: unknown;
   savedBy: RequestActor;
   claims?: ProvenanceClaims;
   partState?: "live" | "draft";
@@ -82,6 +86,54 @@ export function singleProvenanceRecorded(
     deps.logger,
     transactionTableProbe(deps.adapter, tx)
   );
+}
+
+/**
+ * Whether the source text translations are made from is kept on `tx`: the table is there, asked
+ * as {@link singleProvenanceRecorded} asks for its own.
+ */
+export function singleSourceTextKept(
+  deps: Pick<SingleProvenanceDeps, "adapter" | "logger">,
+  tx: TransactionContext
+): Promise<boolean> {
+  return translationSourcesPresent(
+    deps.adapter,
+    deps.logger,
+    transactionTableProbe(deps.adapter, tx)
+  );
+}
+
+/**
+ * Where a Single's write reads the values its translations are made from, and keeps them, on its
+ * transaction; none for a write in the default language.
+ */
+async function singleWriteSources(
+  deps: SingleProvenanceDeps,
+  tx: TransactionContext,
+  write: SingleProvenanceWrite
+): Promise<WriteSources | undefined> {
+  if (
+    write.locale === deps.defaultLocale ||
+    write.companionTable === undefined ||
+    write.languagesTable === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    db: tx,
+    kept: await singleSourceTextKept(deps, tx),
+    read: sourceReaderOf({
+      db: tx.getDrizzle(),
+      companion: {
+        table: write.companionTable,
+        localizedFields: write.localizedFields,
+      },
+      // Remembered, never resolved here: the write resolved it, and a probe of
+      // a missing table aborts a PostgreSQL transaction.
+      readiness: cachedCompanionReadiness(deps.adapter, write.languagesTable),
+      entryId: write.entryId,
+    }),
+  };
 }
 
 /**
@@ -142,5 +194,6 @@ export async function recordSingleProvenance(
     defaultLocale: deps.defaultLocale,
     savedBy: write.savedBy,
     claims: write.claims,
+    sources: await singleWriteSources(deps, tx, write),
   });
 }

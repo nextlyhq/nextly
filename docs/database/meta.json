@@ -6,6 +6,7 @@
     "mysql",
     "sqlite",
     "support",
+    "repair-columns",
     "encrypted-connections",
     "extending-the-schema",
     "coming-from-payload"

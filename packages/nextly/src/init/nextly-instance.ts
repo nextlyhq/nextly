@@ -25,6 +25,7 @@ import type {
   ApiKeysNamespace,
 } from "../direct-api/namespaces/rbac";
 import type { ReleasesNamespace } from "../direct-api/namespaces/releases";
+import type { TranslationsNamespace } from "../direct-api/namespaces/translations";
 import type { WorkflowsNamespace } from "../direct-api/namespaces/workflows";
 import type {
   AuthResult,
@@ -1152,6 +1153,12 @@ export interface Nextly {
    * ```
    */
   notices: NoticesNamespace;
+
+  /**
+   * @experimental A translated field and its source: what changed in the source since the
+   * translation was made, and keeping the translation as it is.
+   */
+  translations: TranslationsNamespace;
 
   roles: {
     find: (args?: FindRolesArgs) => Promise<ListResult<Role>>;

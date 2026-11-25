@@ -833,6 +833,18 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * Whether this user may update the entry, and the same of its row once a
+   * transaction has locked it. See the mutation service.
+   *
+   * @experimental
+   */
+  judgeEntryUpdate(
+    params: Parameters<CollectionMutationService["judgeEntryUpdate"]>[0]
+  ) {
+    return this.mutationService.judgeEntryUpdate(params);
+  }
+
+  /**
    * Whether this caller may make a write naming `nextStatus` of the entry: the
    * lifecycle gate an update asks, only where it moves the row into or out of
    * published, judged without writing. See the mutation service.

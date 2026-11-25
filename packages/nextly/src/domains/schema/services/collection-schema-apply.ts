@@ -1291,6 +1291,7 @@ async function reconcileCompanion(args: {
       slug,
       tableName,
       renamed: args.companionRename,
+      newFields: fields,
     });
   } catch (err) {
     // A refused setting and a busy-table stop are passed on as they are. Anything else: the
