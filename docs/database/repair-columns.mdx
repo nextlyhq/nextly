@@ -33,12 +33,13 @@ Run the dry run once if your site holds tables that an earlier release made in t
 | A select, radio, upload or text field on MySQL | `text`, where the field is a `varchar`               | `0.0.2-alpha.66` |
 | A many-to-many relationship in a field group   | one text or id value, where the field is a JSON list | `0.0.2-alpha.69` |
 | Other columns of a field group                 | the types the field group's creator gave them        | `0.0.2-alpha.77` |
+| A required relationship or upload of a Single  | `NOT NULL`, where the column allows a null           | `0.0.2-alpha.79` |
 
-A required relationship or upload of a Single is also reported where its column is `NOT NULL`: it should allow a null, and converting it drops the `NOT NULL`. A collection's required relationship or upload is `NOT NULL` on purpose since `0.0.2-alpha.79`. There the reverse is reported: a column an earlier migration created nullable. So is a required user field added to a site that already had user fields. Converting it sets `NOT NULL`, and is blocked while a row holds a null. For a collection, the next `nextly migrate:create` plans the same change.
+A Single's one entry is created before anything is chosen, so the column of its required relationship or upload allows a null, and converting an old one drops the `NOT NULL`. The entry's requirement is still checked when it is saved. A collection's required relationship or upload is `NOT NULL` on purpose since `0.0.2-alpha.79`. There the reverse is reported: a column an earlier migration created nullable. So is a required user field added to a site that already had user fields. Converting it sets `NOT NULL`, and is blocked while a row holds a null. For a collection, the next `nextly migrate:create` plans the same change.
 
 A site first made on this release holds none of the columns in the table. When nothing differs, the dry run answers "Every column matches its field."
 
-Where a line says `created by the current version's generator`, the report names this release's own generator as the one that makes such a column. Where that is so, a table it makes later can hold the same difference, even after a repair.
+Where a line says `created by the current version's generator`, this release's own generator makes such a column. A table it makes later can hold the same difference, even after a repair.
 
 ## Read the report
 
