@@ -17,7 +17,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerEntityRuntimeTables } from "../../../../di/register-runtime-tables";
 import {
   compareBeforeTransaction,
-  refuseReadOverLeftSave,
   refuseWriteOverLeftSave,
 } from "../left-save-fields";
 
@@ -340,13 +339,6 @@ describe("a left save that made a row need a value its registry row lets it leav
   it("lets a write of a row already there leave it out, and refuses one that sets it", async () => {
     await expect(write({ heading: "x" })).resolves.toBeUndefined();
     await expect(write({ note: "x" })).rejects.toMatchObject(refused);
-  });
-
-  it("refuses a new row for a column of no field of the row's, and nothing else", async () => {
-    stubs.found = { unserved: [], required: ["alpha"], shapeServed: true };
-    await expect(create({ heading: "x" })).rejects.toMatchObject(refused);
-    await expect(write({ heading: "x" })).resolves.toBeUndefined();
-    await expect(refuseReadOverLeftSave(posts)).resolves.toBeUndefined();
   });
 
   // The control: nothing a new row must be given, so only what it sets is asked about.

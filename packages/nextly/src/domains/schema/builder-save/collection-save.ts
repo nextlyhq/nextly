@@ -1374,10 +1374,8 @@ async function desiredTable(
  * `liveJudgedTable`): after its table, so no main-table column shares its name.
  */
 function translationsColumnName(column: string): string {
-  return `${TRANSLATIONS_PREFIX}${column}`;
+  return `_locales.${column}`;
 }
-
-const TRANSLATIONS_PREFIX = "_locales.";
 
 /**
  * The entity's table as the database has it, as the judgement reads it: the main table, and for an
@@ -4654,11 +4652,6 @@ export async function fieldsNotServed(
     });
     if (demanded) required.push(field.name);
   }
-  // A main-table column the row does not declare, which no insert of it gives.
-  for (const [name, column] of standing) {
-    if (declared.has(name) || name.startsWith(TRANSLATIONS_PREFIX)) continue;
-    if (mustBeGiven(column)) required.push(name);
-  }
   // A column of the entity's own the tables lack, which every read selects: no field to hold
   // answers it. One they have beyond the row's is harmless, as nothing selects it.
   const shapeServed = [...declared.keys()].every(
@@ -4674,8 +4667,9 @@ function mustBeGiven(column: TableSpec["columns"][number]): boolean {
 
 /**
  * What the comparison found (`fieldsNotServed`): each field whose columns the tables do not hold as
- * declared, what a new row must be given that the declaration lets it leave out (a field, or a column
- * of no field of the row's), and whether the entity's own columns beyond its fields are all there.
+ * declared, those of them a new row must be given that the declaration lets it leave out, and whether
+ * the entity's own columns beyond its fields are all there. A column of no field of the row's says
+ * nothing: it may be one a hook or a plugin added, which they give.
  */
 export interface ServedComparison {
   unserved: UnservedField[];

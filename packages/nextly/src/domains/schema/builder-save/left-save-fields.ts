@@ -84,7 +84,7 @@ interface RegistryRow {
 interface Unserved {
   fields: readonly string[];
   missing: readonly string[];
-  /** What a new row must be given that the registry row lets it leave out, by field or column. */
+  /** The fields a new row must be given that the registry row lets it leave out. */
   required: readonly string[];
   /**
    * Whether the tables lack a column the entity's own shape needs beyond its fields (its status, a
@@ -275,7 +275,7 @@ function heldOver(
   }
   const fields = [...new Set([...(mine?.fields ?? []), ...embedding.fields])];
   const required = mine?.required ?? [];
-  if (fields.length === 0 && required.length === 0) return undefined;
+  if (fields.length === 0) return undefined;
   const group = (mine?.fields.length ?? 0) > 0 ? undefined : embedding.group;
   return {
     fields: new Set(fields),

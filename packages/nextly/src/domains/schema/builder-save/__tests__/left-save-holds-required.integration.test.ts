@@ -89,7 +89,7 @@ describe.each(LEFT_SAVE_SUITES)(
 
     // SQLite alters no column to be required; what it would need is a table made again.
     it.runIf(dialect !== "sqlite")(
-      "the comparison finds what a row must be given that its registry row lets it leave out: a field, and a column of no field",
+      "the comparison finds a field a row must be given that its registry row lets it leave out, and asks nothing of a column of no field",
       async () => {
         const t = await boot();
         const required = async () =>
@@ -113,14 +113,14 @@ describe.each(LEFT_SAVE_SUITES)(
         );
         expect(await required()).toEqual(["note"]);
 
+        // One a hook or a plugin added to the table, say: what gives it is not the row's to know.
         await t.adapter.executeQuery(
-          `ALTER TABLE ${table} ADD COLUMN alpha int NOT NULL DEFAULT 0`
+          `ALTER TABLE ${table} ADD COLUMN owned int NOT NULL DEFAULT 0`
         );
-        expect(await required(), "one with a default").toEqual(["note"]);
         await t.adapter.executeQuery(
-          `ALTER TABLE ${table} ALTER COLUMN alpha DROP DEFAULT`
+          `ALTER TABLE ${table} ALTER COLUMN owned DROP DEFAULT`
         );
-        expect(await required()).toEqual(["note", "alpha"]);
+        expect(await required()).toEqual(["note"]);
       },
       300_000
     );
