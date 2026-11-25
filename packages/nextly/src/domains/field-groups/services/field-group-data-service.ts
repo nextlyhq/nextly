@@ -7,7 +7,10 @@ import type { FieldGroupRegistryService } from "../../../services/field-groups/f
 import type { Logger } from "../../../shared/types";
 import type { LocalizationSource } from "../../i18n/localization-source";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
-import { refusingMovedStorage } from "../migration/moved-storage";
+import {
+  refusalAfterFollowing,
+  refusingMovedStorage,
+} from "../migration/moved-storage";
 
 import {
   FieldGroupMutationService,
@@ -146,6 +149,22 @@ export class FieldGroupDataService {
       executor,
       work,
     });
+  }
+
+  /**
+   * Whether a read that failed with `error` met field-group storage the migration moved, followed by
+   * now, so the same read made again finds it. For a read that addresses a group's table itself, as
+   * one filtered on a group's field does. Never on a transaction, where the write that owns it
+   * decides.
+   */
+  async followedMove(error: unknown): Promise<boolean> {
+    if (this.adapter.transactionOpenInFlow()) return false;
+    const refusal = await refusalAfterFollowing({
+      adapter: this.adapter,
+      rows: this.registryService,
+      error,
+    });
+    return refusal !== undefined;
   }
 
   setRelationshipService(service: CollectionRelationshipService): void {

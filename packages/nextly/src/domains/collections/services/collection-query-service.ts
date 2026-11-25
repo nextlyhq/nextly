@@ -4946,6 +4946,8 @@ export class CollectionQueryService extends BaseService {
         data: paginatedResponse,
       };
     } catch (caught: unknown) {
+      const again = await this.afterMove(params, caught);
+      if (again) return this.listEntries(again);
       // A read the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
@@ -4978,6 +4980,32 @@ export class CollectionQueryService extends BaseService {
         ...errorEnvelopeFields(error),
       };
     }
+  }
+
+  /** The requests being made again after a move, so none is made a third time. */
+  private readonly madeAgain = new WeakSet<object>();
+
+  /**
+   * The request to make again, when a read filtered on a field group failed because the storage
+   * migration moved the group's table under this server (`followedMove`); undefined otherwise, and
+   * for a request already made again. What the failed read had resolved about the group's tables is
+   * left out of it.
+   */
+  private async afterMove<P extends object>(
+    params: P,
+    error: unknown
+  ): Promise<P | undefined> {
+    if (this.madeAgain.has(params)) return undefined;
+    if (!(await this.fieldGroupDataService?.followedMove(error))) {
+      return undefined;
+    }
+    const again: P = {
+      ...params,
+      resolvedComponentTables: undefined,
+      resolvedComponentTypeColumns: undefined,
+    };
+    this.madeAgain.add(again);
+    return again;
   }
 
   /**
@@ -5373,6 +5401,8 @@ export class CollectionQueryService extends BaseService {
         data: { totalDocs },
       };
     } catch (error: unknown) {
+      const again = await this.afterMove(params, error);
+      if (again) return this.countEntries(again, settled);
       return this.countFailed(params.collectionName, error, params);
     }
   }
@@ -5464,6 +5494,8 @@ export class CollectionQueryService extends BaseService {
         },
       };
     } catch (error: unknown) {
+      const again = await this.afterMove(params, error);
+      if (again) return this.countEntriesUpTo(again, settled);
       // Reported as `countEntries` reports it, so a refusal stays a typed 403.
       return this.countFailed(params.collectionName, error, params);
     }
@@ -5556,6 +5588,8 @@ export class CollectionQueryService extends BaseService {
         },
       };
     } catch (caught: unknown) {
+      const again = await this.afterMove(params, caught);
+      if (again) return this.groupEntries(again);
       // A read the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
@@ -5726,6 +5760,8 @@ export class CollectionQueryService extends BaseService {
 
       return this.timeseriesAnswer(window, interval, counted);
     } catch (caught: unknown) {
+      const again = await this.afterMove(params, caught);
+      if (again) return this.timeseriesEntries(again);
       // A read the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
@@ -6734,6 +6770,8 @@ export class CollectionQueryService extends BaseService {
         resolvedEntryId,
       };
     } catch (caught: unknown) {
+      const again = await this.afterMove(params, caught);
+      if (again) return this.getEntry(again);
       // A read the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
