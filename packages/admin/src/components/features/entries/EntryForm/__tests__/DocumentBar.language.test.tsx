@@ -108,6 +108,33 @@ describe("DocumentBar language", () => {
     ).toBeTruthy();
   });
 
+  it("lets History's word give way sooner beside the languages control, whose cluster is wider", () => {
+    // Beside the languages control, History's cluster needs 44rem of the bar's
+    // part; without it (one language, so no control), 36rem. Both read whether
+    // the control is drawn from the same answer the control's place does.
+    const historyWord = () =>
+      [
+        ...screen
+          .getByRole("button", { name: "History" })
+          .querySelectorAll("span"),
+      ].find(span => span.textContent === "History")?.className ?? "";
+    localization.locales = [
+      { code: "en", label: "English" },
+      { code: "fr", label: "French" },
+    ];
+    const { unmount } = render(
+      <Harness languagesControl={<button type="button">Languages</button>} />
+    );
+    expect(historyWord()).toContain("@max-[44rem]/toolbar:sr-only");
+    unmount();
+    localization.locales = [{ code: "en", label: "English" }];
+    render(
+      <Harness languagesControl={<button type="button">Languages</button>} />
+    );
+    expect(historyWord()).toContain("@max-[36rem]/toolbar:sr-only");
+    expect(historyWord()).not.toContain("@max-[44rem]/toolbar:sr-only");
+  });
+
   it("draws no languages control on a one-language site", () => {
     localization.locales = [{ code: "en", label: "English" }];
     render(

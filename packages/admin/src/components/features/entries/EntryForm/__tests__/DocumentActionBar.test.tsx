@@ -277,6 +277,62 @@ describe("an action that cannot be used", () => {
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
+  it("names the arrow for what it holds: publishing where it holds a way to publish, the document's actions where it holds none", () => {
+    // A collection with no publish lifecycle leads with Save, and its arrow
+    // holds the preview and the document's views: nothing that publishes.
+    const { unmount } = render(
+      <DocumentActionBar
+        actions={[{ id: "save", label: "Save", placement: "primary" }]}
+        bindings={{ save: { onSelect: vi.fn() } }}
+        mainMenuItems={[
+          { id: "preview-open", label: "Preview", onSelect: vi.fn() },
+        ]}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "More document actions" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "More ways to publish" })
+    ).toBeNull();
+    unmount();
+    // Save leading over a way to publish (Schedule… on a clean live
+    // document): the arrow holds publishing, and says so.
+    const scheduled = render(
+      <DocumentActionBar
+        actions={[
+          { id: "save", label: "Save", placement: "primary" },
+          {
+            id: "schedule-publish",
+            label: "Schedule…",
+            placement: "publish-menu",
+          },
+        ]}
+        bindings={{
+          save: { onSelect: vi.fn() },
+          "schedule-publish": { onSelect: vi.fn() },
+        }}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "More ways to publish" })
+    ).toBeInTheDocument();
+    scheduled.unmount();
+    // The control: where Publish leads, the arrow says so.
+    render(
+      <DocumentActionBar
+        actions={[{ id: "publish", label: "Publish", placement: "primary" }]}
+        bindings={{ publish: { onSelect: vi.fn() } }}
+        mainMenuItems={[
+          { id: "preview-open", label: "Preview", onSelect: vi.fn() },
+        ]}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "More ways to publish" })
+    ).toBeInTheDocument();
+  });
+
   it("draws a leading action refused for this instant disabled, with why", () => {
     // Nothing to save, a submit in flight: not a hold to explain, and the
     // press would do nothing a moment later either.

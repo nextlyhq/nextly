@@ -154,7 +154,9 @@ function renderBar(
  * hold draws no arrow at all, which offers it nowhere either.
  */
 async function openInBuilder(): Promise<HTMLElement | null> {
-  const arrow = screen.queryByRole("button", { name: "More ways to publish" });
+  const arrow = screen.queryByRole("button", {
+    name: /^More (ways to publish|document actions)$/,
+  });
   if (arrow === null) return null;
   await userEvent.click(arrow);
   const menu = await screen.findByRole("menu");
@@ -181,7 +183,9 @@ describe("DocumentBar — opening the document in its other view", () => {
       screen.queryByRole("link", { name: "Open in builder" })
     ).not.toBeInTheDocument();
     await userEvent.click(
-      screen.getByRole("button", { name: "More ways to publish" })
+      screen.getByRole("button", {
+        name: /^More (ways to publish|document actions)$/,
+      })
     );
     const row = await screen.findByRole("menuitem", {
       name: "Open in builder",

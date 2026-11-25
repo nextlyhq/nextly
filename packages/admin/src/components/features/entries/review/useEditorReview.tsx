@@ -241,7 +241,9 @@ export function useEditorReview({
  */
 function stepLabel(step: ReviewStep): string {
   const asks = step.kind === "request-changes" || step.commentRequired;
-  return asks && !step.label.endsWith("…") ? `${step.label}…` : step.label;
+  // A label already ending in an ellipsis, either spelling, keeps it.
+  const hasEllipsis = step.label.endsWith("…") || step.label.endsWith("...");
+  return asks && !hasEllipsis ? `${step.label}…` : step.label;
 }
 
 function reviewUnknown(failed: boolean): DocumentReviewBinding {
