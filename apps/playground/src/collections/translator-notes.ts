@@ -8,8 +8,18 @@
  * Spanish read-only. No other playground collection has a rule that answers
  * by language, and adding one there would change what it is for in every
  * development run.
+ *
+ * Its `slides` repeater keeps one structure in every language with a caption
+ * translated row by row, for the visual check of how the editor marks such a
+ * field in a language other than the default.
  */
-import { defineCollection, text, textarea } from "nextly/config";
+import {
+  defineCollection,
+  number,
+  repeater,
+  text,
+  textarea,
+} from "nextly/config";
 
 export const TranslatorNotes = defineCollection({
   slug: "translator-notes",
@@ -21,5 +31,13 @@ export const TranslatorNotes = defineCollection({
   fields: [
     text({ name: "title", label: "Title", required: true }),
     textarea({ name: "note", label: "Note" }),
+    repeater({
+      name: "slides",
+      label: "Slides",
+      fields: [
+        text({ name: "caption", label: "Caption" }),
+        number({ name: "position", label: "Position" }),
+      ],
+    }),
   ],
 });

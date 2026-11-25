@@ -38,6 +38,7 @@ import {
   migrateData,
   openUpgradeDatabase,
   previewMigrateData,
+  refusalBeforeSchemaChanges,
   seedLegacyStates,
   SITE,
   whatEachReaderSees,
@@ -308,6 +309,129 @@ describeEachDialect(
       for (const table of translated) {
         expect(await columnsOf(table)).toEqual(before[table]);
       }
+    });
+
+    // A moved column leaves its main table, and an index standing on it alone goes with it, first,
+    // since SQLite refuses to drop a column an index names. One standing on it and another column
+    // would break, or keep something else unique, so the upgrade refuses it before anything
+    // changes, naming it. Broken, SQLite stops part-way on the first, and the other dialects drop
+    // or shrink the second without a word.
+    it("drops an index on a moved column alone, and refuses one on it with another column", async () => {
+      await legacySite();
+      const adapter = database!.adapter;
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const columnsOf = async (table: string) => {
+        const { tables } = await introspectLiveColumns(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          [table]
+        );
+        return (tables[0]?.columns ?? []).map(column => column.name);
+      };
+      const titleIndex = `CREATE INDEX ${q("idx_notes_title")} ON ${q("dc_notes")} (${q("title")})`;
+      const twoColumns = `CREATE INDEX ${q("idx_notes_two")} ON ${q("dc_notes")} (${q("title")}, ${q("id")})`;
+
+      await adapter.executeQuery(twoColumns);
+      expect(await refusalBeforeSchemaChanges(adapter, SITE)).toMatchObject({
+        code: "NEXTLY_UPGRADE_COLUMN_HELD",
+        publicMessage: expect.stringContaining("idx_notes_two"),
+      });
+      await expect(upgrade()).rejects.toMatchObject({
+        code: "NEXTLY_UPGRADE_COLUMN_HELD",
+      });
+      expect(await columnsOf("dc_notes")).toContain("title");
+
+      await adapter.executeQuery(
+        dialect === "mysql"
+          ? `DROP INDEX ${q("idx_notes_two")} ON ${q("dc_notes")}`
+          : `DROP INDEX ${q("idx_notes_two")}`
+      );
+      await adapter.executeQuery(titleIndex);
+      await upgrade();
+      expect(await columnsOf("dc_notes")).not.toContain("title");
+    });
+
+    // An index on an expression over a moved column, or one whose condition names it, keeps that
+    // column out of the catalog's column list: only its definition names it. Either is refused up
+    // front by name, like any other index a drop would break. Broken, PostgreSQL and MySQL drop it
+    // with the column in silence, and SQLite stops part-way with its own error rather than the
+    // up-front refusal. MySQL has no index with a condition.
+    it.each(
+      (
+        [
+          ["an expression over", "idx_notes_lower_title"],
+          ["a condition naming", "idx_notes_titled"],
+        ] as const
+      ).filter(([, name]) => dialect !== "mysql" || name !== "idx_notes_titled")
+    )(
+      "refuses an index on %s a moved column, naming it",
+      async (_label, indexName) => {
+        await legacySite();
+        const adapter = database!.adapter;
+        const q = (name: string) =>
+          dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+        const { tables } = await introspectLiveColumns(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          ["dc_notes"]
+        );
+        // MySQL writes a functional key part in its own parentheses.
+        const keyed =
+          indexName === "idx_notes_titled"
+            ? `(${q("id")}) WHERE ${q("title")} IS NOT NULL`
+            : dialect === "mysql"
+              ? `((lower(${q("title")})))`
+              : `(lower(${q("title")}))`;
+        await adapter.executeQuery(
+          `CREATE INDEX ${q(indexName)} ON ${q("dc_notes")} ${keyed}`
+        );
+
+        expect(await refusalBeforeSchemaChanges(adapter, SITE)).toMatchObject({
+          code: "NEXTLY_UPGRADE_COLUMN_HELD",
+          publicMessage: expect.stringContaining(indexName),
+        });
+        await expect(upgrade()).rejects.toMatchObject({
+          code: "NEXTLY_UPGRADE_COLUMN_HELD",
+        });
+        const after = await introspectLiveColumns(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          ["dc_notes"]
+        );
+        expect(after.tables[0]?.columns.map(column => column.name)).toEqual(
+          tables[0]?.columns.map(column => column.name)
+        );
+      }
+    );
+
+    // What an index reads is its key and its condition, not its own name or its table's: an
+    // expression index named for the moved column, over another, does not hold it, and the
+    // upgrade moves the column. Broken (the whole catalog DDL read), the index's name is taken for
+    // the column it reads and the upgrade is refused.
+    it("moves a column an unrelated index is only named after", async () => {
+      await legacySite();
+      const adapter = database!.adapter;
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const columnsOf = async (table: string) => {
+        const { tables } = await introspectLiveColumns(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          [table]
+        );
+        return (tables[0]?.columns ?? []).map(column => column.name);
+      };
+      // MySQL writes a functional key part in its own parentheses.
+      const keyed =
+        dialect === "mysql" ? `((lower(${q("id")})))` : `(lower(${q("id")}))`;
+      await adapter.executeQuery(
+        `CREATE INDEX ${q("title")} ON ${q("dc_notes")} ${keyed}`
+      );
+
+      expect(await refusalBeforeSchemaChanges(adapter, SITE)).toBeUndefined();
+      await upgrade();
+      expect(await columnsOf("dc_notes")).not.toContain("title");
     });
 
     // A field group declared in code had its columns built by the pipeline, whose rule bounds a

@@ -932,6 +932,37 @@ describe("VersionHistorySheet", () => {
     window.history.pushState({}, "", "/");
   });
 
+  it("chooses the one field the comparison page asked for by name, and lists the rest", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/admin/collections/posts/e1?history=1&version=3&restore=views"
+    );
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
+      })
+    );
+    useVersionMock.mockReturnValue(
+      detailState({ data: { snapshot: { title: "Then", views: 1 } } })
+    );
+    const { editor } = fakeEditor();
+    editor.fields = [
+      { name: "title", type: "text", label: "Title" } as FieldConfig,
+      { name: "views", type: "number", label: "Views" } as FieldConfig,
+    ];
+    editor.currentValues = () => ({ title: "Now", views: 2 });
+
+    renderPublishing({ canRestore: true }, editor);
+
+    expect(
+      await screen.findByRole("checkbox", { name: /Views/ })
+    ).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Title/ })).not.toBeChecked();
+    expect(window.location.search).not.toContain("restore=");
+    window.history.pushState({}, "", "/");
+  });
+
   it("puts the chosen values into the editor, never writing, and offers Undo", async () => {
     useVersionsMock.mockReturnValue(
       listState({

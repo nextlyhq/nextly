@@ -49,11 +49,13 @@ const echo = () =>
     },
   });
 
-/** A translated group whose read hook puts a password value back. */
+/**
+ * A group whose text is kept per language (its label, beside its one structure) and whose read
+ * hook puts a password value back.
+ */
 const vault = () =>
   group({
     name: "vault",
-    localized: true,
     hooks: {
       afterRead: [
         ({ value }: { value: unknown }) =>

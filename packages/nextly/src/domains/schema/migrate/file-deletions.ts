@@ -19,9 +19,12 @@
  * - removes rows (`DELETE`, `TRUNCATE`, `REPLACE`, SQLite's `OR REPLACE`): a
  *   `rows` deletion, and one for each table a foreign key's `ON DELETE
  *   CASCADE` (or PostgreSQL's `TRUNCATE ... CASCADE`) reaches from it, read
- *   from the live database (`DeletionFacts`). When those cannot be read, an
- *   `unnamed` deletion stands for them, which only consent without targets
- *   covers: a list cannot name tables nobody could read.
+ *   from the live database (`DeletionFacts`), or added by the list itself.
+ *   When those cannot be read, an `unnamed` deletion stands for them, which
+ *   only consent without targets covers: a list cannot name tables nobody
+ *   could read. A key the list adds to a table written with its schema (or
+ *   database) deletes nothing by itself; which table that name reaches is not
+ *   decided, so a later removal of rows counts as reaching it.
  * - rebuilds a SQLite table (`__new_t` created, rows copied, `t` dropped,
  *   `__new_t` renamed to `t`): judged by what it does to `t` — each live
  *   column it leaves out or converts, and its rows when the copy does not
@@ -233,10 +236,14 @@ type Step =
   | { kind: "add-column"; table: string; column: string }
   | {
       kind: "add-key";
+      /** The table the key is on; with its schema (`s.t`) where it is written so. */
       table: string;
       columns: string[];
-      references: string;
+      /** The table it references, or undefined for one written with its schema (`keyAt`). */
+      references: string | undefined;
       onDelete: KeyAction;
+      /** Declared by the statement that makes the table, whose rows are then the run's own. */
+      declared?: true;
     }
   | { kind: "create-function"; name: string }
   /** `child` made a descendant of `parent` (ATTACH PARTITION, INHERIT): a later removal from `parent` reaches it. */
@@ -466,7 +473,7 @@ function readDefinition(
   tokens: readonly Token[],
   dialect: SupportedDialect
 ): Step[] | null {
-  if (cursor.accept("CREATE")) return readCreate(cursor, tokens);
+  if (cursor.accept("CREATE")) return readCreate(cursor, tokens, dialect);
   if (cursor.accept("DROP")) return readDrop(cursor, tokens, dialect);
   if (cursor.accept("ALTER", "TABLE")) {
     return readAlterTable(cursor, tokens, dialect);
@@ -558,18 +565,23 @@ function readSqliteReplace(
  * MariaDB's `CREATE OR REPLACE TABLE t` drops t first. Any other creation
  * deletes nothing now.
  */
-function readCreate(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
+function readCreate(
+  cursor: StatementCursor,
+  tokens: readonly Token[],
+  dialect: SupportedDialect
+): Step[] {
   const replacing = cursor.accept("OR", "REPLACE");
   // MySQL may name the definer first: `CREATE DEFINER = user FUNCTION …`.
   if (cursor.isWord("DEFINER")) return readDefinedCode(tokens);
   if (cursor.accept("FUNCTION")) return readCreateFunction(cursor);
   // A trigger runs later, on rows: the walk counts it as code the run defines.
   if (tokens.slice(1, 6).includes("TRIGGER")) return [];
-  if (replacing) return readCreateOrReplace(cursor, tokens);
+  if (replacing) return readCreateOrReplace(cursor, tokens, dialect);
   if (cursor.accept("TEMPORARY") || cursor.accept("TEMP")) {
-    return readCreateTemporary(cursor);
+    return readCreateTable(cursor, tokens, dialect, true);
   }
-  return readCreateTable(cursor, false);
+  if (dialect === "postgresql") cursor.accept("UNLOGGED");
+  return readCreateTable(cursor, tokens, dialect, false);
 }
 
 /**
@@ -578,10 +590,13 @@ function readCreate(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
  */
 function readCreateOrReplace(
   cursor: StatementCursor,
-  tokens: readonly Token[]
+  tokens: readonly Token[],
+  dialect: SupportedDialect
 ): Step[] {
   // A temporary table replaces only a temporary one of the same name.
-  if (cursor.accept("TEMPORARY")) return readCreateTemporary(cursor);
+  if (cursor.accept("TEMPORARY")) {
+    return readCreateTable(cursor, tokens, dialect, true);
+  }
   if (!cursor.accept("TABLE")) return [];
   const table = cursor.name();
   return table === undefined
@@ -593,32 +608,60 @@ function readCreateOrReplace(
 }
 
 /**
- * A temporary table: it holds only what the run puts in it, and shadows a
- * live table of its name until it is dropped.
- */
-function readCreateTemporary(cursor: StatementCursor): Step[] {
-  return readCreateTable(cursor, true);
-}
-
-/**
  * `TABLE [IF NOT EXISTS] name`, after `CREATE [TEMPORARY]`: the table the
  * list makes. One created only if absent may be a live table: the step says
  * so (`conditional`), and whether it makes the table is decided where it is
- * applied (`FileWalk.createIfAbsent`). A temporary one so written makes
- * nothing of the name.
+ * applied (`FileWalk.createIfAbsent`). A temporary one holds only what the run
+ * puts in it and shadows a live table of its name until it is dropped; so
+ * written, it makes nothing of the name. The keys its body declares go with
+ * it (`declaredKeys`).
  */
-function readCreateTable(cursor: StatementCursor, temporary: boolean): Step[] {
+function readCreateTable(
+  cursor: StatementCursor,
+  tokens: readonly Token[],
+  dialect: SupportedDialect,
+  temporary: boolean
+): Step[] {
   if (!cursor.accept("TABLE")) return [];
   const conditional = cursor.accept("IF", "NOT", "EXISTS");
   if (conditional && temporary) return [];
-  const table = cursor.name();
-  if (table === undefined) return [];
-  if (conditional) return [{ kind: "create", table, conditional }];
-  return [
-    temporary
-      ? { kind: "create", table, temporary }
-      : { kind: "create", table },
-  ];
+  const made = tableNamed(cursor.rest());
+  if (made === undefined) {
+    return tokens.includes("REFERENCES") ? [unread(tokens)] : [];
+  }
+  const keys = declaredKeys(made, temporary || dialect === "sqlite");
+  if (keys === undefined) return [unread(tokens)];
+  // One written with its schema is not followed as the run's own table.
+  const create: Step[] = made.qualified
+    ? []
+    : [createStep(made.table, temporary, conditional)];
+  return [...create, ...keys];
+}
+
+/** The step of a table made, temporary or only if absent. */
+function createStep(
+  table: string,
+  temporary: boolean,
+  conditional: boolean
+): Step {
+  if (conditional) return { kind: "create", table, conditional };
+  return temporary
+    ? { kind: "create", table, temporary }
+    : { kind: "create", table };
+}
+
+/**
+ * The keys a CREATE TABLE's body declares; undefined when one cannot be read.
+ * None where none matters: a temporary table's, which no live table
+ * references, and SQLite's, since the runner applies a migration with
+ * foreign-key enforcement off.
+ */
+function declaredKeys(made: TableNamed, inert: boolean): Step[] | undefined {
+  if (inert) return [];
+  return keysIn(made.rest, made.table)?.map(key => ({
+    ...key,
+    declared: true as const,
+  }));
 }
 
 /** MySQL's `CREATE DEFINER = … FUNCTION …`: the function it creates; nothing for any other. */
@@ -680,7 +723,8 @@ function readAlterType(tokens: readonly Token[]): Step[] {
 /**
  * The functions a statement calls, by the names it writes them with,
  * lower-cased and qualified as written: a name, plain or quoted, directly
- * before `(`. Whether one may delete is a fact about the database
+ * before `(`, that does not stand where only a table's name can
+ * (`namesTable`). Whether one may delete is a fact about the database
  * (`mayDeleteThrough`), asked by the walk. A statement that only defines
  * code (a function, procedure, trigger or view) calls nothing now. An
  * escaped quoted name (`U&"…"`) reads as a qualified one, which may delete.
@@ -692,7 +736,9 @@ function readCalls(tokens: readonly Token[]): Step | undefined {
   if (tokens[0] === "CREATE" && definesCode(tokens)) return undefined;
   if (namesCodeOnly(tokens)) return undefined;
   const names = tokens.flatMap((token, at) =>
-    tokens[at + 1] === "(" ? calledName(tokens, at) : []
+    tokens[at + 1] === "(" && !namesTable(tokens, at)
+      ? calledName(tokens, at)
+      : []
   );
   return names.length === 0
     ? undefined
@@ -701,6 +747,84 @@ function readCalls(tokens: readonly Token[]): Step | undefined {
         names,
         description: `${labelOf(tokens)} (calls a function, may delete data)`,
       };
+}
+
+/**
+ * Whether the name ending at `at`, directly before `(`, stands where only a
+ * table's name can: after REFERENCES, or as the table a CREATE TABLE makes or
+ * a CREATE INDEX is on. The list after it is columns, where any call is still
+ * one.
+ */
+function namesTable(tokens: readonly Token[], at: number): boolean {
+  const start = nameStart(tokens, at);
+  const rest = tableNamed(tokens.slice(start))?.rest;
+  if (rest === undefined || tokens.length - rest.length !== at + 1)
+    return false;
+  if (tokens[start - 1] === "REFERENCES") return keysAreRead(tokens);
+  if (tokens[0] !== "CREATE") return false;
+  const head = tokens.slice(1, start);
+  return head.every(isTableCreationWord)
+    ? head.includes("TABLE")
+    : indexOn(head);
+}
+
+/**
+ * Whether every key of a statement is read (`keysIn`), or leaves it unread:
+ * an ALTER TABLE, or a CREATE TABLE that replaces nothing. In any other
+ * statement a referenced table still counts as a call, so a key in it is not
+ * passed over without a word.
+ */
+function keysAreRead(tokens: readonly Token[]): boolean {
+  if (tokens[0] === "ALTER") return tokens[1] === "TABLE";
+  const made = tokens.findIndex((token, at) => at > 0 && token === "TABLE");
+  return (
+    tokens[0] === "CREATE" &&
+    made > 0 &&
+    tokens.slice(1, made).every(token => READ_CREATION_WORDS.has(token))
+  );
+}
+
+/** Words between CREATE and TABLE of a creation whose keys are read. */
+const READ_CREATION_WORDS = new Set<Token>(["TEMPORARY", "TEMP", "UNLOGGED"]);
+
+/** Where the name ending at `at` starts, before any qualifier: one of its own, or a word ending in its dot. */
+function nameStart(tokens: readonly Token[], at: number): number {
+  let start = at;
+  for (;;) {
+    const before = tokens[start - 1];
+    if (before === ".") start -= 2;
+    else if (typeof before === "string" && /^[^.].*\.$/.test(before))
+      start -= 1;
+    else return start;
+  }
+}
+
+/** Words between CREATE and the name of the table it makes. */
+const TABLE_CREATION_WORDS = new Set([
+  "GLOBAL",
+  "LOCAL",
+  "TEMPORARY",
+  "TEMP",
+  "UNLOGGED",
+  "TABLE",
+  "IF",
+  "NOT",
+  "EXISTS",
+]);
+
+const isTableCreationWord = (token: Token): boolean =>
+  typeof token === "string" && TABLE_CREATION_WORDS.has(token);
+
+/** Words between CREATE and INDEX. */
+const INDEX_CREATION_WORDS = new Set(["UNIQUE", "FULLTEXT", "SPATIAL"]);
+
+/** Whether a creation's words up to a name are `[UNIQUE] INDEX ... ON [ONLY]`: the name is its table's. */
+function indexOn(head: readonly Token[]): boolean {
+  const kind = head[0];
+  const index =
+    typeof kind === "string" && INDEX_CREATION_WORDS.has(kind) ? 1 : 0;
+  if (head[index] !== "INDEX") return false;
+  return head.at(-1) === "ONLY" ? head.at(-2) === "ON" : head.at(-1) === "ON";
 }
 
 /** First words of a statement that names code (a signature, a grant) without running it. */
@@ -982,26 +1106,44 @@ function readAlterTable(
 ): Step[] {
   cursor.acceptCondition();
   if (dialect === "postgresql") cursor.accept("ONLY");
-  const table = cursor.name();
-  // A qualified name leaves its clauses unread: any word that can open a
-  // clause dropping or converting a column makes the statement unread.
-  if (table === undefined) {
-    return tokens.some(
-      token =>
-        typeof token === "string" &&
-        (DELETING_WORDS.has(token) || CONVERTING_WORDS.has(token))
-    )
-      ? [unread(tokens)]
-      : [];
+  const altered = tableNamed(tokens.slice(cursor.at));
+  if (altered === undefined || altered.qualified) {
+    return readQualifiedAlter(altered, tokens, dialect);
   }
+  const { table } = altered;
   const steps: Step[] = [];
-  for (const clause of cursor.clauses()) {
+  for (const clause of new StatementCursor(altered.rest).clauses()) {
     const read = readAlterClause(new StatementCursor(clause), table, dialect);
+    const keys = keysIn(clause, table);
     // A clause not placed is one that may delete (`readAlterClause`).
-    if (read === undefined) return [unread(tokens)];
-    steps.push(...read);
+    if (read === undefined || keys === undefined) return [unread(tokens)];
+    steps.push(...read, ...keys);
   }
   return steps;
+}
+
+/**
+ * An ALTER TABLE whose table is written with its schema: its clauses are not
+ * read, so any word that can open one dropping or converting a column makes
+ * the statement unread. The keys it adds are, on PostgreSQL: a later
+ * `TRUNCATE ... CASCADE` empties this table through them, whatever their
+ * action. Where the table cannot be named at all, the statement is unread.
+ */
+function readQualifiedAlter(
+  altered: TableNamed | undefined,
+  tokens: readonly Token[],
+  dialect: SupportedDialect
+): Step[] {
+  const mayDelete = tokens.some(
+    token =>
+      typeof token === "string" &&
+      (DELETING_WORDS.has(token) || CONVERTING_WORDS.has(token))
+  );
+  if (mayDelete) return [unread(tokens)];
+  if (dialect !== "postgresql" || !tokens.includes("REFERENCES")) return [];
+  const keys =
+    altered === undefined ? undefined : keysIn(altered.rest, altered.table);
+  return keys ?? [unread(tokens)];
 }
 
 /** Words that open an ALTER TABLE clause converting a column's values. */
@@ -1077,16 +1219,9 @@ const ADDED_NOT_COLUMNS = new Set([
 
 /**
  * An ALTER TABLE `ADD` clause: a column the run makes (its values are the
- * run's own), and any foreign key it adds with an ON DELETE action, which a
- * later removal of rows in the same run follows. Undefined for a key whose
- * referenced table cannot be named.
+ * run's own). The keys it adds are read with every other (`keysIn`).
  */
-function readAddClause(
-  clause: StatementCursor,
-  table: string
-): Step[] | undefined {
-  if (clause.accept("CONSTRAINT")) clause.name();
-  if (clause.accept("FOREIGN", "KEY")) return readAddedKey(clause, table);
+function readAddClause(clause: StatementCursor, table: string): Step[] {
   const next = clause.peek();
   const column =
     clause.accept("COLUMN") ||
@@ -1097,46 +1232,141 @@ function readAddClause(
   // so a conditional addition never marks it as the run's own.
   const conditional = clause.accept("IF", "NOT", "EXISTS");
   const name = clause.name();
-  if (name === undefined) return [];
-  const key = readReferences(clause, table, [name]);
-  if (key === undefined) return undefined;
-  return conditional
-    ? key
-    : [{ kind: "add-column", table, column: name }, ...key];
+  return name === undefined || conditional
+    ? []
+    : [{ kind: "add-column", table, column: name }];
 }
 
-/** `FOREIGN KEY [name] (columns) REFERENCES …`, after `FOREIGN KEY`. */
-function readAddedKey(
-  clause: StatementCursor,
+/** A foreign key the list adds. */
+type AddedKey = Extract<Step, { kind: "add-key" }>;
+
+/**
+ * Every foreign key `tokens` (an ALTER TABLE clause, or a CREATE TABLE from
+ * its body on) gives `table`: one for each REFERENCES, however the statement
+ * writes the key, so none is passed over. Undefined when one cannot be read.
+ */
+function keysIn(
+  tokens: readonly Token[],
   table: string
-): Step[] | undefined {
-  // MySQL may name the key's index before its columns.
-  if (!clause.isWord("(")) clause.name();
-  if (!clause.accept("(")) return undefined;
-  const columns = clause.names();
-  if (columns === undefined || !clause.accept(")")) return undefined;
-  return readReferences(clause, table, columns);
+): AddedKey[] | undefined {
+  const keys: AddedKey[] = [];
+  for (let at = 0; at < tokens.length; at += 1) {
+    if (tokens[at] !== "REFERENCES") continue;
+    const key = keyAt(tokens, at, table);
+    if (key === undefined) return undefined;
+    keys.push(key);
+  }
+  return keys;
 }
 
 /**
- * The key `columns` of `table` hold, when the rest of the clause says
- * `REFERENCES parent … ON DELETE action`: nothing without a REFERENCES or an
- * action that touches rows, undefined when the parent cannot be named.
+ * The key whose REFERENCES is at `at`. One with no ON DELETE action is a key
+ * too, since PostgreSQL's `TRUNCATE ... CASCADE` follows it. A parent written
+ * with its schema (PostgreSQL) or database (MySQL) is left undecided: the name
+ * may reach the app's own table, one the list renamed there, or one a cascade
+ * from the app's reaches. Undefined when the parent cannot be read, or the
+ * columns an action blanks.
  */
-function readReferences(
-  clause: StatementCursor,
-  table: string,
-  columns: string[]
-): Step[] | undefined {
-  const rest = clause.rest();
-  const at = rest.indexOf("REFERENCES");
-  if (at === -1) return [];
-  const references = new StatementCursor(rest.slice(at + 1)).name();
-  if (references === undefined) return undefined;
-  const onDelete = keyAction(rest.slice(at + 1));
-  return onDelete === "none"
-    ? []
-    : [{ kind: "add-key", table, columns, references, onDelete }];
+function keyAt(
+  tokens: readonly Token[],
+  at: number,
+  table: string
+): AddedKey | undefined {
+  const parent = tableNamed(tokens.slice(at + 1));
+  if (parent === undefined) return undefined;
+  const onDelete = keyAction(itemFrom(parent.rest));
+  const columns = keyColumns(itemBefore(tokens, at));
+  const blanks = onDelete === "set null" || onDelete === "set default";
+  if (columns === undefined && blanks) return undefined;
+  return {
+    kind: "add-key",
+    table,
+    columns: columns ?? [],
+    references: parent.qualified ? undefined : parent.table,
+    onDelete,
+  };
+}
+
+/** The rest of a list's item: up to its comma, or the parenthesis closing the list. */
+function itemFrom(tokens: readonly Token[]): readonly Token[] {
+  let depth = 0;
+  const end = tokens.findIndex(token => {
+    if (token === "(") depth += 1;
+    if (token === ")") depth -= 1;
+    return depth < 0 || (token === "," && depth === 0);
+  });
+  return end === -1 ? tokens : tokens.slice(0, end);
+}
+
+/** A list's item up to `at`: from its comma, or the parenthesis opening the list. */
+function itemBefore(tokens: readonly Token[], at: number): readonly Token[] {
+  let depth = 0;
+  let start = at;
+  for (; start > 0; start -= 1) {
+    const token = tokens[start - 1];
+    if (token === ")") depth += 1;
+    if (token === "(") depth -= 1;
+    if (depth < 0 || (token === "," && depth === 0)) break;
+  }
+  return tokens.slice(start, at);
+}
+
+/** The columns a key's item, up to its REFERENCES, puts it on; undefined when they cannot be read. */
+function keyColumns(item: readonly Token[]): string[] | undefined {
+  const foreign = item.findIndex(
+    (token, at) => token === "FOREIGN" && item[at + 1] === "KEY"
+  );
+  if (foreign === -1) return columnKeyed(new StatementCursor(item));
+  const key = new StatementCursor(item.slice(foreign + 2));
+  // MySQL may name the key's index before its columns.
+  if (!key.isWord("(")) key.name();
+  if (!key.accept("(")) return undefined;
+  const columns = key.names();
+  return key.accept(")") ? columns : undefined;
+}
+
+/** The column whose own definition an item is; undefined for one MySQL restates. */
+function columnKeyed(item: StatementCursor): string[] | undefined {
+  if (item.isWord("MODIFY") || item.isWord("CHANGE")) return undefined;
+  item.accept("ADD");
+  item.accept("COLUMN");
+  item.accept("IF", "NOT", "EXISTS");
+  const column = item.name();
+  return column === undefined ? undefined : [column];
+}
+
+/** A table's name where a statement writes one, and what follows it. */
+interface TableNamed {
+  /** Lower-cased, with its schema or database (`s.t`) where it is written so. */
+  table: string;
+  qualified: boolean;
+  rest: readonly Token[];
+}
+
+/**
+ * The table `tokens` starts with, its name's parts quoted or not, one by one;
+ * undefined for a name in a form not read (three parts, an escaped name).
+ */
+function tableNamed(tokens: readonly Token[]): TableNamed | undefined {
+  // A dot is part of an unquoted word (`AUTH.USERS`, or `AUTH.` before a
+  // quoted name): each part is set apart, with the token it came from.
+  const parts = tokens.slice(0, 5).flatMap((token, from) =>
+    typeof token === "string"
+      ? token
+          .split(/(\.)/)
+          .filter(part => part !== "")
+          .map(part => ({ part: part as Token, from }))
+      : [{ part: token, from }]
+  );
+  const cursor = new StatementCursor(parts.map(({ part }) => part));
+  const qualified = cursor.qualifiedName();
+  const name = qualified?.name ?? cursor.name();
+  if (name === undefined) return undefined;
+  return {
+    table: qualified === undefined ? name : `${qualified.qualifier}.${name}`,
+    qualified: qualified !== undefined,
+    rest: tokens.slice((parts[cursor.at - 1]?.from ?? 0) + 1),
+  };
 }
 
 /** The ON DELETE action a key's clause names; none when it names none. */
@@ -1703,10 +1933,12 @@ class FileWalk {
   private readonly madeIfAbsent = new Set<string>();
   /** The functions the list defines, by the last part of their names; `*` for one it cannot name. */
   private readonly functions = new Set<string>();
-  /** The foreign keys with an ON DELETE action the list added, in order. */
+  /** The foreign keys the list added, in order; `parent` undefined where it is not decided which table it is. */
   private readonly addedKeys: {
-    parent: string;
+    parent: string | undefined;
     child: string;
+    /** The app's own table a child written with its schema may be. */
+    mayBe: string | undefined;
     live: boolean;
     columns: string[];
     onDelete: KeyAction;
@@ -2065,12 +2297,19 @@ class FileWalk {
     this.madeColumns.set(table, made);
   }
 
-  private addKey(step: Extract<Step, { kind: "add-key" }>): void {
+  private addKey(step: AddedKey): void {
     const child = this.origin(step.table);
+    const dot = step.table.indexOf(".");
     this.addedKeys.push({
-      parent: this.identity(step.references),
+      parent:
+        step.references === undefined
+          ? undefined
+          : this.identity(step.references),
       child: this.identity(step.table),
-      live: child !== null,
+      mayBe: dot === -1 ? undefined : this.identity(step.table.slice(dot + 1)),
+      // A table the run makes holds only its own rows; one made only if absent
+      // that stands already keeps the keys it has, which the live reading follows.
+      live: child !== null && step.declared !== true,
       columns:
         child === null
           ? step.columns
@@ -2141,7 +2380,8 @@ class FileWalk {
     if (table !== null && step.only !== true && step.removal !== "partition") {
       removed.push(...this.descendants(table));
     }
-    if (step.reach !== "none") {
+    // No key of a table that lasts references a temporary one.
+    if (step.reach !== "none" && !this.shadowed.has(step.table)) {
       const start = [this.identity(step.table), ...removed.slice(1)];
       removed.push(...this.reach(start, table !== null, step.reach));
     }
@@ -2306,9 +2546,10 @@ class FileWalk {
   }
 
   /**
-   * What the keys the list added on `table` do: a cascade (or a TRUNCATE
-   * CASCADE, whatever the action) removes a live child's rows, a SET NULL or
-   * SET DEFAULT blanks its key columns. Returns the children to follow on.
+   * What the keys the list added on `table` do, and those on a table not
+   * decided, which may be it: a cascade (or a TRUNCATE CASCADE, whatever the
+   * action) removes a live child's rows, a SET NULL or SET DEFAULT blanks its
+   * key columns. Returns the children to follow on.
    */
   private reachAdded(
     table: string,
@@ -2316,11 +2557,14 @@ class FileWalk {
   ): { table: string; askLive: boolean }[] {
     const follow: { table: string; askLive: boolean }[] = [];
     for (const key of this.addedKeys) {
-      if (key.parent !== table) continue;
+      if (key.parent !== undefined && key.parent !== table) continue;
       if (reach === "truncate" || key.onDelete === "cascade") {
         if (key.live) this.emit({ kind: "rows", table: key.child });
         follow.push({ table: key.child, askLive: key.live });
-      } else if (key.live) {
+        if (key.mayBe !== undefined) {
+          follow.push({ table: key.mayBe, askLive: false });
+        }
+      } else if (key.live && key.onDelete !== "none") {
         this.blank(key.child, key.columns);
       }
     }
@@ -2535,6 +2779,10 @@ function liveRunSteps(run: MysqlLiveRun): Step[] {
       ];
 }
 
+/** Whether a step only notes a key no removal of rows but TRUNCATE CASCADE follows: nothing else of its statement was read. */
+const isInertKey = (step: Step): boolean =>
+  step.kind === "add-key" && step.onDelete === "none";
+
 /** Every step of the list, with each SQLite rebuild judged as one. */
 function walk(
   statements: readonly string[],
@@ -2580,7 +2828,7 @@ function walk(
       for (const step of steps) {
         file.apply(fingerprinted(step, statement));
       }
-      if (steps.length === 0) file.unfollowed(tokens);
+      if (steps.every(isInertKey)) file.unfollowed(tokens);
       const call = readCalls(tokens);
       if (call !== undefined) file.apply(fingerprinted(call, statement));
       advance(state, tokens);
@@ -2820,6 +3068,62 @@ export function functionsDefinedBy(
       step.kind === "create-function" ? [step.name] : []
     )
   );
+}
+
+/**
+ * The tables a statement list leaves dropped, lower-cased, read in order: each name the database
+ * could hold before the list runs, and which the list leaves absent. A table dropped and then made
+ * again, or renamed onto (SQLite's rebuild of a table under a new name, renamed back), is not among
+ * them; one renamed away is, and so is one dropped, made again and dropped. A name is known to be
+ * new only where the list first makes it unconditionally (a plain `CREATE TABLE`, or a rename onto
+ * it), which would fail on a table already there; one made `IF NOT EXISTS` may be the table the
+ * database held. What the localisation steps leave out ahead of a run whose files remove an
+ * entity, since the run never reaches the rows those tables hold.
+ */
+export function tablesLeftDropped(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): string[] {
+  // Each name the list touches: whether the database could hold it before, from the first step
+  // naming it, and whether the list leaves it there, from the last.
+  const names = new Map<string, { heldBefore: boolean; there: boolean }>();
+  const step = (table: string, there: boolean, provesNew: boolean) => {
+    const seen = names.get(table);
+    names.set(table, {
+      heldBefore: seen?.heldBefore ?? !provesNew,
+      there,
+    });
+  };
+  // The names a temporary table the list made shadows, as `FileWalk` reads them: an unqualified
+  // drop of such a name drops the temporary table and gives the name back to the table it hid, a
+  // temporary drop of any other name drops none of the database's tables, and a temporary table
+  // renamed away takes its shadow with it.
+  const shadowed = new Set<string>();
+  for (const statement of statements) {
+    for (const read of readStatement(statement, dialect)) {
+      if (read.kind === "drop") {
+        const table = read.table.toLowerCase();
+        if (shadowed.delete(table) || read.temporary === true) continue;
+        step(table, false, false);
+      } else if (read.kind === "create") {
+        const table = read.table.toLowerCase();
+        if (read.temporary === true) shadowed.add(table);
+        else step(table, true, read.conditional !== true);
+      } else if (read.kind === "rename-table") {
+        const from = read.from.toLowerCase();
+        const to = read.to.toLowerCase();
+        if (shadowed.delete(from)) {
+          shadowed.add(to);
+          continue;
+        }
+        step(from, false, false);
+        step(to, true, true);
+      }
+    }
+  }
+  return [...names]
+    .filter(([, { heldBefore, there }]) => heldBefore && !there)
+    .map(([table]) => table);
 }
 
 /** A read that answers undefined rather than throwing. */

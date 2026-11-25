@@ -197,7 +197,10 @@ import {
   provenanceClaimsOf,
   type ProvenanceClaims,
 } from "../../i18n/provenance/provenance-claims";
-import { discardDraftProvenance } from "../../i18n/provenance/record-provenance";
+import {
+  discardDraftProvenance,
+  forgetRemovedRowsProvenance,
+} from "../../i18n/provenance/record-provenance";
 import {
   configuredLocale,
   isValidLocale,
@@ -206,6 +209,8 @@ import {
 import {
   buildCompanionSchema,
   type CompanionSchema,
+  pruneOverlaysOfRemovedRows,
+  sharedStructuresIn,
   splitLocalizedWrite,
 } from "../../i18n/runtime/companion-io";
 import {
@@ -216,7 +221,12 @@ import {
   resolveCompanionReadiness,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
+import {
+  assembleStoredValue,
+  sameSharedStructure,
+} from "../../i18n/shared-structure";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   refuseWriteOverLeftSave,
@@ -368,7 +378,11 @@ import {
   resolveSingleForRequest,
   withDeclaredFields,
 } from "./ensure-runtime-table";
-import { liveSharedSingle, type SharedComparison } from "./live-shared-single";
+import {
+  liveSharedSingle,
+  type SharedComparison,
+  withLiveStructures,
+} from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
@@ -826,9 +840,24 @@ export class SingleMutationService extends BaseService {
           )
         : [];
     // Each translated value, by its field's name rather than its column's.
+    // A container with one structure is its stored structure with the
+    // language's text on it: the language row holds that text alone, and
+    // the structure holds what is never translated, a password's hash among
+    // it, which the carry puts back.
     const translated: Record<string, unknown> = {};
     for (const field of companion?.localizedFields ?? []) {
       const value = row?.[field.name] ?? row?.[field.column];
+      if (field.sharedStructure !== undefined) {
+        const structure = args.stored[field.name] ?? args.stored[field.column];
+        if (structure !== undefined && structure !== null) {
+          translated[field.name] = assembleStoredValue(
+            structure,
+            value === undefined || value === null ? [] : [value],
+            field.sharedStructure
+          );
+        }
+        continue;
+      }
       if (value !== undefined) translated[field.name] = value;
     }
     return { ...args.stored, ...translated };
@@ -979,11 +1008,16 @@ export class SingleMutationService extends BaseService {
     );
     const pending =
       singleMeta.versions?.drafts?.enabled === true
-        ? await pendingChangesInSaveOrder(reader, {
-            scopeKind: "single",
-            scopeSlug: singleMeta.slug,
-            entryId: args.entryId,
-          })
+        ? // Only which languages are pending is read here, never their values.
+          await pendingChangesInSaveOrder(
+            reader,
+            {
+              scopeKind: "single",
+              scopeSlug: singleMeta.slug,
+              entryId: args.entryId,
+            },
+            null
+          )
         : [];
     return languagesTold({
       configured: new Set(this.localization?.locales.map(l => l.code) ?? []),
@@ -3846,6 +3880,15 @@ export class SingleMutationService extends BaseService {
         // phases into units of their own, as `assemblesSaveDocuments` is.
         // fallow-ignore-next-line complexity
         updatedRows = await transact(async tx => {
+          // The Single's translated fields, a container placing a component read with its
+          // component's fields on this transaction (`withComponentShapes`): what its write is
+          // split by and its value put back together by below.
+          const shapedRefs = companion
+            ? await withComponentShapes(
+                companion.localizedFields,
+                tx.getDrizzle()
+              )
+            : [];
           // This attempt's component values. A publish merges the held
           // draft's into them, and a retry after a lost race must start again
           // from the caller's own values: the draft may have moved on since.
@@ -4033,7 +4076,7 @@ export class SingleMutationService extends BaseService {
           // pre-transaction guard above has already proven is actually possible.
           let { main: mainPayload, companion: companionData } =
             companion && companionPhysicallyExists
-              ? splitLocalizedWrite(updatePayload, companion.localizedFields)
+              ? splitLocalizedWrite(updatePayload, shapedRefs)
               : {
                   main: updatePayload,
                   companion: {} as Record<string, unknown>,
@@ -4504,9 +4547,33 @@ export class SingleMutationService extends BaseService {
                     singleDraftLocale
                   )
                 : undefined;
+            // A structured field's held share is laid over the Single as read
+            // before this write, in the language it publishes.
             const pendingDraft = promoteParts
               ? holdsPendingChange(promoteParts)
-                ? { snapshot: combinedDraft({}, promoteParts) }
+                ? {
+                    snapshot: combinedDraft({}, promoteParts, {
+                      keys: await partKeysOf(fieldConfigs, {
+                        executor: tx.getDrizzle(),
+                      }),
+                      // Part drafts are read only for a language's slot.
+                      live:
+                        typeof singleDraftLocale === "string"
+                          ? await withLiveStructures(
+                              tx,
+                              this.adapter,
+                              existingDoc,
+                              companion,
+                              singleDraftLocale,
+                              {
+                                fieldGroupDataService:
+                                  this.fieldGroupDataService,
+                                singleMeta,
+                              }
+                            )
+                          : existingDoc,
+                    }),
+                  }
                 : undefined
               : await promoteRepo.findWorkingDraft(
                   promoteRef,
@@ -4632,7 +4699,10 @@ export class SingleMutationService extends BaseService {
                 pendingDraft.snapshot,
                 singleMeta.tableName,
                 fieldConfigs,
-                companion && companionPhysicallyExists ? companion : null,
+                // Split by its component-read refs (`shapedRefs`).
+                companion && companionPhysicallyExists
+                  ? { ...companion, localizedFields: shapedRefs }
+                  : null,
                 updatePayload,
                 componentSlug =>
                   singleComponentSchemas?.get(componentSlug)?.fields
@@ -4730,6 +4800,28 @@ export class SingleMutationService extends BaseService {
           // stored below instead. The stored row still travels onward so
           // everything after this reports the document as it stands, which
           // for a held edit is the published content the public still sees.
+          // A repeater's or group's structure written as it is stored changes nothing the live
+          // row's version covers: its text went to the language's row. Left out of the UPDATE,
+          // so a save of translated values alone moves only that language's counter
+          // (`sameSharedStructure`), as a collection entry's does. Left out of a copy:
+          // `mainPayload` keeps every structure the save wrote, which the language's provenance
+          // record lays its text out by, row by row.
+          const livePayload: Record<string, unknown> = { ...mainPayload };
+          if (!holdEdit) {
+            const stored = existingDoc as Record<string, unknown>;
+            for (const written of sharedStructuresIn(mainPayload, shapedRefs)) {
+              const key =
+                written.column in livePayload ? written.column : written.field;
+              if (
+                sameSharedStructure(
+                  livePayload[key],
+                  stored[key] ?? stored[written.field] ?? stored[written.column]
+                )
+              ) {
+                delete livePayload[key];
+              }
+            }
+          }
           const savedBy = actorForWrite(options.actor, options.user);
           // The row as it is written, what the hooks added and a promoted draft included: a field
           // a Builder save left part-way holds is refused before anything of it is written.
@@ -4747,13 +4839,13 @@ export class SingleMutationService extends BaseService {
             : await tx.update<SingleDocument>(
                 singleMeta.tableName,
                 {
-                  ...mainPayload,
+                  ...livePayload,
                   // The document's counter moves unless this save changed
                   // translated fields alone, which move only that
                   // language's row.
                   ...mainRowBump(
                     {
-                      updatePayload: mainPayload,
+                      updatePayload: livePayload,
                       componentFieldData: attemptComponentFields,
                       // Links alone are a change of the document too.
                       manyToManyData: manyToManyLinks,
@@ -4797,8 +4889,20 @@ export class SingleMutationService extends BaseService {
             writeLocale !== undefined &&
             companionPhysicallyExists
           ) {
+            // A shared structure's language text is read laid on its
+            // structure, which only the main row holds: without it the read
+            // has nothing to fill.
             const preLocaleRow: Record<string, unknown> = {
               id: existingDoc.id,
+              ...Object.fromEntries(
+                companion.localizedFields
+                  .filter(f => f.sharedStructure)
+                  .map(f => [
+                    f.name,
+                    (existingDoc as Record<string, unknown>)[f.column] ??
+                      (existingDoc as Record<string, unknown>)[f.name],
+                  ])
+              ),
             };
             await populateCompanionFields({
               db: tx.getDrizzle<
@@ -5373,19 +5477,64 @@ export class SingleMutationService extends BaseService {
               entryId: existingDoc.id,
               locale: writeLocale,
               values: companionData,
-              localizedFields: companion.localizedFields,
+              // A container's overlay is recorded with the structure the
+              // write put on the main row.
+              structures: mainPayload,
+              localizedFields: shapedRefs,
               languagesTable: companion.companionTableName,
               savedBy,
               claims: provenanceClaims,
               promotesDraft: promotedDraft,
             });
             const row = rows[0] as Record<string, unknown>;
-            for (const f of companion.localizedFields) {
+            for (const f of shapedRefs) {
               if (
                 Object.prototype.hasOwnProperty.call(companionData, f.column)
               ) {
-                row[f.column] = companionData[f.column];
+                // A shared structure's column holds this language's overlay:
+                // the row reads its structure filled from it.
+                row[f.column] = f.sharedStructure
+                  ? assembleStoredValue(
+                      row[f.column],
+                      [companionData[f.column]],
+                      f.sharedStructure
+                    )
+                  : companionData[f.column];
               }
+            }
+          }
+
+          // A repeater's rows removed from its one structure take their
+          // translations with them, in every language, on this transaction.
+          if (!holdEdit && companion && companionPhysicallyExists) {
+            // By the refs the write was split by, a component placed in a
+            // container read with its fields, so a removed instance's text
+            // goes too.
+            const written = sharedStructuresIn(mainPayload, shapedRefs);
+            await pruneOverlaysOfRemovedRows(tx, this.adapter.dialect, {
+              companionTable: companion.table,
+              companionTableName: companion.companionTableName,
+              parentId: existingDoc.id,
+              written,
+            });
+            // And every language's record of the rows removed, as their text.
+            if (
+              written.length > 0 &&
+              (await singleProvenanceRecorded(this.provenanceDeps, tx))
+            ) {
+              await forgetRemovedRowsProvenance(
+                tx,
+                {
+                  scopeKind: "single",
+                  scopeSlug: slug,
+                  entryId: existingDoc.id,
+                },
+                written.map(entry => ({
+                  field: entry.field,
+                  structure: entry.structure,
+                  kind: entry.shape.kind,
+                }))
+              );
             }
           }
 
@@ -5492,7 +5641,9 @@ export class SingleMutationService extends BaseService {
                 entryId: existingDoc.id,
                 locale: singleDraftLocale,
                 values: companionData,
-                localizedFields: companion.localizedFields,
+                // The held structure, as the held write split it.
+                structures: mainPayload,
+                localizedFields: shapedRefs,
                 languagesTable: companion.companionTableName,
                 savedBy,
                 claims: provenanceClaims,
@@ -5567,11 +5718,22 @@ export class SingleMutationService extends BaseService {
               draftsKeptByPart() && typeof singleDraftLocale === "string"
                 ? await findPartDrafts(draftRepo, draftRef, singleDraftLocale)
                 : undefined;
+            // Which part each key belongs to, read once for the document the
+            // drafts describe and for how this save is split back into them.
+            const heldKeys = await partKeysOf(fieldConfigs, {
+              executor: tx.getDrizzle(),
+            });
             const existingDraft = singleParts
               ? holdsPendingChange(singleParts)
-                ? {
-                    snapshot: combinedDraft(await liveDocument(), singleParts),
-                  }
+                ? await (async () => {
+                    const live = await liveDocument();
+                    return {
+                      snapshot: combinedDraft(live, singleParts, {
+                        keys: heldKeys,
+                        live,
+                      }),
+                    };
+                  })()
                 : undefined
               : await draftRepo.findWorkingDraft(draftRef, singleDraftLocale);
             // In read shape whichever it comes from: the save is compared with
@@ -5640,11 +5802,19 @@ export class SingleMutationService extends BaseService {
             // snapshot only by being overlaid here — keyed by field name to
             // match the read shape, as the version capture does.
             if (companion) {
-              for (const f of companion.localizedFields) {
+              for (const f of shapedRefs) {
                 if (
                   Object.prototype.hasOwnProperty.call(companionData, f.column)
                 ) {
-                  pending[f.name] = companionData[f.column];
+                  // A shared structure's column holds this language's text
+                  // alone: laid on the structure the main payload carries.
+                  pending[f.name] = f.sharedStructure
+                    ? assembleStoredValue(
+                        pending[f.name],
+                        [companionData[f.column]],
+                        f.sharedStructure
+                      )
+                    : companionData[f.column];
                   suppliedFieldNames.add(f.name);
                 }
               }
@@ -5778,7 +5948,9 @@ export class SingleMutationService extends BaseService {
               ...suppliedFieldNames,
               ...Object.keys(attemptComponentFields),
             ]);
-            const heldKeys = await partKeysOf(fieldConfigs);
+            // The document before and after the save, which a structured
+            // field's shares are judged by: one key holds structure and text.
+            const heldValues = { before: replaces, after: pending };
             // The draft, and the save as a version of its own. A save that
             // changes nothing against what it replaces records no version.
             const { versionNo: draftVersionNo } = await storeDraftSave(
@@ -5812,6 +5984,7 @@ export class SingleMutationService extends BaseService {
                   locale: singleDraftLocale ?? null,
                   touched: heldTouched,
                   keys: heldKeys,
+                  values: heldValues,
                 }),
                 ...(singleParts && typeof singleDraftLocale === "string"
                   ? {
@@ -5820,6 +5993,7 @@ export class SingleMutationService extends BaseService {
                           ref: draftRef,
                           locale: singleDraftLocale,
                           document: pending,
+                          before: replaces,
                           touched: heldTouched,
                           keys: heldKeys,
                           existing: singleParts,
@@ -5890,11 +6064,19 @@ export class SingleMutationService extends BaseService {
             // recovered translations.
             let overlaidPriorTranslations = false;
             if (companion) {
-              for (const f of companion.localizedFields) {
+              for (const f of shapedRefs) {
                 if (
                   Object.prototype.hasOwnProperty.call(companionData, f.column)
                 ) {
-                  parentRow[f.name] = companionData[f.column];
+                  // A shared structure's column holds this language's
+                  // overlay: the snapshot records the structure filled from it.
+                  parentRow[f.name] = f.sharedStructure
+                    ? assembleStoredValue(
+                        parentRow[f.name],
+                        [companionData[f.column]],
+                        f.sharedStructure
+                      )
+                    : companionData[f.column];
                 } else if (
                   Object.prototype.hasOwnProperty.call(
                     previousCompanionValues,
@@ -6222,7 +6404,14 @@ export class SingleMutationService extends BaseService {
                 ]),
                 keys: await partKeysOf(fieldConfigs, {
                   translated: Boolean(companion),
+                  executor: tx.getDrizzle(),
                 }),
+                // A structured field's structure and text are judged apart:
+                // the Single as read before the write, and as written.
+                values: {
+                  before: existingDoc,
+                  after: parentRow,
+                },
                 // The language's own status rides its translation row; the
                 // Single's is the main row's, which a write in the default
                 // language moves too, and which every language shows.
@@ -7392,7 +7581,9 @@ export class SingleMutationService extends BaseService {
               tx,
               companion,
               entryId,
-              translatedIn
+              translatedIn,
+              // A repeater's or group's text is laid on the live structure.
+              live
             )) as SingleDocument,
             singleMeta.fields
           )
@@ -7647,7 +7838,9 @@ export class SingleMutationService extends BaseService {
         tx,
         companion,
         entryId,
-        locale
+        locale,
+        // A repeater's or group's text is laid on the structure this row holds.
+        parentRow
       );
       Object.assign(parentRow, translations);
       // The language's row is its state even where every value in it is

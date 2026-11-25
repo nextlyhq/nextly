@@ -87,3 +87,21 @@ export function contextNames(error: NextlyError, key: string): string[] {
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 }
+
+/**
+ * The three parts an error was built from, where its context carries them (`parts`), or undefined
+ * where it does not hold all three.
+ */
+export function contextParts(
+  error: NextlyError
+): { what: string; why: string; next: string } | undefined {
+  const { what, why, next } =
+    (error.logContext?.parts as
+      | Partial<Record<"what" | "why" | "next", unknown>>
+      | undefined) ?? {};
+  return typeof what === "string" &&
+    typeof why === "string" &&
+    typeof next === "string"
+    ? { what, why, next }
+    : undefined;
+}

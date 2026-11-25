@@ -19,6 +19,7 @@ import { vi } from "vitest";
 
 import {
   previewDataSteps,
+  refusalOfSteps,
   runDataSteps,
   type DataStepsDeps,
 } from "../../../../cli/commands/data-steps";
@@ -27,6 +28,7 @@ import type {
   UpgradeStep,
 } from "../../../../cli/commands/upgrade-step";
 import { MIGRATE_DATA_STEPS } from "../../../../cli/commands/upgrade-steps";
+import { dryRunRefusalOf } from "../../../../cli/commands/migrate-create";
 import type { DryRunPlan } from "../../../../cli/dry-run";
 import {
   defineCollection,
@@ -154,6 +156,28 @@ export async function migrateData(
     warn: () => undefined,
     site,
   });
+}
+
+/**
+ * The refusal `nextly migrate` makes of its data steps over `adapter` for `site` before its schema
+ * changes (`refusalOfSteps`), asked of a refusal as a dry run reports one; undefined where it makes
+ * none then.
+ */
+export function refusalBeforeSchemaChanges(
+  adapter: unknown,
+  site: UpgradeSite
+): Promise<unknown> {
+  _resetPerLanguageStorage();
+  return refusalOfSteps(
+    {
+      adapter: adapter as DataStepsDeps["adapter"],
+      steps: MIGRATE_DATA_STEPS,
+      log: () => undefined,
+      warn: () => undefined,
+      site,
+    },
+    error => dryRunRefusalOf(error) !== undefined
+  );
 }
 
 /** What `nextly migrate --dry-run` says of its data steps over `adapter` for `site`. */

@@ -95,8 +95,6 @@ export interface DocumentPanelProps {
   actionsDisabled?: boolean;
   /** Withholds opening another language; the same as `actionsDisabled` unless given. */
   navigationDisabled?: boolean;
-  /** Withholds publishing every language; the same as `actionsDisabled` unless given. */
-  publishAllDisabled?: boolean;
   /**
    * Sections plugins add for this collection, drawn after Details under the
    * heading the panel draws for its own sections.
@@ -148,7 +146,6 @@ export function DocumentPanel({
   onLocaleChange,
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
-  publishAllDisabled = actionsDisabled,
   pluginSections = [],
   pluginSectionProps,
   panelOrder = BUILT_IN_ORDER,
@@ -196,7 +193,6 @@ export function DocumentPanel({
               hasStatus={hasStatus}
               actionsDisabled={actionsDisabled}
               navigationDisabled={navigationDisabled}
-              publishAllDisabled={publishAllDisabled}
               sharedChangesPending={sharedChangesPending}
               {...(reviewStages === undefined ? {} : { reviewStages })}
             />

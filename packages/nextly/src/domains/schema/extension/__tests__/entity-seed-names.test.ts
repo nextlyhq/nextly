@@ -59,3 +59,46 @@ describe("a schema hook extending a collection's table", () => {
     ).toEqual(["search_vector"]);
   });
 });
+
+describe("a collection with a group that has no name", () => {
+  it("compiles, with the fields the group lays out as columns of the table", async () => {
+    // Such a group keeps its fields on the collection's own row and has no column of its own.
+    const schema = await compileExtensionSchema({
+      dialect: "postgresql",
+      plugins: [],
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            fields: [
+              {
+                type: "group",
+                fields: [{ name: "rank", type: "number", localized: false }],
+              },
+            ],
+          },
+        ],
+        db: {
+          schema: {
+            extend: [
+              ({
+                schema,
+              }: {
+                schema: { extendTable(name: string, input: unknown): void };
+              }) => {
+                schema.extendTable("dc_posts", {
+                  indexes: [{ columns: ["rank"] }],
+                });
+              },
+            ],
+          },
+        },
+      },
+      logger,
+    } as never);
+
+    expect(
+      schema?.entityIndexes.get("dc_posts")?.map(index => index.columns)
+    ).toEqual([["rank"]]);
+  });
+});

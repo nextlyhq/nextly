@@ -4,6 +4,10 @@
  * @module cli/__tests__/error-cases/schema
  */
 import { heldFieldsRefusal } from "../../../domains/schema/builder-save/left-save-fields";
+import {
+  rowsDivergedError,
+  rowsWithoutTableError,
+} from "../../../domains/schema/repair-columns/stop-errors";
 import { clearLeftoverStorage } from "../../../domains/schema/services/leftover-storage";
 import {
   assertAdapterPostgresSchema,
@@ -37,6 +41,26 @@ async function rejectedBy(fn: () => Promise<unknown>): Promise<unknown> {
 }
 
 export const SCHEMA_CASES = {
+  // As `nextly repair-columns` stops on a collection's row whose table name is empty.
+  REGISTRY_ROW_WITHOUT_TABLE: () =>
+    rowsWithoutTableError([
+      {
+        kind: "collection",
+        slug: "posts",
+        registryTable: "dynamic_collections",
+        codeOwned: false,
+      },
+    ]),
+  // As `nextly repair-columns` stops on a field group the admin may repair.
+  REGISTRY_ROW_DIVERGED: () =>
+    rowsDivergedError([
+      {
+        kind: "fieldGroup",
+        slug: "card",
+        registryTable: "dynamic_components",
+        codeOwned: false,
+      },
+    ]),
   // A Single created again after its first attempt was removed, whose field-group rows still name
   // its table as their parent. No table of its own stands, so no database is read: the rows found
   // elsewhere refuse the create before anything is dropped.

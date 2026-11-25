@@ -23,7 +23,15 @@ import { waitingForWords } from "../review/review-words";
 import { SHARED_PATH, type PartsChoice } from "./publish-parts-choice";
 
 /** The code the publish gate refuses a part with while it holds no current approval. */
-const NOT_APPROVED = "NOT_APPROVED";
+export const NOT_APPROVED = "NOT_APPROVED";
+
+/** Whether a refusal is for want of approval and nothing else. */
+export function refusedForApprovalAlone(refusal: unknown): boolean {
+  const issues = validationIssues(refusal);
+  return (
+    issues.length > 0 && issues.every(issue => issue.code === NOT_APPROVED)
+  );
+}
 
 /** One thing that holds Publish, and how it is resolved. */
 export interface ReadyProblem {
@@ -83,8 +91,8 @@ function unapprovedProblem(
 }
 
 /**
- * Every hard problem with publishing `choice`: from the review state of each chosen part, and
- * from the refusal of the server's description of the same request.
+ * Every hard problem with publishing `choice`, the parts the publish moves: from the review state
+ * of each, and from the refusal of the server's description of the same request.
  */
 export function readyProblems({
   choice,

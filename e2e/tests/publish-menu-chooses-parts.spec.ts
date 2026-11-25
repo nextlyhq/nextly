@@ -81,7 +81,7 @@ test.describe("choosing what to publish", () => {
       /Goes live for the first time/
     );
 
-    await dialog.getByRole("button", { name: "Publish", exact: true }).click();
+    await dialog.getByRole("button", { name: "Publish selected" }).click();
     await expect(dialog).toBeHidden();
 
     const statuses = await statusByLanguage(page, id);

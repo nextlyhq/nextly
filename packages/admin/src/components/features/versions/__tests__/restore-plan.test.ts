@@ -60,6 +60,51 @@ function input(overrides: Partial<RestorePlanInput> = {}): RestorePlanInput {
 const names = (rows: { name: string }[]) => rows.map(row => row.name);
 
 describe("restorePlan", () => {
+  it("names a field as the editor does: its label, else its name made readable", () => {
+    const rows = restorePlan(
+      input({
+        fields: [
+          { name: "metaTitle", type: "text" },
+          { name: "title", type: "text", label: "Headline" },
+        ] as unknown as FieldConfig[],
+        snapshot: { metaTitle: "Old meta", title: "Old" },
+        current: { metaTitle: "New meta", title: "New" },
+      })
+    );
+
+    // The raw key ("metaTitle") is what the person never sees in the form.
+    expect(rows.map(row => row.label)).toEqual(["Meta Title", "Headline"]);
+  });
+
+  it("names the containers a field is laid out in, outermost first", () => {
+    const rows = restorePlan(
+      input({
+        fields: [
+          {
+            type: "group",
+            label: "Search and sharing",
+            fields: [
+              {
+                type: "row",
+                label: "Search result",
+                fields: [{ name: "metaTitle", type: "text" }],
+              },
+              // A container nobody named adds no step to the path.
+              { type: "row", fields: [{ name: "slug", type: "text" }] },
+            ],
+          },
+        ] as unknown as FieldConfig[],
+        snapshot: { metaTitle: "Old", slug: "old" },
+        current: { metaTitle: "New", slug: "new" },
+      })
+    );
+
+    expect(rows.map(row => [row.name, row.place])).toEqual([
+      ["metaTitle", ["Search and sharing", "Search result"]],
+      ["slug", ["Search and sharing"]],
+    ]);
+  });
+
   it("lists every field the version holds differently, chosen, in form order", () => {
     const rows = restorePlan(input());
 

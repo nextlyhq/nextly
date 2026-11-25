@@ -2,8 +2,9 @@
  * A held save's field-group instance is judged in the language the save
  * names, in a collection with no languages of its own.
  *
- * The localized field group `lbadge` holds a translated container, `box`,
- * whose `kept` no update may change. Judging an update of a stored instance
+ * The localized field group `lbadge` holds a container, `box`, whose text
+ * is kept per language beside its one structure, and whose `kept` no update
+ * may change. Judging an update of a stored instance
  * puts a denied child back at what the container stores in the write's
  * language, and judges that. `kept` records each value it is judged on, so a
  * held save in Spanish shows the Spanish value, and one in the default
@@ -63,11 +64,10 @@ describe.each(getConfiguredTestDialects())(
             localized: true,
             fields: [
               text({ name: "heading" }),
-              // A translated container, held on the companion row and
-              // written whole.
+              // A container whose text is kept per language, beside its one
+              // structure (its overlay on the companion row).
               group({
                 name: "box",
-                localized: true,
                 fields: [
                   text({
                     name: "kept",

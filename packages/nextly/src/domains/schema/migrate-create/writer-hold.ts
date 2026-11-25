@@ -52,6 +52,16 @@ import { basename, dirname, resolve } from "node:path";
 import { NextlyError } from "../../../errors/nextly-error";
 import { describeHolder } from "../pipeline/schema-lock";
 
+import {
+  WRITER_HOLD_HELD_REASON,
+  WRITER_HOLD_LOST_REASON,
+  WRITER_NOT_WRITTEN_REASON,
+  WRITER_START_MOVED_REASON,
+} from "./writer-hold-reasons";
+
+// Read here by the Builder's save, which refuses a lost hold as a writer does.
+export { WRITER_HOLD_LOST_REASON };
+
 /** The hold's file, in the project's migration folder. */
 export const WRITER_LOCK_FILE = ".nextly-writer.lock";
 
@@ -127,12 +137,6 @@ export interface WriterHold {
 
 /** How a writer that finds the folder held behaves. */
 type WhenHeld = "wait" | "refuse";
-
-/** The `logContext.reason` of a refusal over a held folder. */
-export const WRITER_HOLD_HELD_REASON = "migration files held by another writer";
-
-/** The `logContext.reason` of a writer that lost its hold. */
-export const WRITER_HOLD_LOST_REASON = "migration writer hold lost while held";
 
 /** Whether `error` is the refusal of a writer that found the folder held. */
 export function isWriterHoldHeld(error: unknown): error is NextlyError {
@@ -838,10 +842,6 @@ export async function holdInBuilderChange(
   );
 }
 
-/** The `logContext.reason` of a writer whose starting snapshot is no longer the newest. */
-export const WRITER_START_MOVED_REASON =
-  "another writer wrote a migration after this one read the newest";
-
 /**
  * The refusal of a writer that read the newest snapshot before it held the
  * folder and finds another there now: a migration written from the one it
@@ -959,10 +959,6 @@ function leftInPlaceError(
     },
   });
 }
-
-/** What a writer says of a migration file it could not put in place. */
-export const WRITER_NOT_WRITTEN_REASON =
-  "migration file could not be put in place";
 
 /**
  * The refusal of a writer one of whose files could not be moved to its name

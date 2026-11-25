@@ -203,16 +203,45 @@ function useDraftCommit({
         setDraft,
         settling,
       });
-    if (live === undefined) return commit(false);
+    if (live === undefined) {
+      commit(false);
+      return;
+    }
     // Typed live, the text left in the field is usually the stored value
     // already. A field whose end-of-edit write does more (a colour joining
     // Recent colours) still makes it, once; one that only re-wrote the same
     // text writes nothing more.
     const typedLive = live.written(draft);
-    if (!typedLive) live.join(() => commit(false));
-    else if (settles) live.join(() => commit(true));
+    if (!typedLive) {
+      const outcome = live.join(() => commit(false));
+      // A colour left on text that is no colour takes back what its
+      // keystrokes drew: a hex colour one key from the refused text is not
+      // what the author asked for, and would be saved under a field saying
+      // the text is not a colour.
+      if (outcome === "refused" && isColour(control)) live.withdraw();
+    } else if (settles) live.join(() => commit(true));
     live.end();
   };
+}
+
+/** Whether a field edits a colour. */
+function isColour(control: StyleControl): boolean {
+  return control.leaf.kind === "color";
+}
+
+/**
+ * Whether a keystroke's text may be written as it is typed: always, except a
+ * colour typed as a word. A colour name is written when the edit ends, on
+ * blur or Enter, because the word typed so far is often a colour on its way
+ * to a longer name ("yellow" before "yellow 500", a saved colour's name, or
+ * "green" before "greenyellow"), and written live it put that colour on the
+ * canvas, and in a save, while the author was still typing. A hex colour or
+ * a colour function is drawn as typed: no further keys turn it into a name.
+ */
+function writesAsTyped(control: StyleControl, text: string): boolean {
+  if (!isColour(control)) return true;
+  const typed = trimCssWhitespace(text);
+  return typed.startsWith("#") || typed.includes("(");
 }
 
 /**
@@ -236,6 +265,7 @@ function typedWrite({
   return text => {
     const typed = typedStyleText(text);
     if (typed === undefined) return false;
+    if (!writesAsTyped(control, typed)) return false;
     // Asked even where the text reads as what is stored ("24px" after
     // "24p"), so the refusal of the text before it is cleared.
     const value = draftValue(control.kind, control.leaf, tokens, mode, typed);
@@ -299,8 +329,9 @@ export function commitDraft({
    * document holds the text, for what the commit does beyond writing it.
    */
   settling?: boolean;
-}): void {
-  if (!settling && draft === storedText(stored)) return;
+}): CommitOutcome | undefined {
+  // `undefined` where nothing was asked of the document.
+  if (!settling && draft === storedText(stored)) return undefined;
   const outcome = onCommit(draftValue(kind, leaf, tokens, mode, draft));
   // The document did not move because it already holds this value in another
   // spelling: `01`, `+1` and `1e0` all commit as the `1` that is stored. The
@@ -309,6 +340,7 @@ export function commitDraft({
   // contain until something remounts it. A REFUSAL deliberately keeps the
   // draft: the author has to be able to correct what they typed.
   if (outcome === "unchanged") setDraft(storedText(stored));
+  return outcome;
 }
 
 /**

@@ -7,12 +7,13 @@ description: "A snapshot file in `meta/` has no migration file beside it."
 
 A snapshot file in `meta/` has no migration file beside it.
 
-Each snapshot in `meta/` is written beside the migration it describes. This one's migration file is not there: it was deleted, or never committed.
+Each snapshot in `meta/` is written beside the migration it describes. This one's migration file is not there: it was deleted, or never committed. `nextly repair-columns` stops where that migration has been applied, as its snapshot records what the database last had applied. It goes on where `nextly migrate:resolve --removed` records that the file was removed on purpose.
 
 ## Fix
 
 - Restore the `.sql` file from version control.
-- Or delete the orphan snapshot.
+- Or, if no database has applied the migration, delete the orphan snapshot.
+- For `nextly repair-columns`, if the file was removed on purpose, record that with `nextly migrate:resolve --removed <file>`.
 
 See [Production migrations](/docs/guides/production-migrations).
 

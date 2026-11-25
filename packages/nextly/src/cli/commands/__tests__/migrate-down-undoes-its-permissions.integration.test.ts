@@ -20,6 +20,9 @@
  * - A plugin installed after the newest snapshot, before the rolled-back
  *   migration, keeps its permissions and every grant.
  * - A declared permission orphaned by hand is restored by the next run.
+ * - Rolling back a migration that renamed a plugin's collection (`renameMap`) writes the row of the
+ *   slug the plugin declares back as the plugin's, though the configuration still renames it, and
+ *   where the point records the app's own collection on the new slug too.
  * - Before the registry record exists, a rollback between two migrations
  *   whose snapshots predate the registry metadata changes no orphan mark.
  */
@@ -114,6 +117,26 @@ const SEO_V2 = plugin(
   ["read", "mdp-seo"],
   ["audit", "mdp-seo"]
 );
+const EVENTS = "@test/mdp-events";
+/** A plugin contributing `mdp-events`, which the host renames by `renameMap`. */
+function eventsPlugin(renameMap?: Record<string, string>): PluginDefinition {
+  return definePlugin({
+    name: EVENTS,
+    version: "1.0.0",
+    nextly: "*",
+    contributes: {
+      collections: [
+        defineCollection({
+          slug: "mdp-events",
+          fields: [text({ name: "body" })],
+        }),
+      ],
+    },
+    // As a host's `rename` leaves the definition.
+    ...(renameMap === undefined ? {} : { renameMap }),
+  });
+}
+
 /** A plugin installed after the newest snapshot. */
 const LATE = plugin("@test/mdp-late", "1.0.0", ["sync", "mdp-late"]);
 
@@ -226,7 +249,11 @@ describe.each(getConfiguredTestDialects())(
       const { context, said } = command();
       setNonInteractive(true);
       try {
-        await runMigrateCreate(`step${clock}`, { cwd: state.dir }, context);
+        await runMigrateCreate(
+          `step${clock}`,
+          { cwd: state.dir, acceptDataLoss: true },
+          context
+        );
       } catch (error) {
         throw new Error(
           `migrate:create failed: ${messageOf(error)}\n${said.join("\n")}`
@@ -242,7 +269,10 @@ describe.each(getConfiguredTestDialects())(
       tick();
       const { context, said } = command();
       try {
-        await runMigrate({ cwd: state.dir, throwOnFailure: true }, context);
+        await runMigrate(
+          { cwd: state.dir, throwOnFailure: true, acceptDataLoss: true },
+          context
+        );
       } catch (error) {
         throw new Error(
           `migrate failed: ${messageOf(error)}\n${said.join("\n")}`
@@ -318,6 +348,63 @@ describe.each(getConfiguredTestDialects())(
           .sort();
       });
     }
+
+    /** Each collection's recorded owner, by slug. */
+    async function owners(): Promise<Record<string, string>> {
+      return on(async adapter => {
+        const rows = await adapter.executeQuery<Record<string, unknown>>(
+          `SELECT ${q}slug${q} AS slug, ${q}source${q} AS source FROM ${q}dynamic_collections${q}`
+        );
+        return Object.fromEntries(
+          rows.map(row => [String(row.slug), String(row.source)])
+        );
+      });
+    }
+
+    it("writes the slug a plugin declares back as the plugin's when its rename is rolled back", async () => {
+      // The configuration folds the plugin's collection in, under the slug the host gives it.
+      const before = config({ plugins: [eventsPlugin()] });
+      const renamed = config({
+        plugins: [eventsPlugin({ "mdp-events": "mdp-shows" })],
+      });
+      await migrateCreate(before);
+      await migrate(before);
+      expect((await owners())["mdp-events"]).toBe(`plugin:${EVENTS}`);
+      await migrateCreate(renamed);
+      await migrate(renamed);
+
+      // The configuration the rollback runs with still renames it.
+      await migrateDown(renamed);
+
+      expect((await owners())["mdp-events"]).toBe(`plugin:${EVENTS}`);
+    }, 120_000);
+
+    it("does so too where the app's own collection held the new slug until the rename", async () => {
+      // The point the rollback goes back to records both slugs: the app's and the plugin's.
+      const before = config({
+        extra: ["mdp-shows"],
+        plugins: [eventsPlugin()],
+      });
+      const renamed = config({
+        plugins: [eventsPlugin({ "mdp-events": "mdp-shows" })],
+      });
+      await migrateCreate(before);
+      await migrate(before);
+      expect(await owners()).toMatchObject({
+        "mdp-events": `plugin:${EVENTS}`,
+        "mdp-shows": "code",
+      });
+      await migrateCreate(renamed);
+      await migrate(renamed);
+
+      await migrateDown(renamed);
+
+      // The row re-created takes the plugin; the one that stayed keeps the owner it had.
+      expect(await owners()).toMatchObject({
+        "mdp-events": `plugin:${EVENTS}`,
+        "mdp-shows": "code",
+      });
+    }, 120_000);
 
     /** The lines that say a permission's orphan mark changed. */
     const markLines = (said: readonly string[]) =>
