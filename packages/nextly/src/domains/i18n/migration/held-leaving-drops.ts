@@ -16,6 +16,7 @@ import {
   applyStatementsInTries,
   type BusyTableWait,
 } from "../../schema/services/apply-migration-statements";
+import type { StructuredField } from "../shared-structure";
 
 import { ensureI18nArchive, runI18nSchemaStatements } from "./ensure-archive";
 import type {
@@ -59,12 +60,29 @@ export async function applyCompanionTransition(args: {
   tableName: string;
   /** The translated field this change renames, as the schema dialog decided it. */
   renamed?: FieldRename | null;
+  /**
+   * The entity's fields as the change leaves them, by which the source text kept for a field it
+   * removes or no longer translates goes. Absent, none does but with the companion.
+   */
+  newFields?: readonly StructuredField[];
 }): Promise<void> {
   const { adapter, plan, settleLeaving, busyTable } = args;
   await applyCompanionStatements(adapter, plan, busyTable);
   if (settleLeaving) {
     await settleLeaving();
     await dropHeldLeavingFields(adapter, plan, args.kind, busyTable);
+  }
+  // The source text kept for its translations first: the records' move below may fail, and text
+  // still under the old name would read as a removed field's to the next `nextly migrate`.
+  if (args.kind === "collection" || args.kind === "single") {
+    await settleSourceText(
+      adapter,
+      { scopeKind: args.kind, scopeSlug: args.slug },
+      {
+        renamed: args.renamed,
+        fields: plan.companionDropped ? [] : args.newFields,
+      }
+    );
   }
   // A renamed translated field keeps its records of where each language's value came from, under
   // its new name. Moved here, once its column has been, rather than among the plan's statements,
@@ -115,6 +133,65 @@ export async function applyCompanionTransition(args: {
       await resolveTransitionStore(adapter),
       args.kind,
       args.slug
+    );
+  }
+}
+
+/**
+ * The source text kept for the entity's translations, after its change: a renamed field's moves to
+ * its new name, and that of a field removed or no longer translated (`fields`, those left) goes.
+ * The change has landed by now, and text left under an old name is found under no field: a failure
+ * is logged, not answered, with the statements that finish a rename's move. Until they are run the
+ * text is missing where it is asked for, and the next `nextly migrate` removes what stayed.
+ */
+async function settleSourceText(
+  adapter: DrizzleAdapter,
+  scope: { scopeKind: "collection" | "single"; scopeSlug: string },
+  change: {
+    renamed?: FieldRename | null;
+    fields?: readonly StructuredField[];
+  }
+): Promise<void> {
+  if (!change.renamed && change.fields === undefined) return;
+  try {
+    const { removeFieldSources, renameFieldSources, translatedFieldNames } =
+      await import("../provenance/removed-field-sources");
+    if (change.renamed) {
+      await renameFieldSources(adapter, scope, change.renamed);
+    }
+    if (change.fields !== undefined) {
+      const translated = translatedFieldNames(change.fields, true);
+      await removeFieldSources(adapter, scope, field => !translated.has(field));
+    }
+  } catch (error) {
+    const [
+      { getLoggerFromDI },
+      { consoleLogger },
+      { renameFieldProvenanceStatements },
+      { TRANSLATION_SOURCES_TABLE },
+    ] = await Promise.all([
+      import("../../../dispatcher/helpers/di"),
+      import("../../../shared/types"),
+      import("../provenance/record-provenance"),
+      import("../../../schemas/translation-sources"),
+    ]);
+    const statements = change.renamed
+      ? renameFieldProvenanceStatements(
+          adapter.getCapabilities().dialect,
+          { ...scope, ...change.renamed },
+          TRANSLATION_SOURCES_TABLE
+        )
+      : [];
+    (getLoggerFromDI() ?? consoleLogger).error(
+      [
+        `[translations step] The source text kept for ${scope.scopeKind} '${scope.scopeSlug}' was not brought in step with its change: ${error instanceof Error ? error.message : String(error)}`,
+        ...(statements.length > 0
+          ? [
+              "Run these before the next `nextly migrate` to keep it:",
+              ...statements,
+            ]
+          : []),
+      ].join("\n")
     );
   }
 }
