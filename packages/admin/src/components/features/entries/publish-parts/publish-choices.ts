@@ -16,6 +16,7 @@
  * @module components/features/entries/publish-parts/publish-choices
  */
 
+import { validationIssues } from "@admin/lib/api/parseApiError";
 import type {
   PartsLanguageOutcome,
   PublishPartsResult,
@@ -30,6 +31,7 @@ import {
   SHARED_PATH,
   type PartsChoice,
 } from "./publish-parts-choice";
+import { NOT_APPROVED } from "./ready-to-publish";
 
 /** One part as the choice lists it: a language, or the shared fields. */
 export interface PublishChoiceRow {
@@ -156,6 +158,36 @@ export function offeredChoice(
       choice.shared &&
       sharedHoldsSomething(known) &&
       !takesShared(locales, known),
+  };
+}
+
+/** Whether the server refuses the request for want of the shared fields' approval. */
+function refusedForSharedApproval(refusal: unknown): boolean {
+  return validationIssues(refusal).some(
+    issue => issue.path === SHARED_PATH && issue.code === NOT_APPROVED
+  );
+}
+
+/**
+ * The parts `request` moves, the shared fields a first publish takes among them: what a workflow
+ * judges. The descriptions say whether it takes them; while the shared fields wait for approval
+ * both are refused, and the refusal names them.
+ */
+export function movedParts(
+  request: PartsChoice,
+  known: PartsKnown & {
+    chosenAnswer: PublishPartsResult | undefined;
+    /** Why the server refuses the request, if it does. */
+    error: unknown;
+  }
+): PartsChoice {
+  return {
+    ...request,
+    shared:
+      request.shared ||
+      known.chosenAnswer?.shared.added === true ||
+      takesShared(request.locales, known) ||
+      refusedForSharedApproval(known.error),
   };
 }
 

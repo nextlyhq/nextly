@@ -10,7 +10,8 @@
  * fields when they hold unpublished changes. Every change of choice asks the server to describe
  * the request again, so the sentences are the server's, not a guess. A publish also asks what
  * publishing every language would do, which is what the parts not chosen say and which parts have
- * anything to publish: one that has nothing is not offered, and neither described nor sent. A
+ * anything to publish: one that has nothing is not offered, and neither described nor sent. The
+ * confirm waits for the description of the parts as chosen, so nothing undescribed is sent. A
  * refusal is shown beside each part it names; the request changes nothing until every chosen part
  * may go.
  *
@@ -59,6 +60,7 @@ import type { LanguageLabel } from "../publishAllOutcomes";
 
 import type { TranslationOverview } from "./out-of-date";
 import {
+  movedParts,
   offeredChoice,
   publishChoices,
   type PublishChoiceRow,
@@ -209,6 +211,8 @@ interface DescribedParts {
   settling: boolean;
   /** Either description is being asked. */
   checking: boolean;
+  /** The server has described the request as it stands: neither asking, refused nor failed. */
+  described: boolean;
   /** Why the server refuses the request, if it does. */
   error: Error | null;
 }
@@ -280,6 +284,7 @@ function useDescribedParts({
     sharedPending: known.sharedPending,
     settling,
     checking: settling || description.isFetching,
+    described: !settling && !beingAsked(description) && !description.isError,
     error: description.error,
   };
 }
@@ -519,7 +524,7 @@ export function PublishPartsDialog(
   // What holds Publish where a workflow governs the document, each with its fix. A field it
   // lists is said there, and not again among the general refusals.
   const problems = problemsOf(review, direction, {
-    choice: request,
+    choice: movedParts(request, { languages, ...parts }),
     refusal,
     translated,
     labelOf,
@@ -527,17 +532,21 @@ export function PublishPartsDialog(
   const offersWithoutReview = offersPublishingWithoutReview(review, problems);
   // Something to send, not on its way already, and no part of it about to be found not offered.
   const ready = choosesAnything(request) && !move.pending && !parts.settling;
+  // An ordinary move waits for the server's description of exactly what it sends, and for whatever
+  // "Ready to publish?" lists. Publishing without review goes past a description refused for want
+  // of approval, so only `ready` holds it.
+  const held = !parts.described || problems.length > 0;
 
   // Asked again of the parts chosen now: a selection changed while the reason was written may no
   // longer need the bypass, and then it is left and the publish made as usual, never sent past a
-  // review it does not need. Anything else still holding Publish keeps it held.
+  // review it does not need. Where that publish is held, the person is back at it, held.
   const confirmWithoutReview = async (why: string): Promise<void> => {
     if (offersWithoutReview) {
       await move.confirm(why);
       return;
     }
     setReason(null);
-    if (problems.length === 0) await move.confirm();
+    if (!held) await move.confirm();
   };
 
   return (
@@ -603,7 +612,7 @@ export function PublishPartsDialog(
             label={confirmLabelOf(direction, translated)}
             destructive={direction === "unpublish"}
             ready={ready}
-            held={problems.length > 0}
+            held={held}
             pending={move.pending}
             onCancel={() => onOpenChange(false)}
             onConfirm={() => void move.confirm()}
@@ -799,7 +808,7 @@ function ChoiceFooter({
   label: string;
   destructive: boolean;
   ready: boolean;
-  /** Something "Ready to publish?" lists holds it. */
+  /** The move is not described yet, or something "Ready to publish?" lists holds it. */
   held: boolean;
   pending: boolean;
   onCancel: () => void;

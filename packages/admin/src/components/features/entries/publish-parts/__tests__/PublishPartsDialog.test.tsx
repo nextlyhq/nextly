@@ -21,6 +21,8 @@ import type {
 
 import { PublishPartsDialog } from "../PublishPartsDialog";
 
+import { pressConfirm } from "./press-confirm";
+
 const api = vi.hoisted(() => ({
   publishParts: vi.fn(),
   findByID: vi.fn(),
@@ -148,7 +150,9 @@ describe("choosing what to publish", () => {
     await screen.findByText(FIRST_TIME_IN_SPANISH);
     await user.click(screen.getByRole("checkbox", { name: "Arabic" }));
 
-    await user.click(screen.getByRole("button", { name: "Publish selected" }));
+    await pressConfirm(
+      screen.getByRole("button", { name: "Publish selected" })
+    );
 
     await waitFor(() =>
       expect(calls().filter(call => call.describe !== true)).toEqual([
@@ -167,7 +171,7 @@ describe("choosing what to publish", () => {
     open();
     await screen.findByText(FIRST_TIME_IN_SPANISH);
     const publish = screen.getByRole("button", { name: "Publish selected" });
-    expect(publish).toBeEnabled();
+    await waitFor(() => expect(publish).toBeEnabled());
 
     await user.click(screen.getByRole("checkbox", { name: "Spanish" }));
 
@@ -175,7 +179,6 @@ describe("choosing what to publish", () => {
   });
 
   it("shows a refusal beside the part it names, and keeps the dialog open", async () => {
-    const user = userEvent.setup();
     const refusal = parseApiError(
       {
         error: {
@@ -210,7 +213,9 @@ describe("choosing what to publish", () => {
     open();
     await screen.findByText(FIRST_TIME_IN_SPANISH);
 
-    await user.click(screen.getByRole("button", { name: "Publish selected" }));
+    await pressConfirm(
+      screen.getByRole("button", { name: "Publish selected" })
+    );
 
     const spanish = screen.getByRole("checkbox", { name: "Spanish" });
     await waitFor(() =>
@@ -219,7 +224,6 @@ describe("choosing what to publish", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
   it("shows a refusal naming a field rather than a part, with the field's name", async () => {
-    const user = userEvent.setup();
     const refusal = parseApiError(
       {
         error: {
@@ -253,7 +257,9 @@ describe("choosing what to publish", () => {
     open();
     await screen.findByText(FIRST_TIME_IN_SPANISH);
 
-    await user.click(screen.getByRole("button", { name: "Publish selected" }));
+    await pressConfirm(
+      screen.getByRole("button", { name: "Publish selected" })
+    );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "slug: Another entry already uses this value in Spanish."
@@ -280,7 +286,6 @@ describe("choosing what to publish", () => {
     );
     act(() => recorder.result.current.schedule());
     await waitFor(() => expect(record).toHaveBeenCalledTimes(1));
-    const user = userEvent.setup();
     render(
       <PublishPartsDialog
         open
@@ -296,7 +301,9 @@ describe("choosing what to publish", () => {
     await screen.findByText(FIRST_TIME_IN_SPANISH);
     const moves = () => calls().filter(call => call.describe !== true);
 
-    await user.click(screen.getByRole("button", { name: "Publish selected" }));
+    await pressConfirm(
+      screen.getByRole("button", { name: "Publish selected" })
+    );
     await new Promise(resolve => setTimeout(resolve, 100));
 
     // Held while the recording is on its way: it could land after the publish.

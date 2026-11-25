@@ -4,8 +4,9 @@
  * never sent, and what the publish means beyond its parts is said before it is made.
  *
  * The plausible broken dialogs: one that offers, describes or sends a language with nothing to
- * publish; one that lets a choice be confirmed before it is known which parts have anything; one
- * that blocks on an answer the server refuses; one that leaves the shared fields out of reach when
+ * publish; one that lets a choice be confirmed before it is known which parts have anything, or
+ * before the server has described it; one that blocks on an answer about every language that the
+ * server refuses; one that leaves the shared fields out of reach when
  * the server says a language cannot go without them; one that draws publishing as a danger; and
  * one that tells its page a language went live that did not.
  */
@@ -13,7 +14,7 @@ import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, waitFor } from "@admin/__tests__/utils";
+import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import { parseApiError } from "@admin/lib/api/parseApiError";
 import type {
   PartsLanguageOutcome,
@@ -22,6 +23,8 @@ import type {
 } from "@admin/services/publishParts";
 
 import { PublishPartsDialog } from "../PublishPartsDialog";
+
+import { pressConfirm } from "./press-confirm";
 
 const api = vi.hoisted(() => ({
   publishParts: vi.fn(),
@@ -206,7 +209,7 @@ describe("the parts listed", () => {
     }
     expect(screen.queryByText(SHARED_FACT)).toBeNull();
 
-    await userEvent.click(confirm());
+    await pressConfirm(confirm());
     await waitFor(() =>
       expect(moves()).toEqual([{ locales: ["en"], shared: false }])
     );
@@ -263,7 +266,7 @@ describe("the parts listed", () => {
     );
     expect(screen.getByText(SHARED_FACT)).toBeInTheDocument();
 
-    await userEvent.click(confirm());
+    await pressConfirm(confirm());
     await waitFor(() =>
       expect(moves()).toEqual([{ locales: ["en"], shared: false }])
     );
@@ -290,7 +293,7 @@ describe("the parts listed", () => {
     expect(part("Shared fields")).toBeChecked();
     expect(part("Shared fields")).toBeEnabled();
 
-    await userEvent.click(confirm());
+    await pressConfirm(confirm());
     await waitFor(() =>
       expect(moves()).toEqual([{ locales: ["en"], shared: true }])
     );
@@ -356,10 +359,76 @@ describe("until the server has said what every language would do", () => {
     // A language nobody chose is not the request's problem.
     expect(screen.queryByText(/not yours/)).toBeNull();
 
-    await userEvent.click(confirm());
+    await pressConfirm(confirm());
     await waitFor(() =>
       expect(moves()).toEqual([{ locales: ["en"], shared: false }])
     );
+  });
+});
+
+describe("until the server has described the parts as chosen", () => {
+  /** Each description of chosen parts, answered when asked to be; that of every language at once. */
+  function serveDescriptions() {
+    const waiting: {
+      choice: PublishPartsChoice;
+      answer: () => void;
+      fail: (error: unknown) => void;
+    }[] = [];
+    api.publishParts.mockImplementation(
+      (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
+        new Promise((resolve, reject) => {
+          const answer = () => resolve(answerTo(choice, TWO_PENDING, true));
+          if (choice.describe !== true || choice.locales === "all") answer();
+          else waiting.push({ choice, answer, fail: reject });
+        })
+    );
+    return waiting;
+  }
+
+  const TWO_PENDING: PartsLanguageOutcome[] = [
+    { locale: "en", outcome: "goes-live-with-pending-change" },
+    { locale: "es", outcome: "goes-live-with-pending-change" },
+    { locale: "ar", outcome: "shows-fallback", fallback: "en" },
+  ];
+
+  it("holds the confirm, and again for a choice changed since", async () => {
+    const waiting = serveDescriptions();
+    open();
+    // Every language is described by now, and English says what it does from that.
+    await screen.findByText(ENGLISH_PENDING);
+    await waitFor(() => expect(waiting).toHaveLength(1));
+    expect(confirm()).toBeDisabled();
+
+    act(() => waiting[0].answer());
+    await waitFor(() => expect(confirm()).toBeEnabled());
+
+    await userEvent.click(part("Spanish"));
+    await waitFor(() => expect(waiting).toHaveLength(2));
+    expect(confirm()).toBeDisabled();
+    await userEvent.click(confirm());
+    expect(moves()).toEqual([]);
+
+    act(() => waiting[1].answer());
+    await pressConfirm(confirm());
+    await waitFor(() =>
+      expect(moves()).toEqual([{ locales: ["en", "es"], shared: false }])
+    );
+  });
+
+  it.each([
+    ["refuses it", refusal("title", "REQUIRED", "This field is required.")],
+    ["does not answer", new Error("Network down.")],
+  ])("holds the confirm where the server %s", async (_how, error) => {
+    const waiting = serveDescriptions();
+    open();
+    await waitFor(() => expect(waiting).toHaveLength(1));
+
+    act(() => waiting[0].fail(error));
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(confirm()).toBeDisabled();
+    await userEvent.click(confirm());
+    expect(moves()).toEqual([]);
   });
 });
 
@@ -456,7 +525,7 @@ describe("what the dialog is called, and its confirm", () => {
     // It has no languages to ask about.
     expect(choices().filter(choice => choice.locales === "all")).toEqual([]);
 
-    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+    await pressConfirm(screen.getByRole("button", { name: "Publish" }));
     await waitFor(() =>
       expect(moves()).toEqual([{ locales: [], shared: true }])
     );
@@ -487,7 +556,7 @@ describe("unpublishing", () => {
 
     const unpublish = screen.getByRole("button", { name: "Unpublish" });
     expect(unpublish).toHaveClass("bg-destructive-solid");
-    await userEvent.click(unpublish);
+    await pressConfirm(unpublish);
 
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     expect(moves()).toEqual([{ locales: ["en"], shared: false }]);
@@ -528,7 +597,7 @@ describe("once it is published", () => {
     });
     await screen.findByText(ENGLISH_PENDING);
 
-    await userEvent.click(confirm());
+    await pressConfirm(confirm());
 
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     expect(onPublished.mock.calls).toEqual([[{ published: ["en", "es"] }]]);
@@ -549,7 +618,7 @@ describe("once it is published", () => {
     open({ onPublished, onOpenChange });
     await screen.findByText(ENGLISH_PENDING);
 
-    await userEvent.click(confirm());
+    await pressConfirm(confirm());
 
     await screen.findByText("Not approved.");
     expect(onPublished).not.toHaveBeenCalled();

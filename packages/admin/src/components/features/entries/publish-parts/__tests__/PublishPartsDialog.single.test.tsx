@@ -5,7 +5,6 @@
  * The plausible broken menu sends a Single's choice to the entry client, which has no Single to
  * publish, or reads the version every language is judged on from the wrong document.
  */
-import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, waitFor } from "@admin/__tests__/utils";
@@ -15,6 +14,8 @@ import type {
 } from "@admin/services/publishParts";
 
 import { PublishPartsDialog } from "../PublishPartsDialog";
+
+import { pressConfirm } from "./press-confirm";
 
 const api = vi.hoisted(() => ({
   singlePublishParts: vi.fn(),
@@ -70,7 +71,6 @@ beforeEach(() => {
 
 describe("choosing what to publish on a Single", () => {
   it("describes and publishes through the Single's own route, with its own version", async () => {
-    const user = userEvent.setup();
     render(
       <PublishPartsDialog
         open
@@ -84,7 +84,9 @@ describe("choosing what to publish on a Single", () => {
     );
     await screen.findByText(FIRST_TIME_IN_SPANISH);
 
-    await user.click(screen.getByRole("button", { name: "Publish selected" }));
+    await pressConfirm(
+      screen.getByRole("button", { name: "Publish selected" })
+    );
 
     // The move, not the descriptions asked before and after it.
     await waitFor(() =>
@@ -101,7 +103,6 @@ describe("choosing what to publish on a Single", () => {
     expect(api.getDocument).toHaveBeenCalledWith("banner", { locale: "all" });
   });
   it("is refused as stale when the editor shows an older version than the Single's, and publishes nothing", async () => {
-    const user = userEvent.setup();
     render(
       <PublishPartsDialog
         open
@@ -117,7 +118,9 @@ describe("choosing what to publish on a Single", () => {
     );
     await screen.findByText(FIRST_TIME_IN_SPANISH);
 
-    await user.click(screen.getByRole("button", { name: "Publish selected" }));
+    await pressConfirm(
+      screen.getByRole("button", { name: "Publish selected" })
+    );
 
     // The copy on screen is read as the editor reads it, found changed, and said so.
     expect(await screen.findByRole("alert")).toHaveTextContent(

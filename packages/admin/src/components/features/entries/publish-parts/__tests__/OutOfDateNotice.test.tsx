@@ -62,9 +62,11 @@ const AFTER_TITLE_EDIT: TranslationOverview = {
 function Editor({
   readOverview,
   scope = "7:en",
+  publish = () => Promise.resolve(),
 }: {
   readOverview: () => Promise<TranslationOverview | undefined>;
   scope?: string;
+  publish?: () => Promise<void>;
 }): JSX.Element {
   const { notice, afterPublish, dismiss } = useOutOfDateNotice({
     scope,
@@ -78,7 +80,9 @@ function Editor({
       <button
         type="button"
         onClick={() =>
-          void afterPublish({ before: BEFORE, published: ["en"], source: "en" })
+          void publish().then(() =>
+            afterPublish({ before: BEFORE, published: ["en"], source: "en" })
+          )
         }
       >
         Publish
@@ -174,6 +178,37 @@ describe("the notice after publishing an edit to a translated source field", () 
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(screen.queryByRole("status")).toBeNull();
   });
+
+  it.each([
+    ["to another language", ["7:es"]],
+    ["to another document", ["8:en"]],
+    ["away and back", ["7:es", "7:en"]],
+  ])(
+    "says nothing for a publish that finishes after the editor moved %s",
+    async (_where, visited) => {
+      const readOverview = vi.fn(() => Promise.resolve(AFTER_TITLE_EDIT));
+      let finish: () => void = () => undefined;
+      const publish = () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        });
+      const { rerender } = render(
+        <Editor readOverview={readOverview} publish={publish} />
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+
+      for (const scope of visited) {
+        rerender(
+          <Editor readOverview={readOverview} publish={publish} scope={scope} />
+        );
+      }
+      finish();
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(readOverview).not.toHaveBeenCalled();
+    }
+  );
 
   it("goes away when dismissed", async () => {
     render(<Editor readOverview={() => Promise.resolve(AFTER_TITLE_EDIT)} />);
