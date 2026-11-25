@@ -5,7 +5,9 @@
  * they have not caught up with. A write that sets such a field is refused, naming it, with nothing
  * of it applied. Writes that set no such field go on, and reads are answered from the tables: this
  * process's running tables for the entity leave out each column the tables do not hold, so no
- * statement names one, until the record no longer stands, when they are the registry's again.
+ * statement names one, until the record no longer stands, when they are the registry's again. A save
+ * that changed the entity's own columns beyond its fields holds it whole: every write and every read
+ * of it is refused, as each one reaches those columns.
  * Only the settle lifts it, at the next development start or save of the entity: the record stands
  * for every process on the database, whatever became of the save's own.
  *
@@ -56,6 +58,11 @@ interface HeldFields {
    * they are, a read refused rather than answered from a shape not known.
    */
   readonly compared: boolean;
+  /**
+   * Whether the comparison found the whole entity held (`Unserved.whole`): every write is refused,
+   * whatever it sets, the status alone included.
+   */
+  readonly whole: boolean;
   /** The refusal, naming the held fields and what settles them. */
   readonly refusal: NextlyError;
 }
@@ -101,7 +108,8 @@ const narrowedBy = new Map<string, { shape: string; table: unknown }>();
 
 /**
  * Refuses a write to an entry of `kind` `slug` that sets a field a left save holds: a key of
- * `data` naming it, as written or as its column (`toSnakeCase`). Nothing of the write has run.
+ * `data` naming it, as written or as its column (`toSnakeCase`); any write where the save holds the
+ * whole entity. Nothing of the write has run.
  */
 export async function refuseWriteOverLeftSave(args: {
   adapter: DrizzleAdapter;
@@ -114,6 +122,7 @@ export async function refuseWriteOverLeftSave(args: {
   // At a write's entry, what stands is read afresh and kept for its transaction's checks.
   const held = await heldFieldsOf({ ...args, fresh: args.tx === undefined });
   if (held === undefined) return;
+  if (held.whole) throw held.refusal;
   const named = (key: string) =>
     [...held.fields].some(
       field => field === key || toSnakeCase(field) === toSnakeCase(key)
@@ -239,14 +248,24 @@ async function applyingRecordsOf(args: {
  */
 function heldOver(
   args: { kind: EntryKind; slug: string },
-  mine: { fields: readonly string[]; compared: boolean } | undefined,
+  mine: HeldByOwn | undefined,
   embedding: EmbeddingFields
 ): HeldFields | undefined {
+  // The whole entity held: no field of it is named, as what the save changed is not one of them.
+  if (mine?.whole === true) {
+    return {
+      fields: new Set(mine.fields),
+      compared: false,
+      whole: true,
+      refusal: heldWholeRefusal(args.kind, args.slug),
+    };
+  }
   const fields = [...new Set([...(mine?.fields ?? []), ...embedding.fields])];
   if (fields.length === 0) return undefined;
   const group = (mine?.fields.length ?? 0) > 0 ? undefined : embedding.group;
   return {
     fields: new Set(fields),
+    whole: false,
     // A field group's save is not compared: the host's reads, which reach its tables, are refused.
     compared:
       (mine === undefined || mine.compared) && embedding.fields.length === 0,
@@ -258,6 +277,13 @@ function heldOver(
             slug: args.slug,
           }),
   };
+}
+
+/** What the entity's own record holds, and whether it holds the whole entity (`HeldFields`). */
+interface HeldByOwn {
+  fields: readonly string[];
+  compared: boolean;
+  whole?: boolean;
 }
 
 /**
@@ -274,7 +300,7 @@ async function heldByOwnRecord(
   },
   own: ReadRow,
   registry: RegistryRow
-): Promise<{ fields: readonly string[]; compared: boolean } | "busy"> {
+): Promise<HeldByOwn | "busy"> {
   // A record that cannot be read could be any save's: every field is held, failing closed.
   if (!("record" in own)) {
     return { fields: namesOf(registry.fields), compared: false };
@@ -282,7 +308,11 @@ async function heldByOwnRecord(
   const unserved = await unservedOf(args, own.record, registry);
   if (unserved === "busy") return "busy";
   if (unserved === undefined || unserved.whole) {
-    return { fields: namesOf(registry.fields), compared: false };
+    return {
+      fields: namesOf(registry.fields),
+      compared: false,
+      whole: unserved?.whole === true,
+    };
   }
   await shapeRunningTables(args, own.record.id, registry, unserved.missing);
   return { fields: unserved.fields, compared: true };
@@ -618,6 +648,23 @@ export function heldFieldsRefusal(
       slug,
       fields: [...fields],
       ...(host === undefined ? {} : { host: `${host.kind}:${host.slug}` }),
+    },
+  });
+}
+
+/**
+ * The refusal of any write or read of an entity a save of it, left part-way, holds whole: the save
+ * changed the entity's own columns beyond its fields (its status, its translations table's own), so
+ * no field answers what it holds.
+ */
+function heldWholeRefusal(kind: EntryKind, slug: string): NextlyError {
+  return new NextlyError({
+    code: "BUILDER_SAVE_FIELD_UNSETTLED",
+    publicMessage: `A Builder save of the ${kind} "${slug}" was left part-way, and it changed the ${kind}'s own columns, beyond its fields, without recording it yet. Every write and read of the ${kind} is refused until the save is settled: the next development start (\`next dev\`), or the next save of this ${kind} in the Schema Builder, settles it. Then try again.`,
+    logContext: {
+      reason: "builder-save-entity-unsettled",
+      kind,
+      slug,
     },
   });
 }

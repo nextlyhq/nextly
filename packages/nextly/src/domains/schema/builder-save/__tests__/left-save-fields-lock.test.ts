@@ -5,6 +5,9 @@
  * next check asks again. Inside a transaction a check reads what was found before it opened,
  * holding every field where nothing was, and nothing where the lock was busy when last asked.
  *
+ * A save that changed the entity's own columns beyond its fields (its status, turned off) holds the
+ * whole entity: every write of it is refused, whatever it sets, since every one reaches those columns.
+ *
  * The record, the registry row, the lock and the comparison are stubbed here: what is watched is
  * what the guard does with them, on MySQL in development, where it can hold a field.
  */
@@ -29,6 +32,12 @@ const stubs = vi.hoisted(() => ({
   joined: 0,
   // The entity's running table as the registry of tables holds it, where the case has one.
   registry: undefined as { getTable: () => unknown } | undefined,
+  // What the comparison finds: the fields the tables do not hold, and the entity's own columns.
+  found: {
+    unserved: [] as Array<{ field: string; missing: boolean }>,
+    shapeServed: true,
+  },
+  fields: [] as Array<{ name: string; type: string }>,
 }));
 
 vi.mock("../../pipeline/schema-lock", async original => ({
@@ -44,24 +53,17 @@ vi.mock("../save-in-progress", async original => ({
     },
   ],
 }));
-// The comparison finds `heading`'s column gone, as a committed rename leaves it.
 vi.mock("../settle-left-save", () => ({
   fieldsNotServedOf: async () => {
     stubs.compared += 1;
-    return {
-      unserved: [{ field: "heading", missing: true }],
-      shapeServed: true,
-    };
+    return stubs.found;
   },
 }));
 vi.mock("../../../../di/service-access", () => ({
   getService: () => ({
     getCollectionBySlug: async () => ({
       tableName: "dc_posts",
-      fields: [
-        { name: "heading", type: "text" },
-        { name: "note", type: "text" },
-      ],
+      fields: stubs.fields,
       status: false,
       localized: false,
     }),
@@ -111,6 +113,15 @@ beforeEach(() => {
   stubs.inFlow = false;
   stubs.joined = 0;
   stubs.registry = undefined;
+  // The comparison finds `heading`'s column gone, as a committed rename leaves it.
+  stubs.found = {
+    unserved: [{ field: "heading", missing: true }],
+    shapeServed: true,
+  };
+  stubs.fields = [
+    { name: "heading", type: "text" },
+    { name: "note", type: "text" },
+  ];
   vi.mocked(registerEntityRuntimeTables).mockClear();
 });
 
@@ -195,5 +206,51 @@ describe("the left-save guard's comparison and the schema lock", () => {
     await expect(write({ note: "x" }, true)).resolves.toBeUndefined();
     await expect(write({ heading: "x" }, true)).rejects.toMatchObject(refused);
     expect(stubs.compared).toBe(1);
+  });
+});
+
+describe("a left save that changed the entity's own columns beyond its fields", () => {
+  beforeEach(() => {
+    stubs.found = { unserved: [], shapeServed: false };
+  });
+
+  it("refuses a write naming the status alone, as it refuses one naming a field", async () => {
+    await expect(write({ status: "published" })).rejects.toMatchObject(refused);
+    await expect(write({ note: "x" })).rejects.toMatchObject(refused);
+    await expect(write({})).rejects.toMatchObject(refused);
+  });
+
+  it("refuses it inside a transaction too, from what was found before it opened", async () => {
+    await compareBeforeTransaction(posts);
+    await expect(write({ status: "published" }, true)).rejects.toMatchObject(
+      refused
+    );
+    expect(stubs.compared).toBe(1);
+  });
+
+  it("refuses a write of an entity whose registry row has no fields", async () => {
+    stubs.fields = [];
+    await expect(write({ status: "published" })).rejects.toMatchObject(refused);
+  });
+
+  it("says the whole entity is held, naming no field it did not change", async () => {
+    const error: unknown = await write({ status: "published" }).catch(
+      (thrown: unknown) => thrown
+    );
+    const said = (error as { publicMessage?: string }).publicMessage;
+    expect(said).toContain('the collection "posts" was left part-way');
+    expect(said).toContain("Every write and read of the collection is refused");
+    expect(said).not.toContain("heading");
+    expect(said).not.toContain("note");
+  });
+
+  // The control: what holds a field alone lets a write that names none go on.
+  it("lets a write naming the status alone go on where only a field is held", async () => {
+    stubs.found = {
+      unserved: [{ field: "heading", missing: true }],
+      shapeServed: true,
+    };
+    await expect(write({ status: "published" })).resolves.toBeUndefined();
+    await expect(write({ heading: "x" })).rejects.toMatchObject(refused);
   });
 });
