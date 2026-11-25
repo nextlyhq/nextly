@@ -3141,7 +3141,15 @@ async function companionRenameDecisions(
     ) {
       continue;
     }
-    const recorded = previousTable.localizedColumns ?? [];
+    // The entity's containers are candidates in a translated entity only, by their overlays.
+    const translated = entity.localized === true;
+    const containers = overlayColumnsOf(entity, kind, args.dialect);
+    // An earlier release kept a container marked `localized: true` whole on the translations table,
+    // and its snapshot lists that column among the translated ones. The column stays as the
+    // container's overlay, so in an untranslated entity it is no text column a rename takes.
+    const recorded = (previousTable.localizedColumns ?? []).filter(
+      column => translated || !containers.includes(column)
+    );
     // Each translated field's column as the config now describes it, by name.
     const described = new Map(
       entity.fields
@@ -3157,15 +3165,10 @@ async function companionRenameDecisions(
     );
     const now = [...described.keys()];
     // The overlay columns, apart: one is paired only with another, never with a text's column.
-    // Paired in a translated entity only: in one that is not translated, a container's overlay is
-    // no candidate, though its text columns are.
-    const translated = entity.localized === true;
     const recordedOverlays = translated
       ? (previousTable.overlayColumns ?? [])
       : [];
-    const overlaysNow = translated
-      ? overlayColumnsOf(entity, kind, args.dialect)
-      : [];
+    const overlaysNow = translated ? containers : [];
     const pairs = [
       ...renamePairs(recorded, now),
       ...renamePairs(recordedOverlays, overlaysNow),
