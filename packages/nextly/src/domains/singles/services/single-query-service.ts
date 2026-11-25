@@ -181,9 +181,12 @@ import {
   resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
-import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import {
-  sharedStructureShape,
+  containerShapesOf,
+  withComponentShapes,
+} from "../../i18n/runtime/component-shapes";
+import {
+  type SharedStructureShape,
   splitStoredValue,
 } from "../../i18n/shared-structure";
 import {
@@ -2901,17 +2904,13 @@ export class SingleQueryService extends BaseService {
     // its default's structure goes on the main row and its text to the default language's row, as
     // a save splits it. Inserted whole, the main row would hold text no language reads from there,
     // and the first save, putting the structure right, would move every language's version.
-    const sharedShapes = new Map(
-      storesPerLanguage(singleMeta)
-        ? rowFields.flatMap(field => {
-            const shape =
-              "name" in field && field.name
-                ? sharedStructureShape(field)
-                : null;
-            return shape ? [[field.name as string, shape] as const] : [];
-          })
-        : []
-    );
+    // A container placing a component is read with that component's fields
+    // (`containerShapesOf`), as every save and read splits it: one whose only
+    // text is inside a component is split too, so its default text is the
+    // default language's rather than the structure's.
+    const sharedShapes = storesPerLanguage(singleMeta)
+      ? await containerShapesOf(rowFields, this.adapter.getDrizzle())
+      : new Map<string, SharedStructureShape>();
     for (const [key, value] of Object.entries(defaults)) {
       if (noColumnFieldNames.has(key)) continue;
       const shape = sharedShapes.get(key);
@@ -3011,9 +3010,16 @@ export class SingleQueryService extends BaseService {
     );
     if (!companion) return;
 
+    // A container placing a component is split by that component's fields, read on this
+    // transaction, as a save splits it: one whose only text is inside a component keeps that text
+    // as the default language's.
+    const localizedFields = await withComponentShapes(
+      companion.localizedFields,
+      tx.getDrizzle()
+    );
     const { companion: companionData } = splitLocalizedWrite(
       localizedDefaults,
-      companion.localizedFields
+      localizedFields
     );
     const companionStatus = companion.hasStatus
       ? (status ?? "draft")
@@ -3042,7 +3048,7 @@ export class SingleQueryService extends BaseService {
         entryId: parentId,
         locale: this.localization.defaultLocale,
         values: companionData,
-        localizedFields: companion.localizedFields,
+        localizedFields,
         languagesTable: companion.companionTableName,
         savedBy: SYSTEM_ACTOR,
       }
@@ -3143,9 +3149,10 @@ export class SingleQueryService extends BaseService {
     ) {
       return { doc, translations: undefined };
     }
+    // A container placing a component is split by that component's fields, as the seed splits it.
     const { companion: values } = splitLocalizedWrite(
       built.localizedDefaults,
-      seed.localizedFields
+      await withComponentShapes(seed.localizedFields, this.adapter.getDrizzle())
     );
     const status = (built.document as { status?: string }).status;
     return {

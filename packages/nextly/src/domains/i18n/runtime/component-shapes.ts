@@ -11,8 +11,12 @@
  */
 import type { LocalizedFieldRef } from "../companion-join";
 import {
+  type ComponentFieldsOf,
+  placesComponent,
   shapeBeforeComponents,
   sharedStructureShape,
+  type SharedStructureShape,
+  type StructuredField,
 } from "../shared-structure";
 
 /**
@@ -70,4 +74,48 @@ export async function withComponentShapesOf<
       executor
     ),
   };
+}
+
+/**
+ * The shape of each container in `fields` that keeps its text inside, by field name, a container
+ * placing a component read with that component's fields as the registry holds them (read on
+ * `executor`), as {@link withComponentShapes} reads a ref's: a container whose only text is inside
+ * a component is split by it too, and one whose component holds no text by its own text alone
+ * (`shapeBeforeComponents`). For a path holding field definitions rather than companion refs, such
+ * as a Single's first row.
+ */
+export async function containerShapesOf(
+  fields: readonly unknown[],
+  executor?: unknown
+): Promise<Map<string, SharedStructureShape>> {
+  const named = fields.filter(
+    (field): field is StructuredField & { name: string; type: string } =>
+      typeof field === "object" &&
+      field !== null &&
+      typeof (field as { name?: unknown }).name === "string" &&
+      typeof (field as { type?: unknown }).type === "string"
+  );
+  const placing = named.filter(field => placesComponent(field));
+  let fieldsOf: ComponentFieldsOf | undefined;
+  if (placing.length > 0) {
+    const { resolveComponentSchemas } = await import(
+      "../../versions/restore-version"
+    );
+    const schemas = await resolveComponentSchemas(
+      placing as unknown as Parameters<typeof resolveComponentSchemas>[0],
+      executor
+    );
+    fieldsOf = slug => {
+      const schema = schemas.get(slug);
+      return schema?.resolved === false ? undefined : schema?.fields;
+    };
+  }
+  return new Map(
+    named.flatMap(field => {
+      const shape =
+        sharedStructureShape(field, fieldsOf) ??
+        (placesComponent(field) ? shapeBeforeComponents(field) : null);
+      return shape ? [[field.name, shape] as const] : [];
+    })
+  );
 }
