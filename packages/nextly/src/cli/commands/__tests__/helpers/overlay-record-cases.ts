@@ -100,7 +100,10 @@ interface Ran {
 }
 
 /** The line that names the overlay's file, beside the main migration. */
-const OVERLAY_LINE = `translations table dc_${SLUG}`;
+const OVERLAY_LINE = `~ translations table dc_${SLUG}`;
+
+/** What says a file beside the main migration is not recorded. */
+const NOT_RECORDED = "not recorded yet";
 
 export function overlayRecordCases(
   loaded: Loaded,
@@ -121,8 +124,11 @@ export function overlayRecordCases(
       let drop: () => Promise<void> = async () => {};
       let synced: SyncTarget | undefined;
       let opened: Awaited<ReturnType<typeof createAdapter>> | undefined;
+      /** What the last start's check warned of. */
+      let warned: string[] = [];
 
       beforeEach(() => {
+        warned = [];
         dir = mkdtempSync(join(tmpdir(), "nextly-overlay-record-"));
         mkdirSync(join(dir, "migrations"));
         clock = 0;
@@ -233,6 +239,7 @@ export function overlayRecordCases(
 
       /** The check a production start makes before it applies anything. */
       async function startsCheck(config: unknown): Promise<string | undefined> {
+        warned = [];
         try {
           await refuseUnwrittenChanges({
             adapter: (await open()) as unknown as DrizzleAdapter,
@@ -240,7 +247,10 @@ export function overlayRecordCases(
             projectRoot: dir,
             migrationsDir: join(dir, "migrations"),
             dialect,
-            logger: { warn: () => undefined, error: () => undefined },
+            logger: {
+              warn: (message: string) => warned.push(message),
+              error: () => undefined,
+            },
           } as Parameters<typeof refuseUnwrittenChanges>[0]);
           return undefined;
         } catch (error) {
@@ -338,13 +348,24 @@ export function overlayRecordCases(
         expect(sqlFiles()).toEqual(files);
       }
 
-      /** No surface refuses. */
-      async function refusedByNone(config: unknown): Promise<void> {
+      /** No surface refuses, and each says the overlay is not recorded where `noticed`. */
+      async function refusedByNone(
+        config: unknown,
+        noticed = false
+      ): Promise<void> {
         const checked = await check(config);
         expect(checked.code, checked.said).toBeUndefined();
         const ran = await migrate(config);
         expect(ran.code, ran.said).toBeUndefined();
         expect(await startsCheck(config)).toBeUndefined();
+        for (const said of [checked.said, ran.said, warned.join("\n")]) {
+          if (noticed) {
+            expect(said).toContain(NOT_RECORDED);
+            expect(said).toContain(OVERLAY_LINE);
+          } else {
+            expect(said).not.toContain(NOT_RECORDED);
+          }
+        }
       }
 
       /** `migrate:create` writes files, `nextly migrate` applies them, and nothing is left after. */
@@ -382,7 +403,8 @@ export function overlayRecordCases(
           await forgetTheSettings();
         }, 120_000);
 
-        it("is refused by no surface", () => refusedByNone(project));
+        it("is refused by no surface, which says it is not recorded", () =>
+          refusedByNone(project, true));
 
         it("has the column added by migrate:create, and nothing left after", () =>
           writtenAndApplied(project));
@@ -413,7 +435,8 @@ export function overlayRecordCases(
             expect(await translationColumns()).not.toContain("box");
           }, 120_000);
 
-          it("is refused by no surface", () => refusedByNone(project));
+          it("is refused by no surface, which says it is not recorded", () =>
+            refusedByNone(project, true));
 
           it("has the column added by migrate:create, and nothing left after", () =>
             writtenAndApplied(project));

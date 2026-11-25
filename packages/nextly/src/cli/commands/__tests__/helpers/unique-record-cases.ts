@@ -49,6 +49,10 @@ import {
 
 const SLUG = "urposts";
 
+/** What says a file beside the main migration is not recorded, and the line that names it. */
+const NOT_RECORDED = "not recorded yet";
+const INDEXES_LINE = `~ per-language unique indexes dc_${SLUG}`;
+
 /** The collection's declaration: whether it, and its second field, are translated. */
 interface Declared {
   localized: boolean;
@@ -116,8 +120,11 @@ export function uniqueRecordCases(
       let drop: () => Promise<void> = async () => {};
       let synced: SyncTarget | undefined;
       let opened: Awaited<ReturnType<typeof createAdapter>> | undefined;
+      /** What the start's check warned of. */
+      let warned: string[] = [];
 
       beforeEach(() => {
+        warned = [];
         dir = mkdtempSync(join(tmpdir(), "nextly-unique-record-"));
         mkdirSync(join(dir, "migrations"));
         clock = 0;
@@ -233,7 +240,10 @@ export function uniqueRecordCases(
             projectRoot: dir,
             migrationsDir: join(dir, "migrations"),
             dialect,
-            logger: { warn: () => undefined, error: () => undefined },
+            logger: {
+              warn: (message: string) => warned.push(message),
+              error: () => undefined,
+            },
           } as Parameters<typeof refuseUnwrittenChanges>[0]);
           return undefined;
         } catch (error) {
@@ -343,17 +353,20 @@ export function uniqueRecordCases(
           it("is not refused by nextly migrate", async () => {
             const ran = await migrate();
             expect(ran.code, ran.said).toBeUndefined();
-            expect(ran.said).not.toContain("per-language unique indexes");
+            expect(ran.said).toContain(NOT_RECORDED);
+            expect(ran.said).toContain(INDEXES_LINE);
           });
 
           it("is not refused by a production start's check", async () => {
             expect(await startsCheck()).toBeUndefined();
+            expect(warned.join("\n")).toContain(INDEXES_LINE);
           });
 
           it("passes migrate:check", async () => {
             const ran = await check();
             expect(ran.code, ran.said).toBeUndefined();
-            expect(ran.said).not.toContain("per-language unique indexes");
+            expect(ran.said).toContain(NOT_RECORDED);
+            expect(ran.said).toContain(INDEXES_LINE);
           });
 
           it("has the indexes recorded once by migrate:create, and nothing left after", async () => {
@@ -368,7 +381,9 @@ export function uniqueRecordCases(
             const again = await create();
             expect(again.said).toContain("No changes detected");
             expect(sqlFiles()).toEqual(files);
-            expect((await check()).code).toBeUndefined();
+            const checked = await check();
+            expect(checked.code, checked.said).toBeUndefined();
+            expect(checked.said).not.toContain(NOT_RECORDED);
           });
         }
       );
