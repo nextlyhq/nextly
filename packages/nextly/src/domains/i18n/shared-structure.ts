@@ -296,7 +296,7 @@ export function componentStructureShape(
 }
 
 /** The shape a row (or an instance) is read by: its component type's, in a dynamic zone. */
-function shapeOfRow(
+export function shapeOfRow(
   row: Record<string, unknown>,
   shape: SharedStructureShape
 ): SharedStructureShape {

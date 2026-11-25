@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { currentFieldGroupTypeKey } from "../../../../domains/field-groups/storage/field-group-type-key";
 import type { SharedStructureShape } from "../../../../domains/i18n/shared-structure";
 import { withPositionIds } from "../position-ids";
 
@@ -20,7 +21,30 @@ const PANELS: SharedStructureShape = {
   inner: { cards: CARDS },
 };
 
-type Row = { id?: string; label?: string; cards?: Row[] };
+type Row = { id?: string; label?: string; cards?: Row[]; items?: Row[] };
+
+// A dynamic zone whose two types reuse a nested name with a different cardinality: `quote`
+// places one item there, `list` a repeatable list of them. The zone's merged shape keeps the first
+// type's, so only each instance's own type (`byType`) says that a `list` holds rows.
+const ONE_ITEM: SharedStructureShape = {
+  kind: "group",
+  texts: ["label"],
+  inner: {},
+};
+const ITEMS: SharedStructureShape = {
+  kind: "repeater",
+  texts: ["label"],
+  inner: {},
+};
+const ZONE: SharedStructureShape = {
+  kind: "repeater",
+  texts: [],
+  inner: { items: ONE_ITEM },
+  byType: {
+    quote: { kind: "repeater", texts: [], inner: { items: ONE_ITEM } },
+    list: { kind: "repeater", texts: [], inner: { items: ITEMS } },
+  },
+};
 
 describe("withPositionIds", () => {
   it("gives each place one id, the same in every language", () => {
@@ -64,6 +88,27 @@ describe("withPositionIds", () => {
       "en"
     );
     expect(aligned.get("es")).toEqual([{ id: "r1", label: "uno" }]);
+  });
+
+  // Broken (the merged shape read for every instance), a `list` instance's rows are taken for one
+  // item and get no id, so their languages are refused or their text left in the structure.
+  it("gives the rows inside an instance their ids by the instance's own type", () => {
+    const zone = (label: string) => [
+      { id: "z1", [currentFieldGroupTypeKey]: "list", items: [{ label }] },
+    ];
+    const aligned = withPositionIds(
+      new Map<string, unknown>([
+        ["en", zone("one")],
+        ["es", zone("uno")],
+      ]),
+      ZONE,
+      "en"
+    );
+    const en = (aligned.get("en") as Row[])[0]!.items!;
+    const es = (aligned.get("es") as Row[])[0]!.items!;
+    expect(en[0]!.id).toBeDefined();
+    expect(es[0]!.id).toBe(en[0]!.id);
+    expect(es[0]!.label).toBe("uno");
   });
 
   it("gives the instances inside each row their ids too", () => {

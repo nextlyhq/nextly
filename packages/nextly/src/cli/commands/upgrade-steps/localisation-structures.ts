@@ -28,7 +28,9 @@ import { resolveFieldGroupRegistryName } from "../../../domains/field-groups/sto
 import { holdsOneStructure } from "../../../domains/i18n/classify-fields";
 import type { LaidOutEntity } from "../../../domains/i18n/per-language-storage-layout";
 import {
+  placesComponent,
   sameShare,
+  shapeBeforeComponents,
   sharedStructureShape,
   splitSharedStructure,
   type SharedStructureShape,
@@ -164,10 +166,16 @@ async function structuredColumns(
     const shaped = withoutContainerFlags(entity.fields).fields.flatMap(
       field => {
         if (!isPlainObject(field) || typeof field.name !== "string") return [];
-        const shape = sharedStructureShape(
-          field as unknown as StructuredField,
-          slug => components.get(slug)
-        );
+        const structured = field as unknown as StructuredField;
+        // A container placing a component keeps its translations inside even where the component
+        // holds no text yet (`keepsTranslationsInside`), and its old whole column becomes its
+        // overlay: its structure moves all the same, by the shape it has before its components'
+        // fields (`shapeBeforeComponents`), its overlays empty.
+        const shape =
+          sharedStructureShape(structured, slug => components.get(slug)) ??
+          (placesComponent(structured)
+            ? shapeBeforeComponents(structured)
+            : null);
         return shape ? [{ field: field.name, shape }] : [];
       }
     );

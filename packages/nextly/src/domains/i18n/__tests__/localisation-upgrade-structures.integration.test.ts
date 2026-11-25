@@ -89,10 +89,31 @@ const BOARDS = defineCollection({
   ],
 });
 
+/** A component holding no text: a container placing it translates nothing inside yet. */
+const UP_STAT = defineFieldGroup({
+  slug: "upstat",
+  fields: [number({ name: "size" })],
+});
+
+const TILES = defineCollection({
+  slug: "uptiles",
+  localized: true,
+  fields: [
+    text({ name: "title" }),
+    repeater({
+      name: "tiles",
+      fields: [
+        number({ name: "position" }),
+        fieldGroup({ name: "stats", component: "upstat", repeatable: true }),
+      ],
+    }),
+  ],
+});
+
 const SITE = {
-  collections: [SLIDESHOWS, BOARDS],
+  collections: [SLIDESHOWS, BOARDS, TILES],
   singles: [],
-  fieldGroups: [UP_CARD],
+  fieldGroups: [UP_CARD, UP_STAT],
   localization: { locales: ["en", "es"], defaultLocale: "en" },
 };
 
@@ -135,8 +156,8 @@ describeEachDialect(
       _resetPerLanguageStorage();
       t = await createTestNextly({
         adapter: database.adapter as never,
-        collections: [SLIDESHOWS, BOARDS],
-        fieldGroups: [UP_CARD],
+        collections: [SLIDESHOWS, BOARDS, TILES],
+        fieldGroups: [UP_CARD, UP_STAT],
         localization: SITE.localization,
       });
       return t;
@@ -583,6 +604,71 @@ describeEachDialect(
         // One id per instance, the same in every language.
         expect(es.map(card => card.id)).toEqual(en.map(card => card.id));
         expect(new Set(en.map(card => card.id)).size).toBe(2);
+      },
+      BOOT_TIMEOUT
+    );
+
+    // A container placing a component that holds no text keeps its translations inside all the
+    // same, so its structure moves to the main table, its overlays empty. Broken (the container
+    // read only by what text it holds), it is left out of the move while its whole value is taken
+    // for its overlay: the main table's structure stays empty and reads return none.
+    it(
+      "moves the structure of a container whose component holds no text",
+      async () => {
+        await boot();
+        const created = await t!.nextly.create({
+          collection: "uptiles",
+          locale: "en",
+          data: { title: "Tiles" },
+        });
+        const id = (created.item as { id: string }).id;
+        await t!.nextly.update({
+          collection: "uptiles",
+          id,
+          locale: "es",
+          data: { title: "Mosaicos", _overwrite: true },
+        });
+        const tiles = [
+          {
+            id: "t1",
+            position: 1,
+            stats: [{ _componentType: "upstat", size: 3 }],
+          },
+        ];
+        const adapter = database!.adapter;
+        await adapter.update(
+          "dc_uptiles",
+          { tiles: null },
+          { and: [{ column: "id", op: "=", value: id }] }
+        );
+        for (const locale of ["en", "es"]) {
+          await adapter.update(
+            "dc_uptiles_locales",
+            { tiles: JSON.stringify(tiles) },
+            {
+              and: [
+                { column: "_parent", op: "=", value: id },
+                { column: "_locale", op: "=", value: locale },
+              ],
+            }
+          );
+        }
+
+        await migrateData(database!.adapter, SITE, STRUCTURES_STEP);
+
+        const [main] = await adapter.select<{ tiles: unknown }>("dc_uptiles", {
+          where: { and: [{ column: "id", op: "=", value: id }] },
+        });
+        expect(parsedValue(main?.tiles)).toMatchObject([
+          { id: "t1", position: 1, stats: [{ size: 3 }] },
+        ]);
+        const read = (await t!.nextly.findByID({
+          collection: "uptiles",
+          id,
+          locale: "es",
+        })) as { tiles: { position?: number; stats?: { size?: number }[] }[] };
+        expect(read.tiles[0]?.position).toBe(1);
+        expect(read.tiles[0]?.stats?.[0]?.size).toBe(3);
       },
       BOOT_TIMEOUT
     );
