@@ -154,7 +154,6 @@ import {
   keepDeniedFieldGroupsInDraft,
   withStoredFieldGroups,
 } from "../../field-groups/field-group-write-access";
-import { isStorageMovingRefusal } from "../../field-groups/migration/moved-storage";
 import { passwordReachOf } from "../../field-groups/password-reach";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupWriteAccessOf } from "../../field-groups/services/field-group-mutation-service";
@@ -5120,10 +5119,6 @@ export class SingleMutationService extends BaseService {
                   }
                 }
               } catch (err) {
-                // A write that met field-group storage moving under it is
-                // refused to be retried: passed on as it is, as the
-                // post-write snapshot read passes it.
-                if (isStorageMovingRefusal(err)) throw err;
                 // Wrap the raw driver error the same way the post-write
                 // snapshot read does: an unwrapped database error would reach
                 // the Single error fallback and ship the driver's own message
