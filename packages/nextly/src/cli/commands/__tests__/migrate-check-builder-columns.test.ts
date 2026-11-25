@@ -179,7 +179,7 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
 );
 
 /** The three Builder tables, each with one text field that states no width. */
-const TABLES = ["dc_cases", "single_about", "comp_teaser"] as const;
+const TABLES = ["dc_cases", "single_about", "fg_teaser"] as const;
 
 /** A collection, a Single and a field group, each with `field` added to it. */
 function manifestWith(field: Record<string, unknown>) {

@@ -19,11 +19,11 @@ import {
 import { definePlugin } from "../../../../plugins/plugin-context";
 import type { SchemaHook } from "../../../schema/extension/draft";
 import { col, defineTable } from "../../../schema/extension/dsl";
-import { resolveComponentTableName } from "../../../schema/utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../services/field-group-storage-names";
 
 /** The field group every field-group suite tries to delete. */
 export const SEO = "dep_seo";
-export const SEO_TABLE = resolveComponentTableName(SEO);
+export const SEO_TABLE = fieldGroupTableNameFor("current", SEO);
 
 /** The hosts that place SEO: a collection (at the top and inside a group), a Single and a field group. */
 export const ARTICLES = "dep_articles";

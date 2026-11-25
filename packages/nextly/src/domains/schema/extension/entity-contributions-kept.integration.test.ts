@@ -32,13 +32,13 @@ import { resolveSingleTableName } from "../../singles/services/resolve-single-ta
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type { TableSpec } from "../pipeline/diff/types";
 import { applyDesiredSchema } from "../pipeline/index";
-import { resolveComponentTableName } from "../utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../field-groups/services/field-group-storage-names";
 
 import { col } from "./dsl";
 
 const POSTS_TABLE = "dc_ek_posts";
 const SITE_TABLE = resolveSingleTableName({ slug: "ek_site" });
-const SEO_TABLE = resolveComponentTableName("ek_seo");
+const SEO_TABLE = fieldGroupTableNameFor("current", "ek_seo");
 const TABLES = [POSTS_TABLE, SITE_TABLE, SEO_TABLE] as const;
 
 /** Each entity's own field, required at the first boot and optional after. */

@@ -34,7 +34,7 @@ import {
 
 const GROUP = "fgu_hero";
 const PAGES = "fgu_pages";
-const GROUP_TABLE = `comp_${GROUP}`;
+const GROUP_TABLE = `fg_${GROUP}`;
 
 let current: TestNextly | undefined;
 afterEach(async () => {

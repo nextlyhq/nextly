@@ -37,6 +37,7 @@ import {
   buildBlankPluginMigration,
   buildPluginMigration,
 } from "../../../domains/schema/migrate-create/generate-plugin";
+import { resolveRegistryNameFromCatalog } from "../../../domains/field-groups/storage/resolve-storage-names";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import {
   migrationChecksum,
@@ -427,6 +428,11 @@ describe.each(getConfiguredTestDialects())(
       await reconcileCore({
         db: db(),
         dialect,
+        // The registry the database holds, as `nextly migrate` resolves it.
+        fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+          dialect,
+          getDrizzle: <T>() => db() as T,
+        }),
         logger: { info: () => {}, warn: () => {} },
       });
       run.dialect = dialect;

@@ -1227,7 +1227,7 @@ describe.each(eachSite())(
         eventResolutions: [
           {
             kind: "confirm_drop",
-            eventId: "destructive_drop:${FG}older.extra",
+            eventId: `destructive_drop:${FG}older.extra`,
           },
         ],
       };
