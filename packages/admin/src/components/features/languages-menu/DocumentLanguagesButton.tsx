@@ -11,11 +11,13 @@ import type { JSX } from "react";
 
 import type { DocumentPanelMode } from "@admin/components/features/entries/EntryForm/document-panel-mode";
 import { translateAddress } from "@admin/components/features/entries/publish-parts/out-of-date";
+import { useLanguageReviewStages } from "@admin/components/features/entries/review/useLanguageReviewStages";
 import { barFolds } from "@admin/components/layout/header/bar-fold";
 import { useTopBarWidth } from "@admin/components/layout/header/TopBarPlaces";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
+import type { ReleaseDocumentRef } from "@admin/types/releases";
 
 import {
   currentLanguageOf,
@@ -30,6 +32,8 @@ import { LanguagesButton } from "./LanguagesButton";
 export interface DocumentLanguagesButtonProps {
   /** The document, as the editor read it. */
   document: unknown;
+  /** The document, as its review is kept for. */
+  reviewed: ReleaseDocumentRef;
   /** Whether it has a Draft / Published lifecycle. */
   hasStatus: boolean;
   /** The editor's own address, which the rows' addresses add a language to. */
@@ -48,6 +52,7 @@ export interface DocumentLanguagesButtonProps {
 
 export function DocumentLanguagesButton({
   document,
+  reviewed,
   hasStatus,
   editorPath,
   locale,
@@ -60,6 +65,7 @@ export function DocumentLanguagesButton({
   const { hasPermission } = useCurrentUserPermissions();
   const barWidth = useTopBarWidth();
   const heldReason = languagesHeldReason(hold);
+  const stages = useLanguageReviewStages(reviewed);
   return (
     <LanguagesButton
       model={languagesMenuModel({
@@ -74,6 +80,7 @@ export function DocumentLanguagesButton({
         defaultLanguage: defaultLocale,
         translating,
       })}
+      stages={stages}
       heldReason={heldReason}
       // Publishing is held with everything else that acts on the live document.
       onPublishOthers={heldReason === undefined ? onPublishOthers : undefined}

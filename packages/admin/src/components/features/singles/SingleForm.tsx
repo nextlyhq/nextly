@@ -1943,6 +1943,11 @@ export function SingleForm({
                                       schema.localized === true ? (
                                         <DocumentLanguagesButton
                                           document={document}
+                                          reviewed={{
+                                            scopeKind: "single",
+                                            scopeSlug: schema.slug,
+                                            entryId: String(document.id),
+                                          }}
                                           hasStatus={hasStatus}
                                           editorPath={buildRoute(
                                             ROUTES.SINGLE_EDIT,

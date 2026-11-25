@@ -1748,6 +1748,11 @@ export function EntryForm({
                                         collection.localized === true ? (
                                           <DocumentLanguagesButton
                                             document={entry}
+                                            reviewed={{
+                                              scopeKind: "collection",
+                                              scopeSlug: collection.name,
+                                              entryId: savedEntryId,
+                                            }}
                                             hasStatus={hasStatus}
                                             editorPath={buildRoute(
                                               ROUTES.COLLECTION_ENTRY_EDIT,

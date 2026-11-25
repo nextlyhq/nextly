@@ -17,7 +17,8 @@ import {
   type DocumentLanguagesButtonProps,
 } from "../DocumentLanguagesButton";
 
-const { site, permissions, bar } = vi.hoisted(() => ({
+const { site, permissions, bar, review } = vi.hoisted(() => ({
+  review: { state: vi.fn() },
   site: { languages: 2 },
   permissions: { held: [] as string[] },
   bar: { width: 1200 },
@@ -43,6 +44,12 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", async importOriginal => ({
     hasPermission: (slug: string) => permissions.held.includes(slug),
   }),
 }));
+vi.mock("@admin/hooks/queries/useReviewState", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/hooks/queries/useReviewState")
+  >()),
+  useReviewState: review.state,
+}));
 vi.mock(
   "@admin/components/layout/header/TopBarPlaces",
   async importOriginal => ({
@@ -66,6 +73,34 @@ const document = {
   },
 };
 
+const REVIEWED = {
+  scopeKind: "collection",
+  scopeSlug: "posts",
+  entryId: "p1",
+} as const;
+
+/** A document whose languages stand in these stages; null for one in none. */
+function standsIn(stages: Record<string, string | null>) {
+  review.state.mockReturnValue({
+    data: {
+      attached: true,
+      review: {
+        workflow: { slug: "review", label: "Review" },
+        // The shared fields' part as well, which no row is for.
+        parts: [
+          { part: null, stage: "approved", stageLabel: "Approved" },
+          ...Object.entries(stages).map(([part, stageLabel]) => ({
+            part,
+            stage: stageLabel === null ? null : "stage",
+            stageLabel,
+          })),
+        ],
+        mayPublishWithoutReview: false,
+      },
+    },
+  });
+}
+
 const NOTHING_HELD = {
   viewingPastVersion: false,
   recovering: false,
@@ -77,6 +112,7 @@ function draw(props: Partial<DocumentLanguagesButtonProps> = {}) {
   return render(
     <DocumentLanguagesButton
       document={document}
+      reviewed={REVIEWED}
       hasStatus
       editorPath={EDITOR}
       locale={undefined}
@@ -102,9 +138,51 @@ beforeEach(() => {
   site.languages = 2;
   permissions.held = [];
   bar.width = 1200;
+  review.state.mockReset().mockReturnValue({ data: { attached: false } });
 });
 
 describe("the document's Languages button", () => {
+  it("says each language's stage beside its status", async () => {
+    standsIn({ es: "In review", en: "Drafting" });
+    const menu = await open();
+    expect(review.state).toHaveBeenCalledWith(REVIEWED);
+    expect(
+      item(menu, /^Spanish.*Live.*changes not published.*In review/)
+    ).not.toBeNull();
+    // The language on screen too, after what it says of itself.
+    expect(item(menu, /^English.*Editing.*live.*Drafting/)).not.toBeNull();
+  });
+
+  it("says no stage of a language standing in none, nor the shared fields' own", async () => {
+    standsIn({ es: null });
+    const menu = await open();
+    expect(item(menu, /^Spanish.*changes not published/)).not.toBeNull();
+    expect(within(menu).queryByText(/Approved|stage/)).toBeNull();
+  });
+
+  it("says no stage where no workflow holds the document", async () => {
+    const menu = await open();
+    expect(item(menu, /^Spanish.*changes not published/)).not.toBeNull();
+    expect(within(menu).queryByText(/review|Drafting|Approved/)).toBeNull();
+  });
+
+  it("says a stage to someone told no language's status", async () => {
+    standsIn({ es: "In review" });
+    const menu = await open({ document: { id: "p1", status: "published" } });
+    expect(item(menu, /^Spanish.*In review/)).not.toBeNull();
+  });
+
+  it("says a stage named as the status is, beside it", async () => {
+    standsIn({ es: "Live" });
+    const menu = await open({
+      document: {
+        ...document,
+        _translations: { es: { translated: true, status: "published" } },
+      },
+    });
+    expect(item(menu, /^Spanish.*Live.*Live/)).not.toBeNull();
+  });
+
   it("is drawn on a site with languages, and on no other", () => {
     const { unmount } = draw();
     expect(

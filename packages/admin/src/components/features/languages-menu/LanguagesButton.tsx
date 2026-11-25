@@ -48,6 +48,11 @@ export interface LanguagesButtonProps {
    */
   currentLanguage?: string | undefined;
   /**
+   * Each language's stage in the workflow that holds the document's publishing, by its code.
+   * Absent where none does, and without an entry for a language standing in no stage.
+   */
+  stages?: Readonly<Record<string, string>> | undefined;
+  /**
    * Why no other language can be opened at this moment, said above the languages. Each row then
    * keeps its status and leads nowhere. Absent, nothing holds them.
    */
@@ -70,7 +75,8 @@ function StatusLine({ parts }: { parts: string[] }): JSX.Element | null {
       <span className="sr-only">, </span>
       <span className="block text-xs text-muted-foreground">
         {parts.map((part, index) => (
-          <Fragment key={part}>
+          // A stage may be named as a status is, so the words alone are no key.
+          <Fragment key={`${index} ${part}`}>
             {index === 0 ? null : (
               <>
                 <span aria-hidden="true"> · </span>
@@ -88,10 +94,13 @@ function StatusLine({ parts }: { parts: string[] }): JSX.Element | null {
 /** One language: its name and line, and what choosing the row does. */
 function RowContent({
   row,
+  stage,
   editing = false,
   action = null,
 }: {
   row: LanguageRow;
+  /** Its stage in a workflow, said after its status. */
+  stage: string | undefined;
   /** Whether it is the language on screen. */
   editing?: boolean;
   action?: ReactNode;
@@ -111,7 +120,12 @@ function RowContent({
             </span>
           </>
         ) : null}
-        <StatusLine parts={statusParts(row, editing)} />
+        <StatusLine
+          parts={[
+            ...statusParts(row, editing),
+            ...(stage === undefined ? [] : [stage]),
+          ]}
+        />
         {action === null ? null : <span className="sr-only">, </span>}
       </span>
       {action}
@@ -122,11 +136,13 @@ function RowContent({
 /** A language's row: the way to it, or a note that it is the one on screen. */
 function LanguageMenuRow({
   row,
+  stage,
   href,
   current,
   held,
 }: {
   row: LanguageRow;
+  stage: string | undefined;
   href: string;
   current: boolean;
   /** Whether no other language can be opened now. */
@@ -140,7 +156,7 @@ function LanguageMenuRow({
         className={ROW_CLASS}
         onSelect={event => event.preventDefault()}
       >
-        <RowContent row={row} />
+        <RowContent row={row} stage={stage} />
       </DropdownMenuItem>
     );
   }
@@ -149,7 +165,7 @@ function LanguageMenuRow({
     // the menu, back to the document it names.
     return (
       <DropdownMenuItem aria-current="true" className={ROW_CLASS}>
-        <RowContent row={row} editing />
+        <RowContent row={row} stage={stage} editing />
       </DropdownMenuItem>
     );
   }
@@ -158,6 +174,7 @@ function LanguageMenuRow({
       <Link href={href}>
         <RowContent
           row={row}
+          stage={stage}
           action={
             <span className="inline-flex h-8 shrink-0 items-center rounded-md border border-border bg-background px-3 text-sm font-medium">
               {row.isDefault ? "Edit" : "Translate"}
@@ -218,6 +235,7 @@ export function LanguagesButton({
   translateHref,
   editHref,
   currentLanguage,
+  stages,
   heldReason,
   onPublishOthers,
   canManageLanguages,
@@ -275,6 +293,7 @@ export function LanguagesButton({
             <LanguageMenuRow
               key={row.code}
               row={row}
+              stage={stages?.[row.code]}
               href={row.isDefault ? editHref : translateHref(row.code)}
               current={row.code === currentLanguage}
               held={heldReason !== undefined}
