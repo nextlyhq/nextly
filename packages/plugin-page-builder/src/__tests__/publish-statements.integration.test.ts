@@ -94,10 +94,16 @@ type Route = "direct" | "rest";
  * transaction takes the collection's named locks, reads its registry row for
  * share and lets the named locks go (`holdEntityForWrite`), measured as
  * exactly those three statements more on each route.
+ *
+ * On SQLite one more (from 78/87) and on PostgreSQL two more (from 83/93)
+ * since an entry write holds its collection there too: it reads its registry
+ * row's id and version under the hold, and on PostgreSQL takes the
+ * collection's advisory lock before it. Measured with the hold and without
+ * it, on each route.
  */
 const PINS: Readonly<Record<TestDialect, Readonly<Record<Route, number>>>> = {
-  sqlite: { direct: 78, rest: 87 },
-  postgresql: { direct: 83, rest: 93 },
+  sqlite: { direct: 79, rest: 88 },
+  postgresql: { direct: 85, rest: 95 },
   mysql: { direct: 89, rest: 98 },
 };
 
