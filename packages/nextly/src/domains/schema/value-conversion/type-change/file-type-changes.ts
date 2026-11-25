@@ -822,8 +822,10 @@ export async function judgeFileTypeChanges(
     }
     const judged = await judgeEntityTypeChanges(db, source.dialect, input);
     const consent = runConsentOf(source, input);
+    // A marked change's refusals are read again from what was judged, with the run's consent to clear.
+    // Where the judgement refused before any value was read, nothing was judged and they are its own.
     const entityRefusals =
-      input.rewrites === undefined
+      input.rewrites === undefined || judged.judged.length === 0
         ? judged.refusals
         : consentedRefusals(input.label, judged.judged, consent).refusals;
     const converted = await conversionOf(db, source.dialect, input, {
