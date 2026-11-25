@@ -1304,7 +1304,7 @@ async function reconcileCompanion(
   }
 ): Promise<void> {
   const { change, adapter } = args;
-  const { slug } = change;
+  const { slug, fields } = change;
   const { tableName } = change.collection;
   try {
     const plan = await companionPlanOf({

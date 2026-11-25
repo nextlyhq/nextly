@@ -231,10 +231,13 @@ const shaped = (
               })
             ),
           ...(shape.ownMarker === true ? [number({ name: MARKER })] : []),
+          group({ name: "meta", fields: [text({ name: "summary" })] }),
+          // The group fields move into: one holding text keeps it for each language on per-language
+          // storage, and a move into it is refused there.
           group({
-            name: "meta",
+            name: "box",
             fields: [
-              text({ name: "summary" }),
+              number({ name: "weight" }),
               ...inside.map(name => type({ name })),
             ],
           }),

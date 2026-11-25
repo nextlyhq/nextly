@@ -270,6 +270,13 @@ describe.each(getConfiguredTestDialects())(
         type: "group",
         fields: [{ name: "summary", type: "text" }],
       },
+      // A group a field can move into: one holding text keeps it for each language, and a move into
+      // it is refused on this layout.
+      {
+        name: "box",
+        type: "group",
+        fields: [{ name: "weight", type: "number" }],
+      },
     ];
 
     async function versionOf(t: TestNextly, registry: string, slug: string) {
@@ -455,7 +462,7 @@ describe.each(getConfiguredTestDialects())(
           saveKept(
             t,
             keptWithout("rank").map(field =>
-              field.name === "meta"
+              field.name === "box"
                 ? {
                     ...field,
                     fields: [
@@ -465,7 +472,7 @@ describe.each(getConfiguredTestDialects())(
                   }
                 : field
             ),
-            { hints: { moves: [{ from: ["rank"], to: ["meta", "rank"] }] } }
+            { hints: { moves: [{ from: ["rank"], to: ["box", "rank"] }] } }
           ),
       },
       {
