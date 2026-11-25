@@ -588,6 +588,10 @@ export function settleAnswerCases(args: {
         return rows.map(row => String(row.id)).sort();
       }
 
+      /** Their names (`pendingIn`). */
+      const pendingNames = async (adapter: DrizzleAdapter, folder: string) =>
+        (await pendingIn(adapter, folder)).map(file => file.name);
+
       /** The files the reached database's ledger does not hold yet. */
       const pendingIn = (adapter: DrizzleAdapter, folder: string) =>
         findPendingFiles(
@@ -810,9 +814,17 @@ export function settleAnswerCases(args: {
             const state = async () => ({
               entries: await entriesOf(target.adapter),
               notes: await languageRowsOf(target.adapter, "note"),
-              pending: await pendingIn(target.adapter, after),
+              pending: await pendingNames(target.adapter, after),
             });
-            return { after, file, target, state, untouched: await state() };
+            const left = () => pendingNames(target.adapter, after);
+            return {
+              after,
+              file,
+              target,
+              state,
+              left,
+              untouched: await state(),
+            };
           };
           /** What a refusal says: its code, the file, both languages, and that nothing changed. */
           const refusedIn = (said: string, file: string, runs: string) => {
@@ -824,7 +836,7 @@ export function settleAnswerCases(args: {
           };
 
           it(`refuses ${named} where the configuration's default is another language`, async () => {
-            const { after, file, state, untouched } = await deployed();
+            const { after, file, state, left, untouched } = await deployed();
             const spanish = { ...LOCALIZATION, defaultLocale: "es" };
 
             const refused = await migrate(after, consent, spanish);
@@ -845,11 +857,12 @@ export function settleAnswerCases(args: {
             // Under the language it was made in, the same file applies.
             const applied = await migrate(after, consent);
             expect(applied.code, applied.said).toBeUndefined();
-            expect((await state()).pending).toEqual([]);
+            expect(await left()).toEqual([]);
           }, 240_000);
 
           it(`refuses ${named} where Settings' default is another language`, async () => {
-            const { after, file, target, state, untouched } = await deployed();
+            const { after, file, target, state, left, untouched } =
+              await deployed();
             await settingsLanguages(target.adapter, ["es", "en"]);
 
             const refused = await migrate(after, consent, "Settings");
@@ -860,7 +873,7 @@ export function settleAnswerCases(args: {
             await settingsLanguages(target.adapter, ["en", "es"]);
             const applied = await migrate(after, consent, "Settings");
             expect(applied.code, applied.said).toBeUndefined();
-            expect((await state()).pending).toEqual([]);
+            expect(await left()).toEqual([]);
           }, 240_000);
 
           it(`refuses ${named} where the file records no language`, async () => {
@@ -878,6 +891,83 @@ export function settleAnswerCases(args: {
             expect(await state()).toEqual(untouched);
           }, 240_000);
         }
+
+        // The translations table may be one the run makes and fills from the entity's, so it is the
+        // entity's own rows that are read.
+        it.runIf(layout === "earlier")(
+          "refuses a delete in a run that turns translation on first, where the entries are not in a translations table yet",
+          async () => {
+            const dev = await database();
+            reach(dev.url);
+            await site(dev.adapter, project);
+            const fields = [
+              { name: "heading", type: "text" },
+              { name: "note", type: "text" },
+            ];
+            await dispatchCollections(
+              {} as ServiceContainer,
+              "createCollection",
+              {},
+              { name: "posts", label: "Posts", localized: false, fields }
+            );
+            const before = copied("untranslated");
+            await save(
+              "posts",
+              fields,
+              { localized: true },
+              await versionOf(dev.adapter)
+            );
+            const renamed = savesFor(true).find(
+              each => each.name === "renamed"
+            )!;
+            await save(
+              "posts",
+              renamed.fields,
+              renamed.answers,
+              await versionOf(dev.adapter)
+            );
+            const after = copied("translated");
+            const added = files(after).filter(
+              name => !files(before).includes(name)
+            );
+            expect(
+              added.some(name =>
+                /INSERT INTO .dc_posts_locales./.test(runs(after, name))
+              )
+            ).toBe(true);
+            expect(
+              added.some(name => runs(after, name).includes("DELETE FROM"))
+            ).toBe(true);
+
+            const target = await database();
+            reach(target.url);
+            const first = await migrate(before);
+            expect(first.code, first.said).toBeUndefined();
+            const app = await site(target.adapter, before, "production");
+            const entry = String(
+              (
+                await app.nextly.create({
+                  collection: "posts" as never,
+                  data: { heading: "Empty" } as never,
+                })
+              ).item.id
+            );
+            expect(await target.adapter.tableExists(COMPANION)).toBe(false);
+            const pending = await pendingNames(target.adapter, after);
+
+            const refused = await migrate(
+              after,
+              { acceptDataLoss: true },
+              { ...LOCALIZATION, defaultLocale: "es" }
+            );
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            expect(await entriesOf(target.adapter)).toEqual([entry]);
+            expect(await target.adapter.tableExists(COMPANION)).toBe(false);
+            expect(await pendingNames(target.adapter, after)).toEqual(pending);
+          },
+          240_000
+        );
 
         // A run refuses for the entries a file would settle by another language's values: where it
         // has none to settle, on a database whose table it makes or whose table is empty, the same
@@ -913,7 +1003,7 @@ export function settleAnswerCases(args: {
           };
 
           it(`runs ${named} on a new database whose default is another language`, async () => {
-            const { after } = await answered();
+            const { before, after } = await answered();
             const target = await database();
             reach(target.url);
 
@@ -921,7 +1011,20 @@ export function settleAnswerCases(args: {
             expect(applied.code, applied.said).toBeUndefined();
             expect(await pendingIn(target.adapter, after)).toEqual([]);
             expect(await entriesOf(target.adapter)).toEqual([]);
-          }, 240_000);
+
+            // The same files on a database holding one entry are refused, with nothing written.
+            const held = await seeded(before, translated);
+            reach(held.url);
+            await held.adapter.executeQuery(
+              `DELETE FROM ${q(MAIN)} WHERE ${q("id")} <> '${held.empty}'`
+            );
+            const pending = await pendingNames(held.adapter, after);
+            const refused = await migrate(after, consent, spanish);
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            expect(await entriesOf(held.adapter)).toEqual([held.empty]);
+            expect(await pendingNames(held.adapter, after)).toEqual(pending);
+          }, 360_000);
 
           it(`runs ${named} on a new database where the file records no language`, async () => {
             const { after, path } = await answered();
@@ -963,6 +1066,67 @@ export function settleAnswerCases(args: {
             );
           }, 240_000);
         }
+
+        // A SQLite file rebuilds a table through a copy renamed into place. The copy is made by the
+        // run, so on a new database there is nothing in it.
+        it.runIf(dialect === "sqlite")(
+          `runs ${translated ? "a translated" : "an untranslated"} collection's delete in a run that rebuilds its table, on a new database whose default is another language`,
+          async () => {
+            const dev = await database();
+            reach(dev.url);
+            await site(dev.adapter, project);
+            const rank = { name: "rank", type: "number" };
+            await dispatchCollections(
+              {} as ServiceContainer,
+              "createCollection",
+              {},
+              {
+                name: "posts",
+                label: "Posts",
+                localized: translated,
+                fields: [
+                  { name: "heading", type: "text" },
+                  { name: "note", type: "text" },
+                  rank,
+                ],
+              }
+            );
+            await save(
+              "posts",
+              [
+                { name: "heading", type: "text" },
+                { name: "note", type: "text" },
+                { ...rank, required: true },
+              ],
+              translated ? { localized: true } : {},
+              await versionOf(dev.adapter)
+            );
+            const answer = decidedSaves(translated).at(-1)!.save;
+            await save(
+              "posts",
+              [...answer.fields, { ...rank, required: true }],
+              answer.answers,
+              await versionOf(dev.adapter)
+            );
+            const after = copied("rebuilt");
+            expect(
+              files(after).filter(name =>
+                runs(after, name).includes(`RENAME TO "${MAIN}"`)
+              ).length
+            ).toBeGreaterThan(0);
+
+            const target = await database();
+            reach(target.url);
+            const applied = await migrate(
+              after,
+              { acceptDataLoss: true },
+              { ...LOCALIZATION, defaultLocale: "es" }
+            );
+            expect(applied.code, applied.said).toBeUndefined();
+            expect(await pendingNames(target.adapter, after)).toEqual([]);
+          },
+          240_000
+        );
 
         it.runIf(dialect === "mysql")(
           `leaves ${translated ? "a translated" : "an untranslated"} collection's file whole where a run stopped between its ALTER and its fill, and finishes once that is undone`,
