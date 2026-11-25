@@ -1368,10 +1368,23 @@ async function removedTranslationsDrops(
   ) {
     return undefined;
   }
-  return () =>
-    adapter.transaction(async tx => {
+  return async () => {
+    // A precondition: the transaction below joins the one the calling flow is inside, the file's,
+    // through the adapter (`joinableFrame`), as the registry rows written with a file do
+    // (`writesInFileTransaction`). With none open it would commit on its own, whatever the file and
+    // the registry row then did.
+    if (!adapter.inTransaction()) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "translated columns dropped outside their file's transaction",
+          slug: change.slug,
+        },
+      });
+    }
+    await adapter.transaction(async tx => {
       for (const statement of planned.statements) await tx.execute(statement);
     });
+  };
 }
 
 /**

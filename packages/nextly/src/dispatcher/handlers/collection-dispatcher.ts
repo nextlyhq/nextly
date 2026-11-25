@@ -1475,7 +1475,6 @@ const COLLECTIONS_METHODS: Record<
               );
             }
           };
-          const inFile = await road.inFile();
           const written = await saveThroughWriter({
             holdScope,
             // Where the save runs its file, the row is written in the file's own transaction, so a
@@ -1483,13 +1482,9 @@ const COLLECTIONS_METHODS: Record<
             // the translations table is brought in step after the file: the row would then record
             // the change before that step holds it, so it is written after it, as a Single's is.
             // Where the file's transaction does what that step would (`inFile`), the row follows it.
-            ...(road.registryInFile || inFile !== undefined
-              ? {
-                  registry: (stored: FieldDefinition[]) =>
-                    writeRow(stored, false),
-                }
-              : {}),
-            ...(inFile === undefined ? {} : { inFile }),
+            registry: (stored: FieldDefinition[]) => writeRow(stored, false),
+            registryInFile: road.registryInFile,
+            inFile: road.inFile,
             // A file stopped part way and settled to what applied: this process's tables and the
             // admin's schema version follow the fields it recorded, as after an apply. Asked only
             // where the registry write runs in the file's transaction.
@@ -2553,17 +2548,19 @@ async function saveThroughWriter(
     };
     /**
      * The caller's registry write for the save, given the fields as stored. Where the writer runs
-     * the save's file in development, it runs inside the last file's transaction, after its ledger
-     * row, so a failed write leaves the save as it was (`inLastTransaction`); elsewhere the caller
-     * writes it once this returns.
+     * the save's file in development, and `registryInFile` or `inFile` has it written there, it runs
+     * inside the last file's transaction, after its ledger row, so a failed write leaves the save as
+     * it was (`inLastTransaction`); elsewhere the caller writes it once this returns.
      */
-    registry?: (fields: FieldDefinition[]) => Promise<void>;
+    registry: (fields: FieldDefinition[]) => Promise<void>;
+    /** Whether the row is written in the last file's transaction (`CollectionFileRoad`). */
+    registryInFile: boolean;
     /**
      * What the last file's transaction does before `registry`, where what the file does not reach
-     * can be done there whole. Such a save has no file stopped part way to settle: the databases it
-     * is for take every statement back.
+     * can be done there whole. Asked only where the writer runs the save's file. Such a save has no
+     * file stopped part way to settle: the databases it is for take every statement back.
      */
-    inFile?: () => Promise<void>;
+    inFile: () => Promise<(() => Promise<void>) | undefined>;
     /**
      * After `registry`, for a file that stopped part way and was settled to what applied: what the
      * caller does after an apply, given the fields the row recorded.
@@ -2620,15 +2617,16 @@ async function saveThroughWriter(
     import("../../domains/schema/builder-save/collection-save"),
     import("../../domains/schema/builder-save/stopped-save"),
   ]);
-  const registry = change.registry;
-  const inFile = prepared.deps.applies && !viaPush && registry !== undefined;
+  const inFile = runsFile ? await change.inFile() : undefined;
+  const registryInFile =
+    runsFile && (change.registryInFile || inFile !== undefined);
   const roadOptions: CollectionSaveOptions =
     viaPush && change.appliedBy !== undefined
       ? { appliedBy: change.appliedBy }
-      : inFile
+      : registryInFile
         ? {
             ...beforeWrite,
-            ...registryInTheFile(change, prepared.fields, registry, report =>
+            ...registryInTheFile(change, inFile, prepared.fields, report =>
               appliedFieldsOf(
                 change.collection.fields ?? [],
                 prepared.fields,
@@ -2647,7 +2645,7 @@ async function saveThroughWriter(
     applied: result.applied,
     files: result.files,
     ...(result.checked === undefined ? {} : { checked: result.checked }),
-    registryWritten: inFile,
+    registryWritten: registryInFile,
   };
 }
 
@@ -2657,30 +2655,29 @@ async function saveThroughWriter(
  * reach (`inFile`).
  *
  * A file that stops part way is settled to what of it applied (`appliedOf`): the row then records
- * the fields as far as the database holds them. Not with `inFile`, as that says.
+ * the fields as far as the database holds them. Not with `inFile`, as `saveThroughWriter` says.
  */
 function registryInTheFile(
-  change: Pick<Parameters<typeof saveThroughWriter>[0], "inFile" | "settled">,
+  change: Pick<Parameters<typeof saveThroughWriter>[0], "registry" | "settled">,
+  inFile: (() => Promise<void>) | undefined,
   fields: FieldDefinition[],
-  registry: (fields: FieldDefinition[]) => Promise<void>,
   appliedOf: (
     report: Parameters<NonNullable<CollectionSaveOptions["onSettled"]>>[0]
   ) => FieldDefinition[]
 ): Pick<CollectionSaveOptions, "inLastTransaction" | "onSettled"> {
-  const { inFile } = change;
   if (inFile !== undefined) {
     return {
       inLastTransaction: async () => {
         await inFile();
-        await registry(fields);
+        await change.registry(fields);
       },
     };
   }
   return {
-    inLastTransaction: () => registry(fields),
+    inLastTransaction: () => change.registry(fields),
     onSettled: async report => {
       const applied = appliedOf(report);
-      await registry(applied);
+      await change.registry(applied);
       change.settled?.(applied);
     },
   };
