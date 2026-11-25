@@ -99,6 +99,10 @@ const OTHER: Entity = {
   table: "dc_mrp_other",
 };
 
+/** Who reads, and what is pictured, in the shared rows. */
+const READER = "mrp-reader";
+const PICTURE = "mrp-picture";
+
 /** The fields of each of the three. */
 const fields = () => [
   text({ name: "body", localized: true } as never),
@@ -362,6 +366,71 @@ async function seedSharedRows(
     origin: "machine",
     writtenAt: now,
   });
+  await adapter.insert("nextly_translation_sources", {
+    id: randomUUID(),
+    ...scope,
+    sourceLocale: "en",
+    fieldPath: "body",
+    fingerprint: "f",
+    content: { value: "b" },
+    recordedAt: now,
+  });
+  await adapter.insert("nextly_dashboard_pins", {
+    id: randomUUID(),
+    userId: READER,
+    targetType: kind,
+    targetSlug: slug,
+    entryId: kind === "single" ? "" : "e1",
+    pinnedAt: now,
+  });
+  await adapter.insert("nextly_media_usage", {
+    id: randomUUID(),
+    mediaId: PICTURE,
+    subjectKind: kind,
+    subjectSlug: slug,
+    documentId: kind === "single" ? "" : "e1",
+    fieldPath: "body",
+    locale: "",
+  });
+  // A stage of a workflow, with who it waits on, when it is due, and an approval given there.
+  await adapter.insert("nextly_review_states", {
+    id: randomUUID(),
+    ...scope,
+    partKey: randomUUID(),
+    stage: "review",
+    enteredAt: now,
+    assigneeKind: "user",
+    assigneeId: READER,
+    dueAt: now,
+    approvedVersionNo: 1,
+    approvedDigest: "d",
+    approvedBy: READER,
+    approvedAt: now,
+    definitionHash: "h",
+    revision: 1,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+/** The reader and the picture the shared rows name. */
+async function seedReaderAndPicture(adapter: DrizzleAdapter): Promise<void> {
+  const now = new Date();
+  await adapter.insert("users", {
+    id: READER,
+    email: "reader@example.com",
+    is_active: true,
+  });
+  await adapter.insert("media", {
+    id: PICTURE,
+    filename: "p.png",
+    originalFilename: "p.png",
+    mimeType: "image/png",
+    size: 1,
+    url: "/uploads/p.png",
+    uploadedAt: now,
+    updatedAt: now,
+  });
 }
 
 /**
@@ -411,6 +480,16 @@ async function sharedRowsOf(
       entity_kind: kind,
     }),
     translationProvenance: await read("nextly_translation_provenance", scope),
+    translationSources: await read("nextly_translation_sources", scope),
+    dashboardPins: await read("nextly_dashboard_pins", {
+      target_type: kind,
+      target_slug: slug,
+    }),
+    mediaUsage: await read("nextly_media_usage", {
+      subject_kind: kind,
+      subject_slug: slug,
+    }),
+    reviewStates: await read("nextly_review_states", scope),
   };
 }
 
@@ -573,8 +652,15 @@ describe.each(getConfiguredTestDialects())(
       expect(await migrate(config({}))).toBeUndefined();
       await writeDocuments(await start(dialect, deployed));
       const { adapter } = deployed;
+      await seedReaderAndPicture(adapter);
       for (const entity of [NOTES, HOME, OTHER]) {
         await seedSharedRows(adapter, entity);
+        // Every kind is there to go.
+        for (const [kind, rows] of Object.entries(
+          await sharedRowsOf(adapter, dialect, entity)
+        )) {
+          expect(rows.length, `${entity.slug} ${kind}`).toBeGreaterThan(0);
+        }
       }
 
       await grantAll(adapter, [NOTES, HOME, OTHER]);
