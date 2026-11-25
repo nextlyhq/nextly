@@ -40,6 +40,8 @@ export interface DataStepsDeps {
   adapter: UpgradeAdapter;
   /** The site's configuration, which the steps that bring content into its model judge by. */
   site?: UpgradeSite;
+  /** As `UpgradeStepContext.droppedAhead`: counted before the migrations, what they drop. */
+  droppedAhead?: ReadonlySet<string>;
   /** The command running them, as a refusal and the lock's holder name it: "nextly migrate". */
   command: string;
   /** The steps, in the order they run. */
@@ -84,7 +86,10 @@ export interface PendingDataStep {
 
 /** What each step is handed: the database, the site and the command's log. */
 function stepContext(
-  deps: Pick<DataStepsDeps, "adapter" | "log" | "warn" | "site">
+  deps: Pick<
+    DataStepsDeps,
+    "adapter" | "log" | "warn" | "site" | "droppedAhead"
+  >
 ): UpgradeStepContext {
   const { adapter } = deps;
   return {
@@ -92,6 +97,9 @@ function stepContext(
     db: adapter.getDrizzle(),
     dialect: adapter.getCapabilities().dialect,
     ...(deps.site === undefined ? {} : { site: deps.site }),
+    ...(deps.droppedAhead === undefined
+      ? {}
+      : { droppedAhead: deps.droppedAhead }),
     log: deps.log,
     warn: deps.warn,
   };
@@ -109,7 +117,10 @@ const named = ({ step, pending }: PendingDataStep) =>
  * read with that refusal.
  */
 export async function firstDataStepWithWork(
-  deps: Pick<DataStepsDeps, "adapter" | "steps" | "log" | "warn" | "site">
+  deps: Pick<
+    DataStepsDeps,
+    "adapter" | "steps" | "log" | "warn" | "site" | "droppedAhead"
+  >
 ): Promise<PendingDataStep | undefined> {
   const context = stepContext(deps);
   for (const step of deps.steps) {
@@ -160,7 +171,10 @@ function countsAhead(steps: readonly UpgradeStep[]): {
  * refuses nothing, and the rest of its group waits too.
  */
 export async function refusalOfSteps(
-  deps: Pick<DataStepsDeps, "adapter" | "steps" | "log" | "warn" | "site">,
+  deps: Pick<
+    DataStepsDeps,
+    "adapter" | "steps" | "log" | "warn" | "site" | "droppedAhead"
+  >,
   refuses: (error: unknown) => boolean
 ): Promise<NextlyError | undefined> {
   const context = stepContext(deps);
@@ -308,7 +322,7 @@ export async function runDataSteps(
  * carries on from it, so the refusal says that, in place of "Nothing was changed", and that the
  * cause it names is what to fix first. Anything that is not a step's refusal is left as it is.
  */
-function refusalAfterWork(
+export function refusalAfterWork(
   error: unknown,
   deps: Pick<DataStepsDeps, "command" | "schemaChanges">,
   ran: readonly { title: string; changed: number }[]
@@ -369,6 +383,7 @@ export async function previewDataSteps(
     | "log"
     | "warn"
     | "site"
+    | "droppedAhead"
   >
 ): Promise<DryRunPlan> {
   const {
@@ -405,7 +420,10 @@ export async function previewDataSteps(
  * stops the counting there, as it stops the run, and is the refusal named.
  */
 async function countForPreview(
-  deps: Pick<DataStepsDeps, "adapter" | "steps" | "log" | "warn" | "site">
+  deps: Pick<
+    DataStepsDeps,
+    "adapter" | "steps" | "log" | "warn" | "site" | "droppedAhead"
+  >
 ): Promise<{
   withWork: PendingDataStep[];
   refusal?: string;
