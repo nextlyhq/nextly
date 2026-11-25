@@ -11,6 +11,8 @@
  * - `<id> read <entryId>` answers `OK <json>`: the entry's field-group value as a read returns it.
  * - `<id> save <entryId> <heading>` answers `OK` when the save succeeded, the heading saved as
  *   the group's translated tagline too.
+ * - `<id> list [<field> <value>]` answers `OK <json>`: the group of each entry, or of those whose
+ *   group holds that value.
  * - `<id> duplicate <entryId>` answers `OK <new entryId>`.
  * - `<id> plugin-save <entryId> <heading>` and `plugin-tx-save` save through a plugin's context;
  *   `plugin-tx-save-unwarmed` does so without warming the collection's readiness first.
@@ -173,6 +175,18 @@ const COMMANDS: Record<string, (args: string[]) => Promise<string>> = {
       data: saved(heading) as never,
     });
     return "OK";
+  },
+  // Every entry, or those whose group's field is as given: the group of each, in the order listed.
+  list: async ([field, value]) => {
+    const found = await instance.nextly.find({
+      collection: LIVE_COLLECTION as never,
+      ...(field === undefined
+        ? {}
+        : { where: { [`card.${field}`]: { equals: value } } as never }),
+    });
+    return `OK ${JSON.stringify(
+      found.items.map(item => (item as { card?: unknown }).card ?? null)
+    )}`;
   },
   duplicate: async ([id]) => {
     const copied = await instance.nextly.duplicate({

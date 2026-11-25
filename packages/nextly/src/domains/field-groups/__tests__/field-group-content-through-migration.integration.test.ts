@@ -216,7 +216,9 @@ describe.each(getConfiguredTestDialects())(
     }, 300_000);
 
     /** The legacy site with content, a server started on it, and the migration then run. */
-    const openMigratedUnder = async (options: { migrate?: boolean } = {}) => {
+    const openMigratedUnder = async (
+      options: { migrate?: boolean; before?: () => Promise<void> } = {}
+    ) => {
       site = await openStorageGenerationSite({
         dialect,
         loaded,
@@ -240,6 +242,7 @@ describe.each(getConfiguredTestDialects())(
         perLanguageStorageEnabled() ? "on" : "off",
       ]);
       await server.printed("READY");
+      await options.before?.();
       if (options.migrate !== false) {
         expect((await site.migrateStorage()).ran).toBe(true);
       }
@@ -306,6 +309,31 @@ describe.each(getConfiguredTestDialects())(
           await untilDone(`${command} ${id} from-plugin`);
           expect(await readHeading(server!, id)).toBe("from-plugin");
           expect(await legacyObjects(site!.adapter, dialect)).toEqual([]);
+        },
+        300_000
+      );
+
+      it.each([
+        ["every entry", "list"],
+        ["a filter on the group's shared field", "list heading Kept"],
+        ["a filter on the group's translated field", "list tagline Kept"],
+      ])(
+        "is a list of %s, finds the entry with its group and translation",
+        async (_what, request) => {
+          const kept = [{ heading: "Kept", tagline: "Kept" }];
+          const listed = async () => {
+            const answer = await ask(server!, request);
+            expect(answer).toMatch(/^OK /);
+            return JSON.parse(answer.slice("OK ".length)) as unknown;
+          };
+          // The control, and what leaves this server holding what it resolved before the move.
+          await openMigratedUnder({
+            before: async () => {
+              expect(await listed()).toMatchObject(kept);
+            },
+          });
+          expect(await listed()).toMatchObject(kept);
+          expect(await listed()).toHaveLength(1);
         },
         300_000
       );
