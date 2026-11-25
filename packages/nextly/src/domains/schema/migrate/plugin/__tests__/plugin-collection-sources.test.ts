@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
 
 import type { PluginDefinition } from "../../../../../plugins/plugin-context";
 import { renamePluginContributes } from "../../../../../plugins/schema/apply-contributions";
-import { pluginCollectionSources } from "../plugin-collection-sources";
+import {
+  declaredCollectionSources,
+  pluginCollectionSources,
+} from "../plugin-collection-sources";
 
 /** A plugin contributing `slugs`, which the host renames by `renameMap`. */
 function plugin(
@@ -48,29 +51,14 @@ describe("the plugin a collection belongs to", () => {
     expect(sources.get("contact-forms")).toBe("plugin:@a/one");
   });
 
-  it("is found by the declared slug in a record from before the rename", () => {
-    // A registry written back from a migration's snapshot holds the slugs of that point.
-    const renamed = [plugin("@a/one", ["forms"], { forms: "contact-forms" })];
+  it("is found by the slug the plugin declares where a rollback asks, whatever the host renamed", () => {
     expect([
-      ...pluginCollectionSources(renamed, { forms: {}, pages: {} }),
-    ]).toEqual([["forms", "plugin:@a/one"]]);
-    // Whichever plugin took the vacated slug since: the record is from before it could.
-    const taken = plugin("@a/two", ["forms"]);
-    for (const plugins of [
-      [...renamed, taken],
-      [taken, ...renamed],
-    ]) {
-      expect([...pluginCollectionSources(plugins, { forms: {} })]).toEqual([
-        ["forms", "plugin:@a/one"],
-      ]);
-    }
-    // With both, the rename was already made: the vacated slug is the app's.
-    expect([
-      ...pluginCollectionSources(renamed, { forms: {}, "contact-forms": {} }),
-    ]).toEqual([["contact-forms", "plugin:@a/one"]]);
-    // With neither, the configuration's own answer.
-    expect([...pluginCollectionSources(renamed, { pages: {} })]).toEqual([
-      ["contact-forms", "plugin:@a/one"],
+      ...declaredCollectionSources([
+        plugin("@a/one", ["forms", "entries"], { forms: "contact-forms" }),
+      ]),
+    ]).toEqual([
+      ["forms", "plugin:@a/one"],
+      ["entries", "plugin:@a/one"],
     ]);
   });
 

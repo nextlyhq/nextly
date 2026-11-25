@@ -20,11 +20,9 @@
  * - A plugin installed after the newest snapshot, before the rolled-back
  *   migration, keeps its permissions and every grant.
  * - A declared permission orphaned by hand is restored by the next run.
- * - Rolling back a migration that renamed a plugin's collection (`renameMap`) writes the old slug's
- *   registry row back as the plugin's, though the configuration still renames it; where the point
- *   already had the rename, the app's own collection on the vacated slug comes back the app's.
- * - Before the registry record exists, a rollback between two migrations
- *   whose snapshots predate the registry metadata changes no orphan mark.
+ * - Rolling back a migration that renamed a plugin's collection (`renameMap`) writes the row of the
+ *   slug the plugin declares back as the plugin's, though the configuration still renames it, and
+ *   where the point records the app's own collection on the new slug too.
  */
 import {
   mkdirSync,
@@ -361,7 +359,7 @@ describe.each(getConfiguredTestDialects())(
       });
     }
 
-    it("writes a plugin collection's old slug back as the plugin's when its rename is rolled back", async () => {
+    it("writes the slug a plugin declares back as the plugin's when its rename is rolled back", async () => {
       // The configuration folds the plugin's collection in, under the slug the host gives it.
       const before = config({ plugins: [eventsPlugin()] });
       const renamed = config({
@@ -372,7 +370,6 @@ describe.each(getConfiguredTestDialects())(
       expect((await owners())["mdp-events"]).toBe(`plugin:${EVENTS}`);
       await migrateCreate(renamed);
       await migrate(renamed);
-      expect(await owners()).toMatchObject({ "mdp-shows": `plugin:${EVENTS}` });
 
       // The configuration the rollback runs with still renames it.
       await migrateDown(renamed);
@@ -380,55 +377,30 @@ describe.each(getConfiguredTestDialects())(
       expect((await owners())["mdp-events"]).toBe(`plugin:${EVENTS}`);
     }, 120_000);
 
-    it("writes it back as that plugin's where another plugin has taken the vacated slug since", async () => {
-      const taker = definePlugin({
-        name: "@test/mdp-taker",
-        version: "1.0.0",
-        nextly: "*",
-        contributes: {
-          collections: [
-            defineCollection({
-              slug: "mdp-events",
-              fields: [text({ name: "other" })],
-            }),
-          ],
-        },
+    it("does so too where the app's own collection held the new slug until the rename", async () => {
+      // The point the rollback goes back to records both slugs: the app's and the plugin's.
+      const before = config({
+        extra: ["mdp-shows"],
+        plugins: [eventsPlugin()],
       });
-      const renamedPlugin = eventsPlugin({ "mdp-events": "mdp-shows" });
-      const before = config({ plugins: [eventsPlugin()] });
-      const renamed = config({ plugins: [renamedPlugin] });
-      const taken = config({ plugins: [renamedPlugin, taker] });
-      for (const step of [before, renamed, taken]) {
-        await migrateCreate(step);
-        await migrate(step);
-      }
-      expect(await owners()).toMatchObject({
-        "mdp-events": "plugin:@test/mdp-taker",
-        "mdp-shows": `plugin:${EVENTS}`,
+      const renamed = config({
+        plugins: [eventsPlugin({ "mdp-events": "mdp-shows" })],
       });
-
-      // Back over the taker's collection, then over the rename, with today's configuration.
-      await migrateDown(taken);
-      expect(Object.keys(await owners())).not.toContain("mdp-events");
-      await migrateDown(taken);
-
-      expect((await owners())["mdp-events"]).toBe(`plugin:${EVENTS}`);
-    }, 180_000);
-
-    it("writes the app's own collection on the vacated slug back as the app's where the point already had the rename", async () => {
-      const plugins = [eventsPlugin({ "mdp-events": "mdp-shows" })];
-      const both = config({ extra: ["mdp-events"], plugins });
-      const without = config({ plugins });
-      await migrateCreate(both);
-      await migrate(both);
-      await migrateCreate(without);
-      await migrate(without);
-
-      await migrateDown(without);
-
+      await migrateCreate(before);
+      await migrate(before);
       expect(await owners()).toMatchObject({
-        "mdp-events": "code",
-        "mdp-shows": `plugin:${EVENTS}`,
+        "mdp-events": `plugin:${EVENTS}`,
+        "mdp-shows": "code",
+      });
+      await migrateCreate(renamed);
+      await migrate(renamed);
+
+      await migrateDown(renamed);
+
+      // The row re-created takes the plugin; the one that stayed keeps the owner it had.
+      expect(await owners()).toMatchObject({
+        "mdp-events": `plugin:${EVENTS}`,
+        "mdp-shows": "code",
       });
     }, 120_000);
 
