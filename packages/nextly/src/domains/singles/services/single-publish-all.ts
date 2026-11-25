@@ -2848,6 +2848,8 @@ export class SinglePublishAllService extends BaseService {
             companionValues
           ),
           localizedFields: companion.localizedFields,
+          languagesTable: companion.companionTableName,
+          companionTable: companion.table,
           savedBy: plan.actor,
           promotesDraft: true,
         });

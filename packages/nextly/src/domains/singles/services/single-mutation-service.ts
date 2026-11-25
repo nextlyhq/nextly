@@ -396,6 +396,7 @@ import {
   dropRemovedRowsText,
   recordSingleProvenance,
   singleProvenanceRecorded,
+  singleSourceTextKept,
   type SingleProvenanceDeps,
 } from "./single-provenance";
 import {
@@ -1606,10 +1607,13 @@ export class SingleMutationService extends BaseService {
             typeof draftLocale === "string" &&
             (await singleProvenanceRecorded(this.provenanceDeps, tx))
           ) {
-            await discardDraftProvenance(tx, {
-              ...discardedRef,
-              locale: draftLocale,
-            });
+            await discardDraftProvenance(
+              tx,
+              { ...discardedRef, locale: draftLocale },
+              (await singleSourceTextKept(this.provenanceDeps, tx))
+                ? tx
+                : undefined
+            );
           }
           // The discarded part has nothing unpublished left to review: its
           // review closes with the draft, in this transaction.
@@ -5437,6 +5441,7 @@ export class SingleMutationService extends BaseService {
               structures: mainPayload,
               localizedFields: shapedRefs,
               languagesTable: companion.companionTableName,
+              companionTable: companion.table,
               savedBy,
               claims: provenanceClaims,
               promotesDraft: promotedDraft,
@@ -5584,6 +5589,7 @@ export class SingleMutationService extends BaseService {
                 structures: mainPayload,
                 localizedFields: shapedRefs,
                 languagesTable: companion.companionTableName,
+                companionTable: companion.table,
                 savedBy,
                 claims: provenanceClaims,
                 partState: "draft",
@@ -7756,6 +7762,7 @@ export class SingleMutationService extends BaseService {
       structures: main,
       localizedFields: companion.localizedFields,
       languagesTable: companion.companionTableName,
+      companionTable: companion.table,
       savedBy: args.actor,
     });
   }
