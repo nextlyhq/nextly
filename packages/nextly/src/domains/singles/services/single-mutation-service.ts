@@ -210,6 +210,7 @@ import {
   buildCompanionSchema,
   type CompanionSchema,
   pruneOverlaysOfRemovedRows,
+  type SharedStructureWritten,
   sharedStructuresIn,
   splitLocalizedWrite,
 } from "../../i18n/runtime/companion-io";
@@ -5467,32 +5468,13 @@ export class SingleMutationService extends BaseService {
             // By the refs the write was split by, a component placed in a
             // container read with its fields, so a removed instance's text
             // goes too.
-            const written = sharedStructuresIn(mainPayload, shapedRefs);
-            await pruneOverlaysOfRemovedRows(tx, this.adapter.dialect, {
-              companionTable: companion.table,
-              companionTableName: companion.companionTableName,
-              parentId: existingDoc.id,
-              written,
-            });
-            // And every language's record of the rows removed, as their text.
-            if (
-              written.length > 0 &&
-              (await singleProvenanceRecorded(this.provenanceDeps, tx))
-            ) {
-              await forgetRemovedRowsProvenance(
-                tx,
-                {
-                  scopeKind: "single",
-                  scopeSlug: slug,
-                  entryId: existingDoc.id,
-                },
-                written.map(entry => ({
-                  field: entry.field,
-                  structure: entry.structure,
-                  kind: entry.shape.kind,
-                }))
-              );
-            }
+            await this.dropRemovedRowsText(
+              tx,
+              slug,
+              existingDoc.id,
+              companion,
+              sharedStructuresIn(mainPayload, shapedRefs)
+            );
           }
 
           // {@link EVERY_LOCALE}: carry the lifecycle to the languages the
@@ -7655,6 +7637,44 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
+   * The rows `written` removed from a repeater's or group's one structure
+   * take their translations with them, in every language, on `tx`: each
+   * language's overlay pruned (`pruneOverlaysOfRemovedRows`), and every
+   * language's record of those rows forgotten. The one way every write of a
+   * Single's live structure drops a removed row's text: a save, a field
+   * rewrite and a publish of every language alike.
+   */
+  private async dropRemovedRowsText(
+    tx: TransactionContext,
+    slug: string,
+    entryId: string,
+    companion: Pick<CompanionSchema, "table" | "companionTableName">,
+    written: SharedStructureWritten[]
+  ): Promise<void> {
+    await pruneOverlaysOfRemovedRows(tx, this.adapter.dialect, {
+      companionTable: companion.table,
+      companionTableName: companion.companionTableName,
+      parentId: entryId,
+      written,
+    });
+    if (
+      written.length === 0 ||
+      !(await singleProvenanceRecorded(this.provenanceDeps, tx))
+    ) {
+      return;
+    }
+    await forgetRemovedRowsProvenance(
+      tx,
+      { scopeKind: "single", scopeSlug: slug, entryId },
+      written.map(entry => ({
+        field: entry.field,
+        structure: entry.structure,
+        kind: entry.shape.kind,
+      }))
+    );
+  }
+
+  /**
    * Write a copy's new value to the live Single: its row, or its language's
    * row of the translations table for a translated field, shaped as a save
    * shapes it, with the counters a save of that value moves moved once.
@@ -7692,10 +7712,17 @@ export class SingleMutationService extends BaseService {
       fields
     );
     // A translated value goes to its language's row, and leaves the main one.
-    const { main, companion: translation } =
-      translatedIn !== null && companion
-        ? splitLocalizedWrite(columns, companion.localizedFields)
-        : { main: columns, companion: {} as Record<string, unknown> };
+    const {
+      main,
+      companion: translation,
+      sharedStructures,
+    } = translatedIn !== null && companion
+      ? splitLocalizedWrite(columns, companion.localizedFields)
+      : {
+          main: columns,
+          companion: {} as Record<string, unknown>,
+          sharedStructures: [] as SharedStructureWritten[],
+        };
     const at = new Date();
     await tx.update(
       singleMeta.tableName,
@@ -7737,6 +7764,15 @@ export class SingleMutationService extends BaseService {
       savedBy: args.actor,
       revisionClaimed: claimed,
     });
+    // A row the rewrite removed takes its text with it in every language, as
+    // a save's removal does.
+    await this.dropRemovedRowsText(
+      tx,
+      singleMeta.slug,
+      entryId,
+      companion,
+      sharedStructures
+    );
     // Where the rewritten value came from, as any live write records it.
     await recordSingleProvenance(this.provenanceDeps, tx, {
       slug: singleMeta.slug,

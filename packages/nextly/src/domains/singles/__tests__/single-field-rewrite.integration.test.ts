@@ -26,11 +26,13 @@ import {
   defineSingle,
   fieldGroup,
   group,
+  number,
   password,
   relationship,
   repeater,
   text,
 } from "../../../config";
+import { parsedValue } from "../../../shared/lib/json-column-value";
 import { Nextly } from "../../../direct-api/nextly";
 import {
   definePlugin,
@@ -50,6 +52,8 @@ const SITE = "rwsite";
 const PLAIN = "rwplainsite";
 /** Translated, with drafts. */
 const LOCALIZED = "rwlsite";
+/** Translated, no drafts, a repeater whose rows hold text. */
+const SLIDED = "rwslides";
 /** Versions kept, and a password stored on the row and inside a group. */
 const SECRET = "rwsecretsite";
 /** No translations of its own, versions kept, and a translated field group. */
@@ -189,6 +193,17 @@ async function boot(
               fields: [
                 text({ name: "layout" }),
                 fieldGroup({ name: "banner", component: BANNER }),
+              ],
+            }),
+            defineSingle({
+              slug: SLIDED,
+              localized: true,
+              status: true,
+              fields: [
+                repeater({
+                  name: "slides",
+                  fields: [text({ name: "caption" }), number({ name: "rank" })],
+                }),
               ],
             }),
             defineSingle({
@@ -882,6 +897,70 @@ describe.each(getConfiguredTestDialects())(
       expect((await read(t, LOCALIZED, { locale: "de" })).layout).toBe(
         "full-x"
       );
+    });
+
+    // A row a rewrite removes from a repeater's one structure is removed in every language, so its
+    // translations go with it, as a save's removal takes them. Left in another language's overlay,
+    // they would come back for a row given that id again.
+    it("drops a row the rewrite removes from every language's text", async () => {
+      const t = await boot(dialect, true);
+      await save(
+        t,
+        SLIDED,
+        {
+          slides: [
+            { caption: "one", rank: 1 },
+            { caption: "two", rank: 2 },
+          ],
+          status: "published",
+        },
+        "en"
+      );
+      const rows = (await read(t, SLIDED, { locale: "en" })).slides as {
+        id: string;
+      }[];
+      const [kept, removed] = rows.map(row => row.id);
+      await save(
+        t,
+        SLIDED,
+        {
+          slides: [
+            { id: kept, caption: "eins", rank: 1 },
+            { id: removed, caption: "zwei", rank: 2 },
+          ],
+        },
+        "de"
+      );
+      const germanText = async () => {
+        const [row] = await t.adapter.select<{ slides: unknown }>(
+          `single_${SLIDED}_locales`,
+          { where: { and: [{ column: "_locale", op: "=", value: "de" }] } }
+        );
+        return parsedValue(row?.slides) as Record<string, unknown>;
+      };
+      // POPULATION CONTROL: German holds both rows' text.
+      expect(Object.keys(await germanText()).sort()).toEqual(
+        [kept, removed].sort()
+      );
+
+      await t.nextly.rewriteField({
+        single: SLIDED,
+        field: "slides",
+        locale: "en",
+        expectedVersion: await versionOf(t, SLIDED, "en"),
+        set: {
+          from: current =>
+            (current as { id: string }[]).filter(row => row.id === kept),
+        },
+        reason: REASON,
+      });
+
+      expect(
+        (
+          (await read(t, SLIDED, { locale: "en" })).slides as { id: string }[]
+        ).map(row => row.id)
+      ).toEqual([kept]);
+      expect(Object.keys(await germanText())).toEqual([kept]);
     });
 
     it("records a translation's own status with its rewrite", async () => {
