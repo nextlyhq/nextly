@@ -479,7 +479,6 @@ describe("LanguagePanel", () => {
       translations: TRANSLATIONS,
       activeLocale: "de",
       onSelect: vi.fn(),
-      onSeed: vi.fn(),
     });
 
     const mismatched = screen.queryAllByRole("button", {
