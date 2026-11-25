@@ -317,16 +317,21 @@ describe("pruneOverlay", () => {
           ? [{ name: "label", type: "text" }]
           : undefined;
 
+    // Fields as their config declares them, the components they offer among their keys.
+    const layout = {
+      name: "layout",
+      type: "component",
+      components: ["hero", "cta"],
+      repeatable: true,
+    };
+    const lead = {
+      name: "lead",
+      type: "component",
+      components: ["hero", "cta"],
+    };
+
     it("drops the earlier type's text from a list's instance, keeping the new type's", () => {
-      const shape = componentStructureShape(
-        {
-          name: "layout",
-          type: "component",
-          components: ["hero", "cta"],
-          repeatable: true,
-        },
-        fieldsOf
-      )!;
+      const shape = componentStructureShape(layout, fieldsOf)!;
       const { overlay, changed } = pruneOverlay(
         { i1: { title: "Hola", label: "Compra" } },
         [{ id: "i1", _componentType: "cta" }],
@@ -337,10 +342,7 @@ describe("pruneOverlay", () => {
     });
 
     it("drops the earlier type's text from a single instance", () => {
-      const shape = componentStructureShape(
-        { name: "lead", type: "component", components: ["hero", "cta"] },
-        fieldsOf
-      )!;
+      const shape = componentStructureShape(lead, fieldsOf)!;
       const { overlay, changed } = pruneOverlay(
         { title: "Hola" },
         { _componentType: "cta" },
@@ -352,10 +354,7 @@ describe("pruneOverlay", () => {
 
     // The control: the instance kept its type, so nothing of its text goes.
     it("keeps an instance's text while its type stays", () => {
-      const shape = componentStructureShape(
-        { name: "lead", type: "component", components: ["hero", "cta"] },
-        fieldsOf
-      )!;
+      const shape = componentStructureShape(lead, fieldsOf)!;
       expect(
         pruneOverlay({ title: "Hola" }, { _componentType: "hero" }, shape)
       ).toEqual({ overlay: { title: "Hola" }, changed: false });
@@ -502,16 +501,12 @@ describe("a container saying it is not translated", () => {
     expect(keepsTranslationsInside(sharedCard, true)).toBe(false);
     expect(keepsTranslationsInside(insideShared, true)).toBe(false);
     // The control: the same component, translated, is placed.
-    expect(
-      keepsTranslationsInside(
-        {
-          name: "slides",
-          type: "repeater",
-          fields: [{ name: "card", type: "component", component: "card" }],
-        },
-        true
-      )
-    ).toBe(true);
+    const translatedCard = {
+      name: "slides",
+      type: "repeater",
+      fields: [{ name: "card", type: "component", component: "card" }],
+    };
+    expect(keepsTranslationsInside(translatedCard, true)).toBe(true);
   });
 
   // A group with no name only lays fields out, but saying it is not translated it shares the fields
