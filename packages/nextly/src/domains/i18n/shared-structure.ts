@@ -204,6 +204,9 @@ function shapeOfLevel(
         }
         continue;
       }
+      // A row's `id`, declared by its repeater whatever its type, is the key its text is filed
+      // by (`rowKeys`), never text: it stays on the structure, where every language finds it.
+      if (kind === "repeater" && child.name === "id") continue;
       const added = childShape(child, child.name, open, components);
       if (added === "text") texts.push(child.name);
       else if (added !== null) inner[child.name] = added;
