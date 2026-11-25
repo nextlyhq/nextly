@@ -4,6 +4,7 @@ import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import {
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
+  getSingleRowColumnDescriptor,
   type SupportedDialect,
 } from "../../services/field-column-descriptor";
 import { differenceCause } from "../difference-cause";
@@ -29,7 +30,9 @@ function expectedColumn(args: {
   const describe =
     args.kind === "fieldGroup"
       ? getComponentRowColumnDescriptor
-      : getColumnDescriptor;
+      : args.kind === "single"
+        ? getSingleRowColumnDescriptor
+        : getColumnDescriptor;
   const descriptor = describe(args.f, args.dialect, origin);
   return descriptor === null
     ? null
@@ -194,9 +197,10 @@ describe("differenceCause: what a current generator still creates", () => {
   it.each<[RepairEntityKind, RepairColumnOrigin, SupportedDialect, string]>([
     ["collection", "collection", "postgresql", "text"],
     ["collection", "collection", "mysql", "varchar(36)"],
-    ["single", "collection", "sqlite", "text"],
+    ["collection", "collection", "sqlite", "text"],
     ["fieldGroup", "fieldGroup", "postgresql", "text"],
     ["fieldGroup", "fieldGroup", "mysql", "varchar(36)"],
+    ["fieldGroup", "fieldGroup", "sqlite", "text"],
   ])(
     "a required relationship in a NOT NULL column (%s, %s, %s)",
     (kind, origin, dialect, type) => {
@@ -244,6 +248,146 @@ describe("differenceCause: what a current generator still creates", () => {
       ).toEqual({ kind: "current-generator" });
     }
   );
+});
+
+describe("differenceCause: a Single's required relationship or upload", () => {
+  const REFERENCE: ColumnState = { type: "text", nullable: false };
+  const reference = (type: string, over: Record<string, unknown> = {}) =>
+    field({
+      type,
+      relationTo: type === "upload" ? "media" : "posts",
+      required: true,
+      ...over,
+    });
+
+  const CASES: [string, RepairColumnOrigin, SupportedDialect, string][] = (
+    ["collection", "codeFirst"] as const
+  ).flatMap(origin =>
+    ["relationship", "upload"].flatMap(
+      (type): [string, RepairColumnOrigin, SupportedDialect, string][] => [
+        [type, origin, "postgresql", "text"],
+        [type, origin, "mysql", "varchar(36)"],
+        [type, origin, "sqlite", "text"],
+      ]
+    )
+  );
+  it.each(CASES)(
+    "a %s held NOT NULL (%s, %s) was created before 0.0.2-alpha.79",
+    (type, origin, dialect, columnType) => {
+      expect(
+        causeFor({
+          f: reference(type),
+          kind: "single",
+          origin,
+          dialect,
+          live: { type: columnType, nullable: false },
+        })
+      ).toEqual({
+        kind: "legacy",
+        shape: "single-required-reference",
+        before: "0.0.2-alpha.79",
+      });
+    }
+  );
+
+  it("is not named for an optional one, whose NOT NULL no Single's creator made", () => {
+    expect(
+      causeFor({
+        f: reference("relationship", { required: false }),
+        kind: "single",
+        origin: "collection",
+        dialect: "postgresql",
+        live: REFERENCE,
+      })
+    ).toBeNull();
+  });
+
+  it("is not named for a list of references, whose column follows required", () => {
+    expect(
+      causeFor({
+        f: reference("relationship", { hasMany: true }),
+        kind: "single",
+        origin: "collection",
+        dialect: "postgresql",
+        live: { type: "jsonb", nullable: true },
+      })
+    ).toBeNull();
+  });
+
+  it("is not named where the column's type differs too", () => {
+    expect(
+      causeFor({
+        f: reference("relationship"),
+        kind: "single",
+        origin: "collection",
+        dialect: "postgresql",
+        live: { type: "int4", nullable: false },
+      })
+    ).toBeNull();
+  });
+
+  it.each<[SupportedDialect, string, string]>([
+    ["postgresql", "relationship", "int4"],
+    ["mysql", "upload", "text"],
+  ])(
+    "is not named where no record says the column's type, and no Single's creator made it (%s %s as %s)",
+    (dialect, type, columnType) => {
+      const live: ColumnState = { type: columnType, nullable: false };
+      expect(
+        differenceCause({
+          field: reference(type),
+          kind: "single",
+          origin: "collection",
+          dialect,
+          translation: false,
+          live,
+          // The finder leaves the type as the database holds it there (`storageUnknown`).
+          expected: { ...live, nullable: true },
+        })
+      ).toBeNull();
+    }
+  );
+
+  it("leaves a MySQL upload still held as text to the shape that names its type", () => {
+    expect(
+      causeFor({
+        f: reference("upload"),
+        kind: "single",
+        origin: "collection",
+        dialect: "mysql",
+        live: { type: "text", nullable: false },
+      })
+    ).toMatchObject({ kind: "legacy", shape: "mysql-text-fallback" });
+  });
+
+  it("is not named for a collection's, whose column today's generator makes NOT NULL", () => {
+    expect(
+      differenceCause({
+        field: reference("relationship"),
+        kind: "collection",
+        origin: "codeFirst",
+        dialect: "postgresql",
+        translation: false,
+        live: REFERENCE,
+        // As an applied definition that held it optional expects it.
+        expected: { type: "text", nullable: true },
+      })
+    ).toBeNull();
+  });
+
+  it("is not named in a Single's translation table", () => {
+    expect(
+      differenceCause({
+        field: reference("relationship"),
+        kind: "single",
+        origin: "collection",
+        dialect: "postgresql",
+        translation: true,
+        live: REFERENCE,
+        expected: { type: "text", nullable: true },
+      })
+    ).toBeNull();
+  });
 });
 
 describe("differenceCause: the field-group creator's earlier spelling", () => {

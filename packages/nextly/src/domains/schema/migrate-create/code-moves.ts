@@ -257,7 +257,8 @@ function plannedOrRefused(
  * the planner refuses is refused here, before anything is written.
  */
 export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
-  // The drafts stops of every entity lead each side of the file, before any entity's values move.
+  // The drafts stops of every entity lead each side of the file, then every entity's other stops,
+  // before any entity's values move.
   const stops: { up: string[]; down: string[] } = { up: [], down: [] };
   const planned: { moves: EntityMoves; table: string }[] = [];
   const unrecorded: string[] = [];
@@ -307,11 +308,19 @@ export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
   return {
     appended: {
       up: {
-        first: [...stops.up, ...all.flatMap(m => m.up.first)],
+        first: [
+          ...stops.up,
+          ...all.flatMap(m => m.up.stops),
+          ...all.flatMap(m => m.up.first),
+        ],
         last: all.flatMap(m => m.up.last),
       },
       down: {
-        first: [...stops.down, ...all.flatMap(m => m.down.first)],
+        first: [
+          ...stops.down,
+          ...all.flatMap(m => m.down.stops),
+          ...all.flatMap(m => m.down.first),
+        ],
         last: all.flatMap(m => m.down.last),
       },
     },

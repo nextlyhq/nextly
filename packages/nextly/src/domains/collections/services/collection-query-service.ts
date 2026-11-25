@@ -4298,11 +4298,16 @@ export class CollectionQueryService extends BaseService {
         | { kind: "unknown" } => {
         const sortFieldSnake = toSnakeCase(sortField);
         // A localized sort field lives in the companion table (absent
-        // from the main schema), ordered by a correlated subquery below.
+        // from the main schema), ordered by a correlated subquery below. A
+        // repeater or group keeping one structure is not one: it sorts on its
+        // structure, the main table's column every language reads, as a
+        // filter judges it (`localizedFilterContext`).
         const localizedSortField =
           companion && localeChain
             ? companion.localizedFields.find(
-                f => f.name === sortField || f.column === sortFieldSnake
+                f =>
+                  f.sharedStructure === undefined &&
+                  (f.name === sortField || f.column === sortFieldSnake)
               )
             : undefined;
         if (localizedSortField) {

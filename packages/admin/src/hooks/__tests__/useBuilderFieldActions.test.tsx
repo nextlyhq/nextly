@@ -228,12 +228,15 @@ describe("getValidatedFields", () => {
       useBuilderFieldActions(builder.api, "collection")
     );
 
-    const definitions = result.current.getValidatedFields();
+    // The fields as last saved, which the check judges a condition against too.
+    const saved = [field("body")];
+    const definitions = result.current.getValidatedFields(saved);
 
     expect(definitions?.map(d => d.name)).toEqual(["body"]);
-    expect(builder.api.validateFields).toHaveBeenCalledWith([
-      expect.objectContaining({ name: "body" }),
-    ]);
+    expect(builder.api.validateFields).toHaveBeenCalledWith(
+      [expect.objectContaining({ name: "body" })],
+      saved
+    );
   });
 
   it("reports the reason and returns null when the fields do not validate", () => {

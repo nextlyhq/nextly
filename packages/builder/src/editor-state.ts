@@ -71,11 +71,15 @@ import {
 } from "./editor-asks";
 import {
   replayStep,
-  useHistoryStacks,
   useRestartOn,
   type HistoryEntry,
   type HistoryStep,
 } from "./editor-history";
+import {
+  useKeepOnUnmount,
+  useSeededHistory,
+  type EditorStateKeeping,
+} from "./editor-keeping";
 import { keptLockAnswers } from "./kept-lock-answers";
 import {
   layersLockRefusalFor,
@@ -434,6 +438,15 @@ export interface UseEditorStateArgs {
    * @experimental
    */
   session?: unknown;
+  /**
+   * Keeping the state across a remount of the same document: what an earlier
+   * mount kept, and where this one hands its own as it unmounts. A mount
+   * opened on the document the kept state was left on starts with its
+   * history and selection; on any other it starts fresh. Absent, nothing is
+   * kept, and every mount starts fresh.
+   * @experimental
+   */
+  keeping?: EditorStateKeeping;
 }
 
 /**
@@ -1110,16 +1123,21 @@ export function useEditorState(args: UseEditorStateArgs): EditorState {
 function useSessionDocument(
   initialDocument: BlockDocument,
   session: unknown,
-  clearHistory: () => void
+  clearHistory: () => void,
+  // The selection a kept state started this mount with.
+  startSelection: BlockSelection = EMPTY_SELECTION
 ) {
   const [document, setDocument] = useState<BlockDocument>(initialDocument);
-  const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
+  const [selection, setSelection] = useState<BlockSelection>(startSelection);
+  // The selection as it stands, for what is kept as the editor unmounts.
+  const latestSelection = useRef(selection);
+  latestSelection.current = selection;
   useRestartOn(session, () => {
     setDocument(initialDocument);
     setSelection(EMPTY_SELECTION);
     clearHistory();
   });
-  return { document, setDocument, selection, setSelection };
+  return { document, setDocument, selection, setSelection, latestSelection };
 }
 
 /** The document, its selection and its history: see {@link useEditorState}. */
@@ -1134,6 +1152,7 @@ function useDocumentState({
   onPlacementRefused,
   componentName,
   session,
+  keeping,
 }: UseEditorStateArgs): EditorState {
   // Read at apply time rather than closed over, so a library that reloads or
   // a host that swaps its callback does not rebuild `apply` and everything
@@ -1151,13 +1170,22 @@ function useDocumentState({
   };
   const composition = useRef(atApply(host, initialDocument));
   composition.current = atApply(host, initialDocument);
-  const { depths, push, pop, remove, withdrawTyping, record, settle, clear } =
-    useHistoryStacks();
-  const { document, setDocument, selection, setSelection } = useSessionDocument(
-    initialDocument,
-    session,
-    clear
-  );
+  // Started from what an earlier mount of this editor kept on this same
+  // document, if anything.
+  const { start, history } = useSeededHistory(keeping, initialDocument);
+  const {
+    depths,
+    push,
+    pop,
+    remove,
+    withdrawTyping,
+    record,
+    settle,
+    clear,
+    keep,
+  } = history;
+  const { document, setDocument, selection, setSelection, latestSelection } =
+    useSessionDocument(initialDocument, session, clear, start?.selection);
 
   /**
    * The document as it stands NOW, for everything a LATER event reaches.
@@ -1193,6 +1221,7 @@ function useDocumentState({
       locks
     );
   latestDocument.current = document;
+  useKeepOnUnmount(keeping, latestDocument, latestSelection, keep);
 
   /**
    * Run an op and record its inverse on the given stack.

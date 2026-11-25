@@ -34,8 +34,8 @@ import {
   registerComponent,
 } from "@admin/lib/plugins/component-registry";
 
-const { useDocumentLock, autosaveOffer, savedCount, publishAllHeld } =
-  vi.hoisted(() => ({
+const { useDocumentLock, autosaveOffer, savedCount, panelHolds } = vi.hoisted(
+  () => ({
     useDocumentLock: vi.fn(),
     // A recovery point the editor offers back, when a test sets one.
     autosaveOffer: {
@@ -43,10 +43,11 @@ const { useDocumentLock, autosaveOffer, savedCount, publishAllHeld } =
     },
     // How many saves the editor last reported, which its preview follows.
     savedCount: { current: 0 },
-    // Whether each language panel drawn was told to hold publishing every
-    // language, in the order they were drawn.
-    publishAllHeld: { current: [] as boolean[] },
-  }));
+    // What each language panel drawn was told to hold, its actions and the
+    // move to another language, in the order they were drawn.
+    panelHolds: { current: [] as { actions: boolean; navigation: boolean }[] },
+  })
+);
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 // The language panels, inline and in the rail, as what the Single hands them.
@@ -57,11 +58,16 @@ vi.mock(
       typeof import("@admin/components/features/entries/LanguagePanel")
     >()),
     DocumentLanguagePanel: ({
-      publishAllDisabled,
+      actionsDisabled,
+      navigationDisabled,
     }: {
-      publishAllDisabled?: boolean;
+      actionsDisabled?: boolean;
+      navigationDisabled?: boolean;
     }) => {
-      publishAllHeld.current.push(publishAllDisabled === true);
+      panelHolds.current.push({
+        actions: actionsDisabled === true,
+        navigation: navigationDisabled === true,
+      });
       return null;
     },
   })
@@ -183,7 +189,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   autosaveOffer.current = null;
   savedCount.current = 0;
-  publishAllHeld.current = [];
+  panelHolds.current = [];
   heldWork.current = false;
   registerComponent(VIEW, EditorView);
   useDocumentLock.mockReturnValue({
@@ -582,7 +588,7 @@ describe("a Single's form, for a publish refused over shared values", () => {
     expect(savedCount.current).toBe(2);
   });
 
-  it("holds publishing every language while the recovery runs, as it holds the Single's other writes", async () => {
+  it("holds the language panel's actions and the move to another language while the recovery runs", async () => {
     const onSubmit = refusedOnce();
     render(
       <SingleForm schema={schema} document={first} onSubmit={onSubmit} />,
@@ -594,9 +600,11 @@ describe("a Single's form, for a publish refused over shared values", () => {
     });
     fireEvent.submit(document.querySelector("form") as HTMLFormElement);
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    // The author's own Single: publishing every language is offered.
-    expect(publishAllHeld.current.length).toBeGreaterThan(0);
-    expect(publishAllHeld.current).not.toContain(true);
+    // The author's own Single: both are offered.
+    expect(panelHolds.current.length).toBeGreaterThan(0);
+    expect(
+      panelHolds.current.some(held => held.actions || held.navigation)
+    ).toBe(false);
 
     let finishTake: () => void = () => {};
     const take = vi.fn(
@@ -605,7 +613,7 @@ describe("a Single's form, for a publish refused over shared values", () => {
           finishTake = resolve;
         })
     );
-    publishAllHeld.current = [];
+    panelHolds.current = [];
     let running: Promise<unknown> | undefined;
     act(() => {
       running = refusedFormOf(onSubmit)?.recover(take);
@@ -614,16 +622,21 @@ describe("a Single's form, for a publish refused over shared values", () => {
       await waitFor(() => expect(take).toHaveBeenCalled());
     });
 
-    // Every panel drawn from the action on holds it.
-    expect(publishAllHeld.current.length).toBeGreaterThan(0);
-    expect(publishAllHeld.current).not.toContain(false);
+    // Every panel drawn from the action on holds both.
+    expect(panelHolds.current.length).toBeGreaterThan(0);
+    expect(
+      panelHolds.current.every(held => held.actions && held.navigation)
+    ).toBe(true);
 
     await act(async () => {
       finishTake();
       await running;
     });
     // Let go with the rest of the Single.
-    expect(publishAllHeld.current.at(-1)).toBe(false);
+    expect(panelHolds.current.at(-1)).toEqual({
+      actions: false,
+      navigation: false,
+    });
   });
 
   it("takes nothing where every Save of the Single would publish it", async () => {

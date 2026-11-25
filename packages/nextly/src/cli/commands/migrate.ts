@@ -289,6 +289,12 @@ import {
   createOwnerRegistry,
   ownerRecordKey,
 } from "../../domains/schema/ownership/owner-registry";
+import { withoutRecordedPluginElements } from "../../domains/schema/ownership/recorded-drift";
+import {
+  readingOthersElements,
+  refuseRunRemovingOthersElements,
+  removedElementsSourcesOn,
+} from "../../domains/schema/ownership/removed-elements";
 import {
   introspectLiveSnapshot,
   liveColumnNames,
@@ -3078,6 +3084,9 @@ async function runMigrationStreams(
           appliedBefore: pluginOutcome.ran,
         }),
     columnOverrides: overriddenColumns(deps.extensionSchema),
+    ...(deps.extensionSchema === undefined
+      ? {}
+      : { extensionSchema: deps.extensionSchema }),
   });
   return { pluginModulesApplied, applied };
 }
@@ -5742,6 +5751,11 @@ export async function runFileMigrations(args: {
    * one in-place change to another owner's column its files may make.
    */
   columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+  /**
+   * The compiled extension schema the run applies: what each owner adds to
+   * the app's tables, read by the check that a file removes none of it.
+   */
+  extensionSchema?: ExtensionSchema;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -5797,12 +5811,15 @@ export async function runFileMigrations(args: {
     schemaOwnersTableExists,
     tableOwnersByName,
   } = await import("../../domains/schema/ownership/schema-owners-repository");
-  const registryExists = await schemaOwnersTableExists(
-    adapter as unknown as { listTables: () => Promise<string[]> }
+  // A record there that cannot be read refuses the run, before its first file: what another owner
+  // built on the app's tables is then unknown.
+  const fileOwnerRows = await readingOthersElements("The database", async () =>
+    (await schemaOwnersTableExists(
+      adapter as unknown as { listTables: () => Promise<string[]> }
+    ))
+      ? new OwnersRepoForFiles(db, dialect).read()
+      : []
   );
-  const fileOwnerRows = registryExists
-    ? await new OwnersRepoForFiles(db, dialect).read()
-    : [];
   const fileOwners = tableOwnersByName(fileOwnerRows);
 
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
@@ -5828,6 +5845,27 @@ export async function runFileMigrations(args: {
     pending: all.filter(m => !plan.done.has(m)),
     runs: new Set(all.filter(m => plan.runs.has(m)).map(m => m.name)),
     snapshotOf: name => loadTargetSnapshot(metaDir, name),
+  });
+
+  // What the run's files remove takes no element another owner built on the app's tables: an
+  // index, foreign key or check on a column one drops, anything on a table one drops
+  // (`removed-elements.ts`). Every file is judged before the first runs, each as the files before
+  // it leave the database, so a refused file leaves none of them applied.
+  await refuseRunRemovingOthersElements({
+    files: all
+      .filter(m => plan.runs.has(m))
+      .map(m => ({
+        name: m.name,
+        statements: splitSqlStatements(m.upSql, dialect, m),
+      })),
+    db,
+    dialect,
+    sources: removedElementsSourcesOn({
+      db,
+      dialect,
+      extensions: args.extensionSchema ?? null,
+      rows: fileOwnerRows,
+    }),
   });
 
   // The last file this run applied, which a run that lost the schema lock names, so the operator
@@ -5983,10 +6021,19 @@ export async function runFileMigrations(args: {
           // On a table the file itself creates they stay: a table that is there already, with
           // them, is the file's own end, as where a migration written to record a merge
           // creates a table an earlier one of the merge made.
-          live: withoutAdoptedIndexes(
-            await introspectLiveSnapshot(db, dialect, managed),
-            adoptedOnTablesOf(before, adoption.adopted)
-          ),
+          // And without what the owner record says a plugin built there and the file leaves alone,
+          // which the app's history never describes (`recorded-drift.ts`).
+          live: withoutRecordedPluginElements({
+            live: withoutAdoptedIndexes(
+              await introspectLiveSnapshot(db, dialect, managed),
+              adoptedOnTablesOf(before, adoption.adopted)
+            ),
+            rows: fileOwnerRows,
+            before,
+            target,
+            statements: upStatements,
+            dialect,
+          }),
           contributions: mergeContributions(
             beforeContributions,
             targetFile?.contributions ?? {}

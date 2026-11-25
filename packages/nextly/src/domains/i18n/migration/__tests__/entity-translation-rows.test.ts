@@ -91,6 +91,7 @@ describe("removeEntityTranslationRows", () => {
     expect(removed).toEqual({
       archiveRowsPurged: 0,
       provenanceRowsPurged: 0,
+      sourceRowsPurged: 0,
       transitionRecordsPurged: 0,
     });
     expect(deletes).toEqual([]);
@@ -98,7 +99,7 @@ describe("removeEntityTranslationRows", () => {
     expect(forgetI18nTransition).not.toHaveBeenCalled();
   });
 
-  it("removes a collection's archive rows, transition record and provenance, each by kind and slug", async () => {
+  it("removes a collection's archive rows, transition record, provenance and kept source text, each by kind and slug", async () => {
     const { adapter, deletes } = makeAdapter(() => true, 3);
 
     const removed = await removeEntityTranslationRows({
@@ -110,11 +111,13 @@ describe("removeEntityTranslationRows", () => {
     expect(removed).toEqual({
       archiveRowsPurged: 3,
       provenanceRowsPurged: 3,
+      sourceRowsPurged: 3,
       transitionRecordsPurged: 1,
     });
     expect(deletes.map(d => d.table)).toEqual([
       "nextly_i18n_archive",
       "nextly_translation_provenance",
+      "nextly_translation_sources",
     ]);
     // Scoped by both: a Single or a field group may share the slug.
     expect(deletes[0].params).toEqual(["notes", "collection"]);
@@ -124,6 +127,10 @@ describe("removeEntityTranslationRows", () => {
     expect(deletes[1].params).toEqual(["collection", "notes"]);
     expect(deletes[1].sql).toBe(
       '(("nextly_translation_provenance"."scope_kind" = $1) and ("nextly_translation_provenance"."scope_slug" = $2))'
+    );
+    expect(deletes[2].params).toEqual(["collection", "notes"]);
+    expect(deletes[2].sql).toBe(
+      '(("nextly_translation_sources"."scope_kind" = $1) and ("nextly_translation_sources"."scope_slug" = $2))'
     );
     expect(forgetI18nTransition).toHaveBeenCalledWith(
       { store: "meta" },
@@ -146,6 +153,7 @@ describe("removeEntityTranslationRows", () => {
       "delete nextly_i18n_archive",
       "forget",
       "delete nextly_translation_provenance",
+      "delete nextly_translation_sources",
     ]);
   });
 
@@ -161,6 +169,7 @@ describe("removeEntityTranslationRows", () => {
     expect(removed).toEqual({
       archiveRowsPurged: 2,
       provenanceRowsPurged: 0,
+      sourceRowsPurged: 0,
       transitionRecordsPurged: 1,
     });
     expect(deletes.map(d => d.table)).toEqual(["nextly_i18n_archive"]);

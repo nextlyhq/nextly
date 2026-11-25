@@ -23,7 +23,7 @@
 import type { FieldConfig } from "nextly/config";
 import { useMemo } from "react";
 
-import { holdsTranslatedText } from "./container-text";
+import { textContainersOf } from "./container-text";
 import { localizedFieldNamesOf } from "./entry-locale-source";
 import type { EntryLocaleContextValue } from "./EntryLocaleContext";
 
@@ -48,7 +48,6 @@ export interface EntryLocaleContextInput {
   onEnterTranslationMode: ((source: string) => void) | undefined;
   /** How THIS editor reads another language — the seam that differs. */
   fetchSourceValues: EntryLocaleContextValue["fetchSourceValues"];
-  publishAllLanguages: EntryLocaleContextValue["publishAllLanguages"];
   /** Entry-only addressing; a single supplies neither. */
   collectionSlug?: string | undefined;
   entryId?: string | undefined;
@@ -70,7 +69,6 @@ export function useEntryLocaleContext(
     onSeedHandled,
     onEnterTranslationMode,
     fetchSourceValues,
-    publishAllLanguages,
     collectionSlug,
     entryId,
   } = input;
@@ -104,15 +102,12 @@ export function useEntryLocaleContext(
       /** The translatable-field set, for the field-scoped copy-from action. */
       localizedFieldNames: localizedFieldNamesOf(fields, documentLocalized),
       /** The containers whose rows hold translated text, for the same action. */
-      textContainers: fields.filter(field =>
-        holdsTranslatedText(field, documentLocalized)
-      ),
+      textContainers: textContainersOf(fields, documentLocalized),
       // Copy-from-language reads its source THROUGH this seam instead of
       // addressing the document itself, so one implementation serves entries and
       // singles alike — a single has no collection slug or entry id and could
       // otherwise never offer the action at all.
       fetchSourceValues,
-      publishAllLanguages,
     }),
     [
       locale,
@@ -127,7 +122,6 @@ export function useEntryLocaleContext(
       onSeedHandled,
       onEnterTranslationMode,
       fetchSourceValues,
-      publishAllLanguages,
       collectionSlug,
       entryId,
     ]

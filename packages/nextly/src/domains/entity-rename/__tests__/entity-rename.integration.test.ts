@@ -370,6 +370,18 @@ async function seedHistory(
     actorId: ANA.id,
     writtenAt: now,
   });
+  // The source text that value was made from.
+  await adapter.insert("nextly_translation_sources", {
+    id: randomUUID(),
+    scopeKind: kind,
+    scopeSlug: slug,
+    entryId,
+    sourceLocale: "en",
+    fieldPath: "title",
+    fingerprint: "s1",
+    content: { value: "hello" },
+    recordedAt: now,
+  });
   await adapter.insert("nextly_document_lock", {
     id: documentLockKey(kind, slug, entryId),
     scopeKind: kind,

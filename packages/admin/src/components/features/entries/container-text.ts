@@ -16,6 +16,8 @@ import {
   readFieldGroupType,
 } from "nextly/field-group-type";
 
+import { addressableFieldsWithin } from "@admin/lib/plugins/document-view-registry";
+
 /** What these read of a field: a component field as the API enriches it, with its fields. */
 interface FieldShape {
   type?: string;
@@ -86,6 +88,32 @@ export function holdsTranslatedText(
 }
 
 /**
+ * The containers among the fields a document addresses at its top level whose rows hold
+ * translated text ({@link holdsTranslatedText}), for copying a whole document from another
+ * language. A group with no name only lays fields out, so the containers inside it are read, as
+ * storage and the form address them (`addressableFieldsWithin`), never the group itself, and
+ * none inside one saying it is not translated.
+ */
+export function textContainersOf<F extends object>(
+  fields: readonly F[],
+  documentLocalized: boolean
+): F[] {
+  return (
+    addressableFieldsWithin(fields)
+      // A group with no name saying it is not translated shares every field it lays out, a
+      // container among them, as storage keeps them.
+      .filter(
+        ({ within }) =>
+          !within.some(
+            wrapper => (wrapper as { localized?: unknown }).localized === false
+          )
+      )
+      .map(({ field }) => field)
+      .filter(field => holdsTranslatedText(field, documentLocalized))
+  );
+}
+
+/**
  * Whether a level's fields hold translated text: a translated field, a container holding some, or
  * a component placed there whose fields do (its values held inline in the row). `open` stops a
  * component that places itself.
@@ -134,9 +162,12 @@ function textOntoLevel(
 ): Record<string, unknown> {
   let out = { ...current };
   for (const child of fields) {
-    // A group with no name lays its fields out at this level.
+    // A group with no name lays its fields out at this level. Saying it is not translated, it
+    // shares every field it lays out, as storage keeps them, so none takes another language's.
     if (child.type === "group" && !child.name) {
-      out = textOntoLevel(out, source, childrenOf(child), documentLocalized);
+      if (child.localized !== false) {
+        out = textOntoLevel(out, source, childrenOf(child), documentLocalized);
+      }
     } else if (child.name) {
       const value = fieldTextFrom(
         out[child.name],
@@ -177,8 +208,9 @@ function fieldTextFrom(
 
 /**
  * A component's value inside a row, with the text its fields translate taken from `source`: each
- * instance from the source instance with the same id (a list), or the one instance where it is
- * the same one (a single: `sameInstance`), read by the fields of the component it is.
+ * instance from the source instance with the same id (a list) or the one instance (a single),
+ * only where it is the same one (`sameInstance`: an instance that changed type is another
+ * component), read by the fields of the component it is.
  */
 function componentTextFrom(
   current: unknown,
@@ -201,7 +233,9 @@ function componentTextFrom(
     return current.map((instance, index) => {
       const key = keys[index];
       const from = key === undefined ? undefined : byKey.get(key);
-      return isRecord(instance) && from ? onto(instance, from) : instance;
+      return isRecord(instance) && from && sameInstance(instance, from)
+        ? onto(instance, from)
+        : instance;
     });
   }
   return isRecord(current) && isRecord(source) && sameInstance(current, source)
@@ -288,8 +322,9 @@ export function sourceValueAt(
 
 /**
  * The row of `rows` (the source's list) that the form's row at `index` of `formRows` is: the one
- * under its key ({@link rowKeys}). `undefined` where `rows` is no list, or the form's row has no
- * key.
+ * under its key ({@link rowKeys}), and the same instance (`sameInstance`: a component instance
+ * that changed type is another one). `undefined` where `rows` is no list, the form's row has no
+ * key, or the source's row under it is another component.
  */
 function sourceRowFor(
   rows: unknown,
@@ -298,7 +333,12 @@ function sourceRowFor(
 ): unknown {
   if (!Array.isArray(rows)) return undefined;
   const key = rowKeys(formRows)[index];
-  return key === undefined ? undefined : keyedRows(rows).get(key);
+  if (key === undefined) return undefined;
+  const row = keyedRows(rows).get(key);
+  const formRow = formRows[index];
+  return row && isRecord(formRow) && sameInstance(formRow, row)
+    ? row
+    : undefined;
 }
 
 /**

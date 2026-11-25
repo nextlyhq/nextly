@@ -161,6 +161,7 @@ export async function removeDroppedEntityLeftovers(args: {
           translations:
             translations.archiveRowsPurged +
             translations.provenanceRowsPurged +
+            translations.sourceRowsPurged +
             translations.transitionRecordsPurged,
         };
       });
