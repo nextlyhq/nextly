@@ -377,9 +377,19 @@ describe("compareWithNewestSnapshot", () => {
       "~ per-language unique indexes dc_pages",
     ];
 
+    it("are a change where the entity's main table or settings change, and a notice where neither does, over a snapshot that records settings", () => {
+      const changes = over(snapshotOf(posts));
+      // The translations table's file moves a column off `dc_posts`; nothing of `dc_pages` changed.
+      expect(unwrittenChangeLines(changes)).toEqual([
+        "~ translations table dc_posts",
+      ]);
+      expect(changes.besideNotRecorded).toEqual([
+        { kind: "per-language unique indexes", table: "dc_pages" },
+      ]);
+    });
+
     it.each([
       ["no snapshot", null],
-      ["a snapshot that records settings", snapshotOf(posts)],
       [
         "a template's snapshot, which records none",
         {

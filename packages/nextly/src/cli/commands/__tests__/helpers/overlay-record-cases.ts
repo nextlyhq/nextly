@@ -3,15 +3,15 @@
  * by a test file that chooses the storage layout (`overlay-record*.integration.test.ts`).
  *
  * A release before overlay columns kept such a group whole on the main table, so the database it left
- * has none, and its newest snapshot records none beside the settings (`entities`) that declare the
- * group. There the column is a change still to make, whatever the settings declare: nothing but a
- * migration adds it in production, and every write of the group fails without it. A snapshot that
- * records no settings (a baseline, or one older than them) says nothing of it either way.
+ * has none, and its newest snapshot records none. Nothing anyone declared has changed there, and
+ * `nextly migrate` adds the column itself and fills in the default language's text, so no surface
+ * refuses: each says what the snapshot does not record. A change declared of the entity beside it is
+ * refused as any other, the overlay's file named with it.
  *
- * What would separate a correct run from a broken one: a `migrate:create` that takes a declared group
- * for one that has its column, and writes nothing; a surface that refuses over a snapshot that never
- * said whether the column is there; or one that takes a snapshot recording settings and no column
- * for one that never said.
+ * What would separate a correct run from a broken one: a surface that refuses what a release changed
+ * under an unchanged declaration; a `nextly migrate` that passes and leaves the column unmade; a
+ * `migrate:create` that takes a declared group for one that has its column, and writes nothing; or a
+ * declared change that passes because the file it needs is not recorded.
  */
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -58,8 +58,14 @@ const SLUG = "orposts";
  */
 type Box = "none" | "translated" | "shared" | "whole";
 
-/** A translated collection with one translated field, and a group of text declared as `box`. */
-const projectWith = (box: Box) =>
+/**
+ * A translated collection with one translated field, and a group of text declared as `box` with a
+ * second text inside where `noted`, and another collection labelled `beside` where that is given.
+ */
+const projectWith = (
+  box: Box,
+  { noted = false, beside }: { noted?: boolean; beside?: string } = {}
+) =>
   defineConfig({
     localization: { locales: ["en", "es"], defaultLocale: "en" },
     db: { migrationsDir: "./migrations" },
@@ -75,13 +81,25 @@ const projectWith = (box: Box) =>
                 {
                   name: "box",
                   type: "group" as const,
-                  fields: [{ name: "label", type: "text" as const }],
+                  fields: [
+                    { name: "label", type: "text" as const },
+                    ...(noted ? [{ name: "note", type: "text" as const }] : []),
+                  ],
                   ...(box === "shared" ? { localized: false } : {}),
                   ...(box === "whole" ? { localized: true } : {}),
                 },
               ]),
         ],
       }),
+      ...(beside === undefined
+        ? []
+        : [
+            defineCollection({
+              slug: `${SLUG}beside`,
+              description: beside,
+              fields: [{ name: "kind", type: "text" as const }],
+            }),
+          ]),
     ],
   });
 
@@ -321,8 +339,8 @@ export function overlayRecordCases(
        * table, with no overlay column made or recorded. The flag alone is taken off the recorded
        * settings, so they read as that release's do.
        */
-      async function leftByAnEarlierRelease(): Promise<void> {
-        await migrateTheProject(projectWith("shared"));
+      async function leftByAnEarlierRelease(beside?: string): Promise<void> {
+        await migrateTheProject(projectWith("shared", { beside }));
         await withNewestSnapshot(file => {
           const box = file.entities?.collections[SLUG]?.settings.fields.find(
             field => field.name === "box"
@@ -396,14 +414,39 @@ export function overlayRecordCases(
 
       describe("a project an earlier release left, its settings declaring the group", () => {
         const project = projectWith("translated");
-        beforeEach(leftByAnEarlierRelease, 120_000);
 
-        // The settings declare the group and the database has no column for its text.
-        it("is refused by every surface, naming the overlay's file", () =>
-          refusedByEverySurface(project));
+        it("is refused by no surface, which says it is not recorded, and nextly migrate makes the column", async () => {
+          await leftByAnEarlierRelease();
+          await refusedByNone(project, true);
+          expect(await translationColumns()).toContain("box");
+        }, 120_000);
 
-        it("has the column added by migrate:create, and nothing left after", () =>
-          writtenAndApplied(project));
+        it("has the column added by migrate:create, and nothing left after", async () => {
+          await leftByAnEarlierRelease();
+          await writtenAndApplied(project);
+        }, 120_000);
+
+        // The declaration changed, so what its change needs is refused whole, as ever.
+        it("is refused by every surface, naming the overlay's file, once the group's fields change", async () => {
+          await leftByAnEarlierRelease();
+          await refusedByEverySurface(
+            projectWith("translated", { noted: true })
+          );
+        }, 120_000);
+
+        it("is refused for another collection's change alone, not for the overlay", async () => {
+          await leftByAnEarlierRelease("before");
+          const now = projectWith("translated", { beside: "after" });
+          const checked = await check(now);
+          expect(checked.code, checked.said).toBe(1);
+          const ran = await migrate(now);
+          expect(ran.code, ran.said).toBe(1);
+          const started = await startsCheck(now);
+          for (const said of [checked.said, ran.said, started]) {
+            expect(said).toContain(`${SLUG}beside`);
+            expect(said).not.toContain(OVERLAY_LINE);
+          }
+        }, 120_000);
       });
 
       describe("a project an earlier release left, its newest snapshot recording no settings", () => {
@@ -413,8 +456,10 @@ export function overlayRecordCases(
           await forgetTheSettings();
         }, 120_000);
 
-        it("is refused by no surface, which says it is not recorded", () =>
-          refusedByNone(project, true));
+        it("is refused by no surface, which says it is not recorded, and nextly migrate makes the column", async () => {
+          await refusedByNone(project, true);
+          expect(await translationColumns()).toContain("box");
+        });
 
         it("has the column added by migrate:create, and nothing left after", () =>
           writtenAndApplied(project));
@@ -445,8 +490,10 @@ export function overlayRecordCases(
             expect(await translationColumns()).not.toContain("box");
           }, 120_000);
 
-          it("is refused by no surface, which says it is not recorded", () =>
-            refusedByNone(project, true));
+          it("is refused by no surface, which says it is not recorded, and nextly migrate makes the column", async () => {
+            await refusedByNone(project, true);
+            expect(await translationColumns()).toContain("box");
+          });
 
           it("has the column added by migrate:create, and nothing left after", () =>
             writtenAndApplied(project));
