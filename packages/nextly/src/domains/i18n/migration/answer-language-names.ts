@@ -12,18 +12,13 @@
  * The header line recording the language a file's answers are decided in: the default language of
  * the project that wrote it. Written only by a file that holds one.
  */
-const ANSWERS_HEADER = "-- Answers in:";
+export const ANSWERS_HEADER = "-- Answers in:";
 
 /** The line for `language`, or nothing for a file that holds no answer. */
 export function answersHeaderLine(language: string | undefined): string {
   return language === undefined
     ? ""
     : `${ANSWERS_HEADER} ${language.replace(/[\r\n\u2028\u2029]+/g, " ")}\n`;
-}
-
-/** The language a file's header records for its answers, or none where it records none. */
-export function recordedAnswerLanguage(content: string): string | undefined {
-  return /^-- Answers in: (.+)$/m.exec(content)?.[1]?.trim();
 }
 
 /** The `logContext.reason` of a refusal over a file decided in another language. */

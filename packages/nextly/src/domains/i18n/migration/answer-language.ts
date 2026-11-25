@@ -15,7 +15,9 @@ import { splitSqlStatements } from "../../schema/migrate/split-sql";
 import { settledTablesOf } from "../../schema/pipeline/sql-templates/resolution-statements";
 import { standardLanguageCode } from "../config/standard-code";
 
+import { ANSWERS_HEADER } from "./answer-language-names";
 import { type AnswerRun, mayHaveEntriesToSettle } from "./answered-entries";
+import { headerLines } from "./migration-intent";
 
 /** A migration file as this judges it. */
 interface AnsweringFile {
@@ -32,6 +34,17 @@ export interface AnswerLanguageRefusal {
   message: string;
   /** The language the file answers in, or none where it records none. */
   answersIn: string | undefined;
+}
+
+/**
+ * The language a file's header records for its answers, or none where it records none. Only the
+ * header is read: the same words in a statement, such as a fill's text, record nothing.
+ */
+export function recordedAnswerLanguage(content: string): string | undefined {
+  const line = headerLines(content).find(each =>
+    each.startsWith(`${ANSWERS_HEADER} `)
+  );
+  return line?.slice(ANSWERS_HEADER.length).trim() || undefined;
 }
 
 const standard = (code: string) => standardLanguageCode(code) ?? code;

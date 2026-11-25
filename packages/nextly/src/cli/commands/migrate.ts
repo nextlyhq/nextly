@@ -40,9 +40,9 @@ import { registerComponentSchemas } from "../../domains/field-groups/services/re
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   answerLanguageRefusals,
+  recordedAnswerLanguage,
   refuseAnswersInAnotherLanguage,
 } from "../../domains/i18n/migration/answer-language";
-import { recordedAnswerLanguage } from "../../domains/i18n/migration/answer-language-names";
 import {
   isLocalizationIntentRefusal,
   parseLocalizationIntent,
