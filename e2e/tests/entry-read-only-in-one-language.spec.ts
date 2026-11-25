@@ -57,6 +57,16 @@ const bannerAnywhere = () =>
 const note = () =>
   page.locator("main").getByRole("textbox", { name: "Note", exact: true });
 
+/** The note in the language on screen, after the source it stands beside. */
+const translatedNote = () => note().last();
+
+/** Opens the document in a language, from the Languages menu. */
+async function openLanguage(name: RegExp): Promise<void> {
+  await page.getByRole("button", { name: /^Languages/ }).click();
+  // A row waits, as the menu says, until it is known who holds the document.
+  await page.getByRole("menuitem", { name }).click();
+}
+
 /** Whether `url` asks the capabilities answer for `locale`. */
 function asksCapabilitiesIn(locale: string) {
   return (url: URL) =>
@@ -82,7 +92,7 @@ test("edits the English and opens the Spanish read-only, showing no editor while
     await route.continue();
   });
 
-  await page.getByRole("button", { name: "Open Spanish" }).click();
+  await openLanguage(/^Spanish/);
   await expect.poll(() => asked).toBe(true);
 
   // The page waits for the Spanish answer: no editor, so nothing that saves,
@@ -94,12 +104,16 @@ test("edits the English and opens the Spanish read-only, showing no editor while
   await expect(save()).toHaveCount(0);
 
   release();
-  // The Spanish document, which has no note of its own.
-  await expect(note()).toHaveValue("");
+  // The Spanish document, which has no note of its own, beside the English it
+  // is translated from. Neither can be changed.
+  await expect(note()).toHaveCount(2);
+  await expect(note().first()).toHaveValue("Checked in English.");
+  await expect(note().first()).not.toBeEditable();
+  await expect(translatedNote()).toHaveValue("");
   await expect(banner()).toHaveText(
     "Your access lets you view this, but not change it. If you need to change it, ask an admin."
   );
-  await expect(note()).not.toBeEditable();
+  await expect(translatedNote()).not.toBeEditable();
   await expect(save()).toHaveCount(0);
   await page.unroute(asksCapabilitiesIn("es"));
 });
@@ -107,7 +121,7 @@ test("edits the English and opens the Spanish read-only, showing no editor while
 test("is offered the save again on returning to English", async () => {
   await gotoAdmin(page, `/collections/translator-notes/${noteId}?locale=es`);
   await expect(banner()).toBeVisible();
-  await page.getByRole("button", { name: "Open English" }).click();
+  await openLanguage(/^English/);
   await expect(save()).toBeVisible();
   await expect(bannerAnywhere()).toHaveCount(0);
   await expect(note()).toBeEditable();
