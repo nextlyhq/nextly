@@ -2836,46 +2836,88 @@ export function tablesLeftDropped(
   statements: readonly string[],
   dialect: SupportedDialect
 ): string[] {
-  // Each name the list touches: whether the database could hold it before, from the first step
-  // naming it, and whether the list leaves it there, from the last.
-  const names = new Map<string, { heldBefore: boolean; there: boolean }>();
-  const step = (table: string, there: boolean, provesNew: boolean) => {
-    const seen = names.get(table);
-    names.set(table, {
-      heldBefore: seen?.heldBefore ?? !provesNew,
-      there,
-    });
-  };
-  // The names a temporary table the list made shadows, as `FileWalk` reads them: an unqualified
-  // drop of such a name drops the temporary table and gives the name back to the table it hid, a
-  // temporary drop of any other name drops none of the database's tables, and a temporary table
-  // renamed away takes its shadow with it.
-  const shadowed = new Set<string>();
+  const tally: DroppedTally = { names: new Map(), shadowed: new Set() };
   for (const statement of statements) {
-    for (const read of readStatement(statement, dialect)) {
-      if (read.kind === "drop") {
-        const table = read.table.toLowerCase();
-        if (shadowed.delete(table) || read.temporary === true) continue;
-        step(table, false, false);
-      } else if (read.kind === "create") {
-        const table = read.table.toLowerCase();
-        if (read.temporary === true) shadowed.add(table);
-        else step(table, true, read.conditional !== true);
-      } else if (read.kind === "rename-table") {
-        const from = read.from.toLowerCase();
-        const to = read.to.toLowerCase();
-        if (shadowed.delete(from)) {
-          shadowed.add(to);
-          continue;
-        }
-        step(from, false, false);
-        step(to, true, true);
-      }
-    }
+    for (const read of readStatement(statement, dialect))
+      tallyStep(tally, read);
   }
-  return [...names]
+  return [...tally.names]
     .filter(([, { heldBefore, there }]) => heldBefore && !there)
     .map(([table]) => table);
+}
+
+/** What `tablesLeftDropped` has read of a statement list so far. */
+interface DroppedTally {
+  /**
+   * Each name the list touches: whether the database could hold it before, from the first step
+   * naming it, and whether the list leaves it there, from the last.
+   */
+  names: Map<string, { heldBefore: boolean; there: boolean }>;
+  /**
+   * The names a temporary table the list made shadows, as `FileWalk` reads them: an unqualified
+   * drop of such a name drops the temporary table and gives the name back to the table it hid, a
+   * temporary drop of any other name drops none of the database's tables, and a temporary table
+   * renamed away takes its shadow with it.
+   */
+  shadowed: Set<string>;
+}
+
+/** One step of the list into `tally`; a step making or dropping no table leaves it as it was. */
+function tallyStep(tally: DroppedTally, read: Step): void {
+  if (read.kind === "drop") tallyDrop(tally, read);
+  else if (read.kind === "create") tallyCreate(tally, read);
+  else if (read.kind === "rename-table") tallyRename(tally, read);
+}
+
+/** A drop: of the temporary table shadowing the name where there is one, else of the table. */
+function tallyDrop(
+  tally: DroppedTally,
+  read: Extract<Step, { kind: "drop" }>
+): void {
+  const table = read.table.toLowerCase();
+  if (tally.shadowed.delete(table) || read.temporary === true) return;
+  tallyName(tally, table, false, false);
+}
+
+/** A create: a temporary table shadows the name; any other makes it, new unless conditional. */
+function tallyCreate(
+  tally: DroppedTally,
+  read: Extract<Step, { kind: "create" }>
+): void {
+  const table = read.table.toLowerCase();
+  if (read.temporary === true) tally.shadowed.add(table);
+  else tallyName(tally, table, true, read.conditional !== true);
+}
+
+/** A rename: a temporary table takes its shadow along; any other leaves one name for the other. */
+function tallyRename(
+  tally: DroppedTally,
+  read: Extract<Step, { kind: "rename-table" }>
+): void {
+  const from = read.from.toLowerCase();
+  const to = read.to.toLowerCase();
+  if (tally.shadowed.delete(from)) {
+    tally.shadowed.add(to);
+    return;
+  }
+  tallyName(tally, from, false, false);
+  // A rename onto a name fails where a table holds it, so the name is new.
+  tallyName(tally, to, true, true);
+}
+
+/**
+ * One step naming `table`: whether the list leaves it `there`, and, on the first step naming it,
+ * whether the database could hold it before (not where that step `provesNew`: a plain
+ * `CREATE TABLE` or a rename onto it, which fail on a table already there).
+ */
+function tallyName(
+  tally: DroppedTally,
+  table: string,
+  there: boolean,
+  provesNew: boolean
+): void {
+  const seen = tally.names.get(table);
+  tally.names.set(table, { heldBefore: seen?.heldBefore ?? !provesNew, there });
 }
 
 /** A read that answers undefined rather than throwing. */

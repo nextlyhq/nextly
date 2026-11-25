@@ -347,53 +347,76 @@ export function indexDropsBeforeColumns(
   indexes: LocalizationUpOptions["mainIndexes"]
 ): string[] {
   if (indexes === undefined || dropped.length === 0) return [];
-  const { dialect, mainTable } = spec;
   const going = new Set(dropped.map(name => name.toLowerCase()));
-  const drops: string[] = [];
-  const held: string[] = [];
-  for (const index of indexes) {
-    const covered = index.columns.filter(c => going.has(c.toLowerCase()));
-    // An index on more than whole columns (an expression, a partial or a prefix index) can read a
-    // moving column its `columns` do not name: judged by its definition, and held where that
-    // could not be read, since dropping the column under it is refused or silently changes it.
-    if (
-      covered.length === 0 &&
-      (index.wholeColumns || !definitionNames(index.definition, going))
-    ) {
-      continue;
-    }
-    if (
-      index.columns.length === 1 &&
-      index.wholeColumns &&
-      index.droppableByName
-    ) {
-      drops.push(
-        dialect === "mysql"
-          ? `DROP INDEX ${q(index.name, dialect)} ON ${q(mainTable, dialect)}`
-          : `DROP INDEX ${q(index.name, dialect)}`
-      );
-    } else {
-      // An expression index names no plain column, so its own name is what identifies it.
-      held.push(
-        index.columns.length > 0
-          ? `"${index.name}" (${index.columns.join(", ")})`
-          : `"${index.name}"`
-      );
-    }
-  }
+  const reached = indexes.filter(index => readsAMovingColumn(index, going));
+  const held = reached.filter(index => !goesWithItsColumn(index));
   if (held.length > 0) {
-    throw new NextlyError({
-      code: "NEXTLY_UPGRADE_COLUMN_HELD",
-      publicMessage:
-        `The translatable values of "${spec.collection}" move to its translations table, and ` +
-        `their columns leave ${mainTable}, but the index ${held.join(", ")} stands on one of ` +
-        `them with other columns, on part of it or on an expression over it, so dropping it would break the index or ` +
-        `change what it keeps unique. Nothing was changed. Drop that index, or make it stand on ` +
-        `the moving column alone, then run the command again.`,
-      logContext: { mainTable, held, columns: [...dropped] },
-    });
+    throw columnHeldRefusal(spec, dropped, held.map(heldIndexName));
   }
-  return drops;
+  return reached.map(index => dropIndexStatement(index, spec));
+}
+
+/** One of the main table's indexes, as `indexDropsBeforeColumns` judges it. */
+type MainIndex = NonNullable<LocalizationUpOptions["mainIndexes"]>[number];
+
+/**
+ * Whether `index` reads one of the moving columns (`going`, lower-cased). An index on more than
+ * whole columns (an expression, a partial or a prefix index) can read a moving column its
+ * `columns` do not name: judged by its definition, and held where that could not be read, since
+ * dropping the column under it is refused or silently changes it.
+ */
+function readsAMovingColumn(
+  index: MainIndex,
+  going: ReadonlySet<string>
+): boolean {
+  if (index.columns.some(column => going.has(column.toLowerCase()))) {
+    return true;
+  }
+  return !index.wholeColumns && definitionNames(index.definition, going);
+}
+
+/** Whether `index` stands on its column alone, whole, and can be dropped by name before it. */
+function goesWithItsColumn(index: MainIndex): boolean {
+  return (
+    index.columns.length === 1 && index.wholeColumns && index.droppableByName
+  );
+}
+
+/** The statement dropping `index` from the main table, as `spec`'s dialect writes it. */
+function dropIndexStatement(
+  index: MainIndex,
+  { dialect, mainTable }: Pick<CompanionMigrationSpec, "dialect" | "mainTable">
+): string {
+  return dialect === "mysql"
+    ? `DROP INDEX ${q(index.name, dialect)} ON ${q(mainTable, dialect)}`
+    : `DROP INDEX ${q(index.name, dialect)}`;
+}
+
+/** How a refusal names a held index: with its columns, or by its name alone for an expression. */
+function heldIndexName(index: MainIndex): string {
+  // An expression index names no plain column, so its own name is what identifies it.
+  return index.columns.length > 0
+    ? `"${index.name}" (${index.columns.join(", ")})`
+    : `"${index.name}"`;
+}
+
+/** The refusal of a move whose columns an index the drop would break stands on (`held`). */
+function columnHeldRefusal(
+  spec: Pick<CompanionMigrationSpec, "mainTable" | "collection">,
+  dropped: readonly string[],
+  held: readonly string[]
+): NextlyError {
+  const { mainTable } = spec;
+  return new NextlyError({
+    code: "NEXTLY_UPGRADE_COLUMN_HELD",
+    publicMessage:
+      `The translatable values of "${spec.collection}" move to its translations table, and ` +
+      `their columns leave ${mainTable}, but the index ${held.join(", ")} stands on one of ` +
+      `them with other columns, on part of it or on an expression over it, so dropping it would break the index or ` +
+      `change what it keeps unique. Nothing was changed. Drop that index, or make it stand on ` +
+      `the moving column alone, then run the command again.`,
+    logContext: { mainTable, held: [...held], columns: [...dropped] },
+  });
 }
 
 /**

@@ -1018,28 +1018,58 @@ export async function readTableIndexes(
 }
 
 /** One index's definition from the dialect's catalog, or undefined where it holds none. */
-async function readIndexDefinition(
+export function readIndexDefinition(
   db: unknown,
   dialect: SupportedDialect,
   tableName: string,
   indexName: string
 ): Promise<string | undefined> {
   if (dialect === "postgresql") {
-    const result = (await (db as PgMysqlExecute).execute(
-      sql`SELECT indexdef AS definition FROM pg_indexes WHERE schemaname = current_schema() AND tablename = ${tableName} AND indexname = ${indexName}`
-    )) as { rows?: { definition?: string }[] } | { definition?: string }[];
-    const rows = Array.isArray(result) ? result : (result.rows ?? []);
-    return rows[0]?.definition ?? undefined;
+    return readPgIndexDefinition(db, tableName, indexName);
   }
   if (dialect === "mysql") {
-    const rows = mysqlRows<{ part: string | null }>(
-      await (db as PgMysqlExecute).execute(
-        sql`SELECT COALESCE(EXPRESSION, COLUMN_NAME) AS part FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName} AND INDEX_NAME = ${indexName} ORDER BY SEQ_IN_INDEX`
-      )
-    );
-    const parts = rows.flatMap(row => (row.part === null ? [] : [row.part]));
-    return parts.length === 0 ? undefined : parts.join(", ");
+    return readMysqlIndexDefinition(db, tableName, indexName);
   }
+  return readSqliteIndexDefinition(db, indexName);
+}
+
+/** PostgreSQL: the index's DDL as `pg_indexes` keeps it, key, inclusions and condition included. */
+async function readPgIndexDefinition(
+  db: unknown,
+  tableName: string,
+  indexName: string
+): Promise<string | undefined> {
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`SELECT indexdef AS definition FROM pg_indexes WHERE schemaname = current_schema() AND tablename = ${tableName} AND indexname = ${indexName}`
+  )) as { rows?: { definition?: string }[] } | { definition?: string }[];
+  // The driver answers with `{ rows }`, or the rows themselves.
+  const rows = Array.isArray(result) ? result : (result.rows ?? []);
+  return rows[0]?.definition ?? undefined;
+}
+
+/**
+ * MySQL: the index's key parts in order, each an expression or a column name, joined. MySQL keeps
+ * no index condition, so the key is all an index reads.
+ */
+async function readMysqlIndexDefinition(
+  db: unknown,
+  tableName: string,
+  indexName: string
+): Promise<string | undefined> {
+  const rows = mysqlRows<{ part: string | null }>(
+    await (db as PgMysqlExecute).execute(
+      sql`SELECT COALESCE(EXPRESSION, COLUMN_NAME) AS part FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName} AND INDEX_NAME = ${indexName} ORDER BY SEQ_IN_INDEX`
+    )
+  );
+  const parts = rows.flatMap(row => (row.part === null ? [] : [row.part]));
+  return parts.length === 0 ? undefined : parts.join(", ");
+}
+
+/** SQLite: the index's DDL as `sqlite_master` keeps it, condition included. */
+async function readSqliteIndexDefinition(
+  db: unknown,
+  indexName: string
+): Promise<string | undefined> {
   const rows = (await (db as SqliteAll).all(
     sql`SELECT sql AS definition FROM sqlite_master WHERE type = 'index' AND name = ${indexName}`
   )) as { definition: string | null }[];

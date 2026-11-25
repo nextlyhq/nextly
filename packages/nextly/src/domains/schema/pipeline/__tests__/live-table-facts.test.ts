@@ -11,7 +11,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   readForeignKeyColumns,
+  readIndexDefinition,
   readIndexNames,
+  readTableIndexes,
   tableHasRows,
   readColumnNullState,
   readUniqueColumns,
@@ -454,5 +456,76 @@ describe("readColumnNullState", () => {
     );
     expect(execute).toHaveBeenCalledTimes(1);
     expect(holdingNull.size + absent.size).toBe(0);
+  });
+});
+
+// What an index reads beyond its whole columns is in its definition: PostgreSQL's `indexdef`,
+// MySQL's key parts, SQLite's DDL. Broken (a dialect's reply misread), the definition is lost and
+// every expression or partial index is held as if it read every moving column.
+describe("readIndexDefinition", () => {
+  const pgDefinition =
+    "CREATE INDEX idx_lower ON public.dc_notes USING btree (lower((title)::text))";
+
+  it("reads postgres' definition from the QueryResult wrapper, and from bare rows", async () => {
+    for (const answer of [
+      { rows: [{ definition: pgDefinition }] },
+      [{ definition: pgDefinition }],
+    ]) {
+      const db = { execute: vi.fn(async () => answer) };
+      expect(
+        await readIndexDefinition(db, "postgresql", "dc_notes", "idx_lower")
+      ).toBe(pgDefinition);
+    }
+  });
+
+  it("joins mysql's key parts in order, through the tuple wrapper", async () => {
+    const db = {
+      execute: vi.fn(async () => [
+        [{ part: "lower(`title`)" }, { part: "id" }],
+        [],
+      ]),
+    };
+    expect(
+      await readIndexDefinition(db, "mysql", "dc_notes", "idx_lower")
+    ).toBe("lower(`title`), id");
+  });
+
+  it("answers nothing where the catalog holds no such index", async () => {
+    const pg = { execute: vi.fn(async () => ({ rows: [] })) };
+    const mysql = { execute: vi.fn(async () => [[], []]) };
+    expect(
+      await readIndexDefinition(pg, "postgresql", "dc_notes", "gone")
+    ).toBeUndefined();
+    expect(
+      await readIndexDefinition(mysql, "mysql", "dc_notes", "gone")
+    ).toBeUndefined();
+  });
+
+  // A real SQLite table, read through `readTableIndexes`: only an index on more than whole columns
+  // carries its definition.
+  it("gives sqlite's expression and partial indexes their DDL, and whole-column ones none", async () => {
+    const sqlite = new Database(":memory:");
+    try {
+      sqlite.exec(
+        `CREATE TABLE "dc_notes" ("id" text PRIMARY KEY NOT NULL, "title" text)`
+      );
+      sqlite.exec(`CREATE INDEX "by_title" ON "dc_notes" ("title")`);
+      sqlite.exec(`CREATE INDEX "lower_title" ON "dc_notes" (lower("title"))`);
+      sqlite.exec(
+        `CREATE INDEX "titled" ON "dc_notes" ("id") WHERE "title" IS NOT NULL`
+      );
+      const indexes = await readTableIndexes(
+        drizzle({ client: sqlite }),
+        "sqlite",
+        "dc_notes"
+      );
+      const definitionOf = (name: string) =>
+        indexes.find(index => index.name === name)?.definition;
+      expect(definitionOf("by_title")).toBeUndefined();
+      expect(definitionOf("lower_title")).toContain('lower("title")');
+      expect(definitionOf("titled")).toContain('WHERE "title" IS NOT NULL');
+    } finally {
+      sqlite.close();
+    }
   });
 });
