@@ -14,8 +14,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createScratchDatabase } from "../../../../__tests__/helpers/fresh-database";
 import { createAdapter } from "../../../../database/factory";
 import { NextlyError } from "../../../../errors/nextly-error";
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import { planEntityMoves } from "../../field-moves/plan-moves";
 import { mysqlLiveStatements } from "../../pipeline/sql-templates/mysql-live-restate";
 import { runMigrationStatements } from "../migration-transaction";
+import { splitSqlStatements } from "../split-sql";
 
 const describeMysql = describe.skipIf(!process.env.TEST_MYSQL_URL);
 
@@ -29,6 +32,51 @@ const RENAMES = mysqlLiveStatements({
   fromColumn: "body",
   toColumn: "text",
 } as Parameters<typeof mysqlLiveStatements>[0])!;
+
+const SUBTITLE = {
+  name: "subtitle",
+  label: "Subtitle",
+  type: "text",
+  required: true,
+} as FieldDefinition;
+const meta = (fields: FieldDefinition[]) =>
+  ({ name: "meta", label: "Meta", type: "group", fields }) as FieldDefinition;
+const OUTSIDE = [SUBTITLE, meta([])];
+const INSIDE = [meta([SUBTITLE])];
+
+/** The statements a field's move plans for `pages`, as its file runs them: before its changes, and after. */
+function moved(
+  before: FieldDefinition[],
+  after: FieldDefinition[],
+  move: { from: string[]; to: string[] }
+): { first: string[]; last: string[] } {
+  const { up } = planEntityMoves({
+    before,
+    after,
+    moves: [move],
+    table: "pages",
+    dialect: "mysql",
+    localized: false,
+    kind: "collection",
+  });
+  return {
+    first: splitSqlStatements(up.first.join("\n"), "mysql"),
+    last: splitSqlStatements(up.last.join("\n"), "mysql"),
+  };
+}
+
+/** A required field moved out of a group: its first statements are its stops, each in a temporary table. */
+const MOVES_OUT = moved(INSIDE, OUTSIDE, {
+  from: ["meta", "subtitle"],
+  to: ["subtitle"],
+});
+/** The same field moved into the group: its first statements are its copies. */
+const MOVES_IN = moved(OUTSIDE, INSIDE, {
+  from: ["subtitle"],
+  to: ["meta", "subtitle"],
+});
+
+const ADDS_SUBTITLE = "ALTER TABLE `pages` ADD COLUMN `subtitle` varchar(255)";
 
 describeMysql("a transactional migration that fails on MySQL", () => {
   let adapter: DrizzleAdapter;
@@ -52,6 +100,12 @@ describeMysql("a transactional migration that fails on MySQL", () => {
     );
     await adapter.executeQuery("INSERT INTO parted (id) VALUES (1), (50)");
     await adapter.executeQuery("CREATE TABLE spare (id int PRIMARY KEY)");
+    await adapter.executeQuery(
+      "CREATE TABLE pages (id int PRIMARY KEY, meta json)"
+    );
+    await adapter.executeQuery(
+      `INSERT INTO pages (id, meta) VALUES (1, '{"subtitle":"one"}'), (2, '{"subtitle":"two"}')`
+    );
   }, 60_000);
 
   afterEach(async () => {
@@ -271,6 +325,145 @@ describeMysql("a transactional migration that fails on MySQL", () => {
     ).toMatchObject({ rows: 4, partly: true });
   }, 60_000);
 
+  it("a move out of a group starts with stops that write to a temporary table", () => {
+    expect(MOVES_OUT.first[0]).toContain("CREATE TEMPORARY TABLE");
+    expect(MOVES_OUT.first[1]).toContain("INSERT INTO");
+    expect(MOVES_OUT.first.some(sql => sql.includes("UPDATE"))).toBe(false);
+  });
+
+  // The move's stops write rows to a temporary table, which a failure after them leaves nobody.
+  it.each([
+    [
+      "its first ALTER, of a column already there",
+      [...MOVES_OUT.first, "ALTER TABLE `pages` ADD COLUMN `meta` json"],
+    ],
+    [
+      "the statement after its first ALTER",
+      [...MOVES_OUT.first, ADDS_SUBTITLE, FAILS],
+    ],
+    [
+      "the statement after its copies, whose transaction the run opened again",
+      [...MOVES_OUT.first, ADDS_SUBTITLE, ...MOVES_OUT.last, FAILS],
+    ],
+  ])(
+    "leaves every value in the group where a field's move fails at %s, and does not say the file is partly applied",
+    async (_name, statements) => {
+      expect(
+        await ran(
+          statements,
+          "SELECT COUNT(*) AS n FROM pages WHERE JSON_EXTRACT(meta, '$.subtitle') IS NOT NULL"
+        )
+      ).toMatchObject({ rows: 2, partly: false });
+    },
+    60_000
+  );
+
+  it("keeps the values a move out of a group copied, then a schema statement, and says the file is partly applied", async () => {
+    expect(
+      await ran(
+        [
+          ...MOVES_OUT.first,
+          ADDS_SUBTITLE,
+          ...MOVES_OUT.last,
+          "ALTER TABLE `pages` MODIFY `subtitle` varchar(255) NOT NULL",
+          FAILS,
+        ],
+        "SELECT COUNT(*) AS n FROM pages WHERE subtitle IS NOT NULL"
+      )
+    ).toMatchObject({ rows: 2, partly: true });
+  }, 60_000);
+
+  it("keeps the values a move into a group copied, then its column dropped, and says the file is partly applied", async () => {
+    await adapter.executeQuery(ADDS_SUBTITLE);
+    await adapter.executeQuery(
+      "UPDATE pages SET meta = NULL, subtitle = CONCAT('value ', id)"
+    );
+    expect(
+      await ran(
+        [
+          ...MOVES_IN.first,
+          "ALTER TABLE `pages` DROP COLUMN `subtitle`",
+          FAILS,
+        ],
+        "SELECT COUNT(*) AS n FROM pages WHERE JSON_EXTRACT(meta, '$.subtitle') IS NOT NULL"
+      )
+    ).toMatchObject({ rows: 2, partly: true });
+  }, 60_000);
+
+  it.each([
+    ["dropped again", ["DROP TEMPORARY TABLE `notes`", "DELETE FROM `notes`"]],
+    [
+      "dropped again without saying it is temporary",
+      ["DROP TABLE `notes`", "DELETE FROM `notes`"],
+    ],
+    [
+      "renamed",
+      ["ALTER TABLE `notes` RENAME TO `seen`", "DELETE FROM `notes`"],
+    ],
+    [
+      "dropped again by a prepared statement",
+      [
+        "PREPARE gone FROM 'DROP TEMPORARY TABLE `notes`'",
+        "EXECUTE gone",
+        "DELETE FROM `notes`",
+      ],
+    ],
+  ])(
+    "keeps the rows of a DELETE from a table whose name a temporary one had until it was %s, and says the file is partly applied",
+    async (_name, statements) => {
+      expect(
+        await ran([
+          "CREATE TEMPORARY TABLE `notes` (id int)",
+          ...statements,
+          ALTERS,
+          FAILS,
+        ])
+      ).toMatchObject({ rows: 0, partly: true });
+    },
+    60_000
+  );
+
+  it.each([
+    [
+      "a table the file did not make, beside one it did",
+      ["CREATE TEMPORARY TABLE `seen` (id int)", "DELETE FROM `notes`"],
+    ],
+    [
+      "two tables, one of them temporary",
+      [
+        "CREATE TEMPORARY TABLE `seen` SELECT id FROM notes",
+        "DELETE `seen`, `notes` FROM `seen` JOIN `notes` ON `seen`.id = `notes`.id",
+      ],
+    ],
+  ])(
+    "keeps the rows of a DELETE from %s, and says the file is partly applied",
+    async (_name, statements) => {
+      expect(await ran([...statements, ALTERS, FAILS])).toMatchObject({
+        rows: 0,
+        partly: true,
+      });
+    },
+    60_000
+  );
+
+  // Where the server tells names apart by case (Linux), `Notes` is another table than `notes`.
+  it("keeps the rows of a DELETE from a table whose name a temporary one has in another case, and says the file is partly applied", async ({
+    skip,
+  }) => {
+    const [{ folds }] = (await adapter.executeQuery(
+      "SELECT @@lower_case_table_names AS folds"
+    )) as unknown as [{ folds: unknown }];
+    if (Number(folds) !== 0) return skip();
+    expect(
+      await ran([
+        "CREATE TEMPORARY TABLE Notes (id int)",
+        "DELETE FROM notes",
+        ALTERS,
+        FAILS,
+      ])
+    ).toMatchObject({ rows: 0, partly: true });
+  }, 60_000);
+
   it.each([
     [
       "a schema statement MySQL cannot parse",
@@ -329,6 +522,19 @@ describeMysql("a transactional migration that fails on MySQL", () => {
       [
         "DELETE FROM notes",
         "CREATE TEMPORARY TABLE seen SELECT id FROM notes",
+        FAILS,
+      ],
+    ],
+    [
+      "rows written to a temporary table the file made, then a schema statement",
+      [
+        "CREATE TEMPORARY TABLE IF NOT EXISTS `seen` (id int)",
+        "INSERT INTO `seen` (id) SELECT id FROM notes",
+        "UPDATE `seen` SET id = 3 WHERE id = 1",
+        "DELETE FROM `seen` WHERE id = 2",
+        ALTERS,
+        "INSERT INTO `seen` (id) VALUES (4)",
+        "ALTER TABLE notes DROP COLUMN added",
         FAILS,
       ],
     ],
