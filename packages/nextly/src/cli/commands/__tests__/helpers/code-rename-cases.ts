@@ -482,6 +482,15 @@ export function codeRenameCases(args: {
             repeater({ name: "slides", fields: [text({ name: "caption" })] })
           );
           const app = await start(dialect, url, before);
+          const note = await app.nextly.create({
+            collection: SLUG as never,
+            data: {
+              title: "N",
+              note: "kept",
+              slides: [{ caption: "One" }],
+            } as never,
+          });
+          const id = String((note.item as { id: unknown }).id);
           // As that release laid it out: the container's column on the translations table alone.
           const q = (name: string) =>
             dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
@@ -500,6 +509,63 @@ export function codeRenameCases(args: {
           );
           expect(swapped.code, swapped.said).toBeUndefined();
           expect(textOf(swapped.files)).toMatch(renames("slides", "summary"));
+
+          // Applied, the new field's column is the container's, holding its text. SQLite keeps both
+          // as text, so the field reads and takes values; elsewhere its column is JSON, which the
+          // migrate, and each one after it, refuses for a text field, and which takes no text.
+          const migrated = async () => {
+            const run = command();
+            const code = await ran(run.said, () =>
+              runMigrate({ cwd: dir, acceptDataLoss: true }, run.context)
+            );
+            return code === undefined
+              ? "applied"
+              : run.said.join("\n").includes("CONFIG_INVALID")
+                ? "refused: CONFIG_INVALID"
+                : `refused: ${run.said.join("\n")}`;
+          };
+          const first = await migrated();
+          const again = await migrated();
+          const [held] = await (
+            app.adapter as unknown as {
+              executeQuery<R>(statement: string): Promise<R[]>;
+            }
+          ).executeQuery<{ value: unknown }>(
+            `SELECT ${q("summary")} AS value FROM ${q(`dc_${SLUG}_locales`)} WHERE ${q("_parent")} = '${id}' AND ${q("_locale")} = 'en'`
+          );
+          const kept =
+            typeof held?.value === "string"
+              ? (JSON.parse(held.value) as unknown)
+              : held?.value;
+          const site = await start(
+            dialect,
+            url,
+            withField(text({ name: "summary" }))
+          );
+          const write = await site.nextly
+            .update({
+              collection: SLUG,
+              id,
+              data: { summary: "new", _overwrite: true },
+            } as never)
+            .then(
+              () => "written",
+              () => "refused"
+            );
+
+          const asText = dialect === "sqlite";
+          expect({ first, again, write }).toEqual(
+            asText
+              ? { first: "applied", again: "applied", write: "written" }
+              : {
+                  first: "refused: CONFIG_INVALID",
+                  again: "refused: CONFIG_INVALID",
+                  write: "refused",
+                }
+          );
+          expect(Object.values(kept as Record<string, unknown>)).toEqual([
+            { caption: "One" },
+          ]);
         });
 
         it("offers and writes a text field's rename in an adopted project with a container beside it, every value kept", async () => {
@@ -564,7 +630,7 @@ export function codeRenameCases(args: {
           };
           const save = async (
             method: string,
-            params: Record<string, unknown>,
+            params: Record<string, string>,
             body: Record<string, unknown>
           ) => {
             const answer = (await dispatchCollections(
