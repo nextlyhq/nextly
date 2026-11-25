@@ -593,6 +593,14 @@ describe.each(getConfiguredTestDialects())(
     it.runIf(dialect === "postgresql")(
       "takes a savepoint for a save on the legacy names, and none on the current ones",
       async () => {
+        /** What this process reads every so often, whatever is being written. */
+        const EVERY_SO_OFTEN = [
+          // The site's languages, and the stored schema version.
+          /^select count\(\*\), sum\("revision"\) from "nextly_languages"/,
+          /^select "value" from "nextly_meta" where "nextly_meta"\."key"/,
+          // Whether a table a feature keeps is there yet.
+          /^SELECT EXISTS \( SELECT FROM information_schema\.tables/,
+        ];
         /** The statements `write` sent. */
         const sent = async (write: () => Promise<string>) => {
           const recorder = await recordStatements(site!.adapter, dialect);
@@ -602,7 +610,12 @@ describe.each(getConfiguredTestDialects())(
             recorder.uninstall();
           }
           return recorder.statements.map(text =>
-            text.replace(/\s+/g, " ").slice(0, 160)
+            text
+              .replace(/\s+/g, " ")
+              // Each savepoint's name counts up; it is the same statement.
+              .replace(/(nextly_[a-z_]+)_\d+"/g, '$1_n"')
+              .trim()
+              .slice(0, 160)
           );
         };
         const beyond = (longer: string[], shorter: string[]) => {
@@ -615,7 +628,7 @@ describe.each(getConfiguredTestDialects())(
         };
         // Each write five times: a read this process makes every so often falls inside one or
         // another, and adds to it, so what a write itself sends is the fewest it was seen to send.
-        // Whatever a longer one sent beyond that is printed, and must be such a read.
+        // Whatever a longer one sent beyond that must be such a read.
         const fewest = async (
           kind: string,
           write: () => Promise<() => Promise<string>>
@@ -627,8 +640,14 @@ describe.each(getConfiguredTestDialects())(
           console.log(
             `[statement counts] ${kind}: ${runs.map(run => run.length).join(" ")}${extra.length === 0 ? "" : ` extra ${JSON.stringify(extra)}`}`
           );
-          return { least, extra };
+          expect(
+            extra.filter(text => !EVERY_SO_OFTEN.some(read => read.test(text))),
+            kind
+          ).toEqual([]);
+          return { least };
         };
+        // Each save writes a value of its own: an unchanged one keeps no version, and is another write.
+        let saves = 0;
         const measured = async (migrated: boolean) => {
           const at = await openSite({ migrated });
           await at.save();
@@ -637,11 +656,11 @@ describe.each(getConfiguredTestDialects())(
           const counts = {
             "collection save": await fewest(
               `collection save, ${on}`,
-              async () => () => at.save("Counted")
+              async () => () => at.save(`Counted ${++saves}`)
             ),
             "Single save": await fewest(
               `Single save, ${on}`,
-              async () => () => at.saveSingle("Counted")
+              async () => () => at.saveSingle(`Counted ${++saves}`)
             ),
             "bulk delete of one": await fewest(
               `bulk delete of one, ${on}`,
