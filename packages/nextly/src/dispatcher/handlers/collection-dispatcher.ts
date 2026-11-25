@@ -1475,18 +1475,21 @@ const COLLECTIONS_METHODS: Record<
               );
             }
           };
+          const inFile = await road.inFile();
           const written = await saveThroughWriter({
             holdScope,
             // Where the save runs its file, the row is written in the file's own transaction, so a
             // failed write leaves the save as it was and is answered as the failure it is. Not where
             // the translations table is brought in step after the file: the row would then record
             // the change before that step holds it, so it is written after it, as a Single's is.
-            ...(road.registryInFile
+            // Where the file's transaction does what that step would (`inFile`), the row follows it.
+            ...(road.registryInFile || inFile !== undefined
               ? {
                   registry: (stored: FieldDefinition[]) =>
                     writeRow(stored, false),
                 }
               : {}),
+            ...(inFile === undefined ? {} : { inFile }),
             // A file stopped part way and settled to what applied: this process's tables and the
             // admin's schema version follow the fields it recorded, as after an apply. Asked only
             // where the registry write runs in the file's transaction.
@@ -2551,6 +2554,12 @@ async function saveThroughWriter(
      */
     registry?: (fields: FieldDefinition[]) => Promise<void>;
     /**
+     * What the last file's transaction does before `registry`, where what the file does not reach
+     * can be done there whole. Such a save has no file stopped part way to settle: the databases it
+     * is for take every statement back.
+     */
+    inFile?: () => Promise<void>;
+    /**
      * After `registry`, for a file that stopped part way and was settled to what applied: what the
      * caller does after an apply, given the fields the row recorded.
      */
@@ -2614,18 +2623,25 @@ async function saveThroughWriter(
       : inFile
         ? {
             ...beforeWrite,
-            inLastTransaction: () => registry(prepared.fields),
+            inLastTransaction: async () => {
+              await change.inFile?.();
+              await registry(prepared.fields);
+            },
             // A file that stops part way is settled to what of it applied: the row then records
             // the fields as far as the database holds them.
-            onSettled: async report => {
-              const applied = appliedFieldsOf(
-                change.collection.fields ?? [],
-                prepared.fields,
-                report
-              );
-              await registry(applied);
-              change.settled?.(applied);
-            },
+            ...(change.inFile === undefined
+              ? {
+                  onSettled: async report => {
+                    const applied = appliedFieldsOf(
+                      change.collection.fields ?? [],
+                      prepared.fields,
+                      report
+                    );
+                    await registry(applied);
+                    change.settled?.(applied);
+                  },
+                }
+              : {}),
           }
         : beforeWrite;
   const result = await writeCollectionSave(prepared.deps, prepared.save, {

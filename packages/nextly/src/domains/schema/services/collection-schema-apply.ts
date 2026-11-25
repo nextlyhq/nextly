@@ -15,6 +15,8 @@
  *
  * @module domains/schema/services/collection-schema-apply
  */
+import { isDeepStrictEqual } from "node:util";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
@@ -52,7 +54,10 @@ import {
 } from "../../i18n/migration/companion-unique-indexes";
 import { withoutLeavingConstraints } from "../../i18n/migration/field-leaves-translation-rules";
 import { applyCompanionTransition } from "../../i18n/migration/held-leaving-drops";
-import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
+import {
+  buildCompanionTransitionStatements,
+  type CompanionTransitionPlan,
+} from "../../i18n/migration/reconcile-companion";
 import {
   translationLayoutChange,
   type TranslationLayoutChange,
@@ -1213,14 +1218,24 @@ async function reconcileCollectionCompanionAfterFile(
   if (!wasLocalized && !isLocalized) return;
   const { adapter } = requireSchemaChangeDeps(change.slug);
   await reconcileCompanion({
-    change,
+    ...afterFile(change, companionRename),
     adapter,
     oldFields: (change.collection.fields ?? []) as unknown as FieldDefinition[],
+  });
+}
+
+/** How a file's change has its translations table brought in step. */
+function afterFile(
+  change: CollectionSchemaChange,
+  companionRename: CollectionCompanionRename
+) {
+  return {
+    change,
     companionRename,
     defaultLocale: appLocalization()?.defaultLocale ?? "en",
     joinedBefore: [],
     settleLeaving: undefined,
-  });
+  };
 }
 
 /**
@@ -1239,50 +1254,11 @@ async function reconcileCompanion(args: {
     typeof applyCompanionTransition
   >[0]["settleLeaving"];
 }): Promise<void> {
-  const { change, adapter, oldFields } = args;
+  const { change, adapter } = args;
   const { slug, fields } = change;
-  const { wasLocalized, isLocalized } = storedPerLanguage(change);
   const { tableName } = change.collection;
   try {
-    const companionExists = await adapter.tableExists(`${tableName}_locales`);
-    const companionHasStatus =
-      companionExists && wasLocalized && isLocalized
-        ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
-        : undefined;
-    const plan = buildCompanionTransitionStatements({
-      // The companion mirrors the main table, which the Schema Builder's collection creator made.
-      builtBy: "collection" as const,
-      slug,
-      kind: "collection",
-      tableName,
-      dialect: adapter.dialect,
-      defaultLocale: args.defaultLocale,
-      languageOrder: appLanguageOrder(),
-      // The companion's own `_status`, after and before this apply: under per-language storage
-      // only where each language publishes on its own, otherwise the Draft/Published flag. The
-      // one before decides whether main carried `status` and the companion `_status`.
-      status: layoutOf(change).isPublishedPerLanguage,
-      wasLocalized,
-      isLocalized,
-      wasStatus: layoutOf(change).wasPublishedPerLanguage,
-      statusFromEntryInEveryLanguage:
-        layoutOf(change).statusFromEntryInEveryLanguage,
-      oldFields,
-      newFields: fields,
-      companionExists,
-      companionHasStatus,
-      joinedBefore: args.joinedBefore,
-      renamed: args.companionRename ?? undefined,
-      holdLeavingDrops: args.settleLeaving !== undefined,
-      // What this database holds now, so a re-apply after a part-applied one finishes it.
-      ...(await liveCompanionShape(adapter, {
-        tableName,
-        oldFields,
-        newFields: fields,
-        builtBy: "collection",
-        companionExists,
-      })),
-    });
+    const plan = await companionPlanOf(args, fields);
     await applyCompanionTransition({
       adapter,
       plan,
@@ -1303,6 +1279,99 @@ async function reconcileCompanion(args: {
       note: "main table updated but localized companion out of sync; re-apply to retry",
     });
   }
+}
+
+/**
+ * What the translations step does for `change`, its fields becoming `newFields`, from what this
+ * database holds now, so a re-apply after a part-applied one finishes it.
+ */
+async function companionPlanOf(
+  args: Parameters<typeof reconcileCompanion>[0],
+  newFields: FieldDefinition[]
+): Promise<CompanionTransitionPlan> {
+  const { change, adapter, oldFields } = args;
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
+  const { tableName } = change.collection;
+  const companionExists = await adapter.tableExists(`${tableName}_locales`);
+  const companionHasStatus =
+    companionExists && wasLocalized && isLocalized
+      ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
+      : undefined;
+  return buildCompanionTransitionStatements({
+    // The companion mirrors the main table, which the Schema Builder's collection creator made.
+    builtBy: "collection" as const,
+    slug: change.slug,
+    kind: "collection",
+    tableName,
+    dialect: adapter.dialect,
+    defaultLocale: args.defaultLocale,
+    languageOrder: appLanguageOrder(),
+    // The companion's own `_status`, after and before this apply: under per-language storage
+    // only where each language publishes on its own, otherwise the Draft/Published flag. The
+    // one before decides whether main carried `status` and the companion `_status`.
+    status: layoutOf(change).isPublishedPerLanguage,
+    wasLocalized,
+    isLocalized,
+    wasStatus: layoutOf(change).wasPublishedPerLanguage,
+    statusFromEntryInEveryLanguage:
+      layoutOf(change).statusFromEntryInEveryLanguage,
+    oldFields,
+    newFields,
+    companionExists,
+    companionHasStatus,
+    joinedBefore: args.joinedBefore,
+    renamed: args.companionRename ?? undefined,
+    holdLeavingDrops: args.settleLeaving !== undefined,
+    ...(await liveCompanionShape(adapter, {
+      tableName,
+      oldFields,
+      newFields,
+      builtBy: "collection",
+      companionExists,
+    })),
+  });
+}
+
+/**
+ * The drops of `change`'s removed translated fields, run on the transaction the caller has open, for
+ * a change whose translations step would do nothing else; undefined for any other, whose step runs
+ * after the file. The file's transaction then holds the count, the drop and the registry row
+ * together: all of it lands, or none. The step still follows the file, and finds the columns gone.
+ *
+ * Nothing else: the step plans nothing for the fields as they stand, and for the change it plans
+ * exactly what removing those fields alone would. Never on MySQL, which commits each schema
+ * statement as it runs.
+ */
+async function removedTranslationsDrops(
+  change: CollectionSchemaChange,
+  companionRename: CollectionCompanionRename
+): Promise<(() => Promise<void>) | undefined> {
+  const { adapter } = requireSchemaChangeDeps(change.slug);
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
+  if (adapter.dialect === "mysql" || !wasLocalized || !isLocalized) {
+    return undefined;
+  }
+  const oldFields = (change.collection.fields ??
+    []) as unknown as FieldDefinition[];
+  const kept = new Set(change.fields.map(field => field.name));
+  const left = oldFields.filter(field => kept.has(field.name));
+  if (left.length === oldFields.length || companionRename) return undefined;
+  const args = { ...afterFile(change, companionRename), adapter, oldFields };
+  const planned = await companionPlanOf(args, change.fields);
+  const removing = await companionPlanOf(args, left);
+  const standing = await companionPlanOf(args, oldFields);
+  if (
+    planned.statements.length === 0 ||
+    planned.needsArchive ||
+    standing.statements.length > 0 ||
+    !isDeepStrictEqual(planned, removing)
+  ) {
+    return undefined;
+  }
+  return () =>
+    adapter.transaction(async tx => {
+      for (const statement of planned.statements) await tx.execute(statement);
+    });
 }
 
 /**
@@ -1384,7 +1453,8 @@ export interface CollectionFileRoad {
   /**
    * Whether the caller's registry write joins the file's own transaction (`inLastTransaction`):
    * not where the translations table is brought in step after the file (`after`), as the row would
-   * then record the change before that step holds it (`registryInFileTransaction`).
+   * then record the change before that step holds it (`registryInFileTransaction`), unless that
+   * transaction does all the step would (`inFile`).
    */
   registryInFile: boolean;
   /**
@@ -1395,6 +1465,11 @@ export interface CollectionFileRoad {
   judge: () => Promise<void>;
   /** What is written ahead of the file, once every check has passed: a field leaving translation's archive. */
   before: () => Promise<void>;
+  /**
+   * What the file's own transaction does of `after`, its registry row with it
+   * (`removedTranslationsDrops`); undefined where `after` does all of it.
+   */
+  inFile: () => Promise<(() => Promise<void>) | undefined>;
   /**
    * What the file does not reach, done as the push does it once it has run: the translations table
    * brought in step. A unique index a field that stops being unique still has under a name the file
@@ -1443,6 +1518,8 @@ export function collectionFileRoad(
         change,
         await companionRename()
       ),
+    inFile: async () =>
+      removedTranslationsDrops(change, await companionRename()),
     after: async () =>
       reconcileCollectionCompanionAfterFile(change, await companionRename()),
   };
