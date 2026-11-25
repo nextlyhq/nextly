@@ -126,7 +126,7 @@ const update = (
     data
   ) as Promise<Result>;
 
-/** The version a read of `locale` gives, `*` for every language. */
+/** The version a read of `locale` gives, `*` or `all` for every language. */
 async function readRev(
   t: TestNextly,
   slug: string,
@@ -327,6 +327,115 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(refused.code, JSON.stringify(refused)).toBe("STALE_VERSION");
       expect(await lifecycleOf(t, page.id)).toEqual(before);
+    });
+
+    describe("a read of every language (`all`)", () => {
+      /** The version a list gives the page, read in `locale`. */
+      const listedRev = async (t: TestNextly, id: string, locale: string) => {
+        const { items } = await t.nextly.find({
+          collection: PAGES as never,
+          locale,
+          overrideAccess: true,
+          status: "all",
+        } as never);
+        const row = (items as { id?: unknown; _rev?: unknown }[]).find(
+          each => each.id === id
+        );
+        return row?._rev;
+      };
+
+      it("spells the version of every language, a document's read and a list's alike", async () => {
+        const t = await boot(dialect);
+        const page = await translatedDraft(t);
+
+        expect(page.every).toMatch(/en:\d+.*es:\d+/);
+        expect(await readRev(t, PAGES, page.id, "all")).toBe(page.every);
+        expect(await listedRev(t, page.id, "all")).toBe(page.every);
+      });
+
+      it("names a language not yet translated", async () => {
+        const t = await boot(dialect);
+        const id = idOf(
+          await handlerOf(t).createEntry(
+            { collectionName: PAGES, overrideAccess: true, locale: "en" },
+            { title: "hello", note: "n" }
+          )
+        );
+        expect(await readRev(t, PAGES, id, "all")).toMatch(/es:0$/);
+      });
+
+      it("leaves a one-language read's version as it is, every language's values beside it or not", async () => {
+        const t = await boot(dialect);
+        const page = await translatedDraft(t);
+
+        const beside = (await t.nextly.findByID({
+          collection: PAGES as never,
+          id: page.id,
+          locale: "en",
+          translations: "all",
+          overrideAccess: true,
+          status: "all",
+        } as never)) as { _rev?: unknown } | null;
+        expect(beside?._rev).toBe(page.en);
+        expect(page.en).not.toContain("es:");
+        expect(await listedRev(t, page.id, "es")).toBe(page.es);
+      });
+
+      /** Publishes the languages chosen, from `_rev`. */
+      const publishChosen = (
+        t: TestNextly,
+        id: string,
+        locales: string[],
+        _rev: string
+      ) =>
+        handlerOf(t).publishParts(
+          {
+            collectionName: PAGES,
+            entryId: id,
+            overrideAccess: true,
+            data: { _rev },
+          } as never,
+          { direction: "publish", locales } as never
+        ) as Promise<Result>;
+
+      it("publishes a chosen language other than the default from it", async () => {
+        const t = await boot(dialect);
+        const page = await translatedDraft(t);
+
+        const published = await publishChosen(
+          t,
+          page.id,
+          ["es"],
+          await readRev(t, PAGES, page.id, "all")
+        );
+
+        expect(published.success, JSON.stringify(published)).toBe(true);
+        const after = await lifecycleOf(t, page.id);
+        expect(after.languages.es).toMatch(/^published#/);
+        expect(after.languages.en).not.toMatch(/^published#/);
+      });
+
+      it("refuses that publish once the language changed since, and once it names another alone", async () => {
+        const t = await boot(dialect);
+        const page = await translatedDraft(t);
+        const read = await readRev(t, PAGES, page.id, "all");
+        await update(
+          t,
+          PAGES,
+          page.id,
+          { title: "hola otra vez", _overwrite: true },
+          { locale: "es" }
+        );
+        const before = await lifecycleOf(t, page.id);
+
+        expect((await publishChosen(t, page.id, ["es"], read)).code).toBe(
+          "STALE_VERSION"
+        );
+        expect((await publishChosen(t, page.id, ["es"], page.en)).code).toBe(
+          "VALIDATION_ERROR"
+        );
+        expect(await lifecycleOf(t, page.id)).toEqual(before);
+      });
     });
 
     describe.each(EVERY_LANGUAGE_DOORS)(

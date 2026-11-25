@@ -94,7 +94,7 @@ function save(
   }) as Promise<Result>;
 }
 
-/** The version a read of `locale` gives, `*` for every language; drafts included. */
+/** The version a read of `locale` gives, `*` or `all` for every language; drafts included. */
 async function readRev(
   t: TestNextly,
   slug: string,
@@ -239,6 +239,37 @@ describe.each(getConfiguredTestDialects())(
   "publishing a Single and rewriting its pending change, judged by version (%s)",
   dialect => {
     describe("publishing every language", () => {
+      it("spells the version of every language for a read of every language (`all`), and publishes from it", async () => {
+        const t = await boot(dialect);
+        const every = await translatedBanner(t);
+        const english = await readRev(t, BANNER, "en");
+
+        expect(every).toMatch(/en:\d+.*es:\d+/);
+        const read = await readRev(t, BANNER, "all");
+        expect(read).toBe(every);
+        // One language's read is left as it is.
+        expect(english).not.toContain("es:");
+
+        const published = await publishAll(t, { _rev: read });
+        expect(published.success, JSON.stringify(published)).toBe(true);
+      });
+
+      it("refuses that publish once a language changed since the read of every language (`all`)", async () => {
+        const t = await boot(dialect);
+        await translatedBanner(t);
+        const read = await readRev(t, BANNER, "all");
+        await save(t, BANNER, "es", {
+          headline: "hola otra vez",
+          _overwrite: true,
+        });
+        const before = await lifecycleOf(t, BANNER);
+
+        expect((await publishAll(t, { _rev: read })).code).toBe(
+          "STALE_VERSION"
+        );
+        expect(await lifecycleOf(t, BANNER)).toEqual(before);
+      });
+
       it("refuses a publish of every language after one of them changed", async () => {
         const t = await boot(dialect);
         const read = await translatedBanner(t);
