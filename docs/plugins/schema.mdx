@@ -345,6 +345,11 @@ A departed plugin's Singles and field groups stay too: `nextly db:sync`, with
 `--remove-orphaned` as well, keeps them and names each with its plugin. `prune` takes
 collections only.
 
+On a site that keeps migration files, remove all of them with a migration instead:
+`nextly migrate:create` writes the one that drops what left your config, and `nextly migrate`
+applies it with your consent. Dropped by `prune` there, a table is one the applied migrations
+still record, and `nextly migrate` refuses until it is back.
+
 Releases up to 0.0.2-alpha.81 recorded a plugin's Singles and field groups, and collections
 under its legacy top-level `collections` key, as the app's own. A development start, a
 configuration reload or one `nextly db:sync` puts that right while the plugin is configured.

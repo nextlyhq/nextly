@@ -45,6 +45,7 @@ import {
 import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
 import type { Deletion } from "../../domains/schema/migrate/data-loss-consent";
 import { pluginEntitySources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
+import { keepsMigrationFiles } from "../../domains/schema/migrate-create/snapshot-io";
 import { refuseFieldGroupSwitches } from "../../domains/schema/pipeline/companion-shape-switches";
 import { registryRows } from "../../domains/schema/pipeline/recorded-fields";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -160,6 +161,22 @@ async function runSyncStatements(
     appliedBefore: run.appliedBefore,
     name: nameOf,
   });
+}
+
+/** What the three syncs' kept lines are written with (`reportKeptPluginEntities`). */
+function keptReport(
+  config: LoadConfigResult["config"],
+  options: ResolvedDevOptions,
+  logger: CommandContext["logger"]
+): Parameters<typeof reportKeptPluginEntities>[3] {
+  return {
+    logger,
+    keepsMigrationFiles: async () =>
+      keepsMigrationFiles({
+        cwd: options.cwd,
+        migrationsDir: config.db.migrationsDir,
+      }),
+  };
 }
 
 // ============================================================================
@@ -293,11 +310,11 @@ export async function syncCollections(
   }
 
   // From the rows read above: the sync writes only what the configuration declares.
-  reportKeptPluginEntities(
+  await reportKeptPluginEntities(
     "collection",
     recordedCollections,
     config.collections,
-    logger
+    keptReport(config, options, logger)
   );
 
   // Display sync results
@@ -421,11 +438,11 @@ export async function syncSingles(
     }
   }
 
-  reportKeptPluginEntities(
+  await reportKeptPluginEntities(
     "single",
     await singleRegistry.getAllSingles(),
     config.singles,
-    logger
+    keptReport(config, options, logger)
   );
 
   // Display sync results
@@ -562,11 +579,11 @@ export async function syncComponents(
     }
   }
 
-  reportKeptPluginEntities(
+  await reportKeptPluginEntities(
     "component",
     await componentRegistry.getAllComponents(),
     config.fieldGroups,
-    logger
+    keptReport(config, options, logger)
   );
 
   // Display sync results

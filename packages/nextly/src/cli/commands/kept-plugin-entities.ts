@@ -14,15 +14,31 @@ interface RecordedRow {
   source?: unknown;
 }
 
-/** What a kind is called in the line, and the way its entities are removed where there is one. */
+/** What a kind is called in the line, and whether `nextly prune` takes it. */
 const KINDS = {
-  collection: {
-    named: "collection(s)",
-    way: ' "nextly prune" lists these collections, and removes them with --accept-data-loss.',
-  },
-  single: { named: "single(s)", way: "" },
-  component: { named: "component(s)", way: "" },
+  collection: { named: "collection(s)", pruned: true },
+  single: { named: "single(s)", pruned: false },
+  component: { named: "component(s)", pruned: false },
 } as const;
+
+/**
+ * The way to remove them, as a sentence. A migration drops every kind on a site that keeps
+ * migration files, where what `nextly prune` dropped directly would leave `nextly migrate` refusing
+ * a database its ledger no longer matches. Empty where there is no way, or where whether the site
+ * keeps them cannot be read: the line only informs, so that stops no sync.
+ */
+async function wayToRemove(
+  pruned: boolean,
+  keepsMigrationFiles: () => Promise<boolean>
+): Promise<string> {
+  const migrations = await keepsMigrationFiles().catch(() => undefined);
+  if (migrations === true) {
+    return ' "nextly migrate:create" writes the migration that drops them, and "nextly migrate" applies it with your consent.';
+  }
+  return migrations === false && pruned
+    ? ' "nextly prune" lists these collections, and removes them with --accept-data-loss.'
+    : "";
+}
 
 const PLUGIN_PREFIX = "plugin:";
 
@@ -30,12 +46,16 @@ const PLUGIN_PREFIX = "plugin:";
  * Names each of `rows` a plugin owns and the configuration does not declare.
  * Says nothing where there is none.
  */
-export function reportKeptPluginEntities(
+export async function reportKeptPluginEntities(
   kind: keyof typeof KINDS,
   rows: readonly RecordedRow[],
   declared: readonly { slug: string }[],
-  logger: Pick<CommandContext["logger"], "newline" | "info" | "item">
-): void {
+  report: {
+    logger: Pick<CommandContext["logger"], "newline" | "info" | "item">;
+    /** Asked only where there is an entity to name. */
+    keepsMigrationFiles: () => Promise<boolean>;
+  }
+): Promise<void> {
   const slugs = new Set(declared.map(entity => entity.slug));
   const kept = rows.flatMap(({ slug, source }) =>
     typeof slug === "string" &&
@@ -46,7 +66,9 @@ export function reportKeptPluginEntities(
       : []
   );
   if (kept.length === 0) return;
-  const { named, way } = KINDS[kind];
+  const { named, pruned } = KINDS[kind];
+  const { logger } = report;
+  const way = await wayToRemove(pruned, report.keepsMigrationFiles);
   logger.newline();
   logger.info(
     `${kept.length} ${named} kept, contributed by a plugin and no longer in your config:`

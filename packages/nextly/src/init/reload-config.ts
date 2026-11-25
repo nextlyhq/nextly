@@ -114,8 +114,8 @@ import {
 import {
   configTheCodeOwns,
   configWithRecordedHandOvers,
-  isCodeOwned,
   mergeRegisteredCollectionsSafely,
+  mergeRegisteredEntities,
   withoutHandedToBuilder,
 } from "../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector";
@@ -3360,24 +3360,15 @@ async function applyReloadHolding(
         await singleRegistry.getAllSingles(),
         declaredSingles
       );
-      for (const s of dbSingles) {
-        if (!s?.slug || !s?.tableName) continue;
-        if (desiredSingles[s.slug]) continue; // code config wins
-        desiredSingles[s.slug] = {
-          slug: s.slug,
-          tableName: s.tableName,
-          fields: (s.fields ?? []) as DesiredSingle["fields"],
-          status: s.status === true,
-          // Its translated fields are in its companion table: without the flag, the apply adds
-          // their columns back to the main table.
-          localized: s.localized === true,
-          // Read from the row, not inferred from the row's presence. A plugin's single whose
-          // plugin left the config keeps its row, so it reaches this loop while still owned by
-          // code; calling it the Builder's would widen its columns on the apply that follows,
-          // for a removal nobody requested.
-          builderOwned: !isCodeOwned(s),
-        };
-      }
+      // The merge the collections and `db:sync` use: whose the table is and whether its fields
+      // are translated come from the row, for a plugin's Single whose plugin left the config too.
+      Object.assign(
+        desiredSingles,
+        mergeRegisteredEntities(desiredSingles, dbSingles, (row, base) => ({
+          ...base,
+          status: row.status === true,
+        }))
+      );
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -3394,20 +3385,14 @@ async function applyReloadHolding(
       "fieldGroupRegistryService"
     )) as ComponentRegistrySurface;
     if (typeof componentRegistry?.getAllComponents === "function") {
-      const dbComponents = await componentRegistry.getAllComponents();
-      for (const c of dbComponents) {
-        if (!c?.slug || !c?.tableName) continue;
-        if (desiredComponents[c.slug]) continue; // code config wins
-        desiredComponents[c.slug] = {
-          slug: c.slug,
-          tableName: c.tableName,
-          fields: (c.fields ?? []) as DesiredFieldGroup["fields"],
-          // As the Single's above: its translated fields are in its companion table.
-          localized: c.localized === true,
-          // Read from the row, for the same reason as the singles loop above.
-          builderOwned: !isCodeOwned(c),
-        };
-      }
+      Object.assign(
+        desiredComponents,
+        mergeRegisteredEntities(
+          desiredComponents,
+          await componentRegistry.getAllComponents(),
+          (_row, base) => base
+        )
+      );
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
