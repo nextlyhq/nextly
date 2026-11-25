@@ -15,10 +15,12 @@
  */
 import { describe, expect, it, vi, beforeAll } from "vitest";
 
+import { ownerRowsToRecord } from "../../../domains/schema/ownership/kept-elements";
 import type { PluginLifecycleRecord } from "../../../domains/schema/ownership/plugin-lifecycle-state";
 import {
   previewPluginInstall,
   previewPluginInstallAll,
+  previewPluginUninstall,
   runPluginInstallAllCommand,
   runPluginInstallCommand,
   runPluginUninstallCommand,
@@ -925,6 +927,140 @@ describe("plugins uninstall with nothing applied to undo what it added elsewhere
       deps({ db: db as never, plugins: nothingApplied, forgetPlugin })
     );
     expect(forgetPlugin).toHaveBeenCalled();
+  });
+});
+
+describe("plugins uninstall over what it added to a collection's table, which the app's migrations carry", () => {
+  // What a push records for a plugin's hidden column and index on a collection's table: the
+  // plugin's, carried by the app's migrations, which is why no DOWN of the plugin drops either.
+  const carriedByTheApp = ownerRowsToRecord(
+    [
+      {
+        table: "dc_posts",
+        elementKind: "column",
+        elementName: "fx_score",
+        owner: { kind: "plugin", id: "@acme/fx" },
+      },
+      {
+        table: "dc_posts",
+        elementKind: "index",
+        elementName: "dc_posts_fx_idx",
+        owner: { kind: "plugin", id: "@acme/fx" },
+      },
+    ],
+    new Set(["fx__notes"]),
+    []
+  );
+  const reading = (rows: readonly unknown[]) =>
+    ({
+      select: () => ({
+        from: () => Object.assign([...rows], { where: () => [...rows] }),
+      }),
+      insert: () => ({ values: () => Promise.resolve() }),
+    }) as never;
+  /** Both are there throughout, as no step of the uninstall removes them. */
+  const stillThere = () =>
+    vi.fn(
+      async () =>
+        new Map([
+          [
+            "dc_posts",
+            [
+              { kind: "column" as const, name: "fx_score" },
+              { kind: "index" as const, name: "dc_posts_fx_idx" },
+            ],
+          ],
+        ])
+    );
+
+  it("FIXTURE: the rows name the plugin, and the app's stream", () => {
+    expect(carriedByTheApp.map(row => [row.ownerId, row.migratedBy])).toEqual([
+      ["@acme/fx", "app"],
+      ["@acme/fx", "app"],
+    ]);
+  });
+
+  it("finishes and forgets the plugin, leaving both in place, where no module is applied", async () => {
+    const forgetPlugin = vi.fn(async () => undefined);
+    const states: string[] = [];
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      deps({
+        db: reading(carriedByTheApp),
+        plugins: deps({}).plugins.map(p => ({ ...p, modules: [] })),
+        forgetPlugin,
+        liveElements: stillThere(),
+        recordLifecycle: vi.fn(async (_plugin, record) => {
+          states.push(record.state);
+        }),
+      })
+    );
+    expect(forgetPlugin).toHaveBeenCalledTimes(1);
+    expect(states).toEqual(["uninstalling", "uninstalled"]);
+  });
+
+  it("finishes and forgets the plugin, leaving both in place, where its DOWNs drop its own tables", async () => {
+    const forgetPlugin = vi.fn(async () => undefined);
+    const runDown = vi.fn(async () => 1);
+    const states: string[] = [];
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      deps({
+        db: reading([
+          {
+            tableName: "fx__notes",
+            elementKind: "table",
+            elementName: "",
+            ownerKind: "plugin",
+            ownerId: "@acme/fx",
+            migratedBy: "plugin:@acme/fx",
+            ownerVersion: null,
+            schemaVersion: null,
+            state: "active",
+          },
+          ...carriedByTheApp,
+        ]),
+        ...droppedByDowns(runDown),
+        forgetPlugin,
+        liveElements: stillThere(),
+        recordLifecycle: vi.fn(async (_plugin, record) => {
+          states.push(record.state);
+        }),
+      })
+    );
+    expect(runDown).toHaveBeenCalled();
+    expect(forgetPlugin).toHaveBeenCalledTimes(1);
+    expect(states).toEqual(["uninstalling", "uninstalled"]);
+  });
+
+  it("asks no consent for the column, which no DOWN drops", async () => {
+    const { changes } = await previewPluginUninstall(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      deps({
+        db: reading([
+          {
+            tableName: "fx__notes",
+            elementKind: "table",
+            elementName: "",
+            ownerKind: "plugin",
+            ownerId: "@acme/fx",
+            migratedBy: "plugin:@acme/fx",
+            ownerVersion: null,
+            schemaVersion: null,
+            state: "active",
+          },
+          ...carriedByTheApp,
+        ]),
+        liveElements: stillThere(),
+      })
+    );
+    const targets = changes.map(change => change.target).join("\n");
+    // CONTROL: the plan is the uninstall's, its own table's deletion among it.
+    expect(targets).toContain("fx__notes");
+    expect(targets).not.toContain("fx_score");
   });
 });
 
