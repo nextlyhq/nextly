@@ -63,6 +63,7 @@ import {
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { companionTableOf } from "../../../i18n/migration/derive-companion-spec";
 import { setPerLanguageStorage } from "../../../i18n/per-language-storage";
+import { col } from "../../extension/dsl";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 import { setNonInteractive } from "../../migrate/can-prompt";
 import { ownerRowsToRecord } from "../kept-elements";
@@ -185,6 +186,79 @@ const pluggedWith = (withPlugin: boolean, withCode: boolean) =>
         fields: [
           text({ name: "title" }),
           ...(withCode ? [number({ name: "code" })] : []),
+        ],
+      }),
+    ],
+    db: { migrationsDir: "./migrations" },
+  });
+
+/** What `contributing` adds besides the index on `code`: one name of each kind, on each table. */
+const CONTRIBUTED = {
+  column: "mko_stamp",
+  enumColumn: "mko_stage",
+  later: "mko_later",
+  groupIndex: "idx_mko_rank",
+  userColumn: "mko_note",
+};
+
+/**
+ * The plugin, adding to a collection's table, a field group's and a core table, as its schema hook
+ * declares it: hidden columns, the check an enum column implies, and indexes.
+ */
+const contributing = (
+  adds: { stamp?: boolean; later?: boolean } = { stamp: true }
+) =>
+  definePlugin({
+    name: PLUGIN,
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    contributes: {
+      schema: {
+        extend: [
+          ({ schema }) => {
+            schema.extendTable(TABLE, {
+              columns: {
+                ...(adds.stamp === true
+                  ? { [CONTRIBUTED.column]: col.shortText({ nullable: true }) }
+                  : {}),
+                ...(adds.later === true
+                  ? { [CONTRIBUTED.later]: col.shortText({ nullable: true }) }
+                  : {}),
+                [CONTRIBUTED.enumColumn]: col.enum(["open", "done"], {
+                  nullable: true,
+                }),
+              },
+              indexes: [{ columns: ["code"], name: DECLARED_INDEX }],
+            });
+            schema.extendTable(GROUP_TABLE, {
+              indexes: [{ columns: ["rank"], name: CONTRIBUTED.groupIndex }],
+            });
+            schema.extendTable("users", {
+              columns: {
+                [CONTRIBUTED.userColumn]: col.shortText({ nullable: true }),
+              },
+            });
+          },
+        ],
+      },
+    },
+  });
+
+/** The app's configuration with what `contributing` extends, and the plugin or no plugin. */
+const extendedWith = (plugin: ReturnType<typeof contributing> | undefined) =>
+  defineConfig({
+    ...(plugin === undefined ? {} : { plugins: [plugin] }),
+    fieldGroups: [
+      defineFieldGroup({ slug: GROUP, fields: [number({ name: "rank" })] }),
+    ],
+    collections: [
+      defineCollection({
+        slug: SLUG,
+        access: { read: () => true },
+        fields: [
+          text({ name: "title" }),
+          number({ name: "code" }),
+          fieldGroup({ name: "card", component: GROUP }),
         ],
       }),
     ],
@@ -1028,6 +1102,169 @@ describe.each(getConfiguredTestDialects())(
     // WAITING, not yet decided how: `nextly migrate` writes no owner row for what a schema hook adds to
     // an entity's table, and once the plugin has left the configuration nothing else says the index
     // is its, so the removal is not refused and takes it.
+    /** Each element row the record keeps for the plugin, whole, and when it was last written. */
+    async function pluginRows(url: string) {
+      return on(url, async adapter => {
+        const rows = await new SchemaOwnersRepository(
+          adapter.getDrizzle(),
+          dialect
+        ).read();
+        return rows
+          .filter(row => row.ownerId === PLUGIN)
+          .map(row => ({ ...row }))
+          .sort((a, b) =>
+            `${a.tableName} ${a.elementKind} ${a.elementName}`.localeCompare(
+              `${b.tableName} ${b.elementKind} ${b.elementName}`
+            )
+          );
+      });
+    }
+
+    /** When each of the plugin's rows was last written, as the database has it. */
+    async function writtenAt(url: string) {
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      return on(url, adapter =>
+        adapter.executeQuery<Record<string, unknown>>(
+          `SELECT ${q("table_name")} AS t, ${q("element_name")} AS n, ${q("updated_at")} AS u FROM ${q("nextly_schema_owners")} WHERE ${q("owner_id")} = '${PLUGIN}' ORDER BY ${q("table_name")}, ${q("element_kind")}, ${q("element_name")}`
+        )
+      );
+    }
+
+    /** A row as a push writes it for an element a plugin added to an entity's or a core table. */
+    const asAPushWrites = (
+      tableName: string,
+      elementKind: string,
+      elementName: string
+    ) => ({
+      tableName,
+      elementKind,
+      elementName,
+      ownerKind: "plugin",
+      ownerId: PLUGIN,
+      migratedBy: "app",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active",
+    });
+
+    /** The check the enum column implies, as the database names it. */
+    async function enumCheck(url: string): Promise<string> {
+      const snapshot = await snapshotOf(url, [TABLE]);
+      const checks =
+        snapshot.tables.find(each => each.name === TABLE)?.checks ?? [];
+      expect(checks.map(check => check.name)).toHaveLength(1);
+      return checks[0]!.name;
+    }
+
+    it("nextly migrate records what the plugin added to a collection's, a field group's and a core table, as a push records it", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      wentThrough(
+        await migrateCreate("add_posts", extendedWith(contributing()))
+      );
+      wentThrough(await migrate(extendedWith(contributing())));
+      // The control: each element is there.
+      expect((await shapeOf(url, TABLE)).columns).toContain(CONTRIBUTED.column);
+      expect((await shapeOf(url, TABLE)).indexes).toContain(DECLARED_INDEX);
+      expect((await shapeOf(url, GROUP_TABLE)).indexes).toContain(
+        CONTRIBUTED.groupIndex
+      );
+      expect((await shapeOf(url, "users")).columns).toContain(
+        CONTRIBUTED.userColumn
+      );
+
+      const recorded = await pluginRows(url);
+
+      expect(recorded).toHaveLength(6);
+      expect(recorded).toEqual(
+        expect.arrayContaining([
+          asAPushWrites(TABLE, "column", CONTRIBUTED.column),
+          asAPushWrites(TABLE, "column", CONTRIBUTED.enumColumn),
+          asAPushWrites(TABLE, "check", await enumCheck(url)),
+          asAPushWrites(TABLE, "index", DECLARED_INDEX),
+          asAPushWrites(GROUP_TABLE, "index", CONTRIBUTED.groupIndex),
+          asAPushWrites("users", "column", CONTRIBUTED.userColumn),
+        ])
+      );
+    });
+
+    it("nextly migrate records them on a database migrated before rows were written, and writes none again where they are there", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      wentThrough(
+        await migrateCreate("add_posts", extendedWith(contributing()))
+      );
+      wentThrough(await migrate(extendedWith(contributing())));
+      await on(url, async adapter =>
+        new SchemaOwnersRepository(
+          adapter.getDrizzle(),
+          dialect
+        ).deletePluginOwner(PLUGIN)
+      );
+
+      // No file is pending.
+      wentThrough(await migrate(extendedWith(contributing())));
+      expect(await pluginRows(url)).toHaveLength(6);
+
+      const before = await writtenAt(url);
+      wentThrough(await migrate(extendedWith(contributing())));
+      expect(await writtenAt(url)).toEqual(before);
+    });
+
+    it("nextly migrate keeps the row of a declared column no file has made yet, and of what a removed plugin left; it drops the row of what is in neither", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      wentThrough(
+        await migrateCreate("add_posts", extendedWith(contributing()))
+      );
+      wentThrough(await migrate(extendedWith(contributing())));
+      const names = async () =>
+        (await pluginRows(url)).map(row => row.elementName);
+
+      // Declared, and no file made it: the row says whose it will be.
+      wentThrough(
+        await migrate(extendedWith(contributing({ stamp: true, later: true })))
+      );
+      expect((await shapeOf(url, TABLE)).columns).not.toContain(
+        CONTRIBUTED.later
+      );
+      expect(await names()).toContain(CONTRIBUTED.later);
+
+      // Declared no more, and never made.
+      wentThrough(await migrate(extendedWith(contributing())));
+      expect(await names()).not.toContain(CONTRIBUTED.later);
+
+      // The plugin gone from the configuration, its parts still there.
+      wentThrough(await migrate(extendedWith(undefined)));
+      expect(await names()).toContain(CONTRIBUTED.column);
+      expect((await shapeOf(url, TABLE)).columns).toContain(CONTRIBUTED.column);
+    });
+
+    it("nextly migrate applies a file dropping a column the plugin stopped declaring from the app's own table, and drops its row", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      wentThrough(
+        await migrateCreate("add_posts", extendedWith(contributing()))
+      );
+      wentThrough(await migrate(extendedWith(contributing())));
+      expect((await pluginRows(url)).map(row => row.elementName)).toContain(
+        CONTRIBUTED.column
+      );
+
+      wentThrough(
+        await migrateCreate("drop_stamp", extendedWith(contributing({})))
+      );
+      wentThrough(await migrate(extendedWith(contributing({}))));
+
+      expect((await shapeOf(url, TABLE)).columns).not.toContain(
+        CONTRIBUTED.column
+      );
+      expect((await pluginRows(url)).map(row => row.elementName)).not.toContain(
+        CONTRIBUTED.column
+      );
+    });
+
     it("migrate:create refuses removing a field a removed plugin's index stands on, put there by migrate alone, writing nothing", async () => {
       const url = await emptyDatabase();
       use(url);
