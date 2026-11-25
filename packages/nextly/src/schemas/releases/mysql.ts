@@ -26,7 +26,7 @@ import {
 import {
   mysqlIndexes,
   NEXTLY_RELEASES_INDEXES,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-mysql";
 import type { VersionScopeKind } from "../versions/types";
 
 import type { ReleaseKind, ReleaseMemberAction, ReleaseState } from "./types";

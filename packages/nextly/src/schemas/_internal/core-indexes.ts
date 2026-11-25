@@ -1,27 +1,16 @@
 /**
  * The indexes of the extendable core tables, described once for all three
- * dialects, and the per-dialect functions that turn a description into
- * Drizzle index builders.
+ * dialects.
  *
- * Each dialect's table module passes its table's description through its own
- * function, so an index is declared in one place and a dialect cannot come to
- * carry a different set by an edit made to one file.
+ * Each dialect's table module passes its table's description through the
+ * function that turns one into that dialect's Drizzle index builders
+ * (`core-indexes-postgres`, `core-indexes-mysql`, `core-indexes-sqlite`), so an
+ * index is declared in one place and a dialect cannot come to carry a different
+ * set by an edit made to one file. Those functions are apart, and this imports
+ * nothing, so that a dialect's tables load that dialect alone.
  *
  * @module schemas/_internal/core-indexes
  */
-import {
-  index as mysqlIndex,
-  uniqueIndex as mysqlUniqueIndex,
-} from "drizzle-orm/mysql-core";
-import {
-  index as pgIndex,
-  uniqueIndex as pgUniqueIndex,
-} from "drizzle-orm/pg-core";
-import {
-  index as sqliteIndex,
-  uniqueIndex as sqliteUniqueIndex,
-} from "drizzle-orm/sqlite-core";
-
 /** One index: its name and the column KEYS it covers, in order. */
 export interface CoreIndex<K extends string> {
   readonly name: string;
@@ -238,46 +227,3 @@ export const NEXTLY_RELEASES_INDEXES = [
   { name: "nextly_releases_scheduled_idx", columns: ["scheduledAt"] },
   { name: "nextly_releases_published_idx", columns: ["publishedAt"] },
 ] as const satisfies readonly CoreIndex<string>[];
-
-type PgIndexColumn = Parameters<ReturnType<typeof pgIndex>["on"]>[0];
-type MysqlIndexColumn = Parameters<ReturnType<typeof mysqlIndex>["on"]>[0];
-type SqliteIndexColumn = Parameters<ReturnType<typeof sqliteIndex>["on"]>[0];
-
-/** PostgreSQL index builders for `indexes`, over a table's extra-config columns. */
-export function pgIndexes<K extends string>(
-  indexes: readonly CoreIndex<K>[],
-  table: Record<K, PgIndexColumn>
-) {
-  return indexes.map(({ name, unique, columns: [head, ...tail] }) =>
-    (unique ? pgUniqueIndex : pgIndex)(name).on(
-      table[head],
-      ...tail.map(key => table[key])
-    )
-  );
-}
-
-/** MySQL index builders for `indexes`, over a table's extra-config columns. */
-export function mysqlIndexes<K extends string>(
-  indexes: readonly CoreIndex<K>[],
-  table: Record<K, MysqlIndexColumn>
-) {
-  return indexes.map(({ name, unique, columns: [head, ...tail] }) =>
-    (unique ? mysqlUniqueIndex : mysqlIndex)(name).on(
-      table[head],
-      ...tail.map(key => table[key])
-    )
-  );
-}
-
-/** SQLite index builders for `indexes`, over a table's extra-config columns. */
-export function sqliteIndexes<K extends string>(
-  indexes: readonly CoreIndex<K>[],
-  table: Record<K, SqliteIndexColumn>
-) {
-  return indexes.map(({ name, unique, columns: [head, ...tail] }) =>
-    (unique ? sqliteUniqueIndex : sqliteIndex)(name).on(
-      table[head],
-      ...tail.map(key => table[key])
-    )
-  );
-}

@@ -17,7 +17,10 @@
 // fallow-ignore-file code-duplication
 import { mysqlTable, text, varchar } from "drizzle-orm/mysql-core";
 
-import { MEDIA_USAGE_INDEXES, mysqlIndexes } from "../_internal/core-indexes";
+import {
+  MEDIA_USAGE_INDEXES,
+  mysqlIndexes,
+} from "../_internal/core-indexes-mysql";
 import { media } from "../media/mysql";
 
 import { MEDIA_USAGE_FIELD_PATH_LENGTH, MEDIA_USAGE_TABLE } from "./table-name";
