@@ -652,6 +652,89 @@ describe.each(getConfiguredTestDialects())(
       );
     }, 30_000);
 
+    // Where values are kept per language, a repeater's or group's text inside goes to the language's
+    // own row and the rest of it to the entry's. A save that shares a field inside, or translates
+    // one, leaves the container its name and its columns and splits its value otherwise: a write
+    // prepared before it would put that text where no read looks. Refused as any field stored
+    // differently is; a label inside changes nothing of the split, and where no value is kept per
+    // language there is none.
+    it.each([
+      { layout: "kept per language", translated: true },
+      { layout: "kept on the entry", translated: false },
+    ])(
+      "compares a container by how its text inside is split, on a collection whose values are $layout",
+      async ({ translated }) => {
+        const t = await boot(translated);
+        const slides = (caption: Record<string, unknown>) => ({
+          name: "slides",
+          type: "repeater",
+          fields: [
+            { name: "caption", type: "text", ...caption },
+            { name: "credit", type: "text" },
+          ],
+        });
+        const withSlides =
+          (caption: Record<string, unknown>) =>
+          (fields: Array<{ name: string } & Record<string, unknown>>) => [
+            ...fields.filter(field => field.name !== "slides"),
+            slides(caption),
+          ];
+        const madeNow = async () => ({
+          updates: await loadedNow(t, { title: "t" }),
+          updatesSlides: await loadedNow(t, { title: "t", slides: [] }),
+          createsSlides: await loadedNow(
+            t,
+            { title: "t", slides: [] },
+            { insertsOnly: true }
+          ),
+          createsTitle: await loadedNow(
+            t,
+            { title: "t" },
+            { insertsOnly: true }
+          ),
+        });
+        const changed = {
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "fields.slides",
+                code: "FIELD_CHANGED",
+              }),
+            ],
+          },
+        };
+        // Shared, then translated again: each way splits the value otherwise.
+        await saveDefinition(t, withSlides({}));
+        for (const caption of [{ localized: false }, {}]) {
+          const made = await madeNow();
+          await saveDefinition(t, withSlides(caption));
+          if (!translated) {
+            for (const loaded of Object.values(made)) {
+              await expect(heldFor(t, loaded)).resolves.toBeUndefined();
+            }
+            continue;
+          }
+          await expect(heldFor(t, made.updatesSlides)).rejects.toMatchObject(
+            changed
+          );
+          await expect(heldFor(t, made.createsSlides)).rejects.toMatchObject(
+            changed
+          );
+          await expect(heldFor(t, made.updates)).rejects.toMatchObject({
+            code: "COLLECTION_BEING_CHANGED",
+          });
+          await expect(heldFor(t, made.createsTitle)).resolves.toBeUndefined();
+        }
+        const made = await madeNow();
+        await saveDefinition(t, withSlides({ label: "Caption, relabelled" }));
+        for (const loaded of Object.values(made)) {
+          await expect(heldFor(t, loaded)).resolves.toBeUndefined();
+        }
+      },
+      30_000
+    );
+
     // Turning the Draft/Published lifecycle off takes its column out with the save: a write prepared
     // while it was on would write or read it. It is refused as made for a definition that changed,
     // a create among them, to be made again from the definition as it stands.
