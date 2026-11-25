@@ -271,6 +271,24 @@ function translatedDocument(
 }
 
 /**
+ * The document's translation page, where the language asked for is written
+ * there: one other than the site's default, of a document that keeps its text
+ * per language. Undefined where it is written in the form.
+ */
+function translationPageAddress(
+  document: OpenedDocument,
+  collection: OpenableCollection | undefined,
+  request: OpenRequest
+): string | undefined {
+  const { locale, defaultLocale } = request;
+  if (collection?.localized !== true || locale === undefined) return undefined;
+  // A site with no default to compare leaves the form to decide.
+  if (!defaultLocale || !otherLanguage(request)) return undefined;
+  const translated = translatedDocument(document);
+  return translated && translationAddress(translated, { target: locale });
+}
+
+/**
  * The address the document is written at in the language asked for: its
  * translation page for a language other than the site's default, where the
  * document keeps its text per language, else its form (a collection's entry
@@ -283,18 +301,8 @@ function formAddress(
 ): string {
   const { slug, id } = document;
   const { locale, defaultLocale } = request;
-  const translated = translatedDocument(document);
-  if (
-    translated !== undefined &&
-    collection?.localized === true &&
-    locale !== undefined &&
-    // A site with no default to compare leaves the form to decide.
-    defaultLocale !== undefined &&
-    defaultLocale !== "" &&
-    otherLanguage(request)
-  ) {
-    return translationAddress(translated, { target: locale });
-  }
+  const page = translationPageAddress(document, collection, request);
+  if (page !== undefined) return page;
   return withLocale(
     document.kind === "collection" && id !== undefined
       ? buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id })

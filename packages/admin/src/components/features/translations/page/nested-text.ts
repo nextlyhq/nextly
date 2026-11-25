@@ -137,51 +137,73 @@ interface Reading {
   inList: boolean;
 }
 
+/** One level being read. */
+type Contents = Pick<TextLevel, "texts" | "levels">;
+
+/**
+ * A group with no name, whose fields are laid out at the level it stands in,
+ * under its own condition.
+ */
+function addLayout(
+  into: Contents,
+  field: FieldConfig,
+  key: string,
+  value: Row,
+  basePath: string,
+  reading: Reading
+): void {
+  const fields = shapeOf(field).fields ?? [];
+  const inside = contentsOf(fields, value, basePath, reading);
+  if (isEmptyLevel(inside)) return;
+  into.levels.push({ key, label: undefined, field, basePath, ...inside });
+}
+
+/** One named field of a level: its text, or the container it is. */
+function addNamed(
+  into: Contents,
+  field: FieldConfig,
+  name: string,
+  value: Row,
+  basePath: string,
+  reading: Reading
+): void {
+  // What tells a row from the others is the same in every language, though its
+  // repeater declares it as a field of its own.
+  if (reading.inList && name === "id") return;
+  // A value the reader may not see is not in the row at all.
+  if (!Object.hasOwn(value, name)) return;
+  const path = `${basePath}.${name}`;
+  if (isContainer(shapeOf(field))) {
+    const level = levelOf(field, value[name], path, basePath, reading);
+    if (level !== undefined) into.levels.push(level);
+    return;
+  }
+  into.texts.push({
+    path,
+    basePath,
+    field,
+    label: [...reading.around, labelOf(field)].join(", "),
+  });
+}
+
 /** The texts and levels of one row, instance or group. */
 function contentsOf(
   fields: readonly FieldConfig[],
   value: Row,
   basePath: string,
   reading: Reading
-): Pick<TextLevel, "texts" | "levels"> {
-  const texts: NestedText[] = [];
-  const levels: TextLevel[] = [];
+): Contents {
+  const contents: Contents = { texts: [], levels: [] };
   fields.forEach((field, index) => {
-    const shape = shapeOf(field);
     if (fieldAdminGates(field).hidden || !holdsText(field)) return;
-    // What tells a row from the others is the same in every language, though
-    // its repeater declares it as a field of its own.
-    if (reading.inList && shape.name === "id") return;
-    if (!shape.name) {
-      // A group with no name lays its fields out at this level, under its own
-      // condition.
-      const inside = contentsOf(shape.fields ?? [], value, basePath, reading);
-      if (isEmptyLevel(inside)) return;
-      levels.push({
-        key: `layout-${index}`,
-        label: undefined,
-        field,
-        basePath,
-        ...inside,
-      });
-      return;
+    const { name } = shapeOf(field);
+    if (name) addNamed(contents, field, name, value, basePath, reading);
+    else {
+      const key = `layout-${index}`;
+      addLayout(contents, field, key, value, basePath, reading);
     }
-    // A value the reader may not see is not in the row at all.
-    if (!Object.hasOwn(value, shape.name)) return;
-    const path = `${basePath}.${shape.name}`;
-    if (isContainer(shape)) {
-      const level = levelOf(field, value[shape.name], path, basePath, reading);
-      if (level !== undefined) levels.push(level);
-      return;
-    }
-    texts.push({
-      path,
-      basePath,
-      field,
-      label: [...reading.around, labelOf(field)].join(", "),
-    });
   });
-  return { texts, levels };
+  return contents;
 }
 
 function isContainer({ type }: ContainerShape): boolean {
