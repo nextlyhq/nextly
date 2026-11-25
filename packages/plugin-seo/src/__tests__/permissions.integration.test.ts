@@ -623,7 +623,8 @@ describe.each(getConfiguredTestDialects())(
           plan: run.plan,
         });
         expect(applied.status, JSON.stringify(applied.body)).toBe(200);
-        expect((await stored(t, id)).metaTitle).toBe("");
+        // A cleared text inside the `seo` group is stored as no text, as a blank one reads.
+        expect((await stored(t, id)).metaTitle).toBeNull();
       });
     });
 

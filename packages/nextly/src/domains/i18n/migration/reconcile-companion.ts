@@ -6,6 +6,7 @@ import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
+import { keepsTranslationsInside } from "../shared-structure";
 
 import { carriedDefinition } from "./carried-definition";
 import {
@@ -15,7 +16,14 @@ import {
   uniqueTranslatedColumns,
 } from "./companion-unique-indexes";
 import { ddlType, lit, q } from "./ddl-types";
-import { deriveCompanionSpec } from "./derive-companion-spec";
+import {
+  deriveCompanionSpec,
+  deriveCompanionTableSpec,
+} from "./derive-companion-spec";
+import {
+  disableKeepingOverlaysRefusal,
+  overlayLeftBehindRefusal,
+} from "./disable-keeping-overlays";
 import { storageDiffers } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
@@ -28,6 +36,7 @@ import {
 import {
   buildCompanionCreateOnlySql,
   buildLocalizationUpStatements,
+  buildOverlaySeedStatements,
   COMPANION_UPDATED_AT_COLUMN,
   companionUpdatedAtDdl,
 } from "./generate-up";
@@ -44,6 +53,101 @@ export interface CompanionFieldLike {
   name: string;
   type: string;
   localized?: boolean;
+}
+
+/** A repeater or group keeping one structure in every language with its text in an overlay. */
+function keepsOverlay(field: CompanionFieldLike): boolean {
+  return keepsTranslationsInside(field, true);
+}
+
+/**
+ * The refusal of turning translation off for an entity whose repeaters or groups keep their text
+ * per language (`disableKeepingOverlaysRefusal`): each container named by its overlay column on
+ * the translations table, as a migration file's refusal names it from the snapshot. Only a column
+ * the companion has (`liveCompanionColumns`, where read) is named, since one never made holds no
+ * text to lose. `undefined` where there is none. Asked before a Builder save changes anything
+ * (`archiveFieldsLeavingTranslation`), and again where the change is planned.
+ */
+export function disableDroppingOverlays(args: {
+  slug: string;
+  kind: I18nTransitionKind;
+  oldFields: readonly CompanionFieldLike[];
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+  liveCompanionColumns?: readonly string[];
+}): NextlyError | undefined {
+  const live =
+    args.liveCompanionColumns === undefined
+      ? undefined
+      : new Set(args.liveCompanionColumns);
+  const containers = args.oldFields.filter(keepsOverlay).flatMap(field => {
+    const column = fieldToLocalizedColumnSpec(
+      field,
+      args.dialect,
+      args.builtBy
+    );
+    return column && (live === undefined || live.has(column.name))
+      ? [column.name]
+      : [];
+  });
+  return disableKeepingOverlaysRefusal(
+    { kind: args.kind, slug: args.slug },
+    containers
+  );
+}
+
+/**
+ * The refusal of a change, translation staying on, that leaves a repeater or group which kept its
+ * text per language with nothing inside it translated (`overlayLeftBehindRefusal`): the field is
+ * still there under its name and is no longer a container keeping its text inside, so its overlay
+ * column would be dropped as removed, with every language's text in it, while its structure on the
+ * main table was stored without that text. A container removed outright, or one still keeping
+ * text, is not named. Only a column the companion has (`liveCompanionColumns`, where read) is
+ * named. Asked before a Builder save changes anything (`archiveFieldsLeavingTranslation`), and
+ * again where the change is planned.
+ */
+export function overlaysLeftBehind(args: {
+  slug: string;
+  kind: I18nTransitionKind;
+  oldFields: readonly CompanionFieldLike[];
+  newFields: readonly CompanionFieldLike[];
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+  liveCompanionColumns?: readonly string[];
+}): NextlyError | undefined {
+  const live =
+    args.liveCompanionColumns === undefined
+      ? undefined
+      : new Set(args.liveCompanionColumns);
+  const after = new Map(args.newFields.map(field => [field.name, field]));
+  const containers = args.oldFields.filter(keepsOverlay).flatMap(field => {
+    const now = after.get(field.name);
+    if (now === undefined || keepsOverlay(now)) return [];
+    const column = fieldToLocalizedColumnSpec(
+      field,
+      args.dialect,
+      args.builtBy
+    );
+    return column && (live === undefined || live.has(column.name))
+      ? [column.name]
+      : [];
+  });
+  return overlayLeftBehindRefusal(
+    { kind: args.kind, slug: args.slug },
+    containers
+  );
+}
+
+/**
+ * The fields with a column on a translated entity's companion: each translated field
+ * (`isFieldLocalized`), and each repeater or group whose text is kept per language in its overlay
+ * column (`keepsTranslationsInside`), its structure staying on the main table. The start creates
+ * the table with the same columns (`ensureCompanionTable`), so a Builder save and a start agree.
+ */
+function companionFieldsOf<F extends CompanionFieldLike>(
+  fields: readonly F[]
+): F[] {
+  return fields.filter(f => isFieldLocalized(f, true) || keepsOverlay(f));
 }
 
 export interface ReconcileCompanionArgs {
@@ -316,17 +420,43 @@ function addedCompanionColumnStatements(
 ): string[] {
   const { dialect, builtBy } = args;
   const present = new Set(args.presentOnCompanion ?? []);
-  return args.newLocalized
-    .filter(f => !oldNames.has(f.name))
-    .map(f => fieldToLocalizedColumnSpec(f, dialect, builtBy))
-    .filter(
-      (col): col is NonNullable<typeof col> =>
-        col != null && !present.has(col.name)
-    )
-    .map(
-      col =>
-        `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)}`
+  const live =
+    args.liveCompanionColumns === undefined
+      ? undefined
+      : new Set(args.liveCompanionColumns);
+  const added: string[] = [];
+  // Containers already there whose overlay this database's companion lacks: their text is on the
+  // main table, so the default language's overlay is seeded from it once the column is added.
+  const seeded: string[] = [];
+  for (const f of args.newLocalized) {
+    const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
+    // A column the companion already has is never added again: a save's own migration file made
+    // it (an overlay column a Builder save's file carries), or an earlier save that stopped did.
+    if (col == null || present.has(col.name) || live?.has(col.name)) continue;
+    // A container this database's companion holds no overlay for yet (one made before overlays
+    // were kept) gains it, though the field was already there.
+    const overlayMissing = live !== undefined && keepsOverlay(f);
+    if (oldNames.has(f.name) && !overlayMissing) continue;
+    added.push(
+      `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)}`
     );
+    if (oldNames.has(f.name) && overlayMissing) seeded.push(col.name);
+  }
+  if (seeded.length === 0 || args.defaultLocale === undefined) return added;
+  return [
+    ...added,
+    // The one seed every road adding an overlay to a container with text on main takes.
+    ...buildOverlaySeedStatements(
+      {
+        dialect,
+        mainTable: args.tableName,
+        companionTable,
+        defaultLocale: args.defaultLocale,
+      },
+      seeded,
+      { status: args.status }
+    ),
+  ];
 }
 
 export function buildCompanionReconcileStatements(
@@ -338,9 +468,10 @@ export function buildCompanionReconcileStatements(
 
   if (!args.companionExists) {
     // First translatable field on this collection (or fresh localized create): materialize
-    // the whole companion. deriveCompanionSpec returns null when there are no localized
-    // fields, in which case there is nothing to create yet.
-    const spec = deriveCompanionSpec({
+    // the whole companion, with the overlay column of each repeater or group among
+    // `newLocalized` that keeps translations inside. Null when there is nothing to hold, in
+    // which case there is nothing to create yet.
+    const spec = deriveCompanionTableSpec({
       slug,
       kind,
       dbName: tableName,
@@ -865,6 +996,29 @@ export function buildCompanionTransitionStatements(
   // ENABLE — relocate the existing main columns into a seeded companion.
   if (!wasLocalized && isLocalized) {
     const localizedNew = newFields.filter(f => isFieldLocalized(f, true));
+    const overlays = newFields.filter(keepsOverlay);
+    // A container already on the main table holds its text there: its default language's overlay
+    // is seeded from it once the column is added, as `migrate:create` seeds one
+    // (`buildOverlaySeedStatements`). Left empty, a first save in another language writes the
+    // structure without its text, and the default language's text would be gone.
+    const columnsBefore = new Set(
+      oldFields
+        .map(f => fieldToLocalizedColumnSpec(f, dialect, builtBy)?.name)
+        .filter((n): n is string => typeof n === "string")
+    );
+    const overlaySeed = buildOverlaySeedStatements(
+      {
+        dialect,
+        mainTable: tableName,
+        companionTable: `${tableName}_locales`,
+        defaultLocale,
+      },
+      overlays.flatMap(field => {
+        const col = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+        return col && columnsBefore.has(col.name) ? [col.name] : [];
+      }),
+      { status: status === true }
+    );
     const spec = deriveCompanionSpec({
       slug,
       kind,
@@ -883,19 +1037,27 @@ export function buildCompanionTransitionStatements(
     // already on the companion as done, so the values move once and are not added twice.
     if (!spec || companionExists) {
       return {
-        statements: buildCompanionReconcileStatements({
-          slug,
-          kind,
-          tableName,
-          builtBy,
-          oldLocalized: [],
-          newLocalized: localizedNew,
-          dialect,
-          status,
-          companionExists,
-          joinedBefore: args.joinedBefore,
-          presentOnCompanion: args.presentOnCompanion,
-        }),
+        statements: [
+          ...buildCompanionReconcileStatements({
+            slug,
+            kind,
+            tableName,
+            builtBy,
+            oldLocalized: [],
+            newLocalized: [...localizedNew, ...overlays],
+            dialect,
+            status,
+            companionExists,
+            joinedBefore: args.joinedBefore,
+            presentOnCompanion: args.presentOnCompanion,
+            // What the companion holds already, so a column the save's own file made (an overlay
+            // among them) is not added again.
+            ...(args.liveCompanionColumns === undefined
+              ? {}
+              : { liveCompanionColumns: args.liveCompanionColumns }),
+          }),
+          ...overlaySeed,
+        ],
         needsArchive: false,
         companionDropped: false,
       };
@@ -906,18 +1068,22 @@ export function buildCompanionTransitionStatements(
     // a field named `subTitle` is stored as `sub_title`, a `component` field emits no column
     // at all, and a relationship stores under a different name, so matching raw field names
     // would seed from (and drop) columns main never had. A field added in this save has no
-    // old column and gets a companion column only.
-    const oldColumnNames = new Set(
-      oldFields
-        .map(f => fieldToLocalizedColumnSpec(f, dialect, builtBy)?.name)
-        .filter((n): n is string => typeof n === "string")
-    );
+    // old column and gets a companion column only (`columnsBefore`, above).
     spec.columnsOnMain = spec.columns
       .map(c => c.name)
-      .filter(n => oldColumnNames.has(n));
+      .filter(n => columnsBefore.has(n));
     return {
       statements: [
         ...buildLocalizationUpStatements(spec),
+        ...overlays.flatMap(field => {
+          const col = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+          return col
+            ? [
+                `ALTER TABLE ${q(spec.companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)}`,
+              ]
+            : [];
+        }),
+        ...overlaySeed,
         // The companion is new, so every unique translated field's index is created.
         ...uniqueIndexDelta({ ...args, liveCompanionIndexes: [] }).creates,
       ],
@@ -928,6 +1094,21 @@ export function buildCompanionTransitionStatements(
 
   // DISABLE — restore the default locale onto main, archive the rest, drop the companion.
   if (wasLocalized && !isLocalized) {
+    // Nothing brings a container's overlay home, so its text in every language would go with the
+    // companion: refused, as the save's own check before anything changed refuses it.
+    if (companionExists) {
+      const refusal = disableDroppingOverlays({
+        slug,
+        kind,
+        oldFields,
+        dialect,
+        builtBy,
+        ...(args.liveCompanionColumns === undefined
+          ? {}
+          : { liveCompanionColumns: args.liveCompanionColumns }),
+      });
+      if (refusal) throw refusal;
+    }
     const localizedOld = oldFields.filter(f => isFieldLocalized(f, true));
     const spec = deriveCompanionSpec({
       slug,
@@ -993,8 +1174,26 @@ export function buildCompanionTransitionStatements(
     // that kept it.
     const rename = companionColumnRename(args);
     const before = rename?.oldFields ?? oldFields;
-    const oldLocalized = before.filter(f => isFieldLocalized(f, true));
-    const newLocalized = newFields.filter(f => isFieldLocalized(f, true));
+    // As the companion will be once this change's own RENAME has run.
+    const liveColumns = rename?.live ?? args.liveCompanionColumns;
+    // A container left keeping no text would lose its overlay, and every language's text in it:
+    // refused, as the save's own check before anything changed refuses it.
+    if (companionExists) {
+      const leftBehind = overlaysLeftBehind({
+        slug,
+        kind,
+        oldFields: before,
+        newFields,
+        dialect,
+        builtBy,
+        ...(liveColumns === undefined
+          ? {}
+          : { liveCompanionColumns: liveColumns }),
+      });
+      if (leftBehind) throw leftBehind;
+    }
+    const oldLocalized = companionFieldsOf(before);
+    const newLocalized = companionFieldsOf(newFields);
     const sharedAfter = fieldsLeavingTranslation(before, newFields);
     const archiveFirst = args.archiveBeforeMain === true;
     // The rename runs before whatever reads the column under its new name: the archive writes,
@@ -1018,8 +1217,6 @@ export function buildCompanionTransitionStatements(
         ]
       : [];
     const hold = args.holdLeavingDrops === true;
-    // As the companion will be once this change's own RENAME has run.
-    const liveColumns = rename?.live ?? args.liveCompanionColumns;
     const held = hold
       ? heldLeavingIndexes(args, before, sharedAfter, liveColumns)
       : undefined;

@@ -29,7 +29,11 @@ import {
 import { liveCompanionShape } from "../../../domains/i18n/runtime/companion-io";
 import { runStatement } from "../../../domains/schema/pipeline/_internal/run-statement";
 import { NextlyError } from "../../../errors/nextly-error";
-import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
+import {
+  NOTHING_CHANGED,
+  type UpgradeReport,
+  type UpgradeStepContext,
+} from "../upgrade-step";
 
 import { builtByOf, siteEntities, siteLanguages } from "./localisation-site";
 
@@ -81,7 +85,7 @@ async function entitiesToMove(context: UpgradeStepContext): Promise<ToMove[]> {
       publicMessage:
         `The translatable values of ${unresolved.join("; ")} are both on the main table and in ` +
         `its translations table, and nothing records which is current. Run ` +
-        `\`nextly migrate --repair-localization\` once. Nothing was changed.`,
+        `\`nextly migrate --repair-localization\` once. ${NOTHING_CHANGED}`,
       logContext: { entities: unresolved },
     });
   }

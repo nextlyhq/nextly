@@ -912,7 +912,8 @@ export default function EditEntryPage({
              the Publish split's arrow: they decide what goes live and when,
              and the toolbar is reserved for the verbs an author reaches for
              while writing. Choosing what to publish first, as it publishes
-             now; then Schedule. A document whose collection was removed from
+             now; then Schedule; then publishing past the review, which the
+             menu sets apart. A document whose collection was removed from
              code offers none. */
             documentActions={
               removedFromCode
@@ -924,6 +925,9 @@ export default function EditEntryPage({
                     ...(schedule.contributed === null
                       ? []
                       : [schedule.contributed]),
+                    ...(publishParts.withoutReview === null
+                      ? []
+                      : [publishParts.withoutReview]),
                     ...(pin === null ? [] : [pin]),
                   ]
             }

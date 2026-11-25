@@ -18,7 +18,7 @@
  */
 
 import type { SystemColumnEntity } from "../../lib/system-columns";
-import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
+import { componentRowContentEntries } from "../field-groups/storage/component-row-content";
 
 import { NO_PART, type ChangedParts } from "./changed-parts";
 import type { VersionsDbApi } from "./db-api";
@@ -208,22 +208,6 @@ function contentOf(
   );
 }
 
-/** The timestamps a component row's own columns carry, in both spellings. */
-const COMPONENT_ROW_TIMESTAMPS = new Set([
-  "created_at",
-  "updated_at",
-  "createdAt",
-  "updatedAt",
-]);
-
-/** An object's entries, without a component row's own timestamps. */
-function contentEntries(inner: Record<string, unknown>): [string, unknown][] {
-  const entries = Object.entries(inner);
-  return readFieldGroupType(inner) !== undefined
-    ? entries.filter(([key]) => !COMPONENT_ROW_TIMESTAMPS.has(key))
-    : entries;
-}
-
 /**
  * JSON with object keys sorted at every depth, and component rows' timestamps
  * left out, so equal content is equal text.
@@ -232,8 +216,8 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_key, inner: unknown) =>
     inner !== null && typeof inner === "object" && !Array.isArray(inner)
       ? Object.fromEntries(
-          contentEntries(inner as Record<string, unknown>).sort(([x], [y]) =>
-            x < y ? -1 : x > y ? 1 : 0
+          componentRowContentEntries(inner as Record<string, unknown>).sort(
+            ([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)
           )
         )
       : inner

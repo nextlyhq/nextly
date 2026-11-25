@@ -477,6 +477,9 @@ export default function SingleEditPage({
                     ...(schedule.contributed === null
                       ? []
                       : [schedule.contributed]),
+                    ...(publishParts.withoutReview === null
+                      ? []
+                      : [publishParts.withoutReview]),
                     ...(pin === null ? [] : [pin]),
                   ]
             }

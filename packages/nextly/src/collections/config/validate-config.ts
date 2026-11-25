@@ -117,6 +117,9 @@ export type ValidationErrorCode =
   | "FIELD_NAME_TOO_LONG"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NEVER_TRANSLATABLE"
+  // `localized: true` on a repeater, group or field group, which keeps one structure in every
+  // language: the fields inside are marked instead.
+  | "FIELD_STRUCTURE_NOT_TRANSLATABLE"
   | "FIELD_NAME_DUPLICATE"
   | "FIELD_NAME_RESERVED"
   // A name that reaches a system column under a different spelling. Allowed only as the

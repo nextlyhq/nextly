@@ -17,6 +17,19 @@
 
 import type { UpgradeStep } from "../upgrade-step";
 
+/**
+ * What the version history's password removal repairs (`UpgradeStep.group`): the values pending
+ * changes and versions hold, which a step splitting or comparing them reads (`UpgradeStep.reads`).
+ */
+const VERSION_SNAPSHOTS = "version snapshots";
+
+/**
+ * What the localisation steps repair (`UpgradeStep.group`): each reads what the ones before it
+ * repair. The draft split also reads what pending changes hold (`VERSION_SNAPSHOTS`), which the
+ * version history's password removal changes; the others read neither that nor anything else.
+ */
+const LOCALISATION = "localisation";
+
 /** Hashing the passwords an earlier release stored as given. */
 const storedPasswordsStep: UpgradeStep = {
   title: "hash passwords stored before this release",
@@ -27,7 +40,8 @@ const storedPasswordsStep: UpgradeStep = {
 };
 
 /** Removing the passwords an earlier release kept in version history. */
-const versionPasswordsStep: UpgradeStep = {
+export const versionPasswordsStep: UpgradeStep = {
+  group: VERSION_SNAPSHOTS,
   title: "remove passwords kept in version history",
   pending: async context =>
     (await import("./version-passwords")).versionPasswordsWork.pending(context),
@@ -59,6 +73,7 @@ export const zonedDatesStep: UpgradeStep = {
 
 /** Bringing each configured language code's rows into its standard form. */
 const localisationCodesStep: UpgradeStep = {
+  group: LOCALISATION,
   title: "convert language codes to their standard form",
   pending: async context =>
     (await import("./localisation-codes")).codesToConvert(context),
@@ -70,6 +85,7 @@ const localisationCodesStep: UpgradeStep = {
 
 /** Giving every pending change its key, keeping the later of two saves in one language. */
 const localisationKeysStep: UpgradeStep = {
+  group: LOCALISATION,
   title: "give every pending change its key",
   pending: async context =>
     (await import("./localisation-keys")).draftsToKey(context),
@@ -81,6 +97,7 @@ const localisationKeysStep: UpgradeStep = {
 
 /** Storing every entity's translatable values per language. */
 const localisationValuesStep: UpgradeStep = {
+  group: LOCALISATION,
   title: "store translatable values per language",
   pending: async context =>
     (await import("./localisation-values")).entitiesWithValuesToMove(context),
@@ -90,8 +107,26 @@ const localisationValuesStep: UpgradeStep = {
     (await import("./localisation-values")).valuesMoveReport(context),
 };
 
+/**
+ * Bringing repeaters and groups translated whole into one structure across languages, refusing
+ * documents whose languages differ.
+ */
+const localisationStructuresStep: UpgradeStep = {
+  group: LOCALISATION,
+  title: "keep one structure for repeaters and groups translated whole",
+  pending: async context =>
+    (await import("./localisation-structures")).structuresToConvert(context),
+  run: async context =>
+    (await import("./localisation-structures")).convertStructures(context),
+  report: async context =>
+    (await import("./localisation-structures")).structuresReport(context),
+};
+
 /** Keeping every pending change by part, split against what is live. */
 const localisationDraftsStep: UpgradeStep = {
+  group: LOCALISATION,
+  // It splits and compares the values pending changes hold, which the password removal changes.
+  reads: [LOCALISATION, VERSION_SNAPSHOTS],
   title: "split pending changes into shared and language drafts",
   pending: async context =>
     (await import("./localisation-drafts")).documentsWithDraftsToSplit(context),
@@ -103,6 +138,7 @@ const localisationDraftsStep: UpgradeStep = {
 
 /** Dating every translation with no stamp from its language's version history. */
 const localisationStampsStep: UpgradeStep = {
+  group: LOCALISATION,
   title: "date translations from their version history",
   pending: async context =>
     (await import("./localisation-stamps")).entitiesToStamp(context),
@@ -114,6 +150,7 @@ const localisationStampsStep: UpgradeStep = {
 
 /** Listing the archived translations no entity can be found for: nothing to change, only to check. */
 const localisationArchiveStep: UpgradeStep = {
+  group: LOCALISATION,
   title: "list archived translations of no known entity",
   pending: () => Promise.resolve(0),
   run: () => Promise.resolve(0),
@@ -125,12 +162,15 @@ const localisationArchiveStep: UpgradeStep = {
  * The steps bringing an earlier release's content into the localisation model, in the order they
  * must run: codes first, so every later step reads and writes the standard code; pending changes
  * keyed before they are split, so the split sees one draft per language; values moved before the
- * drafts are split against them; translations dated last, from the history the steps before left.
+ * drafts are split against them; repeaters and groups translated whole given their one structure
+ * once their values are per language and before drafts are split against it; translations dated
+ * last, from the history the steps before left.
  */
 export const LOCALISATION_DATA_STEPS: readonly UpgradeStep[] = [
   localisationCodesStep,
   localisationKeysStep,
   localisationValuesStep,
+  localisationStructuresStep,
   localisationDraftsStep,
   localisationStampsStep,
   localisationArchiveStep,

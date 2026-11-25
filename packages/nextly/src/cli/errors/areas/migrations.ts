@@ -20,18 +20,18 @@ import {
   BLANK_FILE_LINE,
   HISTORY_FORKED_REASON,
   MIGRATION_PLACE_STATED_TWICE_REASON,
-} from "../../../domains/schema/migrate/history-line";
+} from "../../../domains/schema/migrate/history-line-names";
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
-import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
+import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-repeats-advice";
 import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
 import {
   WRITER_HOLD_HELD_REASON,
   WRITER_HOLD_LOST_REASON,
   WRITER_NOT_WRITTEN_REASON,
   WRITER_START_MOVED_REASON,
-} from "../../../domains/schema/migrate-create/writer-hold";
+} from "../../../domains/schema/migrate-create/writer-hold-reasons";
 import { NextlyError } from "../../../errors/nextly-error";
-import { builderMigrationRemedy } from "../../utils/migration-discovery";
+import { builderMigrationRemedy } from "../../utils/builder-migration-remedy";
 import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
 import { asSentence, deepestMessage, sentences } from "../messages";

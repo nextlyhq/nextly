@@ -44,6 +44,6 @@ export function registerGenerateTypesCommand(program: Command): void {
           async () => (await import("./generate-types")).generateTypesAction
         )
       ),
-    startLine("Reading the configuration...")
+    startLine("Reading the configuration...", "no database")
   );
 }
