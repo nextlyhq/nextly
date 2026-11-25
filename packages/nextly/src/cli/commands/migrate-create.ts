@@ -51,6 +51,7 @@ import { dirname, relative, resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import type { FieldGroupNaming } from "../../domains/field-groups/services/field-group-storage-names";
 import { refuseWhileSaveLeftPartWay } from "../../domains/schema/builder-save/save-in-progress";
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
@@ -301,16 +302,12 @@ function recordModeReader(
 }
 
 /**
- * What the file is written against for an older unique index a field that stops being unique
- * leaves holding its column (`liveUniqueIndexes`): the database `DATABASE_URL` names, opened
- * read-only on the first read, as the deletion counts open it, and closed by `close`. Nothing is
- * opened for a run with no field that stops being unique. One that cannot be read within the counts'
- * connect limit answers undefined, which the run says, and the file drops only Nextly's own index.
+ * The database `DATABASE_URL` names, opened read-only on the first ask, as the deletion counts open
+ * it, and closed by `close`. One that cannot be reached within the counts' connect limit answers
+ * undefined.
  */
-function uniqueIndexReader(dialect: SupportedDialect): {
-  read: (
-    tableName: string
-  ) => Promise<ReadonlyMap<string, readonly (string | null)[]> | undefined>;
+function reachableDatabase(dialect: SupportedDialect): {
+  open: () => Promise<CLIDatabaseAdapter | undefined>;
   close: () => Promise<void>;
 } {
   let opening: Promise<CLIDatabaseAdapter | MissingDatabase> | undefined;
@@ -340,8 +337,54 @@ function uniqueIndexReader(dialect: SupportedDialect): {
     return opened;
   };
   return {
+    open,
+    close: async () => {
+      await opened?.disconnect().catch(() => undefined);
+    },
+  };
+}
+
+/**
+ * The field-group names the database is on, for the first migration of a project
+ * (`AppMigrationInputsArgs.firstFieldGroupNaming`): a site an earlier release set up by its
+ * development starts holds its groups under the legacy names, and a migration that made them under
+ * the current ones would be one its own database could not record. Undefined where the database
+ * holds no registry or cannot be read.
+ */
+async function databaseFieldGroupNaming(
+  dialect: SupportedDialect
+): Promise<FieldGroupNaming | undefined> {
+  const database = reachableDatabase(dialect);
+  try {
+    const adapter = await database.open();
+    if (adapter === undefined) return undefined;
+    const { standingRegistryNaming } = await import(
+      "../../domains/field-groups/services/field-group-new-site"
+    );
+    return await standingRegistryNaming(adapter as unknown as DrizzleAdapter);
+  } catch {
+    return undefined;
+  } finally {
+    await database.close();
+  }
+}
+
+/**
+ * What the file is written against for an older unique index a field that stops being unique
+ * leaves holding its column (`liveUniqueIndexes`), read from {@link reachableDatabase}. Nothing is
+ * opened for a run with no field that stops being unique. One that cannot be read answers
+ * undefined, which the run says, and the file drops only Nextly's own index.
+ */
+function uniqueIndexReader(dialect: SupportedDialect): {
+  read: (
+    tableName: string
+  ) => Promise<ReadonlyMap<string, readonly (string | null)[]> | undefined>;
+  close: () => Promise<void>;
+} {
+  const database = reachableDatabase(dialect);
+  return {
     read: async tableName => {
-      const adapter = await open();
+      const adapter = await database.open();
       if (adapter === undefined) return undefined;
       const { readUniqueIndexesByColumn } = await import(
         "../../domains/schema/pipeline/live-table-facts"
@@ -358,9 +401,7 @@ function uniqueIndexReader(dialect: SupportedDialect): {
         return undefined;
       }
     },
-    close: async () => {
-      await opened?.disconnect().catch(() => undefined);
-    },
+    close: database.close,
   };
 }
 
@@ -878,6 +919,7 @@ export async function runMigrateCreate(
         migrationsDir,
         dialect,
         logger,
+        firstFieldGroupNaming: () => databaseFieldGroupNaming(dialect),
       });
     } catch (error) {
       // A field declaration Nextly cannot use ends the run as `migrate:check`

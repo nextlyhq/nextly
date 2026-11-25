@@ -96,6 +96,11 @@ const posts = defineCollection({
     fieldGroup({ name: "card", component: "fdh_card" }),
   ],
 });
+/** A collection with no field group in it. */
+const plain = defineCollection({
+  slug: "fdh_plain",
+  fields: [text({ name: "title" })],
+});
 const DECLARED = { collections: [posts], fieldGroups: [card] };
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const PROJECT = defineConfig({ ...DECLARED, db: DB });
@@ -486,6 +491,70 @@ describe.each(getConfiguredTestDialects())(
       });
       writeFileSync(path, JSON.stringify(snapshot, null, 2));
     }
+
+    // A site an earlier release set up by its development starts, whose project writes its first
+    // migration now: the tables it stands on are the legacy ones, so the migration records those.
+    for (const [what, project] of [
+      ["a field group", DECLARED],
+      ["no field group", { collections: [plain], fieldGroups: [] }],
+    ] as const) {
+      it(`writes the first migration of a site on the legacy names under them, with ${what}, and nextly migrate records it`, async () => {
+        const url = await emptyDatabase(dialect);
+        const adapter = await connect(dialect, url);
+        await seedLegacyCoreTables(adapter, dialect);
+        loaded.config = defineConfig({ ...project, db: DB } as Parameters<
+          typeof defineConfig
+        >[0]);
+        await developmentStart(dialect, url, project as typeof DECLARED);
+        await shutdownServices().catch(() => {});
+
+        const created = await run(context =>
+          runMigrateCreate("init", { cwd: dir }, context)
+        );
+        expect(created.exit, created.said).toBeUndefined();
+        expect(newestSnapshot()).toMatchObject({ version: 1 });
+
+        const recorded = await migrate();
+        expect(recorded.exit, recorded.said).toBeUndefined();
+        expect(await hasTable(adapter, "comp_fdh_card")).toBe(
+          project.fieldGroups.length > 0
+        );
+        expect(await hasTable(adapter, "fg_fdh_card")).toBe(false);
+      }, 180_000);
+    }
+
+    it("writes the first migration on the current names where the database is empty", async () => {
+      await emptyDatabase(dialect);
+      const created = await run(context =>
+        runMigrateCreate("init", { cwd: dir }, context)
+      );
+      expect(created.exit, created.said).toBeUndefined();
+      expect(newestSnapshot()).toMatchObject({
+        version: 2,
+        fieldGroupStorage: "current",
+      });
+      const applied = await migrate();
+      expect(applied.exit, applied.said).toBeUndefined();
+    }, 180_000);
+
+    it("writes the first migration on the current names where no database can be reached", async () => {
+      vi.stubEnv("DB_DIALECT", dialect);
+      vi.stubEnv(
+        "DATABASE_URL",
+        dialect === "sqlite"
+          ? `file:${join(dir, "absent", "none.db")}`
+          : `${dialect}://nobody:nothing@127.0.0.1:1/absent`
+      );
+      _resetEnvCache();
+      const created = await run(context =>
+        runMigrateCreate("init", { cwd: dir }, context)
+      );
+      expect(created.exit, created.said).toBeUndefined();
+      expect(newestSnapshot()).toMatchObject({
+        version: 2,
+        fieldGroupStorage: "current",
+      });
+    }, 60_000);
 
     it("refuses by name to set an empty database up where the history's names cannot be told", async () => {
       const url = await emptyDatabase(dialect);

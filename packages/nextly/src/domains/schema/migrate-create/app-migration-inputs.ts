@@ -119,10 +119,16 @@ export interface AppMigrationInputsArgs {
   /**
    * The naming the site's field-group storage is on (`field-group-storage-names`): the table each
    * field group is generated under, and the registry its Builder row is upserted into. A Builder
-   * save reads it from the database it writes to. Absent, the latest snapshot's naming (legacy where the
-   * folder has none), so every offline command follows the history.
+   * save reads it from the database it writes to. Absent, the latest snapshot's naming, so every
+   * offline command follows the history.
    */
   fieldGroupNaming?: FieldGroupNaming;
+  /**
+   * The naming a project's first migration is written under, asked only where the folder has no
+   * snapshot. With no field group too: the snapshot records the names the history begins on. Absent,
+   * or undefined, the current names.
+   */
+  firstFieldGroupNaming?: () => Promise<FieldGroupNaming | undefined>;
   /**
    * The table each field group's registry row names, by slug, where the caller read the registry
    * (`field-group-stored-tables`): a group the registry holds is generated under the table it is
@@ -212,7 +218,7 @@ export async function appMigrationInputs(
   // The names the history keeps field groups under, unless the caller read the site's own: a
   // history moved to the current names generates every group there, and `generateMigration`
   // refuses a caller's naming that differs from the history's (`refuseNamingAgainstHistory`).
-  const fieldGroupNaming = namingOfInputs(input.fieldGroupNaming, latest);
+  const fieldGroupNaming = await namingOfInputs(input, latest);
   // Each field group under the table it is stored in on this site (`withFieldGroupTables`).
   const fieldGroupNames = storageNamesFor(fieldGroupNaming);
   const merged = withFieldGroupTables(
@@ -560,13 +566,18 @@ function builderEntriesOf(record: EntitySettingsRecord | undefined): {
 
 /**
  * The names `appMigrationInputs` resolves field groups under: the caller's, else the latest
- * snapshot's (the history's), else the current names where the folder has none, which a new
- * project's history starts on (`historyFieldGroupNaming`).
+ * snapshot's (the history's), else where the folder has none those the caller's site stands on
+ * (`firstFieldGroupNaming`), and the current names for a new project, whose history starts on them
+ * (`historyFieldGroupNaming`).
  */
-function namingOfInputs(
-  requested: FieldGroupNaming | undefined,
+async function namingOfInputs(
+  input: Pick<
+    AppMigrationInputsArgs,
+    "fieldGroupNaming" | "firstFieldGroupNaming"
+  >,
   latest: LatestSnapshot | null
-): FieldGroupNaming {
-  if (requested !== undefined) return requested;
-  return latest === null ? "current" : snapshotFieldGroupNaming(latest.data);
+): Promise<FieldGroupNaming> {
+  if (input.fieldGroupNaming !== undefined) return input.fieldGroupNaming;
+  if (latest !== null) return snapshotFieldGroupNaming(latest.data);
+  return (await input.firstFieldGroupNaming?.()) ?? "current";
 }
