@@ -20,7 +20,7 @@ import {
 import { ddlType } from "../../../i18n/migration/ddl-types";
 import { fieldToLocalizedColumnSpec } from "../../../i18n/migration/field-to-column-spec";
 import { storesPerLanguage } from "../../../i18n/per-language-storage";
-import { keepsTranslationsInside } from "../../../i18n/shared-structure";
+import { sharedStructureShape } from "../../../i18n/shared-structure";
 import { querySqlRows } from "../../pipeline/classifier/count-helpers";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
@@ -960,21 +960,23 @@ export async function fieldTypeChangeRefusals(
  * out of such a container is. A change between two translated types keeps the text where it is
  * read, and a field there that keeps no text (shared, or not text), is judged as before.
  */
-function textHeldPerLanguageRefusals(
+export function textHeldPerLanguageRefusals(
   entity: EntityTypeChangeInput,
   changes: readonly FieldTypeChange[]
 ): TypeChangeRefusal[] {
-  if (entity.translationsTable === undefined) return [];
+  // Only an entity keeping its values per language before the change (`perLanguageBefore`): on
+  // the earlier layout every value, a container's text among them, is on its row.
+  if (entity.translatedBefore === undefined) return [];
   return changes.flatMap(change => {
-    const container = change.within?.container.from;
+    const within = change.within;
     if (
-      container === undefined ||
-      !keepsTranslationsInside(container, true) ||
-      !isFieldLocalized(change.from, true) ||
+      within === undefined ||
+      !heldAsContainerText(within) ||
       isFieldLocalized(change.to, true)
     ) {
       return [];
     }
+    const container = within.container.from;
     const name = changedFieldName(change);
     return [
       {
@@ -988,6 +990,26 @@ function textHeldPerLanguageRefusals(
       },
     ];
   });
+}
+
+/**
+ * Whether the field at the end of `within.path` is one of its container's texts, as the container's
+ * one structure reads it (`sharedStructureShape`): kept in the overlay, for each language. Not a
+ * field a container inside it marks shared, nor a row's own `id`: those are on the structure.
+ */
+function heldAsContainerText(
+  within: NonNullable<FieldTypeChange["within"]>
+): boolean {
+  let shape = sharedStructureShape(within.container.from);
+  // The path names the container itself first, then each container inside it, then the field.
+  const inside = within.path.slice(1);
+  const leaf = inside.at(-1);
+  if (shape === null || leaf === undefined) return false;
+  for (const step of inside.slice(0, -1)) {
+    shape = shape.inner[step.name] ?? null;
+    if (shape === null) return false;
+  }
+  return shape.texts.includes(leaf.name);
 }
 
 /** A refusal as a validation error lists it: by the field's path under `fields`. */
