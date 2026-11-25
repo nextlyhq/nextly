@@ -31,7 +31,10 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { underNaming } from "../../field-groups/services/field-group-storage-names";
 import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
-import { isFieldLocalized } from "../../i18n/classify-fields";
+import {
+  holdsOneStructure,
+  isFieldLocalized,
+} from "../../i18n/classify-fields";
 import type { JoinRetries } from "../../i18n/migration/archive-preflight";
 import { carriedDefinition } from "../../i18n/migration/carried-definition";
 import {
@@ -147,6 +150,7 @@ import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-r
 import { schemaVersionStoreSql } from "../schema-version";
 import {
   columnsDeclaredBy,
+  toSnakeCase,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
@@ -181,6 +185,7 @@ import {
 } from "./dropped-translations";
 import {
   describeSettingsChange,
+  recordedSettingsOf,
   settingsChangesFor,
   settingsRecordOf,
   type EntitySettingsChange,
@@ -1100,6 +1105,7 @@ export async function generateMigration(
   const companionRenames = await companionRenameDecisions(
     entities,
     previousSnapshot,
+    previous?.data.entities,
     args,
     companionHistory
   );
@@ -3102,6 +3108,30 @@ function companionRenameStatements(
 }
 
 /**
+ * The columns of the fields holding other fields (a repeater, group or component) in the
+ * declaration `record` holds of the entity, by name; none where it holds no declaration.
+ */
+function containerColumnsDeclared(
+  record: EntitySettingsRecord | undefined,
+  kind: I18nTransitionKind,
+  slug: string
+): string[] {
+  const fields = recordedSettingsOf(record, kind, slug)?.settings.fields;
+  if (!Array.isArray(fields)) return [];
+  return fields.flatMap(field => {
+    if (field === null || typeof field !== "object" || Array.isArray(field)) {
+      return [];
+    }
+    const { name, type } = field;
+    return typeof name === "string" &&
+      typeof type === "string" &&
+      holdsOneStructure({ type })
+      ? [toSnakeCase(name)]
+      : [];
+  });
+}
+
+/**
  * Which translated columns are renamed, by entity table: for each translated
  * entity whose translations table the previous snapshot records, every pair
  * of a column it recorded that the entity no longer translates and one it
@@ -3123,6 +3153,7 @@ function companionRenameStatements(
 async function companionRenameDecisions(
   entities: readonly TaggedConfigEntity[],
   previous: NextlySchemaSnapshot,
+  previousEntities: EntitySettingsRecord | undefined,
   args: GenerateArgs,
   history: TranslationRecords
 ): Promise<Map<string, CompanionRename[]>> {
@@ -3146,9 +3177,14 @@ async function companionRenameDecisions(
     const containers = overlayColumnsOf(entity, kind, args.dialect);
     // An earlier release kept a container marked `localized: true` whole on the translations table,
     // and its snapshot lists that column among the translated ones. The column stays as the
-    // container's overlay, so in an untranslated entity it is no text column a rename takes.
+    // container's overlay, so in an untranslated entity it is no text column a rename takes, nor
+    // is the column of a container the previous snapshot declares and this run removes.
+    const containersKnown = new Set([
+      ...containers,
+      ...containerColumnsDeclared(previousEntities, kind, entity.slug),
+    ]);
     const recorded = (previousTable.localizedColumns ?? []).filter(
-      column => translated || !containers.includes(column)
+      column => translated || !containersKnown.has(column)
     );
     // Each translated field's column as the config now describes it, by name.
     const described = new Map(
