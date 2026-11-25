@@ -293,6 +293,8 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     // translations table; one with nothing to translate (a link list and switches) gets none.
     // Recording a finished transition for it anyway made the next run try to begin that
     // transition again and refuse, failing every second `nextly migrate` of such a site.
+    // The link list says it is shared (`localized: false`): a repeater's text inside is otherwise
+    // translated row by row, which keeps a translations table.
     const config = defineConfig({
       localization: { locales: ["en", "es"], defaultLocale: "en" },
       singles: [
@@ -301,6 +303,7 @@ describe("db:sync creates localized companion tables in-process (integration)", 
           fields: [
             repeater({
               name: "links",
+              localized: false,
               fields: [text({ name: "label" }), text({ name: "href" })],
             }),
             checkbox({ name: "showSearch" }),
