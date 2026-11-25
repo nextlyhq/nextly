@@ -326,6 +326,42 @@ describe.each(getConfiguredTestDialects())(
         });
       });
 
+      it("publishes from a description what it described, and refuses once a part of it changed", async () => {
+        await boot(dialect);
+        await bothLive();
+        await save("es", { title: "Hola 2" });
+        const describeSpanish = async () => {
+          const answer = await moveParts({
+            direction: "publish",
+            locales: ["es"],
+            describe: true,
+          });
+          expect(answer.success, JSON.stringify(answer)).toBe(true);
+          return answer.data!;
+        };
+        const publishFrom = (rev: string | undefined) =>
+          singles().publishParts(
+            { slug: NOTICE, overrideAccess: true, data: { _rev: rev } },
+            { direction: "publish", locales: ["es"] }
+          );
+
+        const first = await describeSpanish();
+        await save("es", { title: "Hola 3" });
+        expect(await publishFrom(first._rev)).toMatchObject({
+          success: false,
+          statusCode: 409,
+        });
+        expect((await published("es")).title).toBe("Hola");
+
+        const second = await describeSpanish();
+        expect(second.marks?.languages.es).not.toBe(first.marks?.languages.es);
+        expect(second.marks?.rest).toBe(first.marks?.rest);
+        const moved = await publishFrom(second._rev);
+        expect(moved.success, JSON.stringify(moved)).toBe(true);
+        expect(moved.data).not.toHaveProperty("_rev");
+        expect((await published("es")).title).toBe("Hola 3");
+      });
+
       it("publishes through REST", async () => {
         await boot(dialect);
         const key = await adminKey();

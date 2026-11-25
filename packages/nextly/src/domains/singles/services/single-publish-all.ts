@@ -136,6 +136,10 @@ import { withComponentShapesOf } from "../../i18n/runtime/component-shapes";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { partsTogether, type ChangedParts } from "../../versions/changed-parts";
 import {
+  type DocumentStanding,
+  readDocumentStanding,
+} from "../../versions/described-from";
+import {
   bumpDocumentRevision,
   documentVersionOn,
   revisionBumpColumns,
@@ -870,6 +874,45 @@ export class SinglePublishAllService extends BaseService {
             message: `Single "${slug}" has no document to publish`,
           },
         };
+  }
+
+  /**
+   * The counters and drafts of the Single's document as they stand, for a description of its parts
+   * to say what it was made from. Its languages only where each moves on its own, as a move of
+   * them is judged.
+   *
+   * @experimental
+   */
+  async documentStanding(
+    slug: string,
+    id: string
+  ): Promise<DocumentStanding | undefined> {
+    const singleMeta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      slug,
+      this.logger,
+      { intent: "write" }
+    );
+    if (!singleMeta) return undefined;
+    const { companion, companionPublishable } = await this.resolveLifecycle(
+      slug,
+      singleMeta
+    );
+    const languagesTable = translationTableOf(companion, companionPublishable);
+    return readDocumentStanding(this.adapter, {
+      dialect: this.adapter.dialect,
+      ref: { scopeKind: "single", scopeSlug: slug, entryId: id },
+      table: singleMeta.tableName,
+      languages: languagesJudged(
+        languagesTable,
+        versionLanguagesFor({
+          localized: languagesTable !== null,
+          localization: this.localization,
+          locale: EVERY_LOCALE,
+        })
+      ),
+    });
   }
 
   /**

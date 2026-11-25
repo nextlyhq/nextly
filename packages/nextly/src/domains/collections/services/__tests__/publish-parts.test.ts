@@ -4,7 +4,7 @@
  * implementations drop a rule, apply it to the wrong language or part, or move a part the request
  * refused.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { LifecycleParts } from "../all-locales-lifecycle";
 import type { CollectionServiceResult } from "../collection-types";
@@ -14,6 +14,7 @@ import {
   type PartsField,
   type PartsReads,
   type PartsState,
+  type PublishPartsEngines,
   type PublishPartsRequest,
 } from "../publish-parts";
 
@@ -55,7 +56,8 @@ const OPEN_GATE: PublishGate = {
 async function run(
   request: PublishPartsRequest,
   reads: Partial<PartsReads> & { state: PartsState },
-  gate: PublishGate = OPEN_GATE
+  gate: PublishGate = OPEN_GATE,
+  standing: PublishPartsEngines["standing"] = () => Promise.resolve(undefined)
 ) {
   const moves: { direction: string; parts: LifecycleParts | undefined }[] = [];
   const result = await publishParts("entry-1", request, {
@@ -65,6 +67,7 @@ async function run(
         sharedRefusal: null,
         ...reads,
       }),
+    standing,
     gate,
     collection: "posts",
     caller: { kind: "trusted" },
@@ -249,6 +252,79 @@ describe("publishing chosen parts, rule by rule", () => {
     ]);
     expect(fallback.issues).toEqual([]);
     expect(fallback.moves).toHaveLength(1);
+  });
+
+  it("says what a description was made from, read before anything it says", async () => {
+    const asked: string[] = [];
+    const result = await publishParts(
+      "entry-1",
+      { direction: "publish", locales: ["es"], shared: true, describe: true },
+      {
+        standing: () => {
+          asked.push("standing");
+          return Promise.resolve({
+            main: 7,
+            languages: { en: 2, es: 3 },
+            drafts: [],
+          });
+        },
+        reads: () => {
+          asked.push("reads");
+          return Promise.resolve({
+            state: stateOf(),
+            languageRefusals: new Map(),
+            sharedRefusal: null,
+          });
+        },
+        gate: OPEN_GATE,
+        collection: "posts",
+        caller: { kind: "trusted" },
+        move: () => {
+          asked.push("describe");
+          return Promise.resolve({
+            success: true,
+            statusCode: 200,
+            message: "",
+            data: { languages: [] },
+          } satisfies CollectionServiceResult);
+        },
+      }
+    );
+
+    expect(asked).toEqual(["standing", "reads", "describe"]);
+    expect(result.data).toMatchObject({ _rev: "7.es:3" });
+  });
+
+  it("reads what it stands at for a description alone", async () => {
+    const standing = vi.fn(() => Promise.resolve(undefined));
+    const { result } = await run(
+      { direction: "publish", locales: ["es"], shared: true },
+      { state: stateOf() },
+      OPEN_GATE,
+      standing
+    );
+    expect(result.success).toBe(true);
+    expect(standing).not.toHaveBeenCalled();
+    expect(result.data).not.toHaveProperty("_rev");
+  });
+
+  it("answers a caller's refusal before a failure to read what it stands at", async () => {
+    const failing = () => Promise.reject(new Error("unreadable"));
+    const asked: PublishPartsRequest = {
+      direction: "publish",
+      locales: ["es"],
+      describe: true,
+    };
+    const { issues } = await run(
+      asked,
+      { state: stateOf(), languageRefusals: new Map([["es", "No."]]) },
+      OPEN_GATE,
+      failing
+    );
+    expect(issues.length).toBeGreaterThan(0);
+    await expect(
+      run(asked, { state: stateOf() }, OPEN_GATE, failing)
+    ).rejects.toThrow("unreadable");
   });
 
   it("does not judge a language already live again", async () => {

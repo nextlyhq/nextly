@@ -46,9 +46,13 @@ import {
   apiErrorMessage,
   validationIssues,
 } from "@admin/lib/api/parseApiError";
-import { refusedAsChangedSince } from "@admin/lib/document-version";
+import {
+  refusedAsChangedSince,
+  staleVersionOf,
+} from "@admin/lib/document-version";
 import type { ShownCopy } from "@admin/lib/document-version";
 import type {
+  PartMarks,
   PartsLanguageOutcome,
   PublishPartsDirection,
   PublishPartsResult,
@@ -59,6 +63,7 @@ import type { PartReview } from "@admin/types/workflows";
 import { useReturnFocusOnClose } from "../../releases/dialog-opener";
 import type { LanguageLabel } from "../publishAllOutcomes";
 
+import { changedSinceDescribed, sameMarks } from "./described-changes";
 import type { TranslationOverview } from "./out-of-date";
 import {
   movedParts,
@@ -409,6 +414,7 @@ function usePartsMove({
   onRefused,
   choice,
   request,
+  parts,
 }: Pick<
   PublishPartsDialogProps,
   | "target"
@@ -424,20 +430,31 @@ function usePartsMove({
   choice: PartsChoice;
   /** What is sent: the choice, less what is not offered. */
   request: PartsChoice;
+  /** The parts as the server describes them, and so what is sent was made of. */
+  parts: DescribedParts;
 }): {
   confirm: (withoutReview?: string) => Promise<void>;
   pending: boolean;
   error: Error | null;
+  /** The marks of the description a refused move was made of, where it had one. */
+  refusedMarks: PartMarks | undefined;
   /** The last refusal no longer holds the parts it was of. */
   forgetRefusal: () => void;
 } {
   const move = usePublishParts({ target, direction, shown });
-  const [refusedChoice, setRefusedChoice] = useState<PartsChoice | null>(null);
+  const [refused, setRefused] = useState<{
+    choice: PartsChoice;
+    marks: PartMarks | undefined;
+  } | null>(null);
   const confirm = async (withoutReview?: string): Promise<void> => {
+    // As they were when the person confirmed them. Past a review the server refuses to describe,
+    // what publishing every language does is all that was described.
+    const made = parts.chosenAnswer ?? parts.everyLanguageAnswer;
     try {
       const done = await move.mutateAsync({
         locales: request.locales,
         shared: request.shared,
+        ...(made?._rev === undefined ? {} : { described: made._rev }),
         ...(withoutReview === undefined
           ? {}
           : { withoutReview: { reason: withoutReview } }),
@@ -462,17 +479,17 @@ function usePartsMove({
       onOpenChange(false);
     } catch {
       // Shown in the dialog beside the parts it names; the dialog stays open, back on the parts.
-      setRefusedChoice(choice);
+      setRefused({ choice, marks: parts.chosenAnswer?.marks });
       onRefused();
     }
   };
-  const ofThisChoice =
-    refusedChoice !== null && sameParts(refusedChoice, choice);
+  const ofThisChoice = refused !== null && sameParts(refused.choice, choice);
   return {
     confirm,
     pending: move.isPending,
     error: ofThisChoice ? move.error : null,
-    forgetRefusal: () => setRefusedChoice(null),
+    refusedMarks: ofThisChoice ? refused.marks : undefined,
+    forgetRefusal: () => setRefused(null),
   };
 }
 
@@ -515,6 +532,43 @@ function generalRefusals(
   );
 }
 
+/** A refusal because the document changed, where what changed is not known. */
+const CHANGED_SINCE_OPENED =
+  "This document changed since you opened it. Review the latest version, then try again.";
+
+/**
+ * What a move refused because the document changed says: what changed, once the parts are described
+ * as they are now and a mark of one differs from the description the move was made of, or the
+ * server itself refused it; null for any other refusal.
+ */
+function changedSentence(
+  refusal: Error | null,
+  {
+    before,
+    parts,
+    direction,
+    labelOf,
+  }: {
+    before: PartMarks | undefined;
+    parts: DescribedParts;
+    direction: PublishPartsDirection;
+    labelOf: LanguageLabel;
+  }
+): string | null {
+  if (refusal === null || !refusedAsChangedSince(refusal)) return null;
+  // Said once the parts are described as they are now.
+  if (parts.checking) return null;
+  const now = parts.described ? parts.chosenAnswer?.marks : undefined;
+  if (before === undefined || now === undefined) return CHANGED_SINCE_OPENED;
+  // Held back from the editor's copy, and nothing changed since the parts were described: it
+  // changed before they were, after the editor opened it.
+  const sinceDescribed =
+    staleVersionOf(refusal) !== undefined || !sameMarks(before, now);
+  return sinceDescribed
+    ? changedSinceDescribed({ before, now, direction, labelOf })
+    : CHANGED_SINCE_OPENED;
+}
+
 /**
  * Focus that closing left on nothing, sent to the editor's main button: what opened the dialog
  * may have been held while it ran, and held controls cannot keep the focus.
@@ -553,6 +607,7 @@ export function PublishPartsDialog(
     ...props,
     choice,
     request,
+    parts,
     onRefused: () => setReason(null),
   });
   // What the server refuses, by part: from the move when it was refused, else from the
@@ -644,7 +699,12 @@ export function PublishPartsDialog(
         <Outcome
           checking={parts.checking}
           messages={generalRefusals(refusal, refused, problems)}
-          refusal={refusal}
+          changed={changedSentence(refusal, {
+            before: move.refusedMarks,
+            parts,
+            direction,
+            labelOf,
+          })}
         />
 
         {reason !== null ? (
@@ -776,11 +836,12 @@ function Facts({ facts }: { facts: readonly string[] }): JSX.Element | null {
 function Outcome({
   checking,
   messages,
-  refusal,
+  changed,
 }: {
   checking: boolean;
   messages: readonly string[];
-  refusal: Error | null;
+  /** What a move refused because the document changed says. */
+  changed: string | null;
 }): JSX.Element {
   return (
     <>
@@ -802,12 +863,11 @@ function Outcome({
           {message}
         </p>
       ))}
-      {refusal !== null && refusedAsChangedSince(refusal) ? (
+      {changed === null ? null : (
         <p role="alert" className="text-sm text-danger-text">
-          This document changed since you opened it. Review the latest version,
-          then try again.
+          {changed}
         </p>
-      ) : null}
+      )}
     </>
   );
 }

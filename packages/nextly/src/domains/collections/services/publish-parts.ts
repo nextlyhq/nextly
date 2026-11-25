@@ -25,6 +25,11 @@ import type { RequestActor } from "../../../auth/request-actor";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
+import {
+  describedFrom,
+  type DescribedFrom,
+  type DocumentStanding,
+} from "../../versions/described-from";
 import type {
   LanguageOutcome,
   PublishAllBlocker,
@@ -67,6 +72,13 @@ export interface PublishPartsAnswer {
     /** Whether the shared part was added to the request: the entry's first publish. */
     added: boolean;
   };
+  /**
+   * In a description, the version it was made from: sent back as `_rev` with the same request, it
+   * is refused where a part described changed since.
+   */
+  _rev?: DescribedFrom["_rev"];
+  /** In a description, a mark of each part, to compare with another description's. */
+  marks?: DescribedFrom["marks"];
 }
 
 /** A field as the checks below read it. */
@@ -134,6 +146,11 @@ export interface PublishPartsEngines {
     /** Whether the request names every language rather than choosing some. */
     everyLanguage: boolean;
   }): Promise<PartsReads | CollectionServiceResult>;
+  /**
+   * The entry's counters and drafts as they stand, for a description to say what it was made from;
+   * undefined where there is no entry.
+   */
+  standing(): Promise<DocumentStanding | undefined>;
   gate: PublishGate;
   /** The entry's collection and who asks, for the gate. */
   collection: string;
@@ -527,6 +544,21 @@ function sharedPartOf(
   return { sharedPart: request.shared === true || added, added };
 }
 
+/** What a description of the chosen parts was made from. */
+function describedFromOf(
+  stood: PromiseSettledResult<DocumentStanding | undefined>,
+  judged: Judged
+): DescribedFrom | undefined {
+  if (stood.status === "rejected") throw stood.reason;
+  return (
+    stood.value &&
+    describedFrom(stood.value, {
+      languages: judged.chosen,
+      shared: judged.sharedPart,
+    })
+  );
+}
+
 /** The chosen parts taken down, or what taking them down would do. */
 async function unpublishParts(
   judged: Judged,
@@ -619,6 +651,13 @@ export async function publishParts(
       ? "all"
       : []
     : asked;
+  const describe = request.describe === true;
+  // Before anything a description says is read, so a change made meanwhile leaves the version
+  // older than what is said, never newer. A failure to read it waits for the answers below, which
+  // name what is wrong with the entry or the caller.
+  const stood = describe
+    ? await Promise.allSettled([engines.standing()])
+    : undefined;
   const reads = await engines.reads({
     locales: askedForAccess,
     shared: !everyLanguage,
@@ -642,6 +681,7 @@ export async function publishParts(
   const parts: LifecycleParts | undefined = everyLanguage
     ? undefined
     : { locales: new Set(judged.chosen), shared: sharedPart };
+  const from = stood && describedFromOf(stood[0], judged);
   const sharedLiveAfter = request.direction === "publish";
   const answer: PublishPartsAnswer = {
     id,
@@ -650,8 +690,8 @@ export async function publishParts(
       changes: sharedPart && state.sharedLive !== sharedLiveAfter,
       added,
     },
+    ...from,
   };
-  const describe = request.describe === true;
   return request.direction === "unpublish"
     ? unpublishParts(judged, answer, parts, describe, engines)
     : publishChosenParts(judged, answer, parts, describe, engines);

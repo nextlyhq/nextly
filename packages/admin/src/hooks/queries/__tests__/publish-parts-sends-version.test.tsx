@@ -1,11 +1,12 @@
 /**
- * A publish of chosen parts sends the version of every language.
+ * A publish of chosen parts sends the version its description was made from, and the version of
+ * every language where nothing was described.
  *
  * It is judged on the document's own row and each language's: the version it
- * sends must name them all, which only a read of every language gives. The
- * editor reads one language, so the publish reads every language first and
- * sends that read's version, and compares the language on screen with what
- * the editor opened.
+ * sends must name them all. A description answers one that does; otherwise
+ * only a read of every language gives it. The editor reads one language, so
+ * such a publish reads every language first and sends that read's version.
+ * Either way the language on screen is compared with what the editor opened.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
@@ -59,7 +60,11 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 /** Publishes Spanish, from an editor showing `copy` where one is given. */
-function publishSpanish(target: PartsTarget, copy?: ShownCopy) {
+function publishSpanish(
+  target: PartsTarget,
+  copy?: ShownCopy,
+  described?: string
+) {
   const { result } = renderHook(
     () =>
       usePublishParts({
@@ -69,7 +74,10 @@ function publishSpanish(target: PartsTarget, copy?: ShownCopy) {
       }),
     { wrapper }
   );
-  return result.current.mutateAsync({ locales: ["es"] });
+  return result.current.mutateAsync({
+    locales: ["es"],
+    ...(described === undefined ? {} : { described }),
+  });
 }
 
 const ENTRY: PartsTarget = { kind: "collection", slug: "posts", id: "e1" };
@@ -84,7 +92,63 @@ beforeEach(() => {
   vi.resetAllMocks();
 });
 
-describe("publishing chosen parts", () => {
+describe("publishing chosen parts as they were described", () => {
+  it("sends the version described, and reads none", async () => {
+    api.publishEntryParts.mockResolvedValue({ id: "e1" });
+
+    await publishSpanish(ENTRY, undefined, "7.es:3");
+
+    expect(api.findByID).not.toHaveBeenCalled();
+    expect(api.publishEntryParts).toHaveBeenCalledWith(
+      "posts",
+      "e1",
+      "publish",
+      { locales: ["es"], version: "7.es:3" }
+    );
+  });
+
+  it("from an editor, is still refused when the language on screen changed since it was opened", async () => {
+    api.findByID.mockResolvedValue({ id: "e1", _rev: "8.en:3" });
+
+    await expect(publishSpanish(ENTRY, ENGLISH_COPY, "8.es:3")).rejects.toThrow(
+      /changed since you opened it/
+    );
+    expect(api.publishEntryParts).not.toHaveBeenCalled();
+  });
+
+  it("sends it for a caller refused a read of another language, who overwrites nothing", async () => {
+    api.findByID.mockImplementation(
+      async (_slug: string, _id: string, options: { locale?: string }) => {
+        if (options.locale === "all") throw new Error("refused");
+        return { id: "e1", _rev: "7.en:3" };
+      }
+    );
+    api.publishEntryParts.mockResolvedValue({ id: "e1" });
+
+    await publishSpanish(ENTRY, ENGLISH_COPY, "7.es:3");
+
+    expect(api.publishEntryParts).toHaveBeenCalledWith(
+      "posts",
+      "e1",
+      "publish",
+      { locales: ["es"], version: "7.es:3" }
+    );
+  });
+
+  it("of a Single sends the version described", async () => {
+    api.publishSingleParts.mockResolvedValue({ id: "s1" });
+
+    await publishSpanish(SINGLE, undefined, "4.es:1");
+
+    expect(api.getDocument).not.toHaveBeenCalled();
+    expect(api.publishSingleParts).toHaveBeenCalledWith("settings", "publish", {
+      locales: ["es"],
+      version: "4.es:1",
+    });
+  });
+});
+
+describe("publishing chosen parts nothing was described for", () => {
   it("of an entry sends the version a read of every language gives", async () => {
     api.findByID.mockResolvedValue({ id: "e1", _rev: "7.en:2,es:3" });
     api.publishEntryParts.mockResolvedValue({ id: "e1" });

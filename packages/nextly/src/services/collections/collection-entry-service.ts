@@ -1199,6 +1199,7 @@ export class CollectionEntryService extends BaseService {
           });
           return "answer" in read ? read.answer : read;
         }),
+      standing: () => this.mutationService.entryStanding(params),
       gate: publishGate(),
       collection: params.collectionName,
       caller: publishCallerOf(params),
