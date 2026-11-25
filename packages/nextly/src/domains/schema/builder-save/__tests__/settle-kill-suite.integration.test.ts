@@ -576,8 +576,8 @@ describe.each(getConfiguredTestDialects())(
       return lines.join("\n");
     }
 
-    // The control: with neither the record nor the attempt standing, the same start over the same
-    // folder reads the file as pending and runs it.
+    // The control: with neither the record nor the attempt standing, and the tables as the file
+    // finds them, the same start over the same folder reads the file as pending and runs it.
     it.runIf(dialect === "mysql")(
       "runs the same file at a development start once neither its record nor its attempt stands",
       async () => {
@@ -588,6 +588,10 @@ describe.each(getConfiguredTestDialects())(
         await t.adapter.executeQuery(
           `DELETE FROM nextly_schema_events WHERE filename = '${stoppedFile}'`
         );
+        // What the kill kept of it, which the start would meet as drift.
+        await t.adapter.executeQuery(
+          `ALTER TABLE ${TABLE} DROP COLUMN subtitle`
+        );
 
         const said = await startSays();
 
@@ -596,7 +600,11 @@ describe.each(getConfiguredTestDialects())(
             row.filename === stoppedFile &&
             !ledger.some(earlier => earlier.id === row.id)
         );
-        expect(ran.length, said).toBeGreaterThan(0);
+        expect(
+          ran.map(row => row.status),
+          said
+        ).toEqual(["applied"]);
+        expect(await liveColumns(t)).toEqual(expect.arrayContaining(ADDED));
       },
       300_000
     );
