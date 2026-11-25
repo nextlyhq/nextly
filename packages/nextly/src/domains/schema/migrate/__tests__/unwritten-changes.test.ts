@@ -378,19 +378,97 @@ describe("compareWithNewestSnapshot", () => {
       "~ per-language unique indexes dc_pages",
     ];
 
-    it("are a change where the entity's main table or settings change, and a notice where neither does, over a snapshot that records settings", () => {
-      const changes = over(snapshotOf(posts));
-      // The translations table's file moves a column off `dc_posts`; nothing of `dc_pages` changed.
+    // What a repeater's or group's text needs, as an upgrade plans it: `nextly migrate` makes it.
+    const OVERLAYS = {
+      kind: "translations table" as const,
+      table: "dc_posts",
+      overlays: true as const,
+    };
+    const overlaysOver = (
+      latest: CompareArgs["latest"],
+      extra: Partial<CompareArgs> = {}
+    ) =>
+      compareWithNewestSnapshot({
+        pending: {
+          ...NO_TABLES,
+          beside: [OVERLAYS, ...pending.beside.slice(1)],
+        },
+        entities: posts,
+        permissions: NO_PERMISSIONS,
+        latest,
+        ...extra,
+      });
+
+    it.each([
+      ["a snapshot that records settings", snapshotOf(posts)],
+      [
+        "a template's snapshot",
+        {
+          ...snapshotOf(posts, { entities: undefined }),
+          template: true as const,
+        },
+      ],
+    ])(
+      "are a notice for overlays alone over %s, every other a change",
+      (_, latest) => {
+        const changes = overlaysOver(latest);
+        expect(unwrittenChangeLines(changes)).toEqual([
+          "~ per-language unique indexes dc_pages",
+        ]);
+        expect(changes.besideNotRecorded).toEqual([OVERLAYS]);
+      }
+    );
+
+    it("are a change for overlays too where the entity's settings changed", () => {
+      const described = entitiesOf(
+        collection([TITLE], { description: "Changed" })
+      );
+      const changes = overlaysOver(snapshotOf(posts), { entities: described });
+      expect(unwrittenChangeLines(changes)).toEqual([
+        "~ translations table dc_posts",
+        "~ per-language unique indexes dc_pages",
+        "~ settings posts: description",
+      ]);
+      expect(changes.besideNotRecorded).toBeUndefined();
+    });
+
+    it("are a change for overlays too where the entity's main table changed", () => {
+      const changes = overlaysOver(snapshotOf(posts), {
+        pending: {
+          ...NO_TABLES,
+          tables: [drop],
+          diffed: [drop],
+          beside: [OVERLAYS],
+        },
+      });
+      expect(unwrittenChangeLines(changes)).toEqual([
+        "- drop_column dc_posts.title",
+        "~ translations table dc_posts",
+      ]);
+      expect(changes.besideNotRecorded).toBeUndefined();
+    });
+
+    it("are a change for overlays too over no snapshot, where everything is new", () => {
+      expect(overlaysOver(null).besideNotRecorded).toBeUndefined();
+    });
+
+    it("are a change where translation is turned off, which nextly migrate does not do", () => {
+      const off = { ...OVERLAYS, overlays: undefined, removes: true as const };
+      const changes = compareWithNewestSnapshot({
+        pending: { ...NO_TABLES, beside: [off] },
+        entities: posts,
+        permissions: NO_PERMISSIONS,
+        latest: snapshotOf(posts, { entities: undefined }),
+      });
       expect(unwrittenChangeLines(changes)).toEqual([
         "~ translations table dc_posts",
       ]);
-      expect(changes.besideNotRecorded).toEqual([
-        { kind: "per-language unique indexes", table: "dc_pages" },
-      ]);
+      expect(changes.besideNotRecorded).toBeUndefined();
     });
 
     it.each([
       ["no snapshot", null],
+      ["a snapshot that records settings", snapshotOf(posts)],
       [
         "a template's snapshot, which records none",
         {

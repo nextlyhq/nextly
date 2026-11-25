@@ -21,8 +21,15 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { defineCollection, defineConfig } from "../../../../config";
+import {
+  defineCollection,
+  defineConfig,
+  defineSingle,
+} from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
+import { shutdownServices } from "../../../../di/register";
+import { getNextly, shutdownNextly, startSettled } from "../../../../init";
+import { _resetBootMigrationsGateForTest } from "../../../../init/boot-migrations-gate";
 import {
   clearCachedSnapshot,
   clearLiveSnapshots,
@@ -33,6 +40,7 @@ import { introspectLiveColumns } from "../../../../domains/schema/pipeline/diff/
 import { describeEachDialect } from "../../../../plugins/__tests__/helpers/dialect-matrix";
 import type { TestDialect } from "../../../../plugins/test-nextly";
 import { _resetEnvCache } from "../../../../shared/lib/env";
+import { sanitizeConfig } from "../../../../shared/types/config";
 import { CliError } from "../../../errors/cli-error";
 import type { CommandContext } from "../../../program";
 import { createLogger } from "../../../utils/logger";
@@ -103,14 +111,39 @@ const projectWith = (
     ],
   });
 
+const SINGLE = "orhome";
+
+/** A translated Single whose only text is in a group, declared as `box`. */
+const singleWith = (box: "translated" | "shared") =>
+  defineConfig({
+    localization: { locales: ["en", "es"], defaultLocale: "en" },
+    db: { migrationsDir: "./migrations" },
+    singles: [
+      defineSingle({
+        slug: SINGLE,
+        localized: true,
+        fields: [
+          { name: "rank", type: "number" as const },
+          {
+            name: "box",
+            type: "group" as const,
+            fields: [{ name: "label", type: "text" as const }],
+            ...(box === "shared" ? { localized: false } : {}),
+          },
+        ],
+      }),
+    ],
+  });
+
 /** What these cases read and change of a snapshot file. */
 interface NewestSnapshot {
-  entities?: {
-    collections: Record<
+  entities?: Record<
+    "collections" | "singles",
+    Record<
       string,
       { settings: { fields: { name: string; localized?: boolean }[] } }
-    >;
-  };
+    >
+  >;
   permissions?: unknown;
   snapshot: { tables: { name: string; localized?: boolean }[] };
 }
@@ -292,18 +325,24 @@ export function overlayRecordCases(
         }
       }
 
-      /** The columns the database's translations table has. */
-      async function translationColumns(): Promise<string[]> {
-        const table = `dc_${SLUG}_locales`;
+      /** The columns of `table` in the database; undefined where it has no such table. */
+      async function columnsOf(table: string): Promise<string[] | undefined> {
         const adapter = await open();
         const { tables } = await introspectLiveColumns(
           adapter.getDrizzle(),
           dialect,
           [table]
         );
-        const found = tables.find(t => t.name === table);
+        return tables
+          .find(t => t.name === table)
+          ?.columns.map(column => column.name);
+      }
+
+      /** The columns the database's translations table has. */
+      async function translationColumns(): Promise<string[]> {
+        const found = await columnsOf(`dc_${SLUG}_locales`);
         if (found === undefined) throw new Error("no translations table");
-        return found.columns.map(column => column.name);
+        return found;
       }
 
       /** A project whose history and database `migrate:create` and `nextly migrate` made. */
@@ -357,6 +396,39 @@ export function overlayRecordCases(
         expect(await translationColumns()).not.toContain("box");
       }
 
+      /** One production start of `config` by the Direct API, with what it warned of. */
+      async function productionStart(
+        config: unknown
+      ): Promise<{ warned: string; refusal?: unknown }> {
+        vi.stubEnv("NODE_ENV", "production");
+        // Which a production start requires before it opens the database.
+        vi.stubEnv("NEXT_PUBLIC_APP_URL", "http://localhost:3000");
+        _resetEnvCache();
+        _resetBootMigrationsGateForTest();
+        const lines: string[] = [];
+        const spies = (["log", "info", "warn", "error"] as const).map(level =>
+          vi.spyOn(console, level).mockImplementation((...parts: unknown[]) => {
+            if (level === "warn" || level === "error") {
+              lines.push(parts.map(String).join(" "));
+            }
+          })
+        );
+        try {
+          await getNextly({ config: sanitizeConfig(config as never) as never });
+          await startSettled();
+          return { warned: lines.join("\n") };
+        } catch (refusal) {
+          return { warned: lines.join("\n"), refusal };
+        } finally {
+          for (const spy of spies) spy.mockRestore();
+          await shutdownNextly();
+          await shutdownServices();
+          _resetBootMigrationsGateForTest();
+          vi.stubEnv("NODE_ENV", "test");
+          _resetEnvCache();
+        }
+      }
+
       /** Nothing of what later releases record beside the tables. */
       async function forgetTheSettings(): Promise<void> {
         await withNewestSnapshot(file => {
@@ -382,7 +454,8 @@ export function overlayRecordCases(
       /** No surface refuses, and each says the overlay is not recorded where `noticed`. */
       async function refusedByNone(
         config: unknown,
-        noticed = false
+        noticed = false,
+        line = OVERLAY_LINE
       ): Promise<void> {
         const checked = await check(config);
         expect(checked.code, checked.said).toBeUndefined();
@@ -392,7 +465,7 @@ export function overlayRecordCases(
         for (const said of [checked.said, ran.said, warned.join("\n")]) {
           if (noticed) {
             expect(said).toContain(NOT_RECORDED);
-            expect(said).toContain(OVERLAY_LINE);
+            expect(said).toContain(line);
             expect(said).not.toContain(CREATE_ADVICE);
           } else {
             expect(said).not.toContain(NOT_RECORDED);
@@ -450,6 +523,67 @@ export function overlayRecordCases(
             expect(said).toContain(`${SLUG}beside`);
             expect(said).not.toContain(OVERLAY_LINE);
           }
+        }, 120_000);
+      });
+
+      // The other roads that make the column: each leaves the snapshot as it was.
+      describe("a project an earlier release left, once another road made the column", () => {
+        const project = projectWith("translated");
+        beforeEach(() => leftByAnEarlierRelease(), 120_000);
+
+        it("db:sync makes it, and it is recorded by migrate:create, with nothing left after", async () => {
+          synced = await openSyncTarget(dir, dialect, url);
+          await syncSchemaInOrder(
+            { config: project } as unknown as LoadConfigResult,
+            synced.cli,
+            { ...synced.options, cwd: dir },
+            { ...synced.context, cwd: dir }
+          );
+          expect(await translationColumns()).toContain("box");
+          await refusedByNone(project, true);
+          await writtenAndApplied(project);
+        }, 120_000);
+
+        it("a production start that runs migrations makes it and says it is not recorded", async () => {
+          const started = await productionStart({
+            ...project,
+            db: {
+              ...project.db,
+              migrationsDir: join(dir, "migrations"),
+              runMigrationsOnBoot: true,
+            },
+          });
+          expect(started.refusal).toBeUndefined();
+          expect(await translationColumns()).toContain("box");
+          expect(started.warned).toContain(NOT_RECORDED);
+          expect(started.warned).toContain(OVERLAY_LINE);
+          expect(started.warned).not.toContain(CREATE_ADVICE);
+          await refusedByNone(project, true);
+          await writtenAndApplied(project);
+        }, 120_000);
+      });
+
+      // Its text is inside the group alone, so an earlier release made it no translations table.
+      describe("a Single an earlier release left, whose only text is in its group", () => {
+        const project = singleWith("translated");
+
+        it("is refused by no surface, which says it is not recorded, and nextly migrate makes the table", async () => {
+          await migrateTheProject(singleWith("shared"));
+          await withNewestSnapshot(file => {
+            const box = file.entities?.singles[SINGLE]?.settings.fields.find(
+              field => field.name === "box"
+            );
+            expect(box?.localized).toBe(false);
+            delete box?.localized;
+          });
+          const table = `single_${SINGLE}_locales`;
+          expect(await columnsOf(table)).toBeUndefined();
+          await refusedByNone(
+            project,
+            true,
+            `~ translations table single_${SINGLE}`
+          );
+          expect(await columnsOf(table)).toContain("box");
         }, 120_000);
       });
 
