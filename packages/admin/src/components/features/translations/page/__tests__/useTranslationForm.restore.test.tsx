@@ -35,6 +35,7 @@ const OPTIONS = {
   target: { code: "es", label: "Spanish" },
   fields: [FIELD],
   rows: [{ field: FIELD, name: "bio", label: "Biography" }],
+  nested: [],
   written: { id: "a1", bio: "Una pionera", _rev: "7.es:3" },
   sourceOf: () => "en",
   reload: () => reload(),

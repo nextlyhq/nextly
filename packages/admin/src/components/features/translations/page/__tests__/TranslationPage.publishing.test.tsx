@@ -465,6 +465,14 @@ describe("publishing the language", () => {
     const user = userEvent.setup();
     render();
     const dialog = await openPublish(user);
+    // The reads after the publish take a while, so a dialog that closed before
+    // they were in would leave the next change on the version before it.
+    api.findByID.mockImplementation(
+      async (_s: string, _i: string, read: Read) => {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        return answer(read);
+      }
+    );
     await user.click(
       within(dialog).getByRole("button", { name: "Publish Spanish" })
     );
@@ -472,7 +480,7 @@ describe("publishing the language", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     );
     await user.type(await bio(), "!");
-    await user.click(screen.getByRole("button", { name: "Save Spanish" }));
+    await user.click(screen.getByRole("button", { name: /^Save( draft)?$/ }));
     await waitFor(() => expect(api.update).toHaveBeenCalledOnce());
     expect(api.update.mock.calls[0]?.[2]).toMatchObject({ _rev: "8.es:5" });
   });
@@ -591,7 +599,7 @@ describe("publishing the language", () => {
     render();
     expect(await openPublish(user)).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Save Spanish" })
+      screen.queryByRole("button", { name: /^Save( draft)?$/ })
     ).not.toBeInTheDocument();
   });
 
@@ -628,7 +636,7 @@ describe("a save that changes what readers see", () => {
       "Spanish is published and no drafts are kept here: saving changes what its readers see at once."
     );
     expect(
-      screen.getByRole("button", { name: "Save Spanish" })
+      screen.getByRole("button", { name: /^Save( draft)?$/ })
     ).toHaveAccessibleDescription(/saving changes what its readers see/);
     expect(
       screen.queryByRole("button", { name: "Publish Spanish" })
@@ -667,7 +675,16 @@ describe("a save that changes what readers see", () => {
 });
 
 describe("taking the language offline", () => {
-  const offline = () => screen.getByRole("button", { name: "Take offline" });
+  const arrow = () =>
+    screen.getByRole("button", { name: "More actions for Spanish" });
+  const item = () => screen.queryByRole("menuitem", { name: "Take offline…" });
+  /** Open the arrow's menu, and press its Take offline. */
+  async function pressOffline(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(arrow());
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Take offline…" })
+    );
+  }
 
   beforeEach(() => {
     stored.es = PUBLISHED;
@@ -677,7 +694,7 @@ describe("taking the language offline", () => {
     const user = userEvent.setup();
     render();
     await bio();
-    await user.click(offline());
+    await pressOffline(user);
     const dialog = await screen.findByRole("alertdialog", {
       name: "Take Spanish offline?",
     });
@@ -700,27 +717,21 @@ describe("taking the language offline", () => {
         "Spanish is offline. English and the shared fields are unchanged."
       )
     );
-    // Offline now, so it can't be taken offline again; focus isn't lost.
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("button", { name: "Take offline" })
-      ).not.toBeInTheDocument()
-    );
-    await waitFor(() =>
-      expect(
-        screen.getByRole("group", { name: "Spanish actions" })
-      ).toHaveFocus()
-    );
+    await waitFor(() => expect(arrow()).toHaveFocus());
+    // Offline now, so it can't be taken offline again.
+    await user.click(arrow());
+    await screen.findByRole("menuitem", { name: "Open in editor" });
+    expect(item()).not.toBeInTheDocument();
   });
 
   it("changes nothing when the reader changes their mind", async () => {
     const user = userEvent.setup();
     render();
     await bio();
-    await user.click(offline());
+    await pressOffline(user);
     await user.click(await screen.findByRole("button", { name: "Cancel" }));
     expect(moves()).toHaveLength(0);
-    await waitFor(() => expect(offline()).toHaveFocus());
+    await waitFor(() => expect(arrow()).toHaveFocus());
   });
 
   it("keeps the dialog, with the server's reason, when it is refused", async () => {
@@ -733,7 +744,7 @@ describe("taking the language offline", () => {
     );
     render();
     await bio();
-    await user.click(offline());
+    await pressOffline(user);
     await user.click(
       await screen.findByRole("button", { name: "Take Spanish offline" })
     );
@@ -745,8 +756,12 @@ describe("taking the language offline", () => {
     const user = userEvent.setup();
     render();
     await user.type(await bio(), "!");
-    expect(offline()).toBeDisabled();
-    expect(offline()).toHaveAccessibleDescription(
+    await user.click(arrow());
+    const held = await screen.findByRole("menuitem", {
+      name: "Take offline…",
+    });
+    expect(held).toHaveAttribute("aria-disabled", "true");
+    expect(held).toHaveAccessibleDescription(
       "Save your changes before taking Spanish offline."
     );
   });
@@ -755,12 +770,13 @@ describe("taking the language offline", () => {
     ["without the right", () => reader.can.delete("unpublish-authors")],
     ["while the language is not published", () => (stored.es = DRAFT)],
   ])("is not offered %s", async (_where, given) => {
+    const user = userEvent.setup();
     given();
     render();
     await bio();
-    expect(
-      screen.queryByRole("button", { name: "Take offline" })
-    ).not.toBeInTheDocument();
+    await user.click(arrow());
+    await screen.findByRole("menuitem", { name: "Open in editor" });
+    expect(item()).not.toBeInTheDocument();
   });
 });
 
@@ -795,10 +811,10 @@ describe("leaving with unsaved work", () => {
     const user = userEvent.setup();
     render();
     await user.type(await bio(), "!");
-    await user.click(screen.getByRole("button", { name: "Save Spanish" }));
+    await user.click(screen.getByRole("button", { name: /^Save( draft)?$/ }));
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Save Spanish" })
+        screen.getByRole("button", { name: /^Save( draft)?$/ })
       ).toBeDisabled()
     );
     leave();
@@ -815,7 +831,9 @@ describe("a document someone else has open", () => {
       await screen.findByText("Bob is editing this document right now.")
     ).toBeInTheDocument();
     await user.type(await bio(), "!");
-    expect(screen.getByRole("button", { name: "Save Spanish" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: /^Save( draft)?$/ })
+    ).toBeEnabled();
     expect(
       screen.queryByRole("button", { name: "Take over" })
     ).not.toBeInTheDocument();

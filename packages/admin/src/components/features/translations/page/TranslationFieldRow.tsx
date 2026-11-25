@@ -8,7 +8,8 @@
  * The source comes first in the document, so a screen too narrow for two
  * columns stacks it above what is written from it, and a keyboard meets it
  * first. The value being written is the form's own control for the field, with
- * its label, help and error.
+ * its label, help and error; the source draws the same label at the same
+ * height, so the two values start in line.
  *
  * @module components/features/translations/page/TranslationFieldRow
  */
@@ -21,12 +22,14 @@ import {
   effectiveFieldGate,
   fieldAdminGates,
   OPEN_GATE,
+  type FieldGate,
 } from "@admin/components/features/entries/fields/field-admin-gates";
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import { FieldValue } from "@admin/components/features/versions/value-display/FieldValueDisplay";
-import { Badge } from "@admin/components/ui";
+import { fieldLabel } from "@admin/lib/field-label";
 import { cn } from "@admin/lib/utils";
 
+import { OutOfDateMark } from "./OutOfDateMark";
 import { SourcePicker } from "./SourcePicker";
 import {
   SuggestionBlock,
@@ -34,6 +37,7 @@ import {
   type SuggestionChoices,
 } from "./SuggestionBlock";
 import type { TranslationField } from "./translation-fields";
+import { CardRow, useCards } from "./TranslationCards";
 import { directionOf, useValueLanguage } from "./useValueLanguage";
 
 /** A language as the page names and draws it. */
@@ -63,35 +67,71 @@ export interface TranslationFieldRowProps {
   outOfDate: boolean;
   /** Whether the reader may only look. */
   readOnly: boolean;
+  /** The path of the row or group the field sits in; none at the top. */
+  basePath?: string;
+  /** What the field inherits from what it sits in. */
+  inherited?: FieldGate;
   suggestion?: FieldSuggestion;
   suggestionChoices?: SuggestionChoices;
 }
 
+/** What the form's own label of the field says. */
+function formLabel({ field }: TranslationField): string {
+  const label = "label" in field ? field.label : undefined;
+  return fieldLabel({
+    name: "name" in field ? field.name : undefined,
+    label: typeof label === "string" ? label : undefined,
+  });
+}
+
 /** The text the translator works from. */
-function SourceColumn({
+function SourceHalf({
   translated,
   source,
   labelOf,
   onSourceChange,
+  outOfDate,
 }: Pick<
   TranslationFieldRowProps,
-  "translated" | "labelOf" | "onSourceChange"
+  "translated" | "labelOf" | "onSourceChange" | "outOfDate"
 > & { source: FieldSource }): JSX.Element {
+  const cards = useCards();
+  // Its card is headed with the page's source: another is named here, and a
+  // choice is offered where there is one.
+  const offers = source.eligible.length > 1;
+  const named = source.language.code !== cards.source;
   return (
-    <div className="min-w-0" data-slot="translation-source">
-      <div className="mb-2 flex min-h-8 items-center">
-        <SourcePicker
-          fieldLabel={translated.label}
-          sources={source.eligible}
-          source={source.language.code}
-          labelOf={labelOf}
-          onChange={onSourceChange}
-        />
-      </div>
+    <div className="grid gap-2">
+      <span
+        className={cn(
+          "text-sm leading-none font-medium",
+          (offers || named) && "pr-32"
+        )}
+      >
+        {formLabel(translated)}
+      </span>
+      {offers || named ? (
+        // Out of the label's line, which the translation's is in line with.
+        <div className="absolute -top-1.5 right-0 @xl/cards:top-1.5">
+          <SourcePicker
+            fieldLabel={translated.label}
+            sources={source.eligible}
+            source={source.language.code}
+            labelOf={labelOf}
+            onChange={onSourceChange}
+          />
+        </div>
+      ) : null}
       <div
         lang={source.language.code}
         dir={directionOf(source.language)}
-        className="text-sm break-words"
+        data-slot="translation-source-value"
+        className={cn(
+          "min-h-9 rounded-md border px-3 py-2 text-sm break-words",
+          outOfDate
+            ? "border-warning-border bg-warning-surface"
+            : "border-border"
+        )}
       >
         <FieldValue field={translated.field} value={source.value} />
       </div>
@@ -107,6 +147,8 @@ export function TranslationFieldRow({
   onSourceChange,
   outOfDate,
   readOnly,
+  basePath = "",
+  inherited = OPEN_GATE,
   suggestion,
   suggestionChoices,
 }: TranslationFieldRowProps): JSX.Element | null {
@@ -115,7 +157,7 @@ export function TranslationFieldRow({
   // is left out with its source.
   const condition = conditionSourcePath(
     fieldAdminGates(translated.field).condition,
-    ""
+    basePath
   );
   const conditionValue: unknown = useWatch({
     name: condition ?? "",
@@ -123,7 +165,7 @@ export function TranslationFieldRow({
   });
   const gate = effectiveFieldGate(
     translated.field,
-    { ...OPEN_GATE, readOnly },
+    { ...inherited, readOnly: readOnly || inherited.readOnly },
     conditionValue
   );
   if (!gate.shown) return null;
@@ -132,47 +174,61 @@ export function TranslationFieldRow({
       role="group"
       aria-label={translated.label}
       data-slot="translation-field"
-      className={cn(
-        "grid grid-cols-1 gap-4 border-b border-border py-6 first:pt-0 last:border-b-0",
-        source !== undefined && "md:grid-cols-2 md:gap-8"
-      )}
     >
-      {source === undefined ? null : (
-        <SourceColumn
-          translated={translated}
-          source={source}
-          labelOf={labelOf}
-          onSourceChange={onSourceChange}
-        />
-      )}
-      <div className="min-w-0" data-slot="translation-target">
-        <div className="mb-2 flex min-h-8 flex-wrap items-center gap-2">
-          <span className="text-sm font-medium">{target.label}</span>
-          {outOfDate ? <Badge variant="warning">Out of date</Badge> : null}
-        </div>
-        {source === undefined ? (
-          <p className="mb-2 text-sm text-muted-foreground">
-            No other language has this published and up to date, so it is
-            written here as original {target.label}.
-          </p>
-        ) : null}
-        <div ref={markValue}>
-          <FieldRenderer
-            field={translated.field}
-            mode="edit"
-            readOnly={gate.readOnly}
-          />
-        </div>
-        <SuggestionBlock
-          field={translated.field}
-          fieldLabel={translated.label}
-          suggestion={suggestion}
-          language={target}
-          choices={
-            gate.readOnly || gate.disabled ? undefined : suggestionChoices
-          }
-        />
-      </div>
+      <CardRow
+        sourceLabel={source?.language.label}
+        targetLabel={target.label}
+        {...(source === undefined
+          ? {}
+          : {
+              source: (
+                <SourceHalf
+                  translated={translated}
+                  source={source}
+                  labelOf={labelOf}
+                  onSourceChange={onSourceChange}
+                  outOfDate={outOfDate}
+                />
+              ),
+            })}
+        target={
+          <>
+            {outOfDate ? (
+              <div className="absolute -top-1 right-0 @xl/cards:top-2">
+                <OutOfDateMark />
+              </div>
+            ) : null}
+            <div
+              ref={markValue}
+              // The mark sits at the end of the label's line, so a long label
+              // wraps before it.
+              className={cn(outOfDate && "[&_label]:pr-28")}
+            >
+              <FieldRenderer
+                field={translated.field}
+                basePath={basePath}
+                mode="edit"
+                readOnly={gate.readOnly}
+              />
+            </div>
+            {source === undefined ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                No other language has this published and up to date, so it is
+                written here as original {target.label}.
+              </p>
+            ) : null}
+            <SuggestionBlock
+              field={translated.field}
+              fieldLabel={translated.label}
+              suggestion={suggestion}
+              language={target}
+              choices={
+                gate.readOnly || gate.disabled ? undefined : suggestionChoices
+              }
+            />
+          </>
+        }
+      />
     </div>
   );
 }

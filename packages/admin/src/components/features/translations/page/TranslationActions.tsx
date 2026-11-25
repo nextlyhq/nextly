@@ -5,6 +5,10 @@
  * it offline. Each follows its own right, so a reader who may publish and not
  * write is still offered Publish.
  *
+ * Drawn in the admin's top bar where it has room: the one main button, with
+ * what is done less often under its arrow. What there is to say of them stays
+ * on the page, beside the work it is about.
+ *
  * Publishing with unsaved work saves it first, where that save changes nothing
  * readers see. Where it would, or might, the work is saved by Save, whose own
  * sentence says so. A save that does not go through opens nothing.
@@ -15,11 +19,27 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useId, useRef, useState, type JSX, type RefObject } from "react";
 
-import { Button, toast } from "@admin/components/ui";
+import { ChevronDown } from "@admin/components/icons";
+import {
+  TopBarPlace,
+  useInTopBar,
+  useTopBarWidth,
+} from "@admin/components/layout/header/TopBarPlaces";
+import {
+  Button,
+  buttonVariants,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  toast,
+} from "@admin/components/ui";
+import { Link } from "@admin/components/ui/link";
 import type { PartsTarget } from "@admin/hooks/queries/usePublishParts";
 import { singleDocumentKeys } from "@admin/hooks/queries/useSingles";
 import { useCan } from "@admin/hooks/useCan";
 import type { ShownCopy } from "@admin/lib/document-version";
+import { cn } from "@admin/lib/utils";
 import { entryKeys } from "@admin/services/entryApi";
 import { versionApi, type VersionScope } from "@admin/services/versionApi";
 
@@ -66,7 +86,15 @@ export interface TranslationActionsProps {
   emptyFields: () => EmptyField[];
   /** Read the language again. */
   reload: () => Promise<unknown>;
+  /** The document's editor. */
+  editorHref: string;
 }
+
+/**
+ * The room the bar needs for the trail and these beside each other. Narrower,
+ * they are drawn on the page, so none of them is past the screen's edge.
+ */
+const BAR_ROOM = 640;
 
 /**
  * Focus as a dialog closes: back on what opened it, or on the actions where
@@ -74,15 +102,19 @@ export interface TranslationActionsProps {
  */
 function useReturnFocus(): {
   actions: RefObject<HTMLDivElement | null>;
+  /** The arrow, which the menu's own actions are opened from. */
+  arrow: RefObject<HTMLButtonElement | null>;
   onCloseAutoFocus: (event: Event) => void;
-  opening: () => void;
+  opening: (from?: HTMLElement | null) => void;
 } {
   const actions = useRef<HTMLDivElement>(null);
+  const arrow = useRef<HTMLButtonElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   return {
     actions,
-    opening: () => {
-      const active = globalThis.document.activeElement;
+    arrow,
+    opening: from => {
+      const active = from ?? globalThis.document.activeElement;
       opener.current = active instanceof HTMLElement ? active : null;
     },
     onCloseAutoFocus: event => {
@@ -142,10 +174,15 @@ export function TranslationActions({
   editing,
   emptyFields,
   reload,
+  editorHref,
 }: TranslationActionsProps): JSX.Element {
   const mayPublish = useCan(`publish-${document.slug}`);
   const mayUnpublish = useCan(`unpublish-${document.slug}`);
-  const { actions, opening, onCloseAutoFocus } = useReturnFocus();
+  const { actions, arrow, opening, onCloseAutoFocus } = useReturnFocus();
+  // Asked from the menu, which would otherwise take focus back as it closes.
+  const leavingMenu = useRef(false);
+  const room = useTopBarWidth();
+  const inBar = useInTopBar() && room !== null && room >= BAR_ROOM;
   // Each opening is a dialog of its own, with no answer left from the last.
   const [openings, setOpenings] = useState(0);
   const [asked, setAsked] = useState<"publish" | "offline" | null>(null);
@@ -224,66 +261,133 @@ export function TranslationActions({
     await reload();
   };
 
-  return (
-    <div className="flex flex-col gap-2 sm:items-end">
-      <div
-        ref={actions}
-        role="group"
-        aria-label={`${language.label} actions`}
-        tabIndex={-1}
-        className="flex flex-wrap items-center gap-2"
-      >
-        {offersOffline ? (
+  // A draft only where no reader is shown it: anywhere else a save is not one.
+  const saveLabel =
+    rules.hasStatus && reach === "nobody" ? "Save draft" : "Save";
+  const saveButton = (main: boolean) => (
+    <Button
+      type="button"
+      size="sm"
+      variant={main ? "default" : "outline"}
+      className={main ? "rounded-r-none" : undefined}
+      data-slot="translation-save"
+      disabled={!isDirty || isSaving}
+      aria-describedby={note === undefined ? undefined : noteId}
+      onClick={() => void save()}
+    >
+      {isSaving ? "Saving…" : saveLabel}
+    </Button>
+  );
+  const main: "publish" | "save" | "open" = offersPublish
+    ? "publish"
+    : readOnly
+      ? "open"
+      : "save";
+  const buttons = (
+    <div
+      ref={actions}
+      role="group"
+      aria-label={`${language.label} actions`}
+      tabIndex={-1}
+      className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+    >
+      {/* Save beside the main button, where it is not it. */}
+      {main === "publish" && !readOnly ? saveButton(false) : null}
+      <div className="flex">
+        {main === "publish" ? (
           <Button
             type="button"
-            variant="outline"
-            disabled={isDirty || isSaving}
-            aria-describedby={waiting === undefined ? undefined : heldId}
-            onClick={() => {
-              opening();
-              ask("offline");
-            }}
-          >
-            Take offline
-          </Button>
-        ) : null}
-        {readOnly ? null : (
-          <Button
-            type="button"
-            variant={offersPublish ? "outline" : "default"}
-            data-slot="translation-save"
-            disabled={!isDirty || isSaving}
-            aria-describedby={note === undefined ? undefined : noteId}
-            onClick={() => void save()}
-          >
-            {isSaving ? "Saving…" : `Save ${language.label}`}
-          </Button>
-        )}
-        {offersPublish ? (
-          <Button
-            type="button"
+            size="sm"
             // Not `disabled`, which would drop focus while the save it starts
             // is on its way.
             aria-disabled={!canPublishNow}
             aria-describedby={isDirty && !savesFirst ? heldId : undefined}
-            className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+            className="rounded-r-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
             onClick={() => void askToPublish()}
           >
             Publish {language.label}
           </Button>
         ) : null}
+        {main === "save" ? saveButton(true) : null}
+        {main === "open" ? (
+          <Link
+            href={editorHref}
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+              offersOffline && "rounded-r-none"
+            )}
+          >
+            Open in editor
+          </Link>
+        ) : null}
+        {main === "open" && !offersOffline ? null : (
+          <DropdownMenu
+            // What it opens is modal, and two would hold the page at once.
+            modal={false}
+          >
+            <DropdownMenuTrigger asChild>
+              <Button
+                ref={arrow}
+                type="button"
+                size="sm"
+                variant={main === "open" ? "outline" : "default"}
+                className={cn(
+                  "rounded-l-none px-1.5",
+                  main === "open"
+                    ? "border-l-0"
+                    : "border-l-primary-foreground/25"
+                )}
+                aria-label={`More actions for ${language.label}`}
+              >
+                <ChevronDown className="h-4 w-4" aria-hidden />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              onCloseAutoFocus={event => {
+                if (leavingMenu.current) event.preventDefault();
+                leavingMenu.current = false;
+              }}
+            >
+              {offersOffline ? (
+                <DropdownMenuItem
+                  disabled={isDirty || isSaving}
+                  aria-describedby={waiting === undefined ? undefined : heldId}
+                  onSelect={() => {
+                    leavingMenu.current = true;
+                    opening(arrow.current);
+                    ask("offline");
+                  }}
+                >
+                  Take offline…
+                </DropdownMenuItem>
+              ) : null}
+              {main === "open" ? null : (
+                <DropdownMenuItem asChild>
+                  <Link href={editorHref}>Open in editor</Link>
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
+    </div>
+  );
+
+  return (
+    <div className="mb-4 flex flex-col gap-2 empty:mb-0">
+      {inBar ? <TopBarPlace name="end">{buttons}</TopBarPlace> : buttons}
       {note === undefined ? null : (
         <p
           id={noteId}
           data-slot="translation-save-reach"
-          className="max-w-md text-sm text-muted-foreground sm:text-right"
+          className="text-sm text-muted-foreground"
         >
           {note}
         </p>
       )}
       {!removed && holdsStrandedDraft(rules, standing) ? (
-        <p className="max-w-md text-sm text-muted-foreground sm:text-right">
+        <p className="text-sm text-muted-foreground">
           {language.label} holds a draft from before drafts stopped being kept
           here. It can&apos;t be published.
         </p>

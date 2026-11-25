@@ -1,7 +1,8 @@
 /**
  * Which of a document's fields its translation page shows, and how: the text
  * written per language, a row each; the containers whose text is written per
- * language inside them; and the shared fields, named and edited elsewhere.
+ * language inside them; the shared fields, named and edited in the editor; and
+ * the page-builder content, named and translated in its own editor.
  *
  * Read off the document rather than off the schema alone. The server answers a
  * read of every language with the translatable fields the reader may read, and
@@ -19,6 +20,8 @@ import { fieldAdminGates } from "@admin/components/features/entries/fields/field
 import { fieldLabel } from "@admin/lib/field-label";
 import { addressableFieldsWithin } from "@admin/lib/plugins/document-view-registry";
 
+import { holdsText } from "./nested-text";
+
 /** One field the page names: its declaration, and what it is called. */
 export interface TranslationField {
   field: FieldConfig;
@@ -31,8 +34,12 @@ export interface TranslationFieldSet {
   rows: TranslationField[];
   /** Containers holding text per language inside them. */
   nested: TranslationField[];
+  /** The rows and the containers together, in the form's order. */
+  written: TranslationField[];
   /** The same in every language, and edited in the editor. */
   shared: TranslationField[];
+  /** Kept per language, and written in an editor of its own. */
+  elsewhere: TranslationField[];
 }
 
 /** Each translatable field's stored value in each language the reader may read. */
@@ -58,11 +65,10 @@ export function valuesPerLanguage(
 }
 
 /** Field types whose value is other fields' values. */
-const CONTAINER_TYPES: ReadonlySet<string> = new Set([
-  "group",
-  "repeater",
-  "blocks",
-]);
+const CONTAINER_TYPES: ReadonlySet<string> = new Set(["group", "repeater"]);
+
+/** Field types whose text is written in an editor of its own. */
+const OWN_EDITOR_TYPES: ReadonlySet<string> = new Set(["blocks"]);
 
 function isContainer(field: FieldConfig): boolean {
   // Widened: a plugin contributes types the catalog's own union does not name.
@@ -88,13 +94,27 @@ export function translationFields(
   document: Readonly<Record<string, unknown>>
 ): TranslationFieldSet {
   const perLanguage = valuesPerLanguage(document);
-  const set: TranslationFieldSet = { rows: [], nested: [], shared: [] };
+  const set: TranslationFieldSet = {
+    rows: [],
+    nested: [],
+    written: [],
+    shared: [],
+    elsewhere: [],
+  };
   for (const { field, path, within } of addressableFieldsWithin(fields)) {
     if (path === "") continue;
     if ([...within, field].some(each => fieldAdminGates(each).hidden)) continue;
     const shown = { field, name: path, label: labelOf(field, path) };
+    const type: string = field.type;
     if (Object.hasOwn(perLanguage, path)) {
-      (isContainer(field) ? set.nested : set.rows).push(shown);
+      if (OWN_EDITOR_TYPES.has(type)) set.elsewhere.push(shown);
+      // A container may be kept per language for a component that turns out to
+      // hold no text: then all of it is shared.
+      else if (isContainer(field) && !holdsText(field)) set.shared.push(shown);
+      else {
+        (isContainer(field) ? set.nested : set.rows).push(shown);
+        set.written.push(shown);
+      }
     } else if (Object.hasOwn(document, path)) {
       set.shared.push(shown);
     }

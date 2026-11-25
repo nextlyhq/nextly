@@ -37,12 +37,16 @@ export function SourcePicker({
   onChange,
 }: SourcePickerProps): JSX.Element {
   if (sources.length < 2) {
-    return <span className="text-sm font-medium">{labelOf(source)}</span>;
+    return (
+      <span className="text-xs leading-7 text-muted-foreground">
+        {labelOf(source)}
+      </span>
+    );
   }
   return (
     <Select value={source} onValueChange={onChange}>
       <SelectTrigger
-        className="h-8 w-auto max-w-full"
+        className="h-7 w-auto max-w-32 px-2 text-xs"
         aria-label={`Source language for ${fieldLabel}`}
       >
         <SelectValue />

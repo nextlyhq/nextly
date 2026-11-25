@@ -34,7 +34,6 @@ const DRAFT = { translated: true, status: "draft" };
 const shows = (over: Partial<Parameters<typeof emptyFields>[0]> = {}) =>
   emptyFields({
     rows: [row("title")],
-    nested: [],
     shown: { title: null },
     stored: { title: null },
     values: { title: { en: "Hello", es: null, fr: "Bonjour", ar: null } },
@@ -71,19 +70,14 @@ describe("emptyFields", () => {
   it("names only the fields left empty, in the page's order", () => {
     const empty = emptyFields({
       rows: [row("title"), row("body"), row("note")],
-      nested: [row("gallery"), row("intro")],
-      shown: { title: "", body: "Hola", note: undefined, gallery: [] },
-      stored: { gallery: null, intro: [{ text: "Hola" }] },
+      shown: { title: "", body: "Hola", note: undefined },
+      stored: {},
       values: {},
       translations: {},
       target: "es",
       rules: RULES,
     });
-    expect(empty.map(field => field.label)).toEqual([
-      "TITLE",
-      "NOTE",
-      "GALLERY",
-    ]);
+    expect(empty.map(field => field.label)).toEqual(["TITLE", "NOTE"]);
   });
 
   it("takes a box drawn off, or a list drawn empty, for empty where nothing is stored", () => {

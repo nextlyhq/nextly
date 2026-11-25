@@ -1,6 +1,6 @@
 /**
  * Which languages a field can be translated from: those whose own value for
- * the field is published and not out of date, never the language being
+ * the field is published and known to be up to date, never the language being
  * written. Text nobody has published, or whose own source moved on, is not a
  * text to translate from.
  *
@@ -51,17 +51,14 @@ function isPublished(code: string, facts: SourceFacts): boolean {
 }
 
 /**
- * Whether the value of `field` in `code` is behind its own source. The field's
- * record says where there is one; a value written before records were kept is
- * judged by its language's. Nothing known is not a reason to refuse it.
+ * Whether the value of `field` in `code` is known to be up to date with what it
+ * was made from. The default language's is the source itself. Any other has to
+ * be recorded so: one whose age was never recorded may be behind, and is not a
+ * text to translate from.
  */
-function isOutOfDate(field: string, code: string, facts: SourceFacts): boolean {
-  if (code === facts.defaultLocale) return false;
-  const meta = facts.translations?.[code];
-  const recorded = meta?.fields?.[field];
-  return recorded === undefined
-    ? meta?.stale === true
-    : recorded.outOfDate === true;
+function isUpToDate(field: string, code: string, facts: SourceFacts): boolean {
+  if (code === facts.defaultLocale) return true;
+  return facts.translations?.[code]?.fields?.[field]?.outOfDate === false;
 }
 
 /** The languages `field` can be translated from, in the site's order. */
@@ -75,7 +72,7 @@ export function eligibleSources(field: string, facts: SourceFacts): string[] {
         code !== facts.target &&
         isFieldTranslated(values[code]) &&
         isPublished(code, facts) &&
-        !isOutOfDate(field, code, facts)
+        isUpToDate(field, code, facts)
     );
 }
 

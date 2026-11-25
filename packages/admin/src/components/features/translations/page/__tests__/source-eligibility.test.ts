@@ -11,7 +11,9 @@ import {
   type SourceFacts,
 } from "../source-eligibility";
 
-const PUBLISHED = { translated: true, status: "published" };
+/** A value recorded as made from a source that has not changed since. */
+const CURRENT = { fields: { title: { origin: "person", outOfDate: false } } };
+const PUBLISHED = { translated: true, status: "published", ...CURRENT };
 
 const FACTS: SourceFacts = {
   locales: [{ code: "en" }, { code: "es" }, { code: "fr" }, { code: "ar" }],
@@ -29,7 +31,7 @@ const sources = (over: Partial<SourceFacts> = {}) =>
 const withMeta = (code: string, meta: Record<string, unknown>) => ({
   translations: {
     ...FACTS.translations,
-    [code]: { translated: true, ...meta },
+    [code]: { translated: true, ...CURRENT, ...meta },
   },
 });
 
@@ -83,11 +85,39 @@ describe("eligibleSources", () => {
     ).toEqual(["en", "es", "fr"]);
   });
 
-  it("judges a value with no record by its language", () => {
+  it("refuses a value whose age was never recorded, however its language stands", () => {
+    // Up to date has to be known, and here it is not: from before records were
+    // kept, or made from a source whose own value has none.
+    for (const unknown of [
+      { fields: undefined },
+      { fields: {} },
+      { fields: { title: { origin: "person" } } },
+      { fields: undefined, stale: false },
+    ]) {
+      expect(
+        sources(withMeta("es", { status: "published", ...unknown }))
+      ).toEqual(["en", "fr"]);
+    }
+  });
+
+  it("offers a value written as original, which no source can pass", () => {
     expect(
-      sources(withMeta("es", { status: "published", stale: true }))
-    ).toEqual(["en", "fr"]);
-    expect(sources(withMeta("es", { status: "published" }))).toContain("es");
+      sources(
+        withMeta("es", {
+          status: "published",
+          fields: { title: { origin: "original", outOfDate: false } },
+        })
+      )
+    ).toEqual(["en", "es", "fr"]);
+  });
+
+  it("offers the default language with no record, being the source itself", () => {
+    const legacy = { translated: true, status: "published" };
+    expect(
+      sources({
+        translations: { en: legacy, es: legacy, fr: legacy, ar: legacy },
+      })
+    ).toEqual(["en"]);
   });
 
   it("refuses a language with nothing in the field", () => {
@@ -111,8 +141,8 @@ describe("eligibleSources", () => {
         status: undefined,
         translations: {
           en: { translated: true },
-          es: { translated: true },
-          fr: { translated: true },
+          es: { translated: true, ...CURRENT },
+          fr: { translated: true, ...CURRENT },
         },
       })
     ).toEqual(["en", "es", "fr"]);

@@ -104,9 +104,8 @@ function isEmpty(
 
 /** Each field the language leaves empty, in the page's order. */
 export function emptyFields(args: {
+  /** Each field, or text inside one, by the name the values are under. */
   rows: readonly TranslationField[];
-  /** Containers holding text per language, which are not written here. */
-  nested: readonly TranslationField[];
   /** The language's own values as the form shows them. */
   shown: Readonly<Record<string, unknown>>;
   /** The language's own values as they were read. */
@@ -118,12 +117,11 @@ export function emptyFields(args: {
   rules: FallbackRules;
 }): EmptyField[] {
   const chain = fallbackChain(args.target, args.rules);
-  return [
-    ...args.rows.filter(row => isEmpty(row, args.shown, args.stored)),
-    ...args.nested.filter(row => isBlank(args.stored[row.name])),
-  ].map(row => ({
-    name: row.name,
-    label: row.label,
-    shows: shownInstead(row, chain, args.values, args.translations),
-  }));
+  return args.rows
+    .filter(row => isEmpty(row, args.shown, args.stored))
+    .map(row => ({
+      name: row.name,
+      label: row.label,
+      shows: shownInstead(row, chain, args.values, args.translations),
+    }));
 }

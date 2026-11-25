@@ -186,10 +186,10 @@ describe("TranslationFieldRow", () => {
 
   it("says when the source changed since", () => {
     const { unmount } = renderRow({ outOfDate: true });
-    expect(screen.getByText("Out of date")).toBeInTheDocument();
+    expect(screen.getByText("out of date")).toBeInTheDocument();
     unmount();
     renderRow();
-    expect(screen.queryByText("Out of date")).not.toBeInTheDocument();
+    expect(screen.queryByText("out of date")).not.toBeInTheDocument();
   });
 
   it("cannot be written in by a reader who may only look", async () => {

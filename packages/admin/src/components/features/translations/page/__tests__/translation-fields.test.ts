@@ -45,6 +45,30 @@ describe("translationFields", () => {
     expect(names(set.shared)).toEqual(["price"]);
   });
 
+  it("takes the title and slug a collection declares none of for shared", () => {
+    // As the admin is given them: text with nothing saying they are shared,
+    // though each is stored once for every language. The server's answer says
+    // so, by keeping no value of them per language.
+    const system = [
+      field("title", "text", { required: true }),
+      field("slug", "text", { required: true, unique: true }),
+    ];
+    const set = translationFields([...system, field("bio", "textarea")], {
+      title: "Ada",
+      slug: "ada",
+      _allLocales: perLanguage("bio"),
+    });
+    expect(names(set.rows)).toEqual(["bio"]);
+    expect(names(set.shared)).toEqual(["title", "slug"]);
+    // Declared, and kept per language, they are translated like any text.
+    const declared = translationFields(system, {
+      title: "Ada",
+      slug: "ada",
+      _allLocales: perLanguage("title", "slug"),
+    });
+    expect(names(declared.rows)).toEqual(["title", "slug"]);
+  });
+
   it("names a shared field that holds nothing yet", () => {
     const set = translationFields([field("price", "number")], {
       price: null,
@@ -53,18 +77,47 @@ describe("translationFields", () => {
     expect(names(set.shared)).toEqual(["price"]);
   });
 
-  it("keeps a container's own text apart from the rows", () => {
+  it("keeps a container's own text apart from the rows, all in the form's order", () => {
+    const text = [field("caption", "text")];
     const set = translationFields(
       [
-        field("seo", "fieldGroup"),
-        field("links", "repeater"),
-        field("layout", "blocks"),
+        field("seo", "fieldGroup", { componentFields: text }),
         field("body", "richText"),
+        field("links", "repeater", { fields: text }),
+        field("intro", "group", { fields: text }),
       ],
-      { _allLocales: perLanguage("seo", "links", "layout", "body") }
+      { _allLocales: perLanguage("seo", "links", "intro", "body") }
     );
     expect(names(set.rows)).toEqual(["body"]);
-    expect(names(set.nested)).toEqual(["seo", "links", "layout"]);
+    expect(names(set.nested)).toEqual(["seo", "links", "intro"]);
+    expect(names(set.written)).toEqual(["seo", "body", "links", "intro"]);
+  });
+
+  it("takes a container that holds no text for shared", () => {
+    const numbers = [field("width", "number")];
+    const set = translationFields(
+      [
+        field("sizes", "repeater", { fields: numbers }),
+        field("box", "fieldGroup", { componentFields: numbers }),
+        field("links", "repeater", {
+          fields: [field("caption", "text")],
+          localized: false,
+        }),
+      ],
+      { _allLocales: perLanguage("sizes", "box", "links") }
+    );
+    expect(names(set.shared)).toEqual(["sizes", "box", "links"]);
+    expect(names(set.nested)).toEqual([]);
+  });
+
+  it("names page-builder content apart, kept per language or shared", () => {
+    const set = translationFields(
+      [field("layout", "blocks"), field("footer", "blocks")],
+      { footer: null, _allLocales: perLanguage("layout") }
+    );
+    expect(names(set.elsewhere)).toEqual(["layout"]);
+    expect(names(set.shared)).toEqual(["footer"]);
+    expect(names(set.written)).toEqual([]);
   });
 
   it("reads into a group that only lays fields out", () => {

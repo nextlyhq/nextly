@@ -1,5 +1,6 @@
 /**
- * What saving one language of a document sends: the translatable fields the
+ * What saving one language of a document sends, of its fields of their own
+ * (`nested-text` has those inside containers): the translatable fields the
  * translator changed, and which of them were written as original content.
  * Nothing else: a shared field belongs to every language, and a field sent
  * unchanged would be recorded as made again from its source.

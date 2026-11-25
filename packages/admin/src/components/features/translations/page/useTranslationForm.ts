@@ -5,9 +5,10 @@
  *
  * It holds the whole document in that language, because a field's condition may
  * read any other, and sends only the translatable fields the translator
- * changed. The save goes to the language alone: it names no status, so a
- * published language keeps its readers on what they have where drafts are held,
- * and a language nobody has published stays unpublished.
+ * changed, and the containers whose text they changed. The save goes to the
+ * language alone: it names no status, so a published language keeps its readers
+ * on what they have where drafts are held, and a language nobody has published
+ * stays unpublished.
  *
  * @module components/features/translations/page/useTranslationForm
  */
@@ -43,8 +44,13 @@ import type { TranslatedDocument } from "@admin/lib/navigation/translation-addre
 import { addressableFieldsWithin } from "@admin/lib/plugins/document-view-registry";
 import type { UpdateEntryPayload } from "@admin/services/entryApi";
 
+import { nestedPayload, ontoCurrent, type NestedPayload } from "./nested-text";
 import type { TranslationField } from "./translation-fields";
-import { changedRows, translationPayload } from "./translation-save";
+import {
+  changedRows,
+  PROVENANCE_KEY,
+  translationPayload,
+} from "./translation-save";
 import type { DocumentRow } from "./useTranslationDocument";
 
 export interface TranslationFormOptions {
@@ -55,9 +61,14 @@ export interface TranslationFormOptions {
   fields: readonly FieldConfig[];
   /** The fields written here. */
   rows: readonly TranslationField[];
+  /** The containers whose text is written here. */
+  nested: readonly TranslationField[];
   /** The document in the language, as it was read. */
   written: DocumentRow;
-  /** The language each field's source is shown in; undefined where it has none. */
+  /**
+   * The language the source of a field, or of a text inside a container, is
+   * shown in, by its path in the form; undefined where it has none.
+   */
   sourceOf: (name: string) => string | undefined;
   /** Read the document again. */
   reload: () => Promise<DocumentRow | undefined>;
@@ -139,11 +150,28 @@ function afterSave(
   };
 }
 
+/** The save's body: the fields of their own, and the containers' text. */
+function together(
+  own: Record<string, unknown>,
+  inside: NestedPayload
+): Record<string, unknown> {
+  const claims = {
+    ...(own[PROVENANCE_KEY] as NestedPayload["claims"] | undefined),
+    ...inside.claims,
+  };
+  return {
+    ...own,
+    ...inside.values,
+    ...(Object.keys(claims).length === 0 ? {} : { [PROVENANCE_KEY]: claims }),
+  };
+}
+
 export function useTranslationForm({
   document,
   target,
   fields,
   rows,
+  nested,
   written,
   sourceOf,
   reload,
@@ -218,7 +246,7 @@ export function useTranslationForm({
     if (staleVersionOf(error) !== undefined) return;
     const placed = placeServerRefusal(error, form.setError, {
       isFormField: drawnFieldPath(
-        rows.map(row => row.field),
+        [...rows, ...nested].map(row => row.field),
         path => form.getValues(path)
       ),
     });
@@ -233,7 +261,11 @@ export function useTranslationForm({
     // Read here rather than as the form started: an earlier save moved it.
     const startedFrom = form.formState.defaultValues ?? {};
     const shown = form.getValues();
-    if (changedRows(rows, shown, startedFrom).length === 0) {
+    const inside = nestedPayload(nested, shown, startedFrom, sourceOf);
+    if (
+      changedRows(rows, shown, startedFrom).length === 0 &&
+      Object.keys(inside.values).length === 0
+    ) {
       // Typed and put back: there is nothing to send.
       form.reset(startedFrom);
       return true;
@@ -244,7 +276,10 @@ export function useTranslationForm({
       recordingsFor: null,
       restore,
       toPayload: values =>
-        translationPayload(rows, values, startedFrom, sourceOf),
+        together(
+          translationPayload(rows, values, startedFrom, sourceOf),
+          inside
+        ),
       write: async payload => {
         const { item, warnings } = await send(
           version.withVersion(payload)
@@ -259,7 +294,8 @@ export function useTranslationForm({
     // What was typed while the save was on its way is still unsaved. Asked of
     // the form as it is now: its state is the last render's.
     return (
-      outcome.ok && !rows.some(({ name }) => form.getFieldState(name).isDirty)
+      outcome.ok &&
+      ![...rows, ...nested].some(({ name }) => form.getFieldState(name).isDirty)
     );
   };
 
@@ -275,20 +311,58 @@ export function useTranslationForm({
     form.reset(getDefaultValues(named, current));
   };
 
+  /**
+   * A refused save made again over what is stored now. A container is written
+   * whole, so its text goes onto the rows it has now rather than putting back
+   * those it had. The form then holds every container as it is now, whether or
+   * not this save wrote it: the next one would put back the rows it held.
+   */
+  const ontoLatest = async (
+    refused: Record<string, unknown>,
+    sent: Record<string, unknown>
+  ): Promise<{
+    payload: Record<string, unknown>;
+    containers: Record<string, unknown>;
+  }> => {
+    if (nested.length === 0) return { payload: refused, containers: {} };
+    const current = await reload();
+    if (current === undefined) {
+      throw new Error("The current version couldn't be loaded.");
+    }
+    const payload = ontoCurrent(nested, refused, sent, current);
+    const starting = getDefaultValues(named, current);
+    return {
+      payload,
+      containers: Object.fromEntries(
+        nested.map(container => [
+          container.name,
+          Object.hasOwn(payload, container.name)
+            ? payload[container.name]
+            : starting[container.name],
+        ])
+      ),
+    };
+  };
+
   const saveAnyway = async () => {
-    const payload = version.overwrite();
-    if (payload === null) return;
+    const refused = version.overwrite();
+    if (refused === null) return;
     // Read before the conflict is closed, which forgets it: what was typed
     // since the refusal is kept as unsaved work.
     const sent = version.refusedValues() ?? form.getValues();
     const write = version.writeFor();
     try {
+      const { payload, containers } = await ontoLatest(refused, sent);
       const { item, warnings } = await send(payload);
       write.answered(item);
       write.released();
       restore.saved();
       toastMutationResult(`${target.label} saved`, warnings);
-      adoptStoredValues(form, afterSave(rows, sent, item), sent);
+      adoptStoredValues(
+        form,
+        { ...afterSave(rows, sent, item), ...containers },
+        sent
+      );
     } catch (error) {
       version.failed(
         apiErrorMessage(error, `${target.label} couldn't be saved.`)

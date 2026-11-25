@@ -151,7 +151,10 @@ const WRITTEN = {
       ...PUBLISHED,
       fields: { bio: { origin: "person", outOfDate: true } },
     },
-    fr: PUBLISHED,
+    fr: {
+      ...PUBLISHED,
+      fields: { bio: { origin: "person", outOfDate: false } },
+    },
   },
 };
 /** The document as served, with every language's values. */
@@ -176,7 +179,8 @@ const here = () => `${window.location.pathname}${window.location.search}`;
 const field = (name: string) => screen.findByRole("group", { name });
 const bio = async () =>
   within(await field("Biography")).getByRole("textbox", { name: "Biography" });
-const saveButton = () => screen.getByRole("button", { name: "Save Spanish" });
+const saveButton = () =>
+  screen.getByRole("button", { name: /^Save( draft)?$/ });
 
 type Read = { everyLanguage?: boolean };
 
@@ -282,16 +286,18 @@ describe("what the page shows", () => {
     expect(
       screen.getByRole("heading", { level: 1, name: "Grace Hopper" })
     ).toBeInTheDocument();
-    expect(screen.getByText("Spanish translation")).toBeInTheDocument();
+    expect(screen.getByText(/^Translating from/)).toHaveTextContent(
+      "Translating from English into Spanish · 1 field out of date"
+    );
   });
 
   it("marks a field whose source changed since, and no other", async () => {
     renderWithProviders(<TranslationPage document={ENTRY} />);
     expect(
-      within(await field("Biography")).getByText("Out of date")
+      within(await field("Biography")).getByText("out of date")
     ).toBeInTheDocument();
     expect(
-      within(await field("Role / Title")).queryByText("Out of date")
+      within(await field("Role / Title")).queryByText("out of date")
     ).not.toBeInTheDocument();
   });
 
@@ -317,6 +323,76 @@ describe("what the page shows", () => {
     ).toEqual(["Name", "Article count"]);
     expect(within(shared).queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.queryByText("Secret")).not.toBeInTheDocument();
+  });
+
+  it("says in the panel where the language stands, and where shared fields are edited", async () => {
+    renderWithProviders(<TranslationPage document={ENTRY} />);
+    await field("Biography");
+    const panel = screen.getByRole("complementary", { name: "Spanish" });
+    expect(
+      within(panel).getByRole("region", { name: "Status" })
+    ).toHaveTextContent("Live, 1 out of date");
+    expect(
+      within(panel).getByRole("link", { name: "Edited in the document" })
+    ).toHaveAttribute("href", "/admin/collections/authors/a1");
+  });
+
+  it("colours the source that changed since, and no other", async () => {
+    api.findByID.mockImplementation((_s: string, _i: string, read: Read) =>
+      Promise.resolve(
+        read.everyLanguage
+          ? {
+              ...LIVE,
+              _allLocales: {
+                ...LIVE._allLocales,
+                jobTitle: { en: "Admiral", es: null, fr: null },
+              },
+            }
+          : WRITTEN
+      )
+    );
+    renderWithProviders(<TranslationPage document={ENTRY} />);
+    const value = async (name: string) =>
+      (await field(name)).querySelector(
+        '[data-slot="translation-source-value"]'
+      );
+    expect(await value("Biography")).toHaveClass("bg-warning-surface");
+    expect(await value("Role / Title")).not.toHaveClass("bg-warning-surface");
+  });
+
+  it("heads the source card with the page's source, and offers the others", async () => {
+    go("?locale=es&source=fr");
+    renderWithProviders(<TranslationPage document={ENTRY} />);
+    const row = await field("Biography");
+    expect(
+      screen.getByText("French (source)", { selector: "span" })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/^Translating from/)).toHaveTextContent(
+      "Translating from French into Spanish"
+    );
+    expect(within(row).getByRole("combobox")).toBeInTheDocument();
+  });
+
+  it("is one card where nothing has a source", async () => {
+    api.findByID.mockImplementation((_s: string, _i: string, read: Read) =>
+      Promise.resolve(
+        read.everyLanguage
+          ? {
+              ...LIVE,
+              _allLocales: {
+                bio: { en: null, es: null, fr: null },
+                jobTitle: { en: null, es: null, fr: null },
+              },
+            }
+          : WRITTEN
+      )
+    );
+    renderWithProviders(<TranslationPage document={ENTRY} />);
+    await field("Biography");
+    expect(screen.getByText(/^Writing/)).toHaveTextContent(
+      "Writing Spanish as original content"
+    );
+    expect(screen.queryByText(/\(source\)/)).not.toBeInTheDocument();
   });
 
   it("starts from the source the address asks for", async () => {
@@ -506,7 +582,7 @@ describe("who may write", () => {
     ).toBeInTheDocument();
     expect(textarea).toHaveAttribute("readonly");
     expect(
-      screen.queryByRole("button", { name: "Save Spanish" })
+      screen.queryByRole("button", { name: /^Save( draft)?$/ })
     ).not.toBeInTheDocument();
   });
 
