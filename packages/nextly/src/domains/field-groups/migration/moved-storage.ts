@@ -402,16 +402,39 @@ async function lookingUpOffTransaction<T>(
   try {
     return await lookup();
   } catch (error) {
-    if (!isRegistry(moveCandidate(error))) throw error;
+    const candidate = moveCandidate(error);
+    if (!isRegistry(candidate)) throw error;
     if (adapter.transactionOpenInFlow()) {
-      await adapter.afterRollback(() => resolveAgain(adapter));
-      throw error;
+      return lookingUpUnderOtherName(adapter, candidate, error, lookup);
     }
     await resolveAgain(adapter);
     // A second failure says no more than the first, which is the one raised.
     return lookup().catch(() => {
       throw error;
     });
+  }
+}
+
+/**
+ * A lookup made on the pool inside someone's transaction, made again under the registry's other
+ * name. Nothing is read to find that name, as resolving it would be on another connection; a name
+ * that is not there either leaves the one it had, and the failure it met, as they were.
+ */
+async function lookingUpUnderOtherName<T>(
+  adapter: DrizzleAdapter,
+  candidate: MoveCandidate | undefined,
+  error: unknown,
+  lookup: () => Promise<T>
+): Promise<T> {
+  const had = notedRegistryName(adapter);
+  const other = REGISTRY_TABLES.find(name => name === candidate?.other);
+  if (other === undefined) throw error;
+  noteRegistryName(adapter, other);
+  try {
+    return await lookup();
+  } catch {
+    if (had !== undefined) noteRegistryName(adapter, had);
+    throw error;
   }
 }
 

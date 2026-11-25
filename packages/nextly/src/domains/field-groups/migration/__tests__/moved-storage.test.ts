@@ -656,6 +656,38 @@ describe("lookingUpRegistry", () => {
     }
   );
 
+  it.each(["sqlite", "mysql", "postgresql"] as const)(
+    "answers on the pool inside another's transaction, reading nothing else to know how (%s)",
+    async dialect => {
+      // Its own statement ran on the pool, so nothing it asks is aborted; what it must not do is
+      // read the catalog there as well, nor wait for a rollback that may never come.
+      txOf();
+      const adapter = adapterOf(dialect);
+      noteRegistryName(adapter as never, "dynamic_components");
+      const listTables = vi.spyOn(adapter, "listTables");
+      const registry = lookupOf(dialect, "dynamic_field_groups");
+
+      await expect(run(adapter, registry)).resolves.toEqual({ slug: "hero" });
+      expect(registry.asked).toEqual([
+        "dynamic_components",
+        "dynamic_field_groups",
+      ]);
+      expect(notedRegistryName(adapter as never)).toBe("dynamic_field_groups");
+      expect(listTables).not.toHaveBeenCalled();
+      expect(readOn).toEqual([]);
+    }
+  );
+
+  it("keeps the name it had, and its own failure, when the other name is not there either", async () => {
+    txOf();
+    const adapter = adapterOf("sqlite");
+    noteRegistryName(adapter as never, "dynamic_components");
+    const registry = lookupOf("sqlite");
+    await expect(run(adapter, registry)).rejects.toThrow(/dynamic_components/);
+    expect(registry.asked).toHaveLength(2);
+    expect(notedRegistryName(adapter as never)).toBe("dynamic_components");
+  });
+
   it("refuses a PostgreSQL write that came after the savepoint, rather than losing it", async () => {
     const adapter = adapterOf("postgresql");
     held = { dynamic_components: ["id"] };
