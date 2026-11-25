@@ -181,7 +181,7 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
       timeout: 30_000,
     });
     sent = nextWrite(page, toThis);
-    await saveChanges.click();
+    await saveFromBar(page, /^Save( draft| changes)?$/);
     await sent;
 
     // A list's bulk publish.

@@ -910,6 +910,13 @@ exports[`each code, as a command ends with it > FIELDS_LEAVING_TRANSLATION_NOT_M
   Docs: https://nextlyhq.com/docs/cli/errors/fields-leaving-translation-not-moved  (FIELDS_LEAVING_TRANSLATION_NOT_MOVED)"
 `;
 
+exports[`each code, as a command ends with it > FOREIGN_ELEMENT_REMOVED 1`] = `
+"✗ Migration 20261021_100000_remove_code.sql: this change would remove what another owner built on its tables, so nothing was changed.
+  Why:  Removing "code" removes the column code, which plugin "@acme/search"'s index "posts_code_idx" on dc_posts stands on.
+  Next: Its owner removes it first, or the change keeps what it stands on.
+  Docs: https://nextlyhq.com/docs/cli/errors/foreign-element-removed  (FOREIGN_ELEMENT_REMOVED)"
+`;
+
 exports[`each code, as a command ends with it > I18N_RESTORE_COLLECTION_REQUIRED 1`] = `
 "✗ --collection <slug> is required.
   Why:  \`nextly i18n:restore\` brings back the archived translations of one entity, named by its slug.
@@ -1363,6 +1370,13 @@ exports[`each code, as a command ends with it > OLD_BUILDER_FILE_VARIANT_ADDED 1
   Why:  A ledger row marks the name as an old Schema Builder file's, which every command ignores, and a dialect variant now shares that name, so its rows and the Builder's cannot be told apart.
   Next: Remove the dialect variant, and put its change in a migration of its own with \`nextly migrate:create\`; the marked file is then ignored again.
   Docs: https://nextlyhq.com/docs/cli/errors/old-builder-file-variant-added  (OLD_BUILDER_FILE_VARIANT_ADDED)"
+`;
+
+exports[`each code, as a command ends with it > OWNER_RECORD_UNREADABLE 1`] = `
+"✗ The database was not changed, because the record of what other owners built on its tables could not be read, so whether the change removes any of it is unknown.
+  Why:  Nothing was removed.
+  Next: Fix the cause in the server log and try again.
+  Docs: https://nextlyhq.com/docs/cli/errors/owner-record-unreadable  (OWNER_RECORD_UNREADABLE)"
 `;
 
 exports[`each code, as a command ends with it > OWNERSHIP_TAKEOVER_REFUSED 1`] = `

@@ -648,6 +648,52 @@ async function within<T>(
 }
 
 /**
+ * Refuses a change whose deletions take an element another owner built on the app's tables
+ * (`removed-elements.ts`), read from the database `DATABASE_URL` names, opened read-only as the
+ * deletion counts open it. Where no database is there to read, the run says the change was not
+ * checked here: `nextly migrate` checks the file against its own database before its first
+ * statement. A database that is there but whose record of other owners' elements cannot be read
+ * refuses, as everywhere else.
+ */
+async function refuseRemovingOthersElementsIn(
+  deletions: readonly Deletion[],
+  dialect: SupportedDialect,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  if (!deletions.some(deletion => deletion.core !== true)) return;
+  const opened = await openDryRunAdapter({ dialect }).catch(
+    (error: unknown): MissingDatabase => ({
+      missing: error instanceof Error ? error.message : String(error),
+    })
+  );
+  if ("missing" in opened) {
+    logger.warn(
+      `What this migration removes was not checked against what other owners built on its tables, because no database could be read (${opened.missing}). \`nextly migrate\` checks it before running the file.`
+    );
+    return;
+  }
+  try {
+    const { databaseRemovedElementsSources, refuseRemovingOthersElements } =
+      await import("../../domains/schema/ownership/removed-elements");
+    await refuseRemovingOthersElements({
+      deletions,
+      dialect,
+      entity: "The migration",
+      // The CLI adapter is the Drizzle adapter its factory made, as every command that reads with
+      // it treats it.
+      sources: databaseRemovedElementsSources(
+        opened as unknown as DrizzleAdapter,
+        dialect
+      ),
+      // The code-first change has the fields' columns: each column names its field.
+      fieldOf: (_table, column) => column,
+    });
+  } finally {
+    await opened.disconnect();
+  }
+}
+
+/**
  * The judge `generateMigration` calls with what the plan deletes, before it
  * writes anything: counted where the database can be read, then
  *
@@ -1002,8 +1048,11 @@ export async function runMigrateCreate(
         liveUniqueIndexes: uniques.read,
         dryRun: options.dryRun === true,
         releaseHeldBack: options.releaseHeldBack === true,
-        judgeDeletions: deletions =>
-          judgeMigrationDeletions(deletions, {
+        judgeDeletions: async deletions => {
+          // What the change removes takes no element another owner built there, judged before
+          // the consent is asked for and before anything is written.
+          await refuseRemovingOthersElementsIn(deletions, dialect, logger);
+          return judgeMigrationDeletions(deletions, {
             consent,
             dialect,
             dryRun: options.dryRun === true,
@@ -1012,7 +1061,8 @@ export async function runMigrateCreate(
             counted: listed => {
               counted = listed;
             },
-          }),
+          });
+        },
       });
     } catch (error) {
       // F11 PR 3 review fix #3: distinguish "operator cancelled prompt"
