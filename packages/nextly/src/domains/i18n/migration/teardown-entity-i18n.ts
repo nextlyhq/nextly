@@ -92,6 +92,8 @@ export interface TeardownEntityI18nResult {
    * table does not exist, or for an entity that keeps none).
    */
   provenanceRowsPurged: number;
+  /** The source text its translations were made from, removed as its provenance is. */
+  sourceRowsPurged: number;
 }
 
 /**
@@ -196,7 +198,12 @@ export async function teardownEntityI18n(
   // remove: the archive, the transition record and the provenance records are left alone rather
   // than removed on a guess about whose they are.
   if (slug === null || kind === undefined) {
-    return { companionDropped, archiveRowsPurged: 0, provenanceRowsPurged: 0 };
+    return {
+      companionDropped,
+      archiveRowsPurged: 0,
+      provenanceRowsPurged: 0,
+      sourceRowsPurged: 0,
+    };
   }
   // An archive from before rows recorded their kind is brought up to date first, since its rows
   // are removed by kind. That is DDL, which the rows' removal below does not run, so it is done
