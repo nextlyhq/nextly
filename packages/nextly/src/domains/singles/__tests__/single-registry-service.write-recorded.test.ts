@@ -433,6 +433,38 @@ describe("who owns a Single's row", () => {
     });
   });
 
+  it.each([
+    ["code", 1],
+    [PLUGIN, 1],
+    ["ui", 0],
+    ["built-in", 0],
+  ] as const)(
+    "is locked by default where code or a plugin owns it: %s",
+    async (source, locked) => {
+      const row = {
+        slug: "site-settings",
+        label: "Site Settings",
+        tableName: "single_site_settings",
+        fields,
+        schemaHash: "hash",
+        source,
+      };
+      storedRow(ctx, null);
+      ctx.adapter.insert.mockResolvedValue(dbRow({ source }));
+      await ctx.service.registerSingle(row);
+
+      const tx = {
+        selectOne: vi.fn().mockResolvedValue(null),
+        insert: vi.fn().mockResolvedValue(dbRow({ source })),
+      };
+      await ctx.service.registerSingleInTransaction(tx as never, row);
+
+      for (const insert of [ctx.adapter.insert, tx.insert]) {
+        expect(insert.mock.calls[0][1]).toMatchObject({ source, locked });
+      }
+    }
+  );
+
   it("is left as it is by migrate, which writes a plugin's locked row as the pipeline does", async () => {
     storedRow(ctx, dbRow({ source: PLUGIN }));
     ctx.adapter.update.mockResolvedValue([dbRow({ source: PLUGIN })]);

@@ -470,6 +470,37 @@ describe("who owns a field group's row", () => {
     });
   });
 
+  it.each([
+    ["code", 1],
+    [PLUGIN, 1],
+    ["ui", 0],
+  ] as const)(
+    "is locked by default where code or a plugin owns it: %s",
+    async (source, locked) => {
+      const row = {
+        slug: "seo",
+        label: "SEO",
+        tableName: "comp_seo",
+        fields,
+        schemaHash: "hash",
+        source,
+      };
+      ctx.adapter.selectOne.mockResolvedValue(null);
+      ctx.adapter.insert.mockResolvedValue(dbRow({ source }));
+      await ctx.service.registerComponent(row);
+
+      const tx = {
+        selectOne: vi.fn().mockResolvedValue(null),
+        insert: vi.fn().mockResolvedValue(dbRow({ source })),
+      };
+      await ctx.service.registerComponentInTransaction(tx as never, row);
+
+      for (const insert of [ctx.adapter.insert, tx.insert]) {
+        expect(insert.mock.calls[0][1]).toMatchObject({ source, locked });
+      }
+    }
+  );
+
   it("is left as it is by migrate, which writes a plugin's locked row as the pipeline does", async () => {
     ctx.adapter.selectOne.mockResolvedValue(dbRow({ source: PLUGIN }));
     ctx.adapter.update.mockResolvedValue([dbRow({ source: PLUGIN })]);

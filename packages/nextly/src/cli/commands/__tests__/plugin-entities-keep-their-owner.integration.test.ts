@@ -46,7 +46,10 @@ import { clearServices, shutdownServices } from "../../../di/register";
 import { getService } from "../../../di/service-access";
 import { CollectionRegistryService } from "../../../domains/collections/services/collection-registry-service";
 import { FieldGroupRegistryService } from "../../../domains/field-groups/services/field-group-registry-service";
-import { siteTypes } from "../../../domains/public-addresses/public-address";
+import {
+  siteTypes,
+  typesWithoutAddress,
+} from "../../../domains/public-addresses/public-address";
 import { introspectLiveColumns } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { SingleRegistryService } from "../../../domains/singles/services/single-registry-service";
@@ -580,14 +583,37 @@ for (const dialect of getConfiguredTestDialects()) {
       );
     }, 180_000);
 
-    it("leaves a plugin's Single out of the site's own content types", async () => {
-      await start([asWritten()], async () => {
-        const own = (await siteTypes()).map(({ type }) => type.slug);
-        expect(own).toEqual(
-          expect.arrayContaining([NOTES.slug, APP_SINGLE.slug])
+    it("keeps a plugin's Single among the site's content types, its address with it, and its collection out of them", async () => {
+      const landing = defineSingle({
+        slug: "pks_landing",
+        publicAddress: "/landing",
+        fields: [text({ name: "brand" })],
+      });
+      const plugin = definePlugin({
+        name: PLUGIN,
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { collections: [EVENTS], singles: [SETTINGS, landing] },
+      } as never);
+      await start([plugin], async () => {
+        expect(await owners()).toMatchObject({
+          [SETTINGS.slug]: PLUGIN_SOURCE,
+          [landing.slug]: PLUGIN_SOURCE,
+        });
+        const listed = (await siteTypes()).map(({ type }) => type.slug);
+        expect(listed).toEqual(
+          expect.arrayContaining([
+            NOTES.slug,
+            APP_SINGLE.slug,
+            SETTINGS.slug,
+            landing.slug,
+          ])
         );
-        expect(own).not.toContain(SETTINGS.slug);
-        expect(own).not.toContain(EVENTS.slug);
+        expect(listed).not.toContain(EVENTS.slug);
+        // So one with no address of its own is still told from one with it.
+        const without = (await typesWithoutAddress()).map(({ slug }) => slug);
+        expect(without).toContain(SETTINGS.slug);
+        expect(without).not.toContain(landing.slug);
       });
     }, 180_000);
 
