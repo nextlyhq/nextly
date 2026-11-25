@@ -218,6 +218,7 @@ import {
   refuseRequiredColumnsOverNulls,
 } from "../../domains/schema/migrate/required-column-guard";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
+import type { RetirementContext } from "../../domains/schema/migrate/retired-documents";
 import {
   droppedRegisteredEntities,
   fileRetirements,
@@ -2737,15 +2738,6 @@ function assertPluginTablesAreMigratable(
 }
 
 /**
- * Say what Phase 3 did, and what it could not do.
- *
- * Extracted from the command body because the reporting is four independent
- * decisions about one result — could the registries be read, what was recorded,
- * what is waiting for a migration to exist, what is waiting for one to run —
- * and interleaving them with the migrate flow made both harder to follow than
- * either is alone.
- */
-/**
  * `deps.refuseUnwrittenChanges`, which refuses a configuration holding a change no migration
  * records. Where it refuses, a retirement a stopped run left is finished first, under the lock, and
  * then the refusal ends the run: a configuration declaring a retired entity again must not keep the
@@ -2848,6 +2840,15 @@ function lockOptionsOf(
   };
 }
 
+/**
+ * Say what Phase 3 did, and what it could not do.
+ *
+ * Extracted from the command body because the reporting is four independent
+ * decisions about one result — could the registries be read, what was recorded,
+ * what is waiting for a migration to exist, what is waiting for one to run —
+ * and interleaving them with the migrate flow made both harder to follow than
+ * either is alone.
+ */
 function reportMetadataOutcome(
   metadata: MigrateCoreResult["metadata"],
   logger: CommandContext["logger"]
@@ -3424,10 +3425,7 @@ export async function migrateCore(
           commitRecordBefore,
           recordMetadata,
           seedAccess,
-          retiredDocumentEvents: () =>
-            deletionEventsOfRetiredDocuments(metadataArgs()),
-          settleRetirements: () =>
-            settleRetiredDocumentEvents(metadataArgs(), "down"),
+          ...retirementSteps(metadataArgs),
         }
       );
       // A file that deletes data runs only with consent covering each
@@ -3625,6 +3623,21 @@ export async function migrateCore(
     coreChanged,
     ran: outcome.ran,
     metadata,
+  };
+}
+
+/** The steps of a run that finish retirements earlier runs left, from its Phase 3 arguments. */
+function retirementSteps(
+  metadataArgs: () => Parameters<typeof reconcileMigrationMetadata>[0]
+): {
+  retiredDocumentEvents: () => Promise<void>;
+  settleRetirements: () => Promise<void>;
+} {
+  return {
+    retiredDocumentEvents: () =>
+      deletionEventsOfRetiredDocuments(metadataArgs()),
+    settleRetirements: () =>
+      settleRetiredDocumentEvents(metadataArgs(), "down"),
   };
 }
 
@@ -5337,6 +5350,35 @@ function retirementsOfFile(
 }
 
 /**
+ * What the run tells the unit that runs `file` of the entities it retires, after saying what it drops
+ * where nothing says what it retires (`warnOfUnrecordedDrops`).
+ */
+async function retirementContextOf(
+  run: {
+    db: unknown;
+    dialect: SupportedDialect;
+    logger: Pick<CommandContext["logger"], "warn">;
+  },
+  file: ParsedMigration,
+  before: SnapshotFile | null,
+  target: SnapshotFile | null
+): Promise<RetirementContext> {
+  const judged = retirementsOfFile(file, before, target, run.dialect);
+  if (judged === undefined) {
+    await warnOfUnrecordedDrops(
+      run,
+      `${file.name}.sql`,
+      splitSqlStatements(file.upSql, run.dialect, file)
+    );
+  }
+  return {
+    entities: judged?.retired ?? [],
+    kept: ({ kind, slug }) =>
+      run.logger.warn(keptDespiteItsDrop(`${kind} ${slug}`)),
+  };
+}
+
+/**
  * Refuses the first of `files` in `runs` that may retire an entity and does not say so plainly
  * (`Retirements.unsettled`), before any statement of the run. `files` are every app file in run
  * order, since each is judged after the snapshots before it.
@@ -5945,32 +5987,19 @@ export async function runFileMigrations(args: {
       await args.beforeApply?.(m.name);
 
       // The entities this file retires, judged from the file as it runs.
-      const retirements = retirementsOfFile(m, beforeFile, targetFile, dialect);
-      if (retirements === undefined) {
-        await warnOfUnrecordedDrops(
-          { db, dialect, logger },
-          filename,
-          upStatements
-        );
-      }
+      const retirements = await retirementContextOf(
+        { db, dialect, logger },
+        m,
+        beforeFile,
+        targetFile
+      );
 
       // The statements of this file, sent through `executeSql`. Once the first is sent, a file
       // whose statements commit one by one (one outside a transaction, or any file on MySQL) may
       // stand part-way, so a lost lock names it; a refusal before then left it untouched.
       const executeFileSql: typeof executeSql = (sqlText, unit, after) => {
         if (m.transaction === false || dialect === "mysql") running = filename;
-        return executeSql(
-          sqlText,
-          {
-            ...unit,
-            retirements: {
-              entities: retirements?.retired ?? [],
-              kept: ({ kind, slug }) =>
-                logger.warn(keptDespiteItsDrop(`${kind} ${slug}`)),
-            },
-          },
-          after
-        );
+        return executeSql(sqlText, { ...unit, retirements }, after);
       };
       if (!target || sides === undefined) {
         // No paired snapshot: run verbatim + record. A hand-written file is said to have no

@@ -494,8 +494,8 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
     );
     const db = project.adapter.getDrizzle();
 
-    await expect(checkpoint?.before(db, 0)).resolves.toBeUndefined();
-    await expect(checkpoint?.done(db)).resolves.toBeUndefined();
+    await expect(checkpoint.before(db, 0)).resolves.toBeUndefined();
+    await expect(checkpoint.done(db)).resolves.toBeUndefined();
   });
 });
 
@@ -518,6 +518,20 @@ describeEachDialect("a collection migrate:down drops", dialect => {
     const config = await added();
 
     expect(await rolledBack(config)).toBeUndefined();
+
+    expect(await stands(POSTS)).toBe(false);
+    expect(await deletions()).toEqual(EACH_ONCE);
+    expect(await captures()).toBe(0);
+  });
+
+  it("ends each once where a later change of it is rolled back with it", async () => {
+    await added();
+    const changed = appConfig({ posts: "optional", pagesNamePosts: false });
+    expect((await migrateCreate(changed, "change")).refused).toBeUndefined();
+    expect(await migrate(changed)).toBeUndefined();
+    expect(await deletions()).toEqual({});
+
+    expect(await rolledBack(changed, 2)).toBeUndefined();
 
     expect(await stands(POSTS)).toBe(false);
     expect(await deletions()).toEqual(EACH_ONCE);

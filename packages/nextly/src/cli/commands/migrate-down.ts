@@ -121,6 +121,7 @@ import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry"
 import { readDdlEventTriggers } from "../../domains/schema/pipeline/live-table-facts";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import {
+  appliedAppMigrations,
   storeSchemaVersion,
   newestAppliedAppMigration,
 } from "../../domains/schema/schema-version";
@@ -144,7 +145,6 @@ import {
 import {
   compareMigrationBaseNames,
   type DeclaredNames,
-  migrationFilesInRunOrder,
 } from "../utils/migration-discovery";
 
 import { commandRun } from "./command-run";
@@ -596,6 +596,8 @@ export interface MigrationDown {
    * moves no translation.
    */
   stepFile?: StepFile;
+  /** The file's whole text. Absent for a plugin's module. */
+  content?: string;
 }
 
 /** One rollback target, as planned before anything runs. */
@@ -606,6 +608,8 @@ export interface PlannedDown {
   transaction: boolean;
   /** The DOWN split into the statements `execDown` runs. */
   statements: string[];
+  /** The file's whole text, which its snapshot's hash is compared with. */
+  content?: string;
   /** Why the DOWN could not be read, when it could not. */
   unreadable?: unknown;
   /**
@@ -937,6 +941,9 @@ function plannedFrom(
         downSql,
         transaction: read.down.transaction,
         statements: splitSqlStatements(downSql, dialect, read.down),
+        ...(read.down.content === undefined
+          ? {}
+          : { content: read.down.content }),
       };
     } catch (error) {
       unreadable = error;
@@ -1323,22 +1330,6 @@ interface ResolvedDownOptions extends MigrateDownCommandOptions {
   cwd?: string;
 }
 
-/**
- * Everything `migrateDownCore` reads from and writes to the database, built
- * on one adapter: the ledger, the owner registry, the live schema the guards
- * judge, and how a DOWN runs and is recorded.
- *
- * A DOWN runs through `runMigrationStatements`, and its `rolled_back` row —
- * both the row and its retiring the applied one (`resolveMigration`) — and a
- * plugin's schema version are written through the handle it ran on, so in
- * a transaction they commit with its statements or not at all. The newest
- * row is read through that handle too: one no longer `applied` is another
- * run's rollback, which `migrateDownCore` refuses as a lost race.
- *
- * A database `nextly migrate` has not yet given the owner registry reads as
- * no owner rows, as it does for `nextly migrate`'s own guard, and has no
- * owner rows for a schema version to be written onto.
- */
 /** Where a rollback run without a logger (a plugin's uninstall) says what it records: nowhere. */
 const QUIET: ReconcileLogger = {
   info: () => undefined,
@@ -1401,47 +1392,67 @@ const NOTHING_RECORDED: Pick<SnapshotFile, "snapshot" | "entities"> = {
  * Refused where one leaves an entity unsettled; nothing for a file nothing says it of.
  */
 async function downRetirements(
-  folder: {
-    migrationsDir: string;
-    dialect: SupportedDialect;
-    declared: DeclaredNames | undefined;
-  },
-  repo: Pick<SchemaEventsRepository, "isFileApplied">,
+  metaDir: string,
+  dialect: SupportedDialect,
+  rows: readonly SchemaEventRow[],
   planned: readonly PlannedDown[]
 ): Promise<Map<string, readonly RetiredEntity[]>> {
-  const { migrationsDir, dialect, declared } = folder;
-  const metaDir = resolve(migrationsDir, "meta");
   const downs = new Map(planned.map(down => [down.filename, down]));
   const retired = new Map<string, readonly RetiredEntity[]>();
   let point: Pick<SnapshotFile, "snapshot" | "entities"> | null = null;
-  for (const file of await migrationFilesInRunOrder(
-    migrationsDir,
-    dialect,
-    declared
+  // The ledger's applied migrations, oldest first: the targets are among them.
+  for (const name of [...appliedAppMigrations(rows)].sort(
+    compareMigrationBaseNames
   )) {
-    const filename = `${file.baseName}.sql`;
-    const snapshot = await readMigrationSnapshot(metaDir, file.baseName);
+    const filename = `${name}.sql`;
+    const snapshot = await readMigrationSnapshot(metaDir, name);
     const down = downs.get(filename);
-    if (down !== undefined && file.filePath !== undefined) {
-      const judged = fileRetirements({
-        content: await readFile(file.filePath, "utf-8"),
-        recordedHash: snapshot?.migrationHash,
-        before: snapshot,
-        after: point ?? (snapshot?.parent === null ? NOTHING_RECORDED : null),
-        statements: down.statements,
-        dialect,
-      });
-      const refusal = unsettledRetirement(filename, judged);
-      if (refusal !== undefined) throw refusal;
-      retired.set(filename, judged?.retired ?? []);
+    if (down !== undefined) {
+      retired.set(filename, retiredByDown(down, dialect, snapshot, point));
     }
-    if (snapshot !== null && (await repo.isFileApplied(filename))) {
-      point = snapshot;
-    }
+    point = snapshot ?? point;
   }
   return retired;
 }
 
+/** The entities one DOWN retires, from its file's own `snapshot` back to `point`. */
+function retiredByDown(
+  down: PlannedDown,
+  dialect: SupportedDialect,
+  snapshot: SnapshotFile | null,
+  point: Pick<SnapshotFile, "snapshot" | "entities"> | null
+): readonly RetiredEntity[] {
+  // A plugin's module, which has no file, retires no app entity.
+  if (down.content === undefined) return [];
+  const judged = fileRetirements({
+    content: down.content,
+    recordedHash: snapshot?.migrationHash,
+    before: snapshot,
+    after: point ?? (snapshot?.parent === null ? NOTHING_RECORDED : null),
+    statements: down.statements,
+    dialect,
+  });
+  const refusal = unsettledRetirement(down.filename, judged);
+  if (refusal !== undefined) throw refusal;
+  return judged?.retired ?? [];
+}
+
+/**
+ * Everything `migrateDownCore` reads from and writes to the database, built
+ * on one adapter: the ledger, the owner registry, the live schema the guards
+ * judge, and how a DOWN runs and is recorded.
+ *
+ * A DOWN runs through `runMigrationStatements`, and its `rolled_back` row —
+ * both the row and its retiring the applied one (`resolveMigration`) — and a
+ * plugin's schema version are written through the handle it ran on, so in
+ * a transaction they commit with its statements or not at all. The newest
+ * row is read through that handle too: one no longer `applied` is another
+ * run's rollback, which `migrateDownCore` refuses as a lost race.
+ *
+ * A database `nextly migrate` has not yet given the owner registry reads as
+ * no owner rows, as it does for `nextly migrate`'s own guard, and has no
+ * owner rows for a schema version to be written onto.
+ */
 export async function downDatabaseDeps(args: {
   adapter: DrizzleAdapter;
   dialect: SupportedDialect;
@@ -1568,8 +1579,9 @@ export async function downDatabaseDeps(args: {
     judgeRetirements: async planned => {
       if (plugin !== undefined || args.migrationsDir === undefined) return;
       const judged = await downRetirements(
-        { migrationsDir: args.migrationsDir, dialect, declared: args.declared },
-        repo,
+        resolve(args.migrationsDir, "meta"),
+        dialect,
+        await repo.listFileApplies(),
         planned
       );
       for (const [filename, entities] of judged) {
@@ -1833,6 +1845,7 @@ export async function runMigrateDown(
         sql: parseSqlSections(content).downSql,
         transaction: !marksNoTransaction(content),
         stepFile: stepFileOf(content, name),
+        content,
       };
     };
 

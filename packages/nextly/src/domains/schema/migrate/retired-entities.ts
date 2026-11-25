@@ -22,6 +22,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import { recordedEntityTable } from "../migrate-create/dropped-translations";
+import type { RecordedEntitySettings } from "../migrate-create/entity-settings";
 import {
   computeMigrationHash,
   type SnapshotFile,
@@ -152,20 +153,30 @@ function leftOut(
   if (before?.entities === undefined || after?.entities === undefined) {
     return [];
   }
+  const [was, now] = [before.entities, after.entities];
   const [had, has] = [before, after].map(
     point => new Set(point.snapshot.tables.map(table => table.name))
   );
-  const left: RetiredEntity[] = [];
-  for (const [kind, key] of RECORDED_KINDS) {
-    if (kind === "fieldGroup") continue;
-    for (const [slug, entry] of Object.entries(before.entities[key])) {
-      if (Object.hasOwn(after.entities[key], slug)) continue;
-      if (isReservedResourceSlug(slug)) continue;
-      const table = recordedEntityTable(kind, slug, entry);
-      if (had.has(table) && !has.has(table)) left.push({ kind, slug, table });
-    }
-  }
-  return left;
+  return RECORDED_KINDS.flatMap(([kind, key]) =>
+    kind === "fieldGroup" ? [] : goneOf(kind, was[key], now[key])
+  ).filter(({ table }) => had.has(table) && !has.has(table));
+}
+
+/** The entities of one kind `was` declares and `now` does not, each with its main table. */
+function goneOf(
+  kind: RetiredEntity["kind"],
+  was: Readonly<Record<string, RecordedEntitySettings>>,
+  now: Readonly<Record<string, RecordedEntitySettings>>
+): RetiredEntity[] {
+  return Object.entries(was)
+    .filter(
+      ([slug]) => !Object.hasOwn(now, slug) && !isReservedResourceSlug(slug)
+    )
+    .map(([slug, entry]) => ({
+      kind,
+      slug,
+      table: recordedEntityTable(kind, slug, entry),
+    }));
 }
 
 /**

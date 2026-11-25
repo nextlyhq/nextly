@@ -95,8 +95,10 @@ export interface RetirementContext {
 
 /** What a unit that retires entities does at its statements. */
 export interface RetirementCheckpoint {
-  /** In the unit's transaction, before its first statement: holds the tables, on PostgreSQL. */
-  begin(db: unknown): Promise<void>;
+  /** Whether it retires any. */
+  readonly retires: boolean;
+  /** In the unit's transaction, where a try starts at its first statement: holds the tables, on PostgreSQL. */
+  begin(db: unknown, from: number): Promise<void>;
   /** Before the statement at `index` is sent: captures the documents of each entity it drops. */
   before(db: unknown, index: number): Promise<void>;
   /** Once it has run: what it captured is now final. */
@@ -105,8 +107,17 @@ export interface RetirementCheckpoint {
   done(db: unknown): Promise<void>;
 }
 
+/** The checkpoint of a unit that retires no entity. */
+const RETIRES_NOTHING: RetirementCheckpoint = {
+  retires: false,
+  begin: () => Promise.resolve(),
+  before: () => Promise.resolve(),
+  after: () => Promise.resolve(),
+  done: () => Promise.resolve(),
+};
+
 /**
- * What `unit`, made of `statements`, does for the entities it retires; undefined where it retires
+ * What `unit`, made of `statements`, does for the entities it retires; nothing where it retires
  * none. `held` where its statements run in one transaction that holds the tables until it commits
  * (any dialect's but MySQL's, whose schema statements commit it).
  */
@@ -115,9 +126,9 @@ export function retirementCheckpoint(
   dialect: SupportedDialect,
   unit: MigrationUnit,
   inTransaction: boolean
-): RetirementCheckpoint | undefined {
+): RetirementCheckpoint {
   const entities = unit.retirements?.entities ?? [];
-  if (entities.length === 0) return undefined;
+  if (entities.length === 0) return RETIRES_NOTHING;
   const held = inTransaction && dialect !== "mysql";
   const droppedAt = statements.map(statement => {
     const names = new Set(tablesDroppedIn(statement, dialect));
@@ -136,8 +147,9 @@ export function retirementCheckpoint(
   // A database whose `nextly_meta` is not there yet (one `migrate:down` rolls back from before it)
   // has nowhere to keep a capture: its documents are retired with no event, as before.
   return {
-    begin: async db => {
-      if (dialect !== "postgresql") return;
+    retires: true,
+    begin: async (db, from) => {
+      if (from > 0 || dialect !== "postgresql") return;
       if (!(await metaStands(db, dialect))) return;
       const standing = await standingTables(
         db,
@@ -354,22 +366,38 @@ export async function recordRetiredDocumentEvents(
   for (const { head } of heads) {
     const name = `${head.kind} ${head.slug}`;
     if (waiting.has(name)) continue;
-    try {
-      const failure = unfinished.get(capturePrefix(head));
-      if (failure !== undefined) throw failure.error;
-      const outcome = await settleCapture(run, head);
-      if (outcome !== "forgotten") result[outcome].push(name);
-    } catch (error) {
-      if (endsTheRun(error)) throw error;
+    const settled =
+      unfinished.get(capturePrefix(head)) ?? (await trySettling(run, head));
+    if (typeof settled === "object") {
       waiting.add(name);
       result.failed.push({
         name,
         direction: head.direction,
-        reason: error instanceof Error ? error.message : String(error),
+        reason: reasonOf(settled.error),
       });
+    } else if (settled !== "forgotten") {
+      result[settled].push(name);
     }
   }
   return result;
+}
+
+/** How one capture settled, or why it could not; what ends the run still ends it. */
+async function trySettling(
+  run: RetirementRun,
+  head: CaptureHead
+): Promise<Awaited<ReturnType<typeof settleCapture>> | { error: unknown }> {
+  try {
+    return await settleCapture(run, head);
+  } catch (error) {
+    if (endsTheRun(error)) throw error;
+    return { error };
+  }
+}
+
+/** What a failure is said as. */
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

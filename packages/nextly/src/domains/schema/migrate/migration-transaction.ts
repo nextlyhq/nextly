@@ -875,12 +875,12 @@ async function runUnitStatements(
     unit.transaction
   );
   const checkpoint =
-    required === undefined && unique === undefined && retirement === undefined
+    required === undefined && unique === undefined && !retirement.retires
       ? undefined
       : async (db: unknown, index: number) => {
           await required?.(db, index);
           await unique?.(db, index);
-          await retirement?.before(db, index);
+          await retirement.before(db, index);
         };
   // Each statement is marked with the lock's claim on the servers, where a run taking over a
   // lapsed lock looks for an earlier holder's statements still running. SQLite runs one writer at
@@ -922,7 +922,7 @@ async function runUnitStatements(
         // MySQL try resumed after statements that committed on their own skips it, as below.
         if (from > 0) await bound?.beforeResume?.(tx.db);
         if (from === 0) await bound?.before?.(tx.db);
-        if (from === 0) await retirement?.begin(tx.db);
+        await retirement.begin(tx.db, from);
         // Whether the ledger write is left outside the unit's transaction (MySQL only).
         let outside = await commitBeforeLedgerOnlyTry(
           tx,
@@ -956,12 +956,12 @@ async function runUnitStatements(
             index,
             total: statements.length,
           });
-          await retirement?.after(tx.db, index);
+          await retirement.after(tx.db, index);
           await reachStopPoint(`${unit.source}: after statement ${index + 1}`);
         }
         bound?.onStatement?.(statements.length);
         // A capture whose table the drop left standing goes with the unit's own commit.
-        await retirement?.done(tx.db);
+        await retirement.done(tx.db);
         // A unit may rewrite registry rows (a schema save's upsert of its own
         // row): what the transaction read of them before is read again.
         clearRegistryRowCache();
@@ -1028,11 +1028,11 @@ async function runUnitStatements(
         if (passesOver(bound, error, statement, dialect)) continue;
         throw partialFailure(unit, index, statements.length, error);
       }
-      await retirement?.after(checkpointDb, index);
+      await retirement.after(checkpointDb, index);
       await reachStopPoint(`${unit.source}: after statement ${index + 1}`);
     }
     bound?.onStatement?.(statements.length);
-    await retirement?.done(checkpointDb);
+    await retirement.done(checkpointDb);
     await bound?.settle?.();
   };
   // `settled` follows on the handle the statements ran on, however they ended.
