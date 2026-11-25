@@ -41,10 +41,12 @@ import {
   defineCollection,
   defineConfig,
   number,
+  repeater,
   text,
 } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import { clearServices, shutdownServices } from "../../../../di/register";
+import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { setNonInteractive } from "../../../../domains/schema/migrate/can-prompt";
 import {
   createTestNextly,
@@ -52,10 +54,12 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import type { CommandContext } from "../../../program";
 import { createLogger } from "../../../utils/logger";
 import { runMigrate } from "../../migrate";
+import { runMigrateBaseline } from "../../migrate-baseline";
 import { runMigrateCreate } from "../../migrate-create";
 
 /** The files dev's generator wrote, by case and dialect. */
@@ -370,6 +374,310 @@ export function codeRenameCases(args: {
             } as never)) as Record<string, unknown>;
             expect(spanish.headline).toBe("Hola");
           }
+        });
+      }
+
+      // A container keeping its text inside has a column of the translations table. In a project
+      // adopted by `migrate:baseline`, the snapshot lists that column among the translated ones
+      // with no kind, and declares no entity: what tells it from a text field's is the container's
+      // structure, on the main table under the same name.
+      if (layout === "per-language") {
+        /** `migrate:baseline` over `collections`, adopting a container's column by its name. */
+        const baseline = async (collections: Collections) => {
+          loaded.config = configOf(collections);
+          setNonInteractive(true);
+          const run = command();
+          const code = await ran(run.said, () =>
+            runMigrateBaseline(
+              { cwd: dir, adoptUnknown: true } as never,
+              run.context
+            )
+          );
+          expect(code, run.said.join("\n")).toBeUndefined();
+        };
+
+        it("offers no rename of a removed container's column in an adopted project, and leaves it and its text in place", async () => {
+          const url = await openDatabase(dialect);
+          const withField = (
+            field: ReturnType<typeof repeater> | ReturnType<typeof text>
+          ) => [
+            defineCollection({
+              slug: SLUG,
+              fields: [text({ name: "title" }), text({ name: "note" }), field],
+            }),
+          ];
+          const before = withField(
+            repeater({ name: "slides", fields: [text({ name: "caption" })] })
+          );
+          const after = withField(text({ name: "summary" }));
+          const app = await start(dialect, url, before);
+          const note = await app.nextly.create({
+            collection: SLUG as never,
+            data: {
+              title: "N",
+              note: "kept",
+              slides: [{ caption: "One" }],
+            } as never,
+          });
+          const id = String((note.item as { id: unknown }).id);
+          const q = (name: string) =>
+            dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+          const companion = `dc_${SLUG}_locales`;
+          const columnOf = async (from: TestNextly, column: string) => {
+            const adapter = from.adapter as unknown as {
+              executeQuery<R>(statement: string): Promise<R[]>;
+            };
+            const [row] = await adapter.executeQuery<{ value: unknown }>(
+              `SELECT ${q(column)} AS value FROM ${q(companion)} WHERE ${q("_parent")} = '${id}' AND ${q("_locale")} = 'en'`
+            );
+            return row?.value;
+          };
+          const held = await columnOf(app, "slides");
+          expect(JSON.stringify(held)).toContain("One");
+
+          await baseline(before);
+          loaded.config = configOf(after);
+          const migrations = join(dir, "migrations");
+          const had = new Set(sqlFilesIn(migrations));
+          const swapped = command();
+          const swap = await ran(swapped.said, () =>
+            runMigrateCreate(
+              "swap",
+              { cwd: dir, acceptRenames: true, acceptDataLoss: true } as never,
+              swapped.context
+            )
+          );
+          expect(swap, swapped.said.join("\n")).toBeUndefined();
+          const sql = textOf(sqlFilesIn(migrations).filter(f => !had.has(f)));
+          expect(sql).not.toMatch(/RENAME COLUMN/);
+          expect(sql).toMatch(
+            new RegExp(`${companion}[^;]*ADD (COLUMN )?[\`"]summary[\`"]`)
+          );
+          expect(sql).not.toMatch(new RegExp(`${companion}[^;]*DROP`));
+          await applied();
+
+          // The new field's own column, empty, and the container's text where it was.
+          const reread = await start(dialect, url, after);
+          expect(await columnOf(reread, "summary")).toBeNull();
+          expect(await columnOf(reread, "slides")).toEqual(held);
+          await reread.nextly.update({
+            collection: SLUG,
+            id,
+            data: { summary: "new", _overwrite: true },
+          } as never);
+          expect(await columnOf(reread, "summary")).toBe("new");
+        });
+
+        it("offers and writes a text field's rename in an adopted project with a container beside it, every value kept", async () => {
+          const url = await openDatabase(dialect);
+          const named = (name: string) => [
+            defineCollection({
+              slug: SLUG,
+              fields: [
+                text({ name: "title" }),
+                text({ name }),
+                repeater({
+                  name: "slides",
+                  fields: [text({ name: "caption" })],
+                }),
+              ],
+            }),
+          ];
+          const app = await start(dialect, url, named("heading"));
+          const note = await app.nextly.create({
+            collection: SLUG as never,
+            data: { title: "N", heading: "Hello" } as never,
+          });
+          const id = String((note.item as { id: unknown }).id);
+
+          await baseline(named("heading"));
+          const renamed = await create("rename_heading", named("headline"));
+          expect(renamed.code, renamed.said).toBeUndefined();
+          expect(textOf(renamed.files)).toMatch(renames("heading", "headline"));
+          await applied();
+
+          const reread = await start(dialect, url, named("headline"));
+          const read = (await reread.nextly.findByID({
+            collection: SLUG as never,
+            id: id as never,
+          })) as Record<string, unknown>;
+          expect(read.headline).toBe("Hello");
+        });
+
+        it("carries every value through a Builder's text rename that is the first save in an adopted project", async () => {
+          /** A site in development over the project at `folder`, whose Builder writes its files. */
+          const builder = async (folder: string, url: string) => {
+            await shutdownServices().catch(() => {});
+            clearServices();
+            vi.stubEnv("NODE_ENV", "development");
+            const adapter = (await createAdapter({
+              type: dialect,
+              url,
+            } as Parameters<
+              typeof createAdapter
+            >[0])) as unknown as DrizzleAdapter;
+            closers.unshift(() => adapter.disconnect().catch(() => {}));
+            return createTestNextly({
+              adapter: adapter as never,
+              basePath: folder,
+              collections: [],
+              localization: { locales: ["en", "es"], defaultLocale: "en" },
+              db: {
+                migrationsDir: "./migrations",
+                uiSchemaFile: "./ui-schema.json",
+              },
+            } as Parameters<typeof createTestNextly>[0]);
+          };
+          const save = async (
+            method: string,
+            params: Record<string, unknown>,
+            body: Record<string, unknown>
+          ) => {
+            const answer = (await dispatchCollections(
+              {} as ServiceContainer,
+              method,
+              params,
+              body
+            )) as unknown as Response;
+            if (answer instanceof Response) {
+              expect(answer.ok, await answer.clone().text()).toBe(true);
+            }
+            return answer;
+          };
+          // A collection a site's Builder made, and the same database and definition as a project
+          // that keeps no migrations of its own: what a baseline adopts.
+          const made = mkdtempSync(join(tmpdir(), "nextly-code-renames-made-"));
+          closers.push(async () => {
+            rmSync(made, { recursive: true, force: true });
+          });
+          mkdirSync(join(made, "migrations"));
+          const url = await openDatabase(dialect);
+          const site = await builder(made, url);
+          await save(
+            "createCollection",
+            {},
+            {
+              name: "posts",
+              label: "Posts",
+              fields: [
+                { name: "heading", type: "text" },
+                { name: "note", type: "text" },
+                {
+                  name: "slides",
+                  type: "repeater",
+                  fields: [{ name: "caption", type: "text" }],
+                },
+              ],
+            }
+          );
+          const entry = await site.nextly.create({
+            collection: "posts" as never,
+            data: { title: "P", heading: "Hello", note: "kept" } as never,
+          });
+          const id = String((entry.item as { id: unknown }).id);
+          await (
+            site.adapter as unknown as {
+              executeQuery(statement: string): Promise<unknown>;
+            }
+          ).executeQuery("DELETE FROM nextly_schema_events");
+          cpSync(join(made, "ui-schema.json"), join(dir, "ui-schema.json"));
+
+          loaded.config = defineConfig({
+            collections: [],
+            localization: { locales: ["en", "es"], defaultLocale: "en" },
+            db: {
+              migrationsDir: "./migrations",
+              uiSchemaFile: "./ui-schema.json",
+            },
+          } as never);
+          setNonInteractive(true);
+          const adopted = command();
+          const code = await ran(adopted.said, () =>
+            runMigrateBaseline(
+              { cwd: dir, adoptUnknown: true } as never,
+              adopted.context
+            )
+          );
+          expect(code, adopted.said.join("\n")).toBeUndefined();
+          const meta = join(dir, "migrations", "meta");
+          expect(existsSync(meta), adopted.said.join("\n")).toBe(true);
+          const [file] = readdirSync(meta).filter(f =>
+            f.endsWith(".snapshot.json")
+          );
+          const taken = JSON.parse(
+            readFileSync(join(meta, file!), "utf-8")
+          ) as {
+            entities?: unknown;
+            snapshot: {
+              tables: { name: string; localizedColumns?: string[] }[];
+            };
+          };
+          // What the case stands on: the columns listed by name, and nothing declared.
+          expect(taken.entities).toBeUndefined();
+          expect(
+            taken.snapshot.tables.find(t => t.name === "dc_posts")
+              ?.localizedColumns
+          ).toEqual(["heading", "note", "slides"]);
+
+          // The dialog's rename, as it answers the offer: the first save after the baseline.
+          await builder(dir, url);
+          const fields = [
+            { name: "headline", type: "text" },
+            { name: "note", type: "text" },
+            {
+              name: "slides",
+              type: "repeater",
+              fields: [{ name: "caption", type: "text" }],
+            },
+          ];
+          const preview = await save(
+            "previewSchemaChanges",
+            { collectionName: "posts" },
+            { fields }
+          );
+          const body = (await preview.json()) as {
+            renamed?: { table: string; from: string; to: string }[];
+            data?: { renamed?: { table: string; from: string; to: string }[] };
+          };
+          const offered = (body.data ?? body).renamed ?? [];
+          expect(offered).toEqual([
+            expect.objectContaining({
+              table: "dc_posts_locales",
+              from: "heading",
+              to: "headline",
+            }),
+          ]);
+          const version = await (
+            (
+              await builder(dir, url)
+            ).adapter as unknown as {
+              executeQuery<R>(statement: string): Promise<R[]>;
+            }
+          ).executeQuery<{ version: unknown }>(
+            `SELECT ${dialect === "mysql" ? "`schema_version`" : '"schema_version"'} AS version FROM dynamic_collections WHERE slug = 'posts'`
+          );
+          await save(
+            "applySchemaChanges",
+            { collectionName: "posts" },
+            {
+              fields,
+              confirmed: true,
+              schemaVersion: Number(version[0]?.version ?? 1),
+              renameResolutions: offered.map(candidate => ({
+                tableName: candidate.table,
+                fromColumn: candidate.from,
+                toColumn: candidate.to,
+                choice: "rename",
+              })),
+            }
+          );
+          const reread = await builder(dir, url);
+          const read = (await reread.nextly.findByID({
+            collection: "posts" as never,
+            id: id as never,
+          })) as Record<string, unknown>;
+          expect(read.headline).toBe("Hello");
+          expect(read.note).toBe("kept");
         });
       }
 

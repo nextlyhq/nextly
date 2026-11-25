@@ -3183,8 +3183,14 @@ async function companionRenameDecisions(
       ...containers,
       ...containerColumnsDeclared(previousEntities, kind, entity.slug),
     ]);
+    // A container's structure is on the main table under its overlay's own name, where a text field
+    // kept per language has no column: what tells the two apart where nothing is declared. A
+    // database still holding a text field's column on both is not served until `nextly migrate` has
+    // moved it; taken by a baseline before that, the field's rename is not offered.
+    const onMain = new Set(previousTable.columns.map(column => column.name));
     const recorded = (previousTable.localizedColumns ?? []).filter(
-      column => translated || !containersKnown.has(column)
+      column =>
+        translated || (!containersKnown.has(column) && !onMain.has(column))
     );
     // Each translated field's column as the config now describes it, by name.
     const described = new Map(
