@@ -69,6 +69,8 @@ const BLOCKED_WORDS: Readonly<Record<string, string>> = {
     "A field moves into or out of a group with Move to…, and a saved group or repeating rows keeps its type.",
   password: "A stored password can't be read back as another value.",
   unloaded: "The plugin this type comes from is not loaded.",
+  "leaves-translation-inside":
+    "Its text is kept in each language inside its group or repeating rows, and this type would leave that text behind. Add a new field beside it instead.",
   "no-rule": "No rule says what this type would do to the saved values.",
 };
 

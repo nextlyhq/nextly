@@ -134,7 +134,8 @@ function keptValidation(
  * becoming repeating rows, or the reverse, keeps the fields it holds.
  *
  * Localized is kept as it is set. A field it was never set on is translated or not by its type's own
- * default (`fieldLocalized`), so such a field's switch reads the new type's default after the change.
+ * default (`fieldLocalized`), so such a field's switch reads the new type's default after the change. A
+ * group or repeating rows have none of their own to keep (`advancedOf`).
  */
 export function withTypeChanged(
   field: BuilderField,
@@ -153,7 +154,7 @@ export function withTypeChanged(
       ? { description: field.description }
       : {}),
     ...(admin !== undefined ? { admin } : {}),
-    ...(field.advanced !== undefined ? { advanced: field.advanced } : {}),
+    ...advancedOf(type, field.advanced),
     ...(fits.options && field.options !== undefined
       ? { options: field.options }
       : {}),
@@ -165,6 +166,28 @@ export function withTypeChanged(
     field.fields
       ? { fields: field.fields }
       : {}),
+  };
+}
+
+/**
+ * The database settings a field of `type` keeps of `advanced`. A group or repeating rows keep one
+ * structure in every language, and the fields inside choose what is translated: marked Localized
+ * themselves, a configuration is refused, so none is carried onto one. One back to its type as saved has
+ * what it was saved with (`saved`).
+ */
+function advancedOf(
+  type: string,
+  advanced: BuilderField["advanced"],
+  saved?: BuilderField["advanced"]
+): Pick<BuilderField, "advanced"> {
+  if (advanced === undefined) return {};
+  if (!CONTAINER_TYPES.has(type)) return { advanced };
+  const { localized: _carried, ...rest } = advanced;
+  return {
+    advanced:
+      saved?.localized === undefined
+        ? rest
+        : { ...rest, localized: saved.localized },
   };
 }
 
@@ -219,7 +242,7 @@ export function withSavedTypeRestored(
       ? { description: current.description }
       : {}),
     ...(Object.keys(admin).length > 0 ? { admin } : {}),
-    ...(current.advanced !== undefined ? { advanced: current.advanced } : {}),
+    ...advancedOf(saved.type, current.advanced, saved.advanced),
     ...(current.fields !== undefined ? { fields: current.fields } : {}),
   };
 }

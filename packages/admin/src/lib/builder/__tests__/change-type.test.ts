@@ -272,6 +272,31 @@ describe("a field back to the type it was saved as", () => {
     });
   });
 
+  // Set while it was a text, Localized does not come back onto the group with it.
+  it("a group has no Localized but the one it was saved with", () => {
+    const back = (savedAdvanced?: BuilderField["advanced"]) =>
+      withSavedTypeRestored(
+        {
+          ...draft,
+          advanced: { unique: true, index: false, localized: true },
+        },
+        {
+          id: "f-1",
+          name: "link",
+          label: "Link",
+          type: "group",
+          fields: [],
+          ...(savedAdvanced === undefined ? {} : { advanced: savedAdvanced }),
+        }
+      ).advanced;
+    expect(back()).toEqual({ unique: true, index: false });
+    expect(back({ unique: false, index: false, localized: false })).toEqual({
+      unique: true,
+      index: false,
+      localized: false,
+    });
+  });
+
   it("Required is as the person has it now", () => {
     expect(
       withSavedTypeRestored(

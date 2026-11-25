@@ -8,7 +8,9 @@
  * On an entity stored per language, the save's own translation rules are asked too, and a change
  * one refuses is blocked with the save's words: a field that stops being translated, or becomes
  * translated, while how it is stored changes, and one kept per language whose translations column
- * would keep its old type.
+ * would keep its old type. Inside a group or repeating rows, text is kept per language beside the one
+ * structure, field by field, and a change that stops translating such a text is blocked there too:
+ * every language's text would be left behind it.
  *
  * @module dispatcher/helpers/type-change-targets
  */
@@ -27,6 +29,11 @@ import {
 } from "../../domains/i18n/migration/field-leaves-translation-rules";
 import { retypedCompanionColumns } from "../../domains/i18n/migration/plan-companion-type-change";
 import { fieldsLeavingTranslation } from "../../domains/i18n/migration/reconcile-companion";
+import {
+  keepsTranslationsInside,
+  sharedStructureShape,
+  type SharedStructureShape,
+} from "../../domains/i18n/shared-structure";
 import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import type {
   ColumnOrigin,
@@ -67,7 +74,9 @@ export type TypeChangeBlock =
   /** It becomes translated while how it is stored changes, losing values (`refusalsForFieldsJoiningTranslation`). */
   | "joins-translation"
   /** It stays translated, and its translations column would keep the old type (`translationsColumnChanges`). */
-  | "translations-column";
+  | "translations-column"
+  /** Text its containers keep per language, beside one structure, would stop being translated. */
+  | "leaves-translation-inside";
 
 /** A refusal in the save's own words: its code, why, and the changes that get there instead. */
 export interface TypeChangeRefusalWords {
@@ -275,12 +284,45 @@ function saveMayRefuse(from: FieldDefinition, to: FieldDefinition): boolean {
 }
 
 /**
+ * Why a translation rule blocks changing the field into `candidate`, on an entity stored per language:
+ * on its own row or column, the save's own (`translationRefusal`); inside a container, where the field
+ * is text kept per language there and the candidate would no longer be. Null where none does.
+ */
+function refusalByTranslation(
+  args: {
+    field: FieldDefinition;
+    dialect: SupportedDialect;
+    builtBy: ColumnOrigin;
+    inJson?: boolean;
+    translatedInside?: boolean;
+    layout?: TranslationLayout;
+  },
+  candidate: FieldDefinition
+): { blocked: TypeChangeBlock; refusal: TypeChangeRefusalWords | null } | null {
+  if (args.layout?.perLanguage !== true) return null;
+  if (args.inJson === true) {
+    return args.translatedInside === true && !isFieldLocalized(candidate, true)
+      ? { blocked: "leaves-translation-inside", refusal: null }
+      : null;
+  }
+  return translationRefusal({
+    from: args.field,
+    to: candidate,
+    dialect: args.dialect,
+    builtBy: args.builtBy,
+    fileRetypes: args.layout.fileRetypes,
+  });
+}
+
+/**
  * Each of `candidates` other than the field's own type, judged as a change from `field`, a field
  * as its entity stores it, on the database this runs on. `builtBy` and `componentRow` say where its
  * values are kept, as the save that would make the change reads them; `inJson`, that they are held
  * inside a named group's or a repeater's JSON value, as the save judges such a field. `layout`, where
- * the entity keeps its translated values: a field held in a container's JSON is translated, or not,
- * with its container, so no translation rule is asked of it.
+ * the entity keeps its translated values. A field held in a container's JSON has no translations column
+ * of its own, so the rules of one are not asked of it: `translatedInside` says it is text its containers
+ * keep per language beside their structure (`translatedInsideContainers`), which a change that stops
+ * translating it would leave behind in every language.
  */
 export function typeChangeTargets(args: {
   field: FieldDefinition;
@@ -289,6 +331,7 @@ export function typeChangeTargets(args: {
   builtBy: ColumnOrigin;
   componentRow?: boolean;
   inJson?: boolean;
+  translatedInside?: boolean;
   layout?: TranslationLayout;
 }): TypeChangeTarget[] {
   const at = args.componentRow === true ? { componentRow: true } : {};
@@ -310,16 +353,7 @@ export function typeChangeTargets(args: {
       const blocked = pairBlocked(from, to);
       if (blocked !== null)
         return { type, blocked, refusal: null, outcome: null };
-      const translation =
-        args.layout?.perLanguage === true && args.inJson !== true
-          ? translationRefusal({
-              from: args.field,
-              to: candidate,
-              dialect: args.dialect,
-              builtBy: args.builtBy,
-              fileRetypes: args.layout.fileRetypes,
-            })
-          : null;
+      const translation = refusalByTranslation(args, candidate);
       if (translation !== null) return { type, ...translation, outcome: null };
       return {
         type,
@@ -436,6 +470,30 @@ function fieldAt(
 }
 
 /**
+ * Whether the field at `path` among `fields` is text its containers keep per language, beside the one
+ * structure every language shares: asked of the shape the storage itself splits the outermost container
+ * by (`sharedStructureShape`), so the two never disagree on what is kept there. Whatever the entity's own
+ * switch says: each installation keeps its text per language.
+ */
+function translatedInsideContainers(
+  fields: readonly FieldDefinition[],
+  path: readonly string[]
+): boolean {
+  const [outermost, ...rest] = path;
+  const held = rest.at(-1);
+  const container = onLevel(fields).find(field => field.name === outermost);
+  if (container === undefined || held === undefined) return false;
+  if (!keepsTranslationsInside(container, true)) return false;
+  const shape = rest
+    .slice(0, -1)
+    .reduce<SharedStructureShape | null>(
+      (level, name) => level?.inner[name] ?? null,
+      sharedStructureShape(container)
+    );
+  return shape?.texts.includes(held) === true;
+}
+
+/**
  * The type picker's answer for a saved field of an entity whose stored fields are `fields`, as a
  * list (`{ items, meta }`). Shared by the collection, Single and field-group routes, so the three
  * answer alike; `layout` says where each keeps its translated values.
@@ -477,6 +535,7 @@ export function respondTypeChangeTargets(args: {
   const items = typeChangeTargets({
     field: found.field,
     inJson: found.inJson,
+    translatedInside: translatedInsideContainers(args.fields, request.field),
     candidates:
       request.candidates ??
       FIELD_TYPE_CATALOG.map(entry => ({ type: entry.type })),
