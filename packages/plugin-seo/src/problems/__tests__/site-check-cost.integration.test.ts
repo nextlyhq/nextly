@@ -161,9 +161,14 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     it("reads the record, the settings and the content dates a batch at a time", async () => {
       const { t, ctx } = await boot(dialect, false);
+      // Each count is of a full check that follows one: a page whose own
+      // check after its save kept no row is kept by the first, so the count
+      // holds the reads alone, not the writing of rows the site lacked.
       await publish(t, 30, 60);
+      await checkSite(ctx, CHECKS);
       const fewer = await statementsOf(dialect, () => checkSite(ctx, CHECKS));
       await publish(t, 0, 30);
+      await checkSite(ctx, CHECKS);
       const more = await statementsOf(dialect, () => checkSite(ctx, CHECKS));
       // Thirty more pages, and no more of these reads: each is made once for
       // a batch of pages, not once for each page.

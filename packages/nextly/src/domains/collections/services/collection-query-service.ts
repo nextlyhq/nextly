@@ -162,15 +162,16 @@ import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
   buildLocalizedOrderExpr,
   buildTranslationStatusCondition,
-  TRANSLATION_FILTER_STATES,
-  TRANSLATION_OVERVIEW_KEY,
   fillCompanionFields,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
   populateTranslationStatus,
   selectEntryWithCompanion,
-  type TranslationStatusFilter,
+  structuresIn,
+  TRANSLATION_FILTER_STATES,
+  TRANSLATION_OVERVIEW_KEY,
   type TranslationFilterState,
+  type TranslationStatusFilter,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
@@ -198,6 +199,7 @@ import {
   resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import { inReleaseCondition } from "../../releases/in-release-condition";
 import {
   NO_DECISIONS,
@@ -235,6 +237,7 @@ import {
   draftsKeptByPart,
   findPartDrafts,
   holdsPendingChange,
+  partKeysOf,
   SHARED_DRAFT_SLOT,
 } from "../../versions/part-drafts";
 import { pendingChangeCondition } from "../../versions/pending-change-condition";
@@ -1394,7 +1397,17 @@ export class CollectionQueryService extends BaseService {
     if (!companion) return;
     // Read into copies keyed by id, then attached beside each row's own values:
     // the row keeps every field in its own language and type.
-    const everyLanguage = rows.map(row => ({ id: row.id }));
+    // Each row's repeaters and groups keeping one structure carry it, for each language's text to
+    // be laid on (`structuresIn`), by shapes whose components are read once for every row.
+    const shaped = companion.localizedFields.some(
+      field => field.sharedStructure
+    )
+      ? await withComponentShapes(companion.localizedFields, this.db)
+      : [];
+    const everyLanguage = rows.map(row => ({
+      id: row.id,
+      ...structuresIn(row, shaped),
+    }));
     await populateCompanionFieldsAllLocales({
       db: this.db as never,
       companionTable: companion.table,
@@ -6154,7 +6167,11 @@ export class CollectionQueryService extends BaseService {
           fillCompanionFields({
             rows: [entry],
             companionRows: joined.companionRows,
-            localizedFields: companion.localizedFields,
+            // A container placing a component is put back by its component's fields.
+            localizedFields: await withComponentShapes(
+              companion.localizedFields,
+              this.db
+            ),
             localeChain: joinedLocaleChain,
             // A read scoped to published content takes only the languages published.
             statusValues:
@@ -6460,9 +6477,16 @@ export class CollectionQueryService extends BaseService {
             ? await findPartDrafts(draftRepo, draftRef, draftLocale)
             : undefined;
         if (parts) sharedChangesPending = parts.shared !== undefined;
+        // A structured field's held share is laid over the entry as this
+        // read assembled it, in the language it reads.
         const workingDraft = parts
           ? holdsPendingChange(parts)
-            ? { snapshot: combinedDraft({}, parts) }
+            ? {
+                snapshot: combinedDraft({}, parts, {
+                  keys: await partKeysOf(fields),
+                  live: expandedEntry,
+                }),
+              }
             : undefined
           : await draftRepo.findWorkingDraft(draftRef, draftLocale);
         // Mirror the write gate's eligibility check before overlaying: a

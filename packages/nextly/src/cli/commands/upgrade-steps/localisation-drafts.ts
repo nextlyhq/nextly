@@ -16,6 +16,14 @@
  * A shared value with no column on the live row (one kept in a table of its own) cannot be told
  * from a copy, so it is kept as an edit: a pending change is never dropped.
  *
+ * A repeater or group that keeps one structure across languages is split too: the text inside
+ * becomes the language's draft, keyed by row id, and the structure becomes part of the shared
+ * draft where it differs from the live one. A group holding only text, at its own level and in
+ * every group inside, reads the same held whole as its text alone; where the document has no
+ * structure for it yet (none live, none in a draft kept under no language), a language's draft
+ * holding its text is split as whole, so the group it brings into being is the shared draft's.
+ * Once split, the shared draft holds that structure, so a run again finds nothing to split.
+ *
  * @module cli/commands/upgrade-steps/localisation-drafts
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -23,6 +31,15 @@ import { sql } from "drizzle-orm";
 
 import { storesPerLanguage } from "../../../domains/i18n/per-language-storage";
 import type { LaidOutEntity } from "../../../domains/i18n/per-language-storage-layout";
+import {
+  holdsText,
+  holdsUnkeyedText,
+  isWholeValue,
+  sameStructure,
+  splitSharedStructure,
+  type SharedStructureShape,
+  type StructuredField,
+} from "../../../domains/i18n/shared-structure";
 import { introspectLiveColumns } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { SHARED_PART_ALONE } from "../../../domains/versions/changed-parts";
 import {
@@ -61,6 +78,11 @@ interface DocumentToSplit {
   keys: PartKeys;
   ref: VersionRef;
   drafts: VersionRow[];
+  /**
+   * The groups the document has no structure for yet, none live and none in a draft kept under no
+   * language, that a language's draft holds text in: that draft holds the group whole.
+   */
+  structureless: ReadonlySet<string>;
 }
 
 /** Whether `snapshot` holds any of `keys`. */
@@ -72,14 +94,80 @@ function holdsAny(
 }
 
 /**
+ * Whether a draft's value of a structured field holds more than its part: a language's draft
+ * holding the field's whole value, or one kept under no language holding its text.
+ */
+function structuredKeptWhole(
+  locale: string | null,
+  value: unknown,
+  shape: SharedStructureShape
+): boolean {
+  return locale === null ? holdsText(value, shape) : isWholeValue(value, shape);
+}
+
+/**
  * Whether a working draft holds more than its part: a language's draft holding a shared value,
- * or one kept under no language holding a language's value.
+ * or one kept under no language holding a language's value, or either holding more than its
+ * share of a structured field.
  */
 function keptWhole(draft: VersionRow, keys: PartKeys): boolean {
   const snapshot = snapshotRecord(draft.snapshot);
-  return draft.locale === null
-    ? holdsAny(snapshot, keys.language)
-    : holdsAny(snapshot, keys.shared);
+  const structuredWhole = [...keys.structured].some(
+    ([key, shape]) =>
+      Object.hasOwn(snapshot, key) &&
+      structuredKeptWhole(draft.locale, snapshot[key], shape)
+  );
+  return (
+    structuredWhole ||
+    (draft.locale === null
+      ? holdsAny(snapshot, keys.language)
+      : holdsAny(snapshot, keys.shared))
+  );
+}
+
+/**
+ * The groups of one document (`DocumentToSplit.structureless`) a language's draft holds text in
+ * while the document has no structure for them: none in a draft kept under no language, and none
+ * on its live row. The live row is read only where a draft holds such text.
+ */
+async function structurelessGroups(
+  adapter: DrizzleAdapter,
+  document: Pick<DocumentToSplit, "entity" | "keys" | "ref">,
+  drafts: readonly VersionRow[]
+): Promise<Set<string>> {
+  const snapshots = drafts.map(draft => ({
+    locale: draft.locale,
+    snapshot: snapshotRecord(draft.snapshot),
+  }));
+  const candidates = [...document.keys.structured]
+    .filter(
+      ([key, shape]) =>
+        shape.kind === "group" &&
+        !snapshots.some(
+          ({ locale, snapshot }) =>
+            locale === null && Object.hasOwn(snapshot, key)
+        ) &&
+        snapshots.some(
+          ({ locale, snapshot }) =>
+            locale !== null &&
+            Object.hasOwn(snapshot, key) &&
+            holdsText(snapshot[key], shape)
+        )
+    )
+    .map(([key]) => key);
+  if (candidates.length === 0) return new Set();
+  const live = await liveRowOf(adapter, document);
+  return new Set(
+    candidates.filter(key => {
+      const column = toSnakeCase(key);
+      // No live row or column to judge by: nothing is guessed, the draft is read as it is.
+      return (
+        live !== undefined &&
+        column in live &&
+        sameStructure(live[column], null)
+      );
+    })
+  );
 }
 
 /** Every document with a pending change kept whole, entity by entity. */
@@ -91,7 +179,15 @@ async function documentsToSplit(
   // An earlier release's version history is split only once it is laid out as this one keeps it.
   await assertVersionHistoryReady(context);
   if (!(await versionHistoryReady(context))) return found;
-  for (const entity of await siteEntities(context)) {
+  const entities = await siteEntities(context);
+  // The site's components, by slug: a component field is split by part as the running site
+  // splits it, its instances to the shared draft and their text to the language's.
+  const components = new Map(
+    entities
+      .filter(entity => entity.kind === "component")
+      .map(entity => [entity.slug, entity.fields as readonly StructuredField[]])
+  );
+  for (const entity of entities) {
     // Only collection entries and Singles keep pending changes; a component's are its parent's.
     if (entity.kind === "component") continue;
     const drafts = await adapter.select<VersionRow>(VERSIONS_TABLE, {
@@ -109,6 +205,7 @@ async function documentsToSplit(
     // per language, so a pending text edit belongs to a language's draft.
     const keys = await partKeysOf(entity.fields, {
       translated: storesPerLanguage(entity),
+      components: slug => components.get(slug),
     });
     const byEntry = new Map<string, VersionRow[]>();
     for (const draft of drafts) {
@@ -118,13 +215,19 @@ async function documentsToSplit(
       ]);
     }
     for (const [entryId, entryDrafts] of byEntry) {
-      if (!entryDrafts.some(draft => keptWhole(draft, keys))) continue;
-      found.push({
-        entity,
-        keys,
-        ref: { scopeKind: entity.kind, scopeSlug: entity.slug, entryId },
-        drafts: entryDrafts,
-      });
+      const ref = { scopeKind: entity.kind, scopeSlug: entity.slug, entryId };
+      const structureless = await structurelessGroups(
+        adapter,
+        { entity, keys, ref },
+        entryDrafts
+      );
+      if (
+        structureless.size === 0 &&
+        !entryDrafts.some(draft => keptWhole(draft, keys))
+      ) {
+        continue;
+      }
+      found.push({ entity, keys, ref, drafts: entryDrafts, structureless });
     }
   }
   return found;
@@ -146,6 +249,8 @@ interface SplitDrafts {
   conflicts: SharedConflict[];
   /** Conflicts whose two saves were made at the same moment, so neither is the later. */
   ties: SharedConflict[];
+  /** Each field a draft holds text in on a row or instance with no id, as `field (language)`. */
+  unkeyed: string[];
 }
 
 /** The time a draft was last saved, for ordering its document's drafts oldest first. */
@@ -166,10 +271,16 @@ function isSharedEdit(
   key: string,
   value: unknown
 ): boolean {
-  if (!document.keys.shared.has(key)) return false;
+  const structured = document.keys.structured.has(key);
+  if (!document.keys.shared.has(key) && !structured) return false;
   if (alreadyShared || !live) return true;
   const column = toSnakeCase(key);
-  return !(column in live && sameSharedValue(live[column], value));
+  if (!(column in live)) return true;
+  // A structure is compared as a structure (`sameStructure`): a blank value inside reads as an
+  // absent one, and a structure coming to be is a change even while it holds nothing.
+  return structured
+    ? !sameStructure(live[column], value)
+    : !sameSharedValue(live[column], value);
 }
 
 /** Where each language's value of a field came from, by `[slot, field]`. */
@@ -214,6 +325,7 @@ interface SplitState {
   conflicts: SharedConflict[];
   ties: SharedConflict[];
   languageOrigins: LanguageOrigins;
+  unkeyed: string[];
 }
 
 /**
@@ -237,6 +349,51 @@ function recordSharedEdit(
   state.shared.set(key, { value, from, at });
 }
 
+/**
+ * A held value of `key` as a shared edit judges it: for a structured field, its text goes to the
+ * language's draft, by row id, and its structure is returned to be judged as a shared value is;
+ * any other field's value as it is. `undefined` where nothing is left to judge: a language's draft
+ * already holding the text alone keeps it whole as that language's.
+ */
+function structureOfDraftValue(
+  state: SplitState,
+  document: DocumentToSplit,
+  draft: VersionRow,
+  slot: string,
+  key: string,
+  held: unknown
+): unknown {
+  const shape = document.keys.structured.get(key);
+  if (!shape) return held;
+  // The language's text, kept as a language value is: two drafts saved at one moment for one
+  // language that hold different text is a tie the order rows are read in would settle.
+  const keepText = (text: unknown) => {
+    const tie = languageValueTie(state.languageOrigins, slot, key, text, draft);
+    if (tie) state.ties.push(tie);
+    state.languages.set(slot, { ...state.languages.get(slot), [key]: text });
+  };
+  // A group the document has no structure for is held whole by a language's draft holding its
+  // text (`structureless`), though it reads the same as its text alone.
+  if (
+    draft.locale !== null &&
+    !structuredKeptWhole(draft.locale, held, shape) &&
+    !document.structureless.has(key)
+  ) {
+    keepText(held);
+    return undefined;
+  }
+  // Text on a row or component instance with no id cannot be filed by row: a split leaves it on
+  // the structure, the shared draft's, where any language's publish would take it live. An earlier
+  // release kept no id on an instance held inline, so such a draft is refused rather than guessed
+  // at by position: its rows need not be the live row's.
+  if (holdsUnkeyedText(held, shape)) {
+    state.unkeyed.push(`${key} (${draft.locale ?? "no language"})`);
+  }
+  const split = splitSharedStructure(held, shape);
+  if (split.overlay !== undefined) keepText(split.overlay);
+  return split.structure;
+}
+
 /** Reads one draft into `state`: each language value under its language, each shared edit as one. */
 function readDraft(
   state: SplitState,
@@ -248,22 +405,38 @@ function readDraft(
   const snapshot = snapshotRecord(draft.snapshot);
   // A draft under no language that holds only shared values is already the shared draft: its
   // values were saved as shared edits, so each is kept as one.
+  // One holding the text of a structured field is a whole document's, as one holding a
+  // language's value is.
   const alreadyShared =
-    draft.locale === null && !holdsAny(snapshot, document.keys.language);
+    draft.locale === null &&
+    !holdsAny(snapshot, document.keys.language) &&
+    ![...document.keys.structured].some(
+      ([key, shape]) =>
+        Object.hasOwn(snapshot, key) && holdsText(snapshot[key], shape)
+    );
   const slot = draft.locale ?? defaultLocale;
-  for (const [key, value] of Object.entries(snapshot)) {
+  for (const [key, held] of Object.entries(snapshot)) {
     if (document.keys.language.has(key)) {
       const tie = languageValueTie(
         state.languageOrigins,
         slot,
         key,
-        value,
+        held,
         draft
       );
       if (tie) state.ties.push(tie);
-      state.languages.set(slot, { ...state.languages.get(slot), [key]: value });
+      state.languages.set(slot, { ...state.languages.get(slot), [key]: held });
       continue;
     }
+    const value = structureOfDraftValue(
+      state,
+      document,
+      draft,
+      slot,
+      key,
+      held
+    );
+    if (value === undefined) continue;
     if (!isSharedEdit(document, live, alreadyShared, key, value)) continue;
     recordSharedEdit(
       state,
@@ -290,6 +463,7 @@ function splitDrafts(
     conflicts: [],
     ties: [],
     languageOrigins: new Map(),
+    unkeyed: [],
   };
   const ordered = [...document.drafts].sort((a, b) => savedAt(a) - savedAt(b));
   for (const draft of ordered) {
@@ -302,6 +476,7 @@ function splitDrafts(
     languages: state.languages,
     conflicts: state.conflicts,
     ties: state.ties,
+    unkeyed: state.unkeyed,
   };
 }
 
@@ -312,7 +487,7 @@ function splitDrafts(
  */
 async function liveRowOf(
   adapter: DrizzleAdapter,
-  document: DocumentToSplit
+  document: Pick<DocumentToSplit, "entity" | "keys" | "ref">
 ): Promise<Record<string, unknown> | undefined> {
   const { tables } = await introspectLiveColumns(
     adapter.getDrizzle(),
@@ -322,7 +497,7 @@ async function liveRowOf(
   const present = new Set(
     (tables[0]?.columns ?? []).map(column => column.name)
   );
-  const columns = [...document.keys.shared]
+  const columns = [...document.keys.shared, ...document.keys.structured.keys()]
     .map(key => toSnakeCase(key))
     .filter(column => present.has(column));
   if (columns.length === 0) return undefined;
@@ -344,7 +519,9 @@ interface PlannedSplit {
 /**
  * Every document to split and what its drafts become, refused before any is split where two
  * languages changed one shared field in saves made at the same moment: nothing says which change
- * came later, so neither is kept on a guess. The count, the run and the dry run read this one plan.
+ * came later, so neither is kept on a guess. Refused too where a draft holds text inside a repeater
+ * or group on a row or component instance with no id (`holdsUnkeyedText`), which no split can file
+ * under its language. The count, the run and the dry run read this one plan.
  */
 async function plannedSplits(
   context: UpgradeStepContext
@@ -369,6 +546,25 @@ async function plannedSplits(
         `(${tie.field}, in ${tie.earlier} and ${tie.later})`
     )
   );
+  const unkeyed = planned.flatMap(({ document, split }) =>
+    split.unkeyed.length === 0
+      ? []
+      : [
+          `the ${document.entity.kind} "${document.entity.slug}" entry ${document.ref.entryId} ` +
+            `(${split.unkeyed.join(", ")})`,
+        ]
+  );
+  if (unkeyed.length > 0) {
+    throw new NextlyError({
+      code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
+      publicMessage:
+        `Pending changes hold translated text on repeater rows or component instances with no id ` +
+        `for ${unkeyed.join("; ")}, so that text cannot be kept by row for its language. ` +
+        "Publish or discard these pending changes, then run `nextly migrate` again. " +
+        NOTHING_CHANGED,
+      logContext: { unkeyed },
+    });
+  }
   if (tied.length > 0) {
     throw new NextlyError({
       code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",

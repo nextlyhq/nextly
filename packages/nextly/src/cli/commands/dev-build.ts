@@ -1496,6 +1496,8 @@ export async function ensureLocalizedCompanions(
             kind,
             entity.slug
           ),
+          // A container's overlay column added now is seeded as the default language's text.
+          defaultLocale: transitions?.defaultLocale,
         },
         reportCompanionFailure(
           "update",

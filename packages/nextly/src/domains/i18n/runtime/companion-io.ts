@@ -66,6 +66,17 @@ import type {
   TransitionStateStore,
 } from "../migration/transition-state";
 import { storesPerLanguage } from "../per-language-storage";
+import {
+  hasTranslationColumn,
+  keepsTranslationsInside,
+  placesComponent,
+  pruneOverlay,
+  sameShare,
+  shapeBeforeComponents,
+  splitStoredValue,
+  type SharedStructureShape,
+  type StructuredField,
+} from "../shared-structure";
 
 import { buildCompanionRuntimeTable } from "./companion-registration";
 import { encodeStamp } from "./companion-stamp-column";
@@ -89,6 +100,8 @@ interface CompanionFieldLike {
   type: string;
   localized?: boolean;
   unique?: boolean;
+  /** A container's fields, which decide whether it keeps translations inside. */
+  fields?: readonly StructuredField[];
 }
 
 /**
@@ -155,12 +168,27 @@ export function localizedFieldRefs(
       )
       .map(field => field.name)
   );
-  return resolveLocalizedFieldNames([...fields], true).map(name => ({
-    name,
-    column: toColumn(name),
-    ...(unique.has(name) ? { unique: true } : {}),
-    ...(json.has(name) ? { json: true } : {}),
-  }));
+  // A field translated whole, and a repeater or group keeping translations inside, whose ref
+  // carries what it translates there, so a read assembles it and a write splits it.
+  return fields
+    .filter(field => hasTranslationColumn(field, true))
+    .map(field => {
+      // Null for a field translated whole: a container marked so keeps no shape. A container
+      // placing a component keeps its definition too, for its shape to be read again with the
+      // component's fields (`withComponentShapes`).
+      const keepsInside = keepsTranslationsInside(field, true);
+      const shape = keepsInside ? shapeBeforeComponents(field) : null;
+      return {
+        name: field.name,
+        column: toColumn(field.name),
+        ...(unique.has(field.name) ? { unique: true } : {}),
+        ...(json.has(field.name) ? { json: true } : {}),
+        ...(shape ? { sharedStructure: shape } : {}),
+        ...(keepsInside && placesComponent(field)
+          ? { placingComponents: field }
+          : {}),
+      };
+    });
 }
 
 /**
@@ -274,27 +302,45 @@ function companionSchemaOf(args: {
 export function splitLocalizedWrite(
   data: Record<string, unknown>,
   localizedFields: LocalizedFieldRef[]
-): { main: Record<string, unknown>; companion: Record<string, unknown> } {
+): {
+  main: Record<string, unknown>;
+  companion: Record<string, unknown>;
+  /**
+   * The structures of the repeaters and groups keeping one structure in every language, as
+   * `main` holds them: each goes to the main row and its translatable values inside to the
+   * companion's overlay column, and every language's overlay is pruned against it
+   * (`pruneOverlaysOfRemovedRows`) once the write lands.
+   */
+  sharedStructures: SharedStructureWritten[];
+} {
   // Match a payload key by EITHER the camelCase field name or the snake_case companion column.
   // Component writes pass camelCase field names; single/collection writes pass a payload that has
   // already been `keysToSnakeCase`-converted, so a field like `metaTitle` arrives as `meta_title`.
   // Recognizing both routes translatable values to the companion in every path.
-  const columnByKey = new Map<string, string>();
+  const refByKey = new Map<string, LocalizedFieldRef>();
   for (const f of localizedFields) {
-    columnByKey.set(f.name, f.column);
-    columnByKey.set(f.column, f.column);
+    refByKey.set(f.name, f);
+    refByKey.set(f.column, f);
   }
   const main: Record<string, unknown> = {};
   const companion: Record<string, unknown> = {};
+  const sharedStructures: SharedStructureWritten[] = [];
   for (const [key, value] of Object.entries(data)) {
-    const column = columnByKey.get(key);
-    if (column) {
-      companion[column] = value;
+    const ref = refByKey.get(key);
+    if (ref?.sharedStructure) {
+      // The structure stays on the main row for every language; this language's translatable
+      // values inside go to its overlay.
+      const split = splitSharedStructureWrite(ref, ref.sharedStructure, value);
+      main[key] = split.written.structure;
+      companion[ref.column] = split.overlay;
+      sharedStructures.push(split.written);
+    } else if (ref) {
+      companion[ref.column] = value;
     } else {
       main[key] = value;
     }
   }
-  return { main, companion };
+  return { main, companion, sharedStructures };
 }
 
 /** Minimal adapter surface the write helpers need — matches DrizzleAdapter. */
@@ -688,6 +734,138 @@ export function companionWriteVia(
   };
 }
 
+/** A repeater's or group's structure as one write put it on the main row. */
+export interface SharedStructureWritten {
+  /** The field's name, which its rows' provenance records are kept under. */
+  field: string;
+  /** The overlay column on the translation table. */
+  column: string;
+  /** The structure written, as stored (JSON text allowed). */
+  structure: unknown;
+  shape: SharedStructureShape;
+}
+
+/**
+ * One written value of a repeater or group keeping one structure in every language
+ * (`splitStoredValue`): the structure for the main row, as the write prunes every language's
+ * overlay against it, and this language's overlay for the translation row. The one split every
+ * write path takes.
+ */
+export function splitSharedStructureWrite(
+  ref: Pick<LocalizedFieldRef, "name" | "column">,
+  shape: SharedStructureShape,
+  value: unknown
+): { written: SharedStructureWritten; overlay: unknown } {
+  const { structure, overlay } = splitStoredValue(value, shape);
+  return {
+    written: { field: ref.name, column: ref.column, structure, shape },
+    overlay: storedOverlay(overlay),
+  };
+}
+
+/**
+ * An overlay as it is stored: one holding no text (every value blank, or none) is no translation,
+ * stored as none, so every reader that asks whether a language is translated (status, filters, the
+ * source a value came from) reads this language as untranslated, as a read falling back already
+ * does. The one rule every write of an overlay keeps, a write's and a removed row's prune alike.
+ */
+function storedOverlay(overlay: unknown): unknown {
+  return sameShare(overlay, {}) ? null : overlay;
+}
+
+/**
+ * The shared structures `payload` puts on the main row: one for each repeater or group of
+ * `localizedFields` that keeps one structure in every language, found under its field name or
+ * its column, as the main row's write carries it. What a write that holds no split of its own
+ * prunes every language's overlay against (`pruneOverlaysOfRemovedRows`).
+ */
+export function sharedStructuresIn(
+  payload: Record<string, unknown>,
+  localizedFields: readonly LocalizedFieldRef[]
+): SharedStructureWritten[] {
+  return localizedFields.flatMap(field => {
+    if (!field.sharedStructure) return [];
+    const key = Object.hasOwn(payload, field.column)
+      ? field.column
+      : Object.hasOwn(payload, field.name)
+        ? field.name
+        : null;
+    return key === null
+      ? []
+      : [
+          {
+            field: field.name,
+            column: field.column,
+            structure: payload[key],
+            shape: field.sharedStructure,
+          },
+        ];
+  });
+}
+
+/** Minimal Drizzle-select surface the overlay pruning reads translation rows through. */
+interface OverlaySelectDb {
+  select: (projection: Record<string, unknown>) => {
+    from: (table: unknown) => {
+      where: (cond: unknown) => Promise<Record<string, unknown>[]>;
+    };
+  };
+}
+
+/**
+ * Drop, from every language's translation row of `parentId`, the overlay entries of rows a write
+ * removed from a repeater's structure (`pruneOverlay`), on the write's transaction. A structure
+ * is one for every language, so its rows' translations go with them everywhere at once, rather
+ * than lingering until a row given the same id reads them back.
+ *
+ * Only a row whose overlay changed is rewritten, and without moving its `_updated_at`, its
+ * version or its changer: removing a row in one language is not a new translation in another.
+ */
+export async function pruneOverlaysOfRemovedRows(
+  tx: {
+    getDrizzle<T = unknown>(): T;
+    execute<T = unknown>(sql: string, params?: SqlParam[]): Promise<T[]>;
+  },
+  dialect: SupportedDialect,
+  args: {
+    companionTable: unknown;
+    companionTableName: string;
+    parentId: string;
+    written: readonly SharedStructureWritten[];
+  }
+): Promise<void> {
+  if (args.written.length === 0) return;
+  const table = args.companionTable as Record<string, unknown>;
+  const projection: Record<string, unknown> = { _locale: table._locale };
+  for (const { column } of args.written) projection[column] = table[column];
+  const rows = await tx
+    .getDrizzle<OverlaySelectDb>()
+    .select(projection)
+    .from(args.companionTable)
+    .where(eq(table._parent as never, args.parentId));
+  for (const row of rows) {
+    const changed: Record<string, unknown> = {};
+    for (const { column, structure, shape } of args.written) {
+      const stored = row[column];
+      if (stored === null || stored === undefined) continue;
+      const pruned = pruneOverlay(stored, structure, shape);
+      if (!pruned.changed) continue;
+      const kept = storedOverlay(pruned.overlay);
+      changed[column] = kept === null ? null : JSON.stringify(kept);
+    }
+    if (Object.keys(changed).length === 0) continue;
+    await upsertCompanionRow(
+      companionWriteVia(tx, dialect),
+      args.companionTableName,
+      args.parentId,
+      String(row._locale),
+      changed,
+      undefined,
+      { updatedAt: "omit" }
+    );
+  }
+}
+
 /**
  * Adapter surface for asking about a table's PHYSICAL shape: the Drizzle handle, which the
  * shared introspection helper needs. Separate from {@link CompanionWriteAdapter} so the
@@ -931,15 +1109,22 @@ export async function reconcileCompanionColumns(
      * caller that judges nothing.
      */
     recordedBefore?: RecordedEntity | null;
+    /**
+     * The site's default language: a container's overlay column added here, for a container whose
+     * text is on the main table already, is seeded with it as that language's
+     * (`buildOverlaySeedStatements`). Left out, nothing is seeded.
+     */
+    defaultLocale?: string;
   },
   onError?: (error: unknown) => void,
   /** Told of a column left as it is that cannot hold its field, which fails nothing. */
   onWarning?: (message: string) => void
 ): Promise<boolean> {
   const companionTableName = `${args.tableName}_locales`;
-  // Hoisted so the concurrency recheck in the catch can reuse it.
-  const localizedNames = new Set(resolveLocalizedFieldNames(args.fields, true));
-  const desired = args.fields.filter(f => localizedNames.has(f.name));
+  // Every column the companion holds: translated fields', and the overlay columns of repeaters and
+  // groups keeping translations inside, added like any other missing column. Hoisted so the
+  // concurrency recheck in the catch can reuse it.
+  const desired = args.fields.filter(f => hasTranslationColumn(f, true));
   // Whether the companion's columns are left in step: false once a failure is reported, so the
   // caller builds nothing more on them, such as a unique index over a column this run refused.
   let failed = false;
@@ -1086,6 +1271,38 @@ export async function reconcileCompanionColumns(
     });
     for (const stmt of statements) {
       await adapter.executeQuery(stmt);
+    }
+    // A container whose overlay column was added now and whose text is on the main table already
+    // (one an earlier release kept shared, now keeping its text apart): the default language's
+    // overlay is seeded from it, as `migrate:create` and the Builder seed it. Left empty, a first
+    // save in another language writes the structure without that text, and the default
+    // language's text is gone. Run once: the column is present on every later run.
+    if (args.defaultLocale !== undefined) {
+      const added = desired
+        .filter(f => keepsTranslationsInside(f, true))
+        .map(f => toColumn(f.name))
+        .filter(column => !present.has(column));
+      if (added.length > 0) {
+        const onMain = new Set(
+          (await liveColumnsOf(adapter, args.tableName)).map(c => c.name)
+        );
+        const seeded = added.filter(column => onMain.has(column));
+        const { buildOverlaySeedStatements } = await import(
+          "../migration/generate-up"
+        );
+        for (const stmt of buildOverlaySeedStatements(
+          {
+            dialect: args.dialect,
+            mainTable: args.tableName,
+            companionTable: companionTableName,
+            defaultLocale: args.defaultLocale,
+          },
+          seeded,
+          { status: hasStatus && onMain.has("status") }
+        )) {
+          await adapter.executeQuery(stmt);
+        }
+      }
     }
   } catch (error) {
     // Same check-then-act window as the create path: a concurrent sync or reload may have added
@@ -1870,9 +2087,14 @@ async function resumeInterruptedSeed(
   // The guard belongs to THIS path: it has read the transition record, so it knows the rows the
   // companion already holds are an interrupted copy to be kept rather than the stale remains of a
   // disable. The initial-create path has no such record and asks for the plain seed.
-  const plan = await buildSeedingCreateStatements(adapter, args, newLocalized, {
-    guardSeed: true,
-  });
+  // No overlay columns: only the copy is taken from the plan, never its CREATE.
+  const plan = await buildSeedingCreateStatements(
+    adapter,
+    args,
+    newLocalized,
+    [],
+    { guardSeed: true }
+  );
   if (!plan) return false;
 
   // Everything the plan emits except the CREATE, which the interrupted run already ran.
@@ -2007,6 +2229,8 @@ async function buildSeedingCreateStatements(
     requireColumnsOnMain?: boolean;
   },
   newLocalized: CompanionFieldLike[],
+  /** Repeaters and groups keeping translations inside: their overlay columns are created empty. */
+  overlays: readonly CompanionFieldLike[],
   options: { guardSeed?: boolean } = {}
 ): Promise<string[] | null> {
   if (!args.sourceLocale) return null;
@@ -2018,13 +2242,15 @@ async function buildSeedingCreateStatements(
   );
   const present = new Set(onMain.map(c => c.name));
 
-  const { deriveCompanionSpec } = await import(
+  const { deriveCompanionTableSpec } = await import(
     "../migration/derive-companion-spec"
   );
-  const spec = deriveCompanionSpec({
+  // The table with its overlay columns; only the translated fields' columns on main are copied
+  // (`columnsOnMain`, read from `newLocalized` alone).
+  const spec = deriveCompanionTableSpec({
     slug: args.slug,
     dbName: args.tableName,
-    fields: newLocalized,
+    fields: [...newLocalized, ...overlays],
     dialect: args.dialect,
     builtBy: args.builtBy,
     defaultLocale: args.sourceLocale,
@@ -2049,9 +2275,18 @@ async function buildSeedingCreateStatements(
     }),
   };
 
+  // A container whose column is on the main table already holds its text there: copied whole into
+  // the default language's overlay with the seed, as `migrate:create` seeds it. Its column on main
+  // is its structure, and stays (nothing is dropped here). Left empty, a first save in another
+  // language writes the structure without that text, and the default language's text is gone.
+  const overlaysOnMain = new Set(
+    overlays
+      .map(f => toColumn(f.name))
+      .filter(column => liveMain.some(main => main.name === column))
+  );
   const columnsOnMain = spec.columns
     .map(c => c.name)
-    .filter(name => present.has(name));
+    .filter(name => present.has(name) || overlaysOnMain.has(name));
   // Whether the main table has been reshaped for Draft/Published YET, which is a different
   // question from whether the entity has it. This copy runs before the schema push, so one
   // configuration edit turning on both localization and Draft/Published reaches here with
@@ -2199,6 +2434,9 @@ async function createOrCompleteCompanionTable(
   let claimToken: string | undefined;
   const localizedNames = new Set(resolveLocalizedFieldNames(args.fields, true));
   const newLocalized = args.fields.filter(f => localizedNames.has(f.name));
+  // Created with the companion, never seeded: an overlay column holds translations kept apart
+  // from a structure that stays on the main table, so nothing on main is copied into it.
+  const overlays = args.fields.filter(f => keepsTranslationsInside(f, true));
   try {
     if (await companionTableExists(adapter, companionTableName)) {
       // An existing companion normally means there is nothing to do. It means the opposite when a
@@ -2259,13 +2497,18 @@ async function createOrCompleteCompanionTable(
     }
     // Planned before anything is recorded: planning only reads the database.
     const statements =
-      (await buildSeedingCreateStatements(adapter, args, newLocalized)) ??
+      (await buildSeedingCreateStatements(
+        adapter,
+        args,
+        newLocalized,
+        overlays
+      )) ??
       buildCompanionReconcileStatements({
         slug: args.slug,
         tableName: args.tableName,
         builtBy: args.builtBy,
         oldLocalized: [],
-        newLocalized,
+        newLocalized: [...newLocalized, ...overlays],
         dialect: args.dialect,
         status: args.status === true,
         companionExists: false,

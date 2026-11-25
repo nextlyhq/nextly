@@ -112,6 +112,57 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       expect(up).toMatch(new RegExp(`ADD COLUMN ${escape(q("title2"))}`));
       expect(up).not.toMatch(/RENAME COLUMN/);
     });
+
+    // A repeater keeping its text inside: the structure on the main table, each language's text
+    // in its overlay column on the translations table. Renamed, both columns follow, or every
+    // language's text stays under the old name, where no read finds it.
+    const container = (name: string) => ({
+      name,
+      type: "repeater",
+      fields: [
+        { name: "caption", type: "text" },
+        { name: "rank", type: "number" },
+      ],
+    });
+    const companionRename = (from: string, to: string) =>
+      new RegExp(
+        `${escape(q("dc_posts_locales"))}[^;]*RENAME COLUMN ${escape(q(from))} TO ${escape(q(to))}`
+      );
+    const companionAdd = (column: string) =>
+      new RegExp(
+        `${escape(q("dc_posts_locales"))}[^;]*ADD (COLUMN )?${escape(q(column))}`
+      );
+
+    it.each([
+      ["whose translations table holds overlays alone", [VIEWS]],
+      ["beside a translated field", [{ name: "heading", type: "text" }, VIEWS]],
+    ])(
+      "renames a container's overlay column with it where the rename is accepted, %s",
+      async (_, others) => {
+        const { up, down } = await secondRun(
+          dialect,
+          translated([container("slides"), ...others]),
+          translated([container("sections"), ...others]),
+          true
+        );
+
+        expect(up).toMatch(companionRename("slides", "sections"));
+        expect(up).not.toMatch(companionAdd("sections"));
+        expect(down).toMatch(companionRename("sections", "slides"));
+      }
+    );
+
+    it("adds the new overlay column, as before, where a container's rename is declined", async () => {
+      const { up } = await secondRun(
+        dialect,
+        translated([container("slides"), VIEWS]),
+        translated([container("sections"), VIEWS]),
+        false
+      );
+
+      expect(up).toMatch(companionAdd("sections"));
+      expect(up).not.toMatch(companionRename("slides", "sections"));
+    });
   }
 );
 

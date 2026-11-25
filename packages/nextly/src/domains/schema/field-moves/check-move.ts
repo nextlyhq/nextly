@@ -24,6 +24,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { addressableFields } from "../../../shared/addressable-fields";
 import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import { keepsTranslationsInside } from "../../i18n/shared-structure";
 import { builderColumnIsUnique, toSnakeCase } from "../field-rules";
 import {
   classifyFieldKind,
@@ -70,7 +71,8 @@ export type MoveRefusalReason =
   | "out-of-repeater"
   | "field-group"
   | "blocks"
-  | "translation-changes";
+  | "translation-changes"
+  | "translated-container";
 
 export type MoveCheck =
   | { ok: true; move: PlannedMove }
@@ -205,6 +207,7 @@ export function checkMove(
     );
   }
   const refusal =
+    translatedContainerRefusal(from, to, entity) ??
     storageRefusal(from, to) ??
     placesRefusal(from, to) ??
     valuesRefusal(from, to, entity);
@@ -218,6 +221,29 @@ export function checkMove(
       perLanguage: keptPerLanguage(from, entity),
     },
   };
+}
+
+/**
+ * The refusal of a move into or out of a repeater or group that keeps one structure in every
+ * language with each language's text beside it (`keepsTranslationsInside`): the move's statements
+ * carry the structure's values, so the text each language keeps for the field would be left
+ * behind. Asked of the outermost container on either side, which holds the translations.
+ */
+function translatedContainerRefusal(
+  from: PlacedField,
+  to: PlacedField,
+  entity: MoveEntity
+): MoveCheck | null {
+  const localized = entity.localized === true;
+  const holder = [from.containers[0], to.containers[0]].find(
+    container =>
+      container !== undefined && keepsTranslationsInside(container, localized)
+  );
+  if (!holder) return null;
+  return refuse(
+    "translated-container",
+    `${label(to.field)} cannot be moved into or out of ${label(holder)}: ${label(holder)} keeps the text inside it for each language, and the move would leave those translations behind. This is not available yet.`
+  );
 }
 
 /** The refusal of a field whose storage changes with the move, or that has no column to move. */

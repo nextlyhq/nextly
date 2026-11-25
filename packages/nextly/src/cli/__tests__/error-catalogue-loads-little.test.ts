@@ -19,7 +19,7 @@ import { readdirSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { runtimeImportsOf } from "./helpers/runtime-imports";
+import { inputName, runtimeImportsOf } from "./helpers/runtime-imports";
 
 /** The packages `entry` loads, each with the modules that lead to it. */
 async function packagesOf(entry: string): Promise<Record<string, string>> {
@@ -54,6 +54,13 @@ describe("what the CLI's error catalogue loads", () => {
 });
 
 describe("the walk of what a module loads", () => {
+  it("names a module as esbuild does, whatever the platform's separator", () => {
+    expect(inputName("cli\\errors\\index.ts", "\\")).toBe(
+      "cli/errors/index.ts"
+    );
+    expect(inputName("cli/errors/index.ts", "/")).toBe("cli/errors/index.ts");
+  });
+
   it("finds the dialects, in the module itself and in one it imports", async () => {
     // The resolver names them only through the registry it imports.
     for (const entry of [
