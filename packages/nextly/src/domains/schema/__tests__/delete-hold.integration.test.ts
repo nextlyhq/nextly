@@ -3113,6 +3113,215 @@ describe.each(getConfiguredTestDialects())(
       60_000
     );
 
+    /** The collection's fields as its registry row has them, and that row's version. */
+    async function recorded(
+      t: TestNextly
+    ): Promise<{ fields: string[]; version: number }> {
+      const [row] = await query<{ f: unknown; v: number | string }>(
+        t,
+        `SELECT ${q("fields")} AS f, ${q("schema_version")} AS v FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${SLUG}'`
+      );
+      const fields = (
+        typeof row?.f === "string" ? JSON.parse(row.f) : row?.f
+      ) as { name: string }[];
+      return {
+        fields: fields.map(field => field.name),
+        version: Number(row?.v),
+      };
+    }
+
+    /** The values `column` holds in the translations table, or `"gone"` once it is. */
+    const valuesIn = async (
+      t: TestNextly,
+      column: string
+    ): Promise<number | "gone"> =>
+      query<{ n: number | string }>(
+        t,
+        `SELECT COUNT(*) AS n FROM ${q(VALUES_TABLE)} WHERE ${q(column)} IS NOT NULL`
+      ).then(
+        ([row]) => Number(row?.n),
+        () => "gone" as const
+      );
+
+    /** A view on `column`, which PostgreSQL and SQLite refuse to drop the column under. */
+    const viewOn = (t: TestNextly, column: string) =>
+      query(
+        t,
+        `CREATE VIEW ${q("dh_reads_it")} AS SELECT ${q(column)} FROM ${q(VALUES_TABLE)}`
+      );
+    const dropView = (t: TestNextly) =>
+      query(t, `DROP VIEW ${q("dh_reads_it")}`);
+
+    /** A save to `fields` that removes `removed`, each of three values. */
+    async function saveRemoving(
+      t: TestNextly,
+      fields: readonly Record<string, unknown>[],
+      removed: readonly string[]
+    ): Promise<unknown> {
+      return dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: SLUG },
+        {
+          fields,
+          confirmed: true,
+          schemaVersion: (await recorded(t)).version,
+          resolutions: Object.fromEntries(
+            removed.map(field => [field, { action: "confirm_drop" }])
+          ),
+          confirmedDeletions: removed.map(field => ({ field, count: 3 })),
+        }
+      ).then(
+        () => "applied",
+        (error: unknown) => error
+      );
+    }
+
+    /** Three entries, each with a label, a note and a memo, on a collection with the three fields. */
+    async function bootWithMemo(): Promise<TestNextly> {
+      vi.stubEnv("NODE_ENV", "development");
+      const t = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        db: {
+          migrationsDir: "./database/history",
+          uiSchemaFile: "./schema/builder.json",
+        },
+      });
+      instance = t;
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: SLUG,
+          label: "Note",
+          fields: [...NOTED, { name: "memo", type: "text" }],
+        }
+      );
+      for (const note of ["a", "b", "c"]) {
+        await t.nextly.create({
+          collection: SLUG,
+          data: { label: "l", note, memo: note },
+        } as never);
+      }
+      return t;
+    }
+
+    // On PostgreSQL and SQLite the whole of a save that only removes translated fields is one
+    // transaction: a drop the database refuses leaves the registry, every value and the files as
+    // they were, whichever of the fields it was, and the same save applies once nothing refuses it.
+    // Dropped after the file, the fields are out of the registry with a column still stored, or one
+    // of them is gone and the other not.
+    it.skipIf(dialect === "mysql").each([
+      { removed: ["note"], refused: "note" },
+      { removed: ["note", "memo"], refused: "note" },
+      { removed: ["note", "memo"], refused: "memo" },
+    ])(
+      "changes nothing when the database refuses the drop of $refused in a save removing $removed",
+      async ({ removed, refused }) => {
+        const t = await bootWithMemo();
+        const kept = [
+          { name: "label", type: "text" },
+          { name: "note", type: "text" },
+          { name: "memo", type: "text" },
+        ].filter(field => !removed.includes(field.name));
+        const before = await recorded(t);
+        const dir = join(t.basePath, "database", "history");
+        const filesBefore = readdirSync(dir).sort();
+        await viewOn(t, refused);
+
+        expect(await saveRemoving(t, kept, removed)).not.toBe("applied");
+
+        expect(await recorded(t)).toEqual(before);
+        expect(await valuesIn(t, "note")).toBe(3);
+        expect(await valuesIn(t, "memo")).toBe(3);
+        expect(readdirSync(dir).sort()).toEqual(filesBefore);
+        // The collection is as it was: a write setting the field lands.
+        await write(t, "after the refusal");
+        expect(await valuesIn(t, "note")).toBe(4);
+        await query(
+          t,
+          `DELETE FROM ${q(VALUES_TABLE)} WHERE ${q("note")} = 'after the refusal'`
+        );
+
+        await dropView(t);
+        expect(await saveRemoving(t, kept, removed)).toBe("applied");
+        for (const field of removed) {
+          expect(await valuesIn(t, field)).toBe("gone");
+        }
+        expect((await recorded(t)).fields).toEqual(
+          kept.map(field => field.name)
+        );
+        expect((await recorded(t)).version).toBeGreaterThan(before.version);
+      },
+      60_000
+    );
+
+    // A save that does more to translations than remove fields (here it makes one unique in each
+    // language too) brings the translations table in step after its file, as every such save does:
+    // the file has committed when the drop is refused.
+    it.skipIf(dialect === "mysql")(
+      "drops after its file, as before, in a save that also makes a translated field unique",
+      async () => {
+        const t = await bootWithMemo();
+        await viewOn(t, "note");
+        const fields = [
+          { name: "label", type: "text" },
+          { name: "memo", type: "text", unique: true },
+        ];
+        expect(await saveRemoving(t, fields, ["note"])).not.toBe("applied");
+        expect((await recorded(t)).fields).toEqual(["label", "memo"]);
+        expect(await valuesIn(t, "note")).toBe(3);
+      },
+      60_000
+    );
+
+    // The translations table held by a reader when the save drops its column: PostgreSQL keeps the
+    // drop waiting, and past the tries the save stops as a busy table does, with nothing changed.
+    it.runIf(dialect === "postgresql")(
+      "changes nothing when the translations table stays busy past the drop's tries",
+      async () => {
+        const t = await bootWithMemo();
+        const before = await recorded(t);
+        vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
+        vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "3");
+        let letGo: () => void = () => undefined;
+        const goes = new Promise<void>(resolve => {
+          letGo = resolve;
+        });
+        let reading: () => void = () => undefined;
+        const isReading = new Promise<void>(resolve => {
+          reading = resolve;
+        });
+        // Another session's read, its transaction left open: no write waits for it, and the drop does.
+        const reader = t.adapter.transaction(async tx => {
+          await tx.execute(`SELECT COUNT(*) FROM ${q(VALUES_TABLE)}`);
+          reading();
+          await goes;
+        });
+        await isReading;
+        try {
+          expect(
+            await saveRemoving(
+              t,
+              [
+                { name: "label", type: "text" },
+                { name: "memo", type: "text" },
+              ],
+              ["note"]
+            )
+          ).toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+        } finally {
+          letGo();
+          await reader;
+        }
+        expect(await recorded(t)).toEqual(before);
+        expect(await valuesIn(t, "note")).toBe(3);
+      },
+      60_000
+    );
+
     /** What came of `send`, sent while the save on `road` holds the collection after its count. */
     async function heldBySave(
       t: TestNextly,
