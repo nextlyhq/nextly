@@ -242,7 +242,9 @@ function walk(
 function eachLinkOnce(links: readonly LinkFact[]): LinkFact[] {
   const seen = new Set<string>();
   return links.filter(link => {
-    const key = `${link.field}\u0000${link.url}`;
+    // Trimmed, because a node reader keeps the address as it is stored and
+    // an address field reads it trimmed: the two name one link.
+    const key = `${link.field}\u0000${link.url.trim()}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -256,6 +258,10 @@ export function contentFacts(
   const facts: ContentFacts = { images: [], links: [] };
   for (const [field, value] of Object.entries(document)) {
     if (NOT_CONTENT.has(field)) continue;
+    // A field of the document itself: `walk` goes into arrays and records, so
+    // an address kept in a field of its own is read here or nowhere.
+    const address = addressIn(field, value);
+    if (address !== undefined) facts.links.push({ field, url: address });
     walk(value, field, facts, 0);
   }
   return { images: facts.images, links: eachLinkOnce(facts.links) };

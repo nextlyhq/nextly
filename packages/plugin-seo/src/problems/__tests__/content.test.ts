@@ -155,6 +155,26 @@ describe("contentFacts", () => {
     ]);
   });
 
+  it("finds an address field at the document's root, not only inside a group", () => {
+    // A collection can hold its address in a field of its own, beside the
+    // title, rather than in a group or a repeater's row.
+    const facts = contentFacts({
+      id: "7",
+      title: "Harbour",
+      buttonLink: "/blog/gone",
+    });
+    expect(facts.links).toEqual([{ field: "buttonLink", url: "/blog/gone" }]);
+  });
+
+  it("counts a link once however its address is spaced", () => {
+    // The node reader keeps the address as it is stored, and the address
+    // field reads it trimmed: one link, not two.
+    const facts = contentFacts({
+      cta: { type: "link", url: " /pricing ", href: "/pricing" },
+    });
+    expect(facts.links.map(link => link.url.trim())).toEqual(["/pricing"]);
+  });
+
   it("finds nothing in a page with no images or links", () => {
     expect(contentFacts({ id: "1", title: "Plain", count: 3 })).toEqual({
       images: [],
