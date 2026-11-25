@@ -120,7 +120,7 @@ const SEO_V2 = plugin(
 const EVENTS = "@test/mdp-events";
 /** A plugin contributing `mdp-events`, which the host renames by `renameMap`. */
 function eventsPlugin(renameMap?: Record<string, string>): PluginDefinition {
-  const declared = definePlugin({
+  return definePlugin({
     name: EVENTS,
     version: "1.0.0",
     nextly: "*",
@@ -132,8 +132,9 @@ function eventsPlugin(renameMap?: Record<string, string>): PluginDefinition {
         }),
       ],
     },
+    // As a host's `rename` leaves the definition.
+    ...(renameMap === undefined ? {} : { renameMap }),
   });
-  return renameMap === undefined ? declared : declared.rename(renameMap);
 }
 
 /** A plugin installed after the newest snapshot. */
