@@ -167,7 +167,9 @@ describe("the dialog", () => {
         { timeout: 10_000 }
       )
     ).toBeTruthy();
-  });
+    // The test's own budget is above that wait, so a slow first load fails on
+    // the dialog rather than on the package's 10 s test timeout first.
+  }, 20_000);
 });
 
 describe("the dialog's open state", () => {

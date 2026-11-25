@@ -37,21 +37,31 @@ interface EntriesRead {
 
 const LOADING: EntriesRead = { data: undefined, isLoading: true };
 
-const { useEntries, tableProps, plugins, table, branding } = vi.hoisted(() => ({
-  useEntries: vi.fn(
-    (_options: {
-      params: Record<string, unknown>;
-      enabled?: boolean;
-    }): EntriesRead => ({ data: undefined, isLoading: true })
-  ),
-  tableProps: vi.fn((_props: Record<string, unknown>) => undefined),
-  plugins: { list: [] as unknown[] },
-  // Whether the stubbed table draws the real one: the toolbar's own test
-  // needs it, the list's tests only what the list hands it.
-  table: { real: false },
-  // Whether the signed-in meta, which declares the filters, is still on its way.
-  branding: { pending: false, unavailable: false },
-}));
+const { useEntries, tableProps, plugins, table, branding, collectionRead } =
+  vi.hoisted(() => ({
+    useEntries: vi.fn(
+      (_options: {
+        params: Record<string, unknown>;
+        enabled?: boolean;
+      }): EntriesRead => ({ data: undefined, isLoading: true })
+    ),
+    tableProps: vi.fn((_props: Record<string, unknown>) => undefined),
+    plugins: { list: [] as unknown[] },
+    // Whether the stubbed table draws the real one: the toolbar's own test
+    // needs it, the list's tests only what the list hands it.
+    table: { real: false },
+    // Whether the signed-in meta, which declares the filters, is still on its way.
+    branding: { pending: false, unavailable: false },
+    // The collection's metadata as the list reads it: a workflow's review filters are offered
+    // from it.
+    collectionRead: {
+      data: { name: "tickets", label: "Tickets", fields: [] } as Record<
+        string,
+        unknown
+      >,
+      isLoading: false,
+    },
+  }));
 
 // Hoisted, so it applies to the whole file: the stub records what the list
 // hands its table, and draws the real table where a case asks for it.
@@ -76,10 +86,7 @@ vi.mock("@admin/hooks/queries", () => ({
 vi.mock("@admin/hooks/queries/useCollections", () => ({
   // The list opens rows by its own copy of the collection.
   useEveryNavCollection: () => ({ data: undefined }),
-  useCollection: () => ({
-    data: { name: "tickets", label: "Tickets", fields: [] },
-    isLoading: false,
-  }),
+  useCollection: () => collectionRead,
 }));
 vi.mock("@admin/hooks/useCanRequest", () => ({
   useAsksTranslationStatus: () => false,
@@ -403,5 +410,73 @@ describe("the entry list with a plugin's filter", () => {
       (tableProps.mock.calls.at(-1)?.[0] as { pluginFilters?: unknown })
         .pluginFilters
     ).toEqual([]);
+  });
+});
+
+describe("the entry list with a workflow's review filter", () => {
+  const PLAIN = { name: "tickets", label: "Tickets", fields: [] };
+
+  beforeEach(() => {
+    useEntries.mockClear();
+    useEntries.mockImplementation(() => LOADING);
+    tableProps.mockClear();
+    plugins.list = [];
+    branding.pending = false;
+    branding.unavailable = false;
+    collectionRead.data = {
+      ...PLAIN,
+      workflow: {
+        slug: "review",
+        label: "Review",
+        stages: [{ name: "draft", label: "Draft" }],
+      },
+    };
+    collectionRead.isLoading = false;
+  });
+
+  afterEach(() => {
+    collectionRead.data = PLAIN;
+    collectionRead.isLoading = false;
+  });
+
+  it("reads a review filter's link while the plugins' filters are still on their way", () => {
+    // The review filters come from the collection, not from the plugins' meta: nothing to wait for.
+    branding.pending = true;
+    at("?pf=nextly.review:waiting");
+    render(<EntryList collectionSlug="tickets" />);
+
+    expect(useEntries.mock.calls.at(-1)?.[0].enabled).toBe(true);
+    expect(lastRead().where).toEqual({ _waitingForMe: true });
+  });
+
+  it("reads a review filter's link when the plugins' filters never arrive", () => {
+    branding.unavailable = true;
+    at("?pf=nextly.review:waiting");
+    render(<EntryList collectionSlug="tickets" />);
+
+    expect(useEntries.mock.calls.at(-1)?.[0].enabled).toBe(true);
+    expect(lastRead().where).toEqual({ _waitingForMe: true });
+    expect(screen.queryByText(/filters\s+couldn.t be loaded/)).toBeNull();
+  });
+
+  it("still waits for the collection a review filter is offered from", () => {
+    collectionRead.isLoading = true;
+    at("?pf=nextly.review:waiting");
+    render(<EntryList collectionSlug="tickets" />);
+
+    expect(useEntries.mock.calls.every(([o]) => o.enabled === false)).toBe(
+      true
+    );
+  });
+
+  it("still holds a link that chooses a plugin's filter beside a review filter", () => {
+    branding.unavailable = true;
+    at("?pf=nextly.review:waiting&pf=acme-support.state:open");
+    render(<EntryList collectionSlug="tickets" />);
+
+    expect(useEntries.mock.calls.every(([o]) => o.enabled === false)).toBe(
+      true
+    );
+    expect(screen.getByText(/filters\s+couldn.t be loaded/)).toBeTruthy();
   });
 });

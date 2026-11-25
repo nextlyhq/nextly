@@ -180,6 +180,24 @@ export const TRANSLATION_PROVENANCE_INDEXES = [
   },
 ] as const satisfies readonly CoreIndex<string>[];
 
+export const TRANSLATION_SOURCES_INDEXES = [
+  // One row per version of one field's source text, found by the columns a
+  // translation's provenance names its source by. It also serves reading or
+  // removing a document's rows by its leading columns.
+  {
+    name: "nextly_translation_sources_uidx",
+    columns: [
+      "scopeKind",
+      "scopeSlug",
+      "entryId",
+      "sourceLocale",
+      "fieldPath",
+      "fingerprint",
+    ],
+    unique: true,
+  },
+] as const satisfies readonly CoreIndex<string>[];
+
 export const DASHBOARD_PREFERENCES_INDEXES = [
   // One value per reader per key.
   {

@@ -230,15 +230,18 @@ async function bootLanguages(dialect: TestDialect): Promise<TestNextly> {
         fields: [{ name: "body", type: "probe", localized: true }],
       } as unknown as CollectionConfig,
       {
-        // A group kept per language, holding the type's field.
-        slug: "framed",
+        // A group with one structure in every language: its translated field
+        // is each language's text, its other field one value for all of them.
+        slug: "framedonce",
         localized: true,
         fields: [
           {
             name: "hero",
             type: "group",
-            localized: true,
-            fields: [{ name: "body", type: "probe" }],
+            fields: [
+              { name: "body", type: "probe", localized: true },
+              { name: "note", type: "probe", localized: false },
+            ],
           },
         ],
       } as unknown as CollectionConfig,
@@ -1160,21 +1163,122 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       expect(await at("en")).toEqual({ kind: "value", value: { said: "en" } });
     });
 
-    it("refuses a field inside a group kept per language, by name", async () => {
+    it("reads a field inside a group with one structure in the language asked, and a shared one the same in every language", async () => {
       const t = await bootLanguages(dialect);
+      const id = await created(t, "framedonce", {
+        hero: { body: { said: "en" }, note: { n: 1 } },
+      });
+      await t.nextly.update({
+        collection: "framedonce",
+        id,
+        locale: "de",
+        data: {
+          hero: { body: { said: "de" }, note: { n: 1 } },
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      } as never);
       const read = languagesReader(t, "probe");
-
-      // Refused from the definition alone, before any row is read.
-      await expect(
+      const at = (field: string, locale: string) =>
         read({
-          collection: "framed",
-          id: "any",
-          field: "hero.body",
+          collection: "framedonce",
+          id,
+          field,
           form: "published",
-        })
-      ).rejects.toThrow(
-        /"framed\.hero\.body" cannot be read here: it is inside a group kept per language/
-      );
+          locale,
+        } as never);
+
+      expect(await at("hero.body", "de")).toEqual({
+        kind: "value",
+        value: { said: "de" },
+      });
+      expect(await at("hero.body", "en")).toEqual({
+        kind: "value",
+        value: { said: "en" },
+      });
+      // A language holding no text for it has none, never another language's.
+      expect(await at("hero.body", "fr")).toEqual({ kind: "absent" });
+      // The shared value is the structure's, the same in every language.
+      expect(await at("hero.note", "fr")).toEqual({
+        kind: "value",
+        value: { n: 1 },
+      });
+    });
+
+    // A held change to a group's structure alone sits in the shared draft, which holds no
+    // language's text: a draft read lays the language's live text on the pending structure.
+    it("reads a field inside a group with one structure from a held structure change, with the language's live text", async () => {
+      const plugin = definePlugin({
+        name: "@test/stored-read-held-structure",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: { fieldTypes: [probe, other] },
+      });
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        plugins: [plugin],
+        collections: [
+          {
+            slug: "framedheld",
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              {
+                name: "hero",
+                type: "group",
+                fields: [
+                  { name: "body", type: "probe", localized: true },
+                  { name: "note", type: "probe", localized: false },
+                ],
+              },
+            ],
+          } as unknown as CollectionConfig,
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const id = await created(current, "framedheld", {
+        hero: { body: { said: "en" }, note: { n: 1 } },
+        status: "published",
+      });
+      await current.nextly.update({
+        collection: "framedheld",
+        id,
+        locale: "de",
+        data: {
+          hero: { body: { said: "de" }, note: { n: 1 } },
+          status: "published",
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      } as never);
+      // English changes the shared value alone, held: a change to the structure.
+      await current.nextly.update({
+        collection: "framedheld",
+        id,
+        locale: "en",
+        data: {
+          hero: { body: { said: "en" }, note: { n: 2 } },
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      } as never);
+      const read = languagesReader(current, "probe");
+      const at = (field: string) =>
+        read({
+          collection: "framedheld",
+          id,
+          field,
+          form: "draft",
+          locale: "de",
+        } as never);
+
+      expect(await at("hero.note")).toEqual({ kind: "value", value: { n: 2 } });
+      expect(await at("hero.body")).toEqual({
+        kind: "value",
+        value: { said: "de" },
+      });
     });
 
     it("tells a Single's validators the language the save is in", async () => {

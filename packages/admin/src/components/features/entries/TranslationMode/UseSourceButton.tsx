@@ -25,6 +25,7 @@
 import type { JSX } from "react";
 import { useFormContext } from "react-hook-form";
 
+import { sourceValueAt } from "../container-text";
 import { isFieldTranslated } from "../translation-meta";
 
 import { useTranslationField } from "./TranslationFieldContext";
@@ -33,7 +34,11 @@ export function UseSourceButton({
   fieldName,
   fieldLabel,
 }: {
-  /** The form path this fills — the field's own name. */
+  /**
+   * The form path this fills: the field's own name, or its path inside a repeater's or group's
+   * rows (`slides.1.caption`). Every language keeps one structure, so each row on the way is
+   * found in the source by its id (`sourceValueAt`), wherever the form has it now.
+   */
   fieldName: string;
   /** For the accessible name, so several of these are told apart. */
   fieldLabel: string;
@@ -44,7 +49,9 @@ export function UseSourceButton({
   // which this writes the wrong document.
   const form = useFormContext();
 
-  const value = sourceValues?.[fieldName];
+  const value: unknown = sourceValues
+    ? sourceValueAt(sourceValues, form.getValues(), fieldName)
+    : undefined;
   if (!sourceValues || !isFieldTranslated(value)) return null;
 
   return (

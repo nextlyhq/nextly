@@ -18,11 +18,14 @@ import type { RequestActor } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
+import type { LocalizedFieldRef } from "../../i18n/companion-join";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import {
   splitLocalizedWrite,
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
+import { withComponentShapes } from "../../i18n/runtime/component-shapes";
+import { assembleStoredValue } from "../../i18n/shared-structure";
 import { draftComponentValues } from "../../versions/draft-components";
 import {
   type ComponentFieldResolver,
@@ -177,15 +180,21 @@ export async function writeCompanionValues(args: {
  * caller is denied is refused.
  *
  * Read on the caller's transaction, which already holds the row it is about.
+ *
+ * A repeater or group keeping one structure in every language holds only this language's text on
+ * its companion row: it comes back laid on the structure `mainRow` holds, read with its
+ * components' fields on `tx`, and is left out when no main row is given, so its text alone is
+ * never taken for its value.
  */
 export async function readCompanionValuesInTx(
   tx: { getDrizzle: <T>() => T },
   companion: {
     table: unknown;
-    localizedFields: ReadonlyArray<{ name: string; column: string }>;
+    localizedFields: ReadonlyArray<LocalizedFieldRef>;
   },
   parentId: string,
-  locale: string
+  locale: string,
+  mainRow?: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   const table = companion.table as Record<string, Column>;
   const drizzle = tx.getDrizzle<{
@@ -201,11 +210,22 @@ export async function readCompanionValuesInTx(
     .where(and(eq(table._parent, parentId), eq(table._locale, locale)));
   const row = rows[0];
   if (!row) return {};
+  const refs = companion.localizedFields.some(field => field.sharedStructure)
+    ? await withComponentShapes(companion.localizedFields, tx.getDrizzle())
+    : companion.localizedFields;
   const out: Record<string, unknown> = {};
-  for (const field of companion.localizedFields) {
-    if (Object.prototype.hasOwnProperty.call(row, field.column)) {
-      out[field.name] = row[field.column];
+  for (const field of refs) {
+    if (!Object.prototype.hasOwnProperty.call(row, field.column)) continue;
+    if (field.sharedStructure) {
+      if (!mainRow) continue;
+      out[field.name] = assembleStoredValue(
+        mainRow[field.column] ?? mainRow[field.name],
+        [row[field.column]],
+        field.sharedStructure
+      );
+      continue;
     }
+    out[field.name] = row[field.column];
   }
   return out;
 }

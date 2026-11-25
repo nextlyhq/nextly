@@ -33,6 +33,7 @@ export type EntityOwnedData =
   | "translations"
   | "translationArchive"
   | "translationProvenance"
+  | "translationSources"
   | "translationTransition"
   | "autosaves"
   | "versionPins"
@@ -53,7 +54,10 @@ export type EntityOwnedData =
  *   drop leaves in place there, with the entity still registered, for a
  *   second delete to finish.
  */
-export type OwnedDataRemoval = "beforeTheDrop" | "theDrop" | "withTheRegistryRow";
+export type OwnedDataRemoval =
+  | "beforeTheDrop"
+  | "theDrop"
+  | "withTheRegistryRow";
 
 /** One kind of data an entity owns, where it is kept, and what removes it. */
 export interface OwnedDataDeclaration {
@@ -90,7 +94,8 @@ const TRANSLATIONS: readonly OwnedDataDeclaration[] = [
   },
   {
     data: "translationTransition",
-    keptIn: "its translation transition record in `nextly_meta`, by kind and slug",
+    keptIn:
+      "its translation transition record in `nextly_meta`, by kind and slug",
     removedBy: "teardownEntityI18n",
     removed: "beforeTheDrop",
   },
@@ -100,6 +105,14 @@ const TRANSLATIONS: readonly OwnedDataDeclaration[] = [
 const TRANSLATION_PROVENANCE: OwnedDataDeclaration = {
   data: "translationProvenance",
   keptIn: "its rows in `nextly_translation_provenance`, by kind and slug",
+  removedBy: "teardownEntityI18n",
+  removed: "beforeTheDrop",
+};
+
+/** The source text each translation of a document was made from: kept for collections and Singles only. */
+const TRANSLATION_SOURCES: OwnedDataDeclaration = {
+  data: "translationSources",
+  keptIn: "its rows in `nextly_translation_sources`, by kind and slug",
   removedBy: "teardownEntityI18n",
   removed: "beforeTheDrop",
 };
@@ -126,7 +139,7 @@ const WITH_THE_REGISTRY_ROW: readonly OwnedDataDeclaration[] = [
   },
   {
     data: "seenMarkers",
-    keptIn: "each reader's \"last looked at\" marker, in `nextly_version_views`",
+    keptIn: 'each reader\'s "last looked at" marker, in `nextly_version_views`',
     removedBy: "deleteEntityRegistryRow",
     removed: "withTheRegistryRow",
   },
@@ -138,7 +151,8 @@ const WITH_THE_REGISTRY_ROW: readonly OwnedDataDeclaration[] = [
   },
   {
     data: "mediaUsage",
-    keptIn: "the record of the media its documents use, in `nextly_media_usage`",
+    keptIn:
+      "the record of the media its documents use, in `nextly_media_usage`",
     removedBy: "deleteEntityRegistryRow",
     removed: "withTheRegistryRow",
   },
@@ -168,6 +182,7 @@ export const ENTITY_OWNED_DATA: Readonly<
     FIELD_GROUP_VALUES,
     ...TRANSLATIONS,
     TRANSLATION_PROVENANCE,
+    TRANSLATION_SOURCES,
     ...TABLES,
     ...WITH_THE_REGISTRY_ROW,
   ],
@@ -175,6 +190,7 @@ export const ENTITY_OWNED_DATA: Readonly<
     FIELD_GROUP_VALUES,
     ...TRANSLATIONS,
     TRANSLATION_PROVENANCE,
+    TRANSLATION_SOURCES,
     ...TABLES,
     ...WITH_THE_REGISTRY_ROW,
   ],

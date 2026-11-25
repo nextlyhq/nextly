@@ -925,7 +925,7 @@ export async function readIndexColumns(
 }
 
 /** One index of a live table, as the catalog describes it. */
-interface LiveIndex {
+export interface LiveIndex {
   name: string;
   columns: string[];
   unique: boolean;
@@ -937,6 +937,12 @@ interface LiveIndex {
   wholeColumns: boolean;
   /** False for the primary key, and SQLite's index for an inline `UNIQUE`, which only a rebuild removes. */
   droppableByName: boolean;
+  /**
+   * The index's definition as the catalog holds it, read by `readTableIndexes` for an index that
+   * does not stand on whole columns (an expression, a partial or a prefix index), whose `columns`
+   * alone cannot say every column it reads. Absent where it could not be read.
+   */
+  definition?: string;
 }
 
 /** A PostgreSQL collation, with the schema that holds it. */
@@ -1016,6 +1022,61 @@ export async function readPgColumnCollations(
       { schema: row.collation_schema, name: row.collation_name },
     ])
   );
+}
+
+/**
+ * Every index on `tableName` with what it covers (`LiveIndex`): what a change that drops one of
+ * the table's columns reads, to drop an index that stands on that column alone before it and to
+ * refuse one that stands on more.
+ */
+export async function readTableIndexes(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<LiveIndex[]> {
+  const indexes = await readIndexes(db, dialect, tableName);
+  // An index on more than whole columns names what else it reads only in its definition.
+  return Promise.all(
+    indexes.map(async index => {
+      if (index.wholeColumns) return index;
+      const definition = await readIndexDefinition(
+        db,
+        dialect,
+        tableName,
+        index.name
+      ).catch(() => undefined);
+      return definition === undefined ? index : { ...index, definition };
+    })
+  );
+}
+
+/** One index's definition from the dialect's catalog, or undefined where it holds none. */
+async function readIndexDefinition(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string,
+  indexName: string
+): Promise<string | undefined> {
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT indexdef AS definition FROM pg_indexes WHERE schemaname = current_schema() AND tablename = ${tableName} AND indexname = ${indexName}`
+    )) as { rows?: { definition?: string }[] } | { definition?: string }[];
+    const rows = Array.isArray(result) ? result : (result.rows ?? []);
+    return rows[0]?.definition ?? undefined;
+  }
+  if (dialect === "mysql") {
+    const rows = mysqlRows<{ part: string | null }>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT COALESCE(EXPRESSION, COLUMN_NAME) AS part FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName} AND INDEX_NAME = ${indexName} ORDER BY SEQ_IN_INDEX`
+      )
+    );
+    const parts = rows.flatMap(row => (row.part === null ? [] : [row.part]));
+    return parts.length === 0 ? undefined : parts.join(", ");
+  }
+  const rows = (await (db as SqliteAll).all(
+    sql`SELECT sql AS definition FROM sqlite_master WHERE type = 'index' AND name = ${indexName}`
+  )) as { definition: string | null }[];
+  return rows[0]?.definition ?? undefined;
 }
 
 /** Every index on `tableName`, read once from the catalog of the dialect. */

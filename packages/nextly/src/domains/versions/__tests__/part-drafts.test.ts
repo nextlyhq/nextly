@@ -12,7 +12,14 @@ import {
   _resetPerLanguageStorage,
   setPerLanguageStorage,
 } from "../../i18n/per-language-storage";
-import { draftSlotParts, partKeysOf, partsWritten } from "../part-drafts";
+import {
+  combinedDraft,
+  draftSlotParts,
+  partKeysOf,
+  partsWritten,
+  storePartDrafts,
+} from "../part-drafts";
+import type { VersionRow, VersionsRepository } from "../versions-repository";
 
 describe("partKeysOf", () => {
   it("classifies the fields of an unnamed group into their parts", async () => {
@@ -33,7 +40,7 @@ describe("partKeysOf", () => {
     const meta = {
       type: "group",
       name: "meta",
-      fields: [{ type: "text", name: "caption" }],
+      fields: [{ type: "number", name: "weight" }],
     };
     const keys = await partKeysOf([{ type: "number", name: "views" }, meta]);
 
@@ -112,6 +119,7 @@ describe("partsWritten", () => {
   const keys = {
     language: new Set(["title"]),
     shared: new Set(["views", "slug"]),
+    structured: new Map(),
   };
 
   it("names the language of a held save that set a translated value, and not the shared part", () => {
@@ -201,5 +209,229 @@ describe("draftSlotParts", () => {
   it("names the language and the shared part for a whole document kept in one language", () => {
     setPerLanguageStorage(false);
     expect(draftSlotParts("es")).toEqual({ locales: ["es"], shared: true });
+  });
+});
+
+/**
+ * A repeater or group that keeps one structure across languages is held by both parts: its
+ * structure (rows, ids, order, shared values) by the shared part, the text inside by each
+ * language, keyed by row id. The broken implementations these separate: the field filed whole in
+ * one part (a translation starting a shared draft, or a reorder held for one language alone), a
+ * language's draft keeping its own copy of the structure, and the shared draft carrying the text
+ * of the language that saved it.
+ */
+describe("a structured field's shares", () => {
+  const slides = {
+    type: "repeater",
+    name: "slides",
+    fields: [
+      { type: "text", name: "caption" },
+      { type: "number", name: "rank" },
+    ],
+  };
+  const live = {
+    slides: [
+      { id: "r1", caption: "primero", rank: 1 },
+      { id: "r2", caption: "segundo", rank: 2 },
+    ],
+  };
+  const row = (snapshot: Record<string, unknown>) =>
+    ({ snapshot }) as unknown as VersionRow;
+
+  it("files a repeater holding text in neither whole part, with what it translates inside", async () => {
+    const keys = await partKeysOf([{ type: "text", name: "title" }, slides]);
+
+    expect([...keys.structured.keys()]).toEqual(["slides"]);
+    expect(keys.structured.get("slides")).toMatchObject({
+      kind: "repeater",
+      texts: ["caption"],
+    });
+    expect([...keys.language]).toEqual(["title"]);
+    expect([...keys.shared].sort()).toEqual(["slug"]);
+  });
+
+  it("keeps the repeater whole in the shared part of a document without translations", async () => {
+    const keys = await partKeysOf([slides], { translated: false });
+
+    expect(keys.structured.size).toBe(0);
+    expect([...keys.shared]).toContain("slides");
+  });
+
+  it("names the language alone for a changed caption, the shared part alone for a reorder", async () => {
+    const keys = await partKeysOf([slides]);
+    const touched = new Set(["slides"]);
+
+    expect(
+      partsWritten({
+        locale: "es",
+        touched,
+        keys,
+        values: {
+          before: live,
+          after: {
+            slides: [
+              { id: "r1", caption: "primero 2", rank: 1 },
+              { id: "r2", caption: "segundo", rank: 2 },
+            ],
+          },
+        },
+      })
+    ).toEqual({ locales: ["es"], shared: false });
+    expect(
+      partsWritten({
+        locale: "es",
+        touched,
+        keys,
+        values: {
+          before: live,
+          after: { slides: [...live.slides].reverse() },
+        },
+      })
+    ).toEqual({ locales: [], shared: true });
+    // A blank and an absent value read alike: nothing changed.
+    expect(
+      partsWritten({
+        locale: "es",
+        touched,
+        keys,
+        values: {
+          before: { slides: [{ id: "r1", caption: null, rank: 1 }] },
+          after: { slides: [{ id: "r1", rank: 1 }] },
+        },
+      })
+    ).toEqual({ locales: [], shared: false });
+    // Without the values to judge by, both shares count as changed.
+    expect(partsWritten({ locale: "es", touched, keys })).toEqual({
+      locales: ["es"],
+      shared: true,
+    });
+  });
+
+  it("lays a language's held text on the shared draft's structure, each row by its id", async () => {
+    const keys = await partKeysOf([slides]);
+    const combined = combinedDraft(
+      {},
+      {
+        shared: row({
+          slides: [
+            { id: "r2", rank: 20 },
+            { id: "r1", rank: 1 },
+          ],
+        }),
+        language: row({ slides: { r1: { caption: "primero 2" } } }),
+      },
+      { keys, live }
+    );
+
+    // The held order and shared value; the held text on its own row, the live text on the other.
+    expect(combined.slides).toEqual([
+      { id: "r2", caption: "segundo", rank: 20 },
+      { id: "r1", caption: "primero 2", rank: 1 },
+    ]);
+  });
+
+  it("lays a language's held text on the live structure, never on a copy of its own", async () => {
+    const keys = await partKeysOf([slides]);
+    const reordered = { slides: [...live.slides].reverse() };
+    const combined = combinedDraft(
+      {},
+      { language: row({ slides: { r1: { caption: "primero 2" } } }) },
+      { keys, live: reordered }
+    );
+
+    expect(combined.slides).toEqual([
+      { id: "r2", caption: "segundo", rank: 2 },
+      { id: "r1", caption: "primero 2", rank: 1 },
+    ]);
+  });
+
+  // A held draft that clears a text means it: publishing it clears the text, rather than putting
+  // back the translation the language has live.
+  it("keeps a text a language's held draft clears, rather than the live one", async () => {
+    const keys = await partKeysOf([slides]);
+    const combined = combinedDraft(
+      {},
+      { language: row({ slides: { r1: { caption: "" } } }) },
+      { keys, live }
+    );
+
+    expect(combined.slides).toEqual([
+      { id: "r1", caption: null, rank: 1 },
+      { id: "r2", caption: "segundo", rank: 2 },
+    ]);
+  });
+
+  it("leaves out a language's held text with no structure to lay it on", async () => {
+    const keys = await partKeysOf([slides]);
+    const combined = combinedDraft(
+      {},
+      { language: row({ slides: { r1: { caption: "primero 2" } } }) },
+      { keys, live: {} }
+    );
+
+    expect(combined).not.toHaveProperty("slides");
+  });
+
+  /** A versions store that records the drafts written to it, by slot. */
+  function recordingRepo() {
+    const written = new Map<string | null, Record<string, unknown>>();
+    const repo = {
+      upsertWorkingDraft: (draft: {
+        locale: string | null;
+        snapshot: Record<string, unknown>;
+      }) => {
+        written.set(draft.locale, draft.snapshot);
+        return Promise.resolve();
+      },
+    } as unknown as VersionsRepository;
+    return { repo, written };
+  }
+
+  it("stores a held caption in the language's draft alone, keyed by row id", async () => {
+    const keys = await partKeysOf([slides]);
+    const { repo, written } = recordingRepo();
+
+    await storePartDrafts(repo, {
+      ref: { scopeKind: "single", scopeSlug: "site", entryId: "1" },
+      locale: "es",
+      document: {
+        slides: [
+          { id: "r1", caption: "primero 2", rank: 1 },
+          { id: "r2", caption: "segundo", rank: 2 },
+        ],
+      },
+      before: live,
+      touched: new Set(["slides"]),
+      keys,
+      existing: {},
+    });
+
+    expect([...written.keys()]).toEqual(["es"]);
+    expect(written.get("es")).toEqual({
+      slides: { r1: { caption: "primero 2" }, r2: { caption: "segundo" } },
+    });
+  });
+
+  it("stores a held reorder in the shared draft alone, as structure without any text", async () => {
+    const keys = await partKeysOf([slides]);
+    const { repo, written } = recordingRepo();
+
+    await storePartDrafts(repo, {
+      ref: { scopeKind: "single", scopeSlug: "site", entryId: "1" },
+      locale: "es",
+      document: { slides: [...live.slides].reverse() },
+      before: live,
+      touched: new Set(["slides"]),
+      keys,
+      existing: {},
+    });
+
+    expect([...written.keys()]).toEqual([null]);
+    expect(written.get(null)).toEqual({
+      slides: [
+        { id: "r2", rank: 2 },
+        { id: "r1", rank: 1 },
+      ],
+    });
   });
 });

@@ -48,3 +48,13 @@ export function toJsonColumnValue(value: unknown): unknown {
   // belong here rather than being passed through as the driver's own types.
   return JSON.stringify(value);
 }
+
+/** A stored value, parsed where the dialect holds it as JSON text. */
+export function parsedValue(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}

@@ -102,6 +102,7 @@ import {
   valuesBesideRow,
 } from "../../i18n/read-in-language";
 import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import {
   NO_DECISIONS,
   type ReleaseDecisions,
@@ -2359,7 +2360,11 @@ export class CollectionRelationshipService extends BaseService {
       fillCompanionFields({
         rows,
         companionRows: translations.rows,
-        localizedFields: companion.localizedFields,
+        // A container placing a component is put back by its component's fields.
+        localizedFields: await withComponentShapes(
+          companion.localizedFields,
+          this.db
+        ),
         localeChain: [...translations.localeChain],
         statusValues:
           companion.hasStatus && statusFilter ? statusFilter.values : undefined,

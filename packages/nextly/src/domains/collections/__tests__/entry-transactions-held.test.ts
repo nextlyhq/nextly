@@ -115,11 +115,7 @@ describe("the transactions the entry write services open", () => {
     ].join("\n");
 
     expect(transactionsOpened(fixture, "fixture.ts")).toMatchObject({
-      opened: [
-        "fixture.ts#create",
-        "fixture.ts#update",
-        "fixture.ts#remove",
-      ],
+      opened: ["fixture.ts#create", "fixture.ts#update", "fixture.ts#remove"],
       held: ["fixture.ts#held"],
     });
   });

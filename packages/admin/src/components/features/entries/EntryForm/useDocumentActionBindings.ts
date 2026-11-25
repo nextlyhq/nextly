@@ -99,7 +99,7 @@ export type DocumentActionOverrides = Partial<
 >;
 
 /** A handler whose work is stored, and which says how that went. */
-type StoringHandler = () => void | Promise<SubmitOutcome>;
+type StoringHandler = () => void | Promise<DocumentActionOutcome>;
 
 /**
  * The storing handlers an editor's actions run: one per intent, every one
@@ -301,6 +301,12 @@ export type DocumentActionOutcome =
       beforeWrite?: true;
       /** Set where the author has already been told, so nothing says it again. */
       reported?: true;
+      /**
+       * Set where the action stored the editor's work and then stopped to ask: a Publish that
+       * saves what it would publish and opens the choice of what goes live. Nothing is
+       * published yet, so it is not done, and nothing failed either.
+       */
+      stored?: true;
     };
 
 /** A confirmation an action asks before it runs. */

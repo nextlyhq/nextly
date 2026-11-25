@@ -44,10 +44,7 @@ import {
   unregisterBeforeOperationHook,
   unregisterHook,
 } from "../../../hooks";
-import type {
-  BeforeOperationHandler,
-  HookHandler,
-} from "../../../hooks/types";
+import type { BeforeOperationHandler, HookHandler } from "../../../hooks/types";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
 import { reportPrincipalDeleted } from "../../audit/erase-principal";
@@ -666,9 +663,9 @@ describe.each(getConfiguredTestDialects())(
         });
       }
       // The member is named by digest from now on, not by their id.
-      expect(
-        rows.find(r => r.id === memberRow.id)!.actorPrincipalId
-      ).not.toBe("m4");
+      expect(rows.find(r => r.id === memberRow.id)!.actorPrincipalId).not.toBe(
+        "m4"
+      );
     });
   }
 );

@@ -12,6 +12,7 @@ import { sql } from "drizzle-orm";
 
 import { MEDIA_USAGE_TABLE } from "../../schemas/media-usage/table-name";
 import { TRANSLATION_PROVENANCE_TABLE } from "../../schemas/translation-provenance/table-name";
+import { TRANSLATION_SOURCES_TABLE } from "../../schemas/translation-sources/table-name";
 import { VERSIONS_TABLE } from "../../schemas/versions/types";
 import { introspectLiveColumns } from "../schema/pipeline/diff/introspect-live";
 
@@ -32,8 +33,8 @@ interface CodeColumn {
  * Every column a code is stored in besides the translation tables' `_locale`, each one the
  * conversion rewrites: the versions, by their language and the list of languages each records it
  * changed; a pinned base kept for a language's pending change (its slot); each translation's
- * record of where it came from; the archive of removed translations; the releases' members; and
- * each media use and preview link in a language.
+ * record of where it came from, and the source text it was made from; the archive of removed
+ * translations; the releases' members; and each media use and preview link in a language.
  */
 const CODE_COLUMNS: readonly CodeColumn[] = [
   { table: VERSIONS_TABLE, column: "locale" },
@@ -41,6 +42,7 @@ const CODE_COLUMNS: readonly CodeColumn[] = [
   { table: "nextly_version_pins", column: "slot", prefix: "pending:" },
   { table: TRANSLATION_PROVENANCE_TABLE, column: "locale" },
   { table: TRANSLATION_PROVENANCE_TABLE, column: "source_locale" },
+  { table: TRANSLATION_SOURCES_TABLE, column: "source_locale" },
   { table: "nextly_i18n_archive", column: "locale" },
   { table: "nextly_release_members", column: "locale" },
   { table: MEDIA_USAGE_TABLE, column: "locale" },
@@ -190,18 +192,82 @@ async function underscoredCodesIn(
 }
 
 /**
- * What a stored code is as `dialect` compares codes: MySQL compares them without regard to letter
- * case, so there `pt_BR` and `PT_br` are one spelling, and one conversion rewrites the rows of
- * both; PostgreSQL and SQLite keep them apart. The one rule the scan and every rewrite of a list of
+ * What a stored code is as the database compares codes (`codesFoldCase`): where it compares them
+ * without regard to letter case, `pt_BR` and `PT_br` are one spelling, and one conversion rewrites
+ * the rows of both; elsewhere they are two. The one rule the scan and every rewrite of a list of
  * codes compare by, so a spelling the scan takes as one is rewritten wherever it is stored.
  */
-export function storedCodeKey(dialect: string, code: string): string {
-  return dialect === "mysql" ? code.toLowerCase() : code;
+export function storedCodeKey(foldsCase: boolean, code: string): string {
+  return foldsCase ? code.toLowerCase() : code;
 }
 
-/** Whether `a` and `b` are one stored code as `dialect` compares codes (`storedCodeKey`). */
-export function sameStoredCode(dialect: string, a: string, b: string): boolean {
-  return storedCodeKey(dialect, a) === storedCodeKey(dialect, b);
+/** Whether `a` and `b` are one stored code as the database compares codes (`storedCodeKey`). */
+export function sameStoredCode(
+  foldsCase: boolean,
+  a: string,
+  b: string
+): boolean {
+  return storedCodeKey(foldsCase, a) === storedCodeKey(foldsCase, b);
+}
+
+/**
+ * Whether the database compares stored codes without regard to letter case. PostgreSQL and SQLite
+ * never do. MySQL compares by each column's collation: a case-insensitive one (`..._ci`, the
+ * default) folds case, a binary or case-sensitive one (`utf8mb4_bin`, `..._cs`) keeps `pt_BR` and
+ * `PT_br` apart. Case is folded only where every code column the scan reads folds it, so a column
+ * that keeps the two apart has each found, and a document kept under both is refused, rather than
+ * one of them converted and the other left. A list of codes is read as text in the connection's
+ * collation, so only the plain code columns decide.
+ */
+export async function codesFoldCase(
+  adapter: DrizzleAdapter,
+  translationTables: readonly string[]
+): Promise<boolean> {
+  if (adapter.dialect !== "mysql") return false;
+  const places = (await codeColumnsOn(adapter, translationTables)).filter(
+    place => place.list !== true
+  );
+  const folds = await columnsFoldingCase(adapter, places);
+  return places.every(place => folds(place));
+}
+
+/**
+ * Which of `places`' code columns compare codes without regard to letter case, one column at a
+ * time: on MySQL a column of a case-insensitive collation (`..._ci`), and one whose collation could
+ * not be read, as the database's default is; on PostgreSQL and SQLite none. What a check of one
+ * column asks, where a site mixes collations: on a case-insensitive column `pt_BR` and `PT_br`
+ * match the same row, so the two are one stored code there and never a pair of rows.
+ */
+export async function columnsFoldingCase(
+  adapter: DrizzleAdapter,
+  places: readonly { table: string; column: string }[]
+): Promise<(place: { table: string; column: string }) => boolean> {
+  if (adapter.dialect !== "mysql") return () => false;
+  if (places.length === 0) return () => true;
+  const tables = [...new Set(places.map(({ table }) => table))];
+  const columns = [...new Set(places.map(({ column }) => column))];
+  const rows = await adapter.queryStatement<{
+    tableName: string;
+    columnName: string;
+    collation: string | null;
+  }>(
+    sql`SELECT TABLE_NAME AS ${sql.identifier("tableName")}, COLUMN_NAME AS ${sql.identifier("columnName")}, COLLATION_NAME AS ${sql.identifier("collation")} FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${sql.join(
+      tables.map(table => sql`${table}`),
+      sql`, `
+    )}) AND COLUMN_NAME IN (${sql.join(
+      columns.map(column => sql`${column}`),
+      sql`, `
+    )})`
+  );
+  const keepsCase = new Set(
+    rows
+      .filter(
+        row =>
+          row.collation !== null && !row.collation.toLowerCase().endsWith("_ci")
+      )
+      .map(row => `${row.tableName}.${row.columnName}`)
+  );
+  return ({ table, column }) => !keepsCase.has(`${table}.${column}`);
 }
 
 /**
@@ -236,7 +302,8 @@ export async function storedOlderSpellings(
   const byLowered = olderSpellingsOf(codes);
   if (byLowered.size === 0) return [];
   // One conversion for each spelling as the database tells spellings apart (`storedCodeKey`).
-  const keyOf = (code: string) => storedCodeKey(adapter.dialect, code);
+  const foldsCase = await codesFoldCase(adapter, translationTables);
+  const keyOf = (code: string) => storedCodeKey(foldsCase, code);
   const found = new Map<string, StoredOlderSpelling>();
   for (const place of await codeColumnsOn(adapter, translationTables)) {
     for (const code of await underscoredCodesIn(adapter, place)) {

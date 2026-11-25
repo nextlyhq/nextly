@@ -127,6 +127,12 @@ async function openPicker(section: HTMLElement): Promise<string[]> {
     .map(item => item.textContent ?? "");
 }
 
+/**
+ * How long a case waits for the picker to list what the people read answered: each try opens the
+ * menu again, which a loaded run can take longer than the default second to do.
+ */
+const PICKER_WAIT = { timeout: 5_000 };
+
 describe("ReviewSection", () => {
   it("draws nothing where no workflow is attached", async () => {
     fetchSpy.mockResolvedValue({ attached: false });
@@ -306,7 +312,7 @@ describe("ReviewSection", () => {
         "Legal (the whole role)",
         "Sam Okafor",
       ]);
-    });
+    }, PICKER_WAIT);
     await userEvent.click(screen.getByRole("menuitem", { name: "Sam Okafor" }));
     await waitFor(() =>
       expect(assignSpy).toHaveBeenCalledWith([
@@ -385,7 +391,7 @@ describe("ReviewSection", () => {
         "Editors (the whole role)",
         "Sam Okafor",
       ]);
-    });
+    }, PICKER_WAIT);
   });
 
   it("lists no people for a person who may not list them", async () => {

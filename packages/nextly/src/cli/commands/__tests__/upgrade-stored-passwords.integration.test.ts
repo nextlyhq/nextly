@@ -3,8 +3,9 @@
  *
  * Each placement below once kept a password in a container's stored value as
  * it was written: a group or repeater of a collection, a Single or a field
- * group, a field group held inline in one, and a translated container on its
- * companion row. The rows are seeded that way through the adapter, as such a
+ * group, a field group held inline in one, and a group of a translated
+ * collection, whose structure (a password among it) is one for every language.
+ * The rows are seeded that way through the adapter, as such a
  * release left them. The command's data steps then store each as a hash of what was
  * written, so the password still verifies; leaves a value already in a
  * hasher's format alone; reports counts and never a value; and a second run
@@ -147,9 +148,9 @@ describe.each(getConfiguredTestDialects())(
             localized: true,
             fields: [
               text({ name: "title" }),
+              // One structure in every language: the password in it is one value for all.
               group({
                 name: "wrap",
-                localized: true,
                 fields: [fieldGroup({ name: "held", component: "uppin" })],
               }),
             ],
@@ -265,14 +266,9 @@ describe.each(getConfiguredTestDialects())(
         locale: "es",
         data: { wrap: { held: { heading: "w", pin: "x" } }, _overwrite: true },
       } as never);
-      for (const code of ["en", "es"]) {
-        await storeRaw(
-          "dc_uplocal_locales",
-          { _parent: localId, _locale: code },
-          "wrap",
-          { held: { heading: "w", pin: `local-${code}` } }
-        );
-      }
+      await storeRaw("dc_uplocal", { id: localId }, "wrap", {
+        held: { heading: "w", pin: "local-plain" },
+      });
 
       const readStored = async () => ({
         own: valuesAt((await rowOf("dc_upentries", { id })).own, "pin"),
@@ -286,22 +282,8 @@ describe.each(getConfiguredTestDialects())(
           (await rowOf("single_upsite", { id: site?.id })).own,
           "pin"
         ),
-        en: valuesAt(
-          (
-            await rowOf("dc_uplocal_locales", {
-              _parent: localId,
-              _locale: "en",
-            })
-          ).wrap,
-          "pin"
-        ),
-        es: valuesAt(
-          (
-            await rowOf("dc_uplocal_locales", {
-              _parent: localId,
-              _locale: "es",
-            })
-          ).wrap,
+        local: valuesAt(
+          (await rowOf("dc_uplocal", { id: localId })).wrap,
           "pin"
         ),
       });
@@ -311,8 +293,7 @@ describe.each(getConfiguredTestDialects())(
         "box-plain",
         "inner-plain",
         "site-plain",
-        "local-en",
-        "local-es",
+        "local-plain",
       ];
       const firstOf = (read: Awaited<ReturnType<typeof readStored>>) => [
         read.own[0],
@@ -320,8 +301,7 @@ describe.each(getConfiguredTestDialects())(
         read.box[0],
         read.inner[0],
         read.site[0],
-        read.en[0],
-        read.es[0],
+        read.local[0],
       ];
       // The control: every row holds its password as an earlier release left it.
       expect(firstOf(await readStored())).toEqual(originals);
@@ -343,7 +323,7 @@ describe.each(getConfiguredTestDialects())(
 
       // Counts, and never a value.
       const output = lines.join("\n");
-      expect(output).toMatch(/hash passwords stored before this release: 7\b/);
+      expect(output).toMatch(/hash passwords stored before this release: 6\b/);
       for (const [, original] of plain) expect(output).not.toContain(original);
     });
 

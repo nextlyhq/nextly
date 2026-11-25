@@ -327,13 +327,19 @@ async function recordIfDisplaced(
 function isTakeable(
   existing: LockRow,
   claimant: DocumentLockClaimant,
-  takeover: boolean
+  options: { readonly takeover: boolean; readonly reclaimToken?: string }
 ): boolean {
-  // Lapsed, ours to renew, or deliberately taken over by a person who was told
-  // who held it.
-  return (
-    !existing.live || existing.ownerId === claimant.ownerId || takeover === true
-  );
+  // Lapsed, or deliberately taken over by a person who was told who held it.
+  if (!existing.live || options.takeover) return true;
+  // 🔴 A reclaim replaces only the claim it names. An editor taking back a
+  // claim it lost to silence must not take the document from the same
+  // person's other tab, which a plain claim of theirs would: the check and
+  // the write are one transaction, so no claim can slip in between them.
+  if (options.reclaimToken !== undefined) {
+    return existing.claimToken === options.reclaimToken;
+  }
+  // Ours to renew: the same person opening it again.
+  return existing.ownerId === claimant.ownerId;
 }
 
 /**
@@ -435,6 +441,11 @@ async function refuse(
  * 🔴 It is recorded only where the answer is `held`. A caller that WINS the
  * document is not waiting for it, and stamping the row on the way past would
  * leave every fresh claim carrying a request against itself.
+ *
+ * `reclaimToken` takes back a claim this caller lost track of (its renewals
+ * went unanswered), under a new token: it replaces the live claim only when
+ * that claim is the one named, and is otherwise a claim that displaces nobody,
+ * the same person's other tabs included.
  */
 export async function acquireDocumentLock(
   adapter: DrizzleAdapter,
@@ -443,6 +454,7 @@ export async function acquireDocumentLock(
   options?: {
     readonly takeover?: boolean;
     readonly requestAccess?: boolean;
+    readonly reclaimToken?: string;
   }
 ): Promise<AcquireDocumentLockOutcome> {
   const dialect = adapter.getCapabilities().dialect;
@@ -471,7 +483,13 @@ export async function acquireDocumentLock(
     }
 
     if (existing === undefined) lockRowVanished(key);
-    if (!isTakeable(existing, claimant, options?.takeover === true)) {
+    const takeable = isTakeable(existing, claimant, {
+      takeover: options?.takeover === true,
+      ...(options?.reclaimToken === undefined
+        ? {}
+        : { reclaimToken: options.reclaimToken }),
+    });
+    if (!takeable) {
       return await refuse(ctx, dialect, key, existing, requestAccess);
     }
 

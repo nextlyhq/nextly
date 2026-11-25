@@ -391,4 +391,4 @@ export { compareMigrationBaseNames };
 // In a module that imports nothing, so the CLI's error table names the remedy
 // without this module's imports; re-exported here, where the commands that
 // discover migrations read it.
-export { builderMigrationRemedy } from "./builder-migration-remedy";
+export { builderMigrationRemedy } from "../../domains/schema/migrate/builder-migration-remedy";
