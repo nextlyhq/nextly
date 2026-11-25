@@ -10,6 +10,7 @@
  */
 import type * as RunUnit from "../../../busy-table/run-unit";
 import type * as HeldLeavingDrops from "../../../../i18n/migration/held-leaving-drops";
+import type * as PreResolution from "../../../pipeline/pre-resolution/executor";
 import type * as StatementExecutor from "../../../services/drizzle-statement-executor";
 
 /** Where the save is stopped, and how to let it go. */
@@ -85,4 +86,19 @@ export function stoppingStatements(
     }
   }
   return { ...actual, DrizzleStatementExecutor: StoppingExecutor };
+}
+
+/** A push, whose renames and drops run first: stop before any statement of it, as a process killed there. */
+export function stoppingPushes(
+  actual: typeof PreResolution
+): typeof PreResolution {
+  return {
+    ...actual,
+    executePreResolutionOps: async (
+      ...args: Parameters<typeof actual.executePreResolutionOps>
+    ) => {
+      await stopHere("push: before");
+      return actual.executePreResolutionOps(...args);
+    },
+  };
 }
