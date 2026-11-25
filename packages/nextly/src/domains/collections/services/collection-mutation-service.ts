@@ -1489,6 +1489,34 @@ async function inChunks<T>(
  *
  * @internal
  */
+/**
+ * The keys of `payload` holding a repeater's or group's structure written exactly as `stored`
+ * holds it (`sameSharedStructure`): the structure a save of the text inside left as it was, which
+ * changes nothing the main row's version covers. Each found under its field name or its column,
+ * as the write and the stored row spell it. The one test both the single-entry and the batch
+ * update leave such a structure out of the main row's write by.
+ */
+function unchangedStructureKeys(
+  payload: Record<string, unknown>,
+  written: readonly SharedStructureWritten[],
+  stored: Record<string, unknown> | undefined
+): string[] {
+  const keys: string[] = [];
+  for (const { field, column } of written) {
+    const key = Object.hasOwn(payload, field)
+      ? field
+      : Object.hasOwn(payload, column)
+        ? column
+        : null;
+    if (key === null || stored === undefined) continue;
+    const before = Object.hasOwn(stored, field)
+      ? stored[field]
+      : stored[column];
+    if (sameSharedStructure(payload[key], before)) keys.push(key);
+  }
+  return keys;
+}
+
 export class GoingLiveRelationsBatch {
   private readonly entryIds: readonly string[];
   private readonly components = new Map<
@@ -19052,19 +19080,13 @@ export class CollectionMutationService extends BaseService {
           // A repeater's or group's structure written as it is stored changes nothing the main
           // row's version covers: its text went to the language's row. Left out of the UPDATE, so
           // a save of translated values alone moves only that language's counter, and a reader of
-          // another language keeps the version it holds (`sameSharedStructure`).
-          for (const written of localizedUpdate?.sharedStructures ?? []) {
-            if (
-              written.field in updatePayload &&
-              sameSharedStructure(
-                updatePayload[written.field],
-                (preUpdateRow as Record<string, unknown> | undefined)?.[
-                  written.field
-                ]
-              )
-            ) {
-              delete updatePayload[written.field];
-            }
+          // another language keeps the version it holds (`unchangedStructureKeys`).
+          for (const key of unchangedStructureKeys(
+            updatePayload,
+            localizedUpdate?.sharedStructures ?? [],
+            preUpdateRow as Record<string, unknown> | undefined
+          )) {
+            delete updatePayload[key];
           }
           // Keyed by SQL column name, as the adapter takes it; see
           // `writeRowAndTranslation`.
@@ -24360,6 +24382,17 @@ export class CollectionMutationService extends BaseService {
           : { stale: false, claimed: false };
       if ("success" in languageJudged) return languageJudged;
 
+      // A structure written as stored changes nothing the main row's version
+      // covers, as on the single-entry update: left out of this UPDATE, so a
+      // batch edit of translated text alone keeps the document's version.
+      const liveData = { ...finalData };
+      for (const key of unchangedStructureKeys(
+        liveData,
+        localizedUpdate?.sharedStructures ?? [],
+        storedRow ?? existingEntry
+      )) {
+        delete liveData[key];
+      }
       // Skip the live-row UPDATE for a held edit; the pending change is stored
       // below instead.
       const [updated] = storeAsWorkingDraft
@@ -24368,7 +24401,7 @@ export class CollectionMutationService extends BaseService {
             tableName,
             {
               ...stripImmutableSystemFields(
-                finalData,
+                liveData,
                 "collection",
                 tableName,
                 fields
@@ -24383,7 +24416,7 @@ export class CollectionMutationService extends BaseService {
               ...mainRowBump(
                 {
                   updatePayload: stripImmutableSystemFields(
-                    finalData,
+                    liveData,
                     "collection",
                     tableName,
                     fields
