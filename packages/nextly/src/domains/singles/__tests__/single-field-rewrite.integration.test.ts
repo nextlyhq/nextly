@@ -963,6 +963,61 @@ describe.each(getConfiguredTestDialects())(
       expect(Object.keys(await germanText())).toEqual([kept]);
     });
 
+    // A rewrite in one language that removes a repeater's row changes the structure every
+    // language shares, which the document's own version covers: another language's save holding
+    // the version it read before the rewrite is refused, rather than putting the removed row back.
+    // That language's own counter did not move, so only the document's version can refuse it.
+    it("moves the document's version when a translated rewrite changes the shared structure", async () => {
+      const t = await boot(dialect, true);
+      await save(
+        t,
+        SLIDED,
+        {
+          slides: [
+            { caption: "one", rank: 1 },
+            { caption: "two", rank: 2 },
+          ],
+          status: "published",
+        },
+        "en"
+      );
+      const before = await read(t, SLIDED, { locale: "en" });
+      const ids = (before.slides as { id: string }[]).map(row => row.id);
+      const [kept] = ids;
+      await save(
+        t,
+        SLIDED,
+        {
+          slides: ids.map((id, index) => ({
+            id,
+            caption: `de ${index}`,
+            rank: index + 1,
+          })),
+        },
+        "de"
+      );
+      const german = await read(t, SLIDED, { locale: "de" });
+
+      await t.nextly.rewriteField({
+        single: SLIDED,
+        field: "slides",
+        locale: "en",
+        expectedVersion: await versionOf(t, SLIDED, "en"),
+        set: {
+          from: current =>
+            (current as { id: string }[]).filter(row => row.id === kept),
+        },
+        reason: REASON,
+      });
+
+      const stale = await singlesOf(t).update(
+        SLIDED,
+        { slides: german.slides, _rev: german._rev },
+        { overrideAccess: true, locale: "de" }
+      );
+      expect(stale).toMatchObject({ success: false, code: "STALE_VERSION" });
+    });
+
     it("records a translation's own status with its rewrite", async () => {
       const t = await boot(dialect, true);
       await save(

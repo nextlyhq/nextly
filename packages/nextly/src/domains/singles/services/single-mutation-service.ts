@@ -223,6 +223,8 @@ import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import {
   assembleStoredValue,
   sameSharedStructure,
+  sameStructure,
+  splitSharedStructure,
 } from "../../i18n/shared-structure";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
@@ -5475,9 +5477,12 @@ export class SingleMutationService extends BaseService {
               entryId: existingDoc.id,
               companion,
               written: sharedStructuresIn(mainPayload, shapedRefs),
-              // The row as it stood before this save: a component instance
-              // that changed type since loses its text in the other languages.
-              before: existingDoc,
+              // The row as this transaction read it just before the write (the
+              // earlier read where it found none), not the read before the
+              // transaction began: a component instance that changed type since
+              // loses its text in the other languages, judged against the row
+              // the write replaced.
+              before: preRow ?? existingDoc,
               writtenLocales: writeLocale === undefined ? [] : [writeLocale],
             });
           }
@@ -7699,13 +7704,27 @@ export class SingleMutationService extends BaseService {
           companion: {} as Record<string, unknown>,
           sharedStructures: [] as SharedStructureWritten[],
         };
+    // A repeater's or group's structure is the main row's, every language's:
+    // a translated rewrite that changes it (a row removed, added or moved)
+    // moves the document's own counter, as a save of it does, so a save read
+    // before it is refused. One that changes only the text inside moves only
+    // the language's.
+    const structureMoved = sharedStructures.some(
+      written =>
+        !sameStructure(
+          splitSharedStructure(write.stored, written.shape).structure,
+          written.structure
+        )
+    );
     const at = new Date();
     await tx.update(
       singleMeta.tableName,
       {
         ...main,
         updated_at: at,
-        ...(write.movesMain ? revisionBumpColumns(args.actor, at) : {}),
+        ...(write.movesMain || structureMoved
+          ? revisionBumpColumns(args.actor, at)
+          : {}),
       },
       this.whereEq("id", entryId)
     );

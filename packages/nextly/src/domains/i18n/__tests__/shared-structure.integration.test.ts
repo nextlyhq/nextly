@@ -958,8 +958,9 @@ describeEachDialect("one structure across languages", dialect => {
         });
         return id;
       };
-      await article(1, "b", "a");
+      // Created against their structures' order, so a sort that did nothing would show it.
       await article(2, "a", "b");
+      await article(1, "b", "a");
       const order = async (locale: string) =>
         (
           await nextly.find({
@@ -969,7 +970,14 @@ describeEachDialect("one structure across languages", dialect => {
           })
         ).items.map(item => (item as { title: string }).title);
 
+      // Every language orders alike: the structure is the same in each.
       expect(await order("es")).toEqual(await order("en"));
+      // The structures differ by the row's rank alone: T1's sorts first. MySQL defines no order
+      // between two JSON objects, only whether they are equal, so a list of rows gives it nothing
+      // to order by there.
+      if (dialect !== "mysql") {
+        expect(await order("en")).toEqual(["T1", "T2"]);
+      }
     },
     BOOT_TIMEOUT
   );
