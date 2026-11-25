@@ -43,3 +43,33 @@ export function disableKeepingOverlaysRefusal(
     },
   });
 }
+
+/**
+ * The refusal of a change that leaves a repeater or group of `entity` keeping its text per
+ * language with nothing inside it translated any more (its last translated field made shared, or
+ * the container itself marked `localized: false`), naming each such container in `containers`, or
+ * `undefined` where there is none. The container's overlay column would be dropped, and its
+ * structure was stored without that text, so every language's text there would be lost.
+ */
+export function overlayLeftBehindRefusal(
+  entity: { kind: I18nTransitionKind; slug: string },
+  containers: readonly string[]
+): NextlyError | undefined {
+  if (containers.length === 0) return undefined;
+  const sorted = [...containers].sort();
+  const named = sorted.map(name => `"${name}"`).join(", ");
+  return NextlyError.invalidInput({
+    message:
+      `This change to the ${KIND_NAMES[entity.kind]} "${entity.slug}" isn't supported yet: its ` +
+      `repeaters and groups ${named} keep their text per language, and with nothing inside them ` +
+      `translated any more that text, in every language, would be lost. Nothing was changed. To ` +
+      `go on today, keep at least one field inside ${named} translated; or, if their text can go, ` +
+      `remove ${named} from "${entity.slug}" first and save that change.`,
+    logContext: {
+      reason: "container-overlay-left-behind",
+      entity: entity.slug,
+      kind: entity.kind,
+      containers: sorted,
+    },
+  });
+}

@@ -24,6 +24,7 @@ import {
   text,
 } from "../../../config";
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+import { archiveFieldsLeavingTranslation } from "../migration/archive-preflight";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -975,6 +976,55 @@ describeEachDialect("one structure across languages", dialect => {
       const paths = await livePaths(scope, "es");
       expect(paths).toContain(`slides#${one!.id}`);
       expect(paths).not.toContain(`slides#${two!.id}`);
+    },
+    BOOT_TIMEOUT
+  );
+
+  // Translation stays on, and every text inside the repeater is made shared: the repeater no
+  // longer keeps its text apart, so its overlay column would be dropped with every language's
+  // text in it, while its structure was stored without that text. Refused before anything
+  // changes, naming the repeater; each language keeps its own text.
+  it(
+    "refuses a schema change leaving a repeater with nothing translated inside, naming it, and keeps every language's text",
+    async () => {
+      const { nextly, adapter } = await site();
+      const { id } = await translatedArticle(nextly);
+      const shared = (ARTICLES.fields as { name: string }[]).map(field =>
+        field.name === "slides"
+          ? repeater({
+              name: "slides",
+              fields: [
+                text({ name: "caption", localized: false }),
+                text({ name: "alt", localized: false }),
+                number({ name: "rank" }),
+              ],
+            })
+          : field
+      );
+
+      const refusal = await archiveFieldsLeavingTranslation({
+        adapter,
+        entity: "articles",
+        kind: "collection",
+        tableName: "dc_articles",
+        builtBy: "collection",
+        defaultLocale: "en",
+        oldFields: ARTICLES.fields as never,
+        newFields: shared as never,
+        wasLocalized: true,
+        isLocalized: true,
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refusal).toBeInstanceOf(Error);
+      expect((refusal as { publicMessage?: string }).publicMessage).toMatch(
+        /repeaters and groups "slides" keep their text per language/
+      );
+      expect(
+        (await read(nextly, id, "es")).slides.map(slide => slide.caption)
+      ).toEqual(["primero", "segundo"]);
     },
     BOOT_TIMEOUT
   );

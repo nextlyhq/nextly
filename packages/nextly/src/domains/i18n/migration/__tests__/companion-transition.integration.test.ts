@@ -148,6 +148,55 @@ describe("buildCompanionTransitionStatements — enable, a container's text on m
   );
 });
 
+describe("buildCompanionTransitionStatements — a container left keeping no text", () => {
+  // Translation stays on. The repeater's last translated field is made shared, so the repeater no
+  // longer keeps its text apart: its overlay column would be dropped with every language's text,
+  // while its structure on main was stored without it. Refused, naming it, before any statement.
+  const slides = (caption: Record<string, unknown>) => ({
+    name: "slides",
+    type: "repeater" as const,
+    fields: [
+      { name: "caption", type: "text" as const, ...caption },
+      { name: "rank", type: "number" as const },
+    ],
+  });
+  const change = (newFields: CompanionTransitionArgs["newFields"]) =>
+    buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
+      slug: "hero",
+      kind: "collection" as const,
+      tableName: "single_hero",
+      dialect: "sqlite",
+      defaultLocale: "en",
+      ...NO_STATUS_HISTORY,
+      wasLocalized: true,
+      isLocalized: true,
+      oldFields: [...FIELDS, slides({})],
+      newFields,
+      companionExists: true,
+      liveCompanionColumns: ["heading", "slides"],
+    });
+
+  it.each([
+    ["its last translated field made shared", slides({ localized: false })],
+    [
+      "the container marked not translated",
+      { ...slides({}), localized: false },
+    ],
+  ])("refuses the change, naming the container: %s", (_, now) => {
+    expect(() => change([...FIELDS, now])).toThrow(
+      /repeaters and groups "slides" keep their text per language/
+    );
+  });
+
+  it("drops the overlay of a container removed outright, and keeps one still holding text", () => {
+    const removed = change(FIELDS).statements.join("\n");
+    expect(removed).toMatch(/DROP COLUMN "slides"/);
+    const kept = change([...FIELDS, slides({})]).statements.join("\n");
+    expect(kept).not.toMatch(/"slides"/);
+  });
+});
+
 describe("buildCompanionTransitionStatements — enable", () => {
   it("seeds the companion default locale from main, then drops the translatable column", () => {
     const plan = buildCompanionTransitionStatements({

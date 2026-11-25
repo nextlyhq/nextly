@@ -64,6 +64,7 @@ import {
   disableDroppingOverlays,
   type FieldRename,
   fieldsLeavingTranslation,
+  overlaysLeftBehind,
 } from "./reconcile-companion";
 import type { I18nTransitionKind } from "./transition-state";
 import {
@@ -252,6 +253,19 @@ export async function archiveFieldsLeavingTranslation(args: {
   // Before the early return below: a change that only removes and adds translated fields changes
   // no field's translation, and is exactly the one that would drop a column unasked.
   refuseTranslatedFieldsRemovedBesideAdded(args, oldFields);
+  // A repeater or group left keeping no text inside would have its overlay dropped, with every
+  // language's text in it (`overlaysLeftBehind`): refused before anything changes. Its fields
+  // changing translation is no field leaving translation, so this too goes before the early return.
+  const leftBehind = overlaysLeftBehind({
+    slug: args.entity,
+    kind: args.kind,
+    oldFields,
+    newFields: args.newFields,
+    dialect: args.adapter.dialect,
+    builtBy: args.builtBy,
+    liveCompanionColumns: (await companionColumns()).map(c => c.name),
+  });
+  if (leftBehind) throw leftBehind;
   // Nothing to judge or archive when no field changes whether it is translated, or its name.
   if (leaving.size === 0 && joining.length === 0 && !rename) {
     return;

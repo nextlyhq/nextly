@@ -20,7 +20,10 @@ import {
   deriveCompanionSpec,
   deriveCompanionTableSpec,
 } from "./derive-companion-spec";
-import { disableKeepingOverlaysRefusal } from "./disable-keeping-overlays";
+import {
+  disableKeepingOverlaysRefusal,
+  overlayLeftBehindRefusal,
+} from "./disable-keeping-overlays";
 import { storageDiffers } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
@@ -88,6 +91,48 @@ export function disableDroppingOverlays(args: {
       : [];
   });
   return disableKeepingOverlaysRefusal(
+    { kind: args.kind, slug: args.slug },
+    containers
+  );
+}
+
+/**
+ * The refusal of a change, translation staying on, that leaves a repeater or group which kept its
+ * text per language with nothing inside it translated (`overlayLeftBehindRefusal`): the field is
+ * still there under its name and is no longer a container keeping its text inside, so its overlay
+ * column would be dropped as removed, with every language's text in it, while its structure on the
+ * main table was stored without that text. A container removed outright, or one still keeping
+ * text, is not named. Only a column the companion has (`liveCompanionColumns`, where read) is
+ * named. Asked before a Builder save changes anything (`archiveFieldsLeavingTranslation`), and
+ * again where the change is planned.
+ */
+export function overlaysLeftBehind(args: {
+  slug: string;
+  kind: I18nTransitionKind;
+  oldFields: readonly CompanionFieldLike[];
+  newFields: readonly CompanionFieldLike[];
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+  liveCompanionColumns?: readonly string[];
+}): NextlyError | undefined {
+  const live =
+    args.liveCompanionColumns === undefined
+      ? undefined
+      : new Set(args.liveCompanionColumns);
+  const after = new Map(args.newFields.map(field => [field.name, field]));
+  const containers = args.oldFields.filter(keepsOverlay).flatMap(field => {
+    const now = after.get(field.name);
+    if (now === undefined || keepsOverlay(now)) return [];
+    const column = fieldToLocalizedColumnSpec(
+      field,
+      args.dialect,
+      args.builtBy
+    );
+    return column && (live === undefined || live.has(column.name))
+      ? [column.name]
+      : [];
+  });
+  return overlayLeftBehindRefusal(
     { kind: args.kind, slug: args.slug },
     containers
   );
@@ -1129,6 +1174,24 @@ export function buildCompanionTransitionStatements(
     // that kept it.
     const rename = companionColumnRename(args);
     const before = rename?.oldFields ?? oldFields;
+    // As the companion will be once this change's own RENAME has run.
+    const liveColumns = rename?.live ?? args.liveCompanionColumns;
+    // A container left keeping no text would lose its overlay, and every language's text in it:
+    // refused, as the save's own check before anything changed refuses it.
+    if (companionExists) {
+      const leftBehind = overlaysLeftBehind({
+        slug,
+        kind,
+        oldFields: before,
+        newFields,
+        dialect,
+        builtBy,
+        ...(liveColumns === undefined
+          ? {}
+          : { liveCompanionColumns: liveColumns }),
+      });
+      if (leftBehind) throw leftBehind;
+    }
     const oldLocalized = companionFieldsOf(before);
     const newLocalized = companionFieldsOf(newFields);
     const sharedAfter = fieldsLeavingTranslation(before, newFields);
@@ -1154,8 +1217,6 @@ export function buildCompanionTransitionStatements(
         ]
       : [];
     const hold = args.holdLeavingDrops === true;
-    // As the companion will be once this change's own RENAME has run.
-    const liveColumns = rename?.live ?? args.liveCompanionColumns;
     const held = hold
       ? heldLeavingIndexes(args, before, sharedAfter, liveColumns)
       : undefined;
