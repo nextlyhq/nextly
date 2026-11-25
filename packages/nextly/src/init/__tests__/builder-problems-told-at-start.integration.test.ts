@@ -165,11 +165,15 @@ describe.each(getConfiguredTestDialects())(
       writeFileSync(join(dir, "nextly.config.mjs"), "export default {};\n");
 
     /** A start, and what it serves of the collection. */
-    async function started(mode: "production" | "development" | "test") {
+    async function started(
+      mode: "production" | "development" | "test",
+      collections: unknown[] = []
+    ) {
       vi.stubEnv("NODE_ENV", mode);
       _resetEnvCache();
       const nextly = await getNextly({
         config: sanitizeConfig({
+          collections,
           db: {
             migrationsDir: "./migrations",
             uiSchemaFile: "./ui-schema.json",
@@ -284,25 +288,68 @@ describe.each(getConfiguredTestDialects())(
       expect(said(AT_LOAD), warned.join("\n")).toHaveLength(1);
     }, 300_000);
 
+    // One warning in all: the reload's where it judged a definition file, else the start's own.
     it.each([
-      ["with its schema apply disabled", "1", true],
-      ["with no configuration file to reload", undefined, false],
+      {
+        where: "with its schema apply disabled",
+        disabled: true,
+        config: true,
+        definition: true,
+        by: "start",
+      },
+      {
+        where: "with a configuration file and no definition file",
+        disabled: false,
+        config: true,
+        definition: false,
+        by: "start",
+      },
+      {
+        where: "with neither file",
+        disabled: false,
+        config: false,
+        definition: false,
+        by: "start",
+      },
+      {
+        where: "with a definition file and no configuration file",
+        disabled: false,
+        config: false,
+        definition: true,
+        by: "reload",
+      },
     ])(
-      "in development says it itself %s",
-      async (_, disabled, withFile) => {
-        if (disabled !== undefined) {
-          vi.stubEnv("NEXTLY_DISABLE_BOOT_APPLY", disabled);
-        }
-        if (withFile) configFile();
+      "in development is said once $where, by the $by",
+      async ({ disabled, config, definition, by }) => {
+        if (disabled) vi.stubEnv("NEXTLY_DISABLE_BOOT_APPLY", "1");
+        if (config) configFile();
         await holds(PROBLEM);
+        if (!definition) rmSync(join(dir, "ui-schema.json"));
 
         const served = await started("development");
 
         expect(served.items).toEqual([]);
-        expect(said(AT_START), warned.join("\n")).toHaveLength(1);
+        expect(
+          [said(AT_START).length, said(AT_LOAD).length],
+          warned.join("\n")
+        ).toEqual(by === "start" ? [1, 0] : [0, 1]);
       },
       300_000
     );
+
+    it("in production says it of a collection handed to the Schema Builder whose code entry is still there", async () => {
+      await holds(PROBLEM);
+      const adapter = await adapterFor();
+      await adapter.executeQuery(
+        "UPDATE dynamic_collections SET config_path = 'demoted-from-code' WHERE slug = 'cases'"
+      );
+      await adapter.disconnect();
+
+      await started("production", [{ slug: "cases", fields: SOUND }]);
+
+      expect(said(AT_START), warned.join("\n")).toHaveLength(1);
+      expect(said(AT_START)[0]).toContain("collection 'cases'");
+    }, 300_000);
 
     it("in development says it itself where a Builder save is left unsettled", async () => {
       configFile();
@@ -322,6 +369,7 @@ describe.each(getConfiguredTestDialects())(
         0
       );
       expect(said(AT_START), warned.join("\n")).toHaveLength(1);
+      expect(said(AT_LOAD), warned.join("\n")).toEqual([]);
     }, 300_000);
 
     it("outside production and development says it itself", async () => {

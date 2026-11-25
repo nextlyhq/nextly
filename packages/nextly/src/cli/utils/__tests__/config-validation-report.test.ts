@@ -5,7 +5,13 @@
  * The configuration is a real file on disk, bundled by the loader every command uses, so what is
  * asserted is what esbuild reports for it, not a constructed failure.
  */
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -440,13 +446,14 @@ describe("a committed Builder definition file with problems", () => {
     async () => {
       writeFileSync(join(dir, "nextly.config.ts"), CONFIG);
       writeFileSync(join(dir, "ui-schema.json"), JSON.stringify(DEFINITIONS));
-      // Every file in the project, in any folder: loading a configuration leaves the empty folder
+      // Every file in the project, in any folder, with what it holds: loading a configuration leaves the empty folder
       // its bundle was in, and no file.
       const files = () =>
         readdirSync(dir, { recursive: true, withFileTypes: true })
           .filter(entry => entry.isFile())
           .map(entry => join(entry.parentPath, entry.name))
-          .sort();
+          .sort()
+          .map(path => [path, readFileSync(path, "utf8")]);
       const before = files();
       const wrong: string[] = [];
       const reports = new Map<string, string>();

@@ -2281,16 +2281,6 @@ async function reconcileBuilderTargets<T>(
     startRegistryNow()
   );
 
-  // From the rows just read, so nothing is read for it; it warns and never refuses.
-  if (args.warnOfBuilderProblems !== undefined) {
-    warnOfBuilderProblemsAtStart({
-      entities: builderEntities,
-      code: transformedConfig,
-      logger,
-      when: args.warnOfBuilderProblems,
-    });
-  }
-
   assertRegisteredKeepTheirKind(transformedConfig, builderEntities);
 
   // The configuration's addresses, judged by the one address rule before the boot writes
@@ -2303,6 +2293,16 @@ async function reconcileBuilderTargets<T>(
     transformedConfig,
     builderEntities.collections
   );
+  // From the rows just read, so nothing is read for it; it warns and never refuses. A collection
+  // handed to the Schema Builder is the Builder's, whatever code entry is still there.
+  if (args.warnOfBuilderProblems !== undefined) {
+    warnOfBuilderProblemsAtStart({
+      entities: builderEntities,
+      code: configuredByCode,
+      logger,
+      when: args.warnOfBuilderProblems,
+    });
+  }
   await assertConfiguredAddresses(configuredByCode, builderEntities, table =>
     tableExistsAtStart(adapter, table)
   );

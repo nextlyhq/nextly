@@ -13,6 +13,7 @@
 import {
   existsSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -262,7 +263,13 @@ describe("an invalid configuration, given to every command that loads it", () =>
         reports.set(name, reportOf(ran.stderr));
         if (opened.times > 0) wrong.push(`${name}: opened a database`);
         opened.times = 0;
-        // Nothing written, and no database opened.
+        // Nothing written, the configuration included, and no database opened.
+        if (
+          readFileSync(join(dir, "nextly.config.ts"), "utf8") !==
+          "export default {};\n"
+        ) {
+          wrong.push(`${name}: rewrote the configuration`);
+        }
         const left = readdirSync(dir).filter(
           file => file !== "nextly.config.ts"
         );

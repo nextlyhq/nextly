@@ -2092,9 +2092,9 @@ async function applyReloadHolding(
       // A running site: a problem in the Builder's definitions is warned of, not refused.
       builderDefinitions: "warn",
     });
-    // A load of the project's own configuration judged its definition file, so what the start
-    // held of its rows is said already. One that found no file may be reading another folder.
-    if (opts?.atStart === true && result.configPath !== undefined) {
+    // A load that judged a definition file has said what is wrong in it; where there was none, what
+    // the start held of its stored definitions is still to be said.
+    if (opts?.atStart === true && result.judgedDefinitionFile === true) {
       dropHeldBuilderWarning();
     }
     loadedConfig = result.config;

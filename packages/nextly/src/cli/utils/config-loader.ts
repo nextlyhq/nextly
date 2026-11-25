@@ -50,7 +50,7 @@ import {
   setActivePostgresSchema,
 } from "../../domains/schema/services/postgres-schema";
 import { assertBuilderDefinitionsKept } from "../../domains/schema/ui-schema/builder-definitions";
-import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
+import { readUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
 import { publishWebhookEventTypes } from "../../domains/webhooks/event-type-registry";
 import { NextlyError, describeError } from "../../errors/index";
@@ -111,6 +111,14 @@ const UNREAD_BUILDER_ENTITIES: BuilderEntities = Object.freeze({});
  */
 const unreadReasons = new WeakMap<BuilderEntities, unknown>();
 
+/** The empty entities standing for a definition file that is not there. */
+const absentDefinitions = new WeakSet<BuilderEntities>();
+
+/** Whether `entities` came from a definition file, one that could not be read included. */
+function hasDefinitionFile(entities: BuilderEntities | undefined): boolean {
+  return entities !== undefined && !absentDefinitions.has(entities);
+}
+
 /** Whether `entities` stands for a definition file that could not be read. */
 function isUnread(entities: BuilderEntities): boolean {
   return entities === UNREAD_BUILDER_ENTITIES || unreadReasons.has(entities);
@@ -134,12 +142,16 @@ function builderPolicyOf(options: LoadConfigOptions): "refuse" | "warn" {
  */
 async function readBuilderEntities(
   projectRoot: string,
-  uiSchemaFile: Parameters<typeof loadUiSchema>[0]["uiSchemaFile"]
+  uiSchemaFile: Parameters<typeof readUiSchema>[0]["uiSchemaFile"]
 ): Promise<BuilderEntities> {
   try {
-    return manifestToBuilderEntities(
-      await loadUiSchema({ projectRoot, uiSchemaFile })
-    );
+    const { manifest, exists } = await readUiSchema({
+      projectRoot,
+      uiSchemaFile,
+    });
+    const entities = manifestToBuilderEntities(manifest);
+    if (!exists) absentDefinitions.add(entities);
+    return entities;
   } catch (error) {
     // Its own object, so the reason travels with it (`unreadReasons`).
     const unread: BuilderEntities = Object.freeze({});
@@ -492,6 +504,12 @@ export interface LoadConfigResult {
    * a transformer that adds a plugin or a collection adds it twice.
    */
   appConfig: SanitizedNextlyConfig;
+
+  /**
+   * Whether a Builder definition file was there to judge, one that could not be read included. A
+   * start whose reload judged none says what its stored definitions hold itself.
+   */
+  judgedDefinitionFile?: boolean;
 }
 
 /**
@@ -777,8 +795,12 @@ async function loadDefaultConfig(
   const appConfig = defineConfig({});
   // The Builder's definitions beside the default configuration are judged as they are beside a
   // configuration file, once the registry holds no plugin's field type.
+  const builderEntities = await readBuilderEntities(
+    cwd,
+    appConfig.db?.uiSchemaFile
+  );
   const builderProblems = builderProblemsFor(
-    await readBuilderEntities(cwd, appConfig.db?.uiSchemaFile),
+    builderEntities,
     appConfig,
     appConfig.db?.uiSchemaFile,
     options
@@ -801,6 +823,7 @@ async function loadDefaultConfig(
     // Empty, matching the clear above: work pinned to this result must not
     // resolve plugin types a later config happens to register.
     fieldTypes: snapshotFieldTypes(),
+    judgedDefinitionFile: hasDefinitionFile(builderEntities),
   };
 }
 
@@ -1165,6 +1188,7 @@ async function loadConfigInternal(
       // Captured after registration, so it holds exactly what this config
       // contributed rather than whatever the live set becomes later.
       fieldTypes: snapshotFieldTypes(),
+      judgedDefinitionFile: hasDefinitionFile(builderEntitiesRead),
     };
   } catch (error) {
     // The load owns the registry from the clear above until it returns, so
