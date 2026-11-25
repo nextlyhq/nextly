@@ -689,6 +689,109 @@ describe.each(getConfiguredTestDialects())(
       ].join("\n");
     }
 
+    // A marked file's refusals are read anew with the run's consent (`consentedRefusals`), from the judged
+    // changes alone: a refusal made before any value is read carries none, and must be thrown all the same.
+    converts(
+      "refuses a deploy of a marked file that also changes the type of a translated text inside a group, and changes nothing",
+      async () => {
+        const withGroup = (v: string, contact: string) => [
+          TRANSLATED_S,
+          { name: "v", type: v, localized: true },
+          {
+            name: "details",
+            type: "group",
+            fields: [
+              { name: "contact", type: contact },
+              { name: "note", type: "text" },
+            ],
+          },
+        ];
+        const first = await boot(dialect, LANGUAGES);
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: SLUG,
+            label: "Post",
+            localized: true,
+            fields: withGroup("text", "text"),
+          }
+        );
+        const created = await filesWritten();
+        await write(first, "here", { v: "a@b.co" });
+        // The file this writes is marked, and its snapshot is edited to record the nested change too,
+        // as a file whose save was made by a version that did not refuse it would.
+        await save(first, withGroup("email", "text"), { localized: true });
+        await first.destroy();
+        instance = undefined;
+        const marked = await fileMarking(`dc_${SLUG}_locales.v`);
+        const snapshot = join(
+          basePath,
+          "migrations",
+          "meta",
+          marked.replace(/\.sql$/, ".snapshot.json")
+        );
+        const recorded = JSON.parse(
+          await readFile(snapshot, "utf8")
+        ) as unknown;
+        let edited = 0;
+        const edit = (value: unknown): void => {
+          if (Array.isArray(value)) value.forEach(edit);
+          else if (typeof value === "object" && value !== null) {
+            const field = value as { name?: unknown; type?: unknown };
+            if (field.name === "contact" && field.type === "text") {
+              field.type = "number";
+              edited += 1;
+            }
+            Object.values(value).forEach(edit);
+          }
+        };
+        edit(recorded);
+        // An edit that changes nothing would leave the fixture without what it is for.
+        expect(edited).toBeGreaterThan(0);
+        await writeFile(snapshot, JSON.stringify(recorded));
+
+        const second = await boot(dialect, LANGUAGES);
+        await migrateFolder(second, created);
+        const made = (await second.nextly.create({
+          collection: SLUG,
+          data: {
+            title: "a",
+            v: "c@d.co",
+            details: { contact: "Call us", note: "n" },
+          },
+          locale: "en",
+        } as never)) as { item?: { id?: string }; id?: string };
+        await second.nextly.update({
+          collection: SLUG,
+          id: made.item?.id ?? made.id,
+          data: {
+            details: { contact: "Llámenos", note: "n" },
+            _overwrite: true,
+          },
+          locale: "es",
+        } as never);
+        const held = () =>
+          exec<{ l: string; details: unknown; v: unknown }>(
+            second,
+            `SELECT _locale AS l, details, v FROM dc_${SLUG}_locales ORDER BY _locale`
+          );
+        const before = await held();
+        // The control: each language's text is in its overlay, and the marked column holds a value.
+        expect(JSON.stringify(before)).toContain("Llámenos");
+
+        await expect(
+          migrateFolder(
+            second,
+            undefined,
+            resolveDataLossConsent({ flag: true, env: {} })
+          )
+        ).rejects.toMatchObject(refusedSaying("details.contact"));
+        expect(await held()).toEqual(before);
+      }
+    );
+
     // The file that moves a field into the translations table copies its values there before the
     // change's own file, which would convert them in a column it then drops: what could not convert
     // would stay in the translations table as it was. Refused unless every value is one the new type
