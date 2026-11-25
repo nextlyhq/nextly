@@ -26,6 +26,7 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import type { UnregisteredCollectionRow } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import type { CollectionArtifacts } from "../../dynamic-collections/services/dynamic-collection-service";
+import { judgeFieldGroupCopies } from "../../field-groups/field-group-fields-read-only";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import {
@@ -883,6 +884,9 @@ export class CollectionMetadataService extends BaseService {
     await assertGlobalResourceSlugAvailable(this.adapter, data.name, {
       addressKind: "collection",
     });
+    // A field group's fields are changed only in its own editor, for a request's save: asked
+    // outside the result mapping below, so its code and field reach the answer.
+    await judgeFieldGroupCopies(data.fields);
     try {
       const artifacts = await this.collectionService.generateCollection(data);
 
@@ -1308,6 +1312,14 @@ export class CollectionMetadataService extends BaseService {
     params: { collectionName: string },
     body: Parameters<CollectionMetadataService["updateCollection"]>[1]
   ): Promise<MetadataServiceResult> {
+    // A field group's fields are changed only in its own editor, for a request's save: asked
+    // outside the result mapping below, so its code and field reach the answer.
+    await judgeFieldGroupCopies(
+      body.fields,
+      async () =>
+        (await this.collectionService.getCollection(params.collectionName))
+          .fields
+    );
     try {
       // The collection as it stands before the save, read inside the lock: what the apply changes
       // it from.

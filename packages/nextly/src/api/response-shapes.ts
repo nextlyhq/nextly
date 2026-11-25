@@ -60,6 +60,14 @@ export type PaginationMeta = {
    */
   notConsulted?: string[];
   /**
+   * Whether the reader may read every source the list could draw from, so it is the whole list:
+   * false says others may be left out without naming them, so a screen says so rather than reading
+   * as the whole list. Decided by the reader alone, never by what the list is about: a flag that
+   * followed the item asked about would tell the reader that something hidden uses it. Sent only
+   * by a list narrowed that way (a field group's "used by" list).
+   */
+  complete?: boolean;
+  /**
    * Records on this list the caller may not read, counted per scope (the
    * collection or Single they belong to), with nothing else about them.
    *

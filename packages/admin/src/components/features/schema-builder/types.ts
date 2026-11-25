@@ -501,7 +501,10 @@ export interface BuilderFieldsApi {
   handleFieldDelete: (fieldId: string) => void;
   handleFieldUpdate: (updatedField: BuilderField) => void;
   handleNestedFieldAdd: (parentFieldId: string, newField: BuilderField) => void;
-  validateFields: (userFields: BuilderField[]) => FieldBuilderValidationResult;
+  validateFields: (
+    userFields: BuilderField[],
+    saved?: readonly BuilderField[]
+  ) => FieldBuilderValidationResult;
   // The fields and the entity's settings share one history: see
   // `useFieldBuilder`'s `BuilderSnapshot`.
   settings: BuilderSnapshot["settings"];

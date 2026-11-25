@@ -32,7 +32,12 @@ import {
   type TranslatedColumn,
   type WriteSources,
 } from "../../i18n/provenance/source-text";
-import type { SharedStructureWritten } from "../../i18n/runtime/companion-io";
+import {
+  type CompanionSchema,
+  pruneOverlaysOfRemovedRows,
+  type SharedStructureWritten,
+  withStructuresBefore,
+} from "../../i18n/runtime/companion-io";
 import { cachedCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 import {
   assembleStoredValue,
@@ -100,6 +105,37 @@ export function singleProvenanceRecorded(
 }
 
 /**
+ * The rows `written` removed from a Single's repeater or group structure take their translations
+ * with them, in every language, on `tx`: each language's overlay pruned
+ * (`pruneOverlaysOfRemovedRows`), and every language's suggestions for and record of those rows
+ * forgotten. The one way every write of a Single's live structure drops a removed row's text: a
+ * save, a field rewrite and a publish of every language alike.
+ */
+export async function dropRemovedRowsText(
+  deps: Pick<SingleProvenanceDeps, "adapter" | "logger">,
+  tx: TransactionContext,
+  args: {
+    slug: string;
+    entryId: string;
+    companion: Pick<CompanionSchema, "table" | "companionTableName">;
+    written: SharedStructureWritten[];
+    /** The main row before the write, which tells a component instance that changed type. */
+    before?: Readonly<Record<string, unknown>>;
+    /** The languages whose overlay the write put down itself. */
+    writtenLocales?: readonly string[];
+  }
+): Promise<void> {
+  await pruneOverlaysOfRemovedRows(tx, deps.adapter.dialect, {
+    companionTable: args.companion.table,
+    companionTableName: args.companion.companionTableName,
+    parentId: args.entryId,
+    written: withStructuresBefore(args.written, args.before),
+    writtenLocales: args.writtenLocales,
+  });
+  await forgetRemovedSingleRows(deps, tx, args, args.written);
+}
+
+/**
  * Whether the source text translations are made from is kept on `tx`: the table is there, asked
  * as {@link singleProvenanceRecorded} asks for its own.
  */
@@ -140,7 +176,7 @@ export async function singleSourcePruning(
  * Forgets, in every language, the suggestions for and the record of each row a Single's write
  * removed from the structures it put on the main row, on its transaction.
  */
-export async function forgetRemovedSingleRows(
+async function forgetRemovedSingleRows(
   deps: Pick<SingleProvenanceDeps, "adapter" | "logger">,
   tx: TransactionContext,
   single: { slug: string; entryId: string },

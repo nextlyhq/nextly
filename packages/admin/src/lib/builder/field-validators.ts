@@ -231,10 +231,12 @@ const NO_REFUSED_MOVES: ReadonlyMap<string, string> = new Map();
 export function builderFieldErrors(
   fields: readonly BuilderField[],
   sources: readonly BuilderField[] = fields,
-  refusedMoves: ReadonlyMap<string, string> = NO_REFUSED_MOVES
+  refusedMoves: ReadonlyMap<string, string> = NO_REFUSED_MOVES,
+  /** The fields as last saved, for a condition naming a saved dropdown's former option. */
+  saved: readonly BuilderField[] = []
 ): Map<string, BuilderFieldError> {
   const errors = new Map<string, BuilderFieldError>();
-  const broken = brokenConditions(sources);
+  const broken = brokenConditions(sources, saved);
   const walk = (list: readonly BuilderField[]): void => {
     for (const field of list) {
       const condition = broken.get(field.id);
@@ -279,9 +281,17 @@ export function builderFieldErrors(
  */
 export function validateBuilderFields(
   userFields: BuilderField[],
-  sources: readonly BuilderField[] = userFields
+  sources: readonly BuilderField[] = userFields,
+  saved: readonly BuilderField[] = []
 ): FieldBuilderValidationResult {
-  const errors = [...builderFieldErrors(userFields, sources).values()];
+  const errors = [
+    ...builderFieldErrors(
+      userFields,
+      sources,
+      NO_REFUSED_MOVES,
+      saved
+    ).values(),
+  ];
   for (const kind of REPORT_ORDER) {
     const first = errors.find(error => error.kind === kind);
     if (first) return { valid: false, errorMessage: first.message };

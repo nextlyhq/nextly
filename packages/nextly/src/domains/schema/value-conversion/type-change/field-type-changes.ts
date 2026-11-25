@@ -20,6 +20,7 @@ import {
 import { ddlType } from "../../../i18n/migration/ddl-types";
 import { fieldToLocalizedColumnSpec } from "../../../i18n/migration/field-to-column-spec";
 import { storesPerLanguage } from "../../../i18n/per-language-storage";
+import { keepsTranslationsInside } from "../../../i18n/shared-structure";
 import { querySqlRows } from "../../pipeline/classifier/count-helpers";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
@@ -751,6 +752,15 @@ function refusalOf(
 }
 
 /**
+ * Why a change of a field kept per language is refused where its translations column would keep its
+ * old type (`changesTranslationsColumn`), in the save's words: the Schema Builder's type picker
+ * shows the same sentence for a type it offers as unavailable, so the two cannot say different
+ * things.
+ */
+export const TRANSLATIONS_COLUMN_KEEPS_ITS_TYPE =
+  "It is kept per language, in a translations table whose column a type change does not convert, so the change can't be deployed yet.";
+
+/**
  * Why a refused change can't go ahead as it stands, beyond its values' own reasons: its translations
  * column, its entity leaving translation, and a value the deploying cast would not clear or rewrite.
  */
@@ -761,11 +771,7 @@ function refusalReasons(of: {
   rewritten: boolean;
 }): string[] {
   const why: string[] = [];
-  if (of.translated) {
-    why.push(
-      "It is kept per language, in a translations table whose column a type change does not convert, so the change can't be deployed yet."
-    );
-  }
+  if (of.translated) why.push(TRANSLATIONS_COLUMN_KEEPS_ITS_TYPE);
   if (of.leaving) {
     why.push(
       "Its entity stops being translated in the same save, which moves each language's value out of the translations table as it is stored: turn off translation and save first, then change the field's type."
@@ -916,6 +922,8 @@ export async function fieldTypeChangeRefusals(
     nested: true,
   }).filter(change => entity.ignore?.has(changedFieldName(change)) !== true);
   if (changes.length === 0) return [];
+  const held = textHeldPerLanguageRefusals(entity, changes);
+  if (held.length > 0) return held;
   const pending =
     entity.migrationStatus === undefined
       ? null
@@ -945,6 +953,46 @@ export async function fieldTypeChangeRefusals(
     }),
     entity.acknowledged
   );
+}
+
+/**
+ * The refusal of each change that turns a translated text inside a repeater or group keeping its
+ * text per language (`keepsTranslationsInside`) into a type that is not translated, on an entity
+ * with a translations table. Each language's text is in the container's overlay column there, and
+ * a value of the new type is read from the structure alone, so the change judged over the
+ * structure finds nothing to lose and leaves every language's text behind: hidden, then lost at
+ * that language's next write. Refused until the overlays are converted with it, as a move into or
+ * out of such a container is. A change between two translated types keeps the text where it is
+ * read, and a field there that keeps no text (shared, or not text), is judged as before.
+ */
+function textHeldPerLanguageRefusals(
+  entity: EntityTypeChangeInput,
+  changes: readonly FieldTypeChange[]
+): TypeChangeRefusal[] {
+  if (entity.translationsTable === undefined) return [];
+  return changes.flatMap(change => {
+    const container = change.within?.container.from;
+    if (
+      container === undefined ||
+      !keepsTranslationsInside(container, true) ||
+      !isFieldLocalized(change.from, true) ||
+      isFieldLocalized(change.to, true)
+    ) {
+      return [];
+    }
+    const name = changedFieldName(change);
+    return [
+      {
+        path: name,
+        code: "TYPE_CHANGE_BLOCKED" as const,
+        message: [
+          `${entity.label}: field '${name}' cannot change from ${change.from.type} to ${change.to.type}.`,
+          `It is held inside '${container.name}', which keeps the text inside it for each language, and the change would leave each language's text in the old form. This is not available yet.`,
+          "A new field of the new type keeps the old values beside the new ones.",
+        ].join(" "),
+      },
+    ];
+  });
 }
 
 /** A refusal as a validation error lists it: by the field's path under `fields`. */
