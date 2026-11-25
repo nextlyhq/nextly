@@ -21,6 +21,8 @@ import type { PartReview } from "@admin/types/workflows";
 
 import { PublishPartsDialog, type PublishReview } from "../PublishPartsDialog";
 
+import { pressConfirm } from "./press-confirm";
+
 const api = vi.hoisted(() => ({
   publishParts: vi.fn(),
   findByID: vi.fn(),
@@ -51,6 +53,9 @@ const labelOf = (code: string) =>
 /** What Spanish's row says, once the server has described it. */
 const FIRST_TIME_IN_SPANISH =
   "Goes live for the first time: readers of Spanish see it.";
+
+/** What the dialog says while the server describes the parts chosen. */
+const CHECKING = "Checking what this does to each part…";
 
 /** The server's answer for a post whose shared fields are live. */
 function describing(choice: PublishPartsChoice): PublishPartsResult {
@@ -294,9 +299,11 @@ describe("Ready to publish?", () => {
     expect(
       screen.queryByRole("region", { name: "Ready to publish?" })
     ).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Publish selected" })
-    ).toBeEnabled();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Publish selected" })
+      ).toBeEnabled()
+    );
   });
 
   it("draws the dialog as before where no workflow is attached", async () => {
@@ -308,9 +315,11 @@ describe("Ready to publish?", () => {
     expect(
       screen.queryByRole("button", { name: "Publish without review…" })
     ).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Publish selected" })
-    ).toBeEnabled();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Publish selected" })
+      ).toBeEnabled()
+    );
   });
 });
 
@@ -363,6 +372,7 @@ describe("Publish without review", () => {
     // The part that needed it is no longer chosen: an approved one is.
     await user.click(screen.getByRole("checkbox", { name: "Spanish" }));
     await user.click(screen.getByRole("checkbox", { name: "English" }));
+    await waitFor(() => expect(screen.queryByText(CHECKING)).toBeNull());
     await user.click(
       screen.getByRole("button", { name: "Publish without review" })
     );
@@ -370,6 +380,91 @@ describe("Publish without review", () => {
     await waitFor(() => expect(moves()).toHaveLength(1));
     expect(moves()[0]).toMatchObject({ locales: ["en"] });
     expect(moves()[0]).not.toHaveProperty("withoutReview");
+  });
+
+  it("goes back to the parts, sending nothing, where the parts chosen since are not described yet", async () => {
+    const user = userEvent.setup();
+    const english = part({
+      part: "en",
+      stage: "approved",
+      stageLabel: "Approved",
+      publishable: true,
+      steps: [],
+    });
+    let describeEnglish: () => void = () => undefined;
+    api.publishParts.mockImplementation(
+      (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
+        new Promise(resolve => {
+          const answer = () => resolve(describing(choice));
+          if (choice.describe === true && String(choice.locales) === "en") {
+            describeEnglish = answer;
+          } else {
+            answer();
+          }
+        })
+    );
+    open(review([IN_REVIEW_ES, english], true));
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
+    await user.click(
+      await screen.findByRole("button", { name: "Publish without review…" })
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Reason" }),
+      "Legal deadline today."
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Spanish" }));
+    await user.click(screen.getByRole("checkbox", { name: "English" }));
+    await user.click(
+      screen.getByRole("button", { name: "Publish without review" })
+    );
+
+    const publish = await screen.findByRole("button", {
+      name: "Publish selected",
+    });
+    expect(publish).toBeDisabled();
+    expect(moves()).toEqual([]);
+
+    describeEnglish();
+    await pressConfirm(publish);
+    await waitFor(() => expect(moves()).toHaveLength(1));
+  });
+
+  it("stays usable while the description is refused for want of approval, which it goes past", async () => {
+    const user = userEvent.setup();
+    const unapproved = refusal([
+      { path: "es", code: "NOT_APPROVED", message: "Not approved." },
+    ]);
+    api.publishParts.mockImplementation(
+      (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
+        choice.describe === true
+          ? Promise.reject(unapproved)
+          : Promise.resolve(describing(choice))
+    );
+    open(review([IN_REVIEW_ES], true));
+    await screen.findByText("Not approved.");
+    expect(
+      screen.getByRole("button", { name: "Publish selected" })
+    ).toBeDisabled();
+
+    await user.click(
+      screen.getByRole("button", { name: "Publish without review…" })
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Reason" }),
+      "Legal deadline today."
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Publish without review" })
+    );
+
+    await waitFor(() =>
+      expect(moves()).toEqual([
+        expect.objectContaining({
+          locales: ["es"],
+          withoutReview: { reason: "Legal deadline today." },
+        }),
+      ])
+    );
   });
 
   it("does not offer it to a person who does not hold it", async () => {
