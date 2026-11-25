@@ -763,10 +763,22 @@ export function withStructuresBefore(
   if (stored === undefined) return [...written];
   return written.map(entry => ({
     ...entry,
-    before: Object.hasOwn(stored, entry.field)
-      ? stored[entry.field]
-      : stored[entry.column],
+    before: storedStructureOf(stored, entry),
   }));
+}
+
+/**
+ * A container's structure as a stored row holds it: under its field's name, as a row read through
+ * the runtime model keys it, else under its column, as a statement's row does. The one lookup
+ * every reader of a container's stored structure takes.
+ */
+export function storedStructureOf(
+  stored: Readonly<Record<string, unknown>>,
+  field: { field: string; column: string }
+): unknown {
+  return Object.hasOwn(stored, field.field)
+    ? stored[field.field]
+    : stored[field.column];
 }
 
 /**

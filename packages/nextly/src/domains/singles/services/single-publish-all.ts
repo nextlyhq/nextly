@@ -126,6 +126,7 @@ import {
   buildCompanionSchema,
   type CompanionSchema,
   sharedStructuresIn,
+  storedStructureOf,
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
@@ -2731,7 +2732,17 @@ export class SinglePublishAllService extends BaseService {
       where: this.whereEq("id", entryId),
     });
     const structures: Record<string, unknown> = { ...main };
-    for (const { column } of missing) structures[column] = row?.[column];
+    // Read under the key the row holds it by (`storedStructureOf`), and kept
+    // under its column, which the provenance record matches on. A structure
+    // not found is left out, so the overlay is recorded as it is rather than
+    // laid on nothing.
+    for (const { name, column } of missing) {
+      const structure =
+        row === null || row === undefined
+          ? undefined
+          : storedStructureOf(row, { field: name, column });
+      if (structure !== undefined) structures[column] = structure;
+    }
     return structures;
   }
 
