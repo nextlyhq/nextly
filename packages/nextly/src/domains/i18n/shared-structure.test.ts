@@ -352,6 +352,58 @@ describe("pruneOverlay", () => {
       expect(overlay).toEqual({});
     });
 
+    // Two types naming a translated field alike: the new type describes the field too, so only
+    // the structure before the write tells that the text there is the earlier type's.
+    describe("where both types name a translated field alike", () => {
+      const sameName = (slug: string) =>
+        slug === "hero" || slug === "cta"
+          ? [{ name: "title", type: "text" }]
+          : undefined;
+
+      it("drops the earlier type's text, told by the structure before the write", () => {
+        const shape = componentStructureShape(layout, sameName)!;
+        const { overlay, changed } = pruneOverlay(
+          { i1: { title: "Hola" }, i2: { title: "Adiós" } },
+          [
+            { id: "i1", _componentType: "cta" },
+            { id: "i2", _componentType: "hero" },
+          ],
+          shape,
+          [
+            { id: "i1", _componentType: "hero" },
+            { id: "i2", _componentType: "hero" },
+          ]
+        );
+        expect(changed).toBe(true);
+        // The second instance kept its type, and its text.
+        expect(overlay).toEqual({ i1: {}, i2: { title: "Adiós" } });
+      });
+
+      it("drops a single instance's text when it changed type", () => {
+        const shape = componentStructureShape(lead, sameName)!;
+        expect(
+          pruneOverlay({ title: "Hola" }, { _componentType: "cta" }, shape, {
+            _componentType: "hero",
+          })
+        ).toEqual({ overlay: {}, changed: true });
+      });
+    });
+
+    // A type whose fields translate nothing still names what an instance of it is: changed to it,
+    // the instance holds none of the earlier type's text.
+    it("drops the earlier type's text from an instance changed to a type translating nothing", () => {
+      const heroOnly = (slug: string) =>
+        slug === "hero"
+          ? [{ name: "title", type: "text" }]
+          : slug === "cta"
+            ? [{ name: "size", type: "number" }]
+            : undefined;
+      const shape = componentStructureShape(lead, heroOnly)!;
+      expect(
+        pruneOverlay({ title: "Hola" }, { _componentType: "cta" }, shape)
+      ).toEqual({ overlay: {}, changed: true });
+    });
+
     // The control: the instance kept its type, so nothing of its text goes.
     it("keeps an instance's text while its type stays", () => {
       const shape = componentStructureShape(lead, fieldsOf)!;

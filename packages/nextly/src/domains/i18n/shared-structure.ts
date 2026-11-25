@@ -333,10 +333,18 @@ export function componentStructureShape(
       fieldsOf,
       open: new Set([...open, slug]),
     });
-    if (shape) byType[slug] = shape;
+    // A type whose fields translate nothing keeps an empty shape: it still says what an instance
+    // of it holds, so one changed to it reads none of another type's text.
+    byType[slug] = shape ?? { kind, texts: [], inner: {} };
   }
   const shapes = Object.values(byType);
-  if (shapes.length === 0) return null;
+  if (
+    shapes.every(
+      shape => shape.texts.length === 0 && Object.keys(shape.inner).length === 0
+    )
+  ) {
+    return null;
+  }
   const texts = [...new Set(shapes.flatMap(shape => shape.texts))];
   const inner: Record<string, SharedStructureShape> = {};
   for (const shape of shapes) {
@@ -581,27 +589,32 @@ function asLevel(value: unknown): OverlayLevel {
  * `overlay` without the entries of rows `structure` no longer holds, at every depth, and whether
  * anything was dropped. Run on every language's overlay when a write changes the structure, so a
  * removed row's translations go with it rather than waiting for a row given its id again.
+ *
+ * `before`, the structure the write replaced, tells a component instance that kept its id but
+ * changed type: its text is the earlier type's, even for a field both types name alike, so it
+ * goes. Left out, an instance is judged by its type alone.
  */
 export function pruneOverlay(
   overlay: unknown,
   structure: unknown,
-  shape: SharedStructureShape
+  shape: SharedStructureShape,
+  before?: unknown
 ): { overlay: OverlayLevel; changed: boolean } {
   const parsed = valueOf(overlay);
   const level = isPlainRecord(parsed) ? parsed : {};
   const kept = valueOf(structure);
+  const earlier = valueOf(before);
   if (shape.kind === "group") {
     const structureKept = isPlainRecord(kept) ? kept : {};
-    return pruneLevel(level, structureKept, shape);
+    return pruneLevel(
+      level,
+      structureKept,
+      shape,
+      isPlainRecord(earlier) ? earlier : undefined
+    );
   }
-  const rows = new Map<string, Record<string, unknown>>();
-  if (Array.isArray(kept)) {
-    const keys = rowKeys(kept);
-    kept.forEach((row, index) => {
-      const id = keys[index];
-      if (id !== undefined && isPlainRecord(row)) rows.set(id, row);
-    });
-  }
+  const rows = keyedRowsOf(kept);
+  const earlierRows = keyedRowsOf(earlier);
   const out: OverlayLevel = {};
   let changed = false;
   for (const [id, entry] of Object.entries(level)) {
@@ -610,7 +623,7 @@ export function pruneOverlay(
       changed = true;
       continue;
     }
-    const pruned = pruneLevel(entry, row, shape);
+    const pruned = pruneLevel(entry, row, shape, earlierRows.get(id));
     out[id] = pruned.overlay;
     changed ||= pruned.changed;
   }
@@ -626,13 +639,22 @@ export function pruneOverlay(
 function pruneLevel(
   entry: OverlayLevel,
   structure: Record<string, unknown>,
-  levelShape: SharedStructureShape
+  levelShape: SharedStructureShape,
+  before?: Record<string, unknown>
 ): { overlay: OverlayLevel; changed: boolean } {
   const shape = shapeOfRow(structure, levelShape);
   const out: OverlayLevel = { ...entry };
   let changed = false;
-  if (shape !== levelShape) {
-    const own = new Set([...shape.texts, ...Object.keys(shape.inner)]);
+  // An instance whose type changed since `before` holds none of its text: all of it is the
+  // earlier type's, a field both types name alike among it.
+  const typeChanged =
+    levelShape.byType !== undefined &&
+    before !== undefined &&
+    readFieldGroupType(before) !== readFieldGroupType(structure);
+  if (typeChanged || shape !== levelShape) {
+    const own = new Set(
+      typeChanged ? [] : [...shape.texts, ...Object.keys(shape.inner)]
+    );
     const anyType = new Set([
       ...levelShape.texts,
       ...Object.keys(levelShape.inner),
@@ -646,11 +668,28 @@ function pruneLevel(
   }
   for (const [name, nestedShape] of Object.entries(shape.inner)) {
     if (!Object.hasOwn(out, name)) continue;
-    const nested = pruneOverlay(out[name], structure[name], nestedShape);
+    const nested = pruneOverlay(
+      out[name],
+      structure[name],
+      nestedShape,
+      before?.[name]
+    );
     out[name] = nested.overlay;
     changed ||= nested.changed;
   }
   return { overlay: out, changed };
+}
+
+/** A list's rows that have a key ({@link rowKeys}), by it; none for a value that is no list. */
+function keyedRowsOf(value: unknown): Map<string, Record<string, unknown>> {
+  const rows = new Map<string, Record<string, unknown>>();
+  if (!Array.isArray(value)) return rows;
+  const keys = rowKeys(value);
+  value.forEach((row, index) => {
+    const id = keys[index];
+    if (id !== undefined && isPlainRecord(row)) rows.set(id, row);
+  });
+  return rows;
 }
 
 /**

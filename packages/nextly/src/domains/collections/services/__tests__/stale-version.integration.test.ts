@@ -710,6 +710,13 @@ describe.each(getConfiguredTestDialects())(
         { overrideAccess: true } as never
       );
       expect(batch.errors, JSON.stringify(batch)).toEqual([]);
+      // The batch wrote English: a batch that skipped it would keep the version too.
+      const english = (await t.nextly.findByID({
+        collection: DOCS,
+        id,
+        locale: "en",
+      })) as { box: { label?: string; code?: string } };
+      expect(english.box).toMatchObject({ label: "Label again", code: "c1" });
 
       const fine = await update(
         t,
