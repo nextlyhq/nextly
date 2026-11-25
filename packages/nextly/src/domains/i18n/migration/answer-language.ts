@@ -32,8 +32,6 @@ interface AnsweringFile {
 export interface AnswerLanguageRefusal {
   file: string;
   message: string;
-  /** The language the file answers in, or none where it records none. */
-  answersIn: string | undefined;
 }
 
 /**
@@ -59,7 +57,7 @@ export function answerLanguageRefusal(
     answersIn === undefined
       ? `it fills or deletes entries by their default language's values, and records no language they are decided in; this project's default language is "${runsIn}".`
       : `its answers are decided in "${answersIn}", and this project's default language is "${runsIn}".`;
-  return { file: `${name}.sql`, message, answersIn };
+  return { file: `${name}.sql`, message };
 }
 
 /**
@@ -125,9 +123,6 @@ export function answerLanguageError(
   runsIn: string,
   before: "run" | "file" = "run"
 ): NextlyError {
-  const languages = [
-    ...new Set(refusals.flatMap(refusal => refusal.answersIn ?? [])),
-  ];
   const one = refusals.length === 1;
   const what = `${one ? "A migration's" : `${refusals.length} migrations'`} answers are not recorded as decided in this project's default language, "${runsIn}".`;
   const why = [
@@ -136,14 +131,9 @@ export function answerLanguageError(
   ].join("\n");
   const them = one ? "it" : "them";
   const again = `Where no environment has applied ${them}, delete ${them} and make the save again with "${runsIn}" as the default language.`;
-  const [language, ...others] = languages;
-  const asWritten =
-    language === undefined
-      ? ""
-      : others.length === 0
-        ? ` Where one has, make "${language}" the default language here, run \`nextly migrate\`, then make "${runsIn}" the default again.`
-        : ` Where one has, run each with its own language as the default here (\`nextly migrate --step 1\`), then make "${runsIn}" the default again.`;
-  const next = `${again}${asWritten}`;
+  const file = one ? refusals[0]?.file : "<file>";
+  const byHand = `Where one has, do ${one ? "its" : "each file's"} other statements by hand, settle the entries in "${runsIn}" by hand, and record ${one ? "it" : "the file"} with \`nextly migrate:resolve --applied ${file}\`.`;
+  const next = `${again} ${byHand}`;
   return NextlyError.conflict({
     reason: "state",
     message: `${what} ${why} ${next}`,

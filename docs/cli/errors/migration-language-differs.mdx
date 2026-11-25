@@ -28,8 +28,7 @@ The default language is the one `localization.defaultLocale` declares in the con
 Which one to use depends on whether an environment has applied the file:
 
 - **No environment has applied it.** Delete the file and its snapshot, and make the save again with the right default language. The new file records it.
-- **An environment has applied it, and it should settle the same entries here.** Make the language the file records the default here, run `nextly migrate`, then make the other language the default again.
-- **An environment has applied it, and it should settle the entries by this project's own default language.** Run the file's other statements by hand, fill or delete the entries with no value in your default language, and record the file with `nextly migrate:resolve --applied <migration>`.
+- **An environment has applied it.** Do the file's other statements by hand, fill or delete the entries with no value in your default language, and record the file with `nextly migrate:resolve --applied <file>`. A translations table's file has no snapshot to compare the database with, so record it with `--skip-verify` too.
 
 The dry run (`nextly migrate --dry-run`) names the files a run would refuse.
 
@@ -39,6 +38,6 @@ The dry run (`nextly migrate --dry-run`) names the files a run would refuse.
 ✗ A migration's answers are not recorded as decided in this project's default language, "es".
   Why:  20261021_090000_require_body.sql: its answers are decided in "en", and this project's default language is "es".
         Run here, its statements would settle other entries than the ones answered for. Nothing was changed.
-  Next: Where no environment has applied it, delete it and make the save again with "es" as the default language. Where one has, make "en" the default language here, run `nextly migrate`, then make "es" the default again.
+  Next: Where no environment has applied it, delete it and make the save again with "es" as the default language. Where one has, do its other statements by hand, settle the entries in "es" by hand, and record it with `nextly migrate:resolve --applied 20261021_090000_require_body.sql`.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-language-differs  (MIGRATION_LANGUAGE_DIFFERS)
 ```
