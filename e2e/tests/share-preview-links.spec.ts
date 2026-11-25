@@ -12,6 +12,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { chooseFromMainMenu } from "./support/document-bar";
 import { olderPreviewToken } from "./support/preview-links";
 import { LOCK } from "./support/locks";
 
@@ -43,10 +44,9 @@ async function blockPage(page: Page, title: string): Promise<string> {
   return item.id;
 }
 
-/** Open the share popover from the preview control's menu. */
+/** Open the share popover from the main button's menu. */
 async function openShare(page: Page): Promise<void> {
-  await page.getByRole("button", { name: /preview options$/i }).click();
-  await page.getByRole("menuitem", { name: "Share preview link…" }).click();
+  await chooseFromMainMenu(page, "Share preview link…");
   await expect(
     page.getByRole("heading", { name: "Share a preview" })
   ).toBeVisible();
@@ -190,9 +190,8 @@ test.describe("sharing a preview", () => {
       await page.setViewportSize({ width: 390, height: 844 });
       await gotoAdmin(page, `/collections/block-pages/${id}`);
 
-      // The preview control folds into the document's menu at this width.
-      await page.getByRole("button", { name: "More actions" }).click();
-      await page.getByRole("menuitem", { name: "Share preview link…" }).click();
+      // The same row of the main button's menu at this width.
+      await chooseFromMainMenu(page, "Share preview link…");
       await expect(
         page.getByRole("heading", { name: "Share a preview" })
       ).toBeVisible();

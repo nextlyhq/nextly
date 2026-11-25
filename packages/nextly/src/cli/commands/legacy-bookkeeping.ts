@@ -534,7 +534,8 @@ function backupDeclined(): NextlyError {
  * Moves the migration records an earlier release kept into
  * `nextly_schema_events`, for a `nextly migrate` run that found a legacy
  * table. Returns once the legacy tables are gone, so the run reads its
- * history where every check expects it.
+ * history where every check expects it: true where this run moved them, false
+ * where another run had already.
  *
  * In order: the tables are read whole, so one the run cannot move is refused
  * with nothing asked; the backup is confirmed, by the flag or by a yes at a
@@ -544,11 +545,11 @@ function backupDeclined(): NextlyError {
  */
 export async function consolidateLegacyBookkeeping(
   args: ConsolidateLegacyArgs
-): Promise<void> {
+): Promise<boolean> {
   const context = contextOf(args);
   // Nothing left to move: another run moved the records while this one was
   // starting. Nobody is asked and nothing is refused; the run carries on.
-  if ((await planWhileLegacyStands(context)) === undefined) return;
+  if ((await planWhileLegacyStands(context)) === undefined) return false;
 
   await confirmBackup({
     backupConfirmed: args.backupConfirmed,
@@ -559,6 +560,8 @@ export async function consolidateLegacyBookkeeping(
   });
 
   await args.beforeLock?.();
+  // Whether this run made the move, rather than one it waited behind.
+  let moved = false;
   await withMigrateLock(
     args.adapter,
     args.dialect,
@@ -567,6 +570,7 @@ export async function consolidateLegacyBookkeeping(
       // moved the records already, and then there is nothing left to do.
       if (!(await detectLegacyBookkeeping(context.adapter)).hasLegacy) return;
       const written = await run(context);
+      moved = true;
       args.log(
         `Moved the migration records of an earlier release into ${EVENTS_TABLE}: ${String(written)} written.`
       );
@@ -579,6 +583,7 @@ export async function consolidateLegacyBookkeeping(
       logger: { warn: args.warn, info: args.log },
     }
   );
+  return moved;
 }
 
 /**

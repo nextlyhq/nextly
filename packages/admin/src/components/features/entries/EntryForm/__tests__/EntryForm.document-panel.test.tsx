@@ -186,14 +186,15 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("the entry editor's document panel", () => {
-  it("reads Status, Publishing and Details beside the fields", () => {
+  it("reads Status and Details beside the fields", () => {
     renderEditor();
     const panel = dockedPanel();
     expect(panel).toHaveAttribute("data-document-panel", "docked");
     const sections = within(panel!)
       .getAllByRole("region")
       .map(section => section.getAttribute("data-panel-section"));
-    expect(sections).toEqual(["Status", "Publishing", "Details"]);
+    // No Publishing section: it is drawn only while the document is scheduled.
+    expect(sections).toEqual(["Status", "Details"]);
     expect(
       within(panel!).getByRole("region", { name: "Status" })
     ).toHaveTextContent("This document is published and up to date.");
@@ -327,7 +328,7 @@ describe("a side panel section declared to sit above the form on a phone", () =>
     const sections = within(dockedPanel()!)
       .getAllByRole("region")
       .map(section => section.getAttribute("data-panel-section"));
-    expect(sections).toEqual(["Design", "Status", "Publishing", "Details"]);
+    expect(sections).toEqual(["Design", "Status", "Details"]);
   });
 });
 

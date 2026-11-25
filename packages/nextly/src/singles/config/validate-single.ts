@@ -92,6 +92,9 @@ export type SingleValidationErrorCode =
   | "FIELD_NAME_TOO_LONG"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NEVER_TRANSLATABLE"
+  // `localized: true` on a repeater, group or field group, which keeps one structure in every
+  // language: the fields inside are marked instead.
+  | "FIELD_STRUCTURE_NOT_TRANSLATABLE"
   | "FIELD_NAME_DUPLICATE"
   // A field named after a column the system injects onto the Single's table.
   | "FIELD_NAME_RESERVED"

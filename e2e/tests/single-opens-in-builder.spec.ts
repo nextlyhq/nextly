@@ -16,6 +16,7 @@ import { STORAGE_STATE } from "../global-setup";
 
 import { block, clickBlock, pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
+import { mainMenuRow } from "./support/document-bar";
 import { signInAsLimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
 import { waitForShellAnswers } from "./support/shell-geometry";
@@ -123,12 +124,13 @@ test.describe("where a Single opens", () => {
       await expect(page.getByRole("region", { name: section })).toBeVisible();
     }
 
-    // The form leads back by its bar, beside History, and by the card.
-    await expect(
-      page
-        .getByTestId("document-bar")
-        .getByRole("link", { name: "Open in builder", exact: true })
-    ).toHaveAttribute("href", BUILDER_URL);
+    // The form leads back by its bar, on the main button's menu, and by the
+    // card. The row is a link, to its address.
+    await expect(await mainMenuRow(page, "Open in builder")).toHaveAttribute(
+      "href",
+      BUILDER_URL
+    );
+    await page.keyboard.press("Escape");
     await page
       .locator('[data-slot="page-builder-card"]')
       .getByRole("link", { name: "Open in builder", exact: true })

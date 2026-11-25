@@ -241,8 +241,11 @@ export type Target = (typeof TARGETS)[number];
  * - `bulk`: the REST bulk routes by ids, which the admin's entry list sends
  *   its row and bulk Delete, Publish and Unpublish through, answered by the
  *   entry's own result among the items.
+ * - `sample`: the real records an email template's owner offers for its test
+ *   data (`GET /api/email-templates/[id]/sample-records`), from a template
+ *   whose records are read from the target.
  *
- * The last four were added after the others, and come last, so every column
+ * The last five were added after the others, and come last, so every column
  * already in the answers file keeps its place.
  */
 export const DOORS = [
@@ -260,6 +263,7 @@ export const DOORS = [
   "lock",
   "capabilities",
   "bulk",
+  "sample",
 ] as const;
 export type Door = (typeof DOORS)[number];
 
@@ -477,6 +481,15 @@ const REACH: Record<Door, Reach> = {
     callers: NOT_PRINCIPAL,
     targets: { collection: ["update", "delete", ...PUBLISHING] },
   },
+  // A template's real records are read from a collection or from users, and
+  // only by staff: the route refuses anyone not signed in before any
+  // decision, and a plugin's person never reaches the admin. Every staff
+  // caller who holds a target's read also holds `read-email-templates`, which
+  // the route asks first, so the answer is the target's read.
+  sample: {
+    callers: SIGNED_IN,
+    targets: { collection: READ, users: READ },
+  },
 };
 
 /** What each door asks without the access-control service. */
@@ -533,6 +546,7 @@ const REACH_BY_SETUP: Record<Setup, Partial<Record<Door, Reach>>> = {
     population: REACH.population,
     lock: REACH.lock,
     bulk: REACH.bulk,
+    sample: REACH.sample,
   },
 };
 
@@ -1032,8 +1046,34 @@ const CELL_DOORS: ReadonlySet<Door> = new Set<Door>(["capabilities", "widget"]);
  * The one answer as `door` gives it (see {@link YES_OR_NO_DOORS} and
  * {@link CELL_DOORS}).
  */
+/**
+ * The doors that hand what they read to code given no filter: an email
+ * template's records are read by its owner's loader, which would read past a
+ * rule's filter, so a read the filter limits is refused there.
+ */
+const WHOLE_READ_DOORS: ReadonlySet<Door> = new Set<Door>(["sample"]);
+
+/** The callers past every rule, whose read no filter limits. */
+const PAST_EVERY_RULE: readonly Caller[] = [
+  "super-admin",
+  "super-admin-inherited",
+  "key-super-admin",
+];
+
+/** Whether the row's read is one a rule's filter limits to some entries. */
+function readIsFiltered(row: Row): boolean {
+  return (
+    !PAST_EVERY_RULE.includes(row.caller) &&
+    rulesLet(row.rule, judgedAs(row.action), row.caller, row.target) ===
+      "matching"
+  );
+}
+
 export function oneAnswerAt(row: Row, door: Door): Verdict {
   const answer = oneAnswer(row);
+  if (WHOLE_READ_DOORS.has(door) && answer === "allow" && readIsFiltered(row)) {
+    return "refuse";
+  }
   if (answer !== "matching") return answer;
   if (CELL_DOORS.has(door)) return "allow";
   if (YES_OR_NO_DOORS.has(door)) {

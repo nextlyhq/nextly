@@ -80,6 +80,7 @@ import type {
 import { databaseEnvError, exitWithError, exitWithJsonError } from "../errors";
 import type { CommandContext } from "../program";
 import {
+  cameAfterConnecting,
   createCliAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
@@ -263,6 +264,17 @@ function endWithError(
 }
 
 /**
+ * What `--json` says of a database that could not be used: that the connection failed, unless
+ * the failure came after the database had opened.
+ */
+function openFailureText(error: unknown): string {
+  const text = describeError(error);
+  return cameAfterConnecting(error)
+    ? text
+    : `Failed to connect to database: ${text}`;
+}
+
+/**
  * Execute the migrate:status command
  *
  * @param options - Combined global and command options
@@ -333,12 +345,7 @@ export async function runMigrateStatus(
     });
     logger.debug("Database connected");
   } catch (error) {
-    endWithError(
-      options,
-      logger,
-      `Failed to connect to database: ${describeError(error)}`,
-      error
-    );
+    endWithError(options, logger, openFailureText(error), error);
   }
 
   try {

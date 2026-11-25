@@ -8,6 +8,10 @@
  * serves the order, and the limit stops the read. Index only: no column and no
  * row changes.
  *
+ * The index is read back by its ordered columns and its uniqueness, not by its
+ * name alone: an index of that name in another column order, or a unique one,
+ * would no longer serve the order or would refuse rows.
+ *
  * A fresh database has it because the push creates the table with it. The
  * case that matters is an installation that already has the table, so each
  * dialect is reconciled once, has the index removed behind the differ's back,
@@ -35,6 +39,60 @@ const INDEXES = ["nextly_review_states_waiting_idx"] as const;
 type Dialect = "postgresql" | "mysql" | "sqlite";
 type Adapter = Awaited<ReturnType<typeof createAdapter>>;
 
+/** The rows a raw query answers, however the driver wraps them. */
+async function rowsOf(adapter: Adapter, sql: string): Promise<unknown[]> {
+  const rows = (await adapter.executeQuery(sql)) as unknown;
+  const list = Array.isArray(rows)
+    ? rows
+    : ((rows as { rows?: unknown[] }).rows ?? []);
+  return Array.isArray(list[0]) ? (list[0] as unknown[]) : list;
+}
+
+const WAITING_IDX = "nextly_review_states_waiting_idx";
+
+/**
+ * The waiting index as the live database reports it: its columns in index
+ * order, and whether it is unique. Null when there is no such index.
+ */
+async function waitingSignature(
+  adapter: Adapter,
+  dialect: Dialect
+): Promise<{ columns: string[]; unique: boolean } | null> {
+  const columnsSql = {
+    postgresql: `SELECT a.attname AS col FROM pg_index i
+            JOIN pg_class c ON c.oid = i.indexrelid
+            JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+            WHERE c.relname = '${WAITING_IDX}' ORDER BY k.ord`,
+    mysql: `SELECT column_name AS col FROM information_schema.statistics
+            WHERE table_schema = DATABASE() AND table_name = 'nextly_review_states'
+            AND index_name = '${WAITING_IDX}' ORDER BY seq_in_index`,
+    sqlite: `SELECT name AS col FROM pragma_index_info('${WAITING_IDX}') ORDER BY seqno`,
+  }[dialect];
+  const uniqueSql = {
+    postgresql: `SELECT i.indisunique AS uniq FROM pg_index i
+            JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = '${WAITING_IDX}'`,
+    mysql: `SELECT DISTINCT (non_unique = 0) AS uniq FROM information_schema.statistics
+            WHERE table_schema = DATABASE() AND table_name = 'nextly_review_states'
+            AND index_name = '${WAITING_IDX}'`,
+    sqlite: `SELECT "unique" AS uniq FROM pragma_index_list('nextly_review_states')
+            WHERE name = '${WAITING_IDX}'`,
+  }[dialect];
+  const columns = (await rowsOf(adapter, columnsSql)).map(row =>
+    String(
+      (row as { col?: string; COL?: string }).col ??
+        (row as { COL?: string }).COL ??
+        ""
+    )
+  );
+  const [uniq] = await rowsOf(adapter, uniqueSql);
+  if (columns.length === 0 || uniq === undefined) return null;
+  const flag =
+    (uniq as { uniq?: unknown; UNIQ?: unknown }).uniq ??
+    (uniq as { UNIQ?: unknown }).UNIQ;
+  return { columns, unique: flag === true || Number(flag) === 1 };
+}
+
 /** The indexes the live database reports on `nextly_review_states`. */
 async function liveIndexes(adapter: Adapter, dialect: Dialect) {
   const sql = {
@@ -43,11 +101,7 @@ async function liveIndexes(adapter: Adapter, dialect: Dialect) {
             WHERE table_schema = DATABASE() AND table_name = 'nextly_review_states'`,
     sqlite: `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'nextly_review_states'`,
   }[dialect];
-  const rows = (await adapter.executeQuery(sql)) as unknown;
-  const list = Array.isArray(rows)
-    ? rows
-    : ((rows as { rows?: unknown[] }).rows ?? []);
-  return (Array.isArray(list[0]) ? (list[0] as unknown[]) : list).map(row =>
+  return (await rowsOf(adapter, sql)).map(row =>
     String((row as { name?: string; NAME?: string }).name ?? "")
   );
 }
@@ -98,6 +152,7 @@ async function upgrade(url: string, dialect: Dialect) {
     // The control: a fresh database has it, or "it came back" would be a
     // claim about an index that was never declared.
     const fresh = await holdsAll(connected, dialect);
+    const freshSignature = await waitingSignature(connected, dialect);
     for (const name of INDEXES) {
       await connected.executeQuery(dropStatement(name, dialect));
     }
@@ -106,8 +161,17 @@ async function upgrade(url: string, dialect: Dialect) {
     );
     const upgradeChanged = (await run()).changed;
     const upgraded = await holdsAll(connected, dialect);
+    const upgradedSignature = await waitingSignature(connected, dialect);
     const againChanged = (await run()).changed;
-    return { fresh, dropped, upgradeChanged, upgraded, againChanged };
+    return {
+      fresh,
+      freshSignature,
+      dropped,
+      upgradeChanged,
+      upgraded,
+      upgradedSignature,
+      againChanged,
+    };
   } finally {
     await adapter?.disconnect?.();
     if (prevUrl === undefined) delete process.env.DATABASE_URL;
@@ -117,11 +181,19 @@ async function upgrade(url: string, dialect: Dialect) {
   }
 }
 
+/** The order the waiting list reads in, and no uniqueness: parts share all but their key. */
+const SIGNATURE = {
+  columns: ["scope_kind", "scope_slug", "stage", "entered_at", "part_key"],
+  unique: false,
+};
+
 const EXPECTED = {
   fresh: true,
+  freshSignature: SIGNATURE,
   dropped: true,
   upgradeChanged: true,
   upgraded: true,
+  upgradedSignature: SIGNATURE,
   againChanged: false,
 };
 

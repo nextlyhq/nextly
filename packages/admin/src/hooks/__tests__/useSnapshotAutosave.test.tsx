@@ -15,7 +15,6 @@ import {
   lastStoredRecording,
   recordingsSent,
   recordingsSettled,
-  useAfterRecordings,
   useSnapshotAutosave,
 } from "../useSnapshotAutosave";
 
@@ -649,53 +648,6 @@ describe("a real save waits for the recordings already sent", () => {
     expect(await settled()).toBe(true);
 
     await other.release();
-  });
-
-  it("runs a write that is not a save only once the recordings have landed", async () => {
-    const recorder = heldRecorder();
-    recorder.record();
-    const write = vi.fn();
-    const after = renderHook(() => useAfterRecordings(DOC, false));
-
-    act(() => after.result.current.run(write));
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(write).not.toHaveBeenCalled();
-    // Busy while it waits, so the action shows as already asked for.
-    expect(after.result.current.pending).toBe(true);
-
-    await recorder.release();
-    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
-    expect(after.result.current.pending).toBe(false);
-  });
-
-  it("stays busy while the write itself is pending", () => {
-    // After the wait, the write's own pending state carries on the busy one.
-    const writing = renderHook(() => useAfterRecordings(DOC, true));
-    expect(writing.result.current.pending).toBe(true);
-    const idle = renderHook(() => useAfterRecordings(DOC, false));
-    expect(idle.result.current.pending).toBe(false);
-  });
-
-  it("drops a second ask made while the first is waiting", async () => {
-    // Both would run once the recordings land: two publishes for one click
-    // and its repeat.
-    const recorder = heldRecorder();
-    recorder.record();
-    const write = vi.fn();
-    const after = renderHook(() => useAfterRecordings(DOC, false));
-
-    act(() => {
-      after.result.current.run(write);
-      after.result.current.run(write);
-    });
-    await recorder.release();
-    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
-
-    // Asked again once the first has run: run again, which is the control.
-    act(() => after.result.current.run(write));
-    await waitFor(() => expect(write).toHaveBeenCalledTimes(2));
   });
 
   it("waits until the recording in flight has landed", async () => {

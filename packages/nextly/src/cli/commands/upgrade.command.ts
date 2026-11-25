@@ -36,6 +36,6 @@ export function registerUpgradeCommand(program: Command): void {
       .action(
         lazyAction(async () => (await import("./upgrade")).upgradeAction)
       ),
-    startLine("Starting the upgrade...")
+    startLine("Starting the upgrade...", "no database")
   );
 }

@@ -321,6 +321,31 @@ function readClaimToken(body: { claimToken?: unknown }): string {
   return claimToken;
 }
 
+/**
+ * The claim a claim may take back, when it names one: see
+ * `acquireDocumentLock`. Refused rather than ignored when it is not a token,
+ * since read as a plain claim it could take the document from the caller's
+ * own other tab.
+ */
+function readReclaimToken(body: {
+  reclaimToken?: unknown;
+}): string | undefined {
+  const { reclaimToken } = body;
+  if (reclaimToken === undefined) return undefined;
+  if (typeof reclaimToken !== "string" || reclaimToken === "") {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "reclaimToken",
+          code: "invalid",
+          message: "A reclaim names the claim token it takes back.",
+        },
+      ],
+    });
+  }
+  return reclaimToken;
+}
+
 async function readBody(req: Request): Promise<Record<string, unknown>> {
   // Parsed and inspected separately. Wrapping the shape check in the same
   // `try` would make a rejection of it indistinguishable from malformed JSON,
@@ -402,6 +427,7 @@ export const readLock = withErrorHandler(async (req: Request) => {
  */
 export const acquireLock = withErrorHandler(async (req: Request) => {
   const { auth, body, ref, held, authenticated } = await claimRequest(req);
+  const reclaimToken = readReclaimToken(body);
 
   const acquired = await (
     await getDocumentLockService()
@@ -420,6 +446,7 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
       // Read the same way `takeover` is, and for the same reason: anything
       // other than the boolean is not a person asking for anything.
       requestAccess: body.requestAccess === true,
+      ...(reclaimToken === undefined ? {} : { reclaimToken }),
     }
   );
   const outcome = await withChange(

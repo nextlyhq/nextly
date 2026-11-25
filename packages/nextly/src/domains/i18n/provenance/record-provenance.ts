@@ -788,3 +788,58 @@ export async function forgetDocumentProvenance(
     ],
   });
 }
+
+/**
+ * Removes, in every language, the live record of each row a write removed from a repeater's one
+ * structure (`<field>#<row id>` for a row no longer in `structure`), on `db`, the write's own
+ * transaction. A structure is one for every language, so removing a row removes it from every
+ * language at once: its record goes with it everywhere, as its text does
+ * (`pruneOverlaysOfRemovedRows`), rather than lingering as the record of a row a language no
+ * longer has. A held draft's records are its own, and go live or are discarded with it.
+ *
+ * @experimental
+ */
+export async function forgetRemovedRowsProvenance(
+  db: Pick<ProvenanceDb, "select" | "delete">,
+  document: Pick<ProvenanceWrite, "scopeKind" | "scopeSlug" | "entryId">,
+  written: ReadonlyArray<{
+    /** The field's name, which its records' paths begin with. */
+    field: string;
+    /** The structure written, as stored (JSON text allowed). */
+    structure: unknown;
+    kind: "repeater" | "group";
+  }>
+): Promise<void> {
+  // Only a repeater's structure has rows; a group's records are the field's own.
+  const lists = written.filter(entry => entry.kind === "repeater");
+  if (lists.length === 0) return;
+  const records = await db.select<{ id: string; fieldPath: string }>(
+    TRANSLATION_PROVENANCE_TABLE,
+    {
+      columns: ["id", "fieldPath"],
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: document.scopeKind },
+          { column: "scopeSlug", op: "=", value: document.scopeSlug },
+          { column: "entryId", op: "=", value: document.entryId },
+          { column: "partState", op: "=", value: "live" },
+        ],
+      },
+    }
+  );
+  const gone = lists.flatMap(({ field, structure }) => {
+    const prefix = `${field}${ROW_PATH_SEPARATOR}`;
+    const rows = rowsOf(writtenValueOf(structure, true));
+    return records
+      .filter(
+        record =>
+          record.fieldPath.startsWith(prefix) &&
+          !rows.has(record.fieldPath.slice(prefix.length))
+      )
+      .map(record => record.id);
+  });
+  if (gone.length === 0) return;
+  await db.delete(TRANSLATION_PROVENANCE_TABLE, {
+    and: [{ column: "id", op: "IN", value: gone }],
+  });
+}

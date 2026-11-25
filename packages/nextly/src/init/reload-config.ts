@@ -110,6 +110,7 @@ import {
 } from "../domains/schema/pipeline/recorded-fields";
 import {
   configTheCodeOwns,
+  configWithRecordedHandOvers,
   isCodeOwned,
   mergeRegisteredCollectionsSafely,
   withoutHandedToBuilder,
@@ -1543,6 +1544,8 @@ async function ensureLocalizedCompanionsForReload(
           // entity kind; a kind with no history correctly seeds nothing.
           versionScope: versionScopeForEntityKind(kind),
           recordedBefore: recordedBeforeOf(recordedBefore, kind, entity.slug),
+          // A container's overlay column added now is seeded as the default language's text.
+          defaultLocale: transitions?.defaultLocale,
         },
         error => {
           companionRefused = true;
@@ -2454,7 +2457,12 @@ async function applyReloadHolding(
           }),
       dialect,
       plugins: newConfig.plugins ?? [],
-      config: newConfig,
+      // A collection handed to the Schema Builder as its record has it, from the rows this reload
+      // judges everything else by: a hook on its table is judged by the columns the table keeps.
+      config: configWithRecordedHandOvers(
+        newConfig,
+        await registeredCollections.catch(() => [])
+      ),
       // The connected server's limits: a reload that declares a check the
       // server will not enforce is refused here, before the push that would
       // apply it.

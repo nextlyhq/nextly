@@ -98,6 +98,9 @@ export type FieldGroupValidationErrorCode =
   | "FIELD_NAME_TOO_LONG"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NEVER_TRANSLATABLE"
+  // `localized: true` on a repeater, group or field group, which keeps one structure in every
+  // language: the fields inside are marked instead.
+  | "FIELD_STRUCTURE_NOT_TRANSLATABLE"
   // `unique` on a relation holding a list, which no dialect keeps (`uniqueOnListError`).
   | "UNIQUE_NOT_ON_LIST"
   | "FIELD_NAME_DUPLICATE"

@@ -1,10 +1,12 @@
 /**
- * The page's "Choose what to publish…" sends what the editor's copy started from, as the editor's
- * own Publish every language does: the copy the editor shows is handed to the action, so a publish
- * of chosen parts made over a newer change than the one on screen is refused as stale.
+ * The page's "Choose what to publish…" sends what the editor's copy started from: the copy the
+ * editor shows is handed to the action, so a publish of chosen parts made over a newer change
+ * than the one on screen is refused as stale. And on a document in several languages, what
+ * Publish runs is handed to the editor.
  *
  * The plausible broken page builds the action without the editor's copy, so the publish reads the
- * server's version just before it is sent and never compares it with what the editor shows. The
+ * server's version just before it is sent and never compares it with what the editor shows; or
+ * leaves the editor's Publish as it is, publishing past another language's waiting change. The
  * form is replaced by one that hands up a copy; the page's wiring is the code under test.
  *
  * @module pages/dashboard/singles/[slug]/publish-parts-shown.test
@@ -27,9 +29,17 @@ let documentQuery: {
   isNonDefaultLocale: boolean;
 };
 
-/** What the page handed the publish-parts action. */
+/** What the page handed the publish-parts action, and its editor. */
 const handed = vi.hoisted(() => ({
   shown: undefined as undefined | (() => ShownCopy | undefined),
+  smartPublish: undefined as unknown,
+}));
+
+/** The site's languages: none, until a test gives it some. */
+const site = vi.hoisted(() => ({
+  defaultLocale: undefined as string | undefined,
+  enabled: false,
+  locales: [] as { code: string; label: string }[],
 }));
 
 /** The copy the editor shows: older than the Single as stored. */
@@ -49,7 +59,14 @@ vi.mock("@admin/components/features/singles", async importOriginal => {
     await importOriginal<typeof import("@admin/components/features/singles")>();
   return {
     ...actual,
-    SingleForm: ({ shownCopy }: { shownCopy?: ShownCopyHandle }) => {
+    SingleForm: ({
+      shownCopy,
+      smartPublish,
+    }: {
+      shownCopy?: ShownCopyHandle;
+      smartPublish?: unknown;
+    }) => {
+      handed.smartPublish = smartPublish;
       if (shownCopy) shownCopy.current = () => ON_SCREEN;
       return null;
     },
@@ -77,7 +94,7 @@ vi.mock("@admin/components/features/releases/ScheduleDocumentAction", () => ({
   useScheduleDocumentAction: () => ({ dialog: null, contributed: null }),
 }));
 vi.mock("@admin/hooks/useLocalization", () => ({
-  useLocalization: () => ({ defaultLocale: undefined, enabled: false }),
+  useLocalization: () => site,
 }));
 vi.mock("@admin/hooks/useEditorLocale", () => ({
   useEditorLocale: () => ({
@@ -98,8 +115,32 @@ vi.mock("@admin/hooks/useTranslationMode", () => ({
 
 import SingleEditPage from "./index";
 
+/** A site in English and Spanish, whose Single is translated. */
+function inTwoLanguages(): void {
+  site.defaultLocale = "en";
+  site.enabled = true;
+  site.locales = [
+    { code: "en", label: "English" },
+    { code: "es", label: "Spanish" },
+  ];
+  schemaQuery = {
+    ...schemaQuery,
+    data: {
+      slug: "home",
+      label: "Home",
+      fields: [],
+      status: true,
+      localized: true,
+    },
+  };
+}
+
 beforeEach(() => {
   handed.shown = undefined;
+  handed.smartPublish = undefined;
+  site.defaultLocale = undefined;
+  site.enabled = false;
+  site.locales = [];
   schemaQuery = {
     data: {
       slug: "home",
@@ -125,5 +166,20 @@ describe("choosing what to publish on a Single's page", () => {
     renderWithProviders(<SingleEditPage params={{ slug: "home" }} />);
 
     expect(handed.shown?.()).toEqual(ON_SCREEN);
+  });
+});
+
+describe("what the Single's Publish runs", () => {
+  it("is handed to the editor of a Single in several languages", () => {
+    inTwoLanguages();
+    renderWithProviders(<SingleEditPage params={{ slug: "home" }} />);
+
+    expect(handed.smartPublish).toBeTypeOf("function");
+  });
+
+  it("stays the editor's own on a site in one language", () => {
+    renderWithProviders(<SingleEditPage params={{ slug: "home" }} />);
+
+    expect(handed.smartPublish).toBeUndefined();
   });
 });

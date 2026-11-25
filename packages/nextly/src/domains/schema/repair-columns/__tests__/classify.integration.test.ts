@@ -487,12 +487,9 @@ describe.each(getConfiguredTestDialects())(
       const field =
         dialect === "sqlite"
           ? f({ name: "score", type: "number", localized: true })
-          : f({
-              name: "items",
-              type: "repeater",
-              localized: true,
-              fields: [{ name: "url", type: "text" }],
-            });
+          : // A JSON field translated whole: a repeater keeps one structure in every language
+            // and no longer moves to the translation table.
+            f({ name: "meta", type: "json", localized: true });
       const locale = dialect === "mysql" ? "varchar(16)" : "text";
       await run(
         `CREATE TABLE ${q(LOCALES)} (${q("_parent")} ${keyType} NOT NULL, ${q("_locale")} ${locale} NOT NULL, ${q(field.name)} text, PRIMARY KEY (${q("_parent")}, ${q("_locale")}))`
