@@ -225,6 +225,7 @@ const NO_REVIEW: TranslationReview = {
   binding: undefined,
   part: undefined,
   refusal: null,
+  attached: false,
   clearRefusal: () => undefined,
   dialog: null,
 };

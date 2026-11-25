@@ -376,8 +376,6 @@ export function TranslationActions(
 ): JSX.Element {
   const { document, language, rules, standing, readOnly, removed } = props;
   const { review, around } = props;
-  // A workflow holds the language: its step leads, as it does in the editor.
-  const inWorkflow = review.binding !== undefined;
   const { isDirty, isSaving, save } = props.editing;
   const can = languageActions({
     language: language.label,
@@ -389,7 +387,7 @@ export function TranslationActions(
     removed,
     isDirty,
     isSaving,
-    inWorkflow,
+    inWorkflow: review.attached,
   });
   const { actions, arrow, opening, onCloseAutoFocus } = useReturnFocus();
   const asking = useAsking();
@@ -424,7 +422,8 @@ export function TranslationActions(
             asking.ask("offline");
           }}
           reviewed={
-            inWorkflow ? (
+            // Where the language waits, its step leads, as it does in the editor.
+            review.binding !== undefined ? (
               <ReviewedActions
                 {...props}
                 can={can}

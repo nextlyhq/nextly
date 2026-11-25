@@ -98,6 +98,12 @@ export interface VersionComparePageProps {
    */
   entityLocalized?: boolean;
   /**
+   * The fields written in each language by itself. A version of a language
+   * other than the default is restored where that language is written, which
+   * takes back these alone. Absent until the schema says.
+   */
+  writtenPerLanguage?: ReadonlySet<string> | undefined;
+  /**
    * The pair from the URL. Either may be absent on a link that names none;
    * `from` may name the version before `to` in its language (`previous`).
    */
@@ -378,12 +384,14 @@ export function VersionComparePage({
   documentTitle,
   listCrumb,
   entityLocalized = false,
+  writtenPerLanguage,
   from,
   to,
   locale,
   view,
 }: VersionComparePageProps): JSX.Element {
   const list = useVersions({ scope, locale });
+  const { locales, defaultLocale } = useLocalization();
   // `useCan` answers false while permissions load, which is the right default
   // here: the read-only destination is reachable by everyone who can reach this
   // page, so an unresolved permission costs a less specific target rather than
@@ -605,7 +613,6 @@ export function VersionComparePage({
   }, [shown, scope, locale, view]);
 
   // The language the versions are listed in, as the history panel's filter.
-  const { locales } = useLocalization();
   const chooseLocale = useCallback(
     (code: string) =>
       navigateTo(versionsHref(scope, undefined, code || undefined, view)),
@@ -686,11 +693,20 @@ export function VersionComparePage({
     [restoreTarget, documentHref]
   );
   const mayRestore = canEditDocument && restoreTarget !== null;
+  // Whether the page that restores the version can take the field back.
+  const takesBack = useCallback(
+    (name: string) =>
+      writtenPerLanguage === undefined ||
+      restoreTarget?.locale == null ||
+      restoreTarget.locale === defaultLocale ||
+      writtenPerLanguage.has(name),
+    [writtenPerLanguage, restoreTarget, defaultLocale]
+  );
   // "Restore this field" on each field the version changed that the form
   // still has; the editor's list judges whether the person may restore it.
   const fieldAction = useCallback(
     (node: FieldDiff) =>
-      isFieldChange(node) && "label" in node ? (
+      isFieldChange(node) && "label" in node && takesBack(node.name) ? (
         <Button
           type="button"
           variant="link"
@@ -703,7 +719,7 @@ export function VersionComparePage({
           Restore this field
         </Button>
       ) : null,
-    [handToEditor]
+    [handToEditor, takesBack]
   );
 
   const trail: BreadcrumbItem[] = [

@@ -173,34 +173,44 @@ const EDITOR_ADDRESS =
 const TRANSLATION_ADDRESS =
   /^\/admin\/translations\/(?:collections\/[^/]+\/[^/]+|singles\/[^/]+)$/;
 
+/** What a translation page shows beside its form: a source, and its history. */
+const BESIDE_TRANSLATION: readonly string[] = [
+  SOURCE_PARAM,
+  ...HISTORY_ADDRESS_PARAMS,
+];
+
+/** The keys that change only what an address's page shows beside its form. */
+function keysBeside(pathname: string): readonly string[] {
+  if (EDITOR_ADDRESS.test(pathname)) return [DOCUMENT_TAB_PARAM];
+  return TRANSLATION_ADDRESS.test(pathname) ? BESIDE_TRANSLATION : [];
+}
+
 /**
  * Whether a move changes nothing but what the form's page shows beside it: the
  * same address but for an editor's open tab, or for a translation page's
- * source. That keeps the same form mounted on every editor, a new entry's
- * among them, which has no document to stay on yet.
+ * source and history. That keeps the same form mounted on every editor, a new
+ * entry's among them, which has no document to stay on yet.
  */
 function showsAnotherPart(
   from: { pathname: string; search: string },
   to: { pathname: string; search: string }
 ): boolean {
   if (from.pathname !== to.pathname) return false;
-  const part = EDITOR_ADDRESS.test(from.pathname)
-    ? DOCUMENT_TAB_PARAM
-    : TRANSLATION_ADDRESS.test(from.pathname)
-      ? SOURCE_PARAM
-      : undefined;
-  if (part === undefined) return false;
+  const beside = keysBeside(from.pathname);
+  if (beside.length === 0) return false;
   const was = new URLSearchParams(from.search);
   const next = new URLSearchParams(to.search);
-  was.delete(part);
-  next.delete(part);
+  for (const key of beside) {
+    was.delete(key);
+    next.delete(key);
+  }
   return was.toString() === next.toString();
 }
 
 /**
  * Whether a move is between one document's edit address and its own views,
  * opens or moves through its history beside it, opens another of its editor's
- * tabs, or shows another source beside its translation. The same page answers
+ * tabs, or shows another source or the history beside its translation. The same page answers
  * all of them and keeps the same form mounted, so nothing unsaved is left
  * behind. Any other query change — a language among them — still counts, and
  * so does another document's view.

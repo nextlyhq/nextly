@@ -100,6 +100,16 @@ vi.mock("../useMarkVersionSeen", () => ({
   useMarkVersionSeen: (...a: unknown[]) => seenMock(...a),
 }));
 
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({
+    enabled: false,
+    locales: [],
+    defaultLocale: "en",
+    fallback: true,
+    getLocale: () => undefined,
+  }),
+}));
+
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (...a: unknown[]) => canMock(...a) as boolean,
 }));
@@ -627,6 +637,51 @@ describe("VersionComparePage, its choices", () => {
     expect(
       screen.queryByRole("button", { name: /Restore this field: subtitle/ })
     ).toBeNull();
+  });
+
+  it("offers one field of another language's version only where that language is written with it", () => {
+    // The text is written where its language is; a field every language
+    // shares, or one written elsewhere, can't be put back from there.
+    drawn.locale = "fr";
+    renderPage({
+      from: 4,
+      to: 5,
+      entityLocalized: true,
+      writtenPerLanguage: new Set(["title"]),
+    });
+    expect(
+      screen.getByRole("button", { name: "Restore this field: Title" })
+    ).toBeInTheDocument();
+  });
+
+  it("offers none of a field the language isn't written with", () => {
+    drawn.locale = "fr";
+    renderPage({
+      from: 4,
+      to: 5,
+      entityLocalized: true,
+      writtenPerLanguage: new Set(["summary"]),
+    });
+    expect(
+      screen.queryByRole("button", { name: /Restore this field/ })
+    ).toBeNull();
+    // The version's own restore still lists what can be put back.
+    expect(
+      screen.getByRole("button", { name: /^Restore .*…$/ })
+    ).toBeInTheDocument();
+  });
+
+  it("offers every field of a version in the default language, which the editor takes", () => {
+    drawn.locale = "en";
+    renderPage({
+      from: 4,
+      to: 5,
+      entityLocalized: true,
+      writtenPerLanguage: new Set(),
+    });
+    expect(
+      screen.getByRole("button", { name: "Restore this field: Title" })
+    ).toBeInTheDocument();
   });
 
   it("offers no restore to a reader who may not edit the document", () => {
