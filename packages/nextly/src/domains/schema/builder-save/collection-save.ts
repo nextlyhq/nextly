@@ -77,7 +77,6 @@ import {
   fieldGroupRegistryUnreadable,
   readStoredFieldGroupTables,
 } from "../../field-groups/services/field-group-stored-tables";
-import { isFieldLocalized } from "../../i18n/classify-fields";
 import {
   COMPANION_KEY_COLUMNS,
   COMPANION_LOCALE_COLUMN,
@@ -107,6 +106,7 @@ import {
   companionTableExists,
   liveColumnsOf,
 } from "../../i18n/runtime/companion-io";
+import { hasTranslationColumn } from "../../i18n/shared-structure";
 import type { VersionsWhereCondition } from "../../versions/db-api";
 import { snapshotRecord } from "../../versions/shared-publish-base";
 import { WORKING_DRAFT_SHAPE } from "../../versions/versions-repository";
@@ -1351,9 +1351,10 @@ async function desiredTable(
   if (main === undefined || !storesPerLanguage(entity)) return main;
   // An entity that keeps its translatable values per language has their columns in its
   // translations table: each one as the companion's own derive declares it (always nullable, a
-  // translation's column), judged beside the main table's under a name of its own.
+  // translation's column), judged beside the main table's under a name of its own. A repeater or a
+  // group holding text has one there too, beside its structure on the main table.
   const translated = declared.fields.flatMap(field => {
-    if (!isFieldLocalized(field, true)) return [];
+    if (!hasTranslationColumn(field, true)) return [];
     const column = fieldToLocalizedColumnSpec(field, dialect, kind.builtBy);
     return column === null
       ? []

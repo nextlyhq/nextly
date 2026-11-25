@@ -447,6 +447,46 @@ describe.skipIf(!getConfiguredTestDialects().includes("mysql"))(
           ]);
         }, 300_000);
 
+        // A group's column for each language's text is in the translations table, beside the fields'
+        // own there: it is as the definition declares it, before the save and after it.
+        it.runIf(perLanguage)(
+          "settles a stop of a Single that holds a group keeping its text per language",
+          async () => {
+            const t = await boot();
+            const box: BuilderField = {
+              name: "box",
+              type: "group",
+              fields: [text("label")],
+            };
+            await save(t, [field("heading"), box]);
+            expect(
+              (await liveColumns(t)).filter(name => name === "box"),
+              "one column on each table"
+            ).toHaveLength(2);
+
+            await killSave(
+              t,
+              [field("heading"), box, field("subtitle"), field("summary")],
+              afterAdding("subtitle")
+            );
+            const killedAt = await liveColumns(t);
+            expect(killedAt).toContain("subtitle");
+            expect(killedAt).not.toContain("summary");
+            await clearStoppedHolds(t);
+
+            const settled = await settle(t);
+
+            expect(settled.map(s => s.outcome)).toEqual(["partial"]);
+            expect(await recordRow(t), "the record clears").toBeUndefined();
+            expect(await registryFieldNames(t)).toEqual([
+              "heading",
+              "box",
+              "subtitle",
+            ]);
+          },
+          300_000
+        );
+
         /** Killed after the first of two added columns: the table holds `subtitle` and not `summary`. */
         async function killedAfterFirstAdd(t: TestNextly): Promise<void> {
           await killSave(
