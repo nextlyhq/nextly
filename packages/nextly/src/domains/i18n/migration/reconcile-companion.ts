@@ -28,6 +28,7 @@ import {
 import {
   buildCompanionCreateOnlySql,
   buildLocalizationUpStatements,
+  type LocalizationUpOptions,
   COMPANION_UPDATED_AT_COLUMN,
   companionUpdatedAtDdl,
 } from "./generate-up";
@@ -610,6 +611,13 @@ function companionStatusStatements(
 
 /** Which localization transition a reconcile is performing. */
 export interface CompanionTransitionArgs {
+  /**
+   * The main table's indexes as the database has them (`readTableIndexes`), where the caller read
+   * them: turning translation on drops each moved column, and an index standing on one alone goes
+   * first, while one standing on it with other columns refuses the change before anything runs
+   * (`LocalizationUpOptions.mainIndexes`).
+   */
+  mainIndexes?: LocalizationUpOptions["mainIndexes"];
   slug: string;
   /** Which kind of entity `slug` names, recorded with the archive rows this change writes. */
   kind: I18nTransitionKind;
@@ -917,7 +925,12 @@ export function buildCompanionTransitionStatements(
       .filter(n => oldColumnNames.has(n));
     return {
       statements: [
-        ...buildLocalizationUpStatements(spec),
+        ...buildLocalizationUpStatements(
+          spec,
+          args.mainIndexes === undefined
+            ? {}
+            : { mainIndexes: args.mainIndexes }
+        ),
         // The companion is new, so every unique translated field's index is created.
         ...uniqueIndexDelta({ ...args, liveCompanionIndexes: [] }).creates,
       ],

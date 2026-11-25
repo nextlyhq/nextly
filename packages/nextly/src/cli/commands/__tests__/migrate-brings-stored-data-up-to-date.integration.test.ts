@@ -19,6 +19,7 @@
  * - a database with nothing of the kind asked for a backup it does not need;
  * - a dry run that hashes, or that names no work.
  */
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +51,7 @@ import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+import { fileLedgerDdl, journalDdl } from "./helpers/legacy-bookkeeping-tables";
 
 // `nextly migrate` as every installation runs it: per-language storage (`storage-layout`).
 perLanguageStorageSuite();
@@ -89,7 +91,11 @@ const STEP = "hash passwords stored before this release";
  * The site's collection, with or without the field its second migration adds, in the languages
  * `locales` names (the first the default) where given.
  */
-function configWith(summary: boolean, locales?: readonly string[]) {
+function configWith(
+  summary: boolean,
+  locales?: readonly string[],
+  sharedTitle = false
+) {
   return defineConfig({
     ...(locales === undefined
       ? {}
@@ -103,7 +109,7 @@ function configWith(summary: boolean, locales?: readonly string[]) {
       defineCollection({
         slug: "msd-entries",
         fields: [
-          text({ name: "title" }),
+          text({ name: "title", ...(sharedTitle ? { localized: false } : {}) }),
           group({
             name: "box",
             fields: [text({ name: "label" }), password({ name: "pin" })],
@@ -217,6 +223,7 @@ describe.each(getConfiguredTestDialects())(
         backupConfirmed?: boolean;
         dryRun?: boolean;
         step?: number;
+        acceptDataLoss?: true;
       } = {}
     ): Promise<string[]> {
       const { context, said } = command();
@@ -228,11 +235,14 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** `migrate:create` for the configuration as it stands. */
-    async function capture(name: string): Promise<void> {
+    async function capture(
+      name: string,
+      options: { acceptDataLoss?: true } = {}
+    ): Promise<void> {
       tick();
       const { context, said } = command();
       try {
-        await runMigrateCreate(name, { cwd: state.dir }, context);
+        await runMigrateCreate(name, { cwd: state.dir, ...options }, context);
       } catch (error) {
         throw new Error(
           `migrate:create failed: ${messageOf(error)}\n${said.join("\n")}`
@@ -331,6 +341,65 @@ describe.each(getConfiguredTestDialects())(
       // The run the refusal names finishes the work.
       await migrate({ backupConfirmed: true });
       expect(isPasswordHash(await storedPin())).toBe(true);
+    }, 240_000);
+
+    // Whether a `--step` leaves migrations pending is read from the run's own plan, not from a
+    // count: `--step 0` limits nothing there, so it takes every waiting migration and is refused
+    // before they apply. Broken (the count of pending migrations against the step), they apply
+    // first and the refusal comes after them.
+    it("under --step 0, which limits nothing, refuses before the migrations apply", async () => {
+      await siteHoldingAPlainPassword("plain-pin");
+
+      const refusal = await migrate({ step: 0 }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect((refusal as NextlyError).logContext).toMatchObject({
+        reason: "data-steps-backup-not-confirmed",
+        afterMigrations: false,
+      });
+      expect(toCliError(refusal).why).toContain("Nothing was changed");
+      expect(await summaryColumnExists()).toBe(false);
+      expect(await storedPin()).toBe("plain-pin");
+    }, 240_000);
+
+    // A step that ends inside a move runs on to close it: the title leaving translation is three
+    // files (its archive, the main table's change, its shared value), and `--step 1` takes all
+    // three, so it reaches the data steps and is refused before the move applies. Broken (three
+    // pending against a step of one), the move applies and the refusal comes after it.
+    it("under --step 1 ending inside a move, which the run closes, refuses before the move applies", async () => {
+      setNonInteractive(true);
+      state.config = configWith(false, ["en", "pt-BR"]);
+      await capture("entries");
+      await migrate();
+      const now =
+        dialect === "sqlite" ? String(Date.now()) : "CURRENT_TIMESTAMP";
+      const box = JSON.stringify({ label: "front door", pin: "plain-pin" });
+      await sql(
+        `INSERT INTO ${id(TABLE)} (${id("id")}, ${id("slug")}, ${id("box")}, ${id("created_at")}, ${id("updated_at")}) VALUES ('entry-1', 'first', '${box}', ${now}, ${now})`
+      );
+      state.config = configWith(false, ["en", "pt-BR"], true);
+      await capture("title-shared", { acceptDataLoss: true });
+
+      const refusal = await migrate({ step: 1 }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect((refusal as NextlyError).logContext).toMatchObject({
+        reason: "data-steps-backup-not-confirmed",
+        afterMigrations: false,
+      });
+      expect(await storedPin()).toBe("plain-pin");
+      // The move did not apply: the title is still kept per language, off the main table.
+      const titleOnMain = await sql(
+        `SELECT ${id("title")} FROM ${id(TABLE)} WHERE 1 = 0`
+      ).then(
+        () => true,
+        () => false
+      );
+      expect(titleOnMain).toBe(false);
     }, 240_000);
 
     it("applies the migration and hashes the password once the backup is confirmed, then has nothing left to do", async () => {
@@ -441,6 +510,77 @@ describe.each(getConfiguredTestDialects())(
       expect(NextlyError.isCode(refusal, "NEXTLY_LANGUAGE_CODES_COLLIDE")).toBe(
         true
       );
+      expect(await summaryColumnExists()).toBe(false);
+    }, 240_000);
+
+    // A collection the configuration no longer has is removed by the waiting migration, its
+    // translations table with it, so the run never reaches the two spellings that table holds: it
+    // applies, refusing nothing. Broken, the count before the migration still finds the collection
+    // in the registry and refuses the rows the migration is about to delete, with no way through.
+    // A dry run describes the same run, so it lists no such refusal either.
+    it("refuses nothing over the rows of a collection the waiting migration removes", async () => {
+      await siteWithTwoSpellings();
+      state.config = defineConfig({
+        localization: { locales: ["en", "pt-BR"], defaultLocale: "en" },
+        collections: [],
+        db: { migrationsDir: "./migrations" },
+      });
+      await capture("removed", { acceptDataLoss: true });
+
+      const previewed = await migrate({
+        dryRun: true,
+        backupConfirmed: true,
+        acceptDataLoss: true,
+      });
+      expect(previewed.join("\n")).not.toContain("Rows under both");
+
+      await migrate({ backupConfirmed: true, acceptDataLoss: true });
+
+      const tables = await on(adapter => adapter.listTables());
+      expect(tables).not.toContain(TABLE);
+      expect(tables).not.toContain(`${TABLE}_locales`);
+    }, 240_000);
+
+    /**
+     * The database's migration records as an earlier release kept them: each applied file in
+     * `nextly_migrations`, one finished push in `nextly_migration_journal`, and no events table.
+     */
+    async function recordsAsAnEarlierReleaseKeptThem(): Promise<void> {
+      const files = await sql(
+        `SELECT ${id("filename")} AS filename, ${id("sha256")} AS sha256 FROM ${id("nextly_schema_events")} WHERE ${id("event_type")} = 'file_apply' AND ${id("status")} = 'applied'`
+      );
+      expect(files.length).toBeGreaterThan(0);
+      for (const statement of fileLedgerDdl(dialect)) await sql(statement);
+      for (const file of files) {
+        await sql(
+          `INSERT INTO ${id("nextly_migrations")} (${id("id")}, ${id("filename")}, ${id("sha256")}, ${id("status")}${dialect === "sqlite" ? `, ${id("applied_at")}` : ""}) VALUES ('${randomUUID()}', '${String(file.filename)}', '${String(file.sha256)}', 'applied'${dialect === "sqlite" ? `, ${Date.now()}` : ""})`
+        );
+      }
+      await sql(journalDdl(dialect));
+      await sql(
+        `INSERT INTO ${id("nextly_migration_journal")} (${id("id")}, ${id("source")}, ${id("status")}, ${id("duration_ms")}) VALUES ('${randomUUID()}', 'ui', 'success', 12)`
+      );
+      await sql(`DROP TABLE ${id("nextly_schema_events")}`);
+    }
+
+    // The earlier release's records move first, under their own lock, and are kept: a refusal
+    // the count of the stored data makes after them names that move as applied, never "Nothing
+    // was changed". Broken, it ends with "Nothing was changed" though the move committed.
+    it("names the move of an earlier release's records in a refusal made after it", async () => {
+      await siteWithTwoSpellings();
+      await recordsAsAnEarlierReleaseKeptThem();
+
+      const refusal = await confirmedRefusal();
+
+      expect(NextlyError.isCode(refusal, "NEXTLY_LANGUAGE_CODES_COLLIDE")).toBe(
+        true
+      );
+      expect(messageOf(refusal)).not.toContain("Nothing was changed");
+      expect(messageOf(refusal)).toContain("nextly_schema_events");
+      // The records moved, and the waiting migration did not apply.
+      const tables = await on(adapter => adapter.listTables());
+      expect(tables).toContain("nextly_schema_events");
+      expect(tables).not.toContain("nextly_migrations");
       expect(await summaryColumnExists()).toBe(false);
     }, 240_000);
 
