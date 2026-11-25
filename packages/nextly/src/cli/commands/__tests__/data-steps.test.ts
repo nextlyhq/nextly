@@ -7,10 +7,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
-import { runDataSteps, type DataStepsDeps } from "../data-steps";
+import { NextlyError } from "../../../errors";
+import {
+  previewDataSteps,
+  refusalOfSteps,
+  runDataSteps,
+  type DataStepsDeps,
+} from "../data-steps";
 import { runConvertZonedDates } from "../i18n-convert-zoned-dates";
+import {
+  LOCALISATION_DATA_STEPS,
+  versionPasswordsStep,
+} from "../upgrade-steps";
 import { planWithStoredData } from "../stored-data-of-run";
-import type { UpgradeAdapter, UpgradeStep } from "../upgrade-step";
+import {
+  NOTHING_CHANGED,
+  type UpgradeAdapter,
+  type UpgradeStep,
+} from "../upgrade-step";
 
 /** What the lock ran, in order, with what happened around it. */
 const order = vi.hoisted(() => ({ events: [] as string[] }));
@@ -217,6 +231,268 @@ describe("the steps over data an earlier release stored", () => {
   });
 });
 
+describe("the refusal asked of the steps before anything changes", () => {
+  let adapter: UpgradeAdapter;
+
+  beforeEach(async () => {
+    adapter = makeAdapter(await createTestDb());
+  });
+
+  /** A step of `group` with work to do. */
+  const busy = (group?: string): UpgradeStep => ({
+    title: "tidy one thing",
+    ...(group === undefined ? {} : { group }),
+    pending: () => Promise.resolve(1),
+    run: () => Promise.resolve(1),
+  });
+  /** A step of `group` whose count refuses on the database as it stands. */
+  const refusing = (group?: string): UpgradeStep => ({
+    title: "split what was tidied",
+    ...(group === undefined ? {} : { group }),
+    pending: () =>
+      Promise.reject(
+        new NextlyError({
+          code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
+          publicMessage: `Two saves at one moment. ${NOTHING_CHANGED}`,
+        })
+      ),
+    run: () => Promise.resolve(1),
+  });
+  const refusalOf = (steps: readonly UpgradeStep[]) =>
+    refusalOfSteps(
+      { adapter, steps, log: () => undefined, warn: () => undefined },
+      () => true
+    );
+  const previewOf = (steps: readonly UpgradeStep[]) =>
+    previewDataSteps({
+      adapter,
+      command: "nextly migrate",
+      steps,
+      backupConfirmed: true,
+      interactive: false,
+      log: () => undefined,
+      warn: () => undefined,
+    });
+
+  it("makes a later step's refusal where the earlier step with work is of another group", async () => {
+    const steps = [busy("passwords"), refusing("translations")];
+
+    expect(await refusalOf(steps)).toMatchObject({
+      publicMessage: `Two saves at one moment. ${NOTHING_CHANGED}`,
+    });
+    expect((await previewOf(steps)).refusals).toEqual([
+      `Two saves at one moment. ${NOTHING_CHANGED}`,
+    ]);
+  });
+
+  // The refusing step reads what the busy one repairs, so its count holds only once that has run.
+  // Broken, the refusal is made of a database the run never reaches the step with.
+  it("leaves a step's refusal to the run where an earlier step of its group has work", async () => {
+    const steps = [busy("translations"), refusing("translations")];
+
+    expect(await refusalOf(steps)).toBeUndefined();
+    const plan = await previewOf(steps);
+    expect(plan.refusals ?? []).toEqual([]);
+    // Named all the same, as one the run may make once the earlier step has run.
+    expect(plan.notes).toContainEqual(
+      expect.stringContaining(
+        '"split what was tidied" may be refused once "tidy one thing" has run'
+      )
+    );
+  });
+
+  // A count that waits for an earlier step and cannot be read now is named too, rather than
+  // left out of the plan. Broken, the dry run says nothing of it.
+  it("names a count that waits for an earlier step and cannot be read now", async () => {
+    const unreadable: UpgradeStep = {
+      title: "read what was tidied",
+      group: "translations",
+      pending: () => Promise.reject(new Error("no such column")),
+      run: () => Promise.resolve(1),
+    };
+
+    const plan = await previewOf([busy("translations"), unreadable]);
+
+    expect(plan.notes).toContainEqual(
+      expect.stringContaining(
+        '"read what was tidied" could not be counted before "tidy one thing" has run'
+      )
+    );
+  });
+
+  /** A run of `steps` after the command applied `schemaChanges`, a backup confirmed. */
+  const runOf = (steps: readonly UpgradeStep[], schemaChanges?: string) =>
+    runDataSteps({
+      adapter,
+      command: "nextly migrate",
+      steps,
+      backupConfirmed: true,
+      interactive: false,
+      log: () => undefined,
+      warn: () => undefined,
+      ...(schemaChanges === undefined ? {} : { schemaChanges }),
+    });
+
+  // The refusal comes after the schema changes and the earlier step, which stay applied. Broken,
+  // it still says nothing was changed.
+  it("says what applied before a refusal the run makes after earlier work, and what to do next", async () => {
+    const refusal = await runOf(
+      [busy("translations"), refusing("translations")],
+      "the 1 migration this run applied"
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(
+      NextlyError.isCode(refusal, "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED")
+    ).toBe(true);
+    const message = (refusal as NextlyError).publicMessage;
+    expect(message).toContain("Two saves at one moment.");
+    expect(message).toContain("the 1 migration this run applied");
+    expect(message).toContain('the step "tidy one thing" (1)');
+    expect(message).toContain("stay applied");
+    expect(message).toContain("then run `nextly migrate` again");
+    expect(message).not.toContain(NOTHING_CHANGED);
+    expect((refusal as NextlyError).logContext).toMatchObject({
+      appliedBefore: {
+        schemaChanges: "the 1 migration this run applied",
+        steps: ["tidy one thing"],
+      },
+    });
+  });
+
+  // The run's first count is a refusal's first chance after the schema changes too. Broken, that
+  // refusal still says nothing was changed.
+  it("says what applied before a refusal the run's first count makes after the schema changes", async () => {
+    const refusal = await runOf(
+      [refusing("translations")],
+      "the 2 migrations this run applied"
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    const message = (refusal as NextlyError).publicMessage;
+    expect(message).toContain("the 2 migrations this run applied");
+    expect(message).not.toContain(NOTHING_CHANGED);
+  });
+
+  // What each real step repairs and reads: removing the version history's passwords changes what
+  // the draft split compares, and nothing the code conversion reads. Broken (one group for both),
+  // a code collision is not judged up front once the history holds a password.
+  it("judges the code conversion up front past the version history's passwords, and the draft split after them", async () => {
+    const real = (title: string) => {
+      const found = [versionPasswordsStep, ...LOCALISATION_DATA_STEPS].find(
+        step => step.title.startsWith(title)
+      );
+      if (!found) throw new Error(`no step "${title}"`);
+      return found;
+    };
+    const withWork = (step: UpgradeStep): UpgradeStep => ({
+      ...step,
+      pending: () => Promise.resolve(1),
+    });
+    const refusingAs = (step: UpgradeStep): UpgradeStep => ({
+      ...step,
+      pending: refusing().pending,
+    });
+    const passwords = withWork(
+      real("remove passwords kept in version history")
+    );
+
+    expect(
+      await refusalOf([passwords, refusingAs(real("convert language codes"))])
+    ).toBeDefined();
+    expect(
+      await refusalOf([passwords, refusingAs(real("split pending changes"))])
+    ).toBeUndefined();
+  });
+
+  // Keying the pending changes rewrites only the version history's keys, which the values move
+  // never reads, so the move's refusal (values on both tables, nothing saying which is current) is
+  // made before anything applies. Broken, the localisation steps are one group, and that refusal
+  // waits for the run, after the migrations and the keying have applied.
+  it("judges the values move up front past the keying, and still after the code conversion", async () => {
+    const real = (title: string) => {
+      const found = LOCALISATION_DATA_STEPS.find(step =>
+        step.title.startsWith(title)
+      );
+      if (!found) throw new Error(`no step "${title}"`);
+      return found;
+    };
+    const withWork = (step: UpgradeStep): UpgradeStep => ({
+      ...step,
+      pending: () => Promise.resolve(1),
+    });
+    const refusingAs = (step: UpgradeStep): UpgradeStep => ({
+      ...step,
+      pending: refusing().pending,
+    });
+    const keys = withWork(real("give every pending change its key"));
+    const codes = withWork(real("convert language codes"));
+    const values = refusingAs(real("store translatable values per language"));
+
+    expect(await refusalOf([keys, values])).toMatchObject({
+      publicMessage: `Two saves at one moment. ${NOTHING_CHANGED}`,
+    });
+    // The code conversion renames what the move reads, so its refusal waits for it.
+    expect(await refusalOf([codes, values])).toBeUndefined();
+    // The draft split reads the keys, so it still waits for the keying.
+    expect(
+      await refusalOf([keys, refusingAs(real("split pending changes"))])
+    ).toBeUndefined();
+  });
+
+  // The one structure for repeaters and groups translated whole converts the values per language,
+  // and the draft split is split against what it writes. Broken (the step left in no group of its
+  // own, or one the others do not read), its refusal waits for the keying it never reads, or the
+  // draft split is judged before the structure it compares against.
+  it("judges the one structure past the keying, after the values move, and the draft split after it", async () => {
+    const real = (title: string) => {
+      const found = LOCALISATION_DATA_STEPS.find(step =>
+        step.title.startsWith(title)
+      );
+      if (!found) throw new Error(`no step "${title}"`);
+      return found;
+    };
+    const withWork = (step: UpgradeStep): UpgradeStep => ({
+      ...step,
+      pending: () => Promise.resolve(1),
+    });
+    const refusingAs = (step: UpgradeStep): UpgradeStep => ({
+      ...step,
+      pending: refusing().pending,
+    });
+    const keys = withWork(real("give every pending change its key"));
+    const values = withWork(real("store translatable values per language"));
+    const structures = real("keep one structure for repeaters and groups");
+
+    expect(await refusalOf([keys, refusingAs(structures)])).toMatchObject({
+      publicMessage: `Two saves at one moment. ${NOTHING_CHANGED}`,
+    });
+    expect(await refusalOf([values, refusingAs(structures)])).toBeUndefined();
+    expect(
+      await refusalOf([
+        withWork(structures),
+        refusingAs(real("split pending changes")),
+      ])
+    ).toBeUndefined();
+  });
+
+  it("keeps a refusal made before anything applied as the step made it", async () => {
+    await expect(runOf([refusing("translations")])).rejects.toMatchObject({
+      publicMessage: `Two saves at one moment. ${NOTHING_CHANGED}`,
+    });
+  });
+
+  it("takes a step with no group as one of its own", async () => {
+    expect(await refusalOf([busy(), refusing()])).toMatchObject({
+      publicMessage: `Two saves at one moment. ${NOTHING_CHANGED}`,
+    });
+  });
+});
+
 describe("nextly i18n:convert-zoned-dates", () => {
   let testDb: TestDb;
   let adapter: UpgradeAdapter;
@@ -320,5 +596,27 @@ describe("a command's dry-run plan with the data steps it takes after", () => {
         { takesSteps: true }
       )
     ).toBe(sync);
+    // A report that lists nothing adds nothing either.
+    expect(
+      planWithStoredData(
+        sync,
+        { changes: [], report: { move: [], conflicts: [], check: [] } },
+        { takesSteps: true }
+      )
+    ).toBe(sync);
+  });
+
+  // A step can have nothing to change and still list something an editor should check, as an
+  // archive no entity claims. Broken, the plan of the steps is dropped whole for holding no work.
+  it("keeps what the steps list where they have no work and no refusal", () => {
+    const report = {
+      move: [],
+      conflicts: [],
+      check: ["archived translations of a collection no longer configured"],
+    };
+
+    expect(
+      planWithStoredData(sync, { changes: [], report }, { takesSteps: true })
+    ).toEqual({ ...sync, report });
   });
 });

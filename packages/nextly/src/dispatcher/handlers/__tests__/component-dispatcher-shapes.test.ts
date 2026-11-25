@@ -702,7 +702,8 @@ describe("dispatchComponents, where a field group is used (getComponentUsedBy)",
       { entityType: "collection", entitySlug: "pages", fieldPath: "seo" },
       { entityType: "single", entitySlug: "home", fieldPath: "seo" },
     ]);
-    expect(body.meta).toMatchObject({ total: 3 });
+    // Every collection and Single was read, so no user is left out.
+    expect(body.meta).toMatchObject({ total: 3, complete: true });
   });
 
   it("names no collection or Single the reader may not read, as their own lists hide them", async () => {
@@ -731,6 +732,8 @@ describe("dispatchComponents, where a field group is used (getComponentUsedBy)",
       expect(body.items).toEqual([
         { entityType: "fieldGroup", entitySlug: "card", fieldPath: "meta" },
       ]);
+      // The answer says some users were left out, without naming them.
+      expect(body.meta).toMatchObject({ total: 1, complete: false });
       expect(readableSlugsOfKind).toHaveBeenCalledWith(
         expect.anything(),
         "collection"

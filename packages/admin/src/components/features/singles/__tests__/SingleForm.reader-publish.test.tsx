@@ -80,7 +80,8 @@ describe("a Single for a user who may publish it but not change it", () => {
 
     // Offered once the review state says no workflow holds it.
     const publish = screen.getByRole("button", { name: "Publish" });
-    await waitFor(() => expect(publish).toBeEnabled());
+    await waitFor(() => expect(publish).not.toHaveAttribute("data-held"));
+    expect(publish).toBeEnabled();
     await userEvent.click(publish);
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));

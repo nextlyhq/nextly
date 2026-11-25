@@ -217,6 +217,18 @@ describe("Save and Publish say the page's state themselves", () => {
       await screen.findByRole("menuitem", { name: "Unpublish" })
     ).toBeTruthy();
   });
+
+  it("offers Save once, as its own button, never again on Publish's arrow", async () => {
+    // A draft keeps its save on the main button's menu in the entry header;
+    // this pair draws Save beside Publish, so the arrow leaves it out.
+    drawn({ entry: draftPage, isDirty: true });
+    expect(saveButton()).not.toBeNull();
+    // With Save left out, a draft has nothing else for the arrow to hold: an
+    // arrow drawn here would be one holding Save a second time.
+    expect(
+      screen.queryByRole("button", { name: "More ways to publish" })
+    ).toBeNull();
+  });
 });
 
 describe("what holds them", () => {
@@ -592,12 +604,50 @@ describe("changes from the last visit", () => {
     expect(politely().textContent).toBe(
       "Changes from your last visit aren't saved yet"
     );
+    // Shown open as the page opens: see the test below. Closed, then
+    // opened again from Save.
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Changes from your last visit aren't saved yet.")
+      ).toBeNull()
+    );
     await userEvent.click(saveButton() as HTMLButtonElement);
     expect(
       await screen.findByText("Changes from your last visit aren't saved yet.")
     ).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Discard" }));
     expect(discard).toHaveBeenCalledTimes(1);
+  });
+
+  it("are shown open as the page opens, leaving the focus where it was", async () => {
+    const pending: PendingRecovery = {
+      restoreChecked: vi.fn(async () => "restored" as const),
+      dismiss: vi.fn(),
+    };
+    const hosted: HostedRecoveryOffer = {
+      savedAt: new Date(Date.now() - 60 * 60 * 1000),
+      restore: vi.fn(),
+      dismiss: vi.fn(),
+      discard: vi.fn(),
+    };
+    render(
+      <Providers>
+        <DocumentActionsHost input={input()}>
+          <Offered pending={pending} hosted={hosted} />
+        </DocumentActionsHost>
+      </Providers>
+    );
+    // Unasked: the choice is in front of the author before a first edit.
+    expect(
+      await screen.findByText("Changes from your last visit aren't saved yet.")
+    ).toBeTruthy();
+    const choices = screen.getByRole("button", { name: "Discard" });
+    expect(choices).toBeTruthy();
+    // Not moved into the popover: the author can start reading the page.
+    expect(document.activeElement?.closest("[role='dialog']") ?? null).toBe(
+      null
+    );
   });
 });
 

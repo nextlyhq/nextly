@@ -38,6 +38,6 @@ export function registerGenerateWidgetCommand(program: Command): void {
           async () => (await import("./generate-widget")).generateWidgetAction
         )
       ),
-    startLine("Generating the widget...")
+    startLine("Generating the widget...", "no database")
   );
 }

@@ -45,7 +45,8 @@ describe.each(getConfiguredTestDialects())(
       ]
     ) =>
       toCodeFirstCollectionConfig(
-        defineCollection({ slug, fields })
+        defineCollection({ slug, fields }),
+        "code"
       ) as Parameters<
         CollectionRegistryService["syncCodeFirstCollections"]
       >[0][number];

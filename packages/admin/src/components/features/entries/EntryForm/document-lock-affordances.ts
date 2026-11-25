@@ -452,8 +452,10 @@ function claimAffordances(
       return withheld(
         "surrendered",
         // Deliberately not "someone took over". Nobody said that. What is true
-        // is that this editor can no longer vouch for holding it.
-        "This document could not be confirmed as yours for long enough that a colleague may now be editing it. Your unsaved changes are still here.",
+        // is that this editor can no longer vouch for holding it. The claim is
+        // asked about again on every beat (see `useDocumentLock`), so the
+        // notice says it comes back on its own where nobody took it.
+        "This document could not be confirmed as yours for long enough that a colleague may now be editing it. Your unsaved changes are still here. It comes back by itself when the connection returns, unless someone else has taken it.",
         "Take it back"
       );
 

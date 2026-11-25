@@ -381,12 +381,13 @@ export async function readReferencingTables(
 
   // SQLite has no reverse foreign-key view, but `pragma_foreign_key_list` is a table-valued
   // function, so one join over `sqlite_master` reads every table's outgoing keys and filters to
-  // those aimed at the parent.
+  // those aimed at the parent, its name matched as SQLite matches names: ASCII letters folded, as
+  // its `lower` folds them, since a key may spell the parent in another case.
   const rows = (await (db as SqliteAll).all(
     sql`SELECT DISTINCT m.name AS table_name
         FROM sqlite_master AS m
         JOIN pragma_foreign_key_list(m.name) AS fk
-        WHERE m.type = 'table' AND fk."table" = ${tableName}`
+        WHERE m.type = 'table' AND lower(fk."table") = lower(${tableName})`
   )) as { table_name: string }[];
   for (const row of rows) names.add(row.table_name);
   return [...names];
@@ -415,6 +416,16 @@ export interface ReferencingKey {
   onDelete: "cascade" | "set null" | "set default" | "none";
   /** The referencing table's key columns, in key order. */
   columns: string[];
+  /** The key's constraint name. */
+  name: string;
+  /**
+   * The referencing table's own name, unquoted: bare where an unqualified name reaches it, else
+   * qualified by its schema (PostgreSQL) or database (MySQL). `child` is the same table as a
+   * statement spells it, quoted where its name needs quotes.
+   */
+  childTable: string;
+  /** The referenced table's columns the key points at, in key order. */
+  referencesColumns: string[];
 }
 
 /** PostgreSQL's `confdeltype` codes for the actions that touch the referencing rows. */
@@ -447,8 +458,8 @@ async function requirePgRelation(db: unknown, ref: string): Promise<void> {
 }
 
 /**
- * Every foreign key referencing `parent`, with the referencing table it lives on, its ON DELETE
- * action and its columns, read in one pass from the keys themselves.
+ * Every foreign key referencing `parent`, with the referencing table it lives on, its name, its ON
+ * DELETE action, its columns and the columns it points at, read in one pass from the keys themselves.
  *
  * Read by relation identity rather than by name: a referencing table is found again through the
  * ref this returns, so one in another schema (PostgreSQL) or database (MySQL) is never confused
@@ -466,19 +477,30 @@ export async function readReferencingKeys(
   if (dialect === "postgresql") {
     await requirePgRelation(db, parent.table);
     const result = (await (db as PgMysqlExecute).execute(
-      sql`SELECT c.oid::text AS key_id, c.conrelid::regclass::text AS child,
-                 c.confdeltype::text AS action, a.attname::text AS column_name
+      sql`SELECT c.oid::text AS key_id, c.conname::text AS key_name,
+                 c.conrelid::regclass::text AS child, c.confdeltype::text AS action,
+                 r.relname::text AS child_name, n.nspname::text AS child_schema,
+                 pg_table_is_visible(c.conrelid) AS child_visible,
+                 a.attname::text AS column_name, f.attname::text AS referenced_column
           FROM pg_constraint c
-          CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+          JOIN pg_class r ON r.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = r.relnamespace
+          CROSS JOIN LATERAL unnest(c.conkey, c.confkey) WITH ORDINALITY AS k(attnum, fattnum, ord)
           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+          JOIN pg_attribute f ON f.attrelid = c.confrelid AND f.attnum = k.fattnum
           WHERE c.contype = 'f' AND c.confrelid = to_regclass(${parent.table})
           ORDER BY c.oid, k.ord`
     )) as {
       rows: {
         key_id: string;
+        key_name: string;
         child: string;
+        child_name: string;
+        child_schema: string;
+        child_visible: boolean;
         action: string;
         column_name: string;
+        referenced_column: string;
       }[];
     };
     for (const row of result.rows) {
@@ -487,8 +509,14 @@ export async function readReferencingKeys(
         ref: { table: row.child },
         onDelete: PG_DELETE_ACTIONS[row.action] ?? "none",
         columns: [],
+        name: row.key_name,
+        childTable: row.child_visible
+          ? row.child_name
+          : `${row.child_schema}.${row.child_name}`,
+        referencesColumns: [],
       };
       key.columns.push(row.column_name);
+      key.referencesColumns.push(row.referenced_column);
       keys.set(row.key_id, key);
     }
     return [...keys.values()];
@@ -502,12 +530,13 @@ export async function readReferencingKeys(
     TABLE_SCHEMA: string;
     TABLE_NAME: string;
     COLUMN_NAME: string;
+    REFERENCED_COLUMN_NAME: string;
     DELETE_RULE: string;
     CURRENT_DB: string | null;
   }>(
     await (db as PgMysqlExecute).execute(
       sql`SELECT k.CONSTRAINT_SCHEMA, k.CONSTRAINT_NAME, k.TABLE_SCHEMA, k.TABLE_NAME,
-                 k.COLUMN_NAME, r.DELETE_RULE, DATABASE() AS CURRENT_DB
+                 k.COLUMN_NAME, k.REFERENCED_COLUMN_NAME, r.DELETE_RULE, DATABASE() AS CURRENT_DB
           FROM information_schema.KEY_COLUMN_USAGE k
           JOIN information_schema.REFERENTIAL_CONSTRAINTS r
             ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
@@ -530,8 +559,12 @@ export async function readReferencingKeys(
       ref: { schema: row.TABLE_SCHEMA, table: row.TABLE_NAME },
       onDelete: MYSQL_DELETE_ACTIONS[row.DELETE_RULE] ?? "none",
       columns: [],
+      name: row.CONSTRAINT_NAME,
+      childTable: child,
+      referencesColumns: [],
     };
     key.columns.push(row.COLUMN_NAME);
+    key.referencesColumns.push(row.REFERENCED_COLUMN_NAME);
     keys.set(id, key);
   }
   return [...keys.values()];
@@ -961,7 +994,7 @@ export async function readIndexColumns(
 }
 
 /** One index of a live table, as the catalog describes it. */
-interface LiveIndex {
+export interface LiveIndex {
   name: string;
   columns: string[];
   unique: boolean;
@@ -973,6 +1006,12 @@ interface LiveIndex {
   wholeColumns: boolean;
   /** False for the primary key, and SQLite's index for an inline `UNIQUE`, which only a rebuild removes. */
   droppableByName: boolean;
+  /**
+   * The index's definition as the catalog holds it, read by `readTableIndexes` for an index that
+   * does not stand on whole columns (an expression, a partial or a prefix index), whose `columns`
+   * alone cannot say every column it reads. Absent where it could not be read.
+   */
+  definition?: string;
 }
 
 /** A PostgreSQL collation, with the schema that holds it. */
@@ -1052,6 +1091,61 @@ export async function readPgColumnCollations(
       { schema: row.collation_schema, name: row.collation_name },
     ])
   );
+}
+
+/**
+ * Every index on `tableName` with what it covers (`LiveIndex`): what a change that drops one of
+ * the table's columns reads, to drop an index that stands on that column alone before it and to
+ * refuse one that stands on more.
+ */
+export async function readTableIndexes(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<LiveIndex[]> {
+  const indexes = await readIndexes(db, dialect, tableName);
+  // An index on more than whole columns names what else it reads only in its definition.
+  return Promise.all(
+    indexes.map(async index => {
+      if (index.wholeColumns) return index;
+      const definition = await readIndexDefinition(
+        db,
+        dialect,
+        tableName,
+        index.name
+      ).catch(() => undefined);
+      return definition === undefined ? index : { ...index, definition };
+    })
+  );
+}
+
+/** One index's definition from the dialect's catalog, or undefined where it holds none. */
+async function readIndexDefinition(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string,
+  indexName: string
+): Promise<string | undefined> {
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT indexdef AS definition FROM pg_indexes WHERE schemaname = current_schema() AND tablename = ${tableName} AND indexname = ${indexName}`
+    )) as { rows?: { definition?: string }[] } | { definition?: string }[];
+    const rows = Array.isArray(result) ? result : (result.rows ?? []);
+    return rows[0]?.definition ?? undefined;
+  }
+  if (dialect === "mysql") {
+    const rows = mysqlRows<{ part: string | null }>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT COALESCE(EXPRESSION, COLUMN_NAME) AS part FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName} AND INDEX_NAME = ${indexName} ORDER BY SEQ_IN_INDEX`
+      )
+    );
+    const parts = rows.flatMap(row => (row.part === null ? [] : [row.part]));
+    return parts.length === 0 ? undefined : parts.join(", ");
+  }
+  const rows = (await (db as SqliteAll).all(
+    sql`SELECT sql AS definition FROM sqlite_master WHERE type = 'index' AND name = ${indexName}`
+  )) as { definition: string | null }[];
+  return rows[0]?.definition ?? undefined;
 }
 
 /** Every index on `tableName`, read once from the catalog of the dialect. */

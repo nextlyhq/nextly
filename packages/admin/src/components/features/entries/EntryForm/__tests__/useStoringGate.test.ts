@@ -161,6 +161,36 @@ describe("useStoringGate", () => {
     expect(outcome).toEqual({ ok: true });
   });
 
+  it("counts work stored by an action that then stopped to ask, and only where it stored it", async () => {
+    const { result } = renderGate();
+    const asks =
+      (stored: boolean) => async (): Promise<DocumentActionOutcome> => ({
+        ok: false,
+        reason: "cancelled",
+        message: "Choose what to publish.",
+        ...(stored ? { stored: true as const } : {}),
+      });
+    const fails = async (): Promise<DocumentActionOutcome> => ({
+      ok: false,
+      reason: "failed",
+      message: "The server is down.",
+    });
+
+    await act(async () => {
+      await result.current.storing("publish", fails)();
+    });
+    // Nothing was stored, so the failure still stands.
+    await act(async () => {
+      await result.current.storing("publish", asks(false))();
+    });
+    expect(result.current.lastStore.kind).toBe("failed");
+
+    await act(async () => {
+      await result.current.storing("publish", asks(true))();
+    });
+    expect(result.current.lastStore.kind).toBe("stored");
+  });
+
   it("marks a store a view's open edit stopped before its write", async () => {
     const { result } = renderGate();
     act(() => {

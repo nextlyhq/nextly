@@ -2,7 +2,6 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
-import type { PublishAllPreview } from "@admin/services/publishAllPreview";
 
 import {
   EntryLocaleProvider,
@@ -17,17 +16,21 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => useBranding(),
 }));
 
-// The panel is a composition surface: copy-from and publish-all have their own
-// implementations and their own tests, so these pin what the PANEL decides —
-// which rows it shows, what each row offers, and what it withholds — with the
-// hooks replaced by their contracts.
+// Every permission held, so a control the panel does not draw is not one it
+// withheld from this reader.
+vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
+vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useCanRequest")>()),
+  useCanRequest: () => true,
+}));
+
+// The panel is a composition surface: copy-from has its own implementation and
+// its own tests, so these pin what the PANEL decides — which rows it shows,
+// what each row offers, and what it withholds — with the hook replaced by its
+// contract.
 const copyState = vi.fn();
 vi.mock("../useCopyFromLanguage", () => ({
   useCopyFromLanguage: () => copyState(),
-}));
-const publishState = vi.fn();
-vi.mock("../usePublishAllLanguages", () => ({
-  usePublishAllLanguages: () => publishState(),
 }));
 // Counted rather than stubbed to null: how MANY of these exist is the point of
 // one of the tests below, and a stub that renders nothing cannot answer it.
@@ -72,7 +75,6 @@ const TRANSLATIONS = {
 };
 
 const requestCopy = vi.fn();
-const publishAll = vi.fn();
 
 const COPY_IDLE = {
   available: true,
@@ -84,24 +86,6 @@ const COPY_IDLE = {
   requestCopy,
   cancel: vi.fn(),
   confirm: vi.fn(),
-};
-/** What the server says publishing every language does here. */
-const PREVIEW: PublishAllPreview = {
-  languages: [
-    { locale: "en", outcome: "goes-live-with-pending-change" as const },
-    { locale: "de", outcome: "stays-published" as const },
-    { locale: "ar", outcome: "shows-fallback" as const, fallback: "en" },
-  ],
-  blockers: [],
-};
-const PUBLISH_IDLE = {
-  available: true,
-  pending: false,
-  publishAll,
-  preview: {
-    fetch: () => Promise.resolve(PREVIEW),
-    key: ["publish-all-preview", "test"],
-  },
 };
 
 /** A localized document: the app has languages AND this document uses them. */
@@ -128,6 +112,13 @@ function renderPanel(
   );
 }
 
+/** No control on screen, in the page or in an open menu, publishes every language. */
+function expectNoPublishControl(): void {
+  for (const role of ["button", "menuitem", "link"] as const) {
+    expect(screen.queryAllByRole(role, { name: /publish all/i })).toEqual([]);
+  }
+}
+
 /** The panel's rows, in render order. */
 function rows() {
   return within(
@@ -139,9 +130,7 @@ describe("LanguagePanel", () => {
   beforeEach(() => {
     useBranding.mockReset();
     requestCopy.mockReset();
-    publishAll.mockReset();
     copyState.mockReturnValue(COPY_IDLE);
-    publishState.mockReturnValue(PUBLISH_IDLE);
   });
 
   describe("what the dots mean", () => {
@@ -452,7 +441,7 @@ describe("LanguagePanel", () => {
     // Arabic is empty — a start.
     expect(
       within(ar).getByRole("button", {
-        name: "Start Arabic from another language",
+        name: "Start from… another language, into Arabic",
       })
     ).toBeInTheDocument();
     // English already has content — the same action, but it overwrites, and
@@ -460,14 +449,32 @@ describe("LanguagePanel", () => {
     // appears.
     expect(
       within(en).getByRole("button", {
-        name: "Replace English from another language",
+        name: "Replace from… another language, into English",
       })
     ).toBeInTheDocument();
     expect(
       within(en).queryByRole("button", {
-        name: "Start English from another language",
+        name: "Start from… another language, into English",
       })
     ).toBeNull();
+  });
+
+  // A speech-input user says what they see ("click Replace from"); a button whose name leaves its
+  // visible text out cannot be reached that way (WCAG 2.5.3, label in name). Each button is named
+  // by its visible text first, then by the language it acts on.
+  it("names every button with its visible text first", () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderPanel({
+      translations: TRANSLATIONS,
+      activeLocale: "de",
+      onSelect: vi.fn(),
+    });
+
+    const mismatched = screen.queryAllByRole("button", {
+      name: (name, element) =>
+        !name.startsWith((element.textContent ?? "").trim()),
+    });
+    expect(mismatched.map(button => button.textContent)).toEqual([]);
   });
 
   it("routes an overwrite through the same one switch a start uses", async () => {
@@ -477,7 +484,7 @@ describe("LanguagePanel", () => {
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: "Replace English from another language",
+        name: "Replace from… another language, into English",
       })
     );
     // Target and source in one call, exactly as the empty case does it — the
@@ -497,12 +504,12 @@ describe("LanguagePanel", () => {
     // Not on the row.
     const [, de] = rows();
     expect(
-      within(de).queryByRole("button", { name: /from another language/ })
+      within(de).queryByRole("button", { name: /from… another language/ })
     ).toBeNull();
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: "Replace German from another language",
+        name: "Replace from… another language, into German",
       })
     );
     await userEvent.click(
@@ -542,12 +549,12 @@ describe("LanguagePanel", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Replace Arabic from another language",
+        name: "Replace from… another language, into Arabic",
       })
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", {
-        name: "Start Arabic from another language",
+        name: "Start from… another language, into Arabic",
       })
     ).toBeNull();
   });
@@ -593,13 +600,13 @@ describe("LanguagePanel", () => {
     });
     expect(
       screen.queryByRole("button", {
-        name: "Start Arabic from another language",
+        name: "Start from… another language, into Arabic",
       })
     ).toBeNull();
     // Including the active row's source picker, which reads the same gate.
     expect(
       screen.queryByRole("button", {
-        name: "Replace German from another language",
+        name: "Replace from… another language, into German",
       })
     ).toBeNull();
   });
@@ -614,7 +621,9 @@ describe("LanguagePanel", () => {
     });
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Start Arabic from another language" })
+      screen.getByRole("button", {
+        name: "Start from… another language, into Arabic",
+      })
     );
 
     // ONE call carrying both halves. Asking for the switch and the source
@@ -631,7 +640,9 @@ describe("LanguagePanel", () => {
     renderPanel({ translations: TRANSLATIONS, onSelect });
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Start Arabic from another language" })
+      screen.getByRole("button", {
+        name: "Start from… another language, into Arabic",
+      })
     );
     // `activeLocale` undefined means the implicit default, not "no source".
     expect(onSelect).toHaveBeenCalledWith("ar", { seedFrom: "en" });
@@ -643,19 +654,19 @@ describe("LanguagePanel", () => {
       translations: TRANSLATIONS,
       activeLocale: "de",
       onSelect: vi.fn(),
-      hasStatus: true,
       actionsDisabled: true,
     });
 
     expect(
-      screen.getByRole("button", { name: "Start Arabic from another language" })
+      screen.getByRole("button", {
+        name: "Start from… another language, into Arabic",
+      })
     ).toBeDisabled();
     expect(
       screen.getByRole("button", {
-        name: "Replace German from another language",
+        name: "Replace from… another language, into German",
       })
     ).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Publish all" })).toBeDisabled();
     // Switching too: changing the document under the history banner would show
     // one language's history labelled as another's.
     expect(screen.getByRole("button", { name: "Open English" })).toBeDisabled();
@@ -666,26 +677,6 @@ describe("LanguagePanel", () => {
     expect(rows()[2]).toHaveTextContent("not translated");
   });
 
-  it("offers a reader who may publish every language Publish all, and no edit", () => {
-    // Publishing every language changes only each language's status, which
-    // the publish permission judges: held from every edit, it is still offered.
-    useBranding.mockReturnValue({ locales: LOCALES });
-    renderPanel({
-      translations: TRANSLATIONS,
-      activeLocale: "de",
-      onSelect: vi.fn(),
-      hasStatus: true,
-      actionsDisabled: true,
-      publishAllDisabled: false,
-      navigationDisabled: false,
-    });
-
-    expect(screen.getByRole("button", { name: "Publish all" })).toBeEnabled();
-    expect(
-      screen.getByRole("button", { name: "Start Arabic from another language" })
-    ).toBeDisabled();
-  });
-
   it("lets a user held from every action still open the other languages", () => {
     // A user who may only read the document: every mutation is withheld,
     // reading another language is not.
@@ -694,202 +685,57 @@ describe("LanguagePanel", () => {
       translations: TRANSLATIONS,
       activeLocale: "de",
       onSelect: vi.fn(),
-      hasStatus: true,
       actionsDisabled: true,
       navigationDisabled: false,
     });
 
     expect(
-      screen.getByRole("button", { name: "Start Arabic from another language" })
+      screen.getByRole("button", {
+        name: "Start from… another language, into Arabic",
+      })
     ).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Publish all" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Open English" })).toBeEnabled();
   });
 
-  it("closes an open publish-all confirmation once the actions are held", async () => {
-    // The confirmation was open when a language switch began: its Confirm is
-    // not left to publish on the answer for the language moved from.
+  it("draws no control that publishes every language, whoever may publish", async () => {
+    // What goes live is chosen from the header's publish menu. Every
+    // permission is held here, publishing among them, and a language holds
+    // unpublished changes, so a control offered for it would be drawn.
+    const user = userEvent.setup();
     useBranding.mockReturnValue({ locales: LOCALES });
-    const props = { translations: TRANSLATIONS, hasStatus: true };
-    const { rerender } = renderPanel(props);
-    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-
-    rerender(
-      <EntryLocaleProvider value={LOCALIZED_CTX}>
-        <CopyFromLanguageScope>
-          <LanguagePanel {...props} actionsDisabled />
-        </CopyFromLanguageScope>
-      </EntryLocaleProvider>
-    );
-    expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(publishAll).not.toHaveBeenCalled();
-
-    // Closed, not hidden: the hold ending does not bring it back.
-    rerender(
-      <EntryLocaleProvider value={LOCALIZED_CTX}>
-        <CopyFromLanguageScope>
-          <LanguagePanel {...props} />
-        </CopyFromLanguageScope>
-      </EntryLocaleProvider>
-    );
-    expect(screen.queryByRole("alertdialog")).toBeNull();
-  });
-
-  it("closes an open publish-all confirmation once publishing every language is not offered", async () => {
-    useBranding.mockReturnValue({ locales: LOCALES });
-    const props = { translations: TRANSLATIONS, hasStatus: true };
-    const { rerender } = renderPanel(props);
-    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-
-    publishState.mockReturnValue({ ...PUBLISH_IDLE, available: false });
-    rerender(
-      <EntryLocaleProvider value={LOCALIZED_CTX}>
-        <CopyFromLanguageScope>
-          <LanguagePanel {...props} />
-        </CopyFromLanguageScope>
-      </EntryLocaleProvider>
-    );
-    expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(publishAll).not.toHaveBeenCalled();
-  });
-
-  it("warns that any held change goes live where neither the preview nor the languages' states were read", async () => {
-    // The server's preview could not be read and no count of held changes is
-    // known: the confirmation does not say every language merely goes live
-    // together.
-    useBranding.mockReturnValue({ locales: LOCALES });
-    publishState.mockReturnValue({
-      ...PUBLISH_IDLE,
-      preview: {
-        fetch: () => Promise.reject(new Error("unreachable")),
-        key: ["publish-all-preview", "failing"],
+    renderPanel(
+      {
+        translations: {
+          en: { translated: true, status: "published", pendingChange: true },
+          de: { translated: true, status: "draft" },
+        },
+        activeLocale: "de",
+        onSelect: vi.fn(),
       },
-    });
-    renderPanel({ hasStatus: true });
-    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
-    expect(
-      await screen.findByText(
-        "Any language holding unpublished changes goes live too."
-      )
-    ).toBeInTheDocument();
-  });
-
-  // The confirmation lists every configured language with what the server
-  // says the publish does to it. The plausible broken implementation says
-  // pending changes go live for every language, as the count-only warning
-  // once did, whatever each language holds.
-  it("lists each language with what the publish does to it, then publishes", async () => {
-    useBranding.mockReturnValue({ locales: LOCALES });
-    renderPanel({ translations: TRANSLATIONS, hasStatus: true });
-    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
-
-    const list = await screen.findByRole("list", {
-      name: "What happens to each language",
-    });
-    expect(
-      Array.from(list.querySelectorAll("li")).map(item => item.textContent)
-    ).toEqual([
-      "EnglishIts unpublished changes go live.",
-      "GermanStays as published.",
-      "ArabicGoes live with no content of its own, showing English.",
-    ]);
-    const dialog = screen.getByRole("alertdialog");
-    const confirm = Array.from(dialog.querySelectorAll("button")).find(
-      button => button.textContent === "Publish all"
+      {
+        ...LOCALIZED_CTX,
+        isNonDefaultLocale: true,
+        collectionSlug: "pages",
+        entryId: "p1",
+        onEnterTranslationMode: vi.fn(),
+      }
     );
-    expect(confirm).toBeEnabled();
-    await userEvent.click(confirm!);
-    expect(publishAll).toHaveBeenCalledTimes(1);
-  });
 
-  // Each opening asks the server again, and until it answers the dialog says
-  // nothing from the earlier answer: a language saved or published since
-  // changes what the publish does. The plausible broken implementation shows
-  // the cached outcomes while it refetches and offers Publish on them.
-  it("offers no publish on an earlier answer while it asks again", async () => {
-    useBranding.mockReturnValue({ locales: LOCALES });
-    let answer: (preview: typeof PREVIEW) => void = () => {};
-    const fetchPreview = vi
-      .fn()
-      .mockResolvedValueOnce(PREVIEW)
-      .mockImplementationOnce(
-        () =>
-          new Promise<typeof PREVIEW>(resolve => {
-            answer = resolve;
-          })
-      );
-    publishState.mockReturnValue({
-      ...PUBLISH_IDLE,
-      preview: { fetch: fetchPreview, key: ["publish-all-preview", "again"] },
-    });
-    renderPanel({ translations: TRANSLATIONS, hasStatus: true });
-    const confirmIn = () =>
-      Array.from(
-        screen.getByRole("alertdialog").querySelectorAll("button")
-      ).find(button => button.textContent === "Publish all");
+    // The panel is drawn, with its other document-wide actions.
+    expect(rows()).toHaveLength(3);
+    expect(screen.getByRole("button", { name: "Translate" })).toBeEnabled();
+    expectNoPublishControl();
 
-    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
-    await screen.findByRole("list", { name: "What happens to each language" });
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-
-    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
-    expect(
-      await screen.findByText("Checking what publishing does to each language…")
-    ).toBeInTheDocument();
-    expect(confirmIn()).toBeDisabled();
-    expect(fetchPreview).toHaveBeenCalledTimes(2);
-
-    answer({
-      ...PREVIEW,
-      blockers: [{ reason: "pending-change-forbidden", fields: ["lockState"] }],
-    });
-    expect(
-      await screen.findByText(
-        "Unpublished changes edit lockState, which you may not publish."
-      )
-    ).toBeInTheDocument();
-    expect(confirmIn()).toBeDisabled();
-    expect(publishAll).not.toHaveBeenCalled();
-  });
-
-  it("offers no publish the server would refuse, and says why", async () => {
-    useBranding.mockReturnValue({ locales: LOCALES });
-    publishState.mockReturnValue({
-      ...PUBLISH_IDLE,
-      preview: {
-        fetch: () =>
-          Promise.resolve({
-            ...PREVIEW,
-            blockers: [
-              { reason: "pending-change-forbidden", fields: ["lockState"] },
-            ],
-          }),
-        key: ["publish-all-preview", "blocked"],
-      },
-    });
-    renderPanel({ translations: TRANSLATIONS, hasStatus: true });
-    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
-
-    expect(
-      await screen.findByText(
-        "Unpublished changes edit lockState, which you may not publish."
-      )
-    ).toBeInTheDocument();
-    const dialog = screen.getByRole("alertdialog");
-    const confirm = Array.from(dialog.querySelectorAll("button")).find(
-      button => button.textContent === "Publish all"
+    // Nor in the one menu the panel opens.
+    await user.click(
+      screen.getByRole("button", {
+        name: "Replace from… another language, into German",
+      })
     );
-    expect(confirm).toBeDisabled();
-    expect(publishAll).not.toHaveBeenCalled();
-  });
-
-  it("hides publish-all when the action does not apply", () => {
-    useBranding.mockReturnValue({ locales: LOCALES });
-    publishState.mockReturnValue({ ...PUBLISH_IDLE, available: false });
-    renderPanel({ translations: TRANSLATIONS, hasStatus: true });
-    expect(screen.queryByRole("button", { name: "Publish all" })).toBeNull();
+    expect(
+      await screen.findByRole("menuitem", { name: "English" })
+    ).toBeInTheDocument();
+    expectNoPublishControl();
   });
 
   it("states which language holds unpublished changes, without opening it", () => {

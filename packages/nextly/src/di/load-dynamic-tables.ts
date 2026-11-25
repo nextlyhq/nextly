@@ -26,6 +26,7 @@ import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import { tableExistsAtStart } from "../domains/schema/pipeline/diff/start-catalog-scope";
 import {
   configTheCodeOwns,
+  configWithRecordedHandOvers,
   isCodeOwned,
 } from "../domains/schema/pipeline/registered-collections";
 import { NextlyError } from "../errors/nextly-error";
@@ -457,6 +458,19 @@ export async function configTheCodeOwnsIn<
 >(adapter: DrizzleAdapter, config: C): Promise<C> {
   const registered = await loadBuilderEntities(adapter);
   return configTheCodeOwns(config, registered.collections);
+}
+
+/**
+ * `config` with each collection a demote handed to the Schema Builder described by its registry row
+ * (`configWithRecordedHandOvers`), for a compile of the extension schema. Reads the registry as the
+ * configuration checks do (`loadBuilderEntities`); one that cannot be read yields no rows, which
+ * leaves every entry as the configuration declares it.
+ */
+export async function configWithRecordedHandOversIn<
+  C extends Parameters<typeof configWithRecordedHandOvers>[0],
+>(adapter: DrizzleAdapter, config: C): Promise<C> {
+  const registered = await loadBuilderEntities(adapter);
+  return configWithRecordedHandOvers(config, registered.collections);
 }
 
 export interface LoadedBuilderEntities {

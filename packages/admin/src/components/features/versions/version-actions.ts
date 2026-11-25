@@ -12,6 +12,7 @@ import {
   useDocumentHistory,
   type ViewedVersion,
 } from "./document-history-context";
+import { versionsHref } from "./versions-href";
 
 /**
  * Whether the chosen version is actually on screen.
@@ -41,6 +42,12 @@ export interface VersionActions {
    * restoring would be a decision made without seeing what is chosen.
    */
   restoreDisabled: boolean;
+  /**
+   * The full comparison of the version on screen with the one before it, in
+   * its language: where the title bar's Compare goes. Absent where there is
+   * no comparison to open.
+   */
+  compareHref?: string;
 }
 
 /**
@@ -66,5 +73,23 @@ export function useVersionActions(
       ? { restore: restore.request }
       : {}),
     restoreDisabled: !versionOnScreen(viewing),
+    // Where nothing comes before the version, the comparison page could
+    // only say there is nothing to compare, so Compare is not offered.
+    ...(viewing.comparedWith.kind === "first"
+      ? {}
+      : { compareHref: compareHrefOf(viewing) }),
   };
+}
+
+/**
+ * The comparison page for the version on screen: it against the version
+ * before it in its own language, as the comparison bar frames it, so the
+ * page opens on the same question with room to look further.
+ */
+function compareHrefOf(viewing: ViewedVersion): string {
+  return versionsHref(
+    viewing.scope,
+    { from: "previous", to: viewing.versionNo },
+    viewing.locale
+  );
 }

@@ -42,6 +42,10 @@ import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { consoleLogger } from "../../shared/types";
 
 import { getAdapterFromDI, getLoggerFromDI } from "./di";
+import {
+  fieldGroupUsersForMoves,
+  movesRefusedFirst,
+} from "./readable-field-owners";
 
 /**
  * The Builder save writer, loaded where a save runs: it brings the migration
@@ -164,6 +168,12 @@ export async function writeBuilderSchemaChange(
     moves: change.moves ?? [],
     writes: deps !== undefined,
     pushReason: () => entityPushReason(deps, pushesNow),
+    refusedFirst: travelling =>
+      movesRefusedFirst(deps?.adapter, travelling, {
+        before: change.stored.fields as unknown as FieldDefinition[],
+        after: change.fields,
+        localized: change.localized,
+      }),
   });
   if (deps === undefined) {
     await apply();
@@ -258,7 +268,8 @@ async function entitySaveOf(
   };
   return withMoves(
     saveOfSchemaChange({ ...change, row, definition }).save,
-    change.moves
+    change.moves,
+    deps.adapter
   );
 }
 
@@ -296,12 +307,28 @@ export function entityDialogQuestions(
     });
 }
 
-/** The save with the fields it moves, whose statements its file carries; as it was without any. */
-function withMoves(
+/**
+ * The save with the fields it moves, whose statements its file carries, and who uses each field
+ * group, which a move into or out of one is refused naming; as it was without any. The one place
+ * a Builder save is given its moves, for the collection's road as for the Single's and the field
+ * group's.
+ */
+export async function withMoves(
   save: CollectionSave,
-  moves: readonly FieldMoveRequest[] | undefined
-): CollectionSave {
-  return moves === undefined || moves.length === 0 ? save : { ...save, moves };
+  moves: readonly FieldMoveRequest[] | undefined,
+  adapter: CollectionSaveDeps["adapter"]
+): Promise<CollectionSave> {
+  if (moves === undefined || moves.length === 0) return save;
+  // Checked against the fields before the save and after it, as the planner checks them.
+  const fieldGroupUsers = await fieldGroupUsersForMoves(adapter, moves, {
+    before: (save.previous?.fields ?? []) as FieldDefinition[],
+    after: (save.entity?.fields ?? []) as FieldDefinition[],
+  });
+  return {
+    ...save,
+    moves,
+    ...(fieldGroupUsers === undefined ? {} : { fieldGroupUsers }),
+  };
 }
 
 /**

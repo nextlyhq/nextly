@@ -413,12 +413,14 @@ export const EntryTable: ForwardRefExoticComponent<
   // The workflow's moves over the selection, each refusal named by the row's title.
   const bulkMoves = useWorkflowBulkMoves({
     collection,
-    offered: offered.workflowMoves,
+    offered: offered.workflowMoveKinds,
     rows: entries,
     titleOf: (row, id) => {
       const title = row && titleField ? row[titleField] : undefined;
       return typeof title === "string" && title !== "" ? title : id;
     },
+    // A move answered clears the selection, as a bulk publish does.
+    onMoved: clear,
   });
 
   // A plugin's column decided by a read of its own (whether the collection

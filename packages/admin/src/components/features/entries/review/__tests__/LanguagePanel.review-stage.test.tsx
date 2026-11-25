@@ -27,14 +27,6 @@ vi.mock("../../useCopyFromLanguage", () => ({
     confirm: vi.fn(),
   }),
 }));
-vi.mock("../../usePublishAllLanguages", () => ({
-  usePublishAllLanguages: () => ({
-    available: false,
-    pending: false,
-    publishAll: vi.fn(),
-    preview: { fetch: vi.fn(), key: ["publish-all-preview", "test"] },
-  }),
-}));
 vi.mock("../../CopyFromLanguageDialog", () => ({
   CopyFromLanguageDialog: () => null,
 }));

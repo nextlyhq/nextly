@@ -1248,6 +1248,26 @@ async function bulkItemAnswer(
   };
 }
 
+/**
+ * The real records an email template offers for its test data, asked of the
+ * template whose records are read from the row's target, as the workbench
+ * asks: `A` where the route listed them, its status where it refused.
+ */
+async function sample(world: World, row: Row, who: CallerHandle) {
+  const id = world.sampleTemplates.get(targetSlug(row));
+  if (!id) throw new Error(`no template reads ${targetSlug(row)}`);
+  const res = await request(
+    "GET",
+    ["email-templates", id, "sample-records"],
+    who.headers
+  );
+  if (res.status !== 200) {
+    await noteResponse(res);
+    return String(res.status);
+  }
+  return "A";
+}
+
 const ADAPTERS: Record<
   Door,
   (world: World, row: Row, who: CallerHandle) => Promise<Answer | Attributed>
@@ -1266,6 +1286,7 @@ const ADAPTERS: Record<
   lock,
   capabilities,
   bulk,
+  sample,
 };
 
 /**

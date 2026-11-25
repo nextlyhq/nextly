@@ -1,11 +1,11 @@
 /**
  * The entry editor of a collection removed from code offers no control that
  * would write, for a user holding every permission: no Save or Publish, no
- * Unpublish, Delete, Duplicate or discard, no publishing of every language,
- * no page-contributed action, its fields read-only and no claim made on the
- * document. Reading stays: the menu
- * keeps "View API response". The notice is the page's document banner, drawn
- * under the header; the lock strip adds no reader's sentence of its own.
+ * Unpublish, Delete, Duplicate or discard, no page-contributed action, the
+ * panel's actions held, its fields read-only and no claim made on the
+ * document. Reading stays: the menu keeps "View API response". The notice is
+ * the page's document banner, drawn under the header; the lock strip adds no
+ * reader's sentence of its own.
  *
  * The control is the same editor for the same user on a declared collection,
  * which offers the writes, so a gate that never sees the removal fails here.
@@ -25,7 +25,7 @@ const { useDocumentLock, sidebarProps } = vi.hoisted(() => ({
 }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
-// Drawn as it is, its props recorded: the publish-all hold is handed down here.
+// Drawn as it is, its props recorded: the panel's holds are handed down here.
 vi.mock("../EntryFormSidebar", async importOriginal => {
   const actual = await importOriginal<typeof import("../EntryFormSidebar")>();
   return {
@@ -178,11 +178,14 @@ describe("the entry editor of a collection removed from code", () => {
     );
   });
 
-  it("holds publishing every language, which the page offers a reader", () => {
+  it("holds the panel's actions, and still lets its reader open the other languages", () => {
     renderEditor(true);
 
     expect(sidebarProps).toHaveBeenLastCalledWith(
-      expect.objectContaining({ publishAllDisabled: true })
+      expect.objectContaining({
+        actionsDisabled: true,
+        navigationDisabled: false,
+      })
     );
   });
 
@@ -213,7 +216,10 @@ describe("the entry editor of a collection removed from code", () => {
       expect.objectContaining({ enabled: true })
     );
     expect(sidebarProps).toHaveBeenLastCalledWith(
-      expect.objectContaining({ publishAllDisabled: false })
+      expect.objectContaining({
+        actionsDisabled: false,
+        navigationDisabled: false,
+      })
     );
   });
 });

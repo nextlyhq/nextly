@@ -864,12 +864,14 @@ export class NextlyError extends Error {
   static configuration(opts: {
     logMessage: string;
     logContext?: Record<string, unknown>;
+    cause?: Error;
   }): NextlyError {
     return new NextlyError({
       code: "CONFIGURATION_ERROR",
       publicMessage: "Server configuration error.",
       logMessage: opts.logMessage,
       logContext: opts.logContext,
+      cause: opts.cause,
     });
   }
 

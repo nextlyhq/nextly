@@ -30,6 +30,7 @@ export type MovingEntity = Pick<
   | "admin"
   | "hooks"
   | "filledColumns"
+  | "fieldGroupUsers"
 > & { slug: string };
 
 /**
