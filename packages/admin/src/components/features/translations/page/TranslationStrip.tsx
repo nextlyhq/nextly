@@ -18,7 +18,7 @@ export interface TranslationStripProps {
 }
 
 /** "1 field out of date", "3 fields out of date". */
-export function fieldsOutOfDate(count: number): string {
+function fieldsOutOfDate(count: number): string {
   return `${count} ${count === 1 ? "field" : "fields"} out of date`;
 }
 

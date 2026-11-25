@@ -428,28 +428,60 @@ function emptyOnPublish(args: {
   });
 }
 
-function TranslationForm({
-  document,
-  target,
-  source,
-  schema,
-  live,
-  written,
-  translations,
-  reload,
-}: TranslationFormProps): JSX.Element {
-  const { defaultLocale, fallback, getLocale, locales } = useLocalization();
+/** The document's own id: a Single's address doesn't carry it, its document does. */
+function documentIdOf(document: TranslatedDocument, live: DocumentRow): string {
+  return document.kind === "collection" ? document.id : idOf(live);
+}
+
+/** What the languages' standing is judged by, for the sources of every field. */
+function sourceFacts(
+  { schema, live, target, translations }: TranslationFormProps,
+  site: Pick<ReturnType<typeof useLocalization>, "locales" | "defaultLocale">
+): SourceFacts {
+  return {
+    locales: site.locales,
+    defaultLocale: site.defaultLocale,
+    target: target.code,
+    values: valuesPerLanguage(live),
+    translations,
+    hasStatus: schema.hasStatus,
+    status: typeof live.status === "string" ? live.status : undefined,
+  };
+}
+
+/** Whether anything has a source: with none, there is nothing to set beside. */
+function hasAnySource(
+  set: TranslationFieldSet,
+  levels: ReadonlyMap<string, TextLevel>,
+  sourceOf: Sources["sourceOf"]
+): boolean {
+  const paths = [
+    ...set.rows.map(row => row.name),
+    ...[...levels.values()].flatMap(textsIn).map(text => text.path),
+  ];
+  return paths.some(path => sourceOf(path) !== undefined);
+}
+
+/** What of the document may be written here, and by whom. */
+function useWriteRights({ document, schema }: TranslationFormProps): {
+  removed: boolean;
+  offersEdits: boolean;
+  readOnly: boolean;
+} {
+  const removed = isRemovedFromCode(schema.removed);
+  const offersEdits = editsOffered(useUpdateAnswer(document.slug));
+  return { removed, offersEdits, readOnly: removed || !offersEdits };
+}
+
+/** Everything the page draws of one document in one language. */
+function useTranslationView(props: TranslationFormProps) {
+  const { document, target, source, schema, live, written, translations } =
+    props;
+  const site = useLocalization();
   // Held by the form's validation, so not made anew at each render.
   const { fields } = schema;
   const set = useMemo(() => translationFields(fields, live), [fields, live]);
-  const title = titleOf(document, schema, live, defaultLocale);
-  useDocumentTitle(title);
-
-  const removed = isRemovedFromCode(schema.removed);
-  const offersEdits = editsOffered(useUpdateAnswer(document.slug));
-  const readOnly = removed || !offersEdits;
-
-  const values = valuesPerLanguage(live);
+  const rights = useWriteRights(props);
   const editing = useTranslationForm({
     document,
     target,
@@ -459,227 +491,287 @@ function TranslationForm({
     written,
     // Asked as a save is made, when what reads the form's rows is there too.
     sourceOf: path => sources.sourceOf(path),
-    reload,
+    reload: props.reload,
   });
-  const { form, isDirty, isSaving, save, conflict, loadCurrent, saveAnyway } =
-    editing;
+  const { form } = editing;
   const sources = useFieldSources(
-    {
-      locales,
-      defaultLocale,
-      target: target.code,
-      values,
-      translations,
-      hasStatus: schema.hasStatus,
-      status: typeof live.status === "string" ? live.status : undefined,
-    },
+    sourceFacts(props, site),
     source,
     set.nested,
     form.getValues
   );
   const levels = textLevels(set.nested, written, form);
-  // A Single's address doesn't carry its id; its document does.
-  const documentId = document.kind === "collection" ? document.id : idOf(live);
-  const claimNotice = useClaimNotice(document, documentId);
-
   const languageOf = (code: string): TranslationLanguage =>
-    getLocale(code) ?? { code, label: code, rtl: false };
-  const labelOf = (code: string) => languageOf(code).label;
+    site.getLocale(code) ?? { code, label: code, rtl: false };
   const recorded = translations?.[target.code]?.fields;
-  const standing = languageStanding(
-    translations,
-    target.code,
-    schema.hasStatus ? live.status : undefined
-  );
-  const pageSource = source ?? defaultLocale;
-  const behind = set.written.filter(
-    ({ name }) => recorded?.[name]?.outOfDate === true
-  ).length;
-  // Whether anything has a source: with none, there is nothing to set beside.
-  const paired = [
-    ...set.rows.map(row => row.name),
-    ...[...levels.values()].flatMap(textsIn).map(text => text.path),
-  ].some(path => sources.sourceOf(path) !== undefined);
+  const isOutOfDate = (name: string) => recorded?.[name]?.outOfDate === true;
+  return {
+    ...rights,
+    site,
+    set,
+    title: titleOf(document, schema, live, site.defaultLocale),
+    editing,
+    sources,
+    levels,
+    languageOf,
+    labelOf: (code: string) => languageOf(code).label,
+    isOutOfDate,
+    behind: set.written.filter(({ name }) => isOutOfDate(name)).length,
+    standing: languageStanding(
+      translations,
+      target.code,
+      schema.hasStatus ? live.status : undefined
+    ),
+    pageSource: source ?? site.defaultLocale,
+    paired: hasAnySource(set, levels, sources.sourceOf),
+    documentId: documentIdOf(document, live),
+  };
+}
 
-  /** One field's row, or one text's inside a container, by its path. */
-  const drawRow = (
-    translated: TranslationField,
-    options: { basePath?: string; inherited?: FieldGate; outOfDate?: boolean }
-  ) => {
-    const path = translated.name;
-    const from = sources.sourceOf(path);
+/** A page's parts read it all from here. */
+interface PartProps {
+  props: TranslationFormProps;
+  view: ReturnType<typeof useTranslationView>;
+}
+
+/** One field's row, or one text's inside a container, by its path. */
+function RowAt({
+  props,
+  view,
+  translated,
+  outOfDate = false,
+  ...inside
+}: PartProps & {
+  translated: TranslationField;
+  outOfDate?: boolean;
+  basePath?: string;
+  inherited?: FieldGate;
+}): JSX.Element {
+  const { sources, languageOf, labelOf, readOnly } = view;
+  const path = translated.name;
+  const from = sources.sourceOf(path);
+  return (
+    <TranslationFieldRow
+      translated={translated}
+      target={props.target}
+      source={
+        from === undefined
+          ? undefined
+          : {
+              language: languageOf(from),
+              value: sources.valuesAt(path)[from],
+              eligible: sources.eligibleFor(path),
+            }
+      }
+      labelOf={labelOf}
+      onSourceChange={code => sources.choose(path, code)}
+      outOfDate={outOfDate}
+      readOnly={readOnly}
+      {...inside}
+    />
+  );
+}
+
+/** One field, or one container with the texts inside it. */
+function FieldAt({
+  row,
+  ...part
+}: PartProps & { row: TranslationField }): JSX.Element | null {
+  const { levels, set, isOutOfDate } = part.view;
+  const outOfDate = isOutOfDate(row.name);
+  const level = levels.get(row.name);
+  if (level !== undefined) {
     return (
-      <TranslationFieldRow
-        key={path}
-        translated={translated}
-        target={target}
-        source={
-          from === undefined
-            ? undefined
-            : {
-                language: languageOf(from),
-                value: sources.valuesAt(path)[from],
-                eligible: sources.eligibleFor(path),
-              }
-        }
-        labelOf={labelOf}
-        onSourceChange={code => sources.choose(path, code)}
-        outOfDate={options.outOfDate === true}
-        readOnly={readOnly}
-        {...(options.basePath === undefined
-          ? {}
-          : { basePath: options.basePath })}
-        {...(options.inherited === undefined
-          ? {}
-          : { inherited: options.inherited })}
+      <NestedTextLevel
+        level={level}
+        inherited={OPEN_GATE}
+        outOfDate={outOfDate}
+        drawText={(text: NestedText, gate: FieldGate) => (
+          <RowAt
+            key={text.path}
+            {...part}
+            translated={{
+              field: text.field,
+              name: text.path,
+              label: text.label,
+            }}
+            basePath={text.basePath}
+            inherited={gate}
+          />
+        )}
       />
     );
-  };
-  const drawText = (text: NestedText, gate: FieldGate) =>
-    drawRow(
-      { field: text.field, name: text.path, label: text.label },
-      { basePath: text.basePath, inherited: gate }
-    );
+  }
+  // A container that holds nothing to write.
+  if (set.nested.includes(row)) return null;
+  return <RowAt {...part} translated={row} outOfDate={outOfDate} />;
+}
 
+/** The fields in their two cards. */
+function Fields({ props, view }: PartProps): JSX.Element {
+  const { set, levels, paired, pageSource, labelOf } = view;
+  if (set.rows.length === 0 && levels.size === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        There is no text here to translate.
+      </p>
+    );
+  }
+  return (
+    <TranslationCards
+      paired={paired}
+      source={pageSource}
+      sourceLabel={labelOf(pageSource)}
+      targetLabel={props.target.label}
+    >
+      {set.written.map(row => (
+        <FieldAt key={row.name} props={props} view={view} row={row} />
+      ))}
+    </TranslationCards>
+  );
+}
+
+/** The form the fields are in. */
+function FormBody({ props, view }: PartProps): JSX.Element {
+  const { target } = props;
+  const { form, isSaving, save } = view.editing;
+  return (
+    <EntryLocaleProvider
+      // The value's direction is set on its control, so the field around it
+      // keeps the page's own.
+      value={{
+        locale: target.code,
+        rtl: false,
+        collectionLocalized: true,
+        isNonDefaultLocale: true,
+      }}
+    >
+      <FormProvider {...form}>
+        <form
+          aria-label={`${view.title}, ${target.label} translation`}
+          onSubmit={event => {
+            event.preventDefault();
+            if (!view.readOnly && !isSaving) void save();
+          }}
+        >
+          <Fields props={props} view={view} />
+        </form>
+      </FormProvider>
+    </EntryLocaleProvider>
+  );
+}
+
+/** Why the page can't be written in, and who else has the document. */
+function Notices({ props, view }: PartProps): JSX.Element {
+  const { document, schema } = props;
+  const { removed, offersEdits, documentId } = view;
+  const claimNotice = useClaimNotice(document, documentId);
+  return (
+    <>
+      {removed ? (
+        <div className="mb-6">
+          <RemovedFromCodeNotice
+            entity={{
+              kind: document.kind,
+              label: schema.label,
+              slug: document.slug,
+            }}
+            state={schema.removed.removedFromCodeState}
+          />
+        </div>
+      ) : null}
+      {!removed && !offersEdits ? (
+        <Alert className="mb-6">
+          <AlertDescription>{READ_ONLY_FOR_READER}</AlertDescription>
+        </Alert>
+      ) : null}
+      <DocumentLockBanner
+        notice={claimNotice}
+        onTakeOver={offersNothing}
+        onRequestAccess={offersNothing}
+        className="mb-6"
+      />
+    </>
+  );
+}
+
+/** What is translated and what can be done with it. */
+function Head({ props, view }: PartProps): JSX.Element {
+  const { document, target, schema, live, written, translations } = props;
+  const { title, paired, pageSource, labelOf, site, editing } = view;
+  return (
+    <>
+      <Breadcrumbs
+        items={[
+          { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+          { label: "Translations", href: ROUTES.TRANSLATIONS },
+          {
+            label: target.label,
+            href: `${ROUTES.TRANSLATIONS}?${LOCALE_PARAM}=${encodeURIComponent(target.code)}`,
+          },
+          { label: title },
+        ]}
+      />
+      {/* The trail shows it; a heading says it. */}
+      <h1 className="sr-only">{title}</h1>
+      <TranslationStrip
+        sourceLabel={paired ? labelOf(pageSource) : undefined}
+        targetLabel={target.label}
+        outOfDate={view.behind}
+      />
+      <TranslationActions
+        document={document}
+        documentId={view.documentId}
+        language={target}
+        defaultLocale={site.defaultLocale}
+        labelOf={labelOf}
+        rules={schema}
+        standing={view.standing}
+        goingLiveToo={languagesGoingLiveToo({
+          translations,
+          codes: site.locales.map(locale => locale.code),
+          target: target.code,
+          documentStatus: live.status,
+        })}
+        readOnly={view.readOnly}
+        removed={view.removed}
+        editing={editing}
+        emptyFields={() =>
+          emptyOnPublish({
+            set: view.set,
+            levels: view.levels,
+            shown: editing.form.getValues(),
+            written,
+            valuesAt: view.sources.valuesAt,
+            values: valuesPerLanguage(live),
+            rest: { translations, target: target.code, rules: site },
+          })
+        }
+        reload={props.reload}
+        editorHref={editorAddress(document)}
+      />
+    </>
+  );
+}
+
+function TranslationForm(props: TranslationFormProps): JSX.Element {
+  const { document, target, schema, translations } = props;
+  const view = useTranslationView(props);
+  const { editing, standing, behind, set } = view;
+  useDocumentTitle(view.title);
   return (
     <UnsavedChangesGuard
-      isDirty={isDirty}
-      busy={isSaving}
+      isDirty={editing.isDirty}
+      busy={editing.isSaving}
       language={target.label}
     >
       <PageContainer width={CONTENT_PAGE_MEASURE}>
-        <Breadcrumbs
-          items={[
-            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
-            { label: "Translations", href: ROUTES.TRANSLATIONS },
-            {
-              label: target.label,
-              href: `${ROUTES.TRANSLATIONS}?${LOCALE_PARAM}=${encodeURIComponent(target.code)}`,
-            },
-            { label: title },
-          ]}
-        />
-        {/* The trail shows it; a heading says it. */}
-        <h1 className="sr-only">{title}</h1>
-        <TranslationStrip
-          sourceLabel={paired ? labelOf(pageSource) : undefined}
-          targetLabel={target.label}
-          outOfDate={behind}
-        />
-        <TranslationActions
-          document={document}
-          documentId={documentId}
-          language={target}
-          defaultLocale={defaultLocale}
-          labelOf={labelOf}
-          rules={schema}
-          standing={standing}
-          goingLiveToo={languagesGoingLiveToo({
-            translations,
-            codes: locales.map(locale => locale.code),
-            target: target.code,
-            documentStatus: live.status,
-          })}
-          readOnly={readOnly}
-          removed={removed}
-          editing={editing}
-          emptyFields={() =>
-            emptyOnPublish({
-              set,
-              levels,
-              shown: form.getValues(),
-              written,
-              valuesAt: sources.valuesAt,
-              values,
-              rest: {
-                translations,
-                target: target.code,
-                rules: { locales, defaultLocale, fallback },
-              },
-            })
-          }
-          reload={reload}
-          editorHref={editorAddress(document)}
-        />
-        {removed ? (
-          <div className="mb-6">
-            <RemovedFromCodeNotice
-              entity={{
-                kind: document.kind,
-                label: schema.label,
-                slug: document.slug,
-              }}
-              state={schema.removed.removedFromCodeState}
-            />
-          </div>
-        ) : null}
-        {!removed && !offersEdits ? (
-          <Alert className="mb-6">
-            <AlertDescription>{READ_ONLY_FOR_READER}</AlertDescription>
-          </Alert>
-        ) : null}
-        <DocumentLockBanner
-          notice={claimNotice}
-          onTakeOver={offersNothing}
-          onRequestAccess={offersNothing}
-          className="mb-6"
-        />
+        <Head props={props} view={view} />
+        <Notices props={props} view={view} />
         <div className="@container/translation">
           <div className="flex flex-col gap-6 @5xl/translation:flex-row">
             <div className="min-w-0 flex-1">
-              <EntryLocaleProvider
-                // The value's direction is set on its control, so the field around it
-                // keeps the page's own.
-                value={{
-                  locale: target.code,
-                  rtl: false,
-                  collectionLocalized: true,
-                  isNonDefaultLocale: true,
-                }}
-              >
-                <FormProvider {...form}>
-                  <form
-                    aria-label={`${title}, ${target.label} translation`}
-                    onSubmit={event => {
-                      event.preventDefault();
-                      if (!readOnly && !isSaving) void save();
-                    }}
-                  >
-                    {set.rows.length === 0 && levels.size === 0 ? (
-                      <p className="text-sm text-muted-foreground">
-                        There is no text here to translate.
-                      </p>
-                    ) : (
-                      <TranslationCards
-                        paired={paired}
-                        source={pageSource}
-                        sourceLabel={labelOf(pageSource)}
-                        targetLabel={target.label}
-                      >
-                        {set.written.map(row => {
-                          const outOfDate =
-                            recorded?.[row.name]?.outOfDate === true;
-                          const level = levels.get(row.name);
-                          if (level !== undefined) {
-                            return (
-                              <NestedTextLevel
-                                key={row.name}
-                                level={level}
-                                inherited={OPEN_GATE}
-                                drawText={drawText}
-                                outOfDate={outOfDate}
-                              />
-                            );
-                          }
-                          return set.nested.includes(row)
-                            ? null
-                            : drawRow(row, { outOfDate });
-                        })}
-                      </TranslationCards>
-                    )}
-                  </form>
-                </FormProvider>
-              </EntryLocaleProvider>
+              <FormBody props={props} view={view} />
             </div>
             <TranslationPanel
               title={target.label}
@@ -695,11 +787,11 @@ function TranslationForm({
           </div>
         </div>
         <VersionConflictDialog
-          conflict={conflict}
+          conflict={editing.conflict}
           keepsRecoveryPoints={false}
           compareHref={null}
-          onLoadCurrent={loadCurrent}
-          onSaveAnyway={saveAnyway}
+          onLoadCurrent={editing.loadCurrent}
+          onSaveAnyway={editing.saveAnyway}
         />
       </PageContainer>
     </UnsavedChangesGuard>

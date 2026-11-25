@@ -17,42 +17,31 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useId, useRef, useState, type JSX, type RefObject } from "react";
+import {
+  useId,
+  useRef,
+  useState,
+  type JSX,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
-import { ChevronDown } from "@admin/components/icons";
 import {
   TopBarPlace,
   useInTopBar,
   useTopBarWidth,
 } from "@admin/components/layout/header/TopBarPlaces";
-import {
-  Button,
-  buttonVariants,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  toast,
-} from "@admin/components/ui";
-import { Link } from "@admin/components/ui/link";
+import { toast } from "@admin/components/ui";
 import type { PartsTarget } from "@admin/hooks/queries/usePublishParts";
 import { singleDocumentKeys } from "@admin/hooks/queries/useSingles";
 import { useCan } from "@admin/hooks/useCan";
 import type { ShownCopy } from "@admin/lib/document-version";
-import { cn } from "@admin/lib/utils";
 import { entryKeys } from "@admin/services/entryApi";
 import { versionApi, type VersionScope } from "@admin/services/versionApi";
 
-import {
-  hasSomethingToPublish,
-  holdsStrandedDraft,
-  offlineApplies,
-  publishApplies,
-  saveReach,
-  saveReachSentence,
-  type DraftRules,
-  type LanguageStanding,
-} from "./language-standing";
+import { languageActions, type LanguageActions } from "./language-actions";
+import type { DraftRules, LanguageStanding } from "./language-standing";
+import { LanguageActionButtons } from "./LanguageActionButtons";
 import {
   offlineMessage,
   publishedMessage,
@@ -134,117 +123,33 @@ function scopeOf(document: PartsTarget, documentId: string): VersionScope {
     : { kind: "single", slug: document.slug, documentId };
 }
 
-/** Why Publish or Take offline waits for what is unsaved; undefined if neither does. */
-function waitingSentence({
-  isDirty,
-  readOnly,
-  publishWaits,
-  offlineWaits,
-  language,
-}: {
-  isDirty: boolean;
-  readOnly: boolean;
-  publishWaits: boolean;
-  offlineWaits: boolean;
-  language: string;
-}): string | undefined {
-  if (!isDirty || (!publishWaits && !offlineWaits)) return undefined;
-  if (readOnly) {
-    return "Your unsaved changes can't be saved any more. Reload the page to go on.";
-  }
-  if (!publishWaits) {
-    return `Save your changes before taking ${language} offline.`;
-  }
-  return offlineWaits
-    ? `Save your changes before publishing ${language} or taking it offline.`
-    : `Save your changes before publishing ${language}.`;
+function detailKey(document: PartsTarget): readonly unknown[] {
+  return document.kind === "collection"
+    ? entryKeys.detail(document.slug, document.id)
+    : singleDocumentKeys.detail(document.slug);
 }
 
-export function TranslationActions({
+/** Takes the live values into the language's changes, and reads what it left. */
+function useTakeLiveValues({
   document,
   documentId,
   language,
-  defaultLocale,
-  labelOf,
-  rules,
-  standing,
-  goingLiveToo,
-  readOnly,
-  removed,
   editing,
-  emptyFields,
   reload,
-  editorHref,
-}: TranslationActionsProps): JSX.Element {
-  const mayPublish = useCan(`publish-${document.slug}`);
-  const mayUnpublish = useCan(`unpublish-${document.slug}`);
-  const { actions, arrow, opening, onCloseAutoFocus } = useReturnFocus();
-  // Asked from the menu, which would otherwise take focus back as it closes.
-  const leavingMenu = useRef(false);
-  const room = useTopBarWidth();
-  const inBar = useInTopBar() && room !== null && room >= BAR_ROOM;
-  // Each opening is a dialog of its own, with no answer left from the last.
-  const [openings, setOpenings] = useState(0);
-  const [asked, setAsked] = useState<"publish" | "offline" | null>(null);
-  const noteId = useId();
-  const heldId = useId();
-  const { isDirty, isSaving, save, startedFrom } = editing;
-
+}: TranslationActionsProps): () => Promise<void> {
   const queryClient = useQueryClient();
-  const reach = saveReach(rules, standing);
-  // Publish saves first only what no reader is shown by that save.
-  const savesFirst = isDirty && !readOnly && reach === "nobody";
-  const offersPublish =
-    !removed && mayPublish && publishApplies(rules, standing);
-  const offersOffline =
-    !removed && mayUnpublish && offlineApplies(rules, standing);
-  const canPublishNow =
-    hasSomethingToPublish(standing, isDirty) &&
-    !isSaving &&
-    (!isDirty || savesFirst);
-  const note = readOnly
-    ? undefined
-    : saveReachSentence(reach, rules, language.label);
-  const waiting = waitingSentence({
-    isDirty,
-    readOnly,
-    publishWaits: offersPublish && !savesFirst,
-    offlineWaits: offersOffline,
-    language: language.label,
-  });
-
-  const shown = (): ShownCopy => ({
-    version: startedFrom(),
-    locale: language.code,
-    draft: rules.readsDraft,
-  });
-  const ask = (what: "publish" | "offline") => {
-    setOpenings(count => count + 1);
-    setAsked(what);
-  };
-  const askToPublish = async (): Promise<void> => {
-    if (!canPublishNow) return;
-    opening();
-    if (savesFirst && !(await save())) return;
-    ask("publish");
-  };
-  const takeLiveValues = async (): Promise<void> => {
+  return async () => {
     let read: unknown;
     try {
       await versionApi.takeLiveSharedValues(
         scopeOf(document, documentId),
         language.code,
-        startedFrom()
+        editing.startedFrom()
       );
     } finally {
       // Read again either way: an answer can be lost after the values were
       // taken, and the page would go on from the ones they replaced.
-      void queryClient.invalidateQueries({
-        queryKey:
-          document.kind === "collection"
-            ? entryKeys.detail(document.slug, document.id)
-            : singleDocumentKeys.detail(document.slug),
-      });
+      void queryClient.invalidateQueries({ queryKey: detailKey(document) });
       read = await reload();
     }
     if (read === undefined) {
@@ -253,6 +158,96 @@ export function TranslationActions({
       );
     }
   };
+}
+
+/** Draws the buttons in the top bar, or on the page where it has no room. */
+function ActionPlace({ children }: { children: ReactNode }): JSX.Element {
+  const room = useTopBarWidth();
+  const inBar = useInTopBar() && room !== null && room >= BAR_ROOM;
+  return inBar ? (
+    <TopBarPlace name="end">{children}</TopBarPlace>
+  ) : (
+    <>{children}</>
+  );
+}
+
+/** What there is to say of the actions. */
+function ActionNotes({
+  language,
+  can,
+  noteId,
+  waitingId,
+}: {
+  language: string;
+  can: LanguageActions;
+  noteId: string;
+  waitingId: string;
+}): JSX.Element {
+  const look = "text-sm text-muted-foreground";
+  return (
+    <>
+      {can.note === undefined ? null : (
+        <p id={noteId} data-slot="translation-save-reach" className={look}>
+          {can.note}
+        </p>
+      )}
+      {can.stranded ? (
+        <p className={look}>
+          {language} holds a draft from before drafts stopped being kept here.
+          It can&apos;t be published.
+        </p>
+      ) : null}
+      {can.waiting === undefined ? null : (
+        <p id={waitingId} className={look}>
+          {can.waiting}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** Which dialog is open, each opening one of its own. */
+interface Asking {
+  asked: "publish" | "offline" | null;
+  openings: number;
+  ask: (what: "publish" | "offline") => void;
+  close: () => void;
+}
+
+function useAsking(): Asking {
+  const [openings, setOpenings] = useState(0);
+  const [asked, setAsked] = useState<Asking["asked"]>(null);
+  return {
+    asked,
+    openings,
+    ask: what => {
+      setOpenings(count => count + 1);
+      setAsked(what);
+    },
+    close: () => setAsked(null),
+  };
+}
+
+/** The dialogs, once one has been asked for. */
+function ActionDialogs({
+  asking,
+  onCloseAutoFocus,
+  ...props
+}: TranslationActionsProps & {
+  asking: Asking;
+  onCloseAutoFocus: (event: Event) => void;
+}): JSX.Element | null {
+  const { document, language, labelOf, defaultLocale, rules } = props;
+  const { goingLiveToo, reload, readOnly, editing } = props;
+  const takeLiveValues = useTakeLiveValues(props);
+  const { asked, openings, close } = asking;
+  if (openings === 0) return null;
+
+  const shown = (): ShownCopy => ({
+    version: editing.startedFrom(),
+    locale: language.code,
+    draft: rules.readsDraft,
+  });
   // Said before the language is read again, so a read that fails can't hide
   // that it was done; read before the dialog closes, so what is written next
   // is written from what the move left.
@@ -260,189 +255,111 @@ export function TranslationActions({
     toast.success(message);
     await reload();
   };
+  const shared = {
+    target: document,
+    language,
+    shown,
+    onFailed: reload,
+    onCloseAutoFocus,
+    onOpenChange: (open: boolean) => {
+      if (!open) close();
+    },
+  };
+  return (
+    <>
+      <PublishLanguageDialog
+        key={`publish-${openings}`}
+        {...shared}
+        open={asked === "publish"}
+        labelOf={labelOf}
+        empty={asked === "publish" ? props.emptyFields() : []}
+        goingLiveToo={goingLiveToo}
+        takeLiveValues={readOnly ? undefined : takeLiveValues}
+        onPublished={result =>
+          settled(
+            publishedMessage({
+              result,
+              language: language.label,
+              defaultLocale,
+              goingLiveToo,
+              labelOf,
+            })
+          )
+        }
+      />
+      <TakeLanguageOfflineDialog
+        key={`offline-${openings}`}
+        {...shared}
+        open={asked === "offline"}
+        onTakenOffline={() =>
+          settled(offlineMessage(language.label, labelOf(defaultLocale)))
+        }
+      />
+    </>
+  );
+}
 
-  // A draft only where no reader is shown it: anywhere else a save is not one.
-  const saveLabel =
-    rules.hasStatus && reach === "nobody" ? "Save draft" : "Save";
-  const saveButton = (main: boolean) => (
-    <Button
-      type="button"
-      size="sm"
-      variant={main ? "default" : "outline"}
-      className={main ? "rounded-r-none" : undefined}
-      data-slot="translation-save"
-      disabled={!isDirty || isSaving}
-      aria-describedby={note === undefined ? undefined : noteId}
-      onClick={() => void save()}
-    >
-      {isSaving ? "Saving…" : saveLabel}
-    </Button>
-  );
-  const main: "publish" | "save" | "open" = offersPublish
-    ? "publish"
-    : readOnly
-      ? "open"
-      : "save";
-  const buttons = (
-    <div
-      ref={actions}
-      role="group"
-      aria-label={`${language.label} actions`}
-      tabIndex={-1}
-      className="flex min-w-0 flex-wrap items-center justify-end gap-2"
-    >
-      {/* Save beside the main button, where it is not it. */}
-      {main === "publish" && !readOnly ? saveButton(false) : null}
-      <div className="flex">
-        {main === "publish" ? (
-          <Button
-            type="button"
-            size="sm"
-            // Not `disabled`, which would drop focus while the save it starts
-            // is on its way.
-            aria-disabled={!canPublishNow}
-            aria-describedby={isDirty && !savesFirst ? heldId : undefined}
-            className="rounded-r-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
-            onClick={() => void askToPublish()}
-          >
-            Publish {language.label}
-          </Button>
-        ) : null}
-        {main === "save" ? saveButton(true) : null}
-        {main === "open" ? (
-          <Link
-            href={editorHref}
-            className={cn(
-              buttonVariants({ variant: "outline", size: "sm" }),
-              offersOffline && "rounded-r-none"
-            )}
-          >
-            Open in editor
-          </Link>
-        ) : null}
-        {main === "open" && !offersOffline ? null : (
-          <DropdownMenu
-            // What it opens is modal, and two would hold the page at once.
-            modal={false}
-          >
-            <DropdownMenuTrigger asChild>
-              <Button
-                ref={arrow}
-                type="button"
-                size="sm"
-                variant={main === "open" ? "outline" : "default"}
-                className={cn(
-                  "rounded-l-none px-1.5",
-                  main === "open"
-                    ? "border-l-0"
-                    : "border-l-primary-foreground/25"
-                )}
-                aria-label={`More actions for ${language.label}`}
-              >
-                <ChevronDown className="h-4 w-4" aria-hidden />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              onCloseAutoFocus={event => {
-                if (leavingMenu.current) event.preventDefault();
-                leavingMenu.current = false;
-              }}
-            >
-              {offersOffline ? (
-                <DropdownMenuItem
-                  disabled={isDirty || isSaving}
-                  aria-describedby={waiting === undefined ? undefined : heldId}
-                  onSelect={() => {
-                    leavingMenu.current = true;
-                    opening(arrow.current);
-                    ask("offline");
-                  }}
-                >
-                  Take offline…
-                </DropdownMenuItem>
-              ) : null}
-              {main === "open" ? null : (
-                <DropdownMenuItem asChild>
-                  <Link href={editorHref}>Open in editor</Link>
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </div>
-    </div>
-  );
+export function TranslationActions(
+  props: TranslationActionsProps
+): JSX.Element {
+  const { document, language, rules, standing, readOnly, removed } = props;
+  const { isDirty, isSaving, save } = props.editing;
+  const can = languageActions({
+    language: language.label,
+    rules,
+    standing,
+    mayPublish: useCan(`publish-${document.slug}`),
+    mayUnpublish: useCan(`unpublish-${document.slug}`),
+    readOnly,
+    removed,
+    isDirty,
+    isSaving,
+  });
+  const { actions, arrow, opening, onCloseAutoFocus } = useReturnFocus();
+  const asking = useAsking();
+  const noteId = useId();
+  const waitingId = useId();
+
+  const askToPublish = async (): Promise<void> => {
+    if (!can.canPublishNow) return;
+    opening();
+    if (can.savesFirst && !(await save())) return;
+    asking.ask("publish");
+  };
 
   return (
     <div className="mb-4 flex flex-col gap-2 empty:mb-0">
-      {inBar ? <TopBarPlace name="end">{buttons}</TopBarPlace> : buttons}
-      {note === undefined ? null : (
-        <p
-          id={noteId}
-          data-slot="translation-save-reach"
-          className="text-sm text-muted-foreground"
-        >
-          {note}
-        </p>
-      )}
-      {!removed && holdsStrandedDraft(rules, standing) ? (
-        <p className="text-sm text-muted-foreground">
-          {language.label} holds a draft from before drafts stopped being kept
-          here. It can&apos;t be published.
-        </p>
-      ) : null}
-      {waiting === undefined ? null : (
-        <p id={heldId} className="text-sm text-muted-foreground">
-          {waiting}
-        </p>
-      )}
-      {openings > 0 ? (
-        <PublishLanguageDialog
-          key={`publish-${openings}`}
-          open={asked === "publish"}
-          onOpenChange={open => {
-            if (!open) setAsked(null);
+      <ActionPlace>
+        <LanguageActionButtons
+          language={language.label}
+          can={can}
+          isDirty={isDirty}
+          isSaving={isSaving}
+          readOnly={readOnly}
+          noteId={noteId}
+          waitingId={waitingId}
+          editorHref={props.editorHref}
+          actions={actions}
+          arrow={arrow}
+          onSave={() => void save()}
+          onPublish={() => void askToPublish()}
+          onTakeOffline={() => {
+            opening(arrow.current);
+            asking.ask("offline");
           }}
-          target={document}
-          language={language}
-          labelOf={labelOf}
-          empty={asked === "publish" ? emptyFields() : []}
-          goingLiveToo={goingLiveToo}
-          shown={shown}
-          takeLiveValues={readOnly ? undefined : takeLiveValues}
-          onFailed={reload}
-          onPublished={result =>
-            settled(
-              publishedMessage({
-                result,
-                language: language.label,
-                defaultLocale,
-                goingLiveToo,
-                labelOf,
-              })
-            )
-          }
-          onCloseAutoFocus={onCloseAutoFocus}
         />
-      ) : null}
-      {openings > 0 ? (
-        <TakeLanguageOfflineDialog
-          key={`offline-${openings}`}
-          open={asked === "offline"}
-          onOpenChange={open => {
-            if (!open) setAsked(null);
-          }}
-          target={document}
-          language={language}
-          shown={shown}
-          onFailed={reload}
-          onTakenOffline={() =>
-            settled(offlineMessage(language.label, labelOf(defaultLocale)))
-          }
-          onCloseAutoFocus={onCloseAutoFocus}
-        />
-      ) : null}
+      </ActionPlace>
+      <ActionNotes
+        language={language.label}
+        can={can}
+        noteId={noteId}
+        waitingId={waitingId}
+      />
+      <ActionDialogs
+        {...props}
+        asking={asking}
+        onCloseAutoFocus={onCloseAutoFocus}
+      />
     </div>
   );
 }

@@ -89,56 +89,57 @@ interface SchemaAnswer {
   error: Error | null;
 }
 
+type CollectionRead = NonNullable<
+  ReturnType<typeof useCollectionSchema>["data"]
+>;
+type SingleRead = NonNullable<ReturnType<typeof useSingleSchema>["data"]>;
+
+function ofCollection(data: CollectionRead, slug: string): TranslationSchema {
+  return {
+    label: data.label || data.name || slug,
+    fields: fieldsOf(getCollectionFields(data)),
+    // The schema read carries `localized`, which the admin's type for it does
+    // not declare.
+    localized: "localized" in data && data.localized === true,
+    hasStatus: data.status === true,
+    holdsDrafts: data.draftsEnabled === true,
+    readsDraft: readsHeldDraft(data),
+    useAsTitle: data.admin?.useAsTitle,
+    removed: data,
+  };
+}
+
+function ofSingle(data: SingleRead, slug: string): TranslationSchema {
+  return {
+    label: data.label || slug,
+    fields: fieldsOf(data.fields),
+    localized: data.localized === true,
+    hasStatus: data.status === true,
+    holdsDrafts: data.draftsEnabled === true,
+    readsDraft: data.draftsEnabled === true,
+    useAsTitle: undefined,
+    removed: data,
+  };
+}
+
 /**
  * The document's collection or Single. Both hooks are called, as hooks must
  * be, and the one the document is not of is asked for nothing.
  */
-function useTranslationSchema(document: TranslatedDocument): SchemaAnswer {
-  const { kind, slug } = document;
+function useTranslationSchema({
+  kind,
+  slug,
+}: TranslatedDocument): SchemaAnswer {
   const collection = useCollectionSchema(
     kind === "collection" ? slug : undefined
   );
   const single = useSingleSchema(kind === "single" ? slug : undefined);
-  if (kind === "single") {
-    const { data, isLoading, error } = single;
-    return {
-      isLoading,
-      error,
-      schema:
-        data === undefined
-          ? undefined
-          : {
-              label: data.label || slug,
-              fields: fieldsOf(data.fields),
-              localized: data.localized === true,
-              hasStatus: data.status === true,
-              holdsDrafts: data.draftsEnabled === true,
-              readsDraft: data.draftsEnabled === true,
-              useAsTitle: undefined,
-              removed: data,
-            },
-    };
-  }
-  const { data, isLoading, error } = collection;
-  return {
-    isLoading,
-    error,
-    schema:
-      data === undefined
-        ? undefined
-        : {
-            label: data.label || data.name || slug,
-            fields: fieldsOf(getCollectionFields(data)),
-            // The schema read carries `localized`, which the admin's type for
-            // it does not declare.
-            localized: "localized" in data && data.localized === true,
-            hasStatus: data.status === true,
-            holdsDrafts: data.draftsEnabled === true,
-            readsDraft: readsHeldDraft(data),
-            useAsTitle: data.admin?.useAsTitle,
-            removed: data,
-          },
-  };
+  const { isLoading, error } = kind === "single" ? single : collection;
+  const schema =
+    kind === "single"
+      ? single.data && ofSingle(single.data, slug)
+      : collection.data && ofCollection(collection.data, slug);
+  return { isLoading, error, schema };
 }
 
 /** What both of the page's reads of the document ask for. */

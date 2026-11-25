@@ -139,22 +139,13 @@ function SourceHalf({
   );
 }
 
-export function TranslationFieldRow({
+/** The form's own decision about the field, so one left out takes its source along. */
+function useFieldGate({
   translated,
-  target,
-  source,
-  labelOf,
-  onSourceChange,
-  outOfDate,
-  readOnly,
   basePath = "",
   inherited = OPEN_GATE,
-  suggestion,
-  suggestionChoices,
-}: TranslationFieldRowProps): JSX.Element | null {
-  const markValue = useValueLanguage(target);
-  // The form's own decision about the field, so one its condition leaves out
-  // is left out with its source.
+  readOnly,
+}: TranslationFieldRowProps): FieldGate {
   const condition = conditionSourcePath(
     fieldAdminGates(translated.field).condition,
     basePath
@@ -163,11 +154,67 @@ export function TranslationFieldRow({
     name: condition ?? "",
     disabled: condition === undefined,
   });
-  const gate = effectiveFieldGate(
+  return effectiveFieldGate(
     translated.field,
     { ...inherited, readOnly: readOnly || inherited.readOnly },
     conditionValue
   );
+}
+
+/** What is written: the form's control, and what there is to say of it. */
+function TargetHalf({
+  translated,
+  target,
+  source,
+  outOfDate,
+  basePath = "",
+  suggestion,
+  suggestionChoices,
+  gate,
+}: TranslationFieldRowProps & { gate: FieldGate }): JSX.Element {
+  const markValue = useValueLanguage(target);
+  return (
+    <>
+      {outOfDate ? (
+        <div className="absolute -top-1 right-0 @xl/cards:top-2">
+          <OutOfDateMark />
+        </div>
+      ) : null}
+      <div
+        ref={markValue}
+        // The mark sits at the end of the label's line, so a long label wraps
+        // before it.
+        className={cn(outOfDate && "[&_label]:pr-28")}
+      >
+        <FieldRenderer
+          field={translated.field}
+          basePath={basePath}
+          mode="edit"
+          readOnly={gate.readOnly}
+        />
+      </div>
+      {source === undefined ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          No other language has this published and up to date, so it is written
+          here as original {target.label}.
+        </p>
+      ) : null}
+      <SuggestionBlock
+        field={translated.field}
+        fieldLabel={translated.label}
+        suggestion={suggestion}
+        language={target}
+        choices={gate.readOnly || gate.disabled ? undefined : suggestionChoices}
+      />
+    </>
+  );
+}
+
+export function TranslationFieldRow(
+  props: TranslationFieldRowProps
+): JSX.Element | null {
+  const { translated, target, source } = props;
+  const gate = useFieldGate(props);
   if (!gate.shown) return null;
   return (
     <div
@@ -180,54 +227,8 @@ export function TranslationFieldRow({
         targetLabel={target.label}
         {...(source === undefined
           ? {}
-          : {
-              source: (
-                <SourceHalf
-                  translated={translated}
-                  source={source}
-                  labelOf={labelOf}
-                  onSourceChange={onSourceChange}
-                  outOfDate={outOfDate}
-                />
-              ),
-            })}
-        target={
-          <>
-            {outOfDate ? (
-              <div className="absolute -top-1 right-0 @xl/cards:top-2">
-                <OutOfDateMark />
-              </div>
-            ) : null}
-            <div
-              ref={markValue}
-              // The mark sits at the end of the label's line, so a long label
-              // wraps before it.
-              className={cn(outOfDate && "[&_label]:pr-28")}
-            >
-              <FieldRenderer
-                field={translated.field}
-                basePath={basePath}
-                mode="edit"
-                readOnly={gate.readOnly}
-              />
-            </div>
-            {source === undefined ? (
-              <p className="mt-2 text-xs text-muted-foreground">
-                No other language has this published and up to date, so it is
-                written here as original {target.label}.
-              </p>
-            ) : null}
-            <SuggestionBlock
-              field={translated.field}
-              fieldLabel={translated.label}
-              suggestion={suggestion}
-              language={target}
-              choices={
-                gate.readOnly || gate.disabled ? undefined : suggestionChoices
-              }
-            />
-          </>
-        }
+          : { source: <SourceHalf {...props} source={source} /> })}
+        target={<TargetHalf {...props} gate={gate} />}
       />
     </div>
   );
