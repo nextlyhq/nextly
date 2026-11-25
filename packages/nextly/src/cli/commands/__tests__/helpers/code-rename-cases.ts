@@ -468,6 +468,40 @@ export function codeRenameCases(args: {
           expect(await columnOf(reread, "summary")).toBe("new");
         });
 
+        it("offers a removed container's column in an adopted project where an earlier release kept the container whole, with nothing on the main table", async () => {
+          const url = await openDatabase(dialect);
+          const withField = (
+            field: ReturnType<typeof repeater> | ReturnType<typeof text>
+          ) => [
+            defineCollection({
+              slug: SLUG,
+              fields: [text({ name: "title" }), text({ name: "note" }), field],
+            }),
+          ];
+          const before = withField(
+            repeater({ name: "slides", fields: [text({ name: "caption" })] })
+          );
+          const app = await start(dialect, url, before);
+          // As that release laid it out: the container's column on the translations table alone.
+          const q = (name: string) =>
+            dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+          await (
+            app.adapter as unknown as {
+              executeQuery(statement: string): Promise<unknown>;
+            }
+          ).executeQuery(
+            `ALTER TABLE ${q(`dc_${SLUG}`)} DROP COLUMN ${q("slides")}`
+          );
+          await baseline(before);
+
+          const swapped = await create(
+            "swap",
+            withField(text({ name: "summary" }))
+          );
+          expect(swapped.code, swapped.said).toBeUndefined();
+          expect(textOf(swapped.files)).toMatch(renames("slides", "summary"));
+        });
+
         it("offers and writes a text field's rename in an adopted project with a container beside it, every value kept", async () => {
           const url = await openDatabase(dialect);
           const named = (name: string) => [
@@ -620,7 +654,7 @@ export function codeRenameCases(args: {
           ).toEqual(["heading", "note", "slides"]);
 
           // The dialog's rename, as it answers the offer: the first save after the baseline.
-          await builder(dir, url);
+          const project = await builder(dir, url);
           const fields = [
             { name: "headline", type: "text" },
             { name: "note", type: "text" },
@@ -648,9 +682,7 @@ export function codeRenameCases(args: {
             }),
           ]);
           const version = await (
-            (
-              await builder(dir, url)
-            ).adapter as unknown as {
+            project.adapter as unknown as {
               executeQuery<R>(statement: string): Promise<R[]>;
             }
           ).executeQuery<{ version: unknown }>(
