@@ -452,7 +452,7 @@ describe("LanguagePanel", () => {
     // Arabic is empty — a start.
     expect(
       within(ar).getByRole("button", {
-        name: "Start Arabic from another language",
+        name: "Start from… another language, into Arabic",
       })
     ).toBeInTheDocument();
     // English already has content — the same action, but it overwrites, and
@@ -460,14 +460,33 @@ describe("LanguagePanel", () => {
     // appears.
     expect(
       within(en).getByRole("button", {
-        name: "Replace English from another language",
+        name: "Replace from… another language, into English",
       })
     ).toBeInTheDocument();
     expect(
       within(en).queryByRole("button", {
-        name: "Start English from another language",
+        name: "Start from… another language, into English",
       })
     ).toBeNull();
+  });
+
+  // A speech-input user says what they see ("click Replace from"); a button whose name leaves its
+  // visible text out cannot be reached that way (WCAG 2.5.3, label in name). Each button is named
+  // by its visible text first, then by the language it acts on.
+  it("names every button with its visible text first", () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderPanel({
+      translations: TRANSLATIONS,
+      activeLocale: "de",
+      onSelect: vi.fn(),
+      onSeed: vi.fn(),
+    });
+
+    const mismatched = screen.queryAllByRole("button", {
+      name: (name, element) =>
+        !name.startsWith((element.textContent ?? "").trim()),
+    });
+    expect(mismatched.map(button => button.textContent)).toEqual([]);
   });
 
   it("routes an overwrite through the same one switch a start uses", async () => {
@@ -477,7 +496,7 @@ describe("LanguagePanel", () => {
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: "Replace English from another language",
+        name: "Replace from… another language, into English",
       })
     );
     // Target and source in one call, exactly as the empty case does it — the
@@ -497,12 +516,12 @@ describe("LanguagePanel", () => {
     // Not on the row.
     const [, de] = rows();
     expect(
-      within(de).queryByRole("button", { name: /from another language/ })
+      within(de).queryByRole("button", { name: /from… another language/ })
     ).toBeNull();
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: "Replace German from another language",
+        name: "Replace from… another language, into German",
       })
     );
     await userEvent.click(
@@ -542,12 +561,12 @@ describe("LanguagePanel", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Replace Arabic from another language",
+        name: "Replace from… another language, into Arabic",
       })
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", {
-        name: "Start Arabic from another language",
+        name: "Start from… another language, into Arabic",
       })
     ).toBeNull();
   });
@@ -593,13 +612,13 @@ describe("LanguagePanel", () => {
     });
     expect(
       screen.queryByRole("button", {
-        name: "Start Arabic from another language",
+        name: "Start from… another language, into Arabic",
       })
     ).toBeNull();
     // Including the active row's source picker, which reads the same gate.
     expect(
       screen.queryByRole("button", {
-        name: "Replace German from another language",
+        name: "Replace from… another language, into German",
       })
     ).toBeNull();
   });
@@ -614,7 +633,9 @@ describe("LanguagePanel", () => {
     });
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Start Arabic from another language" })
+      screen.getByRole("button", {
+        name: "Start from… another language, into Arabic",
+      })
     );
 
     // ONE call carrying both halves. Asking for the switch and the source
@@ -631,7 +652,9 @@ describe("LanguagePanel", () => {
     renderPanel({ translations: TRANSLATIONS, onSelect });
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Start Arabic from another language" })
+      screen.getByRole("button", {
+        name: "Start from… another language, into Arabic",
+      })
     );
     // `activeLocale` undefined means the implicit default, not "no source".
     expect(onSelect).toHaveBeenCalledWith("ar", { seedFrom: "en" });
@@ -648,11 +671,13 @@ describe("LanguagePanel", () => {
     });
 
     expect(
-      screen.getByRole("button", { name: "Start Arabic from another language" })
+      screen.getByRole("button", {
+        name: "Start from… another language, into Arabic",
+      })
     ).toBeDisabled();
     expect(
       screen.getByRole("button", {
-        name: "Replace German from another language",
+        name: "Replace from… another language, into German",
       })
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Publish all" })).toBeDisabled();
@@ -682,7 +707,9 @@ describe("LanguagePanel", () => {
 
     expect(screen.getByRole("button", { name: "Publish all" })).toBeEnabled();
     expect(
-      screen.getByRole("button", { name: "Start Arabic from another language" })
+      screen.getByRole("button", {
+        name: "Start from… another language, into Arabic",
+      })
     ).toBeDisabled();
   });
 
@@ -700,7 +727,9 @@ describe("LanguagePanel", () => {
     });
 
     expect(
-      screen.getByRole("button", { name: "Start Arabic from another language" })
+      screen.getByRole("button", {
+        name: "Start from… another language, into Arabic",
+      })
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Publish all" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Open English" })).toBeEnabled();

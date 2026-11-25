@@ -159,7 +159,7 @@ describe("CopyFromLanguageMenu", () => {
     render(<Harness ctx={SINGLE_CTX} />);
     expect(
       await screen.findByRole("button", {
-        name: /replace german from another language/i,
+        name: /replace from… another language, into german/i,
       })
     ).toBeInTheDocument();
   });
@@ -169,7 +169,7 @@ describe("CopyFromLanguageMenu", () => {
     render(<Harness />);
     await userEvent.click(
       screen.getByRole("button", {
-        name: /replace german from another language/i,
+        name: /replace from… another language, into german/i,
       })
     );
     // Active locale (de) excluded; English offered.
@@ -216,7 +216,7 @@ describe("CopyFromLanguageMenu", () => {
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: /replace german from another language/i,
+        name: /replace from… another language, into german/i,
       })
     );
     await userEvent.click(
@@ -246,7 +246,7 @@ describe("CopyFromLanguageMenu", () => {
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: /replace german from another language/i,
+        name: /replace from… another language, into german/i,
       })
     );
     await userEvent.click(
