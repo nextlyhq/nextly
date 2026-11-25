@@ -48,6 +48,10 @@ import {
   writerHeldError,
   writerLostError,
 } from "../../../domains/schema/migrate-create/writer-hold";
+import {
+  readingOthersElements,
+  refuseRemovingOthersElements,
+} from "../../../domains/schema/ownership/removed-elements";
 import { describeHolder } from "../../../domains/schema/pipeline/schema-lock";
 import { snapshotFolderUnreadableError } from "../../../domains/schema/repair-columns/stop-errors";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -102,6 +106,9 @@ const FILE = "20261020_120000_add_posts.sql";
 /** The checksum `FILE`'s snapshot recorded, which it still matches. */
 const POSTS_CHECKSUM = "5f0c".repeat(16);
 const MIGRATIONS = `${PROJECT}/migrations`;
+
+/** An app migration's file that removes a field. */
+const REMOVE_FILE = "20261021_100000_remove_code.sql";
 
 /** A Schema Builder save's file, named as a save names it. */
 const BUILDER_FILE = "1761732000000_update_posts.sql";
@@ -221,6 +228,42 @@ export const MIGRATION_CASES = {
       ],
       new Set(["20261020_120000_add_posts", "20261021_090000_add_tags"])
     ) as NextlyError,
+  // As `nextly migrate` refuses a file that drops a column a plugin's index stands on.
+  FOREIGN_ELEMENT_REMOVED: () =>
+    thrown(() =>
+      refuseRemovingOthersElements({
+        deletions: [{ kind: "column", table: "dc_posts", column: "code" }],
+        dialect: "postgresql",
+        entity: `Migration ${REMOVE_FILE}`,
+        fieldOf: (_table, column) => column,
+        sources: {
+          extensionSchema: () => Promise.resolve(null),
+          recordedElements: () =>
+            Promise.resolve([
+              {
+                owner: { kind: "plugin", id: "@acme/search" },
+                kind: "index",
+                name: "posts_code_idx",
+                table: "dc_posts",
+              },
+            ]),
+          tableOwners: () => Promise.resolve(new Map()),
+          indexColumns: () =>
+            Promise.resolve(new Map([["posts_code_idx", ["code"]]])),
+          indexNames: () => Promise.resolve(new Set(["posts_code_idx"])),
+          foreignKeyColumns: () => Promise.resolve(new Map()),
+          keysInto: () => Promise.resolve([]),
+          liveNames: table => Promise.resolve([table]),
+        },
+      })
+    ),
+  // As `nextly migrate` refuses a run where the record of other owners' elements cannot be read.
+  OWNER_RECORD_UNREADABLE: () =>
+    thrown(() =>
+      readingOthersElements("The database", () =>
+        Promise.reject(new Error("no such table: nextly_schema_owners"))
+      )
+    ),
   // As `nextly repair-columns` stops on a snapshots folder its user may not list.
   MIGRATION_SNAPSHOTS_UNREADABLE: () =>
     snapshotFolderUnreadableError(

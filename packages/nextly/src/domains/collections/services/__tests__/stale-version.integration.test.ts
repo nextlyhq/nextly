@@ -678,6 +678,56 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    // The same through a batch: a default-language batch edit of a group's text alone leaves its
+    // structure as stored, so the document's own version stays and another language's reader
+    // still saves. Moved anyway, Spanish's version would be refused as stale.
+    it("judges a batch edit of a group's text on its own language", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", box: { label: "Label", code: "c1" } }
+      );
+      const id = idOf(created);
+      const es = await update(
+        t,
+        DOCS,
+        id,
+        { box: { label: "Etiqueta", code: "c1" }, _overwrite: true },
+        { locale: "es" }
+      );
+
+      const batch = await serviceOf(t).updateMany(
+        DOCS,
+        [
+          {
+            id,
+            data: {
+              box: { label: "Label again", code: "c1" },
+              _overwrite: true,
+            },
+          },
+        ],
+        { overrideAccess: true } as never
+      );
+      expect(batch.errors, JSON.stringify(batch)).toEqual([]);
+      // The batch wrote English: a batch that skipped it would keep the version too.
+      const english = (await t.nextly.findByID({
+        collection: DOCS,
+        id,
+        locale: "en",
+      })) as { box: { label?: string; code?: string } };
+      expect(english.box).toMatchObject({ label: "Label again", code: "c1" });
+
+      const fine = await update(
+        t,
+        DOCS,
+        id,
+        { box: { label: "Etiqueta nueva", code: "c1" }, _rev: revOf(es) },
+        { locale: "es" }
+      );
+      expect(fine.success, JSON.stringify(fine)).toBe(true);
+    });
+
     it("names who changed it last and when, to a caller who may read it, and never a value", async () => {
       const t = await boot(dialect);
       const created = await handlerOf(t).createEntry(

@@ -42,6 +42,10 @@ import { container } from "../../di/container";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { DynamicCollectionService } from "../../domains/dynamic-collections/services/dynamic-collection-service";
+import {
+  refuseFieldGroupFieldsChangedInHost,
+  withFieldGroupCopiesJudged,
+} from "../../domains/field-groups/field-group-fields-read-only";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
 import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
@@ -49,6 +53,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
+import type { TranslatedDocument } from "../../domains/i18n/pipeline/document-access";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import type {
   BuilderSaveSetup,
@@ -131,6 +136,7 @@ import {
 import {
   NOTHING_TO_REVIEW,
   reviewOf,
+  withMoves,
   type BuilderSaveReview,
 } from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
@@ -140,10 +146,12 @@ import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
+  getComponentRegistryFromDI,
   getLoggerFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
 import { entryWithStored } from "../helpers/entry-with-stored";
+import { movesRefusedFirst } from "../helpers/readable-field-owners";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
 import {
@@ -181,6 +189,10 @@ import { readAccessCallerForDispatch } from "./read-access-caller";
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
+  respondKeepCurrent,
+  respondSourceChange,
+} from "./source-review-handlers";
+import {
   discardWorkingDraftForDocument,
   takeLiveSharedValuesForDocument,
   getVersionDiffForDocument,
@@ -207,6 +219,15 @@ type CollectionsHandlerType = CollectionsHandler;
 function callerUser(): { userId?: string; user?: UserContext } {
   const user = readAuthenticatedUser();
   return user ? { userId: user.id, user } : {};
+}
+
+/** The entry a translation route names. */
+function entryOf(p: Params): TranslatedDocument {
+  return {
+    kind: "collection",
+    slug: requireParam(p, "collectionName"),
+    id: requireParam(p, "entryId"),
+  };
 }
 
 // Decides whether the apply payload carries actionable rename hints we
@@ -742,7 +763,12 @@ const COLLECTIONS_METHODS: Record<
       if (createdFields !== undefined) {
         assertValidPluginFieldOptions(createdFields);
       }
-      const result = await svc.createCollection(created);
+      // A field group's fields are changed only in its own editor, a new collection's too: the
+      // service judges the save's copies under its schema lock.
+      const result = await withFieldGroupCopiesJudged(
+        getComponentRegistryFromDI(),
+        () => svc.createCollection(created)
+      );
       const collection = unwrapServiceResult(result);
       return respondMutation(
         result.message ?? "Collection created.",
@@ -888,14 +914,20 @@ const COLLECTIONS_METHODS: Record<
       const renames = parseFieldRenameAnswers(
         (body as { renames?: unknown }).renames
       );
-      const result = await withFieldRenameAnswers(renames, async () =>
-        svc.updateCollection(
-          { collectionName: p.collectionName },
-          await withFieldsAsStored(
-            p.collectionName,
-            withoutRenameAnswers(body as Record<string, unknown>)
+      // A field group's fields are changed only in its own editor: the service judges the save's
+      // copies under its schema lock.
+      const result = await withFieldGroupCopiesJudged(
+        getComponentRegistryFromDI(),
+        () =>
+          withFieldRenameAnswers(renames, async () =>
+            svc.updateCollection(
+              { collectionName: p.collectionName },
+              await withFieldsAsStored(
+                p.collectionName,
+                withoutRenameAnswers(body as Record<string, unknown>)
+              )
+            )
           )
-        )
       );
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
@@ -986,6 +1018,13 @@ const COLLECTIONS_METHODS: Record<
         lifecycleEnabled:
           collection.status === true || readRequestedLifecycle(body) === true,
       });
+      // A field group's fields are changed only in its own editor: the review refuses what the
+      // apply would.
+      await refuseFieldGroupFieldsChangedInHost(
+        sentFields,
+        getComponentRegistryFromDI(),
+        () => collection.fields
+      );
       // Planned as the apply will write them: an earlier-shaped relationship in its stored shape.
       // A collection's stored built-in fields stay: the admin never sends them (`keepBuiltIns`).
       const fields = fieldsAsStored(sentFields, collection, [], {
@@ -1189,6 +1228,14 @@ const COLLECTIONS_METHODS: Record<
           );
           if (!collection) throw new Error("Collection not found");
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
+          // A field group's fields are changed only in its own editor: a save that changes them
+          // here is refused, compared with each field group as stored under the lock, so an edit
+          // in its own editor cannot land between the comparison and this write.
+          await refuseFieldGroupFieldsChangedInHost(
+            sentFields,
+            getComponentRegistryFromDI(),
+            () => collection.fields
+          );
           // An earlier-shaped relationship the editor read is written back in its stored shape,
           // through a rename the save makes, against the row this save is checked and written
           // against.
@@ -1392,6 +1439,13 @@ const COLLECTIONS_METHODS: Record<
             moves,
             writes: container.has("builderSaveSetup"),
             pushReason,
+            refusedFirst: travelling =>
+              movesRefusedFirst(adapter, travelling, {
+                before: (collection.fields ??
+                  []) as unknown as FieldDefinition[],
+                after: fields as unknown as FieldDefinition[],
+                localized: wasLocalized || isLocalized,
+              }),
           });
           // After a schema apply (rename, add, drop) two independent in-memory
           // caches hold Drizzle table objects that are now stale:
@@ -1982,6 +2036,15 @@ const COLLECTIONS_METHODS: Record<
   publishParts: partsLifecycle("publish", "Published."),
   unpublishParts: partsLifecycle("unpublish", "Unpublished."),
 
+  getEntrySourceChange: {
+    execute: async (_svc, p, _body, request) =>
+      respondSourceChange(entryOf(p), p, request),
+  },
+  keepEntryTranslation: {
+    execute: async (_svc, p, body, request) =>
+      respondKeepCurrent(entryOf(p), body, request),
+  },
+
   previewPublishAllLocales: {
     // What publishing every language would do, language by language, without
     // doing it. Asked as the publish is: the service judges the publish
@@ -2345,10 +2408,7 @@ async function writerSaveOf(change: WriterChange): Promise<
       logger,
       applies: process.env.NODE_ENV === "development",
     },
-    save:
-      change.moves === undefined || change.moves.length === 0
-        ? save
-        : { ...save, moves: change.moves },
+    save: await withMoves(save, change.moves, adapter),
     fields,
   };
 }
@@ -2424,6 +2484,12 @@ async function reviewedMoves(args: {
       after: args.after,
       renames: args.renames,
     }),
+    refusedFirst: travelling =>
+      movesRefusedFirst(args.adapter, travelling, {
+        before: args.before,
+        after: args.after,
+        localized: args.wasLocalized || (args.requestedLocalized ?? false),
+      }),
   });
   return moves;
 }

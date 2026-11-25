@@ -35,6 +35,7 @@ import {
 import {
   APPLIED_MIGRATION_FILE_MISSING_REASON,
   APPLIED_SNAPSHOT_INVALID_REASON,
+  APPLIED_SNAPSHOT_MISSING_REASON,
   MIGRATION_SNAPSHOTS_UNREADABLE_REASON,
 } from "../../../domains/schema/repair-columns/stop-reasons";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -578,6 +579,19 @@ function answerLanguageParts(error: NextlyError): CliErrorParts {
   );
 }
 
+/**
+ * A refusal over what another owner built on the app's tables, as its three parts: its first
+ * sentence says what was refused, its last the step, and those between name each element.
+ */
+function refusalOverOthersElements(error: NextlyError): CliErrorParts {
+  const said = sentences(error.publicMessage);
+  return {
+    what: said[0] ?? error.publicMessage,
+    why: said.slice(1, -1).join(" "),
+    next: said.length > 1 ? said[said.length - 1] : "Run it again.",
+  };
+}
+
 /** A writer of migration files that another overtook, as its three parts. */
 function overtakenParts(error: NextlyError): CliErrorParts {
   return refusalParts(error, "Another run wrote a migration meanwhile.");
@@ -625,6 +639,28 @@ export const MIGRATION_CODES = defineCodes({
         code: "CONFLICT",
         reason: HISTORY_FORKED_REASON,
         describe: forkedHistoryParts,
+      },
+    ],
+  },
+  FOREIGN_ELEMENT_REMOVED: {
+    cause:
+      "A change would remove an element another owner, such as a plugin, built on one of the app's tables, so it was refused and changed nothing.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "field-change-removes-others-elements",
+        describe: refusalOverOthersElements,
+      },
+    ],
+  },
+  OWNER_RECORD_UNREADABLE: {
+    cause:
+      "The record of what other owners built on the app's tables could not be read, so the command changed nothing.",
+    from: [
+      {
+        code: "SERVICE_UNAVAILABLE",
+        reason: "field-change-removes-others-elements-unreadable",
+        describe: refusalOverOthersElements,
       },
     ],
   },
@@ -1353,6 +1389,13 @@ export const MIGRATION_CODES = defineCodes({
   },
   MISSING_SNAPSHOT: {
     cause: "A migration file has no snapshot file beside it in `meta/`.",
+    from: [
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: APPLIED_SNAPSHOT_MISSING_REASON,
+        describe: snapshotStopParts,
+      },
+    ],
   },
   INVALID_SNAPSHOT: {
     cause:

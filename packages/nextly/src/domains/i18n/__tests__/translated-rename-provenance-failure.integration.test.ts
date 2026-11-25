@@ -34,12 +34,14 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { removeUntranslatedFieldSources } from "../provenance/removed-field-sources";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
 const LOCALES = ["en", "es"];
 const SLUG = "trp_hero";
 const TABLE = `single_${SLUG}`;
 const PROVENANCE = "nextly_translation_provenance";
+const SOURCES = "nextly_translation_sources";
 const TRANSLATED = [
   { name: "heading", type: "text" },
   { name: "views", type: "number" },
@@ -183,6 +185,41 @@ describeEachDialect(
       return [...new Set(rows.map(row => String(row.path)))].sort();
     }
 
+    /** The Single's kept source text, by field path. */
+    async function sourcePaths(): Promise<string[]> {
+      const rows = await t.adapter.select<{
+        scopeSlug: string;
+        fieldPath: string;
+      }>("nextly_translation_sources");
+      return rows
+        .filter(row => row.scopeSlug === SLUG)
+        .map(row => row.fieldPath)
+        .sort();
+    }
+
+    /** A trigger refusing any change of the Single's kept source text of `heading`. */
+    async function refuseSourceRename(): Promise<void> {
+      const when = `OLD.${quote(dialect, "scope_slug")} = '${SLUG}' AND OLD.${quote(dialect, "field_path")} = 'heading'`;
+      const on = `BEFORE UPDATE ON ${SOURCES}`;
+      const refused = "injected failure of the source rename";
+      if (dialect === "postgresql") {
+        await query(
+          `CREATE FUNCTION trp_refuse_source() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION '${refused}'; END $$ LANGUAGE plpgsql`
+        );
+        await query(
+          `CREATE TRIGGER trp_refuse_source ${on} FOR EACH ROW WHEN (${when}) EXECUTE FUNCTION trp_refuse_source()`
+        );
+      } else if (dialect === "mysql") {
+        await query(
+          `CREATE TRIGGER trp_refuse_source ${on} FOR EACH ROW BEGIN IF ${when} THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '${refused}'; END IF; END`
+        );
+      } else {
+        await query(
+          `CREATE TRIGGER trp_refuse_source ${on} WHEN ${when} BEGIN SELECT RAISE(ABORT, '${refused}'); END`
+        );
+      }
+    }
+
     async function companionColumns(table = TABLE): Promise<string[]> {
       const rows = await query<{ name: string }>(
         dialect === "sqlite"
@@ -243,6 +280,7 @@ describeEachDialect(
       if (t === undefined) return;
       for (const [name, table] of [
         ["trp_refuse", PROVENANCE],
+        ["trp_refuse_source", SOURCES],
         ["trp_refuse_version", "dynamic_singles"],
       ]) {
         await query(
@@ -370,6 +408,52 @@ describeEachDialect(
       ]);
       expect(stale.failed, `the stale save answered: ${stale.said}`).toBe(true);
       expect(await recorded(), "the registry row").toEqual(afterFailure);
+    });
+
+    it("moves the source text kept for the field though its provenance could not be moved, so a migrate does not take it for a removed field's", async () => {
+      expect(await sourcePaths(), "the seeded source text").toEqual([
+        "heading",
+      ]);
+      await refuseProvenanceRename();
+      captureErrorLog();
+
+      const { failed, said } = await applyRename();
+      expect(failed, `the rename answered: ${said}`).toBe(true);
+      expect(await provenancePaths(), "the provenance").toContain("heading");
+      expect(await sourcePaths(), "the source text").toEqual(["title2"]);
+
+      // What the next `nextly migrate` runs, before anyone has finished the provenance's move.
+      await removeUntranslatedFieldSources(t.adapter);
+      expect(await sourcePaths(), "the source text").toEqual(["title2"]);
+
+      // And finishing it leaves the two under one name.
+      await dropTrigger();
+      for (const statement of finishingStatements(dialect)) {
+        await query(statement);
+      }
+      expect(await provenancePaths(), "the provenance").toContain("title2");
+    });
+
+    it("gives the statements that move the source text, where that could not be moved", async () => {
+      await refuseSourceRename();
+      const logged = captureErrorLog();
+
+      const { failed, said } = await applyRename();
+      // The change and its records landed: the text is what stayed.
+      expect(failed, `the rename answered: ${said}`).toBe(false);
+      expect(await provenancePaths(), "the provenance").toContain("title2");
+      expect(await sourcePaths(), "the source text").toEqual(["heading"]);
+
+      const statements = finishingStatements(dialect).map(statement =>
+        statement.replace(PROVENANCE, SOURCES)
+      );
+      const log = logged().join("\n");
+      for (const statement of statements) {
+        expect(log, "the server log").toContain(statement);
+      }
+      await dropTrigger();
+      for (const statement of statements) await query(statement);
+      expect(await sourcePaths(), "the source text").toEqual(["title2"]);
     });
 
     it("keeps the move's answer when the row's version cannot be written either", async () => {

@@ -23,7 +23,14 @@ const fields = [
   { name: "body", type: "text" },
 ] as unknown as FieldConfig[];
 
-function useSurface() {
+/** A collection's fields as its read describes them: with the system title and slug. */
+const withSystemFields = [
+  { name: "title", type: "text", localized: false },
+  { name: "slug", type: "text", localized: false },
+  { name: "body", type: "text" },
+] as unknown as FieldConfig[];
+
+function useSurface(of = fields, localized = false) {
   const form = useForm<Record<string, unknown>>({
     defaultValues: { title: "Now", body: "B" },
   });
@@ -31,9 +38,9 @@ function useSurface() {
   return useEditorRestoreSurface({
     restore,
     form,
-    fields,
+    fields: of,
     readOnly: () => false,
-    localized: false,
+    localized,
   });
 }
 
@@ -43,5 +50,11 @@ describe("useEditorRestoreSurface", () => {
 
     expect(result.current.canEdit("title")).toBe(false);
     expect(result.current.canEdit("body")).toBe(true);
+  });
+
+  it("restores the system title and slug as shared, and never as one language's text", () => {
+    const { result } = renderHook(() => useSurface(withSystemFields, true));
+
+    expect([...(result.current.translatable ?? [])]).toEqual(["body"]);
   });
 });

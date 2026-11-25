@@ -197,10 +197,7 @@ import {
   provenanceClaimsOf,
   type ProvenanceClaims,
 } from "../../i18n/provenance/provenance-claims";
-import {
-  discardDraftProvenance,
-  forgetRemovedRowsProvenance,
-} from "../../i18n/provenance/record-provenance";
+import { discardDraftProvenance } from "../../i18n/provenance/record-provenance";
 import {
   configuredLocale,
   isValidLocale,
@@ -209,7 +206,7 @@ import {
 import {
   buildCompanionSchema,
   type CompanionSchema,
-  pruneOverlaysOfRemovedRows,
+  type SharedStructureWritten,
   sharedStructuresIn,
   splitLocalizedWrite,
 } from "../../i18n/runtime/companion-io";
@@ -226,6 +223,8 @@ import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import {
   assembleStoredValue,
   sameSharedStructure,
+  sameStructure,
+  splitSharedStructure,
 } from "../../i18n/shared-structure";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
@@ -396,8 +395,10 @@ import {
 import { readSingleForCreation } from "./single-first-row";
 import type { SingleMediaUsageDeps } from "./single-media-usage";
 import {
+  dropRemovedRowsText,
   recordSingleProvenance,
   singleProvenanceRecorded,
+  singleSourceTextKept,
   type SingleProvenanceDeps,
 } from "./single-provenance";
 import {
@@ -1608,10 +1609,13 @@ export class SingleMutationService extends BaseService {
             typeof draftLocale === "string" &&
             (await singleProvenanceRecorded(this.provenanceDeps, tx))
           ) {
-            await discardDraftProvenance(tx, {
-              ...discardedRef,
-              locale: draftLocale,
-            });
+            await discardDraftProvenance(
+              tx,
+              { ...discardedRef, locale: draftLocale },
+              (await singleSourceTextKept(this.provenanceDeps, tx))
+                ? tx
+                : undefined
+            );
           }
           // The discarded part has nothing unpublished left to review: its
           // review closes with the draft, in this transaction.
@@ -5439,6 +5443,7 @@ export class SingleMutationService extends BaseService {
               structures: mainPayload,
               localizedFields: shapedRefs,
               languagesTable: companion.companionTableName,
+              companionTable: companion.table,
               savedBy,
               claims: provenanceClaims,
               promotesDraft: promotedDraft,
@@ -5467,32 +5472,19 @@ export class SingleMutationService extends BaseService {
             // By the refs the write was split by, a component placed in a
             // container read with its fields, so a removed instance's text
             // goes too.
-            const written = sharedStructuresIn(mainPayload, shapedRefs);
-            await pruneOverlaysOfRemovedRows(tx, this.adapter.dialect, {
-              companionTable: companion.table,
-              companionTableName: companion.companionTableName,
-              parentId: existingDoc.id,
-              written,
+            await dropRemovedRowsText(this.provenanceDeps, tx, {
+              slug,
+              entryId: existingDoc.id,
+              companion,
+              written: sharedStructuresIn(mainPayload, shapedRefs),
+              // The row as this transaction read it just before the write (the
+              // earlier read where it found none), not the read before the
+              // transaction began: a component instance that changed type since
+              // loses its text in the other languages, judged against the row
+              // the write replaced.
+              before: preRow ?? existingDoc,
+              writtenLocales: writeLocale === undefined ? [] : [writeLocale],
             });
-            // And every language's record of the rows removed, as their text.
-            if (
-              written.length > 0 &&
-              (await singleProvenanceRecorded(this.provenanceDeps, tx))
-            ) {
-              await forgetRemovedRowsProvenance(
-                tx,
-                {
-                  scopeKind: "single",
-                  scopeSlug: slug,
-                  entryId: existingDoc.id,
-                },
-                written.map(entry => ({
-                  field: entry.field,
-                  structure: entry.structure,
-                  kind: entry.shape.kind,
-                }))
-              );
-            }
           }
 
           // {@link EVERY_LOCALE}: carry the lifecycle to the languages the
@@ -5602,6 +5594,7 @@ export class SingleMutationService extends BaseService {
                 structures: mainPayload,
                 localizedFields: shapedRefs,
                 languagesTable: companion.companionTableName,
+                companionTable: companion.table,
                 savedBy,
                 claims: provenanceClaims,
                 partState: "draft",
@@ -7692,17 +7685,46 @@ export class SingleMutationService extends BaseService {
       fields
     );
     // A translated value goes to its language's row, and leaves the main one.
-    const { main, companion: translation } =
-      translatedIn !== null && companion
-        ? splitLocalizedWrite(columns, companion.localizedFields)
-        : { main: columns, companion: {} as Record<string, unknown> };
+    const {
+      main,
+      companion: translation,
+      sharedStructures,
+    } = translatedIn !== null && companion
+      ? splitLocalizedWrite(
+          columns,
+          // Split by the refs a save splits by: a container placing a component
+          // read with the component's fields, so its text goes to the
+          // language's overlay. A rewrite refuses a field holding a field group
+          // before this, so today nothing here places one, and the read costs
+          // nothing then (`withComponentShapes` returns the refs as they are).
+          await withComponentShapes(companion.localizedFields, tx.getDrizzle())
+        )
+      : {
+          main: columns,
+          companion: {} as Record<string, unknown>,
+          sharedStructures: [] as SharedStructureWritten[],
+        };
+    // A repeater's or group's structure is the main row's, every language's:
+    // a translated rewrite that changes it (a row removed, added or moved)
+    // moves the document's own counter, as a save of it does, so a save read
+    // before it is refused. One that changes only the text inside moves only
+    // the language's.
+    const structureMoved = sharedStructures.some(
+      written =>
+        !sameStructure(
+          splitSharedStructure(write.stored, written.shape).structure,
+          written.structure
+        )
+    );
     const at = new Date();
     await tx.update(
       singleMeta.tableName,
       {
         ...main,
         updated_at: at,
-        ...(write.movesMain ? revisionBumpColumns(args.actor, at) : {}),
+        ...(write.movesMain || structureMoved
+          ? revisionBumpColumns(args.actor, at)
+          : {}),
       },
       this.whereEq("id", entryId)
     );
@@ -7737,14 +7759,29 @@ export class SingleMutationService extends BaseService {
       savedBy: args.actor,
       revisionClaimed: claimed,
     });
+    // A row the rewrite removed takes its text with it in every language, as
+    // a save's removal does.
+    await dropRemovedRowsText(this.provenanceDeps, tx, {
+      slug: singleMeta.slug,
+      entryId,
+      companion,
+      written: sharedStructures,
+      // The field's value as the rewrite found it, and the language it wrote.
+      before: { [field]: write.stored },
+      writtenLocales: [translatedIn],
+    });
     // Where the rewritten value came from, as any live write records it.
     await recordSingleProvenance(this.provenanceDeps, tx, {
       slug: singleMeta.slug,
       entryId,
       locale: translatedIn,
       values: translation,
+      // A container's overlay is recorded with the structure the rewrite put
+      // on the main row, as a save records it.
+      structures: main,
       localizedFields: companion.localizedFields,
       languagesTable: companion.companionTableName,
+      companionTable: companion.table,
       savedBy: args.actor,
     });
   }
