@@ -38,6 +38,7 @@ import {
 import type { ServiceContainer } from "../../../services";
 import { typeChangeCountsOf } from "../builder-save/type-change-counts";
 import { typeConversionOf } from "../builder-save/type-conversion";
+import { SchemaOwnersRepository } from "../ownership/schema-owners-repository";
 import {
   type EntityTypeChangeInput,
   judgeEntityTypeChanges,
@@ -1260,6 +1261,92 @@ describe.each(getConfiguredTestDialects())(
         );
 
         expect(await read(t, "v")).toEqual({ a: "012" });
+      }
+    );
+
+    // What a plugin builds on the column stays: PostgreSQL takes the column's new type from the column
+    // beside, in place, and SQLite puts that column in its place, its indexes made again as they were
+    // written. No statement of a file names them, so nothing else would make one again.
+    it.skipIf(!rewritesValuesOn(dialect))(
+      "keeps a plugin's recorded index on a column it converts, as the plugin wrote it, and its owner row",
+      async () => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await write(t, "a", { v: "034" });
+        const table = `dc_${SLUG}`;
+        // Descending, as no index Nextly writes is: made again from the snapshot it would not be.
+        await exec(
+          t,
+          `CREATE INDEX ${q("acme_by_v")} ON ${q(table)} (${q("v")} DESC)`
+        );
+        const owners = new SchemaOwnersRepository(
+          (t.adapter as unknown as DrizzleAdapter).getDrizzle(),
+          dialect
+        );
+        await owners.upsert([
+          {
+            tableName: table,
+            elementKind: "index",
+            elementName: "acme_by_v",
+            ownerKind: "plugin",
+            ownerId: "acme",
+            migratedBy: "app",
+            ownerVersion: null,
+            schemaVersion: null,
+            state: "active",
+          },
+        ]);
+        const written = async () =>
+          (
+            await (
+              t.adapter as unknown as {
+                executeQuery<R>(statement: string): Promise<R[]>;
+              }
+            ).executeQuery<{ text: string }>(
+              dialect === "sqlite"
+                ? `SELECT sql AS text FROM sqlite_master WHERE type = 'index' AND name = 'acme_by_v'`
+                : `SELECT indexdef AS text FROM pg_indexes WHERE indexname = 'acme_by_v'`
+            )
+          ).map(row => row.text);
+        const ownerRows = async () =>
+          (await owners.read([table])).filter(
+            row => row.elementName === "acme_by_v"
+          );
+        const before = await written();
+        expect(before).toEqual([expect.stringContaining("DESC")]);
+        expect(await ownerRows()).toHaveLength(1);
+
+        // Renamed as well, which the file states by itself: on SQLite the column beside takes its place.
+        const adapter = t.adapter as unknown as DrizzleAdapter;
+        const input: EntityTypeChangeInput = {
+          label: `Collection '${SLUG}'`,
+          table,
+          previous: [{ name: "v", type: "text" }] as never,
+          next: [{ name: "w", type: "number" }] as never,
+          renamed: new Map([["v", "w"]]),
+          builtBy: "collection",
+          acknowledged: new Set(["w"]),
+          rewrites: true,
+        };
+        const { judged } = await judgeEntityTypeChanges(
+          adapter.getDrizzle(),
+          dialect,
+          input
+        );
+        const conversion = typeConversionOf({
+          dialect,
+          input,
+          judged,
+          consent: { kind: "review", confirmed: undefined },
+        });
+        expect(conversion?.columns).toEqual([
+          expect.objectContaining({ column: "v", takesPlaceOnSqlite: true }),
+        ]);
+        await conversion?.run(adapter.getDrizzle());
+
+        // The control: the column took its new values.
+        expect((await stored(t)).a).toBe("34");
+        expect(await written()).toEqual(before);
+        expect(await ownerRows()).toHaveLength(1);
       }
     );
 
