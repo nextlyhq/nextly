@@ -75,7 +75,9 @@ describe("migrate:status --json, when its database cannot be used", () => {
   it.each([
     new TypeError("the tables could not be read"),
     // As Nextly's own code throws, with a code: still not a failed connection.
-    NextlyError.internal({ logMessage: "the tables could not be read" }),
+    NextlyError.internal({
+      logContext: { reason: "the tables could not be read" },
+    }),
   ])("names the failure itself where the database opened: %s", async error => {
     createAdapter.mockResolvedValue({ disconnect: async () => {} });
     installRegistryResolver.mockImplementation(() => {
