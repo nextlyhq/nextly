@@ -66,6 +66,7 @@ import type { Logger } from "../../../shared/types";
 import type { TeardownAdapter } from "../../collections/services/teardown-adapter-in-transaction";
 import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
+import { judgeFieldGroupCopies } from "../../field-groups/field-group-fields-read-only";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import {
   appLanguageOrder,
@@ -539,6 +540,8 @@ export class SingleMetadataService {
       input.fields ?? [],
       null
     );
+    // A field group's fields are changed only in its own editor, for a request's save.
+    await judgeFieldGroupCopies(input.fields);
 
     // 1. PLAN, before anything is persisted or executed. The generator is a validator as well as a
     // renderer, so a request it refuses leaves nothing behind at all — no row, no table — and the
@@ -1056,6 +1059,8 @@ export class SingleMetadataService {
         args.fields,
         current.fields ?? []
       );
+      // A field group's fields are changed only in its own editor, for a request's save.
+      await judgeFieldGroupCopies(args.fields, () => current.fields);
     }
 
     // The `was*` flags describe the state being transitioned FROM, so they follow the refreshed

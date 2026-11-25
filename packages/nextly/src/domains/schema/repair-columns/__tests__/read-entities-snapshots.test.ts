@@ -60,14 +60,18 @@ vi.mock("../../events/schema-events-repository", () => ({
       return Promise.resolve([]);
     }
     listFileApplies() {
-      return Promise.resolve([]);
+      return Promise.resolve([
+        {
+          eventType: "file_apply",
+          status: "applied",
+          filename: "0001_first.sql",
+          startedAt: new Date(),
+          supersededEventIds: null,
+        },
+      ]);
     }
   },
 }));
-vi.mock("../../events/newest-event", () => ({
-  appliedFilenames: () => new Set(["0001_first.sql"]),
-}));
-
 const silent = { debug() {}, info() {}, warn() {}, error() {} };
 
 describe("readRepairEntities: snapshots the disk does not give", () => {

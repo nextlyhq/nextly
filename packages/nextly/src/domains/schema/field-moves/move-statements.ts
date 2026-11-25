@@ -620,6 +620,36 @@ function stopWhereNot(
   table: string,
   stop: { guard: string; reason: string; kept: string; where: string }
 ): string[] {
+  return guardedStop(
+    dialect,
+    stop,
+    `SELECT NULL FROM ${table} WHERE ${stop.where} AND (CASE WHEN ${stop.kept} THEN 0 ELSE 1 END) = 1 LIMIT 1`
+  );
+}
+
+/** A run's stop where the query `rows` gives any row (`guardedStop`). */
+function stopWhereAnyRow(
+  dialect: SupportedDialect,
+  stop: { guard: string; reason: string },
+  rows: string
+): string[] {
+  const found = quoteIdent("found", dialect);
+  return guardedStop(
+    dialect,
+    stop,
+    `SELECT NULL FROM (${rows}) AS ${found} LIMIT 1`
+  );
+}
+
+/**
+ * The statements of one stop: a temporary table whose NOT NULL column `select`'s first row, a
+ * NULL, is written into, so the run stops on that constraint, the table and column naming why.
+ */
+function guardedStop(
+  dialect: SupportedDialect,
+  stop: { guard: string; reason: string },
+  select: string
+): string[] {
   const q = (name: string) => quoteIdent(boundedIdentifier(name), dialect);
   // Unqualified: SQLite and PostgreSQL look a name up among temporary tables first, and the
   // migration's deletion check reads a table the file creates as temporary as the file's own.
@@ -628,11 +658,95 @@ function stopWhereNot(
   const temporary = dialect === "mysql" ? "TEMPORARY" : "TEMP";
   return [
     `CREATE ${temporary} TABLE ${guard} (${reason} INTEGER NOT NULL);`,
-    `INSERT INTO ${guard} (${reason}) SELECT NULL FROM ${table} WHERE ${stop.where} AND (CASE WHEN ${stop.kept} THEN 0 ELSE 1 END) = 1 LIMIT 1;`,
+    `INSERT INTO ${guard} (${reason}) ${select};`,
     dialect === "mysql"
       ? `DROP TEMPORARY TABLE ${guard};`
       : `DROP TABLE ${guard};`,
   ];
+}
+
+/**
+ * Each value the key `keys` of `column` holds in more than one entry of `target`'s table, as a
+ * query: what a field moved out of the group into a unique column would repeat there. Values are
+ * compared as that column's unique index compares them once copied: through the copy's own
+ * conversion (`fromJson`) and as the column then keeps and compares it (`asTheIndexCompares`), so
+ * the same instant written at two offsets, 1 and 1.00 in a decimal, or on SQLite 1 and "1", count
+ * as one value. An entry holding no value, or JSON null, repeats nothing, as a unique index leaves
+ * NULL free on every dialect. The save counts these
+ * rows before it writes anything, once every value is one the column keeps; the file stops over
+ * the first (`repeatedValuesStop`), after its stop on a value the column would not keep.
+ */
+export function repeatedValuesAt(
+  target: MoveColumn,
+  from: Extract<StoragePlace, { kind: "json" }>
+): string {
+  const q = (name: string) => quoteIdent(name, target.dialect);
+  const stored = asTheIndexCompares(
+    target,
+    DIALECTS[target.dialect].fromJson(q(from.column), from.keys, target)
+  );
+  return `SELECT ${stored} AS ${q("value")} FROM ${q(target.table)} WHERE ${holdsValueAt(from.column, from.keys, target.dialect)} AND ${stored} IS NOT NULL GROUP BY ${stored} HAVING COUNT(*) > 1`;
+}
+
+/**
+ * A value as `target`'s column compares it for its unique index, held to the column itself for
+ * every kind by a test. PostgreSQL's copy casts to the column's own type, which is how it compares.
+ */
+function asTheIndexCompares(target: MoveColumn, value: string): string {
+  if (target.dialect === "sqlite") return asSqliteKeeps(target, value);
+  if (target.dialect === "mysql") return asMysqlCompares(target, value);
+  return value;
+}
+
+/**
+ * A value read out of JSON as SQLite's column keeps it: the copy writes it as it is, and the
+ * column's declared type then makes one value of 1 and "1". A text column keeps a number as its
+ * text. A numeric one keeps as a number every text that is written as one, and any other text as
+ * it is, which a CAST alone would read as 0: a comparison with the cast asks SQLite which it is,
+ * since it reads the text as that type would before comparing.
+ */
+function asSqliteKeeps(target: MoveColumn, value: string): string {
+  if (target.columnType === "text") return `CAST(${value} AS TEXT)`;
+  const kept = target.columnType === "real" ? "REAL" : "NUMERIC";
+  return `CASE WHEN CAST(${value} AS NUMERIC) = ${value} THEN CAST(${value} AS ${kept}) ELSE ${value} END`;
+}
+
+/**
+ * A value read out of JSON as MySQL's column compares it. A text column, a relationship's ids among
+ * them, takes its table's collation, which is the one its other text columns were made with, and
+ * the text read out of JSON compares byte by byte: it is read through the table's `id` column,
+ * whose collation the whole expression takes (the id itself is never the result), so the values
+ * compare as the new column will, whatever collation the table has on the database the statement
+ * runs on. A table whose default was changed without converting its columns compares by the older
+ * one. A double's 0 and -0 are one value to an index and two to a GROUP BY, until 0 is added.
+ */
+function asMysqlCompares(target: MoveColumn, value: string): string {
+  if (TEXT_KINDS.has(target.kind) || target.kind === "fkSingle") {
+    return `IF(0, ${quoteIdent("id", target.dialect)}, ${value})`;
+  }
+  return target.kind === "double" ? `(${value} + 0)` : value;
+}
+
+/**
+ * Statements that stop a run, before the file changes anything, where two entries of the database
+ * it runs on hold one value for a field moved out of a group into a unique column: the save's own
+ * count (`repeatedValuesAt`) reads the database the file is written from, and a deploy's may
+ * repeat a value that one never did. The run stops on `two_entries_hold_one_<field>` in
+ * `nextly_repeated_<field>`.
+ */
+export function repeatedValuesStop(
+  target: MoveColumn,
+  from: Extract<StoragePlace, { kind: "json" }>,
+  column: string
+): string[] {
+  return stopWhereAnyRow(
+    target.dialect,
+    {
+      guard: `nextly_repeated_${column}`,
+      reason: `two_entries_hold_one_${column}`,
+    },
+    repeatedValuesAt(target, from)
+  );
 }
 
 /**

@@ -15,8 +15,11 @@ npx nextly repair-columns
   Run it only from a checkout that holds every migration applied to that
   database, with its snapshots (the files in the migrations folder's `meta/`).
   The command compares each column with its field as last migrated, and that
-  record is in those files. From an older checkout, or with a snapshot missing,
-  a correct column can look wrong.
+  record is in those files. It stops, with nothing converted, in a checkout
+  without a migration the database has applied, and where an applied migration
+  newer than the newest snapshot has none: see [If it stops](#if-it-stops). A
+  blank migration and a localization migration have no snapshot, and do not stop
+  it.
 </Callout>
 
 ## Who should run it
@@ -30,12 +33,13 @@ Run the dry run once if your site holds tables that an earlier release made in t
 | A select, radio, upload or text field on MySQL | `text`, where the field is a `varchar`               | `0.0.2-alpha.66` |
 | A many-to-many relationship in a field group   | one text or id value, where the field is a JSON list | `0.0.2-alpha.69` |
 | Other columns of a field group                 | the types the field group's creator gave them        | `0.0.2-alpha.77` |
+| A required relationship or upload of a Single  | `NOT NULL`, where the column allows a null           | `0.0.2-alpha.79` |
 
-A required relationship or upload of a Single is also reported where its column is `NOT NULL`: it should allow a null, and converting it drops the `NOT NULL`. A collection's required relationship or upload is `NOT NULL` on purpose since `0.0.2-alpha.79`. There the reverse is reported: a column an earlier migration created nullable. So is a required user field added to a site that already had user fields. Converting it sets `NOT NULL`, and is blocked while a row holds a null. For a collection, the next `nextly migrate:create` plans the same change.
+A Single's one entry is created before anything is chosen, so the column of its required relationship or upload allows a null, and converting an old one drops the `NOT NULL`. The entry's requirement is still checked when it is saved. A collection's required relationship or upload is `NOT NULL` on purpose since `0.0.2-alpha.79`. There the reverse is reported: a column an earlier migration created nullable. So is a required user field added to a site that already had user fields. Converting it sets `NOT NULL`, and is blocked while a row holds a null. For a collection, the next `nextly migrate:create` plans the same change.
 
 A site first made on this release holds none of the columns in the table. When nothing differs, the dry run answers "Every column matches its field."
 
-Where a line says `created by the current version's generator`, the report names this release's own generator as the one that makes such a column. Where that is so, a table it makes later can hold the same difference, even after a repair.
+Where a line says `created by the current version's generator`, this release's own generator makes such a column. A table it makes later can hold the same difference, even after a repair.
 
 ## Read the report
 
@@ -181,6 +185,8 @@ The command stops in these cases, naming what it found and how to put it right:
 - [`MIGRATION_SNAPSHOTS_UNREADABLE`](/docs/cli/errors/migration-snapshots-unreadable)
 - [`INVALID_SNAPSHOT`](/docs/cli/errors/invalid-snapshot)
 - [`MISSING_MIGRATION`](/docs/cli/errors/missing-migration)
+- [`MIGRATION_MISSING`](/docs/cli/errors/migration-missing)
+- [`MISSING_SNAPSHOT`](/docs/cli/errors/missing-snapshot)
 
 A statement that the database refuses is reported on its own column as `failed`, with the database's reason, and the run goes on.
 

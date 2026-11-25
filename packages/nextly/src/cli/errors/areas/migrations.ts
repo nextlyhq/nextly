@@ -34,6 +34,7 @@ import {
 import {
   APPLIED_MIGRATION_FILE_MISSING_REASON,
   APPLIED_SNAPSHOT_INVALID_REASON,
+  APPLIED_SNAPSHOT_MISSING_REASON,
   MIGRATION_SNAPSHOTS_UNREADABLE_REASON,
 } from "../../../domains/schema/repair-columns/stop-reasons";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -1362,6 +1363,13 @@ export const MIGRATION_CODES = defineCodes({
   },
   MISSING_SNAPSHOT: {
     cause: "A migration file has no snapshot file beside it in `meta/`.",
+    from: [
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: APPLIED_SNAPSHOT_MISSING_REASON,
+        describe: snapshotStopParts,
+      },
+    ],
   },
   INVALID_SNAPSHOT: {
     cause:
