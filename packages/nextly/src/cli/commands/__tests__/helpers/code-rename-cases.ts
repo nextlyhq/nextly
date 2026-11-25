@@ -29,6 +29,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -378,8 +379,9 @@ export function codeRenameCases(args: {
       }
 
       // A container keeping its text inside has a column of the translations table. In a project
-      // adopted by `migrate:baseline`, the snapshot lists that column among the translated ones
-      // with no kind, and declares no entity: what tells it from a text field's is the container's
+      // adopted by `migrate:baseline`, which declares no entity, the snapshot records that column as
+      // the container's overlay. One taken before overlays were recorded lists it among the
+      // translated columns with no kind: what tells it from a text field's is then the container's
       // structure, on the main table under the same name.
       if (layout === "per-language") {
         /** `migrate:baseline` over `collections`, adopting a container's column by its name. */
@@ -395,178 +397,251 @@ export function codeRenameCases(args: {
           );
           expect(code, run.said.join("\n")).toBeUndefined();
         };
-
-        it("offers no rename of a removed container's column in an adopted project, and leaves it and its text in place", async () => {
-          const url = await openDatabase(dialect);
-          const withField = (
-            field: ReturnType<typeof repeater> | ReturnType<typeof text>
-          ) => [
-            defineCollection({
-              slug: SLUG,
-              fields: [text({ name: "title" }), text({ name: "note" }), field],
-            }),
-          ];
-          const before = withField(
-            repeater({ name: "slides", fields: [text({ name: "caption" })] })
+        /** The baseline's snapshot as one was taken before overlays were recorded. */
+        const asTakenBeforeOverlays = () => {
+          const meta = join(dir, "migrations", "meta");
+          const [file] = readdirSync(meta).filter(f =>
+            f.endsWith(".snapshot.json")
           );
-          const after = withField(text({ name: "summary" }));
-          const app = await start(dialect, url, before);
-          const note = await app.nextly.create({
-            collection: SLUG as never,
-            data: {
-              title: "N",
-              note: "kept",
-              slides: [{ caption: "One" }],
-            } as never,
-          });
-          const id = String((note.item as { id: unknown }).id);
-          const q = (name: string) =>
-            dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-          const companion = `dc_${SLUG}_locales`;
-          const columnOf = async (from: TestNextly, column: string) => {
-            const adapter = from.adapter as unknown as {
-              executeQuery<R>(statement: string): Promise<R[]>;
+          const path = join(meta, file!);
+          const taken = JSON.parse(readFileSync(path, "utf-8")) as {
+            snapshot: {
+              tables: {
+                localizedColumns?: string[];
+                overlayColumns?: string[];
+              }[];
             };
-            const [row] = await adapter.executeQuery<{ value: unknown }>(
-              `SELECT ${q(column)} AS value FROM ${q(companion)} WHERE ${q("_parent")} = '${id}' AND ${q("_locale")} = 'en'`
-            );
-            return row?.value;
           };
-          const held = await columnOf(app, "slides");
-          expect(JSON.stringify(held)).toContain("One");
-
-          await baseline(before);
-          loaded.config = configOf(after);
-          const migrations = join(dir, "migrations");
-          const had = new Set(sqlFilesIn(migrations));
-          const swapped = command();
-          const swap = await ran(swapped.said, () =>
-            runMigrateCreate(
-              "swap",
-              { cwd: dir, acceptRenames: true, acceptDataLoss: true } as never,
-              swapped.context
-            )
+          const overlaid = taken.snapshot.tables.filter(
+            table => table.overlayColumns !== undefined
           );
-          expect(swap, swapped.said.join("\n")).toBeUndefined();
-          const sql = textOf(sqlFilesIn(migrations).filter(f => !had.has(f)));
-          expect(sql).not.toMatch(/RENAME COLUMN/);
-          expect(sql).toMatch(
-            new RegExp(`${companion}[^;]*ADD (COLUMN )?[\`"]summary[\`"]`)
-          );
-          expect(sql).not.toMatch(new RegExp(`${companion}[^;]*DROP`));
-          await applied();
+          expect(overlaid).toHaveLength(1);
+          for (const table of overlaid) {
+            table.localizedColumns = [
+              ...(table.localizedColumns ?? []),
+              ...(table.overlayColumns ?? []),
+            ].sort();
+            delete table.overlayColumns;
+          }
+          writeFileSync(path, JSON.stringify(taken, null, 2));
+        };
+        const baselines = [
+          { taken: "now", as: () => {} },
+          { taken: "before overlays were recorded", as: asTakenBeforeOverlays },
+        ];
 
-          // The new field's own column, empty, and the container's text where it was.
-          const reread = await start(dialect, url, after);
-          expect(await columnOf(reread, "summary")).toBeNull();
-          expect(await columnOf(reread, "slides")).toEqual(held);
-          await reread.nextly.update({
-            collection: SLUG,
-            id,
-            data: { summary: "new", _overwrite: true },
-          } as never);
-          expect(await columnOf(reread, "summary")).toBe("new");
-        });
-
-        it("offers a removed container's column in an adopted project where an earlier release kept the container whole, with nothing on the main table", async () => {
-          const url = await openDatabase(dialect);
-          const withField = (
-            field: ReturnType<typeof repeater> | ReturnType<typeof text>
-          ) => [
-            defineCollection({
-              slug: SLUG,
-              fields: [text({ name: "title" }), text({ name: "note" }), field],
-            }),
-          ];
-          const before = withField(
-            repeater({ name: "slides", fields: [text({ name: "caption" })] })
-          );
-          const app = await start(dialect, url, before);
-          const note = await app.nextly.create({
-            collection: SLUG as never,
-            data: {
-              title: "N",
-              note: "kept",
-              slides: [{ caption: "One" }],
-            } as never,
-          });
-          const id = String((note.item as { id: unknown }).id);
-          // As that release laid it out: the container's column on the translations table alone.
-          const q = (name: string) =>
-            dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-          await (
-            app.adapter as unknown as {
-              executeQuery(statement: string): Promise<unknown>;
-            }
-          ).executeQuery(
-            `ALTER TABLE ${q(`dc_${SLUG}`)} DROP COLUMN ${q("slides")}`
-          );
-          await baseline(before);
-
-          const swapped = await create(
-            "swap",
-            withField(text({ name: "summary" }))
-          );
-          expect(swapped.code, swapped.said).toBeUndefined();
-          expect(textOf(swapped.files)).toMatch(renames("slides", "summary"));
-
-          // Applied, the new field's column is the container's, holding its text. SQLite keeps both
-          // as text, so the field reads and takes values; elsewhere its column is JSON, which the
-          // migrate, and each one after it, refuses for a text field, and which takes no text.
-          const migrated = async () => {
-            const run = command();
-            const code = await ran(run.said, () =>
-              runMigrate({ cwd: dir, acceptDataLoss: true }, run.context)
+        it.each(baselines)(
+          "offers no rename of a removed container's column in an adopted project (baseline taken $taken), and leaves it and its text in place",
+          async baselined => {
+            const url = await openDatabase(dialect);
+            const withField = (
+              field: ReturnType<typeof repeater> | ReturnType<typeof text>
+            ) => [
+              defineCollection({
+                slug: SLUG,
+                fields: [
+                  text({ name: "title" }),
+                  text({ name: "note" }),
+                  field,
+                ],
+              }),
+            ];
+            const before = withField(
+              repeater({ name: "slides", fields: [text({ name: "caption" })] })
             );
-            return code === undefined
-              ? "applied"
-              : run.said.join("\n").includes("CONFIG_INVALID")
-                ? "refused: CONFIG_INVALID"
-                : `refused: ${run.said.join("\n")}`;
-          };
-          const first = await migrated();
-          const again = await migrated();
-          const [held] = await (
-            app.adapter as unknown as {
-              executeQuery<R>(statement: string): Promise<R[]>;
-            }
-          ).executeQuery<{ value: unknown }>(
-            `SELECT ${q("summary")} AS value FROM ${q(`dc_${SLUG}_locales`)} WHERE ${q("_parent")} = '${id}' AND ${q("_locale")} = 'en'`
-          );
-          const kept =
-            typeof held?.value === "string"
-              ? (JSON.parse(held.value) as unknown)
-              : held?.value;
-          const site = await start(
-            dialect,
-            url,
-            withField(text({ name: "summary" }))
-          );
-          const write = await site.nextly
-            .update({
+            const after = withField(text({ name: "summary" }));
+            const app = await start(dialect, url, before);
+            const note = await app.nextly.create({
+              collection: SLUG as never,
+              data: {
+                title: "N",
+                note: "kept",
+                slides: [{ caption: "One" }],
+              } as never,
+            });
+            const id = String((note.item as { id: unknown }).id);
+            const q = (name: string) =>
+              dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+            const companion = `dc_${SLUG}_locales`;
+            const columnOf = async (from: TestNextly, column: string) => {
+              const adapter = from.adapter as unknown as {
+                executeQuery<R>(statement: string): Promise<R[]>;
+              };
+              const [row] = await adapter.executeQuery<{ value: unknown }>(
+                `SELECT ${q(column)} AS value FROM ${q(companion)} WHERE ${q("_parent")} = '${id}' AND ${q("_locale")} = 'en'`
+              );
+              return row?.value;
+            };
+            const held = await columnOf(app, "slides");
+            expect(JSON.stringify(held)).toContain("One");
+
+            await baseline(before);
+            baselined.as();
+            loaded.config = configOf(after);
+            const migrations = join(dir, "migrations");
+            const had = new Set(sqlFilesIn(migrations));
+            const swapped = command();
+            const swap = await ran(swapped.said, () =>
+              runMigrateCreate(
+                "swap",
+                {
+                  cwd: dir,
+                  acceptRenames: true,
+                  acceptDataLoss: true,
+                } as never,
+                swapped.context
+              )
+            );
+            expect(swap, swapped.said.join("\n")).toBeUndefined();
+            const sql = textOf(sqlFilesIn(migrations).filter(f => !had.has(f)));
+            expect(sql).not.toMatch(/RENAME COLUMN/);
+            expect(sql).toMatch(
+              new RegExp(`${companion}[^;]*ADD (COLUMN )?[\`"]summary[\`"]`)
+            );
+            expect(sql).not.toMatch(new RegExp(`${companion}[^;]*DROP`));
+            await applied();
+
+            // The new field's own column, empty, and the container's text where it was.
+            const reread = await start(dialect, url, after);
+            expect(await columnOf(reread, "summary")).toBeNull();
+            expect(await columnOf(reread, "slides")).toEqual(held);
+            await reread.nextly.update({
               collection: SLUG,
               id,
               data: { summary: "new", _overwrite: true },
-            } as never)
-            .then(
-              () => "written",
-              () => "refused"
-            );
+            } as never);
+            expect(await columnOf(reread, "summary")).toBe("new");
+          }
+        );
 
-          const asText = dialect === "sqlite";
-          expect({ first, again, write }).toEqual(
-            asText
-              ? { first: "applied", again: "applied", write: "written" }
-              : {
-                  first: "refused: CONFIG_INVALID",
-                  again: "refused: CONFIG_INVALID",
-                  write: "refused",
-                }
-          );
-          expect(Object.values(kept as Record<string, unknown>)).toEqual([
-            { caption: "One" },
-          ]);
-        });
+        it.each(baselines)(
+          "a removed container's column in an adopted project where an earlier release kept the container whole, with nothing on the main table (baseline taken $taken)",
+          async baselined => {
+            const recorded = baselined.taken === "now";
+            const url = await openDatabase(dialect);
+            const withField = (
+              field: ReturnType<typeof repeater> | ReturnType<typeof text>
+            ) => [
+              defineCollection({
+                slug: SLUG,
+                fields: [
+                  text({ name: "title" }),
+                  text({ name: "note" }),
+                  field,
+                ],
+              }),
+            ];
+            const before = withField(
+              repeater({ name: "slides", fields: [text({ name: "caption" })] })
+            );
+            const app = await start(dialect, url, before);
+            const note = await app.nextly.create({
+              collection: SLUG as never,
+              data: {
+                title: "N",
+                note: "kept",
+                slides: [{ caption: "One" }],
+              } as never,
+            });
+            const id = String((note.item as { id: unknown }).id);
+            // As that release laid it out: the container's column on the translations table alone.
+            const q = (name: string) =>
+              dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+            await (
+              app.adapter as unknown as {
+                executeQuery(statement: string): Promise<unknown>;
+              }
+            ).executeQuery(
+              `ALTER TABLE ${q(`dc_${SLUG}`)} DROP COLUMN ${q("slides")}`
+            );
+            await baseline(before);
+            baselined.as();
+
+            const swapped = await create(
+              "swap",
+              withField(text({ name: "summary" }))
+            );
+            expect(swapped.code, swapped.said).toBeUndefined();
+            if (recorded) {
+              // Recorded as the container's overlay, its column is no text field's rename: the new
+              // field takes a column of its own, and the container's text stays where it was.
+              expect(textOf(swapped.files)).not.toMatch(/RENAME COLUMN/);
+              expect(textOf(swapped.files)).not.toMatch(/DROP/);
+              await applied();
+              const adapter = app.adapter as unknown as {
+                executeQuery<R>(statement: string): Promise<R[]>;
+              };
+              const [row] = await adapter.executeQuery<{
+                slides: unknown;
+                summary: unknown;
+              }>(
+                `SELECT ${q("slides")} AS slides, ${q("summary")} AS summary FROM ${q(`dc_${SLUG}_locales`)} WHERE ${q("_parent")} = '${id}' AND ${q("_locale")} = 'en'`
+              );
+              expect(JSON.stringify(row?.slides)).toContain("One");
+              expect(row?.summary).toBeNull();
+              return;
+            }
+            // Listed among the translated columns, nothing tells it from a text field's.
+            expect(textOf(swapped.files)).toMatch(renames("slides", "summary"));
+
+            // Applied, the new field's column is the container's, holding its text. SQLite keeps both
+            // as text, so the field reads and takes values; elsewhere its column is JSON, which the
+            // migrate, and each one after it, refuses for a text field, and which takes no text.
+            const migrated = async () => {
+              const run = command();
+              const code = await ran(run.said, () =>
+                runMigrate({ cwd: dir, acceptDataLoss: true }, run.context)
+              );
+              return code === undefined
+                ? "applied"
+                : run.said.join("\n").includes("CONFIG_INVALID")
+                  ? "refused: CONFIG_INVALID"
+                  : `refused: ${run.said.join("\n")}`;
+            };
+            const first = await migrated();
+            const again = await migrated();
+            const [held] = await (
+              app.adapter as unknown as {
+                executeQuery<R>(statement: string): Promise<R[]>;
+              }
+            ).executeQuery<{ value: unknown }>(
+              `SELECT ${q("summary")} AS value FROM ${q(`dc_${SLUG}_locales`)} WHERE ${q("_parent")} = '${id}' AND ${q("_locale")} = 'en'`
+            );
+            const kept =
+              typeof held?.value === "string"
+                ? (JSON.parse(held.value) as unknown)
+                : held?.value;
+            const site = await start(
+              dialect,
+              url,
+              withField(text({ name: "summary" }))
+            );
+            const write = await site.nextly
+              .update({
+                collection: SLUG,
+                id,
+                data: { summary: "new", _overwrite: true },
+              } as never)
+              .then(
+                () => "written",
+                () => "refused"
+              );
+
+            const asText = dialect === "sqlite";
+            expect({ first, again, write }).toEqual(
+              asText
+                ? { first: "applied", again: "applied", write: "written" }
+                : {
+                    first: "refused: CONFIG_INVALID",
+                    again: "refused: CONFIG_INVALID",
+                    write: "refused",
+                  }
+            );
+            expect(Object.values(kept as Record<string, unknown>)).toEqual([
+              { caption: "One" },
+            ]);
+          }
+        );
 
         it("offers and writes a text field's rename in an adopted project with a container beside it, every value kept", async () => {
           const url = await openDatabase(dialect);
@@ -709,15 +784,19 @@ export function codeRenameCases(args: {
           ) as {
             entities?: unknown;
             snapshot: {
-              tables: { name: string; localizedColumns?: string[] }[];
+              tables: {
+                name: string;
+                localizedColumns?: string[];
+                overlayColumns?: string[];
+              }[];
             };
           };
-          // What the case stands on: the columns listed by name, and nothing declared.
+          // What the case stands on: the columns listed by name, the container's apart as its
+          // overlay, and nothing declared.
           expect(taken.entities).toBeUndefined();
-          expect(
-            taken.snapshot.tables.find(t => t.name === "dc_posts")
-              ?.localizedColumns
-          ).toEqual(["heading", "note", "slides"]);
+          const main = taken.snapshot.tables.find(t => t.name === "dc_posts");
+          expect(main?.localizedColumns).toEqual(["heading", "note"]);
+          expect(main?.overlayColumns).toEqual(["slides"]);
 
           // The dialog's rename, as it answers the offer: the first save after the baseline.
           const project = await builder(dir, url);
