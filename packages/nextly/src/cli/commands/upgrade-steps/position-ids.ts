@@ -7,7 +7,10 @@
  */
 import { randomUUID } from "node:crypto";
 
-import type { SharedStructureShape } from "../../../domains/i18n/shared-structure";
+import {
+  shapeOfRow,
+  type SharedStructureShape,
+} from "../../../domains/i18n/shared-structure";
 import { parsedValue } from "../../../shared/lib/json-column-value";
 import { isPlainObject } from "../../../shared/lib/plain-copy";
 
@@ -54,13 +57,20 @@ function alignLevel(
   }
 }
 
-/** {@link alignLevel} through each container inside `rows`, the same row in each language. */
+/**
+ * {@link alignLevel} through each container inside `rows`, the same row in each language, by the
+ * shape of the row's own component type (`shapeOfRow`), read from the default language's row: in a
+ * dynamic zone two types can reuse a nested name with a different cardinality, and the zone's
+ * merged shape keeps only one of them.
+ */
 function alignInside(
   rows: Record<string, unknown>[],
   shape: SharedStructureShape,
   primary: number
 ): void {
-  for (const [name, nested] of Object.entries(shape.inner)) {
+  const row = rows[primary >= 0 ? primary : 0];
+  const own = row === undefined ? shape : shapeOfRow(row, shape);
+  for (const [name, nested] of Object.entries(own.inner)) {
     alignLevel(
       rows.map(row => row[name]),
       nested,
