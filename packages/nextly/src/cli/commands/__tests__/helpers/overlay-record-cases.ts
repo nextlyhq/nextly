@@ -703,8 +703,8 @@ export function overlayRecordCases(
         () => {
           const project = projectWith("translated");
           beforeEach(async () => {
-            // That release stored the group as this one stores a group shared whole. A baseline of
-            // a database with an overlay column is refused, so this is the one a baseline leaves.
+            // That release stored the group as this one stores a group shared whole, so the database
+            // it left has no overlay column and its baseline records none.
             const earlier = projectWith("shared");
             synced = await openSyncTarget(dir, dialect);
             if (dialect === "sqlite") connectTo(`file:${join(dir, "test.db")}`);
@@ -759,6 +759,38 @@ export function overlayRecordCases(
         it("has the column added by migrate:create, and nothing left after", () =>
           writtenAndApplied(project));
       });
+
+      describe.runIf(perLanguage)(
+        "a project this release's migrate:baseline adopted, its overlay column recorded",
+        () => {
+          const project = projectWith("translated");
+
+          it("is refused by no surface, and nothing is said of the overlay", async () => {
+            synced = await openSyncTarget(dir, dialect);
+            if (dialect === "sqlite") connectTo(`file:${join(dir, "test.db")}`);
+            else connectTo(process.env.DATABASE_URL ?? "");
+            await syncSchemaInOrder(
+              { config: project } as unknown as LoadConfigResult,
+              synced.cli,
+              { ...synced.options, cwd: dir },
+              { ...synced.context, cwd: dir }
+            );
+            expect(await translationColumns()).toContain("box");
+            const baselined = await run(project, context =>
+              runMigrateBaseline({ cwd: dir }, context)
+            );
+            expect(baselined.code, baselined.said).toBeUndefined();
+            expect(baselined.said).toContain("Adopted 1 existing tables");
+            await withNewestSnapshot(file => {
+              expect(file.entities).toBeUndefined();
+              expect(
+                file.snapshot.tables.find(t => t.name === `dc_${SLUG}`)
+              ).toMatchObject({ overlayColumns: ["box"] });
+            });
+            await refusedByNone(project);
+          }, 120_000);
+        }
+      );
 
       describe("an upgrade with nothing to make", () => {
         it.each([
