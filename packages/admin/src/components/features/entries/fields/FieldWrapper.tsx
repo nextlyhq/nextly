@@ -15,12 +15,14 @@ import { Globe, Lock } from "lucide-react";
 import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import type { JSX, ReactNode } from "react";
 import { useId } from "react";
+import { useFormContext } from "react-hook-form";
 
 import { fieldLabel } from "@admin/lib/field-label";
 import { useLabelLandingCheck } from "@admin/lib/forms/label-landing";
 import { cn } from "@admin/lib/utils";
 
 import { useFieldWithheld } from "../../versions/withheld-fields-context";
+import { holdsTranslatedText, sourceValueAt } from "../container-text";
 import { useEntryLocale } from "../EntryLocaleContext";
 import { UseSourceButton } from "../TranslationMode/UseSourceButton";
 
@@ -209,6 +211,39 @@ function useFieldLabelLandingCheck(
  * </FieldWrapper>
  * ```
  */
+/**
+ * The default language's value of the field at `formPath`, shown beside it while translating:
+ * each row on the way matched by its id in the source (`sourceValueAt`), so a row this form has
+ * moved still shows its own source text. Only primitive (text/number) values render. Outside a
+ * form, where nothing can have moved, the path is read as it stands.
+ */
+function SourceHint({
+  source,
+  formPath,
+}: {
+  source: Record<string, unknown>;
+  formPath: string;
+}): JSX.Element | null {
+  // `null` outside a form, where the hook finds no provider.
+  const form = useFormContext() as ReturnType<typeof useFormContext> | null;
+  const raw = sourceValueAt(source, form?.getValues() ?? source, formPath);
+  const text =
+    typeof raw === "string" && raw.trim() !== ""
+      ? raw
+      : typeof raw === "number"
+        ? String(raw)
+        : null;
+  if (text === null) return null;
+  return (
+    <p
+      dir="auto"
+      className="text-xs leading-relaxed text-muted-foreground border-l-2 border-muted pl-2"
+    >
+      <span className="font-medium">Default:</span> {text}
+    </p>
+  );
+}
+
 export function FieldWrapper({
   field,
   error,
@@ -312,43 +347,49 @@ export function FieldWrapper({
   // badge on every shared field was noise on the ordinary editing path. The
   // surprise it guards against — "editing this changes other languages too" —
   // only exists once another language is the one being edited.
+  // A repeater or group keeps one structure in every language, but the text inside its rows is
+  // translated row by row: it is told so, rather than called shared outright.
+  const translatesInside =
+    entryLocale.collectionLocalized &&
+    holdsTranslatedText(field, entryLocale.collectionLocalized);
   const sharedHint =
     entryLocale.collectionLocalized &&
     entryLocale.isNonDefaultLocale &&
     !isLocalizedField &&
     fieldName != null ? (
-      // The whole fact is written out rather than abbreviated to "Shared"
-      // behind a `title` tooltip. A tooltip is unreachable by touch and
-      // awkward by keyboard — the same objection this file already records
-      // against putting description text behind a hover target.
-      <span className="inline-flex w-fit items-center gap-1.5 rounded-sm bg-muted px-2 py-0.5 text-xs font-medium normal-case tracking-normal text-muted-foreground">
-        <Globe className="size-3" aria-hidden="true" />
-        Shared across languages
-      </span>
+      translatesInside ? (
+        <span className="inline-flex w-fit items-center gap-1.5 rounded-sm bg-muted px-2 py-0.5 text-xs font-medium normal-case tracking-normal text-muted-foreground">
+          <Globe className="size-3" aria-hidden="true" />
+          Rows shared across languages; the text inside is translated
+        </span>
+      ) : (
+        // The whole fact is written out rather than abbreviated to "Shared"
+        // behind a `title` tooltip. A tooltip is unreachable by touch and
+        // awkward by keyboard — the same objection this file already records
+        // against putting description text behind a hover target.
+        <span className="inline-flex w-fit items-center gap-1.5 rounded-sm bg-muted px-2 py-0.5 text-xs font-medium normal-case tracking-normal text-muted-foreground">
+          <Globe className="size-3" aria-hidden="true" />
+          Shared across languages
+        </span>
+      )
     ) : null;
 
   // While translating a non-default language, show the default-language value inline on
   // a translatable field so the translator always has the source text (spec §10 — the validated,
   // cheap alternative to a full side-by-side editor). Only primitive (text/number) sources render;
   // structural values (relationships, richText objects) are skipped.
-  const rawSource =
-    isLocalizedField && entryLocale.isNonDefaultLocale && fieldName != null
-      ? entryLocale.sourceValues?.[fieldName]
-      : undefined;
-  const sourceText =
-    typeof rawSource === "string" && rawSource.trim() !== ""
-      ? rawSource
-      : typeof rawSource === "number"
-        ? String(rawSource)
-        : null;
-  const sourceHint = sourceText ? (
-    <p
-      dir="auto"
-      className="text-xs leading-relaxed text-muted-foreground border-l-2 border-muted pl-2"
-    >
-      <span className="font-medium">Default:</span> {sourceText}
-    </p>
-  ) : null;
+  // Read at the field's form path, each row on the way matched by its id in the source: every
+  // language keeps one structure, wherever this form has moved a row (`sourceValueAt`). Outside a
+  // form nothing can have moved, and the path is read as it stands.
+  // Drawn only where a hint can show, so a field in the default language never reads the form.
+  const formPath = fieldPath ?? fieldName;
+  const sourceHint =
+    isLocalizedField &&
+    entryLocale.isNonDefaultLocale &&
+    formPath != null &&
+    entryLocale.sourceValues ? (
+      <SourceHint source={entryLocale.sourceValues} formPath={formPath} />
+    ) : null;
 
   // In translation mode the source is already on screen in its own pane, so the
   // field offers the ACTION rather than repeating the text: fill this one field
@@ -356,7 +397,7 @@ export function FieldWrapper({
   // pane's own fields — that pane sits outside the context this reads.
   const useSourceAction =
     isLocalizedField && fieldName != null && !writesHeld ? (
-      <UseSourceButton fieldName={fieldName} fieldLabel={label} />
+      <UseSourceButton fieldName={formPath ?? fieldName} fieldLabel={label} />
     ) : null;
 
   // Get width class

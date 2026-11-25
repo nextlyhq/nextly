@@ -444,6 +444,42 @@ describe("the refusal asked of the steps before anything changes", () => {
     ).toBeUndefined();
   });
 
+  // The one structure for repeaters and groups translated whole converts the values per language,
+  // and the draft split is split against what it writes. Broken (the step left in no group of its
+  // own, or one the others do not read), its refusal waits for the keying it never reads, or the
+  // draft split is judged before the structure it compares against.
+  it("judges the one structure past the keying, after the values move, and the draft split after it", async () => {
+    const real = (title: string) => {
+      const found = LOCALISATION_DATA_STEPS.find(step =>
+        step.title.startsWith(title)
+      );
+      if (!found) throw new Error(`no step "${title}"`);
+      return found;
+    };
+    const withWork = (step: UpgradeStep): UpgradeStep => ({
+      ...step,
+      pending: () => Promise.resolve(1),
+    });
+    const refusingAs = (step: UpgradeStep): UpgradeStep => ({
+      ...step,
+      pending: refusing().pending,
+    });
+    const keys = withWork(real("give every pending change its key"));
+    const values = withWork(real("store translatable values per language"));
+    const structures = real("keep one structure for repeaters and groups");
+
+    expect(await refusalOf([keys, refusingAs(structures)])).toMatchObject({
+      publicMessage: `Two saves at one moment. ${NOTHING_CHANGED}`,
+    });
+    expect(await refusalOf([values, refusingAs(structures)])).toBeUndefined();
+    expect(
+      await refusalOf([
+        withWork(structures),
+        refusingAs(real("split pending changes")),
+      ])
+    ).toBeUndefined();
+  });
+
   it("keeps a refusal made before anything applied as the step made it", async () => {
     await expect(runOf([refusing("translations")])).rejects.toMatchObject({
       publicMessage: `Two saves at one moment. ${NOTHING_CHANGED}`,

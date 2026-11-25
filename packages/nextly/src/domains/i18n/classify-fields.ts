@@ -38,6 +38,22 @@ export function neverTranslatable(field: {
   return NEVER_LOCALIZABLE.has(field.type) || isVirtualField(field);
 }
 
+/**
+ * Field types whose value holds other fields: a repeater's rows, a group's object, a field
+ * group's instances. Such a value keeps one structure in every language, and only the fields
+ * inside it are translated, each by its own flag, so none of these is translatable as a whole.
+ */
+const ONE_STRUCTURE = new Set(["repeater", "group", "component", "fieldGroup"]);
+
+/**
+ * Whether a field holds other fields in one structure shared by every language, so that marking
+ * it `localized: true` asks for something no field offers: configuration validation refuses the
+ * flag on such a field from this one answer.
+ */
+export function holdsOneStructure(field: { type: string }): boolean {
+  return ONE_STRUCTURE.has(field.type);
+}
+
 /** Smart default: text-like types localize by default; everything else is shared. */
 export function defaultLocalizedForType(type: string): boolean {
   return TEXT_LIKE.has(type);

@@ -265,8 +265,13 @@ async function entities(
           status: publishesPerLanguage(entry),
         })
       : null;
+    // A container kept one structure in every language (`sharedStructure`) has its structure, a
+    // password among it, on the main table; only its text is on the companion, as an overlay.
+    // So only a container translated whole is read on the companion.
     const translated = new Set(
-      companion?.localizedFields.map(field => field.name) ?? []
+      companion?.localizedFields
+        .filter(field => field.sharedStructure === undefined)
+        .map(field => field.name) ?? []
     );
     const tables: StoredTable[] = [];
     const own = containers.filter(field => !translated.has(field.name));
