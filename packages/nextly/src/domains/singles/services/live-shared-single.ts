@@ -24,7 +24,13 @@ import { readComponentSubtrees } from "../../field-groups/read-component-subtree
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import { populateCompanionFields } from "../../i18n/companion-join";
 import { perLanguageFieldNames } from "../../i18n/per-language-fields";
+import type { CompanionSchema } from "../../i18n/runtime/companion-io";
+import {
+  cachedCompanionReadiness,
+  type ReadinessScope,
+} from "../../i18n/runtime/companion-readiness";
 import {
   asIdSet,
   sharedFieldNames,
@@ -34,6 +40,88 @@ import {
   resolveComponentFieldMap,
   tagComponentTypes,
 } from "../../versions/tag-component-types";
+
+/**
+ * `row`, the Single's main row, with each repeater or group that keeps one
+ * structure across languages read in `locale` alone: its structure with that
+ * language's own text laid on it, no other language's filling in. What a held
+ * share of such a field is laid over, so a publish writes back the text the
+ * language holds and never another's in its place. Read on the caller's
+ * transaction; `scope` is what the companion's readiness was settled on.
+ *
+ * With `components`, the Single's components are read in `locale` too, each
+ * instance with its id and type, as a held component share is laid over them.
+ */
+export async function withLiveStructures(
+  tx: TransactionContext,
+  scope: ReadinessScope,
+  live: Record<string, unknown>,
+  companion: CompanionSchema | null,
+  locale: string,
+  components?: {
+    fieldGroupDataService?: FieldGroupDataService;
+    singleMeta: DynamicSingleRecord;
+  }
+): Promise<Record<string, unknown>> {
+  const row = components
+    ? {
+        ...live,
+        ...(await liveComponentsIn(tx, components, String(live.id), locale)),
+      }
+    : live;
+  const structured =
+    companion?.localizedFields.filter(f => f.sharedStructure) ?? [];
+  if (!companion || structured.length === 0) return row;
+  const read: Record<string, unknown> = {
+    id: row.id,
+    ...Object.fromEntries(
+      structured.map(f => [f.name, row[f.column] ?? row[f.name]])
+    ),
+  };
+  await populateCompanionFields({
+    db: tx.getDrizzle<Parameters<typeof populateCompanionFields>[0]["db"]>(),
+    companionTable: companion.table,
+    localizedFields: structured,
+    rows: [read],
+    localeChain: [locale],
+    readiness: cachedCompanionReadiness(scope, companion.companionTableName),
+  });
+  return { ...row, ...read };
+}
+
+/** The Single's components in `locale`, tagged as a draft holds them, read on `tx`. */
+async function liveComponentsIn(
+  tx: TransactionContext,
+  deps: {
+    fieldGroupDataService?: FieldGroupDataService;
+    singleMeta: DynamicSingleRecord;
+  },
+  entryId: string,
+  locale: string
+): Promise<Record<string, unknown>> {
+  const service = deps.fieldGroupDataService;
+  const fields = deps.singleMeta.fields;
+  const executor = tx.getDrizzle();
+  const componentFields = service
+    ? await resolveComponentFieldMap(fields, slug =>
+        service.getComponentFields(slug, executor)
+      )
+    : new Map<string, FieldConfig[]>();
+  return tagComponentTypes(
+    await readComponentSubtrees({
+      fieldGroupDataService: service,
+      tx,
+      entryId,
+      parentTable: deps.singleMeta.tableName,
+      fieldConfigs: fields,
+      locale,
+      reason: "shared-structure-live-read",
+      logContext: { single: deps.singleMeta.slug },
+    }),
+    fields,
+    slug => componentFields.get(slug)
+  );
+}
 
 /**
  * Read the Single's live document under the row lock the caller holds.

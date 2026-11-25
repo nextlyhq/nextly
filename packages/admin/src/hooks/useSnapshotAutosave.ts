@@ -165,6 +165,52 @@ function trackRecording(document: string, saving: Promise<unknown>): number {
   return number;
 }
 
+/**
+ * The documents whose recovery point from an earlier visit waits for its
+ * author's answer, with how many holds each has: see
+ * `holdRecordingsUntilAnswered`.
+ */
+const awaitingAnswer = new Map<string, number>();
+
+/** Told the document whose last hold was let go, so held recordings resume. */
+const answerListeners = new Set<(document: string) => void>();
+
+/**
+ * Hold every recording of `document` in this tab until the returned release
+ * is called.
+ *
+ * An author has one recovery point per document. A new visit (a new tab, or
+ * the page opened again after the old tab froze) is offered the point the
+ * earlier visit left, and a recording of the new visit's first edit would
+ * replace it: the earlier work would then exist nowhere, and the offer would
+ * restore the new edit instead. So the offer holds the recordings while it
+ * waits, and lets them go once it is answered. A recording that came due
+ * meanwhile is made then, under the same rules as at the end of its wait.
+ *
+ * Every recorder's, not one editor's, since a field recording its own state
+ * (the page builder's canvas) writes the same point.
+ */
+export function holdRecordingsUntilAnswered(document: string): () => void {
+  awaitingAnswer.set(document, (awaitingAnswer.get(document) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (awaitingAnswer.get(document) ?? 1) - 1;
+    if (left > 0) {
+      awaitingAnswer.set(document, left);
+      return;
+    }
+    awaitingAnswer.delete(document);
+    for (const listener of answerListeners) listener(document);
+  };
+}
+
+/** Whether recordings of `document` wait for an answer: see above. */
+function waitsForAnswer(document: string | null | undefined): boolean {
+  return document != null && awaitingAnswer.has(document);
+}
+
 /** How long a save waits for recordings in flight: see `recordingsSettled`. */
 const RECORDINGS_WAIT_MS = 5000;
 
@@ -483,13 +529,15 @@ export function useSnapshotAutosave({
 
   const flush = useCallback(async () => {
     const latest = latestRef.current;
-    // Off when it came due: held for this identity, to be asked for again once
-    // recording is on.
-    heldRef.current = latest.enabled ? null : latest.identity;
+    // Off when it came due, or waiting for an earlier visit's point to be
+    // answered: held for this identity, to be asked for again once recording
+    // is on and the point answered.
+    const waiting = waitsForAnswer(latest.document);
+    heldRef.current = latest.enabled && !waiting ? null : latest.identity;
     if (
       recordingBlocked({
         identity: latest.identity,
-        enabled: latest.enabled,
+        enabled: latest.enabled && !waiting,
         refused: refusedRef.current,
         // Saved or undone while the timer waited: nothing is at risk any more.
         stillWanted: latest.stillWanted,
@@ -567,6 +615,24 @@ export function useSnapshotAutosave({
     heldRef.current = null;
     if (heldFor === identity) schedule();
   }, [enabled, identity, schedule]);
+
+  // An earlier visit's point answered: the recording held for it is asked
+  // for again, as when recording comes back on. One still off waits for that
+  // instead, which asks for it the same way.
+  useEffect(() => {
+    const answered = (released: string) => {
+      const latest = latestRef.current;
+      const heldFor = heldRef.current;
+      if (released !== latest.document || !latest.enabled) return;
+      if (heldFor === null) return;
+      heldRef.current = null;
+      if (heldFor === latest.identity) schedule();
+    };
+    answerListeners.add(answered);
+    return () => {
+      answerListeners.delete(answered);
+    };
+  }, [schedule]);
 
   // A pending recording belongs to the identity that scheduled it. Left
   // running across a change it would write one document's snapshot against

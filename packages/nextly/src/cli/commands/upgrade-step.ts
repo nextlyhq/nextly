@@ -78,6 +78,12 @@ export interface UpgradeStepContext {
    * site's model needs its languages and entities. Absent, such a step has nothing to judge by.
    */
   site?: UpgradeSite;
+  /**
+   * The tables the run's pending migrations leave dropped (lower-cased), where the steps are
+   * counted before those apply: the run never reaches the rows they hold, so a step leaves them
+   * out, as an entity whose main table is among them. Absent once the migrations have applied.
+   */
+  droppedAhead?: ReadonlySet<string>;
   log: (message: string) => void;
   warn: (message: string) => void;
 }

@@ -4,7 +4,11 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { systemFieldsBeside } from "../../../collections/config/declared-config";
 import { defineCollection } from "../../../collections/config/define-collection";
+import { validateCollectionConfig } from "../../../collections/config/validate-config";
+import { systemColumnsForFields } from "../../../domains/schema/services/field-column-descriptor";
+import { defineFieldGroup } from "../../../field-groups/config/define-field-group";
 import { setupTransformerInput } from "../../../plugins/plugin-consent";
 import { defineSingle } from "../../../singles/config/define-single";
 import {
@@ -539,8 +543,8 @@ describe("a Builder field named by a SQL keyword", () => {
 
 describe("a define* entity whose own top-level field takes a system field's exact name but no column", () => {
   // Such a field leaves the column free, so `define*` adds its own text field of the same name
-  // beside it, and the two would read and write one document key. Each column-less kind is
-  // refused, naming the field and saying to rename it.
+  // beside it, and both answer to that name. Each column-less kind is refused, naming the field
+  // and saying to rename it.
   const columnLess: ReadonlyArray<[string, Record<string, unknown>]> = [
     ["a component", { type: "component", component: "seo" }],
     [
@@ -769,5 +773,427 @@ describe("a Builder group with no name, by the kind of entity it is in", () => {
     );
 
     expect(problems).toEqual([]);
+  });
+});
+
+/** `declared` as a plugin's setup leaves it, the setup changing the fields of its one entity. */
+function afterSetup<E extends { fields: unknown }>(
+  kind: "collections" | "singles" | "fieldGroups",
+  entity: E,
+  change: (fields: Array<Record<string, unknown>>) => unknown[],
+  settings: Record<string, unknown> = {}
+) {
+  const declared = { [kind]: [entity] } as Record<string, E[]>;
+  const [copy] = setupTransformerInput(declared, [])[kind];
+  return {
+    declared,
+    effective: {
+      [kind]: [
+        {
+          ...copy,
+          ...settings,
+          fields: change(copy.fields as Array<Record<string, unknown>>),
+        },
+      ],
+    },
+  };
+}
+
+const componentNamed = (name: string) => ({
+  name,
+  type: "component",
+  component: "seo",
+});
+
+const manyToManyNamed = (name: string) => ({
+  name,
+  type: "relationship",
+  relationTo: "tags",
+  options: { relationType: "manyToMany" },
+});
+
+const without = (fields: Array<Record<string, unknown>>, name: string) =>
+  fields.filter(field => field.name !== name);
+
+const FROM_SETUP = "A plugin's setup left the field this way";
+
+describe("a define* entity a plugin's setup leaves with a column-less field of a system column's name", () => {
+  // The table carries the system column wherever no field left holds it, whatever became of the
+  // field `define*` added, so the names are those the fields left would be given.
+  const posts = () =>
+    defineCollection({
+      slug: "posts",
+      fields: [{ name: "body", type: "text" }],
+    });
+
+  const reserved = (path: string) => [
+    expect.objectContaining({
+      path,
+      code: "FIELD_NAME_RESERVED",
+      declaredByDefine: true,
+    }),
+  ];
+
+  for (const [kind, named] of [
+    ["a component", componentNamed],
+    ["a many-to-many", manyToManyNamed],
+  ] as const) {
+    it(`is refused where the setup removed the system slug and added ${kind}`, () => {
+      const { declared, effective } = afterSetup(
+        "collections",
+        posts(),
+        fields => [...without(fields, "slug"), named("slug")]
+      );
+      const problems = configurationProblems(declared, effective);
+      expect(problems).toEqual(reserved("collections[0].fields[2].name"));
+      expect(problems[0].message).toContain("Field 'slug'");
+      expect(problems[0].message).toContain("no entry could be created");
+      expect(problems[0].message).toContain(FROM_SETUP);
+    });
+
+    it(`is refused where the setup removed both system fields and added ${kind}`, () => {
+      const { declared, effective } = afterSetup(
+        "collections",
+        posts(),
+        fields => [
+          ...without(without(fields, "slug"), "title"),
+          named("slug"),
+          named("title"),
+        ]
+      );
+      expect(
+        configurationProblems(declared, effective).map(
+          problem => `${problem.path} ${problem.code}`
+        )
+      ).toEqual([
+        "collections[0].fields[1].name FIELD_NAME_RESERVED",
+        "collections[0].fields[2].name FIELD_NAME_RESERVED",
+      ]);
+    });
+
+    it(`is refused on a Single where the setup swapped the system title for ${kind}`, () => {
+      const { declared, effective } = afterSetup(
+        "singles",
+        defineSingle({
+          slug: "home",
+          fields: [{ name: "body", type: "text" }],
+        }),
+        fields => [...without(fields, "title"), named("title")]
+      );
+      const problems = configurationProblems(declared, effective);
+      expect(problems).toEqual(reserved("singles[0].fields[2].name"));
+      expect(problems[0].message).toContain("hidden");
+    });
+  }
+
+  it("is refused where the author's own text slug was swapped for a component", () => {
+    const { declared, effective } = afterSetup(
+      "collections",
+      defineCollection({
+        slug: "posts",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "slug", type: "text" },
+        ],
+      }),
+      fields => [...without(fields, "slug"), componentNamed("slug")]
+    );
+    const problems = configurationProblems(declared, effective);
+    expect(problems).toEqual(reserved("collections[0].fields[1].name"));
+    // The author declares a text slug already, so that is not the advice.
+    expect(problems[0].message).toContain("Change or remove that plugin.");
+    expect(problems[0].message).not.toContain("declare 'slug'");
+  });
+
+  it("is refused where the author declared the component and the setup removed the system slug, with no word of a setup", () => {
+    const { declared, effective } = afterSetup(
+      "collections",
+      defineCollection({
+        slug: "posts",
+        fields: [
+          { name: "body", type: "text" },
+          componentNamed("slug") as never,
+        ],
+      }),
+      fields => fields.filter(f => !(f.name === "slug" && f.type === "text"))
+    );
+    const problems = configurationProblems(declared, effective);
+    expect(problems).toEqual(reserved("collections[0].fields[2].name"));
+    expect(problems[0].message).not.toContain(FROM_SETUP);
+  });
+
+  // A virtual field keeps no column, and its type is applied to the value of the system column of
+  // its name on a write, so every type is refused.
+  it.each(["text", "number", "date", "json"])(
+    "is refused where the setup made the system slug or title virtual in place (%s)",
+    type => {
+      for (const name of ["slug", "title"]) {
+        const collection = afterSetup("collections", posts(), fields =>
+          fields.map(field =>
+            field.name === name ? { ...field, type, virtual: true } : field
+          )
+        );
+        const problems = configurationProblems(
+          collection.declared,
+          collection.effective
+        );
+        expect(problems).toEqual(
+          reserved(`collections[0].fields[${name === "title" ? 0 : 1}].name`)
+        );
+        expect(problems[0].message).toContain("its type would be applied");
+        expect(problems[0].message).not.toContain("no entry could be created");
+        expect(problems[0].message).toContain(FROM_SETUP);
+
+        const single = afterSetup(
+          "singles",
+          defineSingle({
+            slug: "home",
+            fields: [{ name: "body", type: "text" }],
+          }),
+          fields =>
+            fields.map(field =>
+              field.name === name ? { ...field, type, virtual: true } : field
+            )
+        );
+        expect(
+          configurationProblems(single.declared, single.effective)
+        ).toEqual(
+          reserved(`singles[0].fields[${name === "title" ? 0 : 1}].name`)
+        );
+      }
+    }
+  );
+
+  it("is accepted where the setup removed the system slug and added nothing, or replaced it with a text one", () => {
+    for (const change of [
+      (fields: Array<Record<string, unknown>>) => without(fields, "slug"),
+      (fields: Array<Record<string, unknown>>) => [
+        ...without(fields, "slug"),
+        { name: "slug", type: "text", label: "Address" },
+      ],
+    ]) {
+      const { declared, effective } = afterSetup(
+        "collections",
+        posts(),
+        change
+      );
+      expect(configurationProblems(declared, effective)).toEqual([]);
+    }
+  });
+
+  it("is accepted on a field group, which has no system title or slug", () => {
+    const group = defineFieldGroup({
+      slug: "card",
+      fields: [
+        { name: "body", type: "text" },
+        componentNamed("title") as never,
+      ],
+    });
+    const { declared, effective } = afterSetup("fieldGroups", group, fields => [
+      ...fields,
+      { name: "slug", type: "text", virtual: true },
+    ]);
+    expect(configurationProblems({ fieldGroups: [group] })).toEqual([]);
+    expect(configurationProblems(declared, effective)).toEqual([]);
+  });
+
+  it("leaves an entity no define* function declared to its own checks, as a Builder definition is judged", () => {
+    const entity = {
+      slug: "posts",
+      fields: [{ name: "body", type: "text" }, componentNamed("slug")],
+    };
+    expect(
+      configurationProblems({ collections: [entity], singles: [entity] }).map(
+        problem => problem.code
+      )
+    ).not.toContain("FIELD_NAME_RESERVED");
+  });
+});
+
+describe("the names a define* entity's fields may not take without a column", () => {
+  // The check asks `systemFieldsBeside`; the migrations and the runtime schema ask
+  // `systemColumnsForFields`. Two answers would let a name through or refuse one for nothing.
+  const lists: Array<[string, Array<Record<string, unknown>>]> = [
+    ["neither", [{ name: "body", type: "text" }]],
+    ["a text slug", [{ name: "slug", type: "text" }]],
+    ["a text Title", [{ name: "Title", type: "text" }]],
+    ["a component slug", [componentNamed("slug")]],
+    ["a many-to-many title", [manyToManyNamed("title")]],
+    ["a virtual slug", [{ name: "slug", type: "text", virtual: true }]],
+    [
+      "a slug inside a group with no name",
+      [{ type: "group", fields: [{ name: "slug", type: "text" }] }],
+    ],
+    [
+      "a slug inside a named group",
+      [
+        {
+          name: "meta",
+          type: "group",
+          fields: [{ name: "slug", type: "text" }],
+        },
+      ],
+    ],
+  ];
+
+  for (const dialect of ["sqlite", "postgresql", "mysql"] as const) {
+    for (const isSingle of [false, true]) {
+      it.each(lists)(
+        `are the system columns %s leaves on a ${isSingle ? "Single" : "collection"} on ${dialect}`,
+        (_, fields) => {
+          const columns = systemColumnsForFields(fields as never, dialect, {
+            hasStatus: false,
+            isSingle,
+            builtBy: "codeFirst",
+          })
+            .map(column => column.name)
+            .filter(name => name === "title" || name === "slug");
+          expect(
+            systemFieldsBeside(fields as never).map(field => field.name)
+          ).toEqual(columns);
+        }
+      );
+    }
+  }
+});
+
+describe("a define* collection of files whose file field takes no column", () => {
+  const docs = (fields: unknown[] = [{ name: "body", type: "text" }]) =>
+    defineCollection({
+      slug: "docs",
+      files: {
+        visibility: "private",
+        accept: ["application/pdf"],
+        maxSize: 1000,
+      },
+      fields: fields as never,
+    });
+
+  const refused = (path: string) => [
+    expect.objectContaining({
+      path,
+      code: "FIELD_NAME_RESERVED",
+      message: expect.stringMatching(
+        /^Field 'storageKey' .*a collection of files keeps /
+      ),
+    }),
+  ];
+
+  // The same answer whether or not a plugin's setup was handed a copy of the collection.
+  it.each([false, true])(
+    "is refused for one beside Nextly's own, saying to rename it (a setup ran: %s)",
+    ran => {
+      const entity = docs([
+        { name: "body", type: "text" },
+        componentNamed("storageKey"),
+      ]);
+      const { declared, effective } = afterSetup(
+        "collections",
+        entity,
+        fields => fields
+      );
+      const problems = configurationProblems(
+        declared,
+        ran ? effective : undefined
+      );
+      expect(problems).toEqual(refused("collections[0].fields[13].name"));
+      expect(problems[0].message).toMatch(/Rename it\.$/);
+      expect(problems[0].message).not.toContain(FROM_SETUP);
+    }
+  );
+
+  // A group with no name lays its fields out at the top level, where the name is one Nextly keeps.
+  it.each([false, true])(
+    "gets one answer inside a group with no name, beside the group's own (a setup ran: %s)",
+    ran => {
+      const { declared, effective } = afterSetup(
+        "collections",
+        docs([
+          { name: "body", type: "text" },
+          { type: "group", fields: [componentNamed("storageKey")] },
+        ]),
+        fields => fields
+      );
+      expect(
+        configurationProblems(declared, ran ? effective : undefined)
+          .map(problem => `${problem.path} ${problem.code}`)
+          .sort()
+      ).toEqual([
+        "collections[0].fields[13].fields[0].name FIELD_NAME_RESERVED",
+        "collections[0].fields[13].name FIELD_NAME_REQUIRED",
+      ]);
+    }
+  );
+
+  it.each([
+    ["swapped for a component", () => componentNamed("storageKey")],
+    [
+      "made virtual",
+      (field: Record<string, unknown>) => ({ ...field, virtual: true }),
+    ],
+  ])("is refused where a setup's field was %s", (_, left) => {
+    const { declared, effective } = afterSetup("collections", docs(), fields =>
+      fields.map(field =>
+        field.name === "storageKey"
+          ? (left as (f: typeof field) => unknown)(field)
+          : field
+      )
+    );
+    const problems = configurationProblems(declared, effective);
+    expect(problems).toEqual(refused("collections[0].fields[6].name"));
+    expect(problems[0].message).toContain(FROM_SETUP);
+    // Renaming Nextly's own field would break uploads: the plugin is what to change.
+    expect(problems[0].message).toContain("Change or remove that plugin.");
+    expect(problems[0].message).not.toContain("Rename it");
+  });
+
+  it("is accepted as declared, with and without a setup's copy", () => {
+    const { declared, effective } = afterSetup(
+      "collections",
+      docs(),
+      fields => fields
+    );
+    expect(configurationProblems(declared)).toEqual([]);
+    expect(configurationProblems(declared, effective)).toEqual([]);
+  });
+
+  it("is accepted for the same name on a Single, which has no file fields whatever keys it carries", () => {
+    const entity = defineSingle({
+      slug: "home",
+      files: {},
+      fields: [componentNamed("size")],
+    } as never);
+    expect(configurationProblems({ singles: [entity] })).toEqual([]);
+  });
+
+  it("is accepted for the same name on a collection with no files", () => {
+    const entity = defineCollection({
+      slug: "posts",
+      fields: [
+        { name: "body", type: "text" },
+        componentNamed("storageKey") as never,
+      ],
+    });
+    expect(configurationProblems({ collections: [entity] })).toEqual([]);
+  });
+});
+
+describe("an entity with no system field set aside and no name at fault", () => {
+  it("has its problems in the order its validator lists them", () => {
+    const entity = {
+      slug: "posts",
+      fields: [
+        { name: "body", type: "text" },
+        { name: "body", type: "text" },
+      ],
+      indexes: [{ fields: ["missing"] }],
+    };
+    expect(
+      configurationProblems({ collections: [entity] }).map(
+        problem => problem.code
+      )
+    ).toEqual(
+      validateCollectionConfig(entity as never).errors.map(error => error.code)
+    );
   });
 });

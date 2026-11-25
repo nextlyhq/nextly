@@ -70,12 +70,13 @@ export function StatusSection({
 
 /**
  * Which document the sentence is about: the language being edited on a
- * localized document, this document otherwise.
+ * localized document of a site with two languages or more, this document
+ * otherwise. A one-language site speaks no language words.
  */
 function StatusSubject() {
-  const { enabled, defaultLocale, getLocale } = useLocalization();
+  const { enabled, locales, defaultLocale, getLocale } = useLocalization();
   const entryLocale = useEntryLocale();
-  if (!enabled || !entryLocale.collectionLocalized) {
+  if (!enabled || locales.length < 2 || !entryLocale.collectionLocalized) {
     return <>This document</>;
   }
   const code = entryLocale.locale ?? defaultLocale;

@@ -135,6 +135,7 @@ import {
   readDeletionFacts,
   runDeletions,
   runStatements,
+  tablesLeftDropped,
 } from "../../domains/schema/migrate/file-deletions";
 import {
   configurationRowsMessage,
@@ -349,7 +350,11 @@ import {
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
 import { runPluginsOnMigrate } from "./migrate-hooks";
-import { storedDataOfRun } from "./stored-data-of-run";
+import {
+  appliedBeforeDataSteps,
+  EARLIER_RECORDS_MOVED,
+  storedDataOfRun,
+} from "./stored-data-of-run";
 import {
   CORE_UPGRADE_LABEL,
   coreUpgradeSource,
@@ -600,9 +605,10 @@ function announceRun(
  * (`consolidateLegacyBookkeeping`). A database with neither is left alone,
  * whatever the flag says.
  *
- * Answers whether the run ends here: true for a dry run on such a database,
- * which lists the move alone, since which files are pending is not known
- * until the records are moved.
+ * Answers whether the run ends here (`ended`): true for a dry run on such a
+ * database, which lists the move alone, since which files are pending is not
+ * known until the records are moved; and whether this run moved them
+ * (`moved`), which a refusal made after names as applied.
  */
 async function moveEarlierRecords(args: {
   adapter: DrizzleAdapter;
@@ -615,10 +621,10 @@ async function moveEarlierRecords(args: {
   askBackedUp: () => Promise<boolean>;
   lockTtlSeconds: number | undefined;
   logger: CommandContext["logger"];
-}): Promise<boolean> {
+}): Promise<{ ended: boolean; moved: boolean }> {
   const { adapter, dialect, options, logger } = args;
   const legacy = await detectLegacyBookkeeping(adapter);
-  if (!legacy.hasLegacy) return false;
+  if (!legacy.hasLegacy) return { ended: false, moved: false };
   // Loaded only for a database that needs it.
   const { consolidateLegacyBookkeeping, previewLegacyConsolidation } =
     await import("./legacy-bookkeeping");
@@ -632,11 +638,11 @@ async function moveEarlierRecords(args: {
     });
     // No plan: another run moved the records meanwhile, and this dry run
     // goes on to list the pending migrations as on any database.
-    if (plan === undefined) return false;
+    if (plan === undefined) return { ended: false, moved: false };
     reportDryRun(logger, plan);
-    return true;
+    return { ended: true, moved: false };
   }
-  await consolidateLegacyBookkeeping({
+  const moved = await consolidateLegacyBookkeeping({
     adapter,
     dialect,
     bounds: args.bounds,
@@ -649,7 +655,9 @@ async function moveEarlierRecords(args: {
     log: message => logger.info(message),
     warn: message => logger.warn(message),
   });
-  return false;
+  // Moved by this run only where its own consolidation made the move: another run may have moved
+  // the records meanwhile, and then this one changed nothing.
+  return { ended: false, moved };
 }
 
 /**
@@ -774,7 +782,7 @@ export async function runMigrate(
       site: upgradeSiteOf(configResult.config),
     });
 
-    const ended = await moveEarlierRecords({
+    const earlierRecords = await moveEarlierRecords({
       adapter: adapter as unknown as DrizzleAdapter,
       dialect,
       bounds,
@@ -784,7 +792,7 @@ export async function runMigrate(
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
       logger,
     });
-    if (ended) return;
+    if (earlierRecords.ended) return;
 
     // What the declared schema names, with the ledger's old Builder marks:
     // the one value every reader of the folder below reads it through.
@@ -837,6 +845,23 @@ export async function runMigrate(
         },
       });
 
+    // The run's own plan (`migrationsAhead`): whether a `--step` leaves migrations pending, and the
+    // tables its migrations drop, whose rows the data steps never reach. Read before a dry run too,
+    // so its preview leaves out what the run leaves out. A plan that cannot be read is taken as
+    // leaving some pending, as `--step` always was, and as dropping nothing.
+    const ahead = await migrationsAhead({
+      adapter,
+      db,
+      dialect,
+      migrationsDir: appMigrationsDir,
+      logger,
+      declared,
+      pluginMigrationSets: (
+        await pluginMigrationArgs(configResult.config.plugins ?? [])
+      ).pluginMigrationSets,
+      step: options.step,
+    }).catch(() => undefined);
+
     if (options.dryRun) {
       try {
         await refuseUnwritten();
@@ -855,7 +880,7 @@ export async function runMigrate(
         serverConstructs,
         extensionSchema,
       });
-      await storedData.preview(options.step !== undefined);
+      await storedData.preview(options.step !== undefined, ahead?.dropped);
       logger.success("Dry run complete (no changes made).");
       return;
     }
@@ -865,26 +890,15 @@ export async function runMigrate(
     // backup nobody confirmed is refused here, before anything changes.
     // A run whose `--step` takes every pending migration reaches the data steps as a run without
     // it does, so it is asked the same before its schema changes; only one that leaves some
-    // pending leaves the steps to the run that finishes them. A count that cannot be read is
-    // taken as leaving some, as `--step` always was.
+    // pending leaves the steps to the run that finishes them (`ahead`, the run's own plan).
     const stepLeavesPending =
-      options.step !== undefined &&
-      (await migrationsStillPending({
-        adapter,
-        db,
-        dialect,
-        migrationsDir: appMigrationsDir,
-        logger,
-        declared,
-        pluginMigrationSets: (
-          await pluginMigrationArgs(configResult.config.plugins ?? [])
-        ).pluginMigrationSets,
-      }).then(
-        pending => pending > (options.step ?? 0),
-        () => true
-      ));
+      options.step !== undefined && (ahead?.leavesPending ?? true);
     await storedData
-      .confirmBeforeSchemaChanges(stepLeavesPending ? options.step : undefined)
+      .confirmBeforeSchemaChanges(
+        stepLeavesPending ? options.step : undefined,
+        ahead?.dropped,
+        earlierRecords.moved ? EARLIER_RECORDS_MOVED : undefined
+      )
       .catch(fail);
 
     // The consent a deleting file needs, read from the flag and the environment before anything
@@ -1158,10 +1172,14 @@ export async function runMigrate(
         // schema lock: with every migration applied, since each step reads
         // the tables as this release keeps them, and after the permissions
         // the run seeded, which a role's conversion gives.
+        // What applied before the steps, which a refusal they make then names as kept: the move of
+        // an earlier release's records, this run's migrations, and the deploy work after them,
+        // which can change the database where no migration file applied.
         await storedData.takeAfterSchemaChanges(
-          appliedThisRun === 0
-            ? undefined
-            : `the ${formatCount(appliedThisRun, "migration")} this run applied`
+          appliedBeforeDataSteps({
+            recordsMoved: earlierRecords.moved,
+            migrationsApplied: appliedThisRun,
+          })
         );
         // The plugins' own deploy work, last, once every step above has
         // left the schema in step (`migrate-hooks`). Not where migrations
@@ -4905,6 +4923,76 @@ export async function migrationsStillPending(args: {
           undefined
         );
   return files.length + modules.length;
+}
+
+/**
+ * What a run with `step` leaves of the migrations, read from the plan the run itself follows:
+ * the plugin modules within its budget first (`pendingPluginModules`), then the app files within
+ * what is left (`appStepAfter`, `fileRunPlan`), which runs past the budget to close a move and
+ * reads a step of zero or less as no limit. `leavesPending` says whether any module or file stays
+ * pending; `dropped` names the tables the app files it runs leave dropped (`tablesLeftDropped`),
+ * whose rows the data steps after them never reach.
+ */
+export async function migrationsAhead(args: {
+  adapter: CLIDatabaseAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+  migrationsDir: string;
+  logger: CommandContext["logger"];
+  declared?: DeclaredNames;
+  pluginMigrationSets: readonly PluginMigrationSet[];
+  step: number | undefined;
+}): Promise<{ leavesPending: boolean; dropped: ReadonlySet<string> }> {
+  const listed = await listMigrationFiles(
+    args.adapter,
+    args.db,
+    args.dialect,
+    args.migrationsDir,
+    args.logger,
+    args.declared
+  );
+  const applied =
+    args.pluginMigrationSets.length === 0
+      ? new Map<string, string | null>()
+      : await appliedPluginModules({
+          adapter: args.adapter,
+          db: args.db,
+          dialect: args.dialect,
+        });
+  const modulesPending = pendingPluginModules(
+    args.pluginMigrationSets,
+    applied,
+    undefined
+  ).length;
+  const modulesToRun = pendingPluginModules(
+    args.pluginMigrationSets,
+    applied,
+    args.step
+  );
+  const modulesRun = modulesToRun.length;
+  const files = appFilesInStep(listed, appStepAfter(args.step, modulesRun));
+  const runs = new Set(files);
+  const filesLeft = listed.some(
+    ({ file, applied: done }) => !done && !runs.has(file)
+  );
+  return {
+    leavesPending: modulesRun < modulesPending || filesLeft,
+    // Read in the order the run applies them: the plugin modules within the step, then the files,
+    // so a plugin's entity a module removes is left out as an app file's is.
+    dropped: new Set(
+      tablesLeftDropped(
+        [
+          ...modulesToRun.flatMap(({ migration }) =>
+            pluginModuleStatements(migration, args.dialect, "up")
+          ),
+          ...files.flatMap(file =>
+            splitSqlStatements(file.upSql, args.dialect, file)
+          ),
+        ],
+        args.dialect
+      )
+    ),
+  };
 }
 
 /** The app's migration files in run order, each with whether the ledger records it applied. */

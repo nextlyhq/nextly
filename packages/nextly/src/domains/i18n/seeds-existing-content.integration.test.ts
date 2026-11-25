@@ -13,7 +13,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection } from "../../collections/config/define-collection";
-import { text } from "../../collections/fields";
+import { number, repeater, text } from "../../collections/fields";
+import { parsedValue } from "../../shared/lib/json-column-value";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -24,6 +25,7 @@ import { buildLocalizationDownStatements } from "./migration/generate-down";
 import {
   ensureCompanionTable,
   localizedColumnsOnMain,
+  reconcileCompanionColumns,
 } from "./runtime/companion-io";
 
 let current: TestNextly | undefined;
@@ -43,7 +45,7 @@ describe.each(getConfiguredTestDialects())(
      * way they would for content written before localization was turned on.
      */
     async function bootUnlocalized(
-      fields: ReturnType<typeof text>[]
+      fields: (ReturnType<typeof text> | ReturnType<typeof repeater>)[]
     ): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
@@ -218,6 +220,105 @@ describe.each(getConfiguredTestDialects())(
         `SELECT ${q("title")} FROM ${q("dc_seedsrc")} WHERE ${q("id")} = 'row1'`
       );
       expect(main).toEqual([{ title: "Edited while localized" }]);
+    });
+
+    // A repeater keeping one structure in every language: its structure stays in its main column
+    // and each language's text sits in its overlay column on the translations table. Its text on
+    // the main table already is the default language's: copied in as that language's overlay, so a
+    // first save in another language, which writes the structure without its text, keeps it.
+    const SLIDES = repeater({
+      name: "slides",
+      fields: [text({ name: "caption" }), number({ name: "rank" })],
+    });
+    const SLIDES_FIELD = {
+      name: "slides",
+      type: "repeater",
+      fields: [
+        { name: "caption", type: "text" },
+        { name: "rank", type: "number" },
+      ],
+    };
+    const STORED = [{ id: "s1", caption: "Hello", rank: 1 }];
+
+    async function withSlides(t: TestNextly) {
+      const adapter = t.adapter as unknown as {
+        executeQuery: <T = unknown>(sql: string) => Promise<T[]>;
+      };
+      await adapter.executeQuery(
+        `INSERT INTO ${q("dc_seedsrc")} (${q("id")}, ${q("slug")}, ${q("title")}, ${q("slides")}) ` +
+          `VALUES ('row1', 'r1', 'Hi', '${JSON.stringify(STORED)}')`
+      );
+      return adapter;
+    }
+
+    async function defaultOverlay(adapter: {
+      executeQuery: <T = unknown>(sql: string) => Promise<T[]>;
+    }) {
+      const rows = await adapter.executeQuery<{ slides: unknown }>(
+        `SELECT ${q("slides")} FROM ${q("dc_seedsrc_locales")} ` +
+          `WHERE ${q("_parent")} = 'row1' AND ${q("_locale")} = 'en'`
+      );
+      return rows.map(row => parsedValue(row.slides));
+    }
+
+    it("copies a repeater's text in as the recorded locale's overlay, keeping its structure on main", async () => {
+      const t = await bootUnlocalized([text({ name: "title" }), SLIDES]);
+      const adapter = await withSlides(t);
+
+      await ensureCompanionTable(
+        t.adapter as Parameters<typeof ensureCompanionTable>[0],
+        {
+          builtBy: "codeFirst" as const,
+          slug: "seedsrc",
+          tableName: "dc_seedsrc",
+          fields: [
+            { name: "title", type: "text", localized: true },
+            SLIDES_FIELD,
+          ],
+          dialect,
+          sourceLocale: "en",
+        }
+      );
+
+      expect(await defaultOverlay(adapter)).toEqual([STORED]);
+      const main = await adapter.executeQuery<{ slides: unknown }>(
+        `SELECT ${q("slides")} FROM ${q("dc_seedsrc")} WHERE ${q("id")} = 'row1'`
+      );
+      expect(main.map(row => parsedValue(row.slides))).toEqual([STORED]);
+    });
+
+    it("copies a repeater's text in as the default language's overlay when its column joins an existing translations table", async () => {
+      const t = await bootUnlocalized([text({ name: "title" }), SLIDES]);
+      const adapter = await withSlides(t);
+      // The translations table as an earlier release made it: the translated title alone.
+      await ensureCompanionTable(
+        t.adapter as Parameters<typeof ensureCompanionTable>[0],
+        {
+          builtBy: "codeFirst" as const,
+          slug: "seedsrc",
+          tableName: "dc_seedsrc",
+          fields: [{ name: "title", type: "text", localized: true }],
+          dialect,
+          sourceLocale: "en",
+        }
+      );
+
+      await reconcileCompanionColumns(
+        t.adapter as Parameters<typeof reconcileCompanionColumns>[0],
+        {
+          builtBy: "codeFirst" as const,
+          slug: "seedsrc",
+          tableName: "dc_seedsrc",
+          fields: [
+            { name: "title", type: "text", localized: true },
+            SLIDES_FIELD,
+          ],
+          dialect,
+          defaultLocale: "en",
+        }
+      );
+
+      expect(await defaultOverlay(adapter)).toEqual([STORED]);
     });
   }
 );

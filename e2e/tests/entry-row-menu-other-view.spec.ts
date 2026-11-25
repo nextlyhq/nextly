@@ -9,6 +9,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { mainMenuRow } from "./support/document-bar";
 import { createEntry } from "./support/runtime-collection";
 import { test } from "./support/test";
 
@@ -94,9 +95,8 @@ test("a post's row menu and its form's bar both open it in the builder", async (
   await expect(page).toHaveURL(builder);
 
   await gotoAdmin(page, `/collections/posts/${id}`);
-  const inBar = page
-    .getByTestId("document-bar")
-    .getByRole("link", { name: OPEN_IN_BUILDER });
+  // The bar's way in is a link row of its main button's menu.
+  const inBar = await mainMenuRow(page, OPEN_IN_BUILDER);
   await expect(inBar).toHaveAttribute("href", builder);
   await inBar.click();
   await expect(page).toHaveURL(builder);
