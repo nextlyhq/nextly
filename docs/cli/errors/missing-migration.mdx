@@ -13,6 +13,7 @@ Each snapshot in `meta/` is written beside the migration it describes. This one'
 
 - Restore the `.sql` file from version control.
 - Or, if no database has applied the migration, delete the orphan snapshot.
+- For `nextly repair-columns`, if the file was removed on purpose, record that with `nextly migrate:resolve --removed <file>`.
 
 See [Production migrations](/docs/guides/production-migrations).
 
