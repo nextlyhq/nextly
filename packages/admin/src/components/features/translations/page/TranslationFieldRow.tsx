@@ -14,7 +14,7 @@
  * @module components/features/translations/page/TranslationFieldRow
  */
 
-import type { JSX } from "react";
+import { useRef, type JSX, type ReactNode } from "react";
 import { useWatch } from "react-hook-form";
 
 import {
@@ -73,7 +73,21 @@ export interface TranslationFieldRowProps {
   inherited?: FieldGate;
   suggestion?: FieldSuggestion;
   suggestionChoices?: SuggestionChoices;
+  /** What is drawn under an out-of-date field, about its source's change. */
+  review?: (row: FieldRowState) => ReactNode;
 }
+
+/** The row, as what is drawn under its field is told of it. */
+export interface FieldRowState {
+  /** Whether this field may only be looked at. */
+  readOnly: boolean;
+  /** Takes the keyboard to the field's control. */
+  focusField: () => void;
+}
+
+/** What a person can write in, of the controls a field draws. */
+const CONTROL =
+  'input:not([type="hidden"]), textarea, select, [contenteditable="true"], [role="combobox"]';
 
 /** What the form's own label of the field says. */
 function formLabel({ field }: TranslationField): string {
@@ -151,7 +165,9 @@ export function TranslationFieldRow({
   inherited = OPEN_GATE,
   suggestion,
   suggestionChoices,
+  review,
 }: TranslationFieldRowProps): JSX.Element | null {
+  const controls = useRef<HTMLDivElement>(null);
   const markValue = useValueLanguage(target);
   // The form's own decision about the field, so one its condition leaves out
   // is left out with its source.
@@ -198,19 +214,30 @@ export function TranslationFieldRow({
                 <OutOfDateMark />
               </div>
             ) : null}
-            <div
-              ref={markValue}
-              // The mark sits at the end of the label's line, so a long label
-              // wraps before it.
-              className={cn(outOfDate && "[&_label]:pr-28")}
-            >
-              <FieldRenderer
-                field={translated.field}
-                basePath={basePath}
-                mode="edit"
-                readOnly={gate.readOnly}
-              />
+            <div ref={controls}>
+              <div
+                ref={markValue}
+                // The mark sits at the end of the label's line, so a long label
+                // wraps before it.
+                className={cn(outOfDate && "[&_label]:pr-28")}
+              >
+                <FieldRenderer
+                  field={translated.field}
+                  basePath={basePath}
+                  mode="edit"
+                  readOnly={gate.readOnly}
+                />
+              </div>
             </div>
+            {outOfDate
+              ? review?.({
+                  readOnly: gate.readOnly || gate.disabled,
+                  focusField: () =>
+                    controls.current
+                      ?.querySelector<HTMLElement>(CONTROL)
+                      ?.focus(),
+                })
+              : null}
             {source === undefined ? (
               <p className="mt-2 text-xs text-muted-foreground">
                 No other language has this published and up to date, so it is

@@ -434,4 +434,12 @@ describe("OutOfDateReview, the actions", () => {
       screen.getByRole("button", { name: "Use suggestion" }),
     ]);
   });
+
+  it("offers Edit alone where there is nothing to keep it against", () => {
+    renderReview({ onKeepCurrent: undefined });
+    expect(
+      screen.queryByRole("button", { name: "Keep current: Title" })
+    ).toBeNull();
+    expect(editButton()).toBeInTheDocument();
+  });
 });

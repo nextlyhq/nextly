@@ -5,10 +5,11 @@
  */
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "@admin/__tests__/utils";
 import { parseApiError } from "@admin/lib/api/parseApiError";
+import { protectedApi } from "@admin/lib/api/protectedApi";
 
 import { TranslationPage } from "../TranslationPage";
 
@@ -592,6 +593,117 @@ describe("who may write", () => {
     expect(
       screen.queryByText(/Your access lets you view this/)
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("reviewing a field whose source changed", () => {
+  const { get: send, post } = protectedApi;
+  /** What the review asks for; everything else is asked as it was. */
+  const asked = vi.fn();
+  const kept = vi.fn();
+
+  beforeEach(() => {
+    asked.mockResolvedValue({
+      available: true,
+      sourceLocale: "en",
+      before: "A pioneer of code",
+      after: "A pioneer",
+      valueFingerprint: "a".repeat(64),
+      sourceFingerprint: "b".repeat(64),
+    });
+    kept.mockResolvedValue({ message: "Translation kept as it is." });
+    vi.spyOn(protectedApi, "get").mockImplementation((path, options) =>
+      path.includes("/source-change") ? asked(path) : send(path, options)
+    );
+    vi.spyOn(protectedApi, "post").mockImplementation((path, body, options) =>
+      path.endsWith("/keep-current")
+        ? kept(path, body)
+        : post(path, body, options)
+    );
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const review = (name: string) =>
+    screen.findByRole("button", { name: `What changed: ${name}` });
+
+  it("is offered on that field alone, and reads nothing until it is opened", async () => {
+    renderWithProviders(<TranslationPage document={ENTRY} />);
+    await review("Biography");
+    expect(
+      screen.queryByRole("button", { name: "What changed: Role / Title" })
+    ).toBeNull();
+    expect(asked).not.toHaveBeenCalled();
+  });
+
+  it("keeps the translation, reads the document again and leaves the keyboard on the field", async () => {
+    renderWithProviders(<TranslationPage document={ENTRY} />);
+    await userEvent.click(await review("Biography"));
+    const keep = await screen.findByRole("button", {
+      name: "Keep current: Biography",
+    });
+    expect(asked).toHaveBeenCalledWith(
+      "/collections/authors/entries/a1/source-change?locale=es&field=bio"
+    );
+
+    // As the document reads once its translation is kept.
+    const upToDate = {
+      ...WRITTEN,
+      _translations: {
+        ...WRITTEN._translations,
+        es: {
+          ...PUBLISHED,
+          fields: { bio: { origin: "person", outOfDate: false } },
+        },
+      },
+    };
+    api.findByID.mockImplementation((_slug: string, _id: string, read: Read) =>
+      Promise.resolve(read.everyLanguage ? LIVE : upToDate)
+    );
+    await userEvent.click(keep);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "What changed: Biography" })
+      ).toBeNull()
+    );
+    expect(kept).toHaveBeenCalledWith(
+      "/collections/authors/entries/a1/keep-current",
+      {
+        locale: "es",
+        field: "bio",
+        valueFingerprint: "a".repeat(64),
+        sourceFingerprint: "b".repeat(64),
+      }
+    );
+    expect(api.update).not.toHaveBeenCalled();
+    expect(await bio()).toHaveFocus();
+    expect(await bio()).toHaveValue("Una pionera");
+  });
+
+  it("keeps the words being written elsewhere on the page", async () => {
+    renderWithProviders(<TranslationPage document={ENTRY} />);
+    const job = within(await field("Role / Title")).getByRole("textbox");
+    await userEvent.type(job, "Almirante");
+    await userEvent.click(await review("Biography"));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Keep current: Biography" })
+    );
+
+    await waitFor(() => expect(kept).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(job).toHaveValue("Almirante");
+  });
+
+  it("shows a reader who may only look what changed, and no choice", async () => {
+    reader.update = "refused";
+    renderWithProviders(<TranslationPage document={ENTRY} />);
+    await userEvent.click(await review("Biography"));
+    await screen.findByRole("group", { name: "Out of date: Biography" });
+    expect(
+      screen.queryByRole("button", { name: "Keep current: Biography" })
+    ).toBeNull();
   });
 });
 

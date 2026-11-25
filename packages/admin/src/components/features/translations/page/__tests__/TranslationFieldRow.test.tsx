@@ -4,6 +4,7 @@
  */
 import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +13,7 @@ import { renderWithProviders } from "@admin/__tests__/utils";
 import type { TranslationField } from "../translation-fields";
 import {
   TranslationFieldRow,
+  type FieldRowState,
   type TranslationFieldRowProps,
 } from "../TranslationFieldRow";
 
@@ -254,5 +256,36 @@ describe("TranslationFieldRow", () => {
       expect(within(block).getByText("Una precursora")).toBeInTheDocument();
       expect(within(block).queryByRole("button")).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("what is drawn under an out-of-date field", () => {
+  const review = vi.fn(
+    ({ readOnly, focusField }: FieldRowState): ReactNode => (
+      <button type="button" onClick={focusField}>
+        {readOnly ? "Look" : "Review"}
+      </button>
+    )
+  );
+
+  it("stands under the field, and takes the keyboard to its control", async () => {
+    renderRow({ outOfDate: true, review });
+    const button = screen.getByRole("button", { name: "Review" });
+    expect(
+      control().compareDocumentPosition(button) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    await userEvent.click(button);
+    expect(control()).toHaveFocus();
+  });
+
+  it("is told of a field that may only be looked at", () => {
+    renderRow({ outOfDate: true, readOnly: true, review });
+    expect(screen.getByRole("button", { name: "Look" })).toBeInTheDocument();
+  });
+
+  it("is not drawn under a field that is up to date", () => {
+    renderRow({ review });
+    expect(screen.queryByRole("button", { name: "Review" })).toBeNull();
   });
 });

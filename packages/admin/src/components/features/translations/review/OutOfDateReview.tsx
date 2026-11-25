@@ -44,8 +44,11 @@ export interface OutOfDateReviewProps {
     /** The recorded origin of the value; absent where none is recorded. */
     origin?: string | undefined;
   };
-  /** The translation still fits: mark it reviewed against the source now. */
-  onKeepCurrent: () => void;
+  /**
+   * The translation still fits: mark it reviewed against the source now.
+   * Absent where there is nothing known to keep it against.
+   */
+  onKeepCurrent: (() => void) | undefined;
   /** Open the translation for editing. */
   onEdit: () => void;
   /** The person may read the translation but not change it: no actions. */
@@ -183,19 +186,21 @@ export function OutOfDateReview({
         <div className="flex flex-wrap items-center gap-2">
           {/* Named for the field: read out of context, a page of these would
               all say the same. */}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className={INERT}
-            aria-label={`Keep current: ${fieldLabel}`}
-            aria-disabled={busy || undefined}
-            onClick={() => {
-              if (!busy) onKeepCurrent();
-            }}
-          >
-            Keep current
-          </Button>
+          {onKeepCurrent === undefined ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={INERT}
+              aria-label={`Keep current: ${fieldLabel}`}
+              aria-disabled={busy || undefined}
+              onClick={() => {
+                if (!busy) onKeepCurrent();
+              }}
+            >
+              Keep current
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"

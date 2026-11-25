@@ -63,6 +63,7 @@ import {
   TranslationHistoryProvider,
 } from "../history/TranslationHistory";
 import { useTranslationHistory } from "../history/useTranslationHistory";
+import { FieldSourceReview } from "../review/FieldSourceReview";
 import { useTranslationReview } from "../workflow/useTranslationReview";
 
 import { languagesGoingLiveToo, languageStanding } from "./language-standing";
@@ -600,6 +601,18 @@ function TranslationForm({
         onSourceChange={code => sources.choose(path, code)}
         outOfDate={options.outOfDate === true}
         readOnly={readOnly}
+        review={row => (
+          <FieldSourceReview
+            document={document}
+            field={translated}
+            target={target}
+            languageOf={languageOf}
+            origin={recorded?.[path]?.origin}
+            isSaving={isSaving}
+            reload={reload}
+            {...row}
+          />
+        )}
         {...(options.basePath === undefined
           ? {}
           : { basePath: options.basePath })}
