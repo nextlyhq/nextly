@@ -6,7 +6,7 @@
  * again by the conversion where it runs.
  *
  * What the database itself refuses inside the file's transaction, nothing changed, is left to it: on
- * PostgreSQL a view, rule, policy, generated column, trigger or key on the column, and an index the
+ * PostgreSQL a view, policy, generated column, trigger, rule or key naming the column, and an index the
  * new type has no operator class for.
  *
  * @module domains/schema/builder-save/conversion-refusals
@@ -17,7 +17,10 @@ import { sql } from "drizzle-orm";
 import { mysqlSeesEveryTriggerQuery } from "../busy-table/run-unit";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
-import { readUpdateTriggers } from "../pipeline/live-table-facts";
+import {
+  readUpdateRules,
+  readUpdateTriggers,
+} from "../pipeline/live-table-facts";
 import type {
   JudgedFieldTypeChange,
   TypeChangeRefusal,
@@ -52,7 +55,7 @@ interface ConversionAnswer<Column extends ConvertedColumn> {
 
 /**
  * Every refusal of a conversion for what its tables carry: a column left by a conversion that
- * stopped part-way; update triggers; a CHECK constraint naming a column written anew; a unique
+ * stopped part-way; update triggers and rules; a CHECK constraint naming a column written anew; a unique
  * JSON on SQLite; a default or a collation the column's new type would lose; and on SQLite what a
  * column swap would stop part-way over. Each names its field, and what stops it. A column whose
  * values the file's own statement reaches is not refused for what only a conversion sets off or
@@ -117,6 +120,7 @@ async function overWritten(
 ): Promise<TypeChangeRefusal[]> {
   return [
     ...(await overUpdateTriggers(db, dialect, label, of.judged)),
+    ...(await overUpdateRules(db, dialect, label, of.judged)),
     ...(await overChecks(db, dialect, label, of)),
     ...(await overCarried(db, dialect, label, of)),
   ];
@@ -174,20 +178,59 @@ async function overUpdateTriggers(
   if (converted.length === 0) return [];
   const unseen = await unseenTriggers(db, dialect, label, converted);
   if (unseen.length > 0) return unseen;
-  const triggersOf = new Map<string, string[]>();
+  return overEachTable(
+    label,
+    converted,
+    table => readUpdateTriggers(db, dialect, table),
+    (table, fired) =>
+      `${table} has ${fired.length === 1 ? "a trigger that fires" : "triggers that fire"} on every row it writes`
+  );
+}
+
+/**
+ * A table that has PostgreSQL rules on UPDATE, named, before any value is written: such a rule rewrites
+ * the conversion's updates, so one that does nothing for a row leaves that row's value out of the column
+ * beside, and the column would take none; one that does something more runs it for each value converted.
+ * A disabled rule rewrites nothing, and an INSERT's or a DELETE's none of a conversion's statements.
+ */
+function overUpdateRules(
+  db: unknown,
+  dialect: SupportedDialect,
+  label: string,
+  converted: readonly JudgedFieldTypeChange[]
+): Promise<TypeChangeRefusal[]> {
+  return overEachTable(
+    label,
+    converted,
+    table => readUpdateRules(db, dialect, table),
+    (table, rules) =>
+      `${table} has ${rules.length === 1 ? "a rule that rewrites" : "rules that rewrite"} every update of it, which may leave a row as it was`
+  );
+}
+
+/**
+ * The refusal of each of `converted` whose table carries something (`read`, once a table) that its
+ * writes would set off, naming each: `says` how the table carries them.
+ */
+async function overEachTable(
+  label: string,
+  converted: readonly JudgedFieldTypeChange[],
+  read: (table: string) => Promise<string[]>,
+  says: (table: string, names: readonly string[]) => string
+): Promise<TypeChangeRefusal[]> {
+  const namesOf = new Map<string, string[]>();
   const refusals: TypeChangeRefusal[] = [];
   for (const change of converted) {
-    let fired = triggersOf.get(change.table);
-    if (fired === undefined) {
-      fired = await readUpdateTriggers(db, dialect, change.table);
-      triggersOf.set(change.table, fired);
+    let names = namesOf.get(change.table);
+    if (names === undefined) {
+      names = await read(change.table);
+      namesOf.set(change.table, names);
     }
-    if (fired.length === 0) continue;
-    const one = fired.length === 1;
+    if (names.length === 0) continue;
     refusals.push(
       refused(
         change.to.name,
-        `${cannotChange(label, change)}: the change writes each of its values again, and ${change.table} has ${one ? "a trigger that fires" : "triggers that fire"} on every row it writes (${fired.join(", ")}). Drop or disable ${one ? "it" : "them"} first, then try again.`
+        `${cannotChange(label, change)}: the change writes each of its values again, and ${says(change.table, names)} (${names.join(", ")}). Drop or disable ${names.length === 1 ? "it" : "them"} first, then try again.`
       )
     );
   }

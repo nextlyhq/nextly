@@ -908,6 +908,71 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // A PostgreSQL rule is no trigger and rewrites an UPDATE of the table all the same: one that does
+    // nothing for a row leaves its value out of the column beside, and the column would take that.
+    it.runIf(dialect === "postgresql").each([
+      ["skips a row", `WHERE OLD.title = 'skipped' DO INSTEAD NOTHING`],
+      [
+        "runs a statement of its own",
+        `DO ALSO INSERT INTO tcc_seen VALUES (OLD.title)`,
+      ],
+    ])(
+      "refuses a conversion of a table with an update rule that %s, naming it, and changes nothing",
+      async (_does, rule) => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await write(t, "a", { v: "034" });
+        await write(t, "skipped", { v: "056" });
+        await exec(t, `CREATE TABLE tcc_seen (title text)`);
+        try {
+          await exec(
+            t,
+            `CREATE RULE tcc_rule AS ON UPDATE TO ${q(`dc_${SLUG}`)} ${rule}`
+          );
+
+          expect(await save(t, [{ name: "v", type: "number" }])).toMatchObject(
+            refusedSaying("tcc_rule")
+          );
+
+          expect(await read(t, "v")).toEqual({ a: "034", skipped: "056" });
+          expect(
+            await (
+              t.adapter as unknown as {
+                executeQuery<R>(statement: string): Promise<R[]>;
+              }
+            ).executeQuery(`SELECT title FROM tcc_seen`)
+          ).toEqual([]);
+        } finally {
+          await exec(t, `DROP RULE IF EXISTS tcc_rule ON ${q(`dc_${SLUG}`)}`);
+          await exec(t, `DROP TABLE tcc_seen`);
+        }
+      }
+    );
+
+    // The conversion updates rows and neither inserts nor deletes one, so a rule on those is never set
+    // off; a disabled one rewrites nothing.
+    it.runIf(dialect === "postgresql").each([
+      ["an insert rule", "ON INSERT", undefined],
+      ["a delete rule", "ON DELETE", undefined],
+      ["a disabled update rule", "ON UPDATE", "DISABLE RULE tcc_rule"],
+    ])(
+      "converts a table with %s, which no statement of it sets off",
+      async (_what, on, after) => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await write(t, "a", { v: "034" });
+        await exec(
+          t,
+          `CREATE RULE tcc_rule AS ${on} TO ${q(`dc_${SLUG}`)} DO INSTEAD NOTHING`
+        );
+        if (after !== undefined) {
+          await exec(t, `ALTER TABLE ${q(`dc_${SLUG}`)} ${after}`);
+        }
+
+        expect(await save(t, [{ name: "v", type: "number" }])).toBeUndefined();
+
+        expect(await read(t, "v")).toEqual({ a: 34 });
+      }
+    );
+
     /**
      * On SQLite, `table`, holding the rows it held, made again from its own statement as `edit`
      * leaves it, its indexes after it: SQLite adds nothing to a table's statement otherwise.
@@ -1224,6 +1289,24 @@ describe.each(getConfiguredTestDialects())(
           refusedSaying("tcc_touch")
         );
         expect(await stored(t)).toEqual({ a: "012" });
+      }
+    );
+
+    // As under an update trigger: no value needs writing, so the file's own statement changes the column
+    // and no update of a row sets the rule off.
+    it.runIf(dialect === "postgresql")(
+      "changes a column under an update rule where no value needs writing",
+      async () => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await write(t, "a", { v: "12" });
+        await exec(
+          t,
+          `CREATE RULE tcc_rule AS ON UPDATE TO ${q(`dc_${SLUG}`)} WHERE OLD.title = 'a' DO INSTEAD NOTHING`
+        );
+
+        expect(await save(t, [{ name: "v", type: "number" }])).toBeUndefined();
+
+        expect(await read(t, "v")).toEqual({ a: 12 });
       }
     );
 

@@ -986,6 +986,27 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // A PostgreSQL rule that skips a row would leave its value out of what the column then takes.
+    it.runIf(dialect === "postgresql")(
+      "refuses a deploy over an update rule, in a dry run too, and changes nothing",
+      async () => {
+        const created = await textBecomesNumber();
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await write(second, "whole", { v: "034" });
+        await exec(
+          second,
+          `CREATE RULE tcf_rule AS ON UPDATE TO dc_tcf_posts WHERE OLD.title = 'whole' DO INSTEAD NOTHING`
+        );
+
+        expect(await dryRun(second)).toContain("tcf_rule");
+        await expect(
+          migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"))
+        ).rejects.toMatchObject(refusedSaying("tcf_rule"));
+        expect(await read(second)).toEqual({ whole: "034" });
+      }
+    );
+
     // A rollback too, where a value is written back in another form: a text as a list of it.
     converts(
       "refuses a rollback over an update trigger, and changes nothing",

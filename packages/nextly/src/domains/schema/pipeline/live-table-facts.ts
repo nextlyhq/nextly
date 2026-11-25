@@ -777,6 +777,29 @@ export async function readUpdateTriggers(
     .map(row => row.name);
 }
 
+/**
+ * The PostgreSQL rules that rewrite an UPDATE of `tableName`, by name, the disabled ones left out:
+ * a rule may leave a row out of the update, or run statements of its own for it, and nothing in the
+ * statement shows it. An INSERT's or a DELETE's rule rewrites no update. Other dialects have none.
+ */
+export async function readUpdateRules(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<string[]> {
+  if (dialect !== "postgresql") return [];
+  // `ev_type` 2 is UPDATE, `ev_enabled` D a disabled rule.
+  const rows = await rowsOf<{ name: string }>(
+    db,
+    dialect,
+    sql`SELECT r.rulename AS name FROM pg_rewrite r
+        WHERE r.ev_class = to_regclass(${tableName})
+          AND r.ev_type = '2' AND r.ev_enabled <> 'D'
+        ORDER BY r.rulename`
+  );
+  return rows.map(row => row.name);
+}
+
 /** The names of the unique ones among `indexes` (`readIndexUniqueness`). */
 export function uniqueIndexNames(
   indexes: ReadonlyMap<string, { unique: boolean }>
