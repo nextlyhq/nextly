@@ -18,7 +18,11 @@
  *
  * A repeater or group that keeps one structure across languages is split too: the text inside
  * becomes the language's draft, keyed by row id, and the structure becomes part of the shared
- * draft where it differs from the live one.
+ * draft where it differs from the live one. A group holding only text, at its own level and in
+ * every group inside, reads the same held whole as its text alone; where the document has no
+ * structure for it yet (none live, none in a draft kept under no language), a language's draft
+ * holding its text is split as whole, so the group it brings into being is the shared draft's.
+ * Once split, the shared draft holds that structure, so a run again finds nothing to split.
  *
  * @module cli/commands/upgrade-steps/localisation-drafts
  */
@@ -31,7 +35,7 @@ import {
   holdsText,
   holdsUnkeyedText,
   isWholeValue,
-  sameShare,
+  sameStructure,
   splitSharedStructure,
   type SharedStructureShape,
   type StructuredField,
@@ -74,6 +78,11 @@ interface DocumentToSplit {
   keys: PartKeys;
   ref: VersionRef;
   drafts: VersionRow[];
+  /**
+   * The groups the document has no structure for yet, none live and none in a draft kept under no
+   * language, that a language's draft holds text in: that draft holds the group whole.
+   */
+  structureless: ReadonlySet<string>;
 }
 
 /** Whether `snapshot` holds any of `keys`. */
@@ -113,6 +122,51 @@ function keptWhole(draft: VersionRow, keys: PartKeys): boolean {
     (draft.locale === null
       ? holdsAny(snapshot, keys.language)
       : holdsAny(snapshot, keys.shared))
+  );
+}
+
+/**
+ * The groups of one document (`DocumentToSplit.structureless`) a language's draft holds text in
+ * while the document has no structure for them: none in a draft kept under no language, and none
+ * on its live row. The live row is read only where a draft holds such text.
+ */
+async function structurelessGroups(
+  adapter: DrizzleAdapter,
+  document: Pick<DocumentToSplit, "entity" | "keys" | "ref">,
+  drafts: readonly VersionRow[]
+): Promise<Set<string>> {
+  const snapshots = drafts.map(draft => ({
+    locale: draft.locale,
+    snapshot: snapshotRecord(draft.snapshot),
+  }));
+  const candidates = [...document.keys.structured]
+    .filter(
+      ([key, shape]) =>
+        shape.kind === "group" &&
+        !snapshots.some(
+          ({ locale, snapshot }) =>
+            locale === null && Object.hasOwn(snapshot, key)
+        ) &&
+        snapshots.some(
+          ({ locale, snapshot }) =>
+            locale !== null &&
+            Object.hasOwn(snapshot, key) &&
+            holdsText(snapshot[key], shape)
+        )
+    )
+    .map(([key]) => key);
+  if (candidates.length === 0) return new Set();
+  const live = await liveRowOf(adapter, document);
+  return new Set(
+    candidates.filter(key => {
+      const column = toSnakeCase(key);
+      // No live row or column to judge by: nothing is guessed, the draft is read as it is.
+      return (
+        live !== undefined &&
+        column in live &&
+        sameStructure(live[column], null)
+      );
+    })
   );
 }
 
@@ -161,13 +215,19 @@ async function documentsToSplit(
       ]);
     }
     for (const [entryId, entryDrafts] of byEntry) {
-      if (!entryDrafts.some(draft => keptWhole(draft, keys))) continue;
-      found.push({
-        entity,
-        keys,
-        ref: { scopeKind: entity.kind, scopeSlug: entity.slug, entryId },
-        drafts: entryDrafts,
-      });
+      const ref = { scopeKind: entity.kind, scopeSlug: entity.slug, entryId };
+      const structureless = await structurelessGroups(
+        adapter,
+        { entity, keys, ref },
+        entryDrafts
+      );
+      if (
+        structureless.size === 0 &&
+        !entryDrafts.some(draft => keptWhole(draft, keys))
+      ) {
+        continue;
+      }
+      found.push({ entity, keys, ref, drafts: entryDrafts, structureless });
     }
   }
   return found;
@@ -216,9 +276,10 @@ function isSharedEdit(
   if (alreadyShared || !live) return true;
   const column = toSnakeCase(key);
   if (!(column in live)) return true;
-  // A structure is compared as a structure: a blank value inside reads as an absent one.
+  // A structure is compared as a structure (`sameStructure`): a blank value inside reads as an
+  // absent one, and a structure coming to be is a change even while it holds nothing.
   return structured
-    ? !sameShare(live[column], value)
+    ? !sameStructure(live[column], value)
     : !sameSharedValue(live[column], value);
 }
 
@@ -311,9 +372,12 @@ function structureOfDraftValue(
     if (tie) state.ties.push(tie);
     state.languages.set(slot, { ...state.languages.get(slot), [key]: text });
   };
+  // A group the document has no structure for is held whole by a language's draft holding its
+  // text (`structureless`), though it reads the same as its text alone.
   if (
     draft.locale !== null &&
-    !structuredKeptWhole(draft.locale, held, shape)
+    !structuredKeptWhole(draft.locale, held, shape) &&
+    !document.structureless.has(key)
   ) {
     keepText(held);
     return undefined;
@@ -423,7 +487,7 @@ function splitDrafts(
  */
 async function liveRowOf(
   adapter: DrizzleAdapter,
-  document: DocumentToSplit
+  document: Pick<DocumentToSplit, "entity" | "keys" | "ref">
 ): Promise<Record<string, unknown> | undefined> {
   const { tables } = await introspectLiveColumns(
     adapter.getDrizzle(),

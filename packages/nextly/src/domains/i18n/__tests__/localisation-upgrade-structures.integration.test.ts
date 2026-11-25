@@ -65,6 +65,18 @@ const SLIDESHOWS = defineCollection({
       name: "seo",
       fields: [text({ name: "headline" }), number({ name: "weight" })],
     }),
+    // A group whose own fields are all text, with a list inside: held whole for one language, it
+    // has no key outside its text and containers, as the text alone has.
+    group({
+      name: "credits",
+      fields: [
+        text({ name: "author" }),
+        repeater({
+          name: "links",
+          fields: [text({ name: "label" }), number({ name: "rank" })],
+        }),
+      ],
+    }),
   ],
 });
 
@@ -467,6 +479,141 @@ describeEachDialect(
           [second!.id]: { caption: "segundo" },
         });
         expect(bySlot.es!.title).toBe("Muestra");
+      },
+      BOOT_TIMEOUT
+    );
+
+    /** Stores `snapshot` as an earlier release held a pending change of `id` for `locale`. */
+    async function heldWhole(
+      id: string,
+      locale: string,
+      snapshot: Record<string, unknown>
+    ): Promise<void> {
+      const ref = {
+        scopeKind: "collection" as const,
+        scopeSlug: SLUG,
+        entryId: id,
+      };
+      await database!.adapter.insert(
+        VERSIONS_TABLE,
+        {
+          id: crypto.randomUUID(),
+          scopeKind: "collection",
+          scopeSlug: SLUG,
+          entryId: id,
+          versionNo: null,
+          status: "draft",
+          isAutosave: false,
+          snapshot: JSON.stringify(snapshot),
+          label: null,
+          locale,
+          draftKey: workingDraftKey(ref, locale),
+          sourceVersionNo: null,
+          createdBy: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        { returning: [] }
+      );
+    }
+
+    /** `id`'s pending changes, by slot (`shared` for the one kept under no language). */
+    async function draftsBySlot(
+      id: string
+    ): Promise<Record<string, Record<string, unknown>>> {
+      const rows = await database!.adapter.select<{
+        locale: string | null;
+        snapshot: unknown;
+      }>(VERSIONS_TABLE, {
+        where: {
+          and: [
+            { column: "entryId", op: "=", value: id },
+            ...WORKING_DRAFT_SHAPE,
+          ],
+        },
+      });
+      return Object.fromEntries(
+        rows.map(row => [row.locale ?? "shared", parsedValue(row.snapshot)])
+      ) as Record<string, Record<string, unknown>>;
+    }
+
+    // A group whose own fields are all text, held whole by an earlier release's pending change,
+    // reads the same as its text alone. Taken for the text alone, the group the change brings into
+    // being (live holds none) gets no shared change, and a publish lays the text on no group: lost.
+    it(
+      "splits a pending change creating a group that holds only text: the group comes to be in the shared draft, once",
+      async () => {
+        await boot();
+        const created = await t!.nextly.create({
+          collection: SLUG,
+          locale: "en",
+          data: { title: "Show" },
+        });
+        const id = (created.item as { id: string }).id;
+        await heldWhole(id, "es", {
+          title: "Muestra",
+          credits: { author: "Ana" },
+        });
+
+        await migrateData(database!.adapter, SITE, DRAFTS_STEP);
+
+        const drafts = await draftsBySlot(id);
+        // The group's structure, empty since it holds only text, is the shared draft's.
+        expect(drafts.shared?.credits).toEqual({});
+        expect(drafts.es?.credits).toEqual({ author: "Ana" });
+        expect(drafts.es?.title).toBe("Muestra");
+        // Split once: a second run finds nothing to do.
+        expect(await DRAFTS_STEP[0]!.pending(stepContext())).toBe(0);
+      },
+      BOOT_TIMEOUT
+    );
+
+    // A group holding only text at its own level, whose list inside an earlier release's pending
+    // change adds a row to: taken for the text alone, the new row has no shared change and is lost.
+    it(
+      "splits a pending change adding a row inside a group's list: the rows to the shared draft, their text by row",
+      async () => {
+        await boot();
+        const created = await t!.nextly.create({
+          collection: SLUG,
+          locale: "en",
+          data: {
+            title: "Show",
+            credits: { author: "Ana", links: [{ label: "site", rank: 1 }] },
+          },
+        });
+        const id = (created.item as { id: string }).id;
+        const live = (await t!.nextly.findByID({
+          collection: SLUG,
+          id,
+          locale: "en",
+        })) as { credits: { links: { id: string }[] } };
+        const first = live.credits.links[0]!.id;
+        await heldWhole(id, "es", {
+          title: "Muestra",
+          credits: {
+            author: "Ana",
+            links: [
+              { id: first, label: "sitio", rank: 1 },
+              { id: "l2", label: "blog", rank: 2 },
+            ],
+          },
+        });
+
+        await migrateData(database!.adapter, SITE, DRAFTS_STEP);
+
+        const drafts = await draftsBySlot(id);
+        expect(drafts.shared?.credits).toEqual({
+          links: [
+            { id: first, rank: 1 },
+            { id: "l2", rank: 2 },
+          ],
+        });
+        expect(drafts.es?.credits).toEqual({
+          author: "Ana",
+          links: { [first]: { label: "sitio" }, l2: { label: "blog" } },
+        });
+        expect(await DRAFTS_STEP[0]!.pending(stepContext())).toBe(0);
       },
       BOOT_TIMEOUT
     );

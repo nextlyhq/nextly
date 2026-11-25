@@ -624,7 +624,8 @@ function pruneLevel(
 /**
  * Whether `value`, held for one language, is the container's whole value rather than the text
  * alone: a repeater's rows (its text is keyed by row id, never a list), or a group holding a value
- * that is not text. A group holding text alone reads the same either way, and is the text.
+ * that is not text, or holding a container inside that is whole, at any depth (a list inside is
+ * rows, never text). A group holding text alone reads the same either way, and is the text.
  */
 export function isWholeValue(
   value: unknown,
@@ -634,7 +635,28 @@ export function isWholeValue(
   if (shape.kind === "repeater") return Array.isArray(parsed);
   if (!isPlainRecord(parsed)) return false;
   const text = new Set([...shape.texts, ...Object.keys(shape.inner)]);
-  return Object.keys(parsed).some(key => !text.has(key));
+  return Object.keys(parsed).some(
+    key =>
+      !text.has(key) ||
+      (Object.hasOwn(shape.inner, key) &&
+        isWholeValue(parsed[key], shape.inner[key]))
+  );
+}
+
+/**
+ * Whether two structures of a container are the same: both a structure or neither, and the same
+ * rows, ids, order and shared values, a blank value read as an absent one. A structure coming to
+ * be, or going, is a change even when it holds nothing: a group first written with only its text
+ * has an empty structure that text is laid on, which a comparison leaving out blanks reads as none.
+ */
+export function sameStructure(a: unknown, b: unknown): boolean {
+  return holdsStructure(a) === holdsStructure(b) && sameShare(a, b);
+}
+
+/** Whether `value` is a structure at all, a group's object or a repeater's rows, read as stored. */
+function holdsStructure(value: unknown): boolean {
+  const read = valueOf(value);
+  return typeof read === "object" && read !== null;
 }
 
 /**
