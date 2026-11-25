@@ -9,6 +9,7 @@
  * - a signal sent to a group whose number another process has been given;
  * - one that came before the process was there, lost;
  * - a process at the terminal told twice of one Ctrl+C;
+ * - a run taken for one nobody stopped, its end read before the signal;
  * - a group of which only zombies are left taken for one that runs.
  *
  * POSIX only: the groups and signals are.
@@ -107,6 +108,35 @@ describe.skipIf(process.platform === "win32")("a process watched", () => {
     expect(another.exitCode ?? another.signalCode).toBeNull();
   }, 20_000);
 
+  it("was stopped where its end is read before the signal that ended it", async () => {
+    const before = process.listeners("SIGTERM");
+    // As a Ctrl+C at a terminal ends it, with the command still to hear of it.
+    const ended = {
+      pid: undefined,
+      exitCode: null,
+      signalCode: "SIGINT",
+      kill: () => false,
+    } as unknown as ChildProcess;
+    const watched = stopWithCommand(ended, { name: "npm", group: false });
+    const signal = newListener(before);
+
+    const asked = watched.ended();
+    setTimeout(() => signal("SIGINT"), 20);
+
+    expect(await asked).toBe(true);
+  });
+
+  it("is not waited for where it ended well", async () => {
+    const before = counts();
+    const ended = { exitCode: 0, signalCode: null } as unknown as ChildProcess;
+    const watched = stopWithCommand(ended, { name: "npm", group: false });
+    const at = Date.now();
+
+    expect(await watched.ended()).toBe(false);
+    expect(Date.now() - at).toBeLessThan(50);
+    expect(counts()).toEqual(before);
+  });
+
   it("is asked to stop at once where the signal came before it was there", async () => {
     const before = process.listeners("SIGTERM");
     const asked = await holdingSignals(async () => {
@@ -130,7 +160,13 @@ describe.skipIf(process.platform === "win32")("a process watched", () => {
         });
         const before = process.listeners("SIGTERM");
         const kill = vi.fn();
-        const child = { pid: 1, kill, exitCode: 0, signalCode: null };
+        const child = {
+          // No number: a fake process must name none that is there.
+          pid: undefined,
+          kill,
+          exitCode: 0,
+          signalCode: null,
+        };
         const watched = stopWithCommand(child as unknown as ChildProcess, {
           name: "npm",
           group: false,

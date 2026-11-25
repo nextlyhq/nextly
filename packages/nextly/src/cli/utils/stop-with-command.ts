@@ -24,8 +24,16 @@ const SAME_SIGNAL_MS = 500;
 const SAY_WAITING_MS = 1000;
 /** How long one that was ended has to be gone, which it normally is at once. */
 const GONE_MS = 2000;
+/**
+ * How long the end of a process that did not end well waits for the signal that
+ * may have ended it: one sent to the whole terminal reaches it and the command
+ * apart, and its end may be read first.
+ */
+const SIGNAL_AFTER_END_MS = 250;
 /** How often a group is asked whether any of it is left. */
 const ASK_AGAIN_MS = 100;
+/** How often the signal of an end read first is looked for. */
+const SIGNAL_POLL_MS = 10;
 
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
@@ -230,6 +238,10 @@ export function stopWithCommand(
 
   return {
     async ended() {
+      if (!group && askedAt === 0 && child.exitCode !== 0) {
+        const until = Date.now() + SIGNAL_AFTER_END_MS;
+        while (askedAt === 0 && Date.now() < until) await pause(SIGNAL_POLL_MS);
+      }
       // A run nobody stopped owes nothing to what it left in its group.
       while (askedAt > 0 && group && groupRemains(child)) {
         if (endedByUs > 0 && Date.now() - endedByUs > GONE_MS) break;
