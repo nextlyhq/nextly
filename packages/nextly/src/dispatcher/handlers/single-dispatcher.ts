@@ -190,6 +190,10 @@ import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import { assertSingleTablesUnowned } from "./single-table-family";
 import {
+  respondKeepCurrent,
+  respondSourceChange,
+} from "./source-review-handlers";
+import {
   assertLabelRequestValid,
   autosaveForDocument,
   discardWorkingDraftForDocument,
@@ -1139,6 +1143,23 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
   publishSingleParts: singlePartsLifecycle("publish", "Published."),
   unpublishSingleParts: singlePartsLifecycle("unpublish", "Unpublished."),
+
+  getSingleSourceChange: {
+    execute: async (_svc, p, _body, request) =>
+      respondSourceChange(
+        { kind: "single", slug: requireParam(p, "slug", "Single slug") },
+        p,
+        request
+      ),
+  },
+  keepSingleTranslation: {
+    execute: async (_svc, p, body, request) =>
+      respondKeepCurrent(
+        { kind: "single", slug: requireParam(p, "slug", "Single slug") },
+        body,
+        request
+      ),
+  },
 
   previewPublishAllSingleLocales: {
     // What publishing every language would do, language by language, without
