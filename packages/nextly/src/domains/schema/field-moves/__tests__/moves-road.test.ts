@@ -75,4 +75,65 @@ describe("refuseMovesOffTheFile", () => {
       )
     );
   });
+
+  // A move that can never be made as it is (a field kept unique, into a group) is told so, where the
+  // road would only say it waits: asked first, and of the moves that travel alone.
+  describe("with a refusal asked first", () => {
+    it("gives the move's own words, at its path", async () => {
+      await expect(
+        refuseMovesOffTheFile({
+          moves,
+          writes: true,
+          pushReason: reason("translated"),
+          refusedFirst: async () => ({
+            path: "meta.title",
+            message: "title cannot be moved into the group meta: it is unique.",
+          }),
+        })
+      ).rejects.toThrow(
+        refusal("title cannot be moved into the group meta: it is unique.")
+      );
+    });
+
+    it("keeps the road's words where it answers none", async () => {
+      await expect(
+        refuseMovesOffTheFile({
+          moves,
+          writes: true,
+          pushReason: reason("translated"),
+          refusedFirst: async () => undefined,
+        })
+      ).rejects.toThrow(
+        refusal("Fields in a translated collection can't be moved yet.")
+      );
+    });
+
+    it("is not asked where the save takes the file, or moves nothing that travels", async () => {
+      const refusedFirst = vi.fn(async () => ({ path: "x", message: "x" }));
+      await refuseMovesOffTheFile({
+        moves,
+        writes: true,
+        pushReason: reason(null),
+        refusedFirst,
+      });
+      await refuseMovesOffTheFile({
+        moves: [{ from: ["title"], to: ["title"] }],
+        writes: false,
+        pushReason: reason("translated"),
+        refusedFirst,
+      });
+      expect(refusedFirst).not.toHaveBeenCalled();
+    });
+
+    it("is asked of the moves that travel alone", async () => {
+      const refusedFirst = vi.fn(async () => undefined);
+      await refuseMovesOffTheFile({
+        moves: [...moves, { from: ["slug"], to: ["slug"] }],
+        writes: true,
+        pushReason: reason("translated"),
+        refusedFirst,
+      }).catch(() => undefined);
+      expect(refusedFirst).toHaveBeenCalledWith(moves);
+    });
+  });
 });
