@@ -19,6 +19,7 @@ import {
 } from "../pipeline/sql-templates/mysql-live-restate";
 
 import { leadingWords, statementTokens } from "./split-sql";
+import { tablesChangedIn } from "./statement-targets";
 
 /** The objects whose creation, change, drop or rename commits MySQL's transaction, by verb. */
 const MYSQL_COMMITTING: Readonly<Record<string, ReadonlySet<string>>> = {
@@ -242,6 +243,77 @@ export function runsAnotherStatementOnMysql(statement: string): boolean {
   return first === "EXECUTE" || first === "CALL";
 }
 
+/** The words before the table of a `CREATE TEMPORARY TABLE`, where its name is quoted. */
+const MAKES_TEMPORARY = new Set([
+  "CREATE TEMPORARY TABLE",
+  "CREATE TEMPORARY TABLE IF NOT EXISTS",
+]);
+
+/** The words before the table of a statement that changes one table's rows, where its name is quoted. */
+const WRITES_ROWS = new Set(["INSERT INTO", "UPDATE", "DELETE FROM"]);
+
+/** The first words of the statements that leave the session's temporary tables under their names. */
+const LEAVES_TEMPORARY_TABLES = new Set([
+  "CREATE",
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "REPLACE",
+  "SELECT",
+  "WITH",
+  "SET",
+  "BEGIN",
+  "START",
+  "COMMIT",
+  "ROLLBACK",
+  "SAVEPOINT",
+  "RELEASE",
+]);
+
+/**
+ * The table a statement whose words before it are one of `forms` names, where it is quoted and in
+ * lower case. No other name is answered: MySQL may tell `Notes` from `notes`, and an unquoted name's
+ * case is not kept here.
+ */
+function quotedTable(
+  statement: string,
+  forms: ReadonlySet<string>
+): string | undefined {
+  // Reading stops at the first quoted name, so the words are the form alone only where the table is
+  // quoted.
+  const form = leadingWords(statement, "mysql", 7).join(" ");
+  return forms.has(form) ? tablesChangedIn(statement, "mysql")?.[0] : undefined;
+}
+
+/**
+ * The temporary tables a unit made that its session still has, told each statement once it ran. Their
+ * rows end with the session, whatever the unit's transaction does, so no later run meets one. A field
+ * move's stops write to one.
+ */
+function temporaryTables() {
+  const made = new Set<string>();
+  return {
+    /** Whether `statement` changes the rows of one of these tables alone. */
+    writtenBy(statement: string): boolean {
+      const table = quotedTable(statement, WRITES_ROWS);
+      return table !== undefined && made.has(table);
+    },
+    ran(statement: string): void {
+      const temporary = quotedTable(statement, MAKES_TEMPORARY);
+      if (temporary !== undefined) made.add(temporary);
+      const first = leadingWords(statement, "mysql", 1)[0] ?? "";
+      if (LEAVES_TEMPORARY_TABLES.has(first)) return;
+      // A drop or a rename gives a name back to a table that lasts; any other statement may hold one.
+      const changed =
+        first === "ALTER" || first === "DROP"
+          ? tablesChangedIn(statement, "mysql")
+          : undefined;
+      if (changed === undefined) made.clear();
+      else for (const table of changed) made.delete(table);
+    },
+  };
+}
+
 /**
  * How many of a unit's statements MySQL made durable by committing implicitly, where rows changed
  * among them: told each statement as it starts and once it ran, it answers `kept`.
@@ -265,8 +337,9 @@ export interface DurableRows {
  * once it ran. A `ROLLBACK` undoes the rows still open. Where the session may be left with no
  * transaction open (`mayLeaveNoTransaction`), a row statement stays applied as it runs, until one is
  * open again. A try resumed at `from` starts past statements an earlier try kept, committed
- * already. Only rows decide it: a unit whose committed statements change no row is judged from its
- * tables, as before, and other dialects keep nothing here.
+ * already. Only rows that last decide it: a unit whose committed statements change none, or only
+ * those of a temporary table it made itself (`temporaryTables`), is judged from its tables, as before,
+ * and other dialects keep nothing here.
  */
 export function durableRowsOf(
   dialect: string,
@@ -282,9 +355,21 @@ export function durableRowsOf(
     };
   }
   const restatements = restatementsRunIn(statements);
-  const changesRowsAt = (statement: string, index: number) =>
-    !restatements.has(index) && mayChangeRowsOnMysql(statement);
-  let kept = statements.slice(0, from).some(changesRowsAt) ? from : undefined;
+  let temporary = temporaryTables();
+  /** Whether `statement`, which ran, may have changed rows that last. */
+  const changedRows = (statement: string, index: number): boolean => {
+    const changed =
+      !restatements.has(index) &&
+      mayChangeRowsOnMysql(statement) &&
+      !temporary.writtenBy(statement);
+    temporary.ran(statement);
+    return changed;
+  };
+  // Every one is read, in order: which tables are temporary at one depends on those before it.
+  const changedBefore = statements.slice(0, from).map(changedRows);
+  let kept = changedBefore.includes(true) ? from : undefined;
+  // A try resumed may run on another connection, which has none of the tables made before it.
+  temporary = temporaryTables();
   // A statement that may have changed rows since the last commit, which the next one makes durable.
   let rowsOpen = false;
   // Whether each statement may commit as it runs, no transaction being open.
@@ -299,7 +384,7 @@ export function durableRowsOf(
       rowsOpen = false;
     },
     ran(statement, index) {
-      const changesRows = changesRowsAt(statement, index);
+      const changesRows = changedRows(statement, index);
       if (mayCommitOnMysql(statement)) {
         // One that changes rows and may commit has made its own durable, whatever came before it.
         if (kept !== undefined || changesRows) kept = index + 1;
