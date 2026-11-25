@@ -125,6 +125,7 @@ import {
 import {
   buildCompanionSchema,
   type CompanionSchema,
+  sharedStructuresIn,
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
@@ -237,7 +238,11 @@ import {
   runSingleStatusMoveBeforeHooks,
   type SingleBeforeHookCall,
 } from "./single-before-update";
-import { recordSingleProvenance } from "./single-provenance";
+import {
+  dropRemovedRowsText,
+  recordSingleProvenance,
+  type SingleProvenanceDeps,
+} from "./single-provenance";
 import {
   checkSingleAccess,
   getSingleHookCollection,
@@ -2693,6 +2698,43 @@ export class SinglePublishAllService extends BaseService {
     return componentSlug => schemas.get(componentSlug);
   }
 
+  /** What the provenance recording of this service's writes needs. */
+  private provenanceDeps(): SingleProvenanceDeps {
+    return {
+      adapter: this.adapter,
+      logger: this.logger,
+      defaultLocale: this.localization?.defaultLocale,
+    };
+  }
+
+  /**
+   * The structures a promoted language's overlays are the text of, by column: each container's
+   * that the pending change put on the main row (`main`), and the live row's for a container the
+   * change held only text of. Read only where an overlay written has no structure in `main`.
+   */
+  private async structuresHeld(
+    tx: TransactionContext,
+    tableName: string,
+    entryId: string,
+    main: Record<string, unknown>,
+    companion: CompanionSchema,
+    companionValues: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const missing = companion.localizedFields.filter(
+      field =>
+        field.sharedStructure !== undefined &&
+        Object.hasOwn(companionValues, field.column) &&
+        !Object.hasOwn(main, field.column)
+    );
+    if (missing.length === 0) return main;
+    const row = await tx.selectOne<Record<string, unknown>>(tableName, {
+      where: this.whereEq("id", entryId),
+    });
+    const structures: Record<string, unknown> = { ...main };
+    for (const { column } of missing) structures[column] = row?.[column];
+    return structures;
+  }
+
   private async promotePendingChanges(
     tx: TransactionContext,
     plan: PublishPlan,
@@ -2741,6 +2783,16 @@ export class SinglePublishAllService extends BaseService {
           this.whereEq("id", existingDoc.id)
         );
       }
+      // A row the promoted structure removed takes its text with it in every
+      // language, as a save's removal does.
+      if (companion) {
+        await dropRemovedRowsText(this.provenanceDeps(), tx, {
+          slug: singleMeta.slug,
+          entryId: existingDoc.id,
+          companion,
+          written: sharedStructuresIn(main, companion.localizedFields),
+        });
+      }
       if (
         companion &&
         draft.locale &&
@@ -2756,24 +2808,26 @@ export class SinglePublishAllService extends BaseService {
           savedBy: plan.actor,
         });
         // The held draft's record of where its values came from goes live
-        // with them.
-        await recordSingleProvenance(
-          {
-            adapter: this.adapter,
-            logger: this.logger,
-            defaultLocale: this.localization?.defaultLocale,
-          },
-          tx,
-          {
-            slug: singleMeta.slug,
-            entryId: existingDoc.id,
-            locale: draft.locale,
-            values: companionValues,
-            localizedFields: companion.localizedFields,
-            savedBy: plan.actor,
-            promotesDraft: true,
-          }
-        );
+        // with them. A container's overlay is recorded with the structure the
+        // row now holds, as the draft's record was: this draft's, or the live
+        // one where the draft changed only its text.
+        await recordSingleProvenance(this.provenanceDeps(), tx, {
+          slug: singleMeta.slug,
+          entryId: existingDoc.id,
+          locale: draft.locale,
+          values: companionValues,
+          structures: await this.structuresHeld(
+            tx,
+            singleMeta.tableName,
+            existingDoc.id,
+            main,
+            companion,
+            companionValues
+          ),
+          localizedFields: companion.localizedFields,
+          savedBy: plan.actor,
+          promotesDraft: true,
+        });
       }
       await this.promoteComponents(
         tx,

@@ -17,9 +17,15 @@ import {
 import type { ProvenanceClaims } from "../../i18n/provenance/provenance-claims";
 import {
   copySourceRevisions,
+  forgetRemovedRowsProvenance,
   recordWrittenValues,
   translationProvenancePresent,
 } from "../../i18n/provenance/record-provenance";
+import {
+  type CompanionSchema,
+  pruneOverlaysOfRemovedRows,
+  type SharedStructureWritten,
+} from "../../i18n/runtime/companion-io";
 import {
   assembleStoredValue,
   type SharedStructureShape,
@@ -81,6 +87,46 @@ export function singleProvenanceRecorded(
     deps.adapter,
     deps.logger,
     transactionTableProbe(deps.adapter, tx)
+  );
+}
+
+/**
+ * The rows `written` removed from a Single's repeater or group structure take their translations
+ * with them, in every language, on `tx`: each language's overlay pruned
+ * (`pruneOverlaysOfRemovedRows`), and every language's record of those rows forgotten. The one way
+ * every write of a Single's live structure drops a removed row's text: a save, a field rewrite and
+ * a publish of every language alike.
+ */
+export async function dropRemovedRowsText(
+  deps: Pick<SingleProvenanceDeps, "adapter" | "logger">,
+  tx: TransactionContext,
+  args: {
+    slug: string;
+    entryId: string;
+    companion: Pick<CompanionSchema, "table" | "companionTableName">;
+    written: SharedStructureWritten[];
+  }
+): Promise<void> {
+  await pruneOverlaysOfRemovedRows(tx, deps.adapter.dialect, {
+    companionTable: args.companion.table,
+    companionTableName: args.companion.companionTableName,
+    parentId: args.entryId,
+    written: args.written,
+  });
+  if (
+    args.written.length === 0 ||
+    !(await singleProvenanceRecorded(deps, tx))
+  ) {
+    return;
+  }
+  await forgetRemovedRowsProvenance(
+    tx,
+    { scopeKind: "single", scopeSlug: args.slug, entryId: args.entryId },
+    args.written.map(entry => ({
+      field: entry.field,
+      structure: entry.structure,
+      kind: entry.shape.kind,
+    }))
   );
 }
 

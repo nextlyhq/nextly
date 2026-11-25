@@ -197,10 +197,7 @@ import {
   provenanceClaimsOf,
   type ProvenanceClaims,
 } from "../../i18n/provenance/provenance-claims";
-import {
-  discardDraftProvenance,
-  forgetRemovedRowsProvenance,
-} from "../../i18n/provenance/record-provenance";
+import { discardDraftProvenance } from "../../i18n/provenance/record-provenance";
 import {
   configuredLocale,
   isValidLocale,
@@ -209,7 +206,6 @@ import {
 import {
   buildCompanionSchema,
   type CompanionSchema,
-  pruneOverlaysOfRemovedRows,
   type SharedStructureWritten,
   sharedStructuresIn,
   splitLocalizedWrite,
@@ -397,6 +393,7 @@ import {
 import { readSingleForCreation } from "./single-first-row";
 import type { SingleMediaUsageDeps } from "./single-media-usage";
 import {
+  dropRemovedRowsText,
   recordSingleProvenance,
   singleProvenanceRecorded,
   type SingleProvenanceDeps,
@@ -5468,13 +5465,12 @@ export class SingleMutationService extends BaseService {
             // By the refs the write was split by, a component placed in a
             // container read with its fields, so a removed instance's text
             // goes too.
-            await this.dropRemovedRowsText(
-              tx,
+            await dropRemovedRowsText(this.provenanceDeps, tx, {
               slug,
-              existingDoc.id,
+              entryId: existingDoc.id,
               companion,
-              sharedStructuresIn(mainPayload, shapedRefs)
-            );
+              written: sharedStructuresIn(mainPayload, shapedRefs),
+            });
           }
 
           // {@link EVERY_LOCALE}: carry the lifecycle to the languages the
@@ -7637,44 +7633,6 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
-   * The rows `written` removed from a repeater's or group's one structure
-   * take their translations with them, in every language, on `tx`: each
-   * language's overlay pruned (`pruneOverlaysOfRemovedRows`), and every
-   * language's record of those rows forgotten. The one way every write of a
-   * Single's live structure drops a removed row's text: a save, a field
-   * rewrite and a publish of every language alike.
-   */
-  private async dropRemovedRowsText(
-    tx: TransactionContext,
-    slug: string,
-    entryId: string,
-    companion: Pick<CompanionSchema, "table" | "companionTableName">,
-    written: SharedStructureWritten[]
-  ): Promise<void> {
-    await pruneOverlaysOfRemovedRows(tx, this.adapter.dialect, {
-      companionTable: companion.table,
-      companionTableName: companion.companionTableName,
-      parentId: entryId,
-      written,
-    });
-    if (
-      written.length === 0 ||
-      !(await singleProvenanceRecorded(this.provenanceDeps, tx))
-    ) {
-      return;
-    }
-    await forgetRemovedRowsProvenance(
-      tx,
-      { scopeKind: "single", scopeSlug: slug, entryId },
-      written.map(entry => ({
-        field: entry.field,
-        structure: entry.structure,
-        kind: entry.shape.kind,
-      }))
-    );
-  }
-
-  /**
    * Write a copy's new value to the live Single: its row, or its language's
    * row of the translations table for a translated field, shaped as a save
    * shapes it, with the counters a save of that value moves moved once.
@@ -7766,19 +7724,21 @@ export class SingleMutationService extends BaseService {
     });
     // A row the rewrite removed takes its text with it in every language, as
     // a save's removal does.
-    await this.dropRemovedRowsText(
-      tx,
-      singleMeta.slug,
+    await dropRemovedRowsText(this.provenanceDeps, tx, {
+      slug: singleMeta.slug,
       entryId,
       companion,
-      sharedStructures
-    );
+      written: sharedStructures,
+    });
     // Where the rewritten value came from, as any live write records it.
     await recordSingleProvenance(this.provenanceDeps, tx, {
       slug: singleMeta.slug,
       entryId,
       locale: translatedIn,
       values: translation,
+      // A container's overlay is recorded with the structure the rewrite put
+      // on the main row, as a save records it.
+      structures: main,
       localizedFields: companion.localizedFields,
       languagesTable: companion.companionTableName,
       savedBy: args.actor,
