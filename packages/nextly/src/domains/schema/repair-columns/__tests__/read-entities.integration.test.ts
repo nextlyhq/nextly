@@ -232,9 +232,84 @@ describe.each(getConfiguredTestDialects())(
       rmSync(join(migrationsDir, "0002_second.sql"));
       expect(await stopped()).toEqual({
         code: "MISSING_MIGRATION",
-        what: "The snapshot `0002_second.snapshot.json` exists but `0002_second.sql` does not.",
+        what: "The snapshot `0002_second.snapshot.json` exists but no migration file of `0002_second` does.",
         why: "The migration is applied, and a snapshot is read only with its migration file beside it, so what the database last had applied cannot be known.",
-        next: "Restore the .sql file from version control, then run `nextly repair-columns` again.",
+        next: "Restore the migration's .sql file from version control, then run `nextly repair-columns` again.",
+      });
+    });
+
+    it("names the migration, not a file it never had, where it was a dialect's variant alone", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
+      // Its only file was this one; the base file never existed.
+      rmSync(join(migrationsDir, "0002_second.sql"));
+      writeFileSync(join(migrationsDir, `0002_second.${dialect}.sql`), "");
+      expect((await posts())?.applied?.source).toBe("snapshot");
+      rmSync(join(migrationsDir, `0002_second.${dialect}.sql`));
+      const { code, what, next } = await stopped();
+      expect(code).toBe("MISSING_MIGRATION");
+      expect(`${what} ${next}`).toContain("`0002_second`");
+      expect(`${what} ${next}`).not.toContain("0002_second.sql");
+    });
+
+    /** Record a migration's file removed on purpose, as `migrate:resolve --removed` does. */
+    async function removedOnPurpose(name: string) {
+      rmSync(join(migrationsDir, `${name}.sql`));
+      // A removal counts for the outcome recorded before it, to the millisecond (SQLite: second).
+      await new Promise(done => setTimeout(done, 1100));
+      const events = new SchemaEventsRepository(
+        adapter().getDrizzle(),
+        dialect
+      );
+      await events.recordRemoval({
+        filename: `${name}.sql`,
+        sha256: "a".repeat(64),
+      });
+    }
+
+    it("reads the snapshot of an applied migration whose file was removed on purpose", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
+      await removedOnPurpose("0002_second");
+      const entity = await posts();
+      expect(entity?.applied?.source).toBe("snapshot");
+      expect(entity?.applied?.fields.map(f => f.name)).toEqual(["summary"]);
+    });
+
+    it("goes on past a removed migration older than the newest, which it keeps reading", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
+      await removedOnPurpose("0001_first");
+      expect((await posts())?.applied?.fields.map(f => f.name)).toEqual([
+        "summary",
+      ]);
+    });
+
+    it("stops where a removed migration was applied again and its file is gone once more", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
+      await removedOnPurpose("0002_second");
+      // The removal is about the outcome it followed, not the one after it.
+      await new Promise(done => setTimeout(done, 1100));
+      const events = new SchemaEventsRepository(
+        adapter().getDrizzle(),
+        dialect
+      );
+      for (const row of await events.findFileApplies("0002_second.sql")) {
+        await events.markRolledBack(row.id);
+      }
+      await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
+      rmSync(join(migrationsDir, "0002_second.sql"));
+      expect((await stopped()).code).toBe("MISSING_MIGRATION");
+    });
+
+    it("stops on a removed migration's snapshot that cannot be parsed, naming the snapshot", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_broken", null, true, "{ not json");
+      await removedOnPurpose("0002_broken");
+      expect(await stopped()).toMatchObject({
+        code: "INVALID_SNAPSHOT",
+        what: "The snapshot file `meta/0002_broken.snapshot.json` is invalid.",
       });
     });
 

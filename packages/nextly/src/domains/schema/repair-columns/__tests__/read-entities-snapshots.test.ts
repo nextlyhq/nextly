@@ -17,15 +17,25 @@ const disk = vi.hoisted(() => ({
   refused: new Set<string>(),
   /** Refused once, then allowed. */
   refusedOnce: new Set<string>(),
+  /** The system's code for a refusal; `EACCES` unless a case says another. */
+  code: "EACCES",
 }));
 
-/** As Node refuses a path the user may not read. */
+const MESSAGES: Record<string, string> = {
+  EACCES: "permission denied",
+  ENOENT: "no such file or directory",
+  EIO: "i/o error",
+};
+
+/** As Node refuses a path, with the code in force. */
 function refuse(call: string, path: unknown): void {
   const once = disk.refusedOnce.delete(String(path));
   if (!once && !disk.refused.has(String(path))) return;
   throw Object.assign(
-    new Error(`EACCES: permission denied, ${call} '${String(path)}'`),
-    { code: "EACCES", path: String(path) }
+    new Error(
+      `${disk.code}: ${MESSAGES[disk.code]}, ${call} '${String(path)}'`
+    ),
+    { code: disk.code, path: String(path) }
   );
 }
 
@@ -46,6 +56,9 @@ vi.mock("node:fs/promises", async importOriginal => {
 
 vi.mock("../../events/schema-events-repository", () => ({
   SchemaEventsRepository: class {
+    listFileRemovals() {
+      return Promise.resolve([]);
+    }
     listFileApplies() {
       return Promise.resolve([]);
     }
@@ -66,10 +79,14 @@ describe("readRepairEntities: snapshots the disk does not give", () => {
     writeFileSync(join(dir, "meta", "0001_first.snapshot.json"), "{}");
     writeFileSync(join(dir, "0001_first.sql"), "");
     disk.refused.clear();
+    disk.refusedOnce.clear();
+    disk.code = "EACCES";
   });
 
   afterEach(() => {
     disk.refused.clear();
+    disk.refusedOnce.clear();
+    disk.code = "EACCES";
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -145,6 +162,27 @@ describe("readRepairEntities: snapshots the disk does not give", () => {
       what: "The migration snapshot `meta/0001_first.snapshot.json` could not be read.",
       why: `EACCES: permission denied, open '${file}'`,
       next: "Make the file readable by the user running the command, then run `nextly repair-columns` again.",
+    });
+  });
+
+  it("says to restore a snapshot that is gone by the time it is read", async () => {
+    disk.code = "ENOENT";
+    disk.refused.add(join(dir, "meta", "0001_first.snapshot.json"));
+    expect(await stopped()).toEqual({
+      code: "MIGRATION_SNAPSHOTS_UNREADABLE",
+      what: "The migration snapshot `meta/0001_first.snapshot.json` could not be read.",
+      why: "It was there when the command listed the folder, and gone when it was read.",
+      next: "Restore the snapshot from version control, then run `nextly repair-columns` again.",
+    });
+  });
+
+  it("keeps the permission remedy for a permission the system refused", async () => {
+    disk.code = "EIO";
+    const file = join(dir, "meta", "0001_first.snapshot.json");
+    disk.refused.add(file);
+    expect(await stopped()).toMatchObject({
+      why: `EIO: i/o error, open '${file}'`,
+      next: "Put right what that error names, then run `nextly repair-columns` again.",
     });
   });
 });

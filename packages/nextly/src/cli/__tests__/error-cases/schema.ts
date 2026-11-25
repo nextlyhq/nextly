@@ -47,7 +47,7 @@ export const SCHEMA_CASES = {
         kind: "collection",
         slug: "posts",
         registryTable: "dynamic_collections",
-        locked: false,
+        codeOwned: false,
       },
     ]),
   // As `nextly repair-columns` stops on a field group the admin may repair.
@@ -57,7 +57,7 @@ export const SCHEMA_CASES = {
         kind: "fieldGroup",
         slug: "card",
         registryTable: "dynamic_components",
-        locked: false,
+        codeOwned: false,
       },
     ]),
   // A Single created again after its first attempt was removed, whose field-group rows still name

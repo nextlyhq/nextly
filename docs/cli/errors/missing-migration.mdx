@@ -7,7 +7,7 @@ description: "A snapshot file in `meta/` has no migration file beside it."
 
 A snapshot file in `meta/` has no migration file beside it.
 
-Each snapshot in `meta/` is written beside the migration it describes. This one's migration file is not there: it was deleted, or never committed. `nextly repair-columns` stops where that migration has been applied, as its snapshot records what the database last had applied.
+Each snapshot in `meta/` is written beside the migration it describes. This one's migration file is not there: it was deleted, or never committed. `nextly repair-columns` stops where that migration has been applied, as its snapshot records what the database last had applied. It goes on where `nextly migrate:resolve --removed` records that the file was removed on purpose.
 
 ## Fix
 

@@ -221,8 +221,8 @@ describe("repair-columns names what stopped it, without --verbose", () => {
     await applied("0001_lost", "{}");
     rmSync(join(root, "0001_lost.sql"));
     await expectStop("MISSING_MIGRATION", [
-      "`0001_lost.sql` does not",
-      "Restore the .sql file from version control",
+      "no migration file of `0001_lost` does",
+      "Restore the migration's .sql file from version control",
     ]);
   });
 });

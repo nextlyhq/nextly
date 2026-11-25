@@ -17,7 +17,6 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type { NextlyError } from "../../../errors";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 import type { Logger } from "../../../shared/types";
@@ -27,6 +26,7 @@ import { FieldGroupRegistryService } from "../../field-groups/services/field-gro
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { UserExtSchemaService } from "../../users/services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../users/services/user-field-definition-service";
+import { removedOnPurpose } from "../events/migration-state";
 import { appliedFilenames } from "../events/newest-event";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
@@ -44,6 +44,7 @@ import {
   type RecordedEntitySettings,
 } from "../migrate-create/entity-settings";
 import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
+import { isCodeOwned } from "../pipeline/registered-collections";
 import { readUiSchema } from "../ui-schema/loader";
 
 import {
@@ -343,7 +344,12 @@ async function registryRows(
     const row = raw as RawRow;
     const { slug, tableName } = row;
     if (typeof slug !== "string") continue;
-    const stopping = { kind, slug, registryTable, locked: row.locked === true };
+    const stopping = {
+      kind,
+      slug,
+      registryTable,
+      codeOwned: isCodeOwned({ locked: row.locked, source: row.source }),
+    };
     if (typeof tableName !== "string" || tableName === "") {
       reading.withoutTable.push(stopping);
     } else if (row.migrationStatus === DIVERGED_STATUS) {
@@ -493,36 +499,72 @@ async function snapshotsWithMigration(metaDir: string): Promise<string[]> {
   }
 }
 
-/**
- * Why `loadSnapshots` left out an applied migration's snapshot: it cannot be opened, its migration
- * file is gone, or it does not hold JSON. Asked only once the run is stopping, and opened first, so
- * a snapshot removed meanwhile is not said to be there.
- */
-async function unreadSnapshotError(
-  metaDir: string,
-  file: string
-): Promise<NextlyError> {
-  let content: string;
+/** A snapshot file's text; one that cannot be opened stops the run. */
+async function snapshotText(metaDir: string, file: string): Promise<string> {
   try {
-    content = await readFile(resolve(metaDir, file), "utf-8");
+    return await readFile(resolve(metaDir, file), "utf-8");
   } catch (error) {
-    return snapshotFileUnreadableError(file, error);
+    throw snapshotFileUnreadableError(file, error);
   }
-  const recorded = await snapshotsWithMigration(metaDir);
-  if (!recorded.includes(file)) {
-    return appliedMigrationFileMissingError(file, ledgerNameOfSnapshot(file));
-  }
+}
+
+/** A snapshot file's text as JSON; text that is not stops the run. */
+function parsedSnapshot(
+  file: string,
+  text: string
+): LoadedSnapshot["snapshot"] {
   try {
-    JSON.parse(content);
+    return JSON.parse(text) as LoadedSnapshot["snapshot"];
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return appliedSnapshotInvalidError(
+    throw appliedSnapshotInvalidError(
       file,
       `JSON parse failed: ${detail}.`,
       error
     );
   }
-  return snapshotReadFailedOnceError(file);
+}
+
+/**
+ * The snapshots of `removed`, the applied migrations whose file `migrate:resolve --removed` records
+ * as removed on purpose. `loadSnapshots` leaves them out, as it reads a snapshot only with its
+ * migration file beside it, and each is still what its migration left in the database.
+ */
+async function removedSnapshots(
+  metaDir: string,
+  files: readonly string[],
+  removed: ReadonlySet<string>
+): Promise<LoadedSnapshot[]> {
+  return Promise.all(
+    files
+      .filter(file => removed.has(ledgerNameOfSnapshot(file)))
+      .map(async file => ({
+        file,
+        snapshot: parsedSnapshot(file, await snapshotText(metaDir, file)),
+        applied: true,
+      }))
+  );
+}
+
+/**
+ * Stop over an applied migration's snapshot `loadSnapshots` left out: it cannot be opened, its
+ * migration file is gone, or it does not hold JSON. It is opened first, so a snapshot removed
+ * meanwhile is not said to be there.
+ */
+async function refuseUnreadSnapshot(
+  metaDir: string,
+  file: string
+): Promise<never> {
+  const text = await snapshotText(metaDir, file);
+  const recorded = await snapshotsWithMigration(metaDir);
+  if (!recorded.includes(file)) {
+    throw appliedMigrationFileMissingError(
+      file,
+      file.replace(/\.snapshot\.json$/, "")
+    );
+  }
+  parsedSnapshot(file, text);
+  throw snapshotReadFailedOnceError(file);
 }
 
 /**
@@ -540,7 +582,7 @@ async function assertAppliedSnapshotsRead(
   const unread = listed.find(
     file => !read.has(file) && applied.has(ledgerNameOfSnapshot(file))
   );
-  if (unread !== undefined) throw await unreadSnapshotError(metaDir, unread);
+  if (unread !== undefined) await refuseUnreadSnapshot(metaDir, unread);
 }
 
 /**
@@ -593,15 +635,23 @@ async function snapshotEntities(
   const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
   // The ledger read once for every snapshot. A file is applied where its newest event is, which is
   // what `isFileApplied` asks of each file in turn.
-  const applied = appliedFilenames(await events.listFileApplies());
+  const rows = await events.listFileApplies();
+  const applied = appliedFilenames(rows);
+  const removed = removedOnPurpose(rows, await events.listFileRemovals());
   const metaDir = resolve(migrationsDir, "meta");
-  const [listed, loaded] = await Promise.all([
+  const [listed, withFile] = await Promise.all([
     snapshotFiles(metaDir),
     loadSnapshots({
       migrationsDir,
       isApplied: file => Promise.resolve(applied.has(file)),
     }),
   ]);
+  const read = new Set(withFile.map(snapshot => snapshot.file));
+  const unread = listed.filter(file => !read.has(file));
+  const loaded = [
+    ...withFile,
+    ...(await removedSnapshots(metaDir, unread, removed)),
+  ].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
   await assertAppliedSnapshotsRead(metaDir, listed, loaded, applied);
   const newest = newestAppliedRecord(loaded);
   return newest === undefined

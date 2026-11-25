@@ -12,7 +12,7 @@ A schema change altered the entity's tables, and recording it failed, so the row
 ## Fix
 
 - For a field group made in the Schema Builder: in development, open **Field Groups** in the admin and choose **Repair definition** on it. The Schema Builder's pages are not shown in production, or where `admin.branding.showBuilder` is `false`.
-- For a field group your configuration declares: in development, run `nextly db:sync` or start the app. Either repairs the row. `nextly migrate` and a production start do not.
+- For a field group your configuration or a plugin declares: in development, run `nextly db:sync` or start the app. Either repairs the row. `nextly migrate` and a production start do not.
 - For a collection or a Single, which Nextly does not mark this way: make the stored definition match its tables and set the row's `migration_status` to `synced`.
 
 Then run `nextly repair-columns` again.

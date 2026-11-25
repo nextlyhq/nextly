@@ -27,8 +27,8 @@ export interface StoppingRow {
   slug: string;
   /** The registry table the row is in. */
   registryTable: string;
-  /** Whether the row belongs to code, so the admin refuses to change it. */
-  locked: boolean;
+  /** Whether code owns the entity (`isCodeOwned`), so the code sync repairs its row. */
+  codeOwned: boolean;
 }
 
 const RUN_AGAIN = "then run `nextly repair-columns` again.";
@@ -65,8 +65,8 @@ function namedRows(rows: readonly StoppingRow[]): string {
 }
 
 /**
- * The error of one refusal: its parts for the CLI, and together as the log's line. Built as
- * `NextlyError.configuration` builds one, with the failure under it, which `--verbose` shows.
+ * The error of one refusal: its parts for the CLI, and together as the log's line, with the failure
+ * under it, which `--verbose` shows.
  */
 function stopError(
   reason: string,
@@ -74,9 +74,7 @@ function stopError(
   context: Record<string, unknown>,
   cause?: unknown
 ): NextlyError {
-  return new NextlyError({
-    code: "CONFIGURATION_ERROR",
-    publicMessage: "Server configuration error.",
+  return NextlyError.configuration({
     logMessage: `${parts.what} ${parts.why} ${parts.next}`,
     logContext: { ...context, reason, parts },
     ...(cause instanceof Error ? { cause } : {}),
@@ -108,15 +106,15 @@ export function rowsWithoutTableError(
 
 /**
  * What clears a diverged row's mark. A field group the admin owns has the admin's repair, on the
- * Schema Builder's pages, which production does not show. The server refuses it for one locked to
- * code; there the code-first sync makes the repair, and only a development start and
+ * Schema Builder's pages, which production does not show. For one code owns, the code-first sync
+ * makes the repair, as the admin's would be refused or overwritten; only a development start and
  * `nextly db:sync` run it (`nextly migrate` and a production start leave the mark). Nextly marks no
  * collection or Single, so neither has a repair.
  */
 function divergedNext(rows: readonly StoppingRow[]): string {
   const groups = rows.filter(row => row.kind === "fieldGroup");
-  const own = groups.filter(row => !row.locked);
-  const locked = groups.filter(row => row.locked);
+  const own = groups.filter(row => !row.codeOwned);
+  const fromCode = groups.filter(row => row.codeOwned);
   const others = rows.filter(row => row.kind !== "fieldGroup");
   const steps = [
     ...(own.length > 0
@@ -124,9 +122,9 @@ function divergedNext(rows: readonly StoppingRow[]): string {
           `In development, open Field Groups in the admin and choose "Repair definition" on ${slugs(own)}.`,
         ]
       : []),
-    ...(locked.length > 0
+    ...(fromCode.length > 0
       ? [
-          `In development, run \`nextly db:sync\` or start the app, which repairs ${slugs(locked)} where the configuration declares ${locked.length === 1 ? "it" : "them"}.`,
+          `In development, run \`nextly db:sync\` or start the app, which repairs ${slugs(fromCode)} where the configuration declares ${fromCode.length === 1 ? "it" : "them"}.`,
         ]
       : []),
     ...(others.length > 0
@@ -174,25 +172,38 @@ export function appliedSnapshotInvalidError(
   );
 }
 
-/** An applied migration's snapshot whose migration file (`sqlFile`) is not in the folder. */
+/**
+ * An applied migration's snapshot with no migration file beside it. Named by the migration, since
+ * its file may have been a dialect's variant alone.
+ */
 export function appliedMigrationFileMissingError(
   file: string,
-  sqlFile: string
+  migration: string
 ): NextlyError {
   return stopError(
     APPLIED_MIGRATION_FILE_MISSING_REASON,
     {
-      what: `The snapshot \`${file}\` exists but \`${sqlFile}\` does not.`,
+      what: `The snapshot \`${file}\` exists but no migration file of \`${migration}\` does.`,
       why: `The migration is applied, and a snapshot is read only with its migration file beside it, ${UNKNOWN_APPLIED}`,
-      next: `Restore the .sql file from version control, ${RUN_AGAIN}`,
+      next: `Restore the migration's .sql file from version control, ${RUN_AGAIN}`,
     },
-    { file, sqlFile }
+    { file, migration }
   );
 }
 
 /** The system's own words for a read that failed. */
 const readFailure = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
+
+/** Whether the system refused a read for want of permission. */
+const isPermission = (cause: unknown) =>
+  ["EACCES", "EPERM"].includes(String((cause as { code?: unknown })?.code));
+
+/** What to do about a read of `thing` that failed: a permission is granted, anything else put right. */
+const readRemedy = (thing: string, cause: unknown) =>
+  isPermission(cause)
+    ? `Make ${thing} readable by the user running the command, ${RUN_AGAIN}`
+    : `Put right what that error names, ${RUN_AGAIN}`;
 
 /**
  * The snapshots folder cannot be read, or (`folder`) the migrations folder that says which of its
@@ -209,24 +220,29 @@ export function snapshotFolderUnreadableError(
     {
       what: `The migration snapshots in \`${metaDir}\` could not be read.`,
       why: readFailure(cause),
-      next: `Make ${named} readable by the user running the command, ${RUN_AGAIN}`,
+      next: readRemedy(named, cause),
     },
     { metaDir, folder },
     cause
   );
 }
 
-/** An applied migration's snapshot is there and cannot be opened. */
+/** An applied migration's snapshot that was listed and cannot be opened, or is gone since. */
 export function snapshotFileUnreadableError(
   file: string,
   cause: unknown
 ): NextlyError {
+  const gone = (cause as { code?: unknown })?.code === "ENOENT";
   return stopError(
     MIGRATION_SNAPSHOTS_UNREADABLE_REASON,
     {
       what: `The migration snapshot \`meta/${file}\` could not be read.`,
-      why: readFailure(cause),
-      next: `Make the file readable by the user running the command, ${RUN_AGAIN}`,
+      why: gone
+        ? "It was there when the command listed the folder, and gone when it was read."
+        : readFailure(cause),
+      next: gone
+        ? `Restore the snapshot from version control, ${RUN_AGAIN}`
+        : readRemedy("the file", cause),
     },
     { file },
     cause
