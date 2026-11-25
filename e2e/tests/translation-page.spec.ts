@@ -1,12 +1,14 @@
 /**
  * A document is translated on a page of its own: each translatable field's
  * published source beside the value being written, saved to that language
- * alone; a field with no published source written as original content; and the
- * editor's old language addresses moved on to it.
+ * alone; a field with no published source written as original content; that
+ * language published and taken offline by itself; and the editor's old language
+ * addresses moved on to it.
  *
  * Runs on the playground's authors, whose Biography and Role / Title are kept
  * per language and whose other fields are shared, on a site of English (the
- * default), Spanish and Arabic (written right to left).
+ * default), Spanish and Arabic (written right to left); and, for the text inside
+ * rows, on the translator notes, whose slides have one caption per language.
  *
  * @module tests/translation-page
  */
@@ -128,6 +130,22 @@ function fieldNamed(page: Page, name: string) {
 const saveButton = (page: Page) =>
   page.locator('[data-slot="translation-save"]');
 
+/** The main button's arrow, which holds what is done less often. */
+const arrow = (page: Page) =>
+  page.getByRole("button", { name: "More actions for Spanish" });
+
+/** The way to the document's editor, under the arrow. */
+async function openInEditor(page: Page): Promise<void> {
+  await arrow(page).click();
+  await page.getByRole("menuitem", { name: "Open in editor" }).click();
+}
+
+/** Presses Take offline, under the arrow. */
+async function pressOffline(page: Page): Promise<void> {
+  await arrow(page).click();
+  await page.getByRole("menuitem", { name: "Take offline…" }).click();
+}
+
 /** The editor's own save. */
 const editorSave = (page: Page) => page.locator('[data-primary="true"]');
 
@@ -175,16 +193,17 @@ test.describe("writing a translation", () => {
     await expect(
       page.getByRole("heading", { level: 1, name: title })
     ).toBeVisible();
+    await expect(page.locator('[data-slot="translation-strip"]')).toHaveText(
+      "Translating from English into Spanish"
+    );
     await expect(
-      page.locator('[data-slot="page-header-description"]')
-    ).toHaveText("Spanish translation");
+      page.locator('[data-slot="translation-card-head"]')
+    ).toHaveText("English (source)Spanish");
 
     const biography = fieldNamed(page, "Biography");
-    await expect(biography.source).toContainText("English");
     await expect(biography.sourceValue).toHaveText(ENGLISH_BIOGRAPHY);
     await expect(biography.sourceValue).toHaveAttribute("lang", "en");
     await expect(biography.sourceValue).toHaveAttribute("dir", "ltr");
-    await expect(biography.target).toContainText("Spanish");
     await expect(biography.input).toHaveAttribute("lang", "es");
     await expect(biography.input).toHaveAttribute("dir", "ltr");
     // Nobody wrote the Spanish, so it is empty rather than the English.
@@ -197,7 +216,7 @@ test.describe("writing a translation", () => {
       shared.getByText("Article Count", { exact: true })
     ).toBeVisible();
     await expect(
-      shared.getByRole("link", { name: "the editor" })
+      shared.getByRole("link", { name: "Edited in the document" })
     ).toHaveAttribute("href", `/admin/collections/authors/${id}`);
     const main = page.locator("main");
     await expect(
@@ -205,7 +224,7 @@ test.describe("writing a translation", () => {
     ).toHaveCount(0);
     await expect(main.getByRole("spinbutton")).toHaveCount(0);
 
-    await expect(saveButton(page)).toHaveText("Save Spanish");
+    await expect(saveButton(page)).toHaveText("Save draft");
     await expect(saveButton(page)).toBeDisabled();
     await biography.input.fill(SPANISH_BIOGRAPHY);
     const sent = await save(page, id, "Spanish");
@@ -257,7 +276,7 @@ test.describe("writing a translation", () => {
       biography.target.locator("label").filter({ hasText: "Biography" })
     ).toHaveCSS("direction", "ltr");
     await expect(biography.sourceValue).toHaveCSS("direction", "ltr");
-    await expect(saveButton(page)).toHaveText("Save Arabic");
+    await expect(saveButton(page)).toHaveText("Save draft");
   });
 
   test("a source written right to left is shown in its direction, and another can be chosen", async ({
@@ -333,6 +352,307 @@ test.describe("writing a translation", () => {
   });
 });
 
+test.describe("text inside rows", () => {
+  ownSeat(4);
+
+  const NOTES = "/admin/api/collections/translator-notes/entries";
+  const notePath = (id: string) =>
+    `/translations/collections/translator-notes/${id}?locale=ar`;
+
+  interface Slide {
+    id?: string;
+    caption?: string | null;
+    position?: number;
+  }
+
+  /** A note with two slides, in English. */
+  async function createNote(page: Page): Promise<string> {
+    return createEntry(page.request, "translator-notes", {
+      title: `Translated note ${uniqueTag()}`,
+      slides: [
+        { caption: "First slide", position: 1 },
+        { caption: "Second slide", position: 2 },
+      ],
+    });
+  }
+
+  async function slidesIn(
+    page: Page,
+    id: string,
+    language: string
+  ): Promise<Slide[]> {
+    const read = await page.request.get(
+      `${NOTES}/${id}?locale=${language}&fallback-locale=none`
+    );
+    await expectOk(read, `reading the note in ${language}`);
+    return ((await read.json()) as { slides: Slide[] }).slides;
+  }
+
+  const captionOf = (page: Page, slide: number) => {
+    const row = page.getByRole("group", {
+      name: `Slides ${slide}, Caption`,
+      exact: true,
+    });
+    return {
+      source: row.locator('[data-slot="translation-source"]').locator("[lang]"),
+      input: row.getByRole("textbox"),
+    };
+  };
+
+  test("a row's text is written beside the same row's source, and nothing around it changes", async ({
+    page,
+  }) => {
+    const id = await createNote(page);
+    const before = await slidesIn(page, id, "en");
+    await gotoAdmin(page, notePath(id));
+
+    const first = captionOf(page, 1);
+    const second = captionOf(page, 2);
+    await expect(first.source).toHaveText("First slide");
+    await expect(second.source).toHaveText("Second slide");
+    await expect(second.input).toHaveAttribute("lang", "ar");
+    await expect(second.input).toHaveAttribute("dir", "rtl");
+    // The rows are the same in every language, so none is added here.
+    await expect(
+      page
+        .getByRole("group", { name: "Slides", exact: true })
+        .getByRole("button")
+    ).toHaveCount(0);
+
+    await second.input.fill("الشريحة الثانية");
+    const saved = page.waitForResponse(
+      response => response.request().method() === "PATCH"
+    );
+    await saveButton(page).click();
+    const response = await saved;
+    expect(response.ok(), await response.text()).toBe(true);
+    const sent = response.request().postDataJSON() as Record<string, unknown>;
+    expect(Object.keys(sent).sort()).toEqual(["_rev", "slides"]);
+
+    const arabic = await slidesIn(page, id, "ar");
+    expect(arabic.map(slide => slide.caption ?? null)).toEqual([
+      null,
+      "الشريحة الثانية",
+    ]);
+    // The ids, the order and the shared values, in both languages.
+    const around = (slides: Slide[]) =>
+      slides.map(({ id: row, position }) => ({ row, position }));
+    expect(around(arabic)).toEqual(around(before));
+    expect(await slidesIn(page, id, "en")).toEqual(before);
+  });
+
+  test("a row moved in English keeps its own translation", async ({ page }) => {
+    const id = await createNote(page);
+    await gotoAdmin(page, notePath(id));
+    await captionOf(page, 2).input.fill("الشريحة الثانية");
+    await saveButton(page).click();
+    await expect(page.getByText("Arabic saved", { exact: true })).toBeVisible();
+
+    const [one, two] = await slidesIn(page, id, "en");
+    await expectOk(
+      await page.request.patch(`${NOTES}/${id}?locale=en`, {
+        data: { slides: [two, one], _overwrite: true },
+      }),
+      "moving a row"
+    );
+    await gotoAdmin(page, notePath(id));
+    await expect(captionOf(page, 1).source).toHaveText("Second slide");
+    await expect(captionOf(page, 1).input).toHaveValue("الشريحة الثانية");
+    await expect(captionOf(page, 2).source).toHaveText("First slide");
+    await expect(captionOf(page, 2).input).toHaveValue("");
+  });
+});
+
+test.describe("publishing a language", () => {
+  ownSeat(5);
+
+  const publishButton = (page: Page) =>
+    page.getByRole("button", { name: "Publish Spanish", exact: true });
+  const dialogOf = (page: Page) =>
+    page.getByRole("dialog", { name: "Publish Spanish?" });
+
+  /** What a visitor is served of an author in Spanish, with nothing in its place. */
+  async function servedInSpanish(
+    page: Page,
+    id: string
+  ): Promise<Record<string, unknown>> {
+    const read = await page.request.get(
+      `${AUTHORS}/${id}?locale=es&fallback-locale=none&status=published`
+    );
+    await expectOk(read, "reading what is published in Spanish");
+    return (await read.json()) as Record<string, unknown>;
+  }
+
+  test("is told first, done to it alone, and says what stayed as it was", async ({
+    page,
+  }) => {
+    const { id } = await createAuthor(page, {
+      bio: ENGLISH_BIOGRAPHY,
+      jobTitle: "Mathematician",
+    });
+    await gotoAdmin(page, translationPath(id, "locale=es"));
+    await fieldNamed(page, "Biography").input.fill(SPANISH_BIOGRAPHY);
+    await publishButton(page).click();
+
+    // What is unsaved is saved first, and nothing is published by that.
+    const dialog = dialogOf(page);
+    await expect(dialog).toContainText(
+      "Spanish readers will see this translation."
+    );
+    // The field nobody wrote in Spanish, and what is shown in its place.
+    await expect(dialog.getByRole("listitem")).toHaveText([
+      "Role / Title: English is shown",
+    ]);
+    expect((await servedInSpanish(page, id)).bio ?? null).toBeNull();
+
+    await dialog
+      .getByRole("button", { name: "Publish Spanish", exact: true })
+      .click();
+    await expect(
+      page.getByText(
+        "Spanish is published. English and the shared fields are unchanged.",
+        { exact: true }
+      )
+    ).toBeVisible();
+    await expect(dialog).toHaveCount(0);
+    expect((await servedInSpanish(page, id)).bio).toBe(SPANISH_BIOGRAPHY);
+    expect((await storedIn(page, id, "en")).bio).toBe(ENGLISH_BIOGRAPHY);
+  });
+
+  test("first of all the languages, takes the shared fields live and says so", async ({
+    page,
+  }) => {
+    const { id } = await createAuthor(page, {
+      bio: ENGLISH_BIOGRAPHY,
+      status: "draft",
+    });
+    await gotoAdmin(page, translationPath(id, "locale=es"));
+    await fieldNamed(page, "Biography").input.fill(SPANISH_BIOGRAPHY);
+    await publishButton(page).click();
+
+    const dialog = dialogOf(page);
+    await expect(dialog).toContainText(
+      "The shared fields aren't published yet. They go live with Spanish."
+    );
+    await dialog
+      .getByRole("button", { name: "Publish Spanish", exact: true })
+      .click();
+    await expect(
+      page.getByText(
+        "Spanish is published, and the shared fields went live with it. English is unchanged.",
+        { exact: true }
+      )
+    ).toBeVisible();
+    expect((await servedInSpanish(page, id)).bio).toBe(SPANISH_BIOGRAPHY);
+  });
+
+  test("is undone by taking it offline, which leaves English published", async ({
+    page,
+  }) => {
+    const { id } = await createAuthor(page, { bio: ENGLISH_BIOGRAPHY });
+    await publishIn(page, id, "es", { bio: SPANISH_BIOGRAPHY });
+    await gotoAdmin(page, translationPath(id, "locale=es"));
+
+    await pressOffline(page);
+    const dialog = page.getByRole("alertdialog", {
+      name: "Take Spanish offline?",
+    });
+    await expect(dialog).toContainText("“not found”");
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    expect((await servedInSpanish(page, id)).bio).toBe(SPANISH_BIOGRAPHY);
+
+    await pressOffline(page);
+    await dialog
+      .getByRole("button", { name: "Take Spanish offline", exact: true })
+      .click();
+    await expect(
+      page.getByText(
+        "Spanish is offline. English and the shared fields are unchanged.",
+        { exact: true }
+      )
+    ).toBeVisible();
+    await expect(dialog).toHaveCount(0);
+    await arrow(page).click();
+    await expect(
+      page.getByRole("menuitem", { name: "Open in editor" })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "Take offline…" })
+    ).toHaveCount(0);
+    expect((await servedInSpanish(page, id)).bio ?? null).toBeNull();
+    // The text is kept, and English is still served.
+    expect((await storedIn(page, id, "es")).bio).toBe(SPANISH_BIOGRAPHY);
+    const english = await page.request.get(
+      `${AUTHORS}/${id}?locale=en&status=published`
+    );
+    await expectOk(english, "reading what is published in English");
+    expect(((await english.json()) as { bio?: string }).bio).toBe(
+      ENGLISH_BIOGRAPHY
+    );
+  });
+
+  for (const theme of ["light", "dark"] satisfies Theme[]) {
+    test(`asks in dialogs that meet the accessibility rules, in the ${theme} theme`, async ({
+      page,
+    }) => {
+      const { id } = await createAuthor(page, {
+        bio: ENGLISH_BIOGRAPHY,
+        jobTitle: "Mathematician",
+      });
+      await publishIn(page, id, "es", { bio: SPANISH_BIOGRAPHY });
+      await gotoAdmin(page, translationPath(id, "locale=es"), theme);
+      await fieldNamed(page, "Biography").input.fill("Otra biografía.");
+      await publishButton(page).click();
+      await expect(dialogOf(page).getByRole("listitem")).toHaveCount(1);
+      await expectNoAxeViolations(page);
+      await dialogOf(page).getByRole("button", { name: "Cancel" }).click();
+
+      await pressOffline(page);
+      await expect(
+        page.getByRole("alertdialog", { name: "Take Spanish offline?" })
+      ).toBeVisible();
+      await expectNoAxeViolations(page);
+    });
+  }
+});
+
+test.describe("leaving with unsaved work", () => {
+  ownSeat(6);
+
+  test("asks first, naming the language, and keeps the words", async ({
+    page,
+  }) => {
+    const { id } = await createAuthor(page, { bio: ENGLISH_BIOGRAPHY });
+    await gotoAdmin(page, translationPath(id, "locale=es"));
+    const { input } = fieldNamed(page, "Biography");
+    await input.fill(SPANISH_BIOGRAPHY);
+
+    await openInEditor(page);
+    const asked = page.getByRole("alertdialog");
+    await expect(asked).toContainText("You have unsaved changes in Spanish");
+    await asked.getByRole("button", { name: "Keep Editing" }).click();
+    await expect(asked).toHaveCount(0);
+    await expect(input).toHaveValue(SPANISH_BIOGRAPHY);
+    await expect(page).toHaveURL(`/admin${translationPath(id, "locale=es")}`);
+
+    await openInEditor(page);
+    await asked.getByRole("button", { name: "Discard Changes" }).click();
+    await expect(page).toHaveURL(`/admin/collections/authors/${id}`);
+    expect((await storedIn(page, id, "es")).bio ?? null).toBeNull();
+  });
+
+  test("asks nothing once the work is saved", async ({ page }) => {
+    const { id } = await createAuthor(page, { bio: ENGLISH_BIOGRAPHY });
+    await gotoAdmin(page, translationPath(id, "locale=es"));
+    await fieldNamed(page, "Biography").input.fill(SPANISH_BIOGRAPHY);
+    await save(page, id, "Spanish");
+
+    await openInEditor(page);
+    await expect(page).toHaveURL(`/admin/collections/authors/${id}`);
+  });
+});
+
 test.describe("an address naming a language on the editor", () => {
   ownSeat(1);
 
@@ -390,7 +710,7 @@ test.describe("an address naming a language on the editor", () => {
       await gotoAdmin(page, `/collections/authors/${id}?${query}`);
 
       await expect(page).toHaveURL(`/admin${translationPath(id, to)}`);
-      await expect(saveButton(page)).toHaveText("Save Spanish");
+      await expect(saveButton(page)).toHaveText("Save draft");
       await expect(fieldNamed(page, "Role / Title").input).toHaveValue("");
     });
   }
@@ -536,8 +856,9 @@ test.describe("using the page", () => {
     // the screen says something about them.
     expect(controls.map(control => control.name)).toEqual(
       expect.arrayContaining([
-        "Open in editor",
-        "Save Spanish",
+        "Save draft",
+        "Publish Spanish",
+        "More actions for Spanish",
         "Source language for Biography",
       ])
     );
