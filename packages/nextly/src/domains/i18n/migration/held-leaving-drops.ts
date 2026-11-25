@@ -72,6 +72,18 @@ export async function applyCompanionTransition(args: {
     await settleLeaving();
     await dropHeldLeavingFields(adapter, plan, args.kind, busyTable);
   }
+  // The source text kept for its translations first: the records' move below may fail, and text
+  // still under the old name would read as a removed field's to the next `nextly migrate`.
+  if (args.kind === "collection" || args.kind === "single") {
+    await settleSourceText(
+      adapter,
+      { scopeKind: args.kind, scopeSlug: args.slug },
+      {
+        renamed: args.renamed,
+        fields: plan.companionDropped ? [] : args.newFields,
+      }
+    );
+  }
   // A renamed translated field keeps its records of where each language's value came from, under
   // its new name. Moved here, once its column has been, rather than among the plan's statements,
   // which a migration file may carry: the records are data, not schema.
@@ -106,16 +118,6 @@ export async function applyCompanionTransition(args: {
       throw failure;
     }
   }
-  if (args.kind === "collection" || args.kind === "single") {
-    await settleSourceText(
-      adapter,
-      { scopeKind: args.kind, scopeSlug: args.slug },
-      {
-        renamed: args.renamed,
-        fields: plan.companionDropped ? [] : args.newFields,
-      }
-    );
-  }
   // The transition record describes a companion that no longer exists, so it stops being true the
   // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale:
   // the check that protects a live transition would block a legitimate one instead.
@@ -139,7 +141,8 @@ export async function applyCompanionTransition(args: {
  * The source text kept for the entity's translations, after its change: a renamed field's moves to
  * its new name, and that of a field removed or no longer translated (`fields`, those left) goes.
  * The change has landed by now, and text left under an old name is found under no field: a failure
- * is logged, not answered, and the next `nextly migrate` removes what stayed.
+ * is logged, not answered, with the statements that finish a rename's move. Until they are run the
+ * text is missing where it is asked for, and the next `nextly migrate` removes what stayed.
  */
 async function settleSourceText(
   adapter: DrizzleAdapter,
@@ -161,12 +164,34 @@ async function settleSourceText(
       await removeFieldSources(adapter, scope, field => !translated.has(field));
     }
   } catch (error) {
-    const [{ getLoggerFromDI }, { consoleLogger }] = await Promise.all([
+    const [
+      { getLoggerFromDI },
+      { consoleLogger },
+      { renameFieldProvenanceStatements },
+      { TRANSLATION_SOURCES_TABLE },
+    ] = await Promise.all([
       import("../../../dispatcher/helpers/di"),
       import("../../../shared/types"),
+      import("../provenance/record-provenance"),
+      import("../../../schemas/translation-sources"),
     ]);
-    (getLoggerFromDI() ?? consoleLogger).warn(
-      `[translations step] The source text kept for ${scope.scopeKind} '${scope.scopeSlug}' was not brought in step with its change: ${error instanceof Error ? error.message : String(error)}`
+    const statements = change.renamed
+      ? renameFieldProvenanceStatements(
+          adapter.getCapabilities().dialect,
+          { ...scope, ...change.renamed },
+          TRANSLATION_SOURCES_TABLE
+        )
+      : [];
+    (getLoggerFromDI() ?? consoleLogger).error(
+      [
+        `[translations step] The source text kept for ${scope.scopeKind} '${scope.scopeSlug}' was not brought in step with its change: ${error instanceof Error ? error.message : String(error)}`,
+        ...(statements.length > 0
+          ? [
+              "Run these before the next `nextly migrate` to keep it:",
+              ...statements,
+            ]
+          : []),
+      ].join("\n")
     );
   }
 }
