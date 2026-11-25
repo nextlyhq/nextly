@@ -3100,7 +3100,10 @@ async function companionRenameDecisions(
 ): Promise<Map<string, CompanionRename[]>> {
   const byTable = new Map<string, CompanionRename[]>();
   for (const { entity, kind } of entities) {
-    if (entity.localized !== true) continue;
+    // Every entity keeping its values per language, a translated one or, under per-language
+    // storage, one that is not (`storesPerLanguage`): its containers keep their text in overlay
+    // columns all the same, and a rename that left one behind would drop every language's text.
+    if (!storesPerLanguage(entity)) continue;
     const previousTable = previous.tables.find(
       t => t.name === entity.tableName
     );
