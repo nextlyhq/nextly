@@ -481,12 +481,16 @@ async function shapeRunningTables(
   const narrowed = narrowedBy.get(key);
   if (narrowed?.shape === shape && narrowed.table === running()) return;
   const gone = new Set(missing);
-  await registerRunningTables(args, {
-    ...registry,
-    fields: registry.fields.filter(
-      field => typeof field.name !== "string" || !gone.has(field.name)
-    ),
-  });
+  await registerRunningTables(
+    args,
+    {
+      ...registry,
+      fields: registry.fields.filter(
+        field => typeof field.name !== "string" || !gone.has(field.name)
+      ),
+    },
+    registry
+  );
   narrowedBy.set(key, { shape, table: running() });
 }
 
@@ -506,10 +510,14 @@ async function restoreRunningTables(args: {
 /**
  * Registers the entity's running tables for `registry` as the shared registration builds them
  * (`registerEntityRuntimeTables`), in the adapter's cache and, for a collection, the reads' own.
+ * Where they are those of `whole` with fields left out, and none of its translated fields is left,
+ * that registration builds no translations table, so one of no field's column is registered here:
+ * the one before it would go on naming columns the table does not hold.
  */
 async function registerRunningTables(
   args: { adapter: DrizzleAdapter; kind: EntryKind; slug: string },
-  registry: RegistryRow
+  registry: RegistryRow,
+  whole?: RegistryRow
 ): Promise<void> {
   // Loaded only where a left save narrows or puts back a shape: never on an ordinary write.
   const [{ registerEntityRuntimeTables }, di] = await Promise.all([
@@ -519,16 +527,52 @@ async function registerRunningTables(
   const schemas = di.getSchemaRegistryFromDI();
   const reads =
     args.kind === "collection" ? di.getCollectionsHandlerFromDI() : undefined;
+  const register = (name: string, table: unknown) => {
+    schemas?.registerDynamicSchema(name, table);
+    reads?.refreshCollectionSchema(name, table);
+  };
+  const dialect = args.adapter.getCapabilities().dialect;
   registerEntityRuntimeTables(
-    {
-      registerDynamicSchema: (name, table) => {
-        schemas?.registerDynamicSchema(name, table);
-        reads?.refreshCollectionSchema(name, table);
-      },
-    },
+    { registerDynamicSchema: register },
     { slug: args.slug, ...registry },
-    args.adapter.getCapabilities().dialect
+    dialect
   );
+  if (whole === undefined || !(await leavesNoTranslation(whole, registry))) {
+    return;
+  }
+  const { generateCompanionRuntimeSchema } = await import(
+    "../services/runtime-schema-generator"
+  );
+  const { publishesPerLanguage } = await import(
+    "../../i18n/per-language-storage"
+  );
+  const translations = `${whole.tableName}_locales`;
+  register(
+    translations,
+    generateCompanionRuntimeSchema(translations, [], dialect, {
+      // Its own columns stay: the status of each language where it has one.
+      status: publishesPerLanguage(whole),
+    }).table
+  );
+}
+
+/** Whether `whole` has a column on its translations table and `narrowed`, less some fields, none. */
+async function leavesNoTranslation(
+  whole: RegistryRow,
+  narrowed: RegistryRow
+): Promise<boolean> {
+  const [{ storesPerLanguage }, { hasTranslationColumn }] = await Promise.all([
+    import("../../i18n/per-language-storage"),
+    import("../../i18n/shared-structure"),
+  ]);
+  if (!storesPerLanguage(whole)) return false;
+  const translates = (row: RegistryRow) =>
+    row.fields.some(
+      field =>
+        typeof field.name === "string" &&
+        hasTranslationColumn({ ...field, name: field.name }, true)
+    );
+  return translates(whole) && !translates(narrowed);
 }
 
 /**

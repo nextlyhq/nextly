@@ -31,13 +31,19 @@ const stubs = vi.hoisted(() => ({
   inFlow: false,
   joined: 0,
   // The entity's running table as the registry of tables holds it, where the case has one.
-  registry: undefined as { getTable: () => unknown } | undefined,
+  registry: undefined as
+    | {
+        getTable: () => unknown;
+        registerDynamicSchema?: (name: string, table: unknown) => void;
+      }
+    | undefined,
   // What the comparison finds: the fields the tables do not hold, and the entity's own columns.
   found: {
     unserved: [] as Array<{ field: string; missing: boolean }>,
     shapeServed: true,
   },
   fields: [] as Array<{ name: string; type: string }>,
+  localized: false,
 }));
 
 vi.mock("../../pipeline/schema-lock", async original => ({
@@ -65,7 +71,7 @@ vi.mock("../../../../di/service-access", () => ({
       tableName: "dc_posts",
       fields: stubs.fields,
       status: false,
-      localized: false,
+      localized: stubs.localized,
     }),
   }),
 }));
@@ -113,6 +119,7 @@ beforeEach(() => {
   stubs.inFlow = false;
   stubs.joined = 0;
   stubs.registry = undefined;
+  stubs.localized = false;
   // The comparison finds `heading`'s column gone, as a committed rename leaves it.
   stubs.found = {
     unserved: [{ field: "heading", missing: true }],
@@ -178,6 +185,42 @@ describe("the left-save guard's comparison and the schema lock", () => {
 
     expect(registered).toHaveLength(2);
     expect(registered[1]![1].fields.map(field => field.name)).toEqual(["note"]);
+  });
+
+  // A translations table is built of translated fields: with none left there is none to build, and
+  // the one registered before it would go on naming the column the tables no longer hold.
+  it("leaves a translations table of no field's column where it leaves out the last translated field", async () => {
+    stubs.localized = true;
+    stubs.fields = [
+      { name: "heading", type: "text" },
+      { name: "rank", type: "number" },
+    ];
+    const registered = new Map<string, unknown>();
+    stubs.registry = {
+      getTable: () => undefined,
+      registerDynamicSchema: (name, table) => void registered.set(name, table),
+    };
+    await expect(write({ rank: 1 })).resolves.toBeUndefined();
+
+    const translations = registered.get("dc_posts_locales");
+    expect(Object.keys(translations ?? {})).toContain("_parent");
+    expect(Object.keys(translations ?? {})).not.toContain("heading");
+  });
+
+  it("registers no translations table of its own where a translated field remains, or none was there", async () => {
+    const registered: string[] = [];
+    stubs.registry = {
+      getTable: () => undefined,
+      registerDynamicSchema: name => void registered.push(name),
+    };
+    // Every field of the collection on its main table.
+    await expect(write({ note: "x" })).resolves.toBeUndefined();
+    // Both translated, one of them left out: the shared registration builds the other's.
+    stubs.localized = true;
+    stubs.record = `${stubs.record}-again`;
+    await expect(write({ note: "x" })).resolves.toBeUndefined();
+
+    expect(registered).toEqual([]);
   });
 
   it("inside a transaction, holds every field where nothing was compared before it opened", async () => {

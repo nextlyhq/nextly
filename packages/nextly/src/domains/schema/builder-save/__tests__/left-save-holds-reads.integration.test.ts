@@ -227,6 +227,90 @@ describe.each(LEFT_SAVE_SUITES)(
       600_000
     );
 
+    // A settings update pushes its change there and writes the registry row last, so its
+    // translations table can have lost a column the row still names. Where that was the only
+    // translated field's, the hold is left with no translated field to build that table of.
+    it.runIf(dialect === "mysql" && perLanguage).each([
+      ["the only translated field", []],
+      ["one translated field of two", [text("lede")]],
+    ])(
+      "refuses a write setting %s a settings update dropped, lets a write of another field through and answers reads",
+      async (_which, kept) => {
+        const t = await boot({ translatable: true });
+        if (kept.length > 0) {
+          await dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: slug },
+            {
+              fields: [text("heading"), field("note"), ...kept],
+              confirmed: true,
+              schemaVersion: await versionOf(t),
+            }
+          );
+        }
+        await killSave(
+          t,
+          point => point === "companion: after",
+          () =>
+            dispatchCollections(
+              {} as ServiceContainer,
+              "updateCollection",
+              { collectionName: slug },
+              { fields: [field("note"), ...kept] }
+            )
+        );
+        expect(await liveColumns(t), `killed at ${killedAt}`).not.toContain(
+          "heading"
+        );
+
+        const [rest, api, restOther, apiOther, restRead, apiRead] =
+          await fromAnotherProcess([
+            {
+              kind: "write",
+              via: "rest",
+              data: { title: "R1", slug: "r1", heading: "x" },
+            },
+            {
+              kind: "write",
+              via: "api",
+              data: { title: "A1", slug: "a1", heading: "x" },
+            },
+            {
+              kind: "write",
+              via: "rest",
+              data: { title: "R2", slug: "r2", note: "only the note" },
+            },
+            {
+              kind: "write",
+              via: "api",
+              data: { title: "A2", slug: "a2", note: "only the note" },
+            },
+            { kind: "read", via: "rest" },
+            { kind: "read", via: "api" },
+          ]);
+
+        // Each road is looked at whatever the others came to.
+        for (const refused of [rest!, api!]) {
+          expect
+            .soft(refused.code, JSON.stringify(refused))
+            .toBe("BUILDER_SAVE_FIELD_UNSETTLED");
+        }
+        for (const through of [restOther!, apiOther!, restRead!, apiRead!]) {
+          expect.soft(through.ok, JSON.stringify(through)).toBe(true);
+        }
+        for (const read of [restRead!, apiRead!]) {
+          expect
+            .soft(
+              read.items?.map(item => item.note),
+              JSON.stringify(read)
+            )
+            .toContain("n");
+        }
+      },
+      600_000
+    );
+
     // A field group's rows are kept in its own table, which its save changed: each field of the
     // collection holding the group is held, and the collection's reads, which reach that table.
     it.runIf(dialect === "mysql")(
