@@ -21,6 +21,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
+import { defineCollection, text } from "nextly/config";
 import { createAdapter } from "nextly/database";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -56,6 +57,9 @@ describe.each(getConfiguredTestDialects())(
       await site?.destroy();
       site = await createTestNextly({
         adapter: await createAdapter({ type: dialect, url: database.url }),
+        collections: [
+          defineCollection({ slug: "notes", fields: [text({ name: "body" })] }),
+        ],
         plugins: withPlugin ? [pageBuilder()] : [],
       });
       return site;

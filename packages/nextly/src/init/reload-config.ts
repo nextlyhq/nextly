@@ -3325,7 +3325,8 @@ async function applyReloadHolding(
   // owns both the merge and the policy for an unreadable registry, so this
   // path and `db:sync` cannot drift apart again.
   //
-  // A collection or Single removed from code is not preserved. Its row's
+  // A collection or Single removed from code, a departed plugin's Single among them, is not
+  // preserved. Its row's
   // stored fields would become desired schema, so this apply would create its
   // dropped tables again or alter kept ones to match the row, and a table that
   // had drifted from its row would hold up the whole apply on a confirmation.
@@ -3339,6 +3340,7 @@ async function applyReloadHolding(
       desiredCollections,
       async () =>
         withoutRemovedFromCode(
+          "collection",
           await registeredCollections,
           declaredCollections
         ),
@@ -3357,11 +3359,11 @@ async function applyReloadHolding(
       // Removed from code: left out, for the reason given above the
       // collections merge.
       const dbSingles = withoutRemovedFromCode(
+        "single",
         await singleRegistry.getAllSingles(),
         declaredSingles
       );
-      // The merge the collections and `db:sync` use: whose the table is and whether its fields
-      // are translated come from the row, for a plugin's Single whose plugin left the config too.
+      // The merge the collections and `db:sync` use.
       Object.assign(
         desiredSingles,
         mergeRegisteredEntities(desiredSingles, dbSingles, (row, base) => ({
