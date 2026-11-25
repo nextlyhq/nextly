@@ -755,6 +755,8 @@ export class DynamicCollectionRegistryService extends BaseService {
     ids: ReadonlyMap<string, string>;
     /** Each held row's `schema_version`, which every save of the collection moves. */
     versions: ReadonlyMap<string, number>;
+    /** Each held row's `schema_hash`, which a save's file moves with the fields it writes. */
+    hashes: ReadonlyMap<string, string>;
     release: () => Promise<void>;
   }> {
     const none = (): Promise<void> => Promise.resolve();
@@ -763,6 +765,7 @@ export class DynamicCollectionRegistryService extends BaseService {
         existing: [],
         ids: new Map(),
         versions: new Map(),
+        hashes: new Map(),
         release: none,
       };
     }
@@ -776,14 +779,20 @@ export class DynamicCollectionRegistryService extends BaseService {
           )
         : { release: none };
     // Keyed by the table's property names, as a row read through the adapter is.
-    let rows: { slug: string; id: unknown; schemaVersion: unknown }[];
+    let rows: {
+      slug: string;
+      id: unknown;
+      schemaVersion: unknown;
+      schemaHash: unknown;
+    }[];
     try {
       rows = await tx.select<{
         slug: string;
         id: unknown;
         schemaVersion: unknown;
+        schemaHash: unknown;
       }>("dynamic_collections", {
-        columns: ["slug", "id", "schema_version"],
+        columns: ["slug", "id", "schema_version", "schema_hash"],
         where: { and: [{ column: "slug", op: "IN", value: [...slugs] }] },
         ...(strength === "update" ? { forUpdate: true } : { forShare: true }),
       });
@@ -799,11 +808,12 @@ export class DynamicCollectionRegistryService extends BaseService {
     const versions = new Map(
       rows.map(row => [row.slug, Number(row.schemaVersion)])
     );
+    const hashes = new Map(rows.map(row => [row.slug, String(row.schemaHash)]));
     if (strength === "share") {
       await named.release();
-      return { existing, ids, versions, release: none };
+      return { existing, ids, versions, hashes, release: none };
     }
-    return { existing, ids, versions, release: named.release };
+    return { existing, ids, versions, hashes, release: named.release };
   }
 
   /**
