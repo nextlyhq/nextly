@@ -725,18 +725,44 @@ function goneAnswerOf(page: string | undefined): GoneAnswerOptions {
 
 /**
  * `fields` each translated per language unless it says otherwise: a field that names its own
- * `localized` keeps it, and a repeater or group inside keeps one structure in every language (its
- * own fields say what of it is translated), so it is left as it is.
+ * `localized` keeps it, and a field a language cannot keep whole is left as it is, since the
+ * configuration refuses the flag on it at load: a repeater, group or component keeps one structure
+ * in every language (its own fields say what of it is translated), and a password or a virtual
+ * field is never translated.
  */
-function perLanguageFields<F extends { type?: unknown; localized?: unknown }>(
-  fields: readonly F[]
-): F[] {
+function perLanguageFields<
+  F extends {
+    type?: unknown;
+    localized?: unknown;
+    virtual?: unknown;
+    options?: unknown;
+  },
+>(fields: readonly F[]): F[] {
   return fields.map(field =>
     field.localized !== undefined ||
-    field.type === "repeater" ||
-    field.type === "group"
+    (typeof field.type === "string" && KEPT_WHOLE_NEVER.has(field.type)) ||
+    isVirtual(field)
       ? field
       : { ...field, localized: true }
+  );
+}
+
+/** The field types `localized: true` is refused on at load: one structure, or never translated. */
+const KEPT_WHOLE_NEVER = new Set([
+  "repeater",
+  "group",
+  "component",
+  "fieldGroup",
+  "password",
+]);
+
+/** Whether a field is virtual, stored nowhere: said on the field or in its options. */
+function isVirtual(field: { virtual?: unknown; options?: unknown }): boolean {
+  return (
+    field.virtual === true ||
+    (typeof field.options === "object" &&
+      field.options !== null &&
+      (field.options as { virtual?: unknown }).virtual === true)
   );
 }
 

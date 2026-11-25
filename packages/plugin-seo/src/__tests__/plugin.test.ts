@@ -1,7 +1,13 @@
 import { createRequire } from "node:module";
 
 import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
-import { select, text } from "nextly";
+import {
+  fieldGroup,
+  password,
+  select,
+  text,
+  validateCollectionConfig,
+} from "nextly";
 import type { FieldConfig } from "nextly";
 import { describe, expect, it } from "vitest";
 
@@ -106,6 +112,39 @@ describe("seoPlugin", () => {
     expect(seoGroup(plugin).fields).toEqual([
       { ...custom[0], localized: true },
     ]);
+  });
+
+  // Only a field that can be translated as a whole is marked: a component keeps one structure in
+  // every language, and a password or a virtual field is never translated, so each refuses the
+  // flag at load, and a custom SEO config holding one would stop the site from starting.
+  it("marks translated only the custom fields a language can keep, so the collection still loads", () => {
+    const custom: FieldConfig[] = [
+      text({ name: "focusKeyword" }),
+      fieldGroup({ name: "card", component: "seocard" }),
+      password({ name: "previewKey" }),
+      text({ name: "shareUrl", virtual: true }),
+    ];
+    const group = seoGroup(
+      seoPlugin({ collections: ["pages"], fields: custom })
+    );
+
+    expect(
+      (group.fields as { name: string; localized?: boolean }[]).map(f => [
+        f.name,
+        f.localized,
+      ])
+    ).toEqual([
+      ["focusKeyword", true],
+      ["card", undefined],
+      ["previewKey", undefined],
+      ["shareUrl", undefined],
+    ]);
+    const loaded = validateCollectionConfig({
+      slug: "pages",
+      localized: true,
+      fields: [group as FieldConfig],
+    });
+    expect(loaded.errors).toEqual([]);
   });
 
   // A group keeps one structure in every language and is refused at load when marked
