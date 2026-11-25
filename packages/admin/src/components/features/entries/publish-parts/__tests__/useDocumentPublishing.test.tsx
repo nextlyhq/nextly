@@ -102,10 +102,13 @@ function Page({
   document,
   translated = true,
   currentLocale,
+  save,
 }: {
   document: unknown;
   translated?: boolean;
   currentLocale?: string;
+  /** Stores unsaved work, which the form then holds. */
+  save?: SmartPublishHost["save"];
 }): ReactElement {
   const publishing = useDocumentPublishing({
     target: { kind: "collection", slug: "posts", id: "post-1" },
@@ -126,8 +129,8 @@ function Page({
         onClick={() =>
           void publishing.smartPublish?.({
             publish,
-            save: undefined,
-            unsaved: () => false,
+            save,
+            unsaved: () => save !== undefined,
             sharedEdited: () => false,
           })
         }
@@ -275,6 +278,36 @@ describe("publishing from an editor's page", () => {
     expect(
       screen.queryByRole("link", { name: "Translate Spanish" })
     ).toBeNull();
+  });
+
+  it("opens the choice where saving a translated edit left a shared change, which the editor's read did not show", async () => {
+    serve(SPANISH_LIVE);
+    const save = vi.fn(() =>
+      Promise.resolve({ ok: true as const, item: { id: "post-1" } })
+    );
+    api.findByID.mockImplementation(
+      (_s: string, _i: string, options?: { draft?: boolean }) =>
+        Promise.resolve({
+          id: "post-1",
+          _rev: "7",
+          // A hook changed a shared field on the save; only the editor's own read says so.
+          _sharedChangesPending:
+            options?.draft === true && save.mock.calls.length > 0,
+        })
+    );
+    render(
+      <Page document={post({ _sharedChangesPending: false })} save={save} />
+    );
+
+    await press();
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Publish changes",
+    });
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Shared fields" })
+    ).toBeChecked();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("opens the choice with the shared fields chosen where they hold changes", async () => {

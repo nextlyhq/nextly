@@ -57,22 +57,18 @@ function publishingReadOf(document: unknown): PublishingRead {
   };
 }
 
-/** Reads the document's translation overview afresh. */
-async function readOverview(
+/** Reads afresh what publishing needs to know of the document in `locale`. */
+async function readAfresh(
   target: PartsTarget,
-  locale: string | undefined
-): Promise<TranslationOverview | undefined> {
-  const options = {
-    locale,
-    fallbackLocale: "none",
-    depth: 0,
-    translationStatus: true,
-  };
+  locale: string | undefined,
+  asks: { translationStatus?: true; draft?: true }
+): Promise<PublishingRead> {
+  const options = { locale, fallbackLocale: "none", depth: 0, ...asks };
   const document: unknown =
     target.kind === "collection"
       ? await entryApi.findByID(target.slug, target.id, options)
       : await singleApi.getDocument(target.slug, options);
-  return publishingReadOf(document).overview;
+  return publishingReadOf(document);
 }
 
 export interface UseDocumentPublishingOptions {
@@ -158,10 +154,11 @@ export function useDocumentPublishing({
     languages,
     labelOf,
     editorPath,
-    readOverview: () =>
+    readOverview: async () =>
       target === undefined
-        ? Promise.resolve(undefined)
-        : readOverview(target, currentLocale),
+        ? undefined
+        : (await readAfresh(target, currentLocale, { translationStatus: true }))
+            .overview,
   });
   const onPublished = ({ published }: { published: readonly string[] }) => {
     // Without the overview as it stood, every field already out of date would read as newly so.
@@ -195,6 +192,11 @@ export function useDocumentPublishing({
     currentLocale: onScreen,
     sharedPending,
     live,
+    // As the editor reads it, its held changes in place of what is live: only that read says
+    // whether shared ones are among them.
+    readSharedPending: async () =>
+      target !== undefined &&
+      (await readAfresh(target, currentLocale, { draft: true })).sharedPending,
     open,
     onPublished,
   });
