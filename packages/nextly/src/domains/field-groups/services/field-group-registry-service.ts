@@ -75,12 +75,6 @@ export interface UpdateComponentOptions {
    * supply the number would let one regress it.
    */
   invalidateSchemaVersion?: boolean;
-  /**
-   * Gives the row to the declaration the code-first sync writes (`source`) where the row records
-   * another owner the declaration takes it from (`declarationTakesRow`). Set by the code-first
-   * sync alone.
-   */
-  claim?: true;
 }
 
 /**
@@ -595,17 +589,6 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     refuseChangeOutsideCode(existing, slug, options?.source);
 
     const updateData = this.buildComponentUpdateColumns(data);
-
-    // The one update that moves a field group between owners (`UpdateComponentOptions.claim`): its
-    // source and lock written together, so the row is never a declaration's and unlocked.
-    if (
-      options?.claim === true &&
-      options.source !== undefined &&
-      declarationTakesRow(options.source, existing)
-    ) {
-      updateData.source = options.source;
-      updateData.locked = 1;
-    }
 
     // 🔴 The version advances when the PHYSICAL SHAPE changes, not when `fields` happens to be
     // present. `schema_version` is an optimistic lock: `assertSchemaVersionMatch` rejects a save
@@ -1239,20 +1222,37 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   }
 
   /**
+   * Gives each row of `declared` to its declaration, where that takes it from another owner
+   * (`declarationTakesRow`). `nextly db:sync` asks it before its push, so a push that is refused
+   * leaves no row recorded as another's.
+   */
+  async claimDeclared(
+    declared: readonly Pick<CodeFirstComponentConfig, "slug" | "source">[]
+  ): Promise<void> {
+    const recorded = new Map(
+      (await this.getAllComponents()).map(row => [row.slug, row])
+    );
+    for (const config of declared) {
+      const row = recorded.get(config.slug);
+      if (row !== undefined) await this.claimedBy(config, row);
+    }
+  }
+
+  /**
    * `recorded`, given to `config`'s declaration where that takes it from another owner
-   * (`declarationTakesRow`): its source and lock alone, which touch no storage. Asked before
-   * anything that can leave the row as it is, so a field group whose table cannot be brought in
-   * line is still recorded as whose it is.
+   * (`declarationTakesRow`). Asked before anything that can leave the row as it is, so a field
+   * group whose table cannot be brought in line is still recorded as whose it is.
    */
   private async claimedBy(
-    config: CodeFirstComponentConfig,
+    config: Pick<CodeFirstComponentConfig, "slug" | "source">,
     recorded: DynamicFieldGroupRecord
   ): Promise<DynamicFieldGroupRecord> {
     if (!declarationTakesRow(config.source, recorded)) return recorded;
-    await this.updateComponent(
+    await this.claimRow(
+      await this.resolveRegistryTableName(),
       config.slug,
-      { locked: true },
-      { source: config.source, claim: true }
+      recorded.source,
+      config.source
     );
     return { ...recorded, source: config.source, locked: true };
   }

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { PluginDefinition } from "../../../../../plugins/plugin-context";
 import { renamePluginContributes } from "../../../../../plugins/schema/apply-contributions";
 import {
+  collectionOwner,
   declaredEntitySources,
   pluginCollectionSources,
   pluginEntitySources,
@@ -155,6 +156,24 @@ describe("a collection under a plugin's legacy `collections` key", () => {
         ["events", "plugin:@a/old"],
       ]);
     }
+  });
+
+  it("yields to the Schema Builder, where one a plugin contributes is taken back", () => {
+    const sources = pluginEntitySources([
+      legacy,
+      plugin("@a/one", ["forms"], { forms: "contact-forms" }),
+    ]);
+
+    expect(collectionOwner(sources, "events")).toEqual({
+      source: "plugin:@a/old",
+      yieldsToBuilder: true,
+    });
+    expect(collectionOwner(sources, "contact-forms")).toEqual({
+      source: "plugin:@a/one",
+    });
+    expect(collectionOwner(sources, "posts")).toEqual({ source: "code" });
+    // So it is none of those a demote refuses, or a push keeps from the Builder.
+    expect([...pluginCollectionSources([legacy])]).toEqual([]);
   });
 
   it("names no slug the same plugin contributes and the host renamed, which is the app's to take", () => {

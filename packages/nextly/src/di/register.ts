@@ -135,7 +135,7 @@ import {
   withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
 import {
-  pluginCollectionSources,
+  collectionOwner,
   pluginEntitySources,
 } from "../domains/schema/migrate/plugin/plugin-collection-sources";
 import type { ConsentRefusal } from "../domains/schema/ownership/schema-version-check";
@@ -4521,12 +4521,11 @@ function codeFirstCollectionConfigs(
   // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
   // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
   // The rule `nextly migrate`'s registry writer gives a row it creates, too.
-  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
-    pluginCollectionSources(transformedConfig.plugins ?? []);
+  const sources = pluginEntitySources(transformedConfig.plugins ?? []);
   return (transformedConfig.collections ?? []).map(collection =>
     toCodeFirstCollectionConfig(
       collection,
-      sourceBySlug.get(collection.slug) ?? "code"
+      collectionOwner(sources, collection.slug)
     )
   );
 }

@@ -335,6 +335,7 @@ describe.each(getConfiguredTestDialects())(
             collections: plugins,
             singles: new Map(),
             fieldGroups: new Map(),
+            legacyCollections: new Set(),
           },
         }
       );

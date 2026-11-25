@@ -188,7 +188,8 @@ type DemotedWrite =
  * How a demote updates a record the registry already holds: as the hand-over of the
  * configuration's own collection to the Schema Builder, which the registry takes for a record the
  * code-first sync made and locked, writing its source and lock together. A record that is the
- * Builder's already is updated as any other; a plugin's is refused.
+ * Builder's already is updated as any other. A plugin's is refused, but one of its legacy
+ * `collections` key, which the registry records as the plugin's and a demote may hand over.
  */
 const HAND_OVER = { handOver: "builder" } as const;
 
@@ -416,7 +417,14 @@ async function writeDemotedRecord(
 ): Promise<void> {
   const write = demotedWrite(collection, current);
   if (write.kind === "update") {
-    await registry.updateCollection(write.slug, write.data, HAND_OVER);
+    await registry.updateCollection(write.slug, write.data, {
+      ...HAND_OVER,
+      // `demotedCollectionIn` refused a collection a plugin contributes, so a plugin's record here
+      // is its legacy `collections` key's.
+      ...(current?.source.startsWith("plugin:") === true
+        ? { legacyPlugin: true as const }
+        : {}),
+    });
     logger.info(
       current?.source === "ui"
         ? `Updated existing UI record for '${write.slug}'.`

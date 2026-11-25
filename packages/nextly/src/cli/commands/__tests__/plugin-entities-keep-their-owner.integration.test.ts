@@ -53,6 +53,7 @@ import {
 import { introspectLiveColumns } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { pluginEntitySources } from "../../../domains/schema/migrate/plugin/plugin-collection-sources";
+import { configurationRegistryRows } from "../../../domains/schema/migrate/first-run";
 import { writeRegistryFromSource } from "../../../domains/schema/migrate/registry-writer";
 import { calculateSchemaHash } from "../../../domains/schema/services/schema-hash";
 import { SingleRegistryService } from "../../../domains/singles/services/single-registry-service";

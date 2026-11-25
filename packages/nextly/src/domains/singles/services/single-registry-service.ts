@@ -94,12 +94,6 @@ export interface UpdateSingleOptions {
    * Used to enforce locking rules (code-first Singles can't be updated from UI).
    */
   source?: SingleSource;
-  /**
-   * Gives the row to the declaration the code-first sync writes (`source`)
-   * where the row records another owner the declaration takes it from
-   * (`declarationTakesRow`). Set by the code-first sync alone.
-   */
-  claim?: true;
 }
 
 /**
@@ -891,17 +885,6 @@ export class SingleRegistryService extends BaseRegistryService<
       updateData.config_path = data.configPath;
     }
 
-    // The one update that moves a Single between owners (`UpdateSingleOptions.claim`): its source
-    // and lock written together, so the row is never a declaration's and unlocked.
-    if (
-      options?.claim === true &&
-      options.source !== undefined &&
-      declarationTakesRow(options.source, existing)
-    ) {
-      updateData.source = options.source;
-      updateData.locked = 1;
-    }
-
     // Status toggle: only persist when the caller explicitly sent it,
     // so admin updates that don't touch the flag don't reset it.
     if (data.status !== undefined) {
@@ -1457,19 +1440,13 @@ export class SingleRegistryService extends BaseRegistryService<
         // The decision `writeRecordedSingle` shares; the columns come from the
         // same helpers, with the code origin added on top. The stored record
         // comes from one read of the registry (`storedRecordsBySlug`).
-        const decision = this.codeFirstSyncStep(
-          config,
-          await recordOf(config.slug)
-        );
-        const { schemaHash } = decision;
-        // A row whose only difference is its owner is written too, its owner
-        // alone: the decision compares what the declaration says, never whose
-        // the row is.
-        const step =
-          decision.step === "unchanged" &&
-          declarationTakesRow(config.source, decision.existing)
-            ? "metadata"
-            : decision.step;
+        const recorded = await recordOf(config.slug);
+        // Whose the row is, before anything below can be refused and leave the
+        // rest of it as it is.
+        const stored = recorded && (await this.claimedBy(config, recorded));
+        const claimed = stored !== recorded;
+        const decision = this.codeFirstSyncStep(config, stored);
+        const { schemaHash, step } = decision;
 
         if (step === "create") {
           await this.registerSingle(
@@ -1495,7 +1472,7 @@ export class SingleRegistryService extends BaseRegistryService<
               configPath: config.configPath,
               locked: true,
             },
-            { source: config.source, claim: true }
+            { source: config.source }
           );
           result.updated.push(config.slug);
           if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
@@ -1522,7 +1499,7 @@ export class SingleRegistryService extends BaseRegistryService<
           await this.updateSingle(
             config.slug,
             { ...declaredSingleMetadata(config), locked: true },
-            { source: config.source, claim: true }
+            { source: config.source }
           );
           result.updated.push(config.slug);
           if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
@@ -1530,7 +1507,7 @@ export class SingleRegistryService extends BaseRegistryService<
           // No changes — still ensure permissions exist (idempotent), unless a
           // seeding of every entity's follows.
           if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
-          result.unchanged.push(config.slug);
+          (claimed ? result.updated : result.unchanged).push(config.slug);
         }
       } catch (error) {
         const handled = await this.handleSyncError(config, error);
@@ -1552,6 +1529,38 @@ export class SingleRegistryService extends BaseRegistryService<
     });
 
     return result;
+  }
+
+  /**
+   * Gives each row of `declared` to its declaration, where that takes it from
+   * another owner (`declarationTakesRow`). `nextly db:sync` asks it before its
+   * push, so a push that is refused leaves no row recorded as another's.
+   */
+  async claimDeclared(
+    declared: readonly Pick<CodeFirstSingleConfig, "slug" | "source">[]
+  ): Promise<void> {
+    const recorded = new Map(
+      (await this.getAllSingles()).map(row => [row.slug, row])
+    );
+    for (const config of declared) {
+      const row = recorded.get(config.slug);
+      if (row !== undefined) await this.claimedBy(config, row);
+    }
+  }
+
+  /** `recorded`, given to `config`'s declaration where that takes it from another owner. */
+  private async claimedBy(
+    config: Pick<CodeFirstSingleConfig, "slug" | "source">,
+    recorded: DynamicSingleRecord
+  ): Promise<DynamicSingleRecord> {
+    if (!declarationTakesRow(config.source, recorded)) return recorded;
+    await this.claimRow(
+      this.registryTableName,
+      config.slug,
+      recorded.source,
+      config.source
+    );
+    return { ...recorded, source: config.source, locked: true };
   }
 
   // ============================================================

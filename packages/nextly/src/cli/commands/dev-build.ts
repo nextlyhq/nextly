@@ -237,6 +237,40 @@ export async function publishExtensionSchema(
   });
 }
 
+/**
+ * Records each Single and field group the configuration declares as its declaration's, before the
+ * first push: the collections' push, where it is refused, ends the run before their own syncs.
+ * A collection is recorded by its own sync, ahead of that push.
+ */
+export async function claimDeclaredOwners(
+  configResult: LoadConfigResult,
+  adapter: CLIDatabaseAdapter,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const { config } = configResult;
+  const live = adapter as unknown as DrizzleAdapter;
+  const serviceLogger: ServiceLogger = {
+    info: (msg: string) => logger.debug(msg),
+    warn: (msg: string) => logger.warn(msg),
+    error: (msg: string) => logger.error(msg),
+    debug: (msg: string) => logger.debug(msg),
+  };
+  const sources = pluginEntitySources(config.plugins ?? []);
+  await new SingleRegistryService(live, serviceLogger).claimDeclared(
+    config.singles.map(({ slug }) => ({
+      slug,
+      source: sources.singles.get(slug) ?? "code",
+    }))
+  );
+  await new FieldGroupRegistryService(live, serviceLogger).claimDeclared(
+    config.fieldGroups.map(({ slug }) => ({
+      slug,
+      source: sources.fieldGroups.get(slug) ?? "code",
+    }))
+  );
+}
+
 // ============================================================================
 // Collection Sync
 // ============================================================================

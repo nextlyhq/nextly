@@ -36,6 +36,26 @@ export interface PluginEntitySources {
   readonly collections: ReadonlyMap<string, PluginSource>;
   readonly singles: ReadonlyMap<string, PluginSource>;
   readonly fieldGroups: ReadonlyMap<string, PluginSource>;
+  /**
+   * Those of `collections` that are the plugin's by its legacy top-level key alone. Such a
+   * collection can be one a demote handed to the Schema Builder, and stays the Builder's
+   * (`CodeFirstCollectionConfig.yieldsToBuilder`), where one under `contributes` is taken back.
+   */
+  readonly legacyCollections: ReadonlySet<string>;
+}
+
+/**
+ * What a collection's sync payload says of its owner: the app (`code`) or the
+ * plugin it belongs to, and whether it yields to the Schema Builder.
+ */
+export function collectionOwner(
+  sources: PluginEntitySources,
+  slug: string
+): { source: "code" | PluginSource; yieldsToBuilder?: true } {
+  return {
+    source: sources.collections.get(slug) ?? "code",
+    ...(sources.legacyCollections.has(slug) ? { yieldsToBuilder: true } : {}),
+  };
 }
 
 /**
@@ -55,11 +75,19 @@ export function pluginEntitySources(
   return sourcesBy(plugins, renamedSlug);
 }
 
-/** {@link pluginEntitySources} of the collections alone. */
+/**
+ * {@link pluginEntitySources} of the collections a plugin declares in
+ * `contributes` alone: the ones it registers at every start whoever holds the
+ * address, so none is handed to the Schema Builder. One under the legacy key
+ * can be, so it is not among them.
+ */
 export function pluginCollectionSources(
   plugins: readonly ContributingPlugin[]
 ): ReadonlyMap<string, PluginSource> {
-  return pluginEntitySources(plugins).collections;
+  const { collections, legacyCollections } = pluginEntitySources(plugins);
+  return new Map(
+    [...collections].filter(([slug]) => !legacyCollections.has(slug))
+  );
 }
 
 /**
@@ -85,6 +113,7 @@ function sourcesBy(
     collections: new Map<string, PluginSource>(),
     singles: new Map<string, PluginSource>(),
     fieldGroups: new Map<string, PluginSource>(),
+    legacyCollections: new Set<string>(),
   };
   // The legacy ones first, so a collection any plugin contributes at the same slug wins. One the
   // same plugin also contributes is that contribution, under the slug the host may have given it.
@@ -95,12 +124,15 @@ function sourcesBy(
     for (const { slug } of plugin.collections ?? []) {
       if (contributed.has(slug)) continue;
       sources.collections.set(slug, `plugin:${plugin.name}`);
+      sources.legacyCollections.add(slug);
     }
   }
   for (const plugin of plugins) {
     for (const kind of ["collections", "singles", "fieldGroups"] as const) {
       for (const { slug } of plugin.contributes?.[kind] ?? []) {
-        sources[kind].set(slugOf(plugin, slug), `plugin:${plugin.name}`);
+        const held = slugOf(plugin, slug);
+        sources[kind].set(held, `plugin:${plugin.name}`);
+        if (kind === "collections") sources.legacyCollections.delete(held);
       }
     }
   }

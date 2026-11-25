@@ -68,6 +68,7 @@ import { getActiveExtensionSchema } from "../domains/schema/extension/build-exte
 import { compileAndPublishExtensionSchema } from "../domains/schema/extension/publish";
 import { registerExtensionTables } from "../domains/schema/extension/register-tables";
 import {
+  collectionOwner,
   pluginCollectionSources,
   pluginEntitySources,
 } from "../domains/schema/migrate/plugin/plugin-collection-sources";
@@ -606,7 +607,7 @@ async function defaultResolver(name: string): Promise<unknown> {
 // registry-only metadata (versions/localized/status/labels/description) reaches
 // the registry too, not just schema (DDL) changes.
 //
-// Each collection carries its origin, by the rule a start gives it (`pluginCollectionSources`): a
+// Each collection carries its origin, by the rule a start gives it (`collectionOwner`): a
 // slug a plugin contributes is `plugin:<name>`, any other the app's own `code`. Required, so no
 // route sends a plugin's collection as the app's: a record the reload creates keeps the origin it
 // is created with, and a plugin's collection over a record the Schema Builder was handed is the
@@ -615,11 +616,11 @@ function buildCollectionSyncPayload(
   collections: CollectionDef[],
   plugins: SourcedPlugins | undefined
 ) {
-  const sources = pluginCollectionSources(plugins ?? []);
+  const sources = pluginEntitySources(plugins ?? []);
   // The projection every sync route shares; see `toCodeFirstCollectionConfig`.
   return collections
     .filter((c): c is CollectionDef & { slug: string } => !!c.slug)
-    .map(c => toCodeFirstCollectionConfig(c, sources.get(c.slug) ?? "code"));
+    .map(c => toCodeFirstCollectionConfig(c, collectionOwner(sources, c.slug)));
 }
 
 /** The plugins a configuration declares, as far as which entities each contributes. */

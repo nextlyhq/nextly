@@ -474,7 +474,12 @@ async function recordedRows(
           );
           return collections.writeRecordedCollection(
             recordedCollection(slug, recorded, origin.source),
-            origin,
+            {
+              ...origin,
+              ...(deps.entitySources?.legacyCollections.has(slug) === true
+                ? { yieldsToBuilder: true }
+                : {}),
+            },
             options("collection", recorded, storedCollections, slug)
           );
         },
