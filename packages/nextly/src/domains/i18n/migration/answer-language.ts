@@ -95,14 +95,16 @@ export async function answerLanguageRefusals(
 
 /**
  * Refuses a run over a file whose answers are decided in another language, or that records none,
- * before any of its statements (`answerLanguageRefusals`).
+ * before any of its statements (`answerLanguageRefusals`): before the run's first (`"run"`), or
+ * before the file's own, where the files ahead of it have applied (`"file"`).
  *
  * @throws NextlyError `CONFLICT`, its reason `ANSWER_LANGUAGE_REASON`, its parts the CLI's
  */
 export async function refuseAnswersInAnotherLanguage(
   files: readonly AnsweringFile[],
   run: AnswerRun,
-  defaultLanguage: () => Promise<string>
+  defaultLanguage: () => Promise<string>,
+  before: "run" | "file" = "run"
 ): Promise<void> {
   const { refusals, runsIn } = await answerLanguageRefusals(
     files,
@@ -110,7 +112,7 @@ export async function refuseAnswersInAnotherLanguage(
     defaultLanguage
   );
   if (refusals.length === 0 || runsIn === undefined) return;
-  throw answerLanguageError(refusals, runsIn);
+  throw answerLanguageError(refusals, runsIn, before);
 }
 
 /**
@@ -120,7 +122,8 @@ export async function refuseAnswersInAnotherLanguage(
  */
 export function answerLanguageError(
   refusals: readonly AnswerLanguageRefusal[],
-  runsIn: string
+  runsIn: string,
+  before: "run" | "file" = "run"
 ): NextlyError {
   const languages = [
     ...new Set(refusals.flatMap(refusal => refusal.answersIn ?? [])),
@@ -129,7 +132,7 @@ export function answerLanguageError(
   const what = `${one ? "A migration's" : `${refusals.length} migrations'`} answers are not recorded as decided in this project's default language, "${runsIn}".`;
   const why = [
     ...refusals.map(refusal => `${refusal.file}: ${refusal.message}`),
-    `Run here, ${one ? "its" : "their"} statements would settle other entries than the ones answered for. Nothing was changed.`,
+    `Run here, ${one ? "its" : "their"} statements would settle other entries than the ones answered for. ${before === "run" ? "Nothing was changed." : "None of its statements ran; the files this run applied before it stay applied."}`,
   ].join("\n");
   const them = one ? "it" : "them";
   const again = `Where no environment has applied ${them}, delete ${them} and make the save again with "${runsIn}" as the default language.`;

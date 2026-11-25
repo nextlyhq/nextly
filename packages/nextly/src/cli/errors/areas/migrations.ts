@@ -677,7 +677,7 @@ export const MIGRATION_CODES = defineCodes({
   },
   MIGRATION_LANGUAGE_DIFFERS: {
     cause:
-      "A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused and changed nothing.",
+      "A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused it before any of its statements.",
     from: [
       {
         code: "CONFLICT",

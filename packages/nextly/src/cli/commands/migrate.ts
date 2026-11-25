@@ -2977,6 +2977,9 @@ async function runMigrationStreams(
       : {}),
     judged,
     ...(beforeApply === undefined ? {} : { beforeApply }),
+    ...(deps.defaultLanguage === undefined
+      ? {}
+      : { defaultLanguage: deps.defaultLanguage }),
     ...(afterApply === undefined ? {} : { afterApply }),
     ...(deps.collectionSources === undefined
       ? {}
@@ -5587,6 +5590,8 @@ export async function runFileMigrations(args: {
    * the app's tables, read by the check that a file removes none of it.
    */
   extensionSchema?: ExtensionSchema;
+  /** As `MigrateCoreDeps.defaultLanguage`. */
+  defaultLanguage?: () => Promise<string>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -5882,6 +5887,15 @@ export async function runFileMigrations(args: {
       if (typeChanges !== undefined && !atItsEnd) {
         await refuseFileTypeChanges(db, typeChanges);
       }
+      // The language of the file's answers is judged again, over the database as the files before
+      // it left it: a row one of them put in is an entry now. The default language is read again
+      // too, since a file may have changed the one Settings holds.
+      await refuseAnswersInAnotherLanguage(
+        [m],
+        { units: [{ statements: upStatements }], adapter: dz, db, dialect },
+        () => defaultLanguageOf(args),
+        "file"
+      );
       // The caller's last word before the file applies, every refusal of it passed.
       await args.beforeApply?.(m.name);
 

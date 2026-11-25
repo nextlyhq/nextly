@@ -1,11 +1,11 @@
 ---
 title: MIGRATION_LANGUAGE_DIFFERS
-description: "A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused and changed nothing."
+description: "A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused it before any of its statements."
 ---
 
 ## Cause
 
-A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused and changed nothing.
+A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused it before any of its statements.
 
 A field whose values are kept per language can be made required while some entries have no value for it. The save then asks what to do with those entries: fill the field, or delete them. The answer is decided in the default language: an entry is one that has no value in it. The migration file's statements hold that language as it was when the file was written, and its header records it:
 
@@ -19,7 +19,7 @@ A file whose answer has nothing to settle in the database is not refused. The la
 
 A file with more than one such answer is refused as a whole when any one of them has entries to settle. The message names the file.
 
-Rows the run itself adds are not seen. If a pending migration written by hand puts rows in the table before the file that answers, in the same run, the file is not refused for those rows. Check such a run by hand.
+The check is made before the run, and again just before the file's first statement, so a row that an earlier file of the same run adds is seen. The file is then refused and none of its statements run; the files applied before it stay applied. An entry a site writes to an empty table between that check and the file's statements is not seen.
 
 The default language is the one `localization.defaultLocale` declares in the configuration. Without it, it is the one set in Settings, and `en` where no languages are set.
 

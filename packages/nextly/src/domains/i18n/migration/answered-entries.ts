@@ -3,14 +3,14 @@
  * from. Where they have none (a new database, a table with no rows), the language they are decided
  * in decides nothing, and the file runs whatever it is.
  *
- * Read before the run's first statement, from the tables each answer names: the entity's own, whose
+ * Read from the tables each answer names: the entity's own, whose
  * rows are the entries, and its translations table. The entity's is read because the translations
  * table may be one the same run makes and fills from it. What the run renames into place is read
  * back to the table it was: a table standing under another name before the run counts as holding
  * entries. Anything that cannot be told counts so too.
  *
- * A row the run itself puts in, by a statement of a hand-written file ahead of the answer, is not
- * there to be read.
+ * Asked twice: of the run before its first statement, and of each file again just before its own,
+ * when a row an earlier file of the run put in is there to be read.
  *
  * @module domains/i18n/migration/answered-entries
  */
@@ -28,7 +28,7 @@ import { countRows } from "../../schema/pipeline/classifier/count-helpers";
 import { plainMysqlEquivalents } from "../../schema/pipeline/sql-templates/mysql-live-restate";
 import { settledTablesOf } from "../../schema/pipeline/sql-templates/resolution-statements";
 
-/** The run a file is part of: what it runs, in order, and the database it starts from. */
+/** What is still to run, the file judged among it, in order, and the database as it stands. */
 export interface AnswerRun {
   /** Every unit the run applies: its plugin modules and its files. */
   units: readonly { statements: readonly string[] }[];
