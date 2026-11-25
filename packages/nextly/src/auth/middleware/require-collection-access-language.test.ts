@@ -300,7 +300,12 @@ describe("the REST route gate, asking a rule that closes French", () => {
     const [english] = services.config.localization.locales;
     english.fallbackLocale = ["fr"];
     try {
-      for (const method of ["getEntrySourceChange", "getSingleSourceChange"]) {
+      for (const method of [
+        "getEntrySourceChange",
+        "getSingleSourceChange",
+        "getEntryTranslationUnits",
+        "getSingleTranslationUnits",
+      ]) {
         expect(await status("read", method, "?locale=en"), method).toBe(200);
         expect(await status("read", method, "?locale=fr"), method).toBe(403);
         expect(await status("read", method), method).toBe(403);
@@ -336,16 +341,21 @@ describe("the REST route gate, asking a rule open in German alone", () => {
   });
 
   it("admits a translation's read in German, and in no other language", async () => {
-    expect(await status("read", "getEntrySourceChange", "?locale=de")).toBe(
-      200
-    );
-    expect(await status("read", "getEntrySourceChange", "?locale=en")).toBe(
-      403
-    );
+    for (const method of ["getEntrySourceChange", "getEntryTranslationUnits"]) {
+      expect(await status("read", method, "?locale=de"), method).toBe(200);
+      expect(await status("read", method, "?locale=en"), method).toBe(403);
+    }
   });
 
   it("admits a change to a translation its body names, which the service then judges", async () => {
-    for (const method of ["keepEntryTranslation", "keepSingleTranslation"]) {
+    for (const method of [
+      "keepEntryTranslation",
+      "keepSingleTranslation",
+      "acceptEntrySuggestion",
+      "acceptSingleSuggestion",
+      "dismissEntrySuggestion",
+      "dismissSingleSuggestion",
+    ]) {
       expect(await status("update", method), method).toBe(200);
       // Its language is the body's, whatever the query says.
       expect(await status("update", method, "?locale=en"), method).toBe(200);

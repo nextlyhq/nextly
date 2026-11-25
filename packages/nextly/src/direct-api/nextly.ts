@@ -324,7 +324,7 @@ export class Nextly implements NextlyContext {
   public readonly releases: ReleasesNamespace;
   /** A person's own notices. */
   public readonly notices: NoticesNamespace;
-  /** @experimental A translated field and its source. */
+  /** @experimental A translated document's texts, their sources and their suggestions. */
   public readonly translations: TranslationsNamespace;
   /** A document's history: list, read, compare, name, restore. */
   public readonly versions: VersionsNamespace;
@@ -1211,6 +1211,12 @@ export const nextly = {
       (await requireNextlyOnceStarted()).translations.sourceChange(args),
     keepCurrent: async args =>
       (await requireNextlyOnceStarted()).translations.keepCurrent(args),
+    units: async args =>
+      (await requireNextlyOnceStarted()).translations.units(args),
+    acceptSuggestion: async args =>
+      (await requireNextlyOnceStarted()).translations.acceptSuggestion(args),
+    dismissSuggestion: async args =>
+      (await requireNextlyOnceStarted()).translations.dismissSuggestion(args),
   } satisfies TranslationsNamespace,
 
   contentEvents: {

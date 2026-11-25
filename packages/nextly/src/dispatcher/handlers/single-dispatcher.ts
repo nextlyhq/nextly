@@ -55,6 +55,7 @@ import {
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
+import type { TranslatedDocument } from "../../domains/i18n/pipeline/document-access";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
 import {
@@ -193,6 +194,11 @@ import {
   respondKeepCurrent,
   respondSourceChange,
 } from "./source-review-handlers";
+import {
+  respondAcceptSuggestion,
+  respondDismissSuggestion,
+  respondTranslationUnits,
+} from "./translation-units-handlers";
 import {
   assertLabelRequestValid,
   autosaveForDocument,
@@ -713,6 +719,11 @@ async function settledInReview(
   return onPush ? args.settledOnPush : new Set(args.filled);
 }
 
+/** The Single a translation route names. */
+function singleOf(p: Params): TranslatedDocument {
+  return { kind: "single", slug: requireParam(p, "slug", "Single slug") };
+}
+
 /**
  * Publishing or unpublishing the parts of a Single the body chooses (@experimental): the Single's
  * counterpart of a collection entry's, read from the same body and forwarded the same way, with
@@ -1146,19 +1157,23 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
   getSingleSourceChange: {
     execute: async (_svc, p, _body, request) =>
-      respondSourceChange(
-        { kind: "single", slug: requireParam(p, "slug", "Single slug") },
-        p,
-        request
-      ),
+      respondSourceChange(singleOf(p), p, request),
   },
   keepSingleTranslation: {
     execute: async (_svc, p, body, request) =>
-      respondKeepCurrent(
-        { kind: "single", slug: requireParam(p, "slug", "Single slug") },
-        body,
-        request
-      ),
+      respondKeepCurrent(singleOf(p), body, request),
+  },
+  getSingleTranslationUnits: {
+    execute: async (_svc, p, _body, request) =>
+      respondTranslationUnits(singleOf(p), p, request),
+  },
+  acceptSingleSuggestion: {
+    execute: async (_svc, p, body, request) =>
+      respondAcceptSuggestion(singleOf(p), p, body, request),
+  },
+  dismissSingleSuggestion: {
+    execute: async (_svc, p, body, request) =>
+      respondDismissSuggestion(singleOf(p), p, body, request),
   },
 
   previewPublishAllSingleLocales: {

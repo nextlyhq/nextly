@@ -621,9 +621,9 @@ function parseCollectionRoutes(
   );
   if (bulkUpdateByQueryRoute) return bulkUpdateByQueryRoute;
 
-  // What changed in a translated field's source, and keeping its translation
+  // An entry's translations: its units, a field's source, its suggestions
   // (more specific than getEntry/updateEntry)
-  const sourceReviewRoute = parseCollectionEntrySourceReviewRoute(
+  const translationRoute = parseCollectionEntryTranslationRoute(
     id,
     subresource,
     subId,
@@ -631,7 +631,7 @@ function parseCollectionRoutes(
     httpMethod,
     routeParams
   );
-  if (sourceReviewRoute) return sourceReviewRoute;
+  if (translationRoute) return translationRoute;
 
   // Check for duplicate route (more specific)
   const duplicateRoute = parseCollectionEntryDuplicateRoute(
@@ -976,42 +976,101 @@ function parseCollectionEntryPublishAllRoute(
   return null;
 }
 
-/**
- * What one action on a translated field's source is, by its verb and URL token:
- * reading what changed in it, admitted as a read of the document, and keeping
- * the translation as it is, admitted as an update (@experimental).
- */
-function sourceReviewAction(
-  httpMethod: string,
-  action: string | undefined
-): {
+/** One action on a document's translations: what admits it, and the method each kind names. */
+interface TranslationAction {
   operation: OperationType;
   entryMethod: string;
   singleMethod: string;
-} | null {
-  if (httpMethod === "GET" && action === "source-change") {
-    return {
-      operation: "single",
-      entryMethod: "getEntrySourceChange",
-      singleMethod: "getSingleSourceChange",
-    };
-  }
-  if (httpMethod === "POST" && action === "keep-current") {
-    return {
-      operation: "update",
-      entryMethod: "keepEntryTranslation",
-      singleMethod: "keepSingleTranslation",
-    };
-  }
-  return null;
 }
 
 /**
- * Parse the source review routes for a collection entry.
- * GET /api/collections/{slug}/entries/{id}/source-change
- * POST /api/collections/{slug}/entries/{id}/keep-current
+ * The actions on a document's translations, by verb and URL token
+ * (@experimental): what changed in a field's source and the document's units,
+ * each admitted as a read of the document, and keeping a translation as it is,
+ * admitted as an update.
  */
-function parseCollectionEntrySourceReviewRoute(
+const TRANSLATION_ACTIONS: ReadonlyMap<string, TranslationAction> = new Map<
+  string,
+  TranslationAction
+>([
+  [
+    "GET source-change",
+    {
+      operation: "single",
+      entryMethod: "getEntrySourceChange",
+      singleMethod: "getSingleSourceChange",
+    },
+  ],
+  [
+    "GET translation-units",
+    {
+      operation: "single",
+      entryMethod: "getEntryTranslationUnits",
+      singleMethod: "getSingleTranslationUnits",
+    },
+  ],
+  [
+    "POST keep-current",
+    {
+      operation: "update",
+      entryMethod: "keepEntryTranslation",
+      singleMethod: "keepSingleTranslation",
+    },
+  ],
+]);
+
+/** The actions on one suggestion for a document, each admitted as an update of it. */
+const SUGGESTION_ACTIONS: ReadonlyMap<string, TranslationAction> = new Map<
+  string,
+  TranslationAction
+>([
+  [
+    "POST accept",
+    {
+      operation: "update",
+      entryMethod: "acceptEntrySuggestion",
+      singleMethod: "acceptSingleSuggestion",
+    },
+  ],
+  [
+    "POST dismiss",
+    {
+      operation: "update",
+      entryMethod: "dismissEntrySuggestion",
+      singleMethod: "dismissSingleSuggestion",
+    },
+  ],
+]);
+
+/**
+ * The action the path past a document names, and the suggestion it is on.
+ * The route ends at the action: a path that goes on past it names nothing here.
+ */
+function translationAction(
+  httpMethod: string,
+  path: readonly string[]
+): { action: TranslationAction; suggestionId?: string } | null {
+  const [token, suggestionId, decision] = path;
+  if (path.length === 1) {
+    const action = TRANSLATION_ACTIONS.get(`${httpMethod} ${token}`);
+    return action ? { action } : null;
+  }
+  if (path.length !== 3 || token !== "suggestions" || !suggestionId) {
+    return null;
+  }
+  const action = SUGGESTION_ACTIONS.get(`${httpMethod} ${decision}`);
+  return action ? { action, suggestionId } : null;
+}
+
+/**
+ * Parse the translation routes for a collection entry.
+ * GET /api/collections/{slug}/entries/{id}/source-change
+ * GET /api/collections/{slug}/entries/{id}/translation-units
+ * POST /api/collections/{slug}/entries/{id}/keep-current
+ * POST /api/collections/{slug}/entries/{id}/suggestions/{suggestionId}/accept
+ * POST /api/collections/{slug}/entries/{id}/suggestions/{suggestionId}/dismiss
+ */
+function parseCollectionEntryTranslationRoute(
   id: string | undefined,
   subresource: string | undefined,
   subId: string | undefined,
@@ -1020,16 +1079,15 @@ function parseCollectionEntrySourceReviewRoute(
   routeParams: Record<string, string>
 ): ParsedRoute | null {
   if (!id || subresource !== "entries" || !subId) return null;
-  // The route ends at the action: a path that goes on past it names nothing here.
-  if (additionalParams.length !== 1) return null;
-  const action = sourceReviewAction(httpMethod, additionalParams[0]);
-  if (action === null) return null;
+  const named = translationAction(httpMethod, additionalParams);
+  if (named === null) return null;
   routeParams.collectionName = id;
   routeParams.entryId = subId;
+  if (named.suggestionId) routeParams.suggestionId = named.suggestionId;
   return {
     service: "collections",
-    operation: action.operation,
-    method: action.entryMethod,
+    operation: named.action.operation,
+    method: named.action.entryMethod,
     routeParams,
   };
 }
@@ -1623,25 +1681,28 @@ function parsePermissionRoutes(
 }
 
 /**
- * Parse the source review routes for a Single.
+ * Parse the translation routes for a Single.
  * GET /api/singles/{slug}/source-change
+ * GET /api/singles/{slug}/translation-units
  * POST /api/singles/{slug}/keep-current
+ * POST /api/singles/{slug}/suggestions/{suggestionId}/accept
+ * POST /api/singles/{slug}/suggestions/{suggestionId}/dismiss
  */
-function parseSingleSourceReviewRoute(
+function parseSingleTranslationRoute(
   id: string | undefined,
-  subresource: string | undefined,
-  subId: string | undefined,
+  path: readonly string[],
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
-  if (!id || subId) return null;
-  const action = sourceReviewAction(httpMethod, subresource);
-  if (action === null) return null;
+  if (!id) return null;
+  const named = translationAction(httpMethod, path);
+  if (named === null) return null;
   routeParams.slug = id;
+  if (named.suggestionId) routeParams.suggestionId = named.suggestionId;
   return {
     service: "singles",
-    operation: action.operation,
-    method: action.singleMethod,
+    operation: named.action.operation,
+    method: named.action.singleMethod,
     routeParams,
   };
 }
@@ -3817,10 +3878,9 @@ export function parseRestRoute(
     if (versionResult) return versionResult;
 
     const result =
-      parseSingleSourceReviewRoute(
+      parseSingleTranslationRoute(
         id,
-        subresource,
-        subId,
+        params.slice(2),
         httpMethod,
         routeParams
       ) ?? parseSingleRoutes(id, subresource, subId, httpMethod, routeParams);
