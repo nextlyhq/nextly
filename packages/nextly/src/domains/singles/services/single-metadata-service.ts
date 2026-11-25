@@ -114,6 +114,7 @@ import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import type { SqliteTypeChange } from "../../schema/services/sqlite-nullability-rebuild";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
+import type { ReconcileSingleCompanionArgs } from "./reconcile-single-companion";
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type {
   SingleRegistryService,
@@ -1122,6 +1123,7 @@ export class SingleMetadataService {
 
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
     const plan = await this.planUpdate(input);
+    if (plan) await this.refuseCompanionTakingOthersElements(input, plan);
 
     // 2. APPLY, then 3. RECORD. The apply returns a status rather than throwing, except for a
     // refusal (see below). Where a writer is set up, the update is written first as the Single's
@@ -2950,6 +2952,50 @@ export class SingleMetadataService {
   }
 
   /**
+   * Refuse, before anything of the save is written or run, what the companion reconcile after the
+   * main table's change would drop of another owner's (`removed-elements.ts`). Asked once the plan
+   * is made rather than in the apply: a save that runs its own migration file runs it first, so a
+   * refusal in the apply would come after the file had changed the main table.
+   */
+  private async refuseCompanionTakingOthersElements(
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan
+  ): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter) return;
+    const { refuseSingleCompanionTakingOthersElements } = await import(
+      "./reconcile-single-companion"
+    );
+    await refuseSingleCompanionTakingOthersElements(
+      await this.companionChange(input, plan, adapter)
+    );
+  }
+
+  /** The companion's change in this save: what the reconcile applies, and what its drops are judged by. */
+  private async companionChange(
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan,
+    adapter: DrizzleAdapter
+  ): Promise<ReconcileSingleCompanionArgs> {
+    return {
+      slug: input.slug,
+      tableName: input.existing.tableName,
+      oldFields: plan.previousFields,
+      newFields: plan.fields,
+      localized: input.isLocalized,
+      wasLocalized: input.wasLocalized,
+      // The companion's own `_status`, before and after this save.
+      status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
+      wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
+      statusFromEntryInEveryLanguage:
+        input.layout?.statusFromEntryInEveryLanguage,
+      adapter,
+      // One rename rule for every column: the main table's decides a translated field's too.
+      renamed: await this.detectedFieldRename(plan.previousFields, plan.fields),
+    };
+  }
+
+  /**
    * Run the plan, reporting how far it got.
    *
    * Returns undefined when the plan owns no status — a flag-only save with no adapter registered
@@ -3001,6 +3047,11 @@ export class SingleMetadataService {
       };
     }
 
+    const companion = await this.companionChange(input, plan, adapter);
+    const { reconcileSingleCompanion } = await import(
+      "./reconcile-single-companion"
+    );
+
     // Before the try below, as the migration is: a failure here stops the save before the main
     // table changes.
     const { joinedBefore, undoRename } = await this.movesBeforeMain(
@@ -3044,30 +3095,11 @@ export class SingleMetadataService {
       // default locale from main on enable, restore and archive on disable, ADD/DROP columns as
       // translatable fields change. Reported as a failed migration rather than thrown: the main
       // table is already in its new shape, and the row describing it is what makes a retry possible.
-      const { reconcileSingleCompanion } = await import(
-        "./reconcile-single-companion"
-      );
       try {
         await reconcileSingleCompanion({
+          ...companion,
           busyTable: this.busyTableWait(adapter),
-          slug: input.slug,
-          tableName,
-          oldFields: plan.previousFields,
-          newFields: plan.fields,
-          localized: input.isLocalized,
-          wasLocalized: input.wasLocalized,
-          // The companion's own `_status`, before and after this save.
-          status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
-          wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
-          statusFromEntryInEveryLanguage:
-            input.layout?.statusFromEntryInEveryLanguage,
-          adapter,
           joinedBefore,
-          // One rename rule for every column: the main table's decides a translated field's too.
-          renamed: await this.detectedFieldRename(
-            plan.previousFields,
-            plan.fields
-          ),
         });
       } catch (companionError) {
         // 🔴 The shape is RETRACTED here, never rebound, because nothing at this level knows what

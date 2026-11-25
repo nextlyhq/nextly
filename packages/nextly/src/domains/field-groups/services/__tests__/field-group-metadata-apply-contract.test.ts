@@ -63,6 +63,10 @@ vi.mock("../field-group-table-provisioning", () => ({
   // is the state the partial-failure tests below are about; the test that cares about the other
   // answer sets it explicitly rather than letting this double decide.
   reconcileComponentCompanion: vi.fn(async () => true),
+  // The judgement of what the reconcile would drop of another owner's finds nothing to refuse:
+  // these tests are about which changes the update delivers, and the judgement itself is pinned
+  // against real databases in `field-change-keeps-others-elements.per-language.integration.test.ts`.
+  refuseComponentCompanionTakingOthersElements: vi.fn(async () => undefined),
   // The update path probes the existing table before it moves anything: which discriminator column
   // it carries, and the columns it holds. Stubbed to the current spelling and to no column listing:
   // these tests are about which field CHANGES are accepted, and a real probe would make every one

@@ -417,7 +417,8 @@ function keptElementRefusal(
         message:
           `This schema change would ${change.act} the ${noun} "${change.name}" that the plugin "${ownerId}" added to the table "${change.table}"${why ?? ""}. ` +
           `"${ownerId}" is no longer in the configuration, so its ${noun} is kept as it is and nothing was applied. ` +
-          `Add "${ownerId}" back to the configuration, or run \`nextly plugins uninstall ${ownerId}\` to remove what it added, then apply the change again.`,
+          // An uninstall looks the plugin up in the configuration, so it is put back before it.
+          `Add "${ownerId}" back to the configuration, uninstall it with \`nextly plugins uninstall ${ownerId}\`, then remove it from the configuration and apply the change again.`,
       },
     ],
     logContext: {
@@ -580,7 +581,7 @@ export function describeKept(kept: readonly KeptElement[]): string {
   return [...byOwner]
     .map(
       ([owner, list]) =>
-        `kept what the plugin "${owner}" added, which is no longer configured (${list.join(", ")}); \`nextly plugins uninstall ${owner}\` removes it`
+        `kept what the plugin "${owner}" added, which is no longer configured (${list.join(", ")}); to remove it, add "${owner}" back to the configuration, uninstall it with \`nextly plugins uninstall ${owner}\`, then remove it from the configuration`
     )
     .join("; ");
 }
@@ -618,17 +619,23 @@ export function assertNoContributedOwnerChange(
   assertNoOwnerChange(claims, recorded);
 }
 
-/** What the push read and wrote of the owner rows, for the steps after it. */
+/** What the push read of the owner rows, and what it records, for the steps after it. */
 export interface PushElementOwners {
   /** Every owner row, as it stands once the push has recorded its own. */
   rows: OwnerRecord[];
   /** The owners the configuration still declares schema for. */
   declaring: Set<string>;
+  /**
+   * Writes what `rows` already counts: retires the rows it left out and records the new ones, on
+   * `db` where given (the apply's own transaction). Run once the push has passed every refusal, so a
+   * refused push leaves no owner row claiming an element it never built.
+   */
+  write(db?: unknown): Promise<void>;
 }
 
 /**
- * Read the owner rows a push judges by, and bring the element rows up to date
- * first when `record` is set.
+ * Read the owner rows a push judges by, and plan bringing the element rows up
+ * to date when `record` is set; `write` makes those changes.
  *
  * Retires the element rows on the tables the push introspected whose element
  * is gone from both the configuration and the database (`retiredElementRows`),
@@ -655,11 +662,13 @@ export async function pushElementOwners(input: {
     { SCHEMA_OWNERS_TABLE },
     { SchemaOwnersRepository },
     { retiredElementRows },
+    { readingOthersElements },
   ] = await Promise.all([
     import("../pipeline/diff/introspect-live"),
     import("../../../schemas/schema-owners"),
     import("./schema-owners-repository"),
     import("./retired-elements"),
+    import("./removed-elements"),
   ]);
   let exists: boolean;
   try {
@@ -677,8 +686,9 @@ export async function pushElementOwners(input: {
   if (!exists) return undefined;
   const repository = new SchemaOwnersRepository(input.db, input.dialect);
   const declaring = declaringOwners(input.schema, input.dialect);
-  let rows = await repository.read();
-  if (!input.record) return { rows, declaring };
+  // A record there that cannot be read refuses the change, never read as no element at all.
+  let rows = await readingOthersElements("The change", () => repository.read());
+  if (!input.record) return { rows, declaring, write: () => Promise.resolve() };
 
   const contributed = contributedElements(input.schema, input.dialect);
   const managed = new Set(input.managedTables.map(t => t.toLowerCase()));
@@ -687,13 +697,6 @@ export async function pushElementOwners(input: {
     declared: groupByTable(contributed),
     live: input.live,
   });
-  for (const row of retired) {
-    await repository.deleteElement(
-      row.tableName,
-      row.elementKind,
-      row.elementName ?? ""
-    );
-  }
   const gone = new Set(retired.map(row => ownerRecordKey(row)));
   rows = rows.filter(row => !gone.has(ownerRecordKey(row)));
 
@@ -703,8 +706,21 @@ export async function pushElementOwners(input: {
     new Set(input.schema?.owners.keys() ?? []),
     rows
   );
-  await repository.upsert(added);
-  return { rows: [...rows, ...added], declaring };
+  const write = async (db?: unknown): Promise<void> => {
+    const on =
+      db === undefined
+        ? repository
+        : new SchemaOwnersRepository(db, input.dialect);
+    for (const row of retired) {
+      await on.deleteElement(
+        row.tableName,
+        row.elementKind,
+        row.elementName ?? ""
+      );
+    }
+    await on.upsert(added);
+  };
+  return { rows: [...rows, ...added], declaring, write };
 }
 
 /** Contributed elements grouped by table, as `retiredElementRows` reads them. */
