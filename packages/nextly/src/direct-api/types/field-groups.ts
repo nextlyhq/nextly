@@ -153,7 +153,7 @@ export interface FieldGroupDefinition {
  */
 export interface FindFieldGroupsArgs extends DirectAPIConfig {
   /** Filter by source type */
-  source?: "code" | "ui";
+  source?: "code" | "ui" | `plugin:${string}`;
 
   /**
    * Filter by migration status.

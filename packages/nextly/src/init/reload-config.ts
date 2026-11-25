@@ -491,6 +491,7 @@ interface SingleRegistrySurface {
       tableName?: string;
       fields?: unknown[];
       status?: boolean;
+      localized?: boolean;
       source?: string;
     }>
   >;
@@ -547,7 +548,12 @@ interface ComponentRegistrySurface {
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
   // for UI-created components (components have no status column). Optional.
   getAllComponents?(): Promise<
-    Array<{ slug?: string; tableName?: string; fields?: unknown[] }>
+    Array<{
+      slug?: string;
+      tableName?: string;
+      fields?: unknown[];
+      localized?: boolean;
+    }>
   >;
 }
 /**
@@ -3362,6 +3368,9 @@ async function applyReloadHolding(
           tableName: s.tableName,
           fields: (s.fields ?? []) as DesiredSingle["fields"],
           status: s.status === true,
+          // Its translated fields are in its companion table: without the flag, the apply adds
+          // their columns back to the main table.
+          localized: s.localized === true,
           // Read from the row, not inferred from the row's presence. A plugin's single whose
           // plugin left the config keeps its row, so it reaches this loop while still owned by
           // code; calling it the Builder's would widen its columns on the apply that follows,
@@ -3393,6 +3402,8 @@ async function applyReloadHolding(
           slug: c.slug,
           tableName: c.tableName,
           fields: (c.fields ?? []) as DesiredFieldGroup["fields"],
+          // As the Single's above: its translated fields are in its companion table.
+          localized: c.localized === true,
           // Read from the row, for the same reason as the singles loop above.
           builderOwned: !isCodeOwned(c),
         };

@@ -86,9 +86,14 @@ function sourcesBy(
     singles: new Map<string, PluginSource>(),
     fieldGroups: new Map<string, PluginSource>(),
   };
-  // The legacy ones first, so a collection any plugin contributes at the same slug wins.
+  // The legacy ones first, so a collection any plugin contributes at the same slug wins. One the
+  // same plugin also contributes is that contribution, under the slug the host may have given it.
   for (const plugin of plugins) {
+    const contributed = new Set(
+      plugin.contributes?.collections?.map(({ slug }) => slug)
+    );
     for (const { slug } of plugin.collections ?? []) {
+      if (contributed.has(slug)) continue;
       sources.collections.set(slug, `plugin:${plugin.name}`);
     }
   }

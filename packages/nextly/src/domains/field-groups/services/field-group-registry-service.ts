@@ -1073,7 +1073,10 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     for (const config of configs) {
       try {
-        const existing = await this.findRecordForWrite(config.slug);
+        const recorded = await this.findRecordForWrite(config.slug);
+        // Whose the row is, before anything below can leave the rest of it as it is.
+        const existing = recorded && (await this.claimedBy(config, recorded));
+        const claimed = existing !== recorded;
         const schemaHash = calculateSchemaHash(config.fields);
         // The pointer decision `writeRecordedComponent` shares: a stored name
         // that differs from the derived one is repaired or reported, never
@@ -1165,6 +1168,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
             existing: settled,
             schemaHash,
             repairedTableName,
+            claimed,
             result,
           });
         }
@@ -1198,6 +1202,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     existing: DynamicFieldGroupRecord;
     schemaHash: string;
     repairedTableName: string | undefined;
+    /** Whether the sync gave the row to this declaration (`claimedBy`). */
+    claimed: boolean;
     result: SyncComponentResult;
   }): Promise<void> {
     const { config, existing, schemaHash, repairedTableName, result } = args;
@@ -1215,24 +1221,40 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           configPath: config.configPath,
           locked: true,
         },
-        { source: config.source, claim: true }
+        { source: config.source }
       );
       result.updated.push(config.slug);
-    } else if (
-      step === "metadata" ||
-      // A row whose only difference is its owner is written too, its owner alone: the decision
-      // compares what the declaration says, never whose the row is.
-      declarationTakesRow(config.source, existing)
-    ) {
+    } else if (step === "metadata") {
       await this.updateComponent(
         config.slug,
         { ...declaredComponentMetadata(config), locked: true },
-        { source: config.source, claim: true }
+        { source: config.source }
       );
+      result.updated.push(config.slug);
+    } else if (args.claimed) {
       result.updated.push(config.slug);
     } else {
       result.unchanged.push(config.slug);
     }
+  }
+
+  /**
+   * `recorded`, given to `config`'s declaration where that takes it from another owner
+   * (`declarationTakesRow`): its source and lock alone, which touch no storage. Asked before
+   * anything that can leave the row as it is, so a field group whose table cannot be brought in
+   * line is still recorded as whose it is.
+   */
+  private async claimedBy(
+    config: CodeFirstComponentConfig,
+    recorded: DynamicFieldGroupRecord
+  ): Promise<DynamicFieldGroupRecord> {
+    if (!declarationTakesRow(config.source, recorded)) return recorded;
+    await this.updateComponent(
+      config.slug,
+      { locked: true },
+      { source: config.source, claim: true }
+    );
+    return { ...recorded, source: config.source, locked: true };
   }
 
   /**
