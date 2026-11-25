@@ -267,7 +267,10 @@ describe("readRepairEntities: a registry row marked as diverged", () => {
   });
 
   it.each([
-    ["code, its row written before the flag", { source: "code", locked: false }],
+    [
+      "code, its row written before the flag",
+      { source: "code", locked: false },
+    ],
     ["a plugin", { source: "plugin:forms", locked: false }],
   ])("sends a field group owned by %s to the sync", async (_owner, owned) => {
     registry.fieldGroups = [diverged("card", owned)];

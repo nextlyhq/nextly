@@ -221,7 +221,10 @@ export const MIGRATION_CASES = {
   MIGRATION_SNAPSHOTS_UNREADABLE: () =>
     snapshotFolderUnreadableError(
       "/app/migrations/meta",
-      new Error("EACCES: permission denied, scandir '/app/migrations/meta'")
+      Object.assign(
+        new Error("EACCES: permission denied, scandir '/app/migrations/meta'"),
+        { code: "EACCES" }
+      )
     ),
   // As `nextly migrate` refuses a blank migration whose base file and MySQL variant state
   // different places in the history.
