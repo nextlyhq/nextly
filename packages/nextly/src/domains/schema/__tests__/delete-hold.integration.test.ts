@@ -3214,12 +3214,16 @@ describe.each(getConfiguredTestDialects())(
         const id = await firstId(t);
         translationsStep.fails = true;
         const { paused, release } = gated(afterCount);
+        // On MySQL the unique index is a file of its own, run after the one that records the new
+        // definition: a write sent at the count would be made from that one. The removal alone
+        // drops after its file there.
+        const memo =
+          dialect === "mysql"
+            ? { name: "memo", type: "text" }
+            : { name: "memo", type: "text", unique: true };
         const applying = saveRemoving(
           t,
-          [
-            { name: "label", type: "text" },
-            { name: "memo", type: "text", unique: true },
-          ],
+          [{ name: "label", type: "text" }, memo],
           ["note"]
         );
         const reached = await Promise.race([
