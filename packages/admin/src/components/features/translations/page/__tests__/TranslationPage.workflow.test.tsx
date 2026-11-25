@@ -343,6 +343,11 @@ describe("a language a workflow holds", () => {
     await userEvent.click(approve);
     await waitFor(() => expect(api.takeStep).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole("button", { name: /Save/ })).toBeNull();
+    const menu = within(await openMenu());
+    expect(
+      menu.getByRole("menuitem", { name: "Open in editor" })
+    ).toBeInTheDocument();
+    expect(menu.queryByRole("menuitem", { name: /Save/ })).toBeNull();
   });
 });
 
@@ -399,6 +404,11 @@ describe("publishing a language a workflow holds", () => {
     expect(
       await screen.findByText(/^Save your changes before publishing Spanish/)
     ).toBeInTheDocument();
+    expect(publish).toBeDisabled();
+    expect(publish).toHaveAttribute(
+      "title",
+      "Save your changes before publishing Spanish."
+    );
     await userEvent.click(publish);
     expect(api.update).not.toHaveBeenCalled();
     expect(api.publishParts).not.toHaveBeenCalled();
