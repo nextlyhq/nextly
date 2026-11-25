@@ -38,6 +38,7 @@ import {
   retirementCheckpoint,
   type RetirementContext,
 } from "./retired-documents";
+import { tableHold, type UnitConnection } from "./retirement-hold";
 import { leadingWords } from "./split-sql";
 import {
   assertForeignKeysOff,
@@ -872,7 +873,9 @@ async function runUnitStatements(
     statements,
     dialect,
     unit,
-    unit.transaction
+    unit.transaction,
+    // Made here, before the unit's transaction opens (`tableHold`).
+    tableHold(adapter, dialect)
   );
   const checkpoint =
     required === undefined && unique === undefined && !retirement.retires
@@ -892,6 +895,19 @@ async function runUnitStatements(
     dialect === "sqlite"
       ? statement
       : markedForSchemaLock(statement, unit.source);
+  /** The connection the unit's statements run on, for a hold of the tables it drops. */
+  const connectionOf = (
+    db: unknown,
+    execute: (statement: string) => Promise<unknown>,
+    index: number
+  ): UnitConnection => ({
+    db,
+    send: statement => execute(sent(statement)),
+    sending: () => bound?.onSend?.(index),
+    idle: async () => {
+      await bound?.beforeStatement?.();
+    },
+  });
   // A try that resumes starts at `from`; the settings made before it are made again first.
   const from = Math.max(0, Math.min(bound?.from ?? 0, statements.length));
   const settingsBefore = statements
@@ -943,13 +959,11 @@ async function runUnitStatements(
           // A cancel the checkpoint's wait drew is settled before the statement is sent.
           await bound?.beforeStatement?.();
           await sqliteWaitLeft(statement => tx.execute(statement));
-          bound?.onSend?.(index);
-          await executeTolerated(
-            tx,
-            sent(statement),
-            statement,
-            dialect,
-            bound
+          await retirement.sending(
+            connectionOf(tx.db, marked => tx.execute(marked), index),
+            index,
+            () =>
+              executeTolerated(tx, sent(statement), statement, dialect, bound)
           );
           outside = await reopenAfterMysqlImplicitCommit(tx, dialect, bound, {
             statement,
@@ -1021,10 +1035,15 @@ async function runUnitStatements(
       await checkpoint?.(checkpointDb, index);
       // A cancel the checkpoint's wait drew is settled before the statement is sent.
       await bound?.beforeStatement?.();
-      bound?.onSend?.(index);
       await sqliteWaitLeft(statement => adapter.executeQuery(statement));
       try {
-        await execute(sent(statement));
+        await retirement.sending(
+          connectionOf(checkpointDb, execute, index),
+          index,
+          async run => {
+            await run(statement);
+          }
+        );
       } catch (error) {
         if (passesOver(bound, error, statement, dialect)) continue;
         throw partialFailure(unit, index, statements.length, error);
@@ -1078,17 +1097,20 @@ async function runUnitStatements(
       },
       { strictSqlMode: true }
     );
-  } else if (bound !== undefined) {
+  } else if (bound !== undefined || retirement.retires) {
     // A try is watched on one session, so a bounded unit runs on one connection the session
-    // holds and closes afterwards, rather than each statement on whichever pooled one is free.
-    await adapter.withSession(session =>
-      boundSessionTry(session, dialect, bound, () =>
+    // holds and closes afterwards, rather than each statement on whichever pooled one is free;
+    // and a drop's short transaction (`retirement.sending`) is that one connection's.
+    await adapter.withSession(session => {
+      const each = () =>
         runEachHeld(
           statement => session.execute(statement),
           sessionReader(session, dialect)
-        )
-      )
-    );
+        );
+      return bound === undefined
+        ? each()
+        : boundSessionTry(session, dialect, bound, each);
+    });
   } else {
     await runEachHeld(onPool, adapter.getDrizzle());
   }

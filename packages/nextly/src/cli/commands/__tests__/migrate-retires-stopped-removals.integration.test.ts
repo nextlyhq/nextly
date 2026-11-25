@@ -22,6 +22,7 @@ import {
   KILLED_AT,
   withStopPoints,
 } from "../../../domains/schema/migrate/stop-points";
+import { _resetEnvCache } from "../../../shared/lib/env";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import type { TestDialect } from "../../../plugins/test-nextly";
 import {
@@ -68,6 +69,13 @@ useGeneratedMigrations(loaded);
 
 const EACH_ONCE = { p1: 1, p2: 1 };
 const GONE = { posts: "removed", pagesNamePosts: false } as const;
+
+/** The statements of one section of the file that removes `posts`. */
+const statementsOf = (dialect: TestDialect, section: "upSql" | "downSql") =>
+  splitSqlStatements(
+    parseSqlSections(readFileSync(pathOf("remove"), "utf8"))[section],
+    dialect
+  );
 
 /** `nextly migrate` over `config`, stopped where `at` holds of a point it reaches. */
 const stoppedAt = (config: unknown, at: (point: string) => boolean) =>
@@ -156,13 +164,6 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
     expect(await captures()).toBe(0);
   });
 
-  /** The statements of the removal's `section`, as the runner reads them. */
-  const statementsOf = (section: "upSql" | "downSql") =>
-    splitSqlStatements(
-      parseSqlSections(readFileSync(pathOf("remove"), "utf8"))[section],
-      dialect
-    );
-
   /** Where a stopped file's statements stay: MySQL's always, others' outside a transaction. */
   const STAYING =
     dialect === "mysql"
@@ -204,7 +205,7 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
       expect(await deletions()).toEqual({});
 
       // Its other statements finished by hand, as the refusal asks.
-      for (const statement of statementsOf("upSql").slice(1)) {
+      for (const statement of statementsOf(dialect, "upSql").slice(1)) {
         await project.adapter.executeQuery(statement);
       }
       expect(await resolved(gone, { applied: removal() })).toBeUndefined();
@@ -220,7 +221,7 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
     async how => {
       const { gone } = await stoppedAfterItsDrop(how);
       // The drop undone: the table as the file's own DOWN makes it, with the rows it had.
-      for (const statement of statementsOf("downSql").filter(each =>
+      for (const statement of statementsOf(dialect, "downSql").filter(each =>
         each.includes(POSTS)
       )) {
         await project.adapter.executeQuery(statement);
@@ -246,7 +247,7 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
     await project.adapter.executeQuery(
       `DROP TABLE ${POSTS}${dialect === "postgresql" ? " CASCADE" : ""}`
     );
-    const others = statementsOf("upSql").slice(1);
+    const others = statementsOf(dialect, "upSql").slice(1);
     edited("remove", sql => sql.replace(DROP, ""));
 
     // The table's absence is refused first, by its name, as any applied migration's is.
@@ -341,24 +342,257 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
   );
 
   it.each(["in a transaction", "outside a transaction"])(
-    "ends once a document another instance deletes as the drop starts, %s",
+    "lets no other instance store or delete a document between the capture and the drop, %s",
     async how => {
-      // In a transaction PostgreSQL and SQLite hold the table from before the capture.
-      if (how === "in a transaction" && dialect !== "mysql") return;
       const gone = await removalWritten(dialect);
       if (how === "outside a transaction") edited("remove", outsideTransaction);
+      const insert = await insertingPosts(dialect, ["p3"]);
+      const others = [
+        await otherInstance(dialect),
+        await otherInstance(dialect),
+      ];
+      const writes: Promise<string>[] = [];
 
-      const failed = await withStopPoints(
-        async point => {
-          if (point !== "collection gt_posts: captured") return;
-          await postDeleted("p1");
-        },
-        () => migrate(gone)
+      try {
+        const said: string[] = [];
+        const failed = await withStopPoints(
+          async point => {
+            if (point !== "collection gt_posts: captured") return;
+            for (const [n, statement] of [
+              insert,
+              `DELETE FROM ${POSTS} WHERE id = 'p1'`,
+            ].entries()) {
+              writes.push(
+                others[n].executeQuery(statement).then(
+                  () => "went",
+                  () => "refused"
+                )
+              );
+            }
+            // Long enough for both to have reached the database.
+            await new Promise(resolve => setTimeout(resolve, 500));
+          },
+          () => migrate(gone, said)
+        );
+        expect(failed).toBeUndefined();
+        expect(await Promise.all(writes)).toEqual(["refused", "refused"]);
+        expect(said.filter(line => line.includes("can be missing"))).toEqual(
+          []
+        );
+      } finally {
+        for (const other of others) await other.disconnect();
+      }
+
+      expect(await deletions()).toEqual(EACH_ONCE);
+      expect(await captures()).toBe(0);
+    }
+  );
+
+  /** `run`, as a MySQL account that may do everything a migration does and lock no table. */
+  async function withoutLockTables<T>(run: () => Promise<T>): Promise<T> {
+    const own = process.env.DATABASE_URL!;
+    const url = new URL(own);
+    const database = url.pathname.replace(/^\//, "");
+    const user = `${database.slice(-20)}_nolock`;
+    url.username = user;
+    url.password = "nolock";
+    await project.adapter.executeQuery(`DROP USER IF EXISTS '${user}'@'%'`);
+    await project.adapter.executeQuery(
+      `CREATE USER '${user}'@'%' IDENTIFIED BY 'nolock'`
+    );
+    try {
+      await project.adapter.executeQuery(
+        `GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, ALTER, TRIGGER, CREATE VIEW, SHOW VIEW, CREATE TEMPORARY TABLES ON \`${database}\`.* TO '${user}'@'%'`
+      );
+      process.env.DATABASE_URL = url.toString();
+      _resetEnvCache();
+      return await run();
+    } finally {
+      process.env.DATABASE_URL = own;
+      _resetEnvCache();
+      await project.adapter.executeQuery(`DROP USER '${user}'@'%'`);
+    }
+  }
+
+  it.each(dialect === "mysql" ? STAYING : [])(
+    "says so once where the account may not lock tables, and ends each document once, %s",
+    async how => {
+      const gone = await removalWritten(dialect);
+      if (how === "outside a transaction") edited("remove", outsideTransaction);
+      const said: string[] = [];
+
+      const failed = await withoutLockTables(() =>
+        withStopPoints(
+          async point => {
+            // Nothing holds the table: an ordinary delete of p1, its row and its event.
+            if (point !== "collection gt_posts: captured") return;
+            await postDeleted("p1");
+          },
+          () => migrate(gone, said)
+        )
       );
 
       expect(failed).toBeUndefined();
+      expect(
+        said.filter(line => /can be missing.*LOCK TABLES/.test(line))
+      ).toHaveLength(1);
       expect(await deletions()).toEqual(EACH_ONCE);
       expect(await captures()).toBe(0);
+    }
+  );
+
+  it.each(dialect === "mysql" ? STAYING : [])(
+    "runs the file's own statements once where the account may not lock tables and the capture waits, %s",
+    async how => {
+      const gone = await removalWritten(dialect);
+      const insert = await insertingPosts(dialect, ["p3"]);
+      edited("remove", sql => sql.replace(DROP, drop => `${insert};\n${drop}`));
+      if (how === "outside a transaction") edited("remove", outsideTransaction);
+      const said: string[] = [];
+
+      const { failed, waited } = await whileHeld(
+        tx => tx.execute("LOCK TABLES nextly_meta WRITE"),
+        `${removal()}: before statement 2`,
+        () => withoutLockTables(() => migrate(gone, said))
+      );
+
+      expect(failed, said.join("\n")).toBeUndefined();
+      expect(waited).toBeGreaterThan(3_900);
+      expect(await deletions()).toEqual({ ...EACH_ONCE, p3: 1 });
+      expect(await captures()).toBe(0);
+    },
+    90_000
+  );
+
+  it.each(["in a transaction", "outside a transaction"])(
+    "ends each document once where the run has one connection, %s",
+    async how => {
+      const gone = await removalWritten(dialect);
+      if (how === "outside a transaction") edited("remove", outsideTransaction);
+      process.env.DB_POOL_MAX = "1";
+      process.env.DB_POOL_MIN = "0";
+      _resetEnvCache();
+      try {
+        const said: string[] = [];
+        expect(await migrate(gone, said)).toBeUndefined();
+        expect(said.filter(line => line.includes("can be missing"))).toEqual(
+          []
+        );
+      } finally {
+        delete process.env.DB_POOL_MAX;
+        delete process.env.DB_POOL_MIN;
+        _resetEnvCache();
+      }
+
+      expect(await deletions()).toEqual(EACH_ONCE);
+      expect(await captures()).toBe(0);
+    },
+    60_000
+  );
+
+  /** Holds `table` in another session, by `holding`, from when the run reaches `at` for four seconds. */
+  async function whileHeld(
+    holding: (tx: {
+      execute(statement: string): Promise<unknown>;
+    }) => Promise<unknown>,
+    at: string,
+    run: () => Promise<string | undefined>
+  ): Promise<{ failed: string | undefined; waited: number }> {
+    process.env.NEXTLY_LOCK_TIMEOUT = "1";
+    process.env.NEXTLY_LOCK_TIMEOUT_TOTAL = "40";
+    const other = await otherInstance(dialect);
+    let holder: Promise<unknown> | undefined;
+    let from = 0;
+    try {
+      const failed = await withStopPoints(async point => {
+        if (point !== at || holder !== undefined) return;
+        await new Promise<void>((held, refused) => {
+          holder = other
+            .transaction(async tx => {
+              await holding(tx);
+              from = performance.now();
+              held();
+              await new Promise(resolve => setTimeout(resolve, 4_000));
+              if (dialect === "mysql") await tx.execute("UNLOCK TABLES");
+            })
+            .catch(refused);
+        });
+      }, run);
+      return { failed, waited: performance.now() - from };
+    } finally {
+      await holder;
+      await other.disconnect();
+      delete process.env.NEXTLY_LOCK_TIMEOUT;
+      delete process.env.NEXTLY_LOCK_TIMEOUT_TOTAL;
+    }
+  }
+
+  // SQLite's one writer is waited for before the file starts, and a transaction on PostgreSQL holds
+  // the table from before its first statement.
+  it.each(dialect === "sqlite" ? [] : STAYING)(
+    "waits for a table in use in tries, runs the file's own statements once, and ends each document once, %s",
+    async how => {
+      const gone = await removalWritten(dialect);
+      const insert = await insertingPosts(dialect, ["p3"]);
+      edited("remove", sql => sql.replace(DROP, drop => `${insert};\n${drop}`));
+      if (how === "outside a transaction") edited("remove", outsideTransaction);
+      const said: string[] = [];
+
+      const { failed, waited } = await whileHeld(
+        tx => tx.execute(`SELECT COUNT(*) FROM ${POSTS}`),
+        `${removal()}: before statement 1`,
+        () => migrate(gone, said)
+      );
+
+      expect(failed, said.join("\n")).toBeUndefined();
+      // The premise: the run waited several tries long, one lasting a second.
+      expect(waited).toBeGreaterThan(3_900);
+      expect(await deletions()).toEqual({ ...EACH_ONCE, p3: 1 });
+      expect(await captures()).toBe(0);
+    },
+    90_000
+  );
+
+  it.each(["in a transaction", "outside a transaction"])(
+    "ends each document once where one statement drops several tables, %s",
+    async how => {
+      // SQLite drops one table a statement.
+      if (dialect === "sqlite") return;
+      const gone = await removalWritten(dialect);
+      await project.adapter.executeQuery("CREATE TABLE gt_extra (id INT)");
+      edited("remove", sql =>
+        sql.replace(DROP, drop =>
+          drop.replace(/(dc_gt_posts[`"])/, "$1, gt_extra")
+        )
+      );
+      if (how === "outside a transaction") edited("remove", outsideTransaction);
+
+      const said: string[] = [];
+      expect(await migrate(gone, said), said.join("\n")).toBeUndefined();
+
+      expect(await stands("gt_extra")).toBe(false);
+      expect(said.filter(line => line.includes("can be missing"))).toEqual([]);
+      expect(await deletions()).toEqual(EACH_ONCE);
+      expect(await captures()).toBe(0);
+    }
+  );
+
+  it.each(dialect === "mysql" ? STAYING : [])(
+    "says so once where one statement drops a table that is not there too, %s",
+    async how => {
+      const gone = await removalWritten(dialect);
+      edited("remove", sql =>
+        sql.replace(DROP, "DROP TABLE IF EXISTS `dc_gt_posts`, `gt_not_there`;")
+      );
+      if (how === "outside a transaction") edited("remove", outsideTransaction);
+
+      const said: string[] = [];
+      expect(await migrate(gone, said), said.join("\n")).toBeUndefined();
+
+      expect(
+        said.filter(line => /can be missing.*not there/.test(line))
+      ).toHaveLength(1);
+      expect(await deletions()).toEqual(EACH_ONCE);
     }
   );
 
@@ -805,6 +1039,33 @@ describeEachDialect("a removal in code, its process killed", dialect => {
       expect(await deletions(), finished.said).toEqual(EACH_ONCE);
       expect(await captures(), finished.said).toBe(0);
       expect(await orphanedPermissions(), finished.said).not.toContain(false);
+    },
+    3 * PROCESS_TIMEOUT
+  );
+
+  it(
+    "on MySQL, ends a document's own life where one was killed between the drop and the comparison, and one made later under its id is deleted",
+    async () => {
+      if (dialect !== "mysql") return;
+      const gone = await removalWritten(dialect);
+
+      const killed = await migrateProcess("collection gt_posts: dropped");
+
+      expect(killed.said).toContain(`${KILLED_AT}collection gt_posts: dropped`);
+      expect(await stands(POSTS)).toBe(false);
+      for (const statement of statementsOf(dialect, "upSql").slice(1)) {
+        await project.adapter.executeQuery(statement);
+      }
+      // As where the entity is made again, its id used again, and that document deleted.
+      await postDeleted("p1", "created");
+      await postDeleted("p1");
+      expect(await resolved(gone, { applied: removal() })).toBeUndefined();
+
+      const finished = await migrateProcess();
+
+      expect(finished.status, finished.said).toBe(0);
+      expect(await deletions(), finished.said).toEqual({ p1: 2, p2: 1 });
+      expect(await captures(), finished.said).toBe(0);
     },
     3 * PROCESS_TIMEOUT
   );

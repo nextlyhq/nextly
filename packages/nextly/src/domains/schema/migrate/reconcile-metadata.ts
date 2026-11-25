@@ -717,6 +717,11 @@ export function keptDespiteItsDrop(name: string): string {
   return `The migration that retires ${name} ran, and its table is still there, so no deletion of its documents was recorded.`;
 }
 
+/** What a run says of a file whose tables it cannot hold while it drops them, and why. */
+export function unheldWhileDropped(source: string, reason: string): string {
+  return `${source}: another instance's save while its tables are dropped can be missing from the history, since ${reason}.`;
+}
+
 /**
  * Says what a pass over the captures did: each entity whose events went, and each capture that
  * could not be recorded, warned of unless its direction is `blocking`; answers those that are.

@@ -85,6 +85,7 @@ import {
   keptDespiteItsDrop,
   type ReconcileLogger,
   settleRetiredDocumentEvents,
+  unheldWhileDropped,
 } from "../../domains/schema/migrate/reconcile-metadata";
 import { refuseRequiredColumnsOverNulls } from "../../domains/schema/migrate/required-column-guard";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
@@ -1599,6 +1600,8 @@ export async function downDatabaseDeps(args: {
               (args.logger ?? QUIET).warn(
                 keptDespiteItsDrop(`${kind} ${slug}`)
               ),
+            unheld: (source, reason) =>
+              (args.logger ?? QUIET).warn(unheldWhileDropped(source, reason)),
           },
         },
         after,

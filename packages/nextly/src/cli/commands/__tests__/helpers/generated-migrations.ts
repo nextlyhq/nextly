@@ -301,14 +301,17 @@ export async function orphanedPermissions(): Promise<boolean[]> {
   return own.map(row => row.orphanedAt !== null);
 }
 
-/** A `deleted` event of `posts`' document `id`, as an ordinary delete records one. */
-export async function postDeleted(id: string): Promise<void> {
+/** An event of `posts`' document `id`, as an ordinary delete, or a create, records one. */
+export async function postDeleted(
+  id: string,
+  kind: "deleted" | "created" = "deleted"
+): Promise<void> {
   await instance!.adapter.insert("nextly_content_events", {
     id: randomUUID(),
     subjectKind: "collection",
     subjectSlug: "gt_posts",
     subjectId: id,
-    kind: "deleted",
+    kind,
     actorKind: "system",
     occurredAt: new Date(),
   });
@@ -342,7 +345,7 @@ export async function storeUnrecordableCapture(
         whole: true,
       },
     ],
-    [`${prefix}0`, { ids, deletions: {} }],
+    [`${prefix}0`, { ids, deletions: {}, creations: {} }],
   ] as const) {
     await instance!.adapter.insert("nextly_meta", {
       key,

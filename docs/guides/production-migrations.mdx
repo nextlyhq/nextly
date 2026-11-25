@@ -116,10 +116,15 @@ How sure that list is depends on the database:
 - On PostgreSQL, the file runs in a transaction, and the table is locked before the ids are read.
   A save from another instance waits for the drop, then fails, so no document is missed.
 - SQLite has one writer at a time, which gives the same.
-- On MySQL each drop commits as it runs, so nothing holds the table between reading the ids and
-  dropping it. A document another instance saves in that moment gets no event. The same holds
-  for a file [run outside a transaction](#running-a-file-outside-a-transaction) on any database.
-  Stop the other instances' writes to the entity before the deploy if that matters.
+- On MySQL each drop commits as it runs, so `nextly migrate` locks the tables a statement drops with
+  `LOCK TABLES` while it reads the ids and drops them. A save from another instance waits, then
+  fails. The account needs the `LOCK TABLES` privilege, granted to it rather than through a role.
+  Where it has none, or a `DROP TABLE IF EXISTS` names a table that is not there as well, the run
+  says so once for the file, and a document another instance saves in that moment gets no event. Stop the
+  other instances' writes to the entity before the deploy if that matters.
+- A file [run outside a transaction](#running-a-file-outside-a-transaction) has its drop, and the
+  reading of the ids, in one short transaction of their own on PostgreSQL and SQLite; on MySQL it is
+  locked the same way.
 
 The consent naming the entity's table covers these rows (`--accept-data-loss=dc_posts`), and
 `nextly migrate` lists each before asking. A run that stops part-way is finished by the next

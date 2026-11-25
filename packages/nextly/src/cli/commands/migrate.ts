@@ -193,6 +193,7 @@ import {
   keptDespiteItsDrop,
   reconcileMigrationMetadata,
   settleRetiredDocumentEvents,
+  unheldWhileDropped,
 } from "../../domains/schema/migrate/reconcile-metadata";
 import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import {
@@ -5393,6 +5394,8 @@ async function retirementContextOf(
     entities: judged?.retired ?? [],
     kept: ({ kind, slug }) =>
       run.logger.warn(keptDespiteItsDrop(`${kind} ${slug}`)),
+    unheld: (source, reason) =>
+      run.logger.warn(unheldWhileDropped(source, reason)),
   };
 }
 
