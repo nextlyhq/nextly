@@ -37,7 +37,11 @@ export function defineAddCommand(command: Command): Command {
         false
       )
       .action(lazyAction(async () => (await import("./add")).addAction)),
-    startLine("Reading the plugin to add...", "may connect")
+    // A run installs the package first, unless it is told to skip that.
+    startLine("Reading the plugin to add...", {
+      untimed:
+        "installs a package before it connects, unless told to skip it, and a dry run does neither",
+    })
   );
 }
 

@@ -59,6 +59,13 @@ export function StepCommentDialog({
   refusal = null,
 }: StepCommentDialogProps): JSX.Element {
   const [comment, setComment] = useState("");
+  // Whatever closes it, the comment goes with it: a parent closing it once the step is sent (the
+  // dialog stays mounted) would otherwise offer that comment to the next step, ready to send.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (!open) setComment("");
+  }
   const fieldId = useId();
   const trimmed = comment.trim();
   return (

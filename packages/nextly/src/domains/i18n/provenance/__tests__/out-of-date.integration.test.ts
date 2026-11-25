@@ -432,7 +432,7 @@ describe.each(getConfiguredTestDialects())(
       expect(overview.es.stale).toBe(true);
     });
 
-    it("judges a translation made from a source with no recorded value by the language-level stamp", async () => {
+    it("finds a translation out of date by a source first recorded when it was made", async () => {
       await boot(dialect);
       const created = (await t!.nextly.create({
         collection: "posts",
@@ -444,8 +444,29 @@ describe.each(getConfiguredTestDialects())(
       await t!.adapter.delete("nextly_translation_provenance", {
         and: [{ column: "locale", op: "=", value: "en" }],
       });
-      // Spanish is recorded, but made from a source value nothing fingerprinted.
+      // Spanish is made from source values nothing had fingerprinted: they are, with it.
       await save(id, "es", { title: "Hola", summary: "Corto" });
+      const made = await overviewOf(id);
+      expect(made.es.fields?.title?.outOfDate).toBe(false);
+      expect(made.es.stale).toBeUndefined();
+
+      await save(id, "en", { title: "Hello" });
+      const overview = await overviewOf(id);
+      expect(overview.es.fields?.title?.outOfDate).toBe(true);
+      // Field by field: the other source is as it was.
+      expect(overview.es.fields?.summary?.outOfDate).toBe(false);
+      expect(overview.es.stale).toBe(true);
+    });
+
+    it("judges a translation with no recorded source by the language-level stamp", async () => {
+      await boot(dialect);
+      const id = await translatedPost();
+      // As a translation recorded before its source was: it names no version of it.
+      await t!.adapter.updateCount(
+        "nextly_translation_provenance",
+        { sourceFingerprint: null },
+        { and: [{ column: "locale", op: "=", value: "es" }] }
+      );
       await new Promise(resolve => setTimeout(resolve, 1100));
       await save(id, "en", { title: "Hello" });
 

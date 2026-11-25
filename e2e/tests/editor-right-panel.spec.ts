@@ -2,16 +2,17 @@
  * The editor's document panel at the widths an editor is used at, laid out by
  * a real browser.
  *
- * At 1440px it is a column beside the fields, reading Status, Publishing,
- * Language and Details, and it shares the right side with the preview pane:
- * opening the preview folds it, and showing it closes the preview. At 860px
- * it floats over the fields when asked for, with its own close button. At
- * 390px it is a sheet from the bottom, and History, the preview and the panel
- * toggle are rows of the document's menu.
+ * At 1440px it is a column beside the fields, reading Status, Publishing
+ * (once scheduled), Language and Details, and it shares the right side with
+ * the preview pane: opening the preview folds it, and showing it closes the
+ * preview. At 860px it floats over the fields when asked for, with its own
+ * close button. At 390px it is a sheet from the bottom, the panel toggle is a
+ * row of More, and History stays a button by its icon.
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { chooseFromMainMenu } from "./support/document-bar";
 import { test } from "./support/test";
 
 /** The site's address, which a preview is built on. */
@@ -68,12 +69,14 @@ test("docks the panel beside the fields at 1440px, sharing the right side with t
   const sections = panel(page).locator("[data-panel-section]");
   // A block page's entry carries the page builder's Design section first; the core panel's own
   // sections follow it.
-  await expect(sections).toHaveCount(4);
+  // Publishing is drawn only once the entry is scheduled, which this one is
+  // not.
+  await expect(sections).toHaveCount(3);
   expect(
     await sections.evaluateAll(all =>
       all.map(el => el.getAttribute("data-panel-section"))
     )
-  ).toEqual(["Design", "Status", "Publishing", "Details"]);
+  ).toEqual(["Design", "Status", "Details"]);
 
   // Beside the fields, not over them.
   const title = page.getByRole("textbox", { name: "Title", exact: true });
@@ -84,7 +87,7 @@ test("docks the panel beside the fields at 1440px, sharing the right side with t
   expect(fields!.x + fields!.width).toBeLessThanOrEqual(beside!.x + 1);
 
   // The preview folds it...
-  await page.getByRole("button", { name: /^show preview$/i }).click();
+  await chooseFromMainMenu(page, "Show preview pane");
   await expect(page.locator('[data-preview-split="open"]')).toBeVisible();
   await expect(panel(page)).toHaveCount(0);
   // ...and showing it closes the preview. The preview leaves the editor under
@@ -144,27 +147,24 @@ test("floats the panel over the fields at 860px, with its own close button", asy
   await expect(panel(page)).toHaveCount(0);
 });
 
-test("opens the panel as a sheet at 390px, with History, the preview and the toggle in the menu", async ({
+test("opens the panel as a sheet at 390px, with the toggle in More and History kept in the bar", async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await useThisSite(page, testInfo.project.use.baseURL!);
   await openEntry(page);
 
-  // Out of the bar...
+  // History stays a button, by its icon; the panel toggle leaves the bar...
   const bar = page.getByTestId("document-bar");
-  await expect(bar.getByRole("button", { name: "History" })).toHaveCount(0);
+  await expect(bar.getByRole("button", { name: "History" })).toBeVisible();
   await expect(
     bar.getByRole("button", { name: /document panel$/i })
   ).toHaveCount(0);
 
-  // ...and rows of the document's menu.
+  // ...for a row of More.
   await page.getByRole("button", { name: "More actions" }).click();
   const menu = page.getByRole("menu");
-  await expect(menu.getByRole("menuitem", { name: "History" })).toBeVisible();
-  await expect(
-    menu.getByRole("menuitem", { name: "Show preview pane" })
-  ).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "History" })).toHaveCount(0);
   await menu.getByRole("menuitem", { name: "Show document panel" }).click();
 
   const sheet = page.getByRole("dialog", { name: "Document" });
@@ -181,11 +181,10 @@ test("opens the panel as a sheet at 390px, with History, the preview and the tog
   await expect(sheet).toHaveCount(0);
   await expect(page).toHaveURL(/\/collections\/block-pages\/[^/]+$/);
 
-  // The preview, from the same menu, takes the whole screen: two panes side
-  // by side leave neither readable on a phone.
+  // The preview, from the main button's menu, takes the whole screen: two
+  // panes side by side leave neither readable on a phone.
   const title = page.getByRole("textbox", { name: "Title", exact: true });
-  await page.getByRole("button", { name: "More actions" }).click();
-  await page.getByRole("menuitem", { name: "Show preview pane" }).click();
+  await chooseFromMainMenu(page, "Show preview pane");
   await expect(page.locator('[data-preview-split="open"]')).toBeVisible();
   await expect(title).toBeHidden();
   await expectNoSidewaysScroll(page);

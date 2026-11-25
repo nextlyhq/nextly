@@ -15,11 +15,13 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
+import { indexDropsBeforeColumns } from "../../../domains/i18n/migration/generate-up";
 import { applyCompanionTransition } from "../../../domains/i18n/migration/held-leaving-drops";
 import {
   buildCompanionTransitionStatements,
   type CompanionFieldLike,
 } from "../../../domains/i18n/migration/reconcile-companion";
+import { inOneSqliteTransaction } from "../../../domains/i18n/migration/sqlite-transaction";
 import { resolveTransitionStore } from "../../../domains/i18n/migration/transition-recorder";
 import { readI18nTransitionState } from "../../../domains/i18n/migration/transition-state";
 import {
@@ -28,6 +30,7 @@ import {
 } from "../../../domains/i18n/per-language-storage-layout";
 import { liveCompanionShape } from "../../../domains/i18n/runtime/companion-io";
 import { runStatement } from "../../../domains/schema/pipeline/_internal/run-statement";
+import { readTableIndexes } from "../../../domains/schema/pipeline/live-table-facts";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   NOTHING_CHANGED,
@@ -79,6 +82,20 @@ async function entitiesToMove(context: UpgradeStepContext): Promise<ToMove[]> {
       );
     }
   }
+  // Each moved column leaves the main table, and an index standing on one with other columns would
+  // break with it, so that is refused here, in the count, before anything changes
+  // (`indexDropsBeforeColumns`). One standing on the column alone is dropped with it.
+  for (const { entity, onMain } of toMove) {
+    indexDropsBeforeColumns(
+      {
+        dialect: adapter.dialect,
+        mainTable: entity.tableName,
+        collection: entity.slug,
+      },
+      onMain,
+      await mainIndexesOf(adapter, entity.tableName)
+    );
+  }
   if (unresolved.length > 0) {
     throw new NextlyError({
       code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
@@ -90,6 +107,11 @@ async function entitiesToMove(context: UpgradeStepContext): Promise<ToMove[]> {
     });
   }
   return toMove;
+}
+
+/** The main table's indexes, which a moved column's drop takes with it or is refused by. */
+function mainIndexesOf(adapter: DrizzleAdapter, tableName: string) {
+  return readTableIndexes(adapter.getDrizzle(), adapter.dialect, tableName);
 }
 
 /** How many entities have translatable values to move. */
@@ -113,59 +135,90 @@ export async function moveValuesPerLanguage(
   const adapter = context.adapter as unknown as DrizzleAdapter;
   const languages = await siteLanguages(context);
   const found = await entitiesToMove(context);
-  for (const { entity, onMain, how } of found) {
-    if (how === "drop") {
-      // The copy finished: the values are read from the translations table, so the main table's
-      // columns only stand in the way of a single layout.
-      for (const column of onMain) {
-        await runStatement(
-          adapter.getDrizzle(),
-          adapter.dialect,
-          sql`ALTER TABLE ${sql.identifier(entity.tableName)} DROP COLUMN ${sql.identifier(column)}`
-        );
-      }
-      continue;
-    }
-    const fields = entity.fields as CompanionFieldLike[];
-    const builtBy = builtByOf(entity);
-    const companionExists = await adapter.tableExists(
-      `${entity.tableName}_locales`
+  for (const item of found) {
+    // Each entity's move as one on SQLite (`inOneSqliteTransaction`): a drop SQLite refuses part-way
+    // leaves its columns and its translations table as they were.
+    await inOneSqliteTransaction(adapter, () =>
+      moveEntityValues(adapter, languages, item)
     );
-    const plan = buildCompanionTransitionStatements({
-      builtBy,
-      slug: entity.slug,
-      kind: transitionKindOf(entity),
-      tableName: entity.tableName,
-      dialect: adapter.dialect,
-      defaultLocale: languages.defaultLocale,
-      languageOrder: languages.codes,
-      // A translated entity keeps a status per language where it is Draft/Published; one that is
-      // not translated publishes as one document, its status on its main row alone.
-      status: entity.localized === true && entity.status === true,
-      wasStatus: false,
-      wasLocalized: false,
-      isLocalized: true,
-      oldFields: fields,
-      newFields: fields,
-      companionExists,
-      // What this database holds now, so a run that stopped part-way is finished, not repeated.
-      ...(await liveCompanionShape(adapter, {
-        tableName: entity.tableName,
-        oldFields: fields,
-        newFields: fields,
-        builtBy,
-        companionExists,
-      })),
-    });
-    await applyCompanionTransition({
-      adapter,
-      plan,
-      kind: transitionKindOf(entity),
-      slug: entity.slug,
-      tableName: entity.tableName,
-    });
   }
   return found.length;
+}
+
+/** One entity's move: its copy into the translations table, or the drop of what the copy left. */
+async function moveEntityValues(
+  adapter: DrizzleAdapter,
+  languages: Awaited<ReturnType<typeof siteLanguages>>,
+  { entity, onMain, how }: ToMove
+): Promise<void> {
+  if (how === "drop") {
+    // The copy finished: the values are read from the translations table, so the main table's
+    // columns only stand in the way of a single layout. An index on one of them alone goes
+    // first, since SQLite refuses to drop a column an index names.
+    for (const statement of indexDropsBeforeColumns(
+      {
+        dialect: adapter.dialect,
+        mainTable: entity.tableName,
+        collection: entity.slug,
+      },
+      onMain,
+      await mainIndexesOf(adapter, entity.tableName)
+    )) {
+      await runStatement(
+        adapter.getDrizzle(),
+        adapter.dialect,
+        sql.raw(statement)
+      );
+    }
+    for (const column of onMain) {
+      await runStatement(
+        adapter.getDrizzle(),
+        adapter.dialect,
+        sql`ALTER TABLE ${sql.identifier(entity.tableName)} DROP COLUMN ${sql.identifier(column)}`
+      );
+    }
+    return;
+  }
+  const fields = entity.fields as CompanionFieldLike[];
+  const builtBy = builtByOf(entity);
+  const companionExists = await adapter.tableExists(
+    `${entity.tableName}_locales`
+  );
+  const plan = buildCompanionTransitionStatements({
+    // The moved columns leave the main table, their own indexes first.
+    mainIndexes: await mainIndexesOf(adapter, entity.tableName),
+    builtBy,
+    slug: entity.slug,
+    kind: transitionKindOf(entity),
+    tableName: entity.tableName,
+    dialect: adapter.dialect,
+    defaultLocale: languages.defaultLocale,
+    languageOrder: languages.codes,
+    // A translated entity keeps a status per language where it is Draft/Published; one that is
+    // not translated publishes as one document, its status on its main row alone.
+    status: entity.localized === true && entity.status === true,
+    wasStatus: false,
+    wasLocalized: false,
+    isLocalized: true,
+    oldFields: fields,
+    newFields: fields,
+    companionExists,
+    // What this database holds now, so a run that stopped part-way is finished, not repeated.
+    ...(await liveCompanionShape(adapter, {
+      tableName: entity.tableName,
+      oldFields: fields,
+      newFields: fields,
+      builtBy,
+      companionExists,
+    })),
+  });
+  await applyCompanionTransition({
+    adapter,
+    plan,
+    kind: transitionKindOf(entity),
+    slug: entity.slug,
+    tableName: entity.tableName,
+  });
 }
 
 /** What the dry run lists of the move: each entity, and the columns that move. */

@@ -25,10 +25,14 @@ import { announceMode, announceStart } from "./environment";
 
 /**
  * Whether a command that starts with its own line may reach a database: one
- * that may names it when it connects. Asked of every such command, so a new
- * one cannot leave it unsaid and go untimed to its connection.
+ * that may names it when it connects, and the start-up check times it to
+ * there; one that may, but that the check must not run, says why. Asked of
+ * every such command, so a new one cannot leave it unsaid.
  */
-export type StartLineDatabase = "may connect" | "no database";
+export type StartLineDatabase =
+  | "may connect"
+  | "no database"
+  | { untimed: string };
 
 /** The line a command starts with. */
 export type FirstLine =
@@ -58,12 +62,16 @@ export function startLine(
   return { kind: "start", line, database };
 }
 
-/** Whether a command that starts with `first` may connect to a database. */
-export function mayConnect(first: FirstLine): boolean {
-  return (
-    first.kind === "database" ||
-    (first.kind === "start" && first.database === "may connect")
-  );
+/**
+ * Why the start-up check does not time a command that starts with `first` to
+ * its connection, or `undefined` where it does.
+ */
+export function whyUntimedToConnect(first: FirstLine): string | undefined {
+  if (first.kind === "database") return undefined;
+  if (first.kind === "own" || first.database === "no database") {
+    return "reaches no database";
+  }
+  return first.database === "may connect" ? undefined : first.database.untimed;
 }
 
 const DECLARED = new WeakMap<Command, FirstLine>();

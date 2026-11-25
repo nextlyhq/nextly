@@ -22,6 +22,8 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { standardLanguageCode } from "../../../domains/i18n/config/standard-code";
 import {
+  codesFoldCase,
+  columnsFoldingCase,
   sameStoredCode,
   storedOlderSpellings,
   tablesHoldingCode,
@@ -34,6 +36,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { LANGUAGES_TABLE } from "../../../schemas/languages/table-name";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 import { TRANSLATION_PROVENANCE_TABLE } from "../../../schemas/translation-provenance/table-name";
+import { TRANSLATION_SOURCES_TABLE } from "../../../schemas/translation-sources/table-name";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import {
@@ -104,6 +107,8 @@ async function translationTables(
   const tables: string[] = [];
   for (const entity of await siteEntities(context)) {
     const table = `${entity.tableName}_locales`;
+    // One the run's migrations drop, as they do where an entity stops being translated.
+    if (context.droppedAhead?.has(table.toLowerCase())) continue;
     if (await context.adapter.tableExists(table)) tables.push(table);
   }
   return tables;
@@ -156,6 +161,13 @@ const KEYED_TARGETS: readonly KeyedTarget[] = [
     table: TRANSLATION_PROVENANCE_TABLE,
     same: ["scope_kind", "scope_slug", "entry_id", "part_state", "field_path"],
     language: "locale",
+    spelled: asWritten,
+  },
+  // One row per version of one field's source text in a language of a document.
+  {
+    table: TRANSLATION_SOURCES_TABLE,
+    same: ["scope_kind", "scope_slug", "entry_id", "field_path", "fingerprint"],
+    language: "source_locale",
     spelled: asWritten,
   },
   // One language per code in the Settings registry, whatever else its rows hold.
@@ -298,7 +310,10 @@ async function conversionsOfSite(
 ): Promise<CodeConversion[]> {
   const configured = (await configuredLanguages(context)).codes;
   const conversions = conversionsOf(configured);
-  const { dialect } = context.adapter as unknown as DrizzleAdapter;
+  const foldsCase = await codesFoldCase(
+    context.adapter as unknown as DrizzleAdapter,
+    tables
+  );
   for (const stored of await storedOlderSpellings(
     context.adapter as unknown as DrizzleAdapter,
     tables,
@@ -308,7 +323,7 @@ async function conversionsOfSite(
     // already converts rows stored `PT_br`, so the scan's spelling is no second conversion.
     if (
       !conversions.some(({ from }) =>
-        sameStoredCode(dialect, from, stored.from)
+        sameStoredCode(foldsCase, from, stored.from)
       )
     ) {
       conversions.push(stored);
@@ -328,10 +343,25 @@ async function refuseCollisions(
   targets: readonly KeyedTarget[],
   conversions: readonly CodeConversion[]
 ): Promise<void> {
+  // Each target's language column by its own collation (`columnsFoldingCase`): a site can keep
+  // `_locale` binary beside a case-insensitive version history.
+  const folds = await columnsFoldingCase(
+    context.adapter as unknown as DrizzleAdapter,
+    targets.map(({ table, language }) => ({ table, column: language }))
+  );
   for (const [index, one] of conversions.entries()) {
     for (const other of conversions.slice(index + 1)) {
       if (other.to !== one.to) continue;
-      const meeting = await tablesMeetingBoth(context, targets, {
+      // Two spellings that differ only in letter case are one stored code where the column folds
+      // case: a single row there matches both, and is no pair kept under both.
+      const apart = targets.filter(
+        target =>
+          !(
+            folds({ table: target.table, column: target.language }) &&
+            sameStoredCode(true, one.from, other.from)
+          )
+      );
+      const meeting = await tablesMeetingBoth(context, apart, {
         from: one.from,
         to: other.from,
       });
@@ -362,11 +392,15 @@ async function conversionsToRun(
   // Rewriting a version's languages writes the newer columns: only on a history laid out for them.
   await assertVersionHistoryReady(context);
   await refuseCollisions(context, targets.versionHistory, conversions);
+  const foldsCase = await codesFoldCase(adapter, tables);
   const pending: CodeConversion[] = [];
   for (const conversion of conversions) {
     // Where the start finds rows under the older spelling, the same answer as its refusal.
     const held = await tablesHoldingCode(adapter, tables, conversion.from);
-    if (held.length > 0 || (await registryHolds(context, conversion.from))) {
+    if (
+      held.length > 0 ||
+      (await registryHolds(context, conversion.from, foldsCase))
+    ) {
       pending.push(conversion);
     }
   }
@@ -396,6 +430,8 @@ export async function convertLanguageCodes(
   const adapter = context.adapter as unknown as DrizzleAdapter;
   const conversions = await conversionsToRun(context);
   const tables = await translationTables(context);
+  // One case rule for every list and registry entry the conversions rewrite (`sameStoredCode`).
+  const foldsCase = await codesFoldCase(adapter, tables);
   for (const { from, to } of conversions) {
     for (const table of tables) {
       await runStatement(
@@ -404,13 +440,14 @@ export async function convertLanguageCodes(
         sql`UPDATE ${sql.identifier(table)} SET ${sql.identifier("_locale")} = ${to} WHERE ${sql.identifier("_locale")} = ${from}`
       );
     }
-    await convertVersions(adapter, from, to);
+    await convertVersions(adapter, from, to, foldsCase);
     await convertPins(context, from, to);
     await convertReleaseMembers(context, from, to);
-    await convertLanguageRegistry(context, from, to);
+    await convertLanguageRegistry(context, from, to, foldsCase);
     // The tables that record a language and nothing computed from it.
     for (const [table, columns] of [
       [TRANSLATION_PROVENANCE_TABLE, ["locale", "sourceLocale"]],
+      [TRANSLATION_SOURCES_TABLE, ["sourceLocale"]],
       [I18N_ARCHIVE_TABLE, ["locale"]],
       [MEDIA_USAGE_TABLE, ["locale"]],
       [PREVIEW_LINKS_TABLE, ["locale"]],
@@ -434,7 +471,8 @@ export async function convertLanguageCodes(
 async function convertVersions(
   adapter: DrizzleAdapter,
   from: string,
-  to: string
+  to: string,
+  foldsCase: boolean
 ): Promise<void> {
   const rows = await adapter.select<VersionCodeRow>(VERSIONS_TABLE, {
     columns: ["id", "scopeKind", "scopeSlug", "entryId", "draftKey"],
@@ -479,8 +517,7 @@ async function convertVersions(
         changedLocales: JSON.stringify(
           // Each entry the database reads as `from`, as the scan found it (`sameStoredCode`).
           list.map(code =>
-            typeof code === "string" &&
-            sameStoredCode(adapter.dialect, code, from)
+            typeof code === "string" && sameStoredCode(foldsCase, code, from)
               ? to
               : code
           )
@@ -540,7 +577,8 @@ interface RegistryRow {
 /** The Settings registry's rows naming `code`: as their own code or in their fallback list. */
 async function registryRowsNaming(
   context: UpgradeStepContext,
-  code: string
+  code: string,
+  foldsCase: boolean
 ): Promise<RegistryRow[]> {
   if (!(await context.adapter.tableExists(LANGUAGES_TABLE))) return [];
   const adapter = context.adapter as unknown as DrizzleAdapter;
@@ -548,8 +586,7 @@ async function registryRowsNaming(
     columns: ["code", "fallback", "revision"],
   });
   // Compared as the database compares codes (`sameStoredCode`), as the scan found them.
-  const same = (stored: string) =>
-    sameStoredCode(adapter.dialect, stored, code);
+  const same = (stored: string) => sameStoredCode(foldsCase, stored, code);
   return rows.filter(row => same(row.code) || fallbackOf(row).some(same));
 }
 
@@ -568,9 +605,10 @@ function fallbackOf(row: RegistryRow): string[] {
 /** Whether the Settings registry still names `code`. */
 async function registryHolds(
   context: UpgradeStepContext,
-  code: string
+  code: string,
+  foldsCase: boolean
 ): Promise<boolean> {
-  return (await registryRowsNaming(context, code)).length > 0;
+  return (await registryRowsNaming(context, code, foldsCase)).length > 0;
 }
 
 /**
@@ -582,17 +620,18 @@ async function registryHolds(
 async function convertLanguageRegistry(
   context: UpgradeStepContext,
   from: string,
-  to: string
+  to: string,
+  foldsCase: boolean
 ): Promise<void> {
   const adapter = context.adapter as unknown as DrizzleAdapter;
-  for (const row of await registryRowsNaming(context, from)) {
+  for (const row of await registryRowsNaming(context, from, foldsCase)) {
     await adapter.update(
       LANGUAGES_TABLE,
       {
-        code: sameStoredCode(adapter.dialect, row.code, from) ? to : row.code,
+        code: sameStoredCode(foldsCase, row.code, from) ? to : row.code,
         fallback: JSON.stringify(
           fallbackOf(row).map(code =>
-            sameStoredCode(adapter.dialect, code, from) ? to : code
+            sameStoredCode(foldsCase, code, from) ? to : code
           )
         ),
         revision: (row.revision ?? 0) + 1,

@@ -327,7 +327,7 @@ export function useStoringGate(scope: string): StoringGate {
     // A store that settles after the scope changed answers for a document no
     // longer on screen.
     if (startedIn !== currentVisit.current) return;
-    if (outcome.ok) {
+    if (outcome.ok || outcome.stored === true) {
       setLastStore({ kind: "stored", at: new Date() });
     } else if (outcome.reason !== "busy" && outcome.reason !== "cancelled") {
       setLastStore({ kind: "failed", message: outcome.message, action });

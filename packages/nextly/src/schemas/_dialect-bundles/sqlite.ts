@@ -138,6 +138,7 @@ export { nextlyExternalIdentitiesSqlite as nextlyExternalIdentities } from "../e
 export { nextlyVersionViewsSqlite as nextlyVersionViews } from "../version-views/sqlite";
 export { nextlyReviewStatesSqlite as nextlyReviewStates } from "../review-states/sqlite";
 export { nextlyTranslationProvenanceSqlite as nextlyTranslationProvenance } from "../translation-provenance/sqlite";
+export { nextlyTranslationSourcesSqlite as nextlyTranslationSources } from "../translation-sources/sqlite";
 export { nextlyWorkflowSettingsSqlite as nextlyWorkflowSettings } from "../workflow-settings/sqlite";
 export { nextlyScheduleWindowsSqlite as nextlyScheduleWindows } from "../schedule-windows/sqlite";
 // The record of content events; in the bundle so freshPushSchema creates the

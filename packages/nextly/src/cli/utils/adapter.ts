@@ -11,6 +11,8 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
 import {
   activePostgresSchema,
   assertInstallationInConfiguredSchema,
@@ -306,9 +308,10 @@ function missingSqliteFile(
 
 /**
  * Creates the adapter for the dialect and URL given, leaving the environment
- * untouched, with the static system tables resolvable on it. A read-only open whose PostgreSQL schema is not there answers
- * `missing`; any other failure ends with the one code every command that
- * opens a database ends with.
+ * untouched, with the static system tables resolvable on it. A read-only open
+ * whose PostgreSQL schema is not there answers `missing`; any other failure to
+ * connect ends with the one code every command that opens a database ends
+ * with, and a failure of the tables' own code is thrown as it is.
  */
 async function createForTarget(
   options: CreateCliAdapterOptions,
@@ -335,19 +338,13 @@ async function createForTarget(
       ...(schema === DEFAULT_POSTGRES_SCHEMA ? {} : { schema }),
       ...(readOnly ? { readOnly: true } : {}),
     });
-    // The static system tables, resolvable by name from the moment the adapter exists. The
-    // adapter writes only to a table its resolver holds, and several commands install no resolver
-    // of their own before they write one: the schema lock seeds its field-group row through a
-    // transaction insert, inside `migrate:resolve`, `migrate:baseline`, `migrate:down`, `upgrade`
-    // and plugin install and uninstall. A command that installs its own resolver replaces this one.
-    // Loaded here, as the factory is, so the CLI's light entry points do not import the tables.
-    const { installRegistryResolver } = await import("./registry-resolver");
-    installRegistryResolver(adapter);
   } catch (error) {
     return failed(error);
   }
-  // Past the tables' code, which every command that connects loads, and before the command's own queries. Outside
-  // the handling above and below, which reports what it catches as a failed connection.
+  await installTables(adapter);
+  // Past the tables' code, which every command that connects loads, and before the command's own
+  // queries. Outside the handling above and below, which reports what it catches as a failed
+  // connection.
   await endAtProbe("connected", () => adapter.disconnect());
   // Before the command creates or migrates anything: with the setting moved
   // on an existing site, `migrate` and `db:sync` would build a second, empty
@@ -361,6 +358,42 @@ async function createForTarget(
     }
   }
   return adapter;
+}
+
+/** The failures that came after a database had opened, while its tables were loaded. */
+const TABLES_FAILURES = new WeakSet<object>();
+
+/**
+ * Whether `error` came after its database had opened, while its tables were loaded, so it is no
+ * failed connection whatever its kind.
+ */
+export function cameAfterConnecting(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && TABLES_FAILURES.has(error)
+  );
+}
+
+/**
+ * Gives an adapter that has connected the static system tables. Where their code fails, the
+ * connection is given up, and the error is thrown as it is: the database answered, so this is not
+ * a failed connection, and nothing about `DATABASE_URL` would mend it.
+ */
+async function installTables(adapter: DrizzleAdapter): Promise<void> {
+  try {
+    // The static system tables, resolvable by name from the moment the adapter exists. The
+    // adapter writes only to a table its resolver holds, and several commands install no resolver
+    // of their own before they write one: the schema lock seeds its field-group row through a
+    // transaction insert, inside `migrate:resolve`, `migrate:baseline`, `migrate:down`, `upgrade`
+    // and plugin install and uninstall. A command that installs its own resolver replaces this one.
+    // Loaded here, as the factory is, so the CLI's light entry points do not import the tables.
+    const { installRegistryResolver } = await import("./registry-resolver");
+    installRegistryResolver(adapter);
+  } catch (error) {
+    // A disconnect that fails says less than what was already wrong.
+    await adapter.disconnect().catch(() => {});
+    if (typeof error === "object" && error !== null) TABLES_FAILURES.add(error);
+    throw error;
+  }
 }
 
 /**

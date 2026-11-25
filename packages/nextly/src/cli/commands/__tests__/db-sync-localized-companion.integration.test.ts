@@ -22,11 +22,12 @@
  * `dev-watcher.ts` still call the hook — that wiring is a single line in each,
  * checked by reading them.
  */
+import { AsyncResource } from "node:async_hooks";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   checkbox,
@@ -292,6 +293,8 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     // translations table; one with nothing to translate (a link list and switches) gets none.
     // Recording a finished transition for it anyway made the next run try to begin that
     // transition again and refuse, failing every second `nextly migrate` of such a site.
+    // The link list says it is shared (`localized: false`): a repeater's text inside is otherwise
+    // translated row by row, which keeps a translations table.
     const config = defineConfig({
       localization: { locales: ["en", "es"], defaultLocale: "en" },
       singles: [
@@ -300,6 +303,7 @@ describe("db:sync creates localized companion tables in-process (integration)", 
           fields: [
             repeater({
               name: "links",
+              localized: false,
               fields: [text({ name: "label" }), text({ name: "href" })],
             }),
             checkbox({ name: "showSearch" }),
@@ -403,6 +407,191 @@ describe("db:sync creates localized companion tables in-process (integration)", 
       _resetPerLanguageStorage();
     }
   });
+
+  // SQLite cannot make a column optional, so a required translatable column is dropped from the
+  // main table once its values are copied; an index on it would make SQLite refuse the drop part-way,
+  // with the columns dropped before it gone and the next start refused. The index goes first, and
+  // a second sync has nothing left to do. Broken, the sync stops on "no such column" in the index.
+  it.each([
+    ["an index", { index: true }],
+    ["a unique index", { unique: true }],
+  ] as const)(
+    "starts keeping a required field with %s per language, its main column and index gone, in one sync",
+    async (_label, indexed) => {
+      const config = defineConfig({
+        collections: [
+          defineCollection({
+            slug: "dbsync_indexed",
+            fields: [
+              text({ name: "title" }),
+              text({ name: "handle", required: true, ...indexed }),
+            ],
+          }),
+        ],
+      });
+      await runSync(config);
+      await adapter?.executeQuery(
+        `INSERT INTO "dc_dbsync_indexed" ("id", "slug", "title", "handle") VALUES ('row1', 'r1', 'Written before', 'first-handle')`
+      );
+
+      setPerLanguageStorage(true);
+      try {
+        await runSync(config);
+
+        const rows = await adapter?.executeQuery<{ handle: string }>(
+          `SELECT "handle" FROM "dc_dbsync_indexed_locales" WHERE "_locale" = 'en'`
+        );
+        expect(rows).toEqual([{ handle: "first-handle" }]);
+        const mainColumns = (
+          (await adapter?.executeQuery<{ name: string }>(
+            `SELECT name FROM pragma_table_info('dc_dbsync_indexed')`
+          )) ?? []
+        ).map(row => row.name);
+        expect(mainColumns).not.toContain("handle");
+        // Nothing is left half done for the next run.
+        await runSync(config);
+        if ("unique" in indexed) {
+          // Unique in each language, as the per-language table keys it.
+          const indexes = await adapter?.executeQuery<{ sql: string | null }>(
+            `SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'dc_dbsync_indexed_locales'`
+          );
+          expect(
+            (indexes ?? []).some(
+              row => row.sql?.includes("UNIQUE") && row.sql.includes("handle")
+            )
+          ).toBe(true);
+        }
+      } finally {
+        _resetPerLanguageStorage();
+      }
+    }
+  );
+
+  // The move runs in the adapter's own transaction scope, so the adapter knows it is open: a
+  // transaction another flow begins meanwhile waits its turn and runs after the move, rather than
+  // inside it. Broken, with a raw savepoint the adapter cannot see, that transaction begins on the
+  // connection while the move's is open, and SQLite refuses it.
+  it("runs a required field's move in the adapter's transaction, so another flow's waits its turn", async () => {
+    const config = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_in_scope",
+          fields: [
+            text({ name: "title" }),
+            text({ name: "handle", required: true }),
+          ],
+        }),
+      ],
+    });
+    await runSync(config);
+    // Connected by the first sync.
+    const live = adapter;
+    if (!live) throw new Error("the SQLite adapter is not connected");
+    await live.executeQuery(
+      `INSERT INTO "dc_dbsync_in_scope" ("id", "slug", "title", "handle") VALUES ('row1', 'r1', 'Written before', 'first-handle')`
+    );
+    await live.executeQuery(`CREATE TABLE "bystander" ("id" text)`);
+
+    // Each sync opens its own connection, so the one the move runs on is watched through the
+    // adapter's class, and the other flow is started on that connection, from the test's own flow
+    // rather than the move's, as an unrelated request would be.
+    type Connection = typeof live;
+    const otherFlow = AsyncResource.bind((on: Connection) =>
+      on.transaction(async () => {
+        await on.executeQuery(`INSERT INTO "bystander" ("id") VALUES ('b1')`);
+      })
+    );
+    let other: Promise<void> | undefined;
+    const shared = Object.getPrototypeOf(live) as Connection;
+    const executeQuery = shared.executeQuery;
+    const spy = vi.spyOn(shared, "executeQuery").mockImplementation(function (
+      this: Connection,
+      statement: string,
+      params?: Parameters<Connection["executeQuery"]>[1]
+    ) {
+      if (other === undefined && /DROP COLUMN/i.test(statement)) {
+        other = otherFlow(this);
+      }
+      return executeQuery.call(this, statement, params);
+    });
+
+    setPerLanguageStorage(true);
+    try {
+      await runSync(config);
+      spy.mockRestore();
+      expect(other).toBeDefined();
+      await other;
+
+      // Read on the connection the second sync opened.
+      expect(
+        await adapter?.executeQuery(`SELECT "id" FROM "bystander"`)
+      ).toEqual([{ id: "b1" }]);
+      const rows = await adapter?.executeQuery<{ handle: string }>(
+        `SELECT "handle" FROM "dc_dbsync_in_scope_locales" WHERE "_locale" = 'en'`
+      );
+      expect(rows).toEqual([{ handle: "first-handle" }]);
+    } finally {
+      spy.mockRestore();
+      _resetPerLanguageStorage();
+    }
+  });
+
+  // Something else holding the required column that moves: an index on it with another column,
+  // which a drop would break, is refused before anything runs; a view naming it makes SQLite refuse
+  // the drop itself, and the move runs in one transaction, so nothing of it applies. Either way the
+  // main table keeps the column and its values, and no translations table is left half filled.
+  // Broken, the index case drops the column under it, and the view case leaves a filled
+  // translations table beside a main table the next start refuses.
+  it.each([
+    [
+      "an index on it and another column",
+      "dbsync_held_index",
+      (table: string) =>
+        `CREATE INDEX "idx_two" ON "${table}" ("slug", "handle")`,
+    ],
+    [
+      "a view naming it",
+      "dbsync_held_view",
+      (table: string) =>
+        `CREATE VIEW "v_held" AS SELECT "handle" FROM "${table}"`,
+    ],
+  ] as const)(
+    "changes nothing where a required field's column is held by %s",
+    async (_label, slug, holder) => {
+      // A collection of its own per case: a refused move leaves the process remembering its slug.
+      const table = `dc_${slug}`;
+      const config = defineConfig({
+        collections: [
+          defineCollection({
+            slug,
+            fields: [
+              text({ name: "title" }),
+              text({ name: "handle", required: true }),
+            ],
+          }),
+        ],
+      });
+      await runSync(config);
+      await adapter?.executeQuery(
+        `INSERT INTO "${table}" ("id", "slug", "title", "handle") VALUES ('row1', 'r1', 'Written before', 'first-handle')`
+      );
+      await adapter?.executeQuery(holder(table));
+
+      setPerLanguageStorage(true);
+      try {
+        await expect(runSync(config)).rejects.toThrow();
+
+        const [row] =
+          (await adapter?.executeQuery<{ handle: string }>(
+            `SELECT "handle" FROM "${table}"`
+          )) ?? [];
+        expect(row?.handle).toBe("first-handle");
+        expect(await tableExists(`${table}_locales`)).toBe(false);
+      } finally {
+        _resetPerLanguageStorage();
+      }
+    }
+  );
 
   // Only a column whose values move to the per-language table is dropped without consent. A field
   // removed from the config in the same switch has nowhere its values go, so its drop still needs

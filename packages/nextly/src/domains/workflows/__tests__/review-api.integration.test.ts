@@ -75,6 +75,7 @@ import {
   role,
   saveIn,
   seedState,
+  seedStates,
   shownVersion,
   stateDb,
   stateOf,
@@ -83,6 +84,30 @@ import {
   type Grant,
 } from "./helpers/step-harness";
 import { editorial } from "./helpers/step-workflows";
+
+/**
+ * The action each editorial step needs, as Settings names it: the one it names, else `publish`
+ * into a stage that allows publishing (`fastTrack` into Cleared), else `update`.
+ */
+const EDITORIAL_ACTIONS: Record<string, string> = {
+  send: "update",
+  clear: "sign-off",
+  bounce: "sign-off",
+  park: "update",
+  resume: "update",
+  fastTrack: "publish",
+};
+
+/**
+ * The action of each editorial stage's primary step: the one marked primary, or a stage's only
+ * step out (Cleared's Send back). Its permission lets a reader assign a part in the stage.
+ */
+const EDITORIAL_PRIMARY: Record<string, string> = {
+  writing: "update",
+  legal: "sign-off",
+  hold: "update",
+  cleared: "sign-off",
+};
 
 const HASH = workflowDefinitionHash(editorial);
 const PAGES = "pages";
@@ -188,10 +213,28 @@ type Doc = Record<string, unknown>;
 
 let current: TestNextly | undefined;
 
+/** Puts back the server's time zone a case changed with `runIn`. */
+let restoreTz: (() => void) | undefined;
+
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  restoreTz?.();
+  restoreTz = undefined;
 });
+
+/**
+ * Runs the rest of the case as if the server ran in `zone`: Node reads `TZ` again when it is
+ * assigned, so every `Date` made afterwards, and every driver decoding one, uses the new zone.
+ */
+function runIn(zone: string): void {
+  const previous = process.env.TZ;
+  process.env.TZ = zone;
+  restoreTz = () => {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  };
+}
 
 const app = (): TestNextly => {
   if (!current) throw new Error("not booted");
@@ -759,20 +802,25 @@ describe.each(getConfiguredTestDialects())(
             id: "carol",
           });
 
-          // Its stages by name and label, which a list filters by, and its steps by name, label
-          // and kind: a list takes the workflow's one step of a kind in bulk (Submit for review,
-          // Send back), and never an approval.
+          // Its stages by name and label, which a list filters by, each with its primary step's
+          // action, whose permission lets a reader assign there; and its steps by name, label,
+          // kind and whether each needs a comment: a list takes the workflow's one step of a kind
+          // in bulk (Submit for review, Send back), asking first for a comment one needs, and
+          // never an approval.
           expect(held.workflow).toEqual({
             slug: "editorial",
             label: "Editorial",
             stages: editorial.stages.map(stage => ({
               name: stage.name,
               label: stage.label,
+              primaryAction: EDITORIAL_PRIMARY[stage.name],
             })),
             steps: editorial.steps.map(step => ({
               name: step.name,
               label: step.label,
               kind: step.kind,
+              commentRequired: step.commentRequired,
+              action: EDITORIAL_ACTIONS[step.name],
             })),
           });
           expect(free.workflow).toBeNull();
@@ -795,7 +843,11 @@ describe.each(getConfiguredTestDialects())(
             (relabelled.workflow as { stages: Doc[] }).stages.find(
               stage => stage.name === "legal"
             )
-          ).toEqual({ name: "legal", label: "Lawyers" });
+          ).toEqual({
+            name: "legal",
+            label: "Lawyers",
+            primaryAction: "sign-off",
+          });
 
           // A visitor is refused the read, so the workflow is never named to one.
           const anonymous = await createDynamicHandlers().GET(
@@ -831,11 +883,14 @@ describe.each(getConfiguredTestDialects())(
             stages: editorial.stages.map(stage => ({
               name: stage.name,
               label: stage.label,
+              primaryAction: EDITORIAL_PRIMARY[stage.name],
             })),
             steps: editorial.steps.map(step => ({
               name: step.name,
               label: step.label,
               kind: step.kind,
+              commentRequired: step.commentRequired,
+              action: EDITORIAL_ACTIONS[step.name],
             })),
           });
           // The exported schema helper a site can mount names it the same way.
@@ -855,11 +910,14 @@ describe.each(getConfiguredTestDialects())(
             stages: editorial.stages.map(stage => ({
               name: stage.name,
               label: stage.label,
+              primaryAction: EDITORIAL_PRIMARY[stage.name],
             })),
             steps: editorial.steps.map(step => ({
               name: step.name,
               label: step.label,
               kind: step.kind,
+              commentRequired: step.commentRequired,
+              action: EDITORIAL_ACTIONS[step.name],
             })),
           });
 
@@ -1804,12 +1862,13 @@ describe.each(getConfiguredTestDialects())(
           ["read", PAGES],
           ["sign-off", PAGES],
         ]);
-        for (let n = 0; n < 1000; n += 1) {
-          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
-            definitionHash: HASH,
-            assignee: { kind: "user", id: "sam" },
-          });
-        }
+        // In batched inserts: a thousand statements one by one is slow on a busy database.
+        await seedStates(
+          app(),
+          Array.from({ length: 1000 }, () => partOf(PAGES, randomUUID(), null)),
+          "legal",
+          { definitionHash: HASH, assignee: { kind: "user", id: "sam" } }
+        );
         const orphan = await entry(app(), PAGES);
         await seedState(app(), partOf(PAGES, orphan, null), "legal", {
           definitionHash: HASH,
@@ -1884,7 +1943,9 @@ describe.each(getConfiguredTestDialects())(
           many.length,
           `3 assignees:\n${few.join("\n")}\n\n15 assignees:\n${many.join("\n")}`
         ).toBe(few.length);
-      });
+        // Fifteen documents and five people made one by one, and four lists read: more than the
+        // file's 30 s on a busy MySQL, so the case has a budget of its own.
+      }, 90_000);
 
       it("marks the total a floor when it stops before reading everything", async () => {
         // 6 parts Sam may move come first, then 1,000 no one may read. Page 1 needs 6 (its 5 and one
@@ -1905,11 +1966,13 @@ describe.each(getConfiguredTestDialects())(
             { definitionHash: HASH, enteredAt: earlier }
           );
         }
-        for (let n = 0; n < 1000; n += 1) {
-          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
-            definitionHash: HASH,
-          });
-        }
+        // In batched inserts: a thousand statements one by one is slow on a busy database.
+        await seedStates(
+          app(),
+          Array.from({ length: 1000 }, () => partOf(PAGES, randomUUID(), null)),
+          "legal",
+          { definitionHash: HASH }
+        );
         const SAM: Who = { kind: "person", id: "sam" };
 
         const first = await door.waiting(SAM, { page: 1, limit: 5 });
@@ -2138,11 +2201,13 @@ describe.each(getConfiguredTestDialects())(
           ["read", PAGES],
           ["sign-off", PAGES],
         ]);
-        for (let n = 0; n < 1005; n += 1) {
-          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
-            definitionHash: HASH,
-          });
-        }
+        // In batched inserts: a thousand statements one by one is slow on a busy database.
+        await seedStates(
+          app(),
+          Array.from({ length: 1005 }, () => partOf(PAGES, randomUUID(), null)),
+          "legal",
+          { definitionHash: HASH }
+        );
         const later = new Date("2026-11-03T10:00:00.000Z");
         const readable: string[] = [];
         for (let n = 0; n < 10; n += 1) {
@@ -2489,6 +2554,50 @@ describe.each(getConfiguredTestDialects())(
         expect(new Set(walked).size, "no part comes twice").toBe(walked.length);
         expect(walked).toEqual(keysOf(whole));
         expect(walked).toHaveLength(5);
+      });
+
+      it("walks unmoved parts created in the server zone's daylight-saving gap, each once, at the time they were created", async () => {
+        // On a server in Berlin, 02:30 on 29 March 2026 is a wall clock that never happens there
+        // (the clocks go from 02:00 to 03:00). A Brief created at 02:30 UTC and another at 03:10
+        // UTC are walked one at a time: the first page's cursor holds 02:30, so the second Brief
+        // (after it, though before 03:30) is still reached, and each lists when it was created.
+        // Read as a Berlin time, 02:30 would become 03:30, and the walk would skip it.
+        runIn("Europe/Berlin");
+        current = await bootSteps(dialect, undefined, {
+          collections: [briefs],
+        });
+        await person(app(), "pia", [
+          ["read", BRIEFS],
+          ["publish", BRIEFS],
+        ]);
+        const PIA: Who = { kind: "person", id: "pia" };
+        const inGap = new Date("2026-03-29T02:30:00.000Z");
+        const after = new Date("2026-03-29T03:10:00.000Z");
+        const first = await entry(app(), BRIEFS);
+        const second = await entry(app(), BRIEFS);
+        await createdAtOf(app(), BRIEFS, [first], inGap);
+        await createdAtOf(app(), BRIEFS, [second], after);
+        const seen = (page: { items: Doc[] }) =>
+          page.items.map(item => ({
+            entryId: (item.document as Doc).entryId,
+            enteredAt: new Date(String(item.enteredAt)).toISOString(),
+          }));
+
+        let page = await door.waiting(PIA, { limit: 1, page: 1 });
+        const walked = seen(page);
+        for (let pages = 1; page.meta.nextBefore !== undefined; pages += 1) {
+          expect(pages, "the walk ends").toBeLessThan(5);
+          page = await door.waiting(PIA, {
+            limit: 1,
+            before: String(page.meta.nextBefore),
+          });
+          walked.push(...seen(page));
+        }
+
+        expect(walked).toEqual([
+          { entryId: first, enteredAt: inGap.toISOString() },
+          { entryId: second, enteredAt: after.toISOString() },
+        ]);
       });
 
       it("names a part's last move: its latest step, by whom, from where to where, with the comment", async () => {

@@ -16,7 +16,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { sql, type SQL } from "drizzle-orm";
+import { sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
 import { appLocalization } from "../i18n/configured-locales";
 import {
@@ -146,8 +146,11 @@ function partsOf(localized: boolean, locales: readonly string[]) {
 /** What reading one collection's unmoved parts needs, settled once per read. */
 interface ScopeReading {
   dialect: SupportedDialect;
-  /** The collection's main table, and its id, creation and status columns on it. */
-  main: SQL;
+  /**
+   * The collection's main table, and its id, creation and status columns on it. The table is a
+   * quoted name (`sql.identifier`), not a statement of its own: anything a template can interpolate.
+   */
+  main: SQLWrapper;
   columns: { id: SQL; createdAt: SQL; status: SQL };
   /** Each part of a document, in the list's order, and the condition it is unmoved by. */
   parts: (string | null)[];

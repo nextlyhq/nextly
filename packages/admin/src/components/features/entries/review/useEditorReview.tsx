@@ -207,7 +207,7 @@ export function useEditorReview({
     publishable: part.publishable,
     steps: part.steps.map(step => ({
       name: step.name,
-      label: step.label,
+      label: stepLabel(step),
       kind: step.kind,
       held: holds(step),
       primary: step.primary,
@@ -234,6 +234,18 @@ export function useEditorReview({
  * step, and Publish held with why, as a stage that does not allow publishing
  * holds it. No step is offered, so none is taken.
  */
+/**
+ * A step's words on the header: its label, with an ellipsis where taking it
+ * asks for a comment first (asking for changes, or a step that requires one),
+ * as every control that opens a dialog before it acts is worded.
+ */
+function stepLabel(step: ReviewStep): string {
+  const asks = step.kind === "request-changes" || step.commentRequired;
+  // A label already ending in an ellipsis, either spelling, keeps it.
+  const hasEllipsis = step.label.endsWith("…") || step.label.endsWith("...");
+  return asks && !hasEllipsis ? `${step.label}…` : step.label;
+}
+
 function reviewUnknown(failed: boolean): DocumentReviewBinding {
   return {
     state: {

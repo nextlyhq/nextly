@@ -281,6 +281,37 @@ describe("snapshot-io", () => {
       expect(y.indexes).toBeUndefined();
     });
 
+    // A container's overlay column is what the next run reads to know the column is there: a
+    // snapshot that drops it has the next `migrate:create` add the column again.
+    it("persists a translated table's overlay columns, so the next run knows they are there", async () => {
+      const snapshot = {
+        tables: [
+          {
+            name: "dc_x",
+            columns: [{ name: "id", type: "text", nullable: false }],
+            localized: true,
+            localizedColumns: ["title"],
+            overlayColumns: ["slides", "box"],
+          },
+        ],
+      };
+      await writeSnapshot(
+        metaDir,
+        "20260601_120000_002_overlay",
+        snapshot,
+        "-- sql"
+      );
+      await writeFile(
+        join(metaDir, "..", "20260601_120000_002_overlay.sql"),
+        "",
+        "utf-8"
+      );
+      const loaded = await loadLatestSnapshot(metaDir);
+      const x = loaded!.data.snapshot.tables.find(t => t.name === "dc_x")!;
+      expect(x.overlayColumns).toEqual(["box", "slides"]);
+      expect(x.localizedColumns).toEqual(["title"]);
+    });
+
     it("sorts tables and columns alphabetically for reproducibility", async () => {
       const snapshot = {
         tables: [

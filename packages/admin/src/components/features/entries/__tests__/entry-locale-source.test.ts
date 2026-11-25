@@ -45,6 +45,19 @@ describe("localizedFieldNamesOf", () => {
     ]);
   });
 
+  it("never takes the system title and slug for translated, as a collection's read describes them", () => {
+    expect(
+      localizedFieldNamesOf(
+        [
+          { name: "title", type: "text", localized: false },
+          { name: "slug", type: "text", localized: false },
+          { name: "body", type: "richText" },
+        ],
+        true
+      )
+    ).toEqual(["body"]);
+  });
+
   it("returns nothing when the document's master localization switch is off", () => {
     expect(localizedFieldNamesOf(FIELDS, false)).toEqual([]);
   });

@@ -10,6 +10,7 @@
  */
 
 import type { EmailTemplateVersion } from "../../../../schemas/email-templates/types";
+import { realUserRecords } from "../../real-user-records";
 import type { OwnerTemplate } from "../../template-ownership";
 
 // Re-import for array construction
@@ -42,13 +43,14 @@ export { welcomeTemplate } from "./welcome";
  * All built-in email templates, ordered for insertion.
  *
  * The default layout is listed first so it exists before any body
- * template with `useLayout: true` is previewed or sent.
+ * template with `useLayout: true` is previewed or sent. Each email to a
+ * person offers a real user for its test data.
  */
 export const BUILT_IN_TEMPLATES: OwnerTemplate[] = [
   defaultLayoutTemplate,
-  welcomeTemplate,
-  passwordResetTemplate,
-  emailVerificationTemplate,
+  { ...welcomeTemplate, sampleRecords: realUserRecords },
+  { ...passwordResetTemplate, sampleRecords: realUserRecords },
+  { ...emailVerificationTemplate, sampleRecords: realUserRecords },
 ];
 
 /**
