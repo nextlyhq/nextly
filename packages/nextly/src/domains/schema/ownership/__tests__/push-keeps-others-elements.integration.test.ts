@@ -398,12 +398,15 @@ describeEachDialect(
 
         expect(pushed.success, JSON.stringify(pushed)).toBe(false);
         const message = pushed.success ? "" : pushed.error.message;
+        // The plugin is in no configuration here, so the push keeps what it added and says so
+        // (`refuseChangesToKeptElements`), before this change's own check is asked.
         for (const part of [
           "code",
           PLUGIN,
           MIGRATED_INDEX,
           TABLE,
-          "Its owner removes it first",
+          "is no longer in the configuration",
+          "nothing was applied",
         ]) {
           expect(message).toContain(part);
         }
