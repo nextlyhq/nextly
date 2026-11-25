@@ -2362,16 +2362,20 @@ describe.each(getConfiguredTestDialects())(
           "SELECT DATABASE() AS name"
         );
         const [name] = namedCollectionLockNames(String(database?.name), [SLUG]);
-        let killed: unknown = null;
-        const outcome = await withStopPoints(
+        // Paused before the second statement, and killed from here: outside the save's own flow.
+        let between: () => void = () => undefined;
+        const reachedBetween = new Promise<void>(resolve => {
+          between = resolve;
+        });
+        let letGo: () => void = () => undefined;
+        const goes = new Promise<void>(resolve => {
+          letGo = resolve;
+        });
+        const saving = withStopPoints(
           async point => {
             if (!/: before statement 2$/.test(point)) return;
-            const [holder] = await sql<{ id: number | string | null }>(
-              t,
-              `SELECT IS_USED_LOCK('${String(name)}') AS id`
-            );
-            killed = holder?.id ?? null;
-            await sql(t, `KILL ${String(killed)}`);
+            between();
+            await goes;
           },
           () =>
             dispatchCollections(
@@ -2396,6 +2400,23 @@ describe.each(getConfiguredTestDialects())(
               (error: unknown) => error
             )
         );
+        let killed: unknown = null;
+        try {
+          const reached = await Promise.race([
+            reachedBetween.then(() => true),
+            saving.then(() => false),
+          ]);
+          expect(reached).toBe(true);
+          const [holder] = await sql<{ id: number | string | null }>(
+            t,
+            `SELECT IS_USED_LOCK('${String(name)}') AS id`
+          );
+          killed = holder?.id ?? null;
+          await sql(t, `KILL ${String(killed)}`);
+        } finally {
+          letGo();
+        }
+        const outcome = await saving;
         expect(killed).not.toBeNull();
         expect(outcome).not.toBe("applied");
         const left = async (column: string) =>
