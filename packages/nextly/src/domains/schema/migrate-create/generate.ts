@@ -3162,11 +3162,11 @@ function containerColumnsDeclared(
  * the history records it) is refused, as the Builder's own path refuses it
  * (`refusalsForTranslatedFieldRenamedAndReshaped`).
  *
- * In a translated entity, a container keeping its text inside is a candidate the same way, by its
- * overlay column (`overlayColumns`), paired only with another container's: renamed, its structure
- * column on the main table follows the main-table rename, and its overlay keeps every language's
- * text under the new name rather than leaving it in a column no read names. An overlay holds JSON
- * on either side, so it is never refused as reshaped.
+ * A container keeping its text inside is a candidate the same way, by its overlay column
+ * (`overlayColumns`), paired only with another container's: renamed, its structure column on the
+ * main table follows the main-table rename, and its overlay keeps every language's text under the
+ * new name rather than leaving it in a column no read names. An overlay holds JSON on either side,
+ * so it is never refused as reshaped.
  */
 async function companionRenameDecisions(
   entities: readonly TaggedConfigEntity[],
@@ -3177,9 +3177,11 @@ async function companionRenameDecisions(
 ): Promise<Map<string, CompanionRename[]>> {
   const byTable = new Map<string, CompanionRename[]>();
   for (const { entity, kind } of entities) {
-    // Where its translatable values are kept, as the companion's own plan reads it: under
-    // per-language storage an entity that is not translated keeps them in its translations table
-    // too, so a rename of one of its text fields is that table's rename, not an add and a drop.
+    // Every entity keeping its values per language, a translated one or, under per-language
+    // storage, one that is not (`storesPerLanguage`), as the companion's own plan reads it: a
+    // rename of one of its text fields is its translations table's rename, not an add and a drop,
+    // and its containers keep their text in overlay columns there all the same, where a rename
+    // that left one behind would drop every language's text.
     if (!storesPerLanguage(entity)) continue;
     const previousTable = previous.tables.find(
       t => t.name === entity.tableName
@@ -3190,7 +3192,6 @@ async function companionRenameDecisions(
     ) {
       continue;
     }
-    // The entity's containers are candidates in a translated entity only, by their overlays.
     const translated = entity.localized === true;
     const containers = overlayColumnsOf(entity, kind, args.dialect);
     // An earlier release kept a container marked `localized: true` whole on the translations table,
@@ -3225,10 +3226,8 @@ async function companionRenameDecisions(
     );
     const now = [...described.keys()];
     // The overlay columns, apart: one is paired only with another, never with a text's column.
-    const recordedOverlays = translated
-      ? (previousTable.overlayColumns ?? [])
-      : [];
-    const overlaysNow = translated ? containers : [];
+    const recordedOverlays = previousTable.overlayColumns ?? [];
+    const overlaysNow = containers;
     const pairs = [
       ...renamePairs(recorded, now),
       ...renamePairs(recordedOverlays, overlaysNow),
