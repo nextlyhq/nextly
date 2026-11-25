@@ -56,6 +56,7 @@ import type { SnapshotFile } from "../migrate-create/snapshot-io";
 import {
   type BesideFile,
   madeByMigrate,
+  makesTranslationsTable,
   pendingChangeLines,
   type PendingChanges,
   recordsForTheFirstTime,
@@ -118,8 +119,7 @@ export interface UnwrittenChanges {
   settingsNotRecorded?: boolean;
   /**
    * The files `migrate:create` would write beside the main migration that nothing declared since the
-   * newest snapshot asks for, and `nextly migrate` makes itself (`besideNotRecorded`): a notice, never
-   * a change.
+   * newest snapshot asks for (`besideNotRecorded`): a notice, never a change.
    */
   besideNotRecorded?: readonly BesideFile[];
 }
@@ -230,14 +230,14 @@ const DECLARED_LIST = {
 } as const;
 
 /**
- * The files beside the main migration that are no change of what the newest snapshot recorded, and
- * that `nextly migrate` makes itself.
+ * The files beside the main migration that are no change of what the newest snapshot recorded.
  *
- * - Over a snapshot that does not say what the translations tables hold: each it makes.
- * - Over one that does: only what a repeater's or group's text is kept in, where nothing declared of
- *   its entity changed, neither a setting nor its main table. A release that keeps such text apart
- *   asks for it under an unchanged declaration, and `nextly migrate` makes it and records nothing.
- *   Every other file is a change.
+ * - Over a snapshot that does not say what the translations tables hold: each that makes one, its
+ *   columns or its unique indexes.
+ * - Over one that does: only what a repeater's or group's text is kept in, where `nextly migrate`
+ *   makes it (`madeByMigrate`) and nothing declared of its entity changed, neither a setting nor its
+ *   main table. A release that keeps such text apart asks for it under an unchanged declaration, and
+ *   `nextly migrate` makes it and records nothing. Every other file is a change.
  */
 function besideNotRecorded(args: {
   pending: Pick<PendingChanges, "beside" | "diffed">;
@@ -248,7 +248,7 @@ function besideNotRecorded(args: {
   const { pending, latest, entities } = args;
   if (latest === null) return [];
   if (!recordsTranslationsTables(latest)) {
-    return pending.beside.filter(madeByMigrate);
+    return pending.beside.filter(makesTranslationsTable);
   }
   const changed = new Set([
     ...pending.diffed.map(operationTableName),
@@ -259,7 +259,8 @@ function besideNotRecorded(args: {
     ),
   ]);
   return pending.beside.filter(
-    file => file.overlays === true && !changed.has(file.table)
+    file =>
+      file.overlays === true && madeByMigrate(file) && !changed.has(file.table)
   );
 }
 
