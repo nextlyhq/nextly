@@ -36,7 +36,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { ddlType } from "../../i18n/migration/ddl-types";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import { runStatement } from "../pipeline/_internal/run-statement";
-import { querySqlRows } from "../pipeline/classifier/count-helpers";
+import { countNulls, querySqlRows } from "../pipeline/classifier/count-helpers";
 import { kindChanges } from "../repair-columns/conversion/carry";
 import {
   type ColumnDescriptor,
@@ -44,6 +44,7 @@ import {
   toSnakeCase,
 } from "../services/field-column-descriptor";
 import { fieldColumnDriverValue } from "../services/runtime-schema-generator";
+import { describeRowCount } from "../value-conversion/describe";
 import { columnDescriptorAt } from "../value-conversion/type-change/field-type";
 import {
   type EntityTypeChangeInput,
@@ -121,9 +122,10 @@ export interface ConvertedColumn {
   castReaches: boolean;
   /**
    * The value written into the rows the change would leave with none (`JudgedFieldTypeChange.fill`),
-   * as it was chosen, and how many rows the judgement before the run found take it.
+   * as it was chosen, how many rows the judgement before the run found take it, and whether it reaches
+   * every row that would hold none (`fillsEveryRow`), which the conversion then counts as it ends.
    */
-  fill?: { value: unknown; rows: number };
+  fill?: { value: unknown; rows: number; everyRow: boolean };
 }
 
 /** A type change's values converted one by one. */
@@ -246,7 +248,31 @@ function castReaches(
 function fillOf(change: JudgedFieldTypeChange): Pick<ConvertedColumn, "fill"> {
   return change.fill?.readsAs === undefined
     ? {}
-    : { fill: { value: change.fill.value, rows: change.leavesEmpty ?? 0 } };
+    : {
+        fill: {
+          value: change.fill.value,
+          rows: change.leavesEmpty ?? 0,
+          everyRow: change.fillsEveryRow === true,
+        },
+      };
+}
+
+/**
+ * Whether a column is one `conversions` fill, by its table and name in either case: its rows that would
+ * hold no value are written by them before a file's first statement, as they were judged on the database
+ * they run on. Asked of judged conversions alone, never of what a file's mark states, so a fill no
+ * conversion makes is none.
+ */
+export function filledByConversions(
+  conversions: readonly TypeConversion[]
+): (table: string, column: string) => boolean {
+  const filled = new Set(
+    conversions
+      .flatMap(conversion => conversion.columns)
+      .filter(column => column.fill?.everyRow === true)
+      .map(column => `${column.table}.${column.column}`.toLowerCase())
+  );
+  return (table, column) => filled.has(`${table}.${column}`.toLowerCase());
 }
 
 /** How many rows the judged change leaves with no value, which no fill is written into. */
@@ -666,6 +692,40 @@ async function convertColumn(
   if (!(await swapIn(db, dialect, planned, empties))) {
     await run(sql`ALTER TABLE ${table} DROP COLUMN ${beside}`);
   }
+  if (planned.fill?.everyRow === true) {
+    await refuseRowsLeftEmpty(db, dialect, input.label, planned);
+  }
+}
+
+/**
+ * The rows of a filled column still holding no value once its values and its fill are written, counted
+ * before any statement of the change makes it NOT NULL, which is let through for the fill alone
+ * (`filledByConversions`): none may be left, whatever kept a row from being written.
+ *
+ * @throws {NextlyError} a validation error naming the column and how many of its rows
+ */
+async function refuseRowsLeftEmpty(
+  db: unknown,
+  dialect: SupportedDialect,
+  label: string,
+  planned: PlannedColumn
+): Promise<void> {
+  const left = await countNulls(db, dialect, planned.table, planned.column);
+  if (left === 0) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `fields.${planned.field}`,
+        code: "TYPE_CHANGE_BLOCKED",
+        message: `${label}: field '${planned.field}' cannot change type: its fill was written, and ${planned.table}.${planned.column} still has ${describeRowCount(left)} holding no value, which something on the table kept from being written. Nothing was changed. Remove it, or give ${left === 1 ? "that row" : "those rows"} a value, then try again.`,
+      },
+    ],
+    logContext: {
+      reason: "type-change-fill-left-rows-empty",
+      table: planned.table,
+      column: planned.column,
+    },
+  });
 }
 
 /**

@@ -119,7 +119,7 @@ import { heldValueAt, holdsValueAt } from "../field-moves/move-statements";
 import { movedColumnSentences } from "../field-moves/moved-column-facts";
 import type { EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
-import { type ConvertedColumnName, filledBy } from "../migrate/converts-header";
+import type { ConvertedColumnName } from "../migrate/converts-header";
 import { migrationDriftError, type DriftItem } from "../migrate/drift-error";
 import {
   applyFailedError,
@@ -251,6 +251,7 @@ import {
 } from "./type-change-counts";
 import {
   conversionRefusalsAsItStands,
+  filledByConversions,
   isConversionRefusal,
   type TypeConversion,
   typeConversionOf,
@@ -4238,7 +4239,7 @@ async function runWritten(
         transaction: file.transaction,
       }),
       filename,
-      filledBy(conversion?.columns ?? [])
+      filledByConversions(conversion === undefined ? [] : [conversion])
     );
   }
 

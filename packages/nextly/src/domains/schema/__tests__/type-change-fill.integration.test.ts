@@ -13,11 +13,19 @@
  *   deploy's own lost values with nothing;
  * - a fill taken as it comes writes a value the field would refuse from a person.
  */
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import {
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { SQL, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { migrateCore, previewMigrate } from "../../../cli/commands/migrate";
@@ -31,12 +39,19 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { BESIDE } from "../builder-save/conversion-refusals";
+import { typeConversionOf } from "../builder-save/type-conversion";
+import { convertsHeaderLine } from "../migrate/converts-header";
 import {
   type DataLossConsent,
   NO_CONSENT,
   resolveDataLossConsent,
 } from "../migrate/data-loss-consent";
-import { rewritesValuesOn } from "../value-conversion/type-change/field-type-changes";
+import {
+  type EntityTypeChangeInput,
+  judgeEntityTypeChanges,
+  rewritesValuesOn,
+} from "../value-conversion/type-change/field-type-changes";
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const SLUG = "tcl_posts";
@@ -189,6 +204,30 @@ async function newestFile(): Promise<string> {
   return readFile(join(basePath, "migrations", newest), "utf8");
 }
 
+/** The folder's newest file, as `edit` leaves it. */
+async function editNewestFile(edit: (file: string) => string): Promise<void> {
+  const before = await newestFile();
+  const after = edit(before);
+  // An edit that changes nothing would leave the fixture without what it is for.
+  expect(after).not.toBe(before);
+  await writeFile(
+    join(basePath, "migrations", (await files()).at(-1) ?? ""),
+    after
+  );
+}
+
+/** A run refused before its first statement for `count` rows of `v` that hold no value. */
+function refusedOverRowsHoldingNone(count: string) {
+  return {
+    code: "VALIDATION_ERROR",
+    publicMessage: expect.stringMatching(
+      new RegExp(
+        `refused before any of its statements ran.*cannot become required while ${count}`
+      )
+    ) as unknown,
+  };
+}
+
 /** `nextly migrate` on `t`'s database over the folder. */
 async function migrate(
   t: TestNextly,
@@ -257,6 +296,51 @@ function refusedSaying(why: string | RegExp) {
       ]),
     },
   };
+}
+
+/**
+ * `handle`, doing `after` once the conversion's values are written into the column beside, through
+ * the same handle.
+ */
+function afterWritingValues(
+  handle: unknown,
+  dialect: TestDialect,
+  after: (run: (statement: SQL) => unknown) => unknown
+): unknown {
+  const method = dialect === "sqlite" ? "run" : "execute";
+  const target = handle as Record<string, (statement: unknown) => unknown>;
+  const run = (statement: unknown) => target[method].call(target, statement);
+  return new Proxy(target, {
+    get: (of, name) => {
+      if (name !== method) {
+        const value = of[name as string] as unknown;
+        return typeof value === "function" ? value.bind(of) : value;
+      }
+      return (statement: unknown) => {
+        const done = run(statement);
+        if (!writesBeside(statement)) return done;
+        return dialect === "sqlite"
+          ? after(run)
+          : Promise.resolve(done).then(() => after(run));
+      };
+    },
+  });
+}
+
+/** Whether `statement` is the conversion's write of its values into the column beside. */
+function writesBeside(statement: unknown): boolean {
+  const text: string[] = [];
+  const walk = (chunk: unknown): void => {
+    if (chunk instanceof SQL) chunk.queryChunks.forEach(walk);
+    else if (typeof chunk === "object" && chunk !== null && "value" in chunk) {
+      text.push(String((chunk as { value: unknown }).value));
+    }
+  };
+  walk(statement);
+  const all = text.join("");
+  return (
+    all.startsWith("UPDATE ") && all.includes(BESIDE) && all.includes("CASE ")
+  );
 }
 
 const text = (more: Record<string, unknown> = {}): Field => ({
@@ -719,6 +803,200 @@ describe.each(getConfiguredTestDialects())(
         expect(await takesNull(second)).toBe(false);
       }
     );
+
+    // The rows a fill is written into are counted only where the conversion the file is judged to make
+    // writes them: the file's mark says so, and one that says it and does not is no fill.
+    fills(
+      "refuses a deploy whose fill was edited out of its file, over a row holding none, and changes nothing",
+      async () => {
+        const created = await savedWithFill(
+          [{ name: "v", type: "chips" }],
+          { v: [] },
+          to("text"),
+          { kept: 1, changed: 0, lost: 0, fill: "none" }
+        );
+        await editNewestFile(file =>
+          file.replace(/^(-- Converts values: .*) fill \S+$/m, "$1")
+        );
+        const second = await boot(dialect);
+        await migrate(second, created);
+        await write(second, "one", { v: ["x"] });
+        await write(second, "none", {});
+
+        expect(await dryRun(second)).toContain("cannot become required");
+        await expect(
+          migrate(second, undefined, ANY_LOSS())
+        ).rejects.toMatchObject(refusedOverRowsHoldingNone("1 row holds"));
+        expect(await read(second)).toEqual({ one: ["x"], none: null });
+        expect(await takesNull(second)).toBe(true);
+      }
+    );
+
+    fills(
+      "refuses a deploy whose mark names a fill for a column its file converts nothing of, over a row holding none",
+      async () => {
+        const first = await boot(dialect, [text()]);
+        const created = (await files()).length;
+        await write(first, "here", { v: "x" });
+        // No type changes: the field becomes required alone, so no conversion fills its column.
+        expect(await save(first, [to("text")])).toBeUndefined();
+        await end();
+        await editNewestFile(file =>
+          file.replace(
+            /^-- UP$/m,
+            `${convertsHeaderLine([
+              { table: TABLE, column: "v", fill: { value: "none" } },
+            ])}-- UP`
+          )
+        );
+        const second = await boot(dialect);
+        await migrate(second, created);
+        await write(second, "has", { v: "x" });
+        await write(second, "none", {});
+
+        await expect(
+          migrate(second, undefined, ANY_LOSS())
+        ).rejects.toMatchObject(refusedOverRowsHoldingNone("1 row holds"));
+        expect(await dryRun(second)).toContain("cannot become required");
+        expect(await read(second)).toEqual({ has: "x", none: null });
+        expect(await takesNull(second)).toBe(true);
+      }
+    );
+
+    // A file whose statements committed while its ledger row was never written: the database stands at
+    // the file's end, where nothing converts and nothing is judged, and the run records the file. A fill
+    // the file states is judged ahead of that, and what stops its judgement must not stop the run there.
+    fills.each([
+      ["its change can be judged", false],
+      ["the snapshot its change is judged from is gone", true],
+    ])(
+      "records a file with a fill the database already stands at the end of, where %s",
+      async (_where, snapshotGone) => {
+        const created = await savedWithFill(
+          [{ name: "v", type: "chips" }],
+          { v: [] },
+          to("text"),
+          { kept: 1, changed: 0, lost: 0, fill: "none" }
+        );
+        const second = await boot(dialect);
+        await migrate(second, created);
+        await write(second, "one", { v: ["x"] });
+        await write(second, "none", {});
+        await migrate(second, undefined, ANY_LOSS());
+        const change = (await files()).at(-1) ?? "";
+        const ledger = `nextly_schema_events WHERE event_type = 'file_apply' AND status = 'applied' AND filename = '${change}'`;
+        const recorded = () =>
+          exec<{ n: unknown }>(second, `SELECT 1 AS n FROM ${ledger}`);
+        // The control: recorded once, then not.
+        expect(await recorded()).toHaveLength(1);
+        await exec(second, `DELETE FROM ${ledger}`);
+        expect(await recorded()).toEqual([]);
+        if (snapshotGone) {
+          const meta = join(basePath, "migrations", "meta");
+          const snapshots = (await readdir(meta))
+            .filter(file => file.endsWith(".snapshot.json"))
+            .sort();
+          expect(snapshots).toHaveLength(2);
+          await unlink(join(meta, snapshots[0] ?? ""));
+        }
+
+        await migrate(second, undefined, ANY_LOSS());
+
+        expect(await recorded()).toHaveLength(1);
+        expect(await read(second)).toEqual({ one: "x", none: "none" });
+        expect(await takesNull(second)).toBe(false);
+      }
+    );
+
+    // Nothing on either database leaves a row unfilled without a refusal by name before it (an update
+    // trigger or rule), so the handle the conversion runs on empties one here, once it is written.
+    fills(
+      "refuses a fill that leaves a row with no value, naming its column and how many, before the change's own statements",
+      async () => {
+        const t = await boot(dialect, [{ name: "v", type: "chips" }]);
+        await write(t, "one", { v: ["x"] });
+        await write(t, "none", {});
+        const adapter = t.adapter as unknown as DrizzleAdapter;
+        const input: EntityTypeChangeInput = {
+          label: `Collection '${SLUG}'`,
+          table: TABLE,
+          previous: [{ name: "v", type: "chips" }] as never,
+          next: [to("text")] as never,
+          builtBy: "collection",
+          rewrites: true,
+          fills: new Map([["v", "none"]]),
+        };
+        const { judged } = await judgeEntityTypeChanges(
+          adapter.getDrizzle(),
+          dialect,
+          input
+        );
+        const conversion = typeConversionOf({
+          dialect,
+          input,
+          judged,
+          consent: {
+            kind: "run",
+            covers: () => true,
+            clearsBy: () => "",
+          },
+        });
+        expect(conversion?.columns).toEqual([
+          expect.objectContaining({
+            column: "v",
+            fill: expect.objectContaining({ rows: 1 }),
+          }),
+        ]);
+
+        let emptied = 0;
+        const outcome = await inTransaction(t, async handle => {
+          await conversion?.run(
+            afterWritingValues(handle, dialect, run => {
+              emptied += 1;
+              return run(
+                sql.raw(
+                  `UPDATE ${TABLE} SET ${BESIDE} = NULL WHERE title = 'none'`
+                )
+              );
+            })
+          );
+        });
+
+        // The control: the row was emptied, by this handle and nothing else.
+        expect(emptied).toBe(1);
+        expect(outcome).toMatchObject(
+          refusedSaying(/dc_tcl_posts\.v.*1 row .*no value/)
+        );
+        expect(await read(t)).toEqual({ one: ["x"], none: null });
+      }
+    );
+
+    /** The refusal of `work` done in a transaction that is rolled back, where it has one. */
+    async function inTransaction(
+      t: TestNextly,
+      work: (handle: unknown) => Promise<void>
+    ): Promise<unknown> {
+      const db = (
+        t.adapter as unknown as DrizzleAdapter
+      ).getDrizzle() as unknown as {
+        transaction(work: (tx: unknown) => Promise<void>): Promise<void>;
+      };
+      if (dialect === "postgresql") {
+        return db.transaction(work).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+      }
+      await exec(t, "BEGIN");
+      try {
+        return await work(db).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+      } finally {
+        await exec(t, "ROLLBACK");
+      }
+    }
 
     // A file that carries no fill has none to write: a deploy's own lost value of a required field
     // refuses it, whatever the consent, and nothing changes.

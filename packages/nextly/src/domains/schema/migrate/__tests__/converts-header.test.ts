@@ -5,11 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import {
-  convertsHeaderLine,
-  filledBy,
-  readConvertsMark,
-} from "../converts-header";
+import { convertsHeaderLine, readConvertsMark } from "../converts-header";
 
 const FILE = "20260101_000000_000_posts_update.sql";
 const file = (line: string) =>
@@ -61,15 +57,5 @@ describe("a migration file's converted columns", () => {
     ["another word", "dc_posts.v with 0"],
   ])("refuses a line whose fill cannot be read: %s", (_, entry) => {
     expect(() => read(`-- Converts values: rules 1; ${entry}`)).toThrow();
-  });
-
-  it("says which columns are filled, in either case", () => {
-    const filled = filledBy([
-      { table: "dc_posts", column: "v", fill: { value: 0 } },
-      { table: "dc_posts", column: "w" },
-    ]);
-    expect(filled("DC_POSTS", "V")).toBe(true);
-    expect(filled("dc_posts", "w")).toBe(false);
-    expect(filled("dc_other", "v")).toBe(false);
   });
 });

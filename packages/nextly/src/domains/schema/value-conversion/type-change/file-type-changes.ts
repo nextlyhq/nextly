@@ -941,13 +941,16 @@ function clearOf(
  * conversion of each entity's values its marks convert (`judgeFileTypeChanges`), for the run to
  * write before the first statement that changes each of their tables.
  *
+ * @param judgedAhead the file's judgement on this database, where the caller has made it already
  * @throws {NextlyError} a validation error listing each refusal, with its entity and field
  */
 export async function refuseFileTypeChanges(
   db: unknown,
-  source: FileTypeChangeSource
+  source: FileTypeChangeSource,
+  judgedAhead?: FileTypeChangeJudgement
 ): Promise<TypeConversion[]> {
-  const { refusals, conversions } = await judgeFileTypeChanges(db, source);
+  const { refusals, conversions } =
+    judgedAhead ?? (await judgeFileTypeChanges(db, source));
   throwFileTypeChangeRefusals(source.filename, refusals);
   return conversions;
 }

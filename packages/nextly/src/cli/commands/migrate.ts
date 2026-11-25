@@ -55,9 +55,10 @@ import {
   settleAfterMigrate,
   settleBeforeMigrate,
 } from "../../domains/schema/builder-save/settle-at-migrate";
-import type {
-  ConvertedColumn,
-  TypeConversion,
+import {
+  type ConvertedColumn,
+  filledByConversions,
+  type TypeConversion,
 } from "../../domains/schema/builder-save/type-conversion";
 import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
 import {
@@ -95,7 +96,6 @@ import {
 } from "../../domains/schema/migrate/companion-drift";
 import {
   type ConvertsMark,
-  filledBy,
   readConvertsMark,
 } from "../../domains/schema/migrate/converts-header";
 import {
@@ -311,9 +311,9 @@ import {
   writeRegistryRows,
 } from "../../domains/schema/schema-version";
 import { describeRowCount } from "../../domains/schema/value-conversion/describe";
-import { rewritesValuesOn } from "../../domains/schema/value-conversion/type-change/field-type-changes";
 import {
   fileTypeChangesOf,
+  type FileTypeChangeJudgement,
   judgeFileTypeChanges,
   refuseFileTypeChanges,
 } from "../../domains/schema/value-conversion/type-change/file-type-changes";
@@ -1691,7 +1691,8 @@ export async function previewMigrate(args: {
     pendingFiles,
     args,
     logger,
-    pendingModules.length > 0
+    pendingModules.length > 0,
+    listed.map(({ file }) => file)
   );
   // The field type changes of the first change a real run applies, judged as the run judges them:
   // only the first, since nothing before a later one is run here. Behind pending plugin modules,
@@ -1828,10 +1829,13 @@ async function previewFiles(
   pendingFiles: readonly ParsedMigration[],
   args: { db: unknown; dialect: SupportedDialect; migrationsDir: string },
   logger: CommandContext["logger"],
-  modulesFirst: boolean
+  modulesFirst: boolean,
+  /** Every file of the folder, in order, which the first pending file's change is judged among. */
+  files: readonly ParsedMigration[]
 ): Promise<void> {
   for (const [at, m] of pendingFiles.entries()) {
     previewPendingFile(m, deletions[at] ?? [], args.dialect, logger);
+    const afterEarlier = at > 0 || modulesFirst;
     // The required columns a real run would refuse it over, from the same count: only for the
     // first migration the run applies, since nothing before a later one is run here.
     await previewRequiredColumns(
@@ -1839,20 +1843,68 @@ async function previewFiles(
       args.dialect,
       m,
       logger,
-      at > 0 || modulesFirst,
-      filledColumnsOf(m, args.dialect)
+      afterEarlier,
+      afterEarlier
+        ? undefined
+        : await filledByFirstChange(files, pendingFiles, args)
     );
   }
 }
 
-/** The columns `file`'s conversion fills on `dialect`, as its mark names them (`filledBy`). */
-function filledColumnsOf(
-  file: ParsedMigration,
-  dialect: SupportedDialect
-): FilledColumns {
-  return filledBy(
-    rewritesValuesOn(dialect) ? (file.converts()?.columns ?? []) : []
+/**
+ * The columns the first change a real run applies fills, as it is judged on the database
+ * (`filledByChange`): none where its first file heads no change.
+ */
+async function filledByFirstChange(
+  files: readonly ParsedMigration[],
+  pending: readonly ParsedMigration[],
+  args: { db: unknown; dialect: SupportedDialect; migrationsDir: string }
+): Promise<FilledColumns | undefined> {
+  const metaDir = resolve(args.migrationsDir, "meta");
+  const at = files.indexOf(pending[0]);
+  if (at < 0) return undefined;
+  const runs = new Set(pending);
+  const change = await changeFilesFrom(files, at, metaDir, file =>
+    runs.has(file)
   );
+  if (change === null) return undefined;
+  const before = await newestSnapshotBefore(files, at, metaDir);
+  return filledAhead(
+    judgedWhereFilled(
+      args.db,
+      change.files,
+      change.source(before, args.dialect)
+    )
+  );
+}
+
+/**
+ * A change's field type changes judged on the database, where a file of it states a fill for a column
+ * its conversion converts: the fill's rows are the conversion's own to answer for, so the check of
+ * required columns that runs before its judgement leaves out what the judged conversion fills, and
+ * nothing a file's mark states by itself. Undefined where no file states one, and nothing is read.
+ * Asked ahead of where the judgement is (`refuseFileTypeChanges`), so what stops it is thrown there,
+ * and not at all on a database already at the file's end, where nothing is judged.
+ */
+function judgedWhereFilled(
+  db: unknown,
+  files: readonly ParsedMigration[],
+  source: Parameters<typeof judgeFileTypeChanges>[1]
+): Promise<FileTypeChangeJudgement> | undefined {
+  const states = files.some(file =>
+    (file.converts()?.columns ?? []).some(column => column.fill !== undefined)
+  );
+  return states ? judgeFileTypeChanges(db, source) : undefined;
+}
+
+/** The columns the change judged ahead fills: none where it was not judged, or its judgement stopped. */
+async function filledAhead(
+  ahead: Promise<FileTypeChangeJudgement> | undefined
+): Promise<FilledColumns | undefined> {
+  const judged = await ahead?.catch(() => undefined);
+  return judged === undefined
+    ? undefined
+    : filledByConversions(judged.conversions);
 }
 
 /**
@@ -5732,6 +5784,8 @@ export async function runFileMigrations(args: {
   // the change's files that changes it.
   let changeFiles: readonly ParsedMigration[] = [];
   let convertsBefore = new Map<string, (db: unknown) => Promise<void>>();
+  // The columns the change being run fills, as its conversion was judged on this database.
+  let filled: FilledColumns | undefined;
   try {
     for (const [index, m] of all.entries()) {
       const filename = `${m.name}.sql`;
@@ -5793,27 +5847,17 @@ export async function runFileMigrations(args: {
         transaction: m.transaction,
         unit: "file",
       });
-      // A column made required over rows that would break it: refused here, before any statement.
-      // Rows the file's conversion fills before its first statement are judged with it below.
-      await refuseRequiredColumnsOverNulls(
-        db,
-        dialect,
-        upStatements,
-        filename,
-        filledColumnsOf(m, dialect)
-      );
-      // A column made unique while its entries repeat a value: refused here too, before any
-      // statement, where MySQL would otherwise keep every statement before the index's.
-      await refuseUniqueIndexesOverRepeats(db, dialect, upStatements, filename);
       // A field type change is judged over the values its column holds here, as a Schema Builder
       // save judges it, once per change and before the first of the change's files runs, while
       // every old column still holds its values: a value the new type cannot read refuses the run
       // before any statement, naming the field, its rows and the file (`refuseFileTypeChanges`).
       // It is taken here, with the files as written, and asked once the database is read below.
       let typeChanges: Parameters<typeof refuseFileTypeChanges>[1] | undefined;
+      let judgedAhead: Promise<FileTypeChangeJudgement> | undefined;
       if (index > judgedThrough) {
         changeFiles = [];
         convertsBefore = new Map();
+        filled = undefined;
         const change = await changeFilesFrom(all, index, metaDir, file =>
           plan.runs.has(file)
         );
@@ -5821,8 +5865,23 @@ export async function runFileMigrations(args: {
           judgedThrough = index + change.files.length - 1;
           changeFiles = change.files;
           typeChanges = change.source(beforeFile, dialect, args.consent);
+          // Judged already here where a file of it states a fill, which the next check asks about.
+          judgedAhead = judgedWhereFilled(db, changeFiles, typeChanges);
+          filled = await filledAhead(judgedAhead);
         }
       }
+      // A column made required over rows that would break it: refused here, before any statement.
+      // Rows the change's conversion fills are its own to answer for, where it is judged to fill them.
+      await refuseRequiredColumnsOverNulls(
+        db,
+        dialect,
+        upStatements,
+        filename,
+        filled
+      );
+      // A column made unique while its entries repeat a value: refused here too, before any
+      // statement, where MySQL would otherwise keep every statement before the index's.
+      await refuseUniqueIndexesOverRepeats(db, dialect, upStatements, filename);
       // A file adding per-language unique indexes is refused here, before the ledger records an
       // attempt and before any statement, where one cannot hold. It also answers with the UP to
       // run on THIS database, which leaves out an index already installed here.
@@ -5905,7 +5964,7 @@ export async function runFileMigrations(args: {
         snapshotsEquivalent(sides.live, sides.target);
       if (typeChanges !== undefined && !atItsEnd) {
         convertsBefore = conversionsByFile(
-          await refuseFileTypeChanges(db, typeChanges),
+          await refuseFileTypeChanges(db, typeChanges, await judgedAhead),
           changeFiles,
           dialect
         );

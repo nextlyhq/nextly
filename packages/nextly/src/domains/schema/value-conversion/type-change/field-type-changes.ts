@@ -315,6 +315,12 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
   leavesEmpty?: number;
   /** The value chosen for those rows (`fills`), where one was: what a converted change writes there. */
   fill?: ChosenFill;
+  /**
+   * The fill reaches every row of the column that would hold no value, those that hold none already
+   * included, as the column is made NOT NULL. Never in a translations table, where a language may hold
+   * none: there it is written into the rows the change empties alone.
+   */
+  fillsEveryRow?: true;
 }
 
 /**
@@ -532,6 +538,9 @@ async function judgeOnRow(
     ...(moves === undefined ? {} : { movesTranslation: moves }),
     ...(how.rewritten ? { leavesEmpty: leftEmpty(change, how, result) } : {}),
     ...(fill === undefined ? {} : { fill }),
+    ...(fill?.readsAs !== undefined && how.madeNotNull
+      ? { fillsEveryRow: true as const }
+      : {}),
   };
 }
 

@@ -46,21 +46,6 @@ export function convertsHeaderLine(
 }
 
 /**
- * Whether a column is one a conversion of `columns` fills (`ConvertedColumnName.fill`), by its table
- * and name in either case: its rows holding no value are written before the file's first statement.
- */
-export function filledBy(
-  columns: readonly ConvertedColumnName[]
-): (table: string, column: string) => boolean {
-  const filled = new Set(
-    columns
-      .filter(column => column.fill !== undefined)
-      .map(column => `${column.table}.${column.column}`.toLowerCase())
-  );
-  return (table, column) => filled.has(`${table}.${column}`.toLowerCase());
-}
-
-/**
  * A column as a mark names it: `posts.price`, with its fill where it has one, `posts.price fill 0`. The
  * fill is its JSON, percent-encoded, so it holds no space, comma, quote or line break of its own.
  */

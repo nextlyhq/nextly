@@ -563,6 +563,132 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // A fill reaches the rows a translations column's change empties, and none a language holds no value
+    // in. A file edited to make that column NOT NULL is refused for those, by name.
+    converts(
+      "refuses a deploy edited to require a filled translations column over a language the fill leaves with none",
+      async () => {
+        const required = (type: string) => [
+          TRANSLATED_S,
+          { name: "v", type, localized: true, required: true },
+        ];
+        const first = await boot(dialect, LANGUAGES);
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: SLUG,
+            label: "Post",
+            localized: true,
+            fields: required("text"),
+          }
+        );
+        const created = await filesWritten();
+        await write(first, "lost", { v: "zzz" });
+        await save(first, required("email"), {
+          localized: true,
+          confirmedTypeChanges: [
+            { field: "v", kept: 0, changed: 0, lost: 1, fill: "x@y.co" },
+          ],
+        });
+        const requiring = await requiringLocalesColumn(first);
+        await first.destroy();
+        instance = undefined;
+        const marked = await fileMarking(`dc_${SLUG}_locales.v fill `);
+        const path = join(basePath, "migrations", marked);
+        const file = await readFile(path, "utf8");
+        const edited = file.replace(/^-- DOWN$/m, `${requiring}\n\n-- DOWN`);
+        // An edit that changes nothing would leave the fixture without what it is for.
+        expect(edited).not.toBe(file);
+        await writeFile(path, edited);
+
+        const second = await boot(dialect, LANGUAGES);
+        await migrateFolder(second, created);
+        const made = (await second.nextly.create({
+          collection: SLUG,
+          data: { title: "half", v: "zzz" },
+          locale: "en",
+        } as never)) as { item?: { id?: string }; id?: string };
+        await second.nextly.update({
+          collection: SLUG,
+          id: made.item?.id ?? made.id,
+          // A language with a row of its own that holds no value of it.
+          data: { s: "es", _overwrite: true },
+          locale: "es",
+        } as never);
+        const held = () =>
+          exec<{ l: string; v: unknown }>(
+            second,
+            `SELECT _locale AS l, v FROM dc_${SLUG}_locales ORDER BY _locale`
+          );
+        const before = await held();
+        // The control: the row the fill does not reach.
+        expect(before.map(row => [row.l, row.v])).toEqual([
+          ["en", "zzz"],
+          ["es", null],
+        ]);
+
+        await expect(
+          migrateFolder(
+            second,
+            undefined,
+            resolveDataLossConsent({ flag: true, env: {} })
+          )
+        ).rejects.toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicMessage: expect.stringMatching(
+            /refused before any of its statements ran.*cannot become required while 1 row holds/
+          ) as unknown,
+        });
+        expect(await held()).toEqual(before);
+      }
+    );
+
+    /** The folder's file whose header holds `marks`. */
+    async function fileMarking(marks: string): Promise<string> {
+      for (const file of await filesNamed()) {
+        const content = await readFile(
+          join(basePath, "migrations", file),
+          "utf8"
+        );
+        if (content.includes(marks)) return file;
+      }
+      throw new Error(`no file marks ${marks}`);
+    }
+
+    /**
+     * The statements that make `v` of the translations table NOT NULL: PostgreSQL's one, or SQLite's
+     * rebuild of the table as it stands.
+     */
+    async function requiringLocalesColumn(t: TestNextly): Promise<string> {
+      const table = `dc_${SLUG}_locales`;
+      if (dialect === "postgresql") {
+        return `ALTER TABLE "${table}" ALTER COLUMN "v" SET NOT NULL;`;
+      }
+      const [made] = await exec<{ sql: string }>(
+        t,
+        `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = '${table}'`
+      );
+      const twin = made.sql
+        .replace(
+          new RegExp(`^CREATE TABLE ["\`]?${table}["\`]?`),
+          `CREATE TABLE "__new_${table}"`
+        )
+        .replace(/(["`]v["`]\s+\w+)/, "$1 NOT NULL");
+      expect(twin).toContain(" NOT NULL");
+      expect(twin).not.toBe(made.sql);
+      const columns = (await columnsOf(t, table))
+        .map(column => `"${column}"`)
+        .join(", ");
+      return [
+        `${twin};`,
+        `INSERT INTO "__new_${table}" (${columns}) SELECT ${columns} FROM "${table}";`,
+        `DROP TABLE "${table}";`,
+        `ALTER TABLE "__new_${table}" RENAME TO "${table}";`,
+      ].join("\n");
+    }
+
     // The file that moves a field into the translations table copies its values there before the
     // change's own file, which would convert them in a column it then drops: what could not convert
     // would stay in the translations table as it was. Refused unless every value is one the new type
