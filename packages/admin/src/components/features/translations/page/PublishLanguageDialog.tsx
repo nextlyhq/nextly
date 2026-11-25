@@ -30,28 +30,19 @@ import {
   usePublishPartsDescription,
   type PartsTarget,
 } from "@admin/hooks/queries/usePublishParts";
-import { outOfDateSharedFields } from "@admin/hooks/useSharedFieldsRecovery";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import {
   refusedAsChangedSince,
   type ShownCopy,
 } from "@admin/lib/document-version";
-import type {
-  PartsLanguageOutcome,
-  PublishPartsResult,
-} from "@admin/services/publishParts";
+import type { PublishPartsResult } from "@admin/services/publishParts";
 
 import {
   behindOn,
   emptyFieldLine,
-  goingLiveTooSentence,
-  publishes,
-  publishSentence,
-  refusalMessages,
-  sharedGoLive,
-  sharedGoLiveSentence,
   type LabelOf,
 } from "./publish-language-words";
+import { publishView, type PublishView } from "./publish-view";
 import type { EmptyField } from "./reader-preview";
 
 export interface PublishLanguageDialogProps {
@@ -80,23 +71,6 @@ export interface PublishLanguageDialogProps {
   onPublished: (result: PublishPartsResult) => Promise<void>;
   /** Where focus goes as the dialog closes; see `useReturnFocus`. */
   onCloseAutoFocus: (event: Event) => void;
-}
-
-/**
- * What the language would become: as described, or as a publish refused for
- * the same reason says, since the description and the publish are judged at
- * different moments.
- */
-function outcomeOf(
-  described: PublishPartsResult | undefined,
-  code: string,
-  refusal: unknown
-): PartsLanguageOutcome | undefined {
-  const behind = outOfDateSharedFields(refusal);
-  if (behind !== null) {
-    return { locale: code, outcome: "out-of-date", ...behind };
-  }
-  return described?.languages.find(language => language.locale === code);
 }
 
 /** What its readers get for the fields it leaves empty. */
@@ -159,20 +133,27 @@ function ConfirmButton({
   );
 }
 
-export function PublishLanguageDialog({
+/** What the dialog has asked, and what it can do. */
+interface PublishDialog {
+  view: PublishView;
+  asking: boolean;
+  working: "publishing" | "taking" | null;
+  takeFailure: string | null;
+  publish: () => Promise<void>;
+  take: (takeLive: () => Promise<void>) => Promise<void>;
+}
+
+function usePublishDialog({
   open,
   onOpenChange,
   target,
   language,
   labelOf,
-  empty,
   goingLiveToo,
   shown,
-  takeLiveValues,
   onFailed,
   onPublished,
-  onCloseAutoFocus,
-}: PublishLanguageDialogProps): JSX.Element {
+}: PublishLanguageDialogProps): PublishDialog {
   const request = { locales: [language.code] };
   const description = usePublishPartsDescription({
     target,
@@ -182,7 +163,7 @@ export function PublishLanguageDialog({
   });
   const move = usePublishParts({ target, direction: "publish", shown });
   // Publishing lasts until the page has read what it left.
-  const [working, setWorking] = useState<"publishing" | "taking" | null>(null);
+  const [working, setWorking] = useState<PublishDialog["working"]>(null);
   // What was confirmed stays said until it is done: the publish itself makes
   // the description ask again.
   const [confirmed, setConfirmed] = useState<PublishPartsResult | null>(null);
@@ -191,32 +172,18 @@ export function PublishLanguageDialog({
   const publishing = working === "publishing";
   const asking = description.isFetching && !publishing;
   const described = confirmed ?? description.data;
-  const refusal = publishing ? null : (move.error ?? description.error);
-  const outcome = outcomeOf(described, language.code, refusal);
-  const withShared = sharedGoLive(described);
-  const behind = outcome?.outcome === "out-of-date";
-  const known =
-    publishing ||
-    (!asking && description.error === null && outcome !== undefined && !behind);
-  // A publish that failed may be pressed again, unless it was refused because
-  // the document changed: what is described is then another document.
-  const held =
-    !known ||
-    working !== null ||
-    !publishes(outcome, withShared) ||
-    (move.error !== null && refusedAsChangedSince(move.error));
-  const refused =
-    asking || behind
-      ? []
-      : refusalMessages(
-          refusal,
-          language.label,
-          `${language.label} couldn't be published.`
-        );
-  const alsoLive =
-    known && withShared
-      ? goingLiveTooSentence(goingLiveToo, labelOf)
-      : undefined;
+  const view = publishView({
+    language,
+    labelOf,
+    goingLiveToo,
+    described,
+    refusal: publishing ? null : (move.error ?? description.error),
+    undescribed: description.error !== null,
+    changedSince: move.error !== null && refusedAsChangedSince(move.error),
+    asking,
+    publishing,
+    busy: working !== null,
+  });
 
   const publish = async (): Promise<void> => {
     if (described === undefined) return;
@@ -249,82 +216,128 @@ export function PublishLanguageDialog({
       setWorking(null);
     }
   };
+  return { view, asking, working, takeFailure, publish, take };
+}
 
+/** What the publish does, said as it becomes known. */
+function Described({
+  asking,
+  says,
+}: {
+  asking: boolean;
+  says: readonly string[];
+}): JSX.Element {
   return (
-    <Dialog
-      open={open}
-      onOpenChange={next => {
-        if (working === null) onOpenChange(next);
-      }}
+    <div role="status" className="space-y-2 text-sm text-foreground">
+      {asking ? (
+        <p className="flex items-center gap-2 text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+          Checking what readers will see…
+        </p>
+      ) : null}
+      {says.map(sentence => (
+        <p key={sentence}>{sentence}</p>
+      ))}
+    </div>
+  );
+}
+
+/** The dialog's one confirm: the publish, or what has to be done before it. */
+function Confirm({
+  language,
+  dialog,
+  takeLiveValues,
+}: {
+  language: string;
+  dialog: PublishDialog;
+  takeLiveValues: (() => Promise<void>) | undefined;
+}): JSX.Element {
+  const { view, asking, working, publish, take } = dialog;
+  if (view.behind !== undefined && takeLiveValues !== undefined) {
+    return (
+      <ConfirmButton
+        key="take"
+        held={working !== null || asking}
+        onConfirm={() => void take(takeLiveValues)}
+      >
+        {working === "taking"
+          ? "Taking the live values…"
+          : "Take the live values"}
+      </ConfirmButton>
+    );
+  }
+  return (
+    <ConfirmButton
+      key="publish"
+      held={view.held}
+      onConfirm={() => void publish()}
     >
-      <DialogContent onCloseAutoFocus={onCloseAutoFocus}>
+      {working === "publishing" ? "Publishing…" : `Publish ${language}`}
+    </ConfirmButton>
+  );
+}
+
+/** Why nothing is published, and who has to act. */
+function Refusals({
+  language,
+  dialog,
+  takeLiveValues,
+}: {
+  language: string;
+  dialog: PublishDialog;
+  takeLiveValues: (() => Promise<void>) | undefined;
+}): JSX.Element {
+  const { view, takeFailure } = dialog;
+  return (
+    <>
+      {view.refused.map(message => (
+        <Refusal key={message} message={message} />
+      ))}
+      {takeFailure === null ? null : <Refusal message={takeFailure} />}
+      {view.behind !== undefined && takeLiveValues === undefined ? (
+        <p className="text-sm text-muted-foreground">
+          Someone who may edit {language} has to take the live values of{" "}
+          {behindOn(view.behind)}.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+export function PublishLanguageDialog(
+  props: PublishLanguageDialogProps
+): JSX.Element {
+  const { open, language, labelOf, empty, takeLiveValues } = props;
+  const dialog = usePublishDialog(props);
+  const { view, asking, working } = dialog;
+  // Held open until what it started is done.
+  const change = (next: boolean) => {
+    if (working === null) props.onOpenChange(next);
+  };
+  const about = { language: language.label, dialog, takeLiveValues };
+  return (
+    <Dialog open={open} onOpenChange={change}>
+      <DialogContent onCloseAutoFocus={props.onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>Publish {language.label}?</DialogTitle>
           <DialogDescription>
             What {language.label} readers will see once it is published.
           </DialogDescription>
         </DialogHeader>
-        <div role="status" className="space-y-2 text-sm text-foreground">
-          {asking ? (
-            <p className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-              Checking what readers will see…
-            </p>
-          ) : null}
-          {known || (behind && !asking) ? (
-            <p>{publishSentence(outcome, language.label, withShared)}</p>
-          ) : null}
-          {known && withShared ? (
-            <p>{sharedGoLiveSentence(language.label)}</p>
-          ) : null}
-          {alsoLive === undefined ? null : <p>{alsoLive}</p>}
-        </div>
-        {known && publishes(outcome, withShared) ? (
+        <Described asking={asking} says={view.says} />
+        {view.listsEmpty ? (
           <EmptyFields
             empty={empty}
             language={language.label}
             labelOf={labelOf}
           />
         ) : null}
-        {refused.map(message => (
-          <Refusal key={message} message={message} />
-        ))}
-        {takeFailure === null ? null : <Refusal message={takeFailure} />}
-        {behind && takeLiveValues === undefined ? (
-          <p className="text-sm text-muted-foreground">
-            Someone who may edit {language.label} has to take the live values of{" "}
-            {behindOn(outcome)}.
-          </p>
-        ) : null}
+        <Refusals {...about} />
         <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              if (working === null) onOpenChange(false);
-            }}
-          >
+          <Button type="button" variant="outline" onClick={() => change(false)}>
             Cancel
           </Button>
-          {behind && takeLiveValues !== undefined ? (
-            <ConfirmButton
-              key="take"
-              held={working !== null || asking}
-              onConfirm={() => void take(takeLiveValues)}
-            >
-              {working === "taking"
-                ? "Taking the live values…"
-                : "Take the live values"}
-            </ConfirmButton>
-          ) : (
-            <ConfirmButton
-              key="publish"
-              held={held}
-              onConfirm={() => void publish()}
-            >
-              {publishing ? "Publishing…" : `Publish ${language.label}`}
-            </ConfirmButton>
-          )}
+          <Confirm {...about} />
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -60,6 +60,28 @@ function isUnique(field: TranslationField["field"]): boolean {
   return "unique" in field && field.unique === true;
 }
 
+/**
+ * Whether one language is shown for an empty field: not, or not known, where
+ * its standing or its value is not.
+ */
+function standsIn(
+  code: string,
+  held: Readonly<Record<string, unknown>>,
+  translations: Readonly<Record<string, LocaleTranslationMeta>> | undefined
+): boolean | undefined {
+  // The document as it stands once the language is published, which publishes
+  // its shared part too where that wasn't.
+  const published =
+    translations?.[code] === undefined
+      ? undefined
+      : languageStanding(translations, code, "published").published;
+  if (published === false) return false;
+  // A language the reader may not read is left out of the values, which says
+  // nothing of what it holds.
+  if (!Object.hasOwn(held, code)) return undefined;
+  return isBlank(held[code]) ? false : published;
+}
+
 /** The language shown for one empty field, as {@link EmptyField} says it. */
 function shownInstead(
   row: TranslationField,
@@ -68,20 +90,11 @@ function shownInstead(
   translations: Readonly<Record<string, LocaleTranslationMeta>> | undefined
 ): string | null | undefined {
   if (isUnique(row.field)) return null;
+  const held = values[row.name] ?? {};
   for (const code of chain) {
-    // The document as it stands once the language is published, which
-    // publishes its shared part too where that wasn't.
-    const standing =
-      translations?.[code] === undefined
-        ? undefined
-        : languageStanding(translations, code, "published").published;
-    if (standing === false) continue;
-    const held = values[row.name] ?? {};
-    // A language the reader may not read is left out of the values, which says
-    // nothing of what it holds.
-    if (!Object.hasOwn(held, code)) return undefined;
-    if (isBlank(held[code])) continue;
-    return standing === undefined ? undefined : code;
+    const shown = standsIn(code, held, translations);
+    if (shown === false) continue;
+    return shown === undefined ? undefined : code;
   }
   return null;
 }

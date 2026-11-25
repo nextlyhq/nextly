@@ -84,6 +84,24 @@ function labelOf(field: FieldConfig, name: string): string {
   });
 }
 
+/** Where the page shows one field; undefined where the reader may not read it. */
+function placeOf(
+  field: FieldConfig,
+  path: string,
+  perLanguage: ValuesPerLanguage,
+  document: Readonly<Record<string, unknown>>
+): "rows" | "nested" | "shared" | "elsewhere" | undefined {
+  if (!Object.hasOwn(perLanguage, path)) {
+    return Object.hasOwn(document, path) ? "shared" : undefined;
+  }
+  const type: string = field.type;
+  if (OWN_EDITOR_TYPES.has(type)) return "elsewhere";
+  if (!isContainer(field)) return "rows";
+  // A container may be kept per language for a component that turns out to
+  // hold no text: then all of it is shared.
+  return holdsText(field) ? "nested" : "shared";
+}
+
 /**
  * The document's fields as its translation page shows them, in the form's own
  * order: its top-level fields, those of an unnamed group among them. `document`
@@ -105,19 +123,10 @@ export function translationFields(
     if (path === "") continue;
     if ([...within, field].some(each => fieldAdminGates(each).hidden)) continue;
     const shown = { field, name: path, label: labelOf(field, path) };
-    const type: string = field.type;
-    if (Object.hasOwn(perLanguage, path)) {
-      if (OWN_EDITOR_TYPES.has(type)) set.elsewhere.push(shown);
-      // A container may be kept per language for a component that turns out to
-      // hold no text: then all of it is shared.
-      else if (isContainer(field) && !holdsText(field)) set.shared.push(shown);
-      else {
-        (isContainer(field) ? set.nested : set.rows).push(shown);
-        set.written.push(shown);
-      }
-    } else if (Object.hasOwn(document, path)) {
-      set.shared.push(shown);
-    }
+    const place = placeOf(field, path, perLanguage, document);
+    if (place === undefined) continue;
+    set[place].push(shown);
+    if (place === "rows" || place === "nested") set.written.push(shown);
   }
   return set;
 }

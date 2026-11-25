@@ -92,6 +92,13 @@ function fieldsOf(declared: readonly object[] | undefined): FieldConfig[] {
     : (declared as unknown as FieldConfig[]);
 }
 
+/** The schema hook's answer for either kind, and whether it is still coming. */
+interface SchemaAnswer {
+  schema: TranslationSchema | undefined;
+  isLoading: boolean;
+  error: Error | null;
+}
+
 /** What the schema says of history, read as the editor reads it. */
 function historyOf(
   schema: object
@@ -102,70 +109,63 @@ function historyOf(
   };
 }
 
-/** The schema hook's answer for either kind, and whether it is still coming. */
-interface SchemaAnswer {
-  schema: TranslationSchema | undefined;
-  isLoading: boolean;
-  error: Error | null;
+type CollectionRead = NonNullable<
+  ReturnType<typeof useCollectionSchema>["data"]
+>;
+type SingleRead = NonNullable<ReturnType<typeof useSingleSchema>["data"]>;
+
+function ofCollection(data: CollectionRead, slug: string): TranslationSchema {
+  return {
+    label: data.label || data.name || slug,
+    fields: fieldsOf(getCollectionFields(data)),
+    // The schema read carries `localized`, which the admin's type for it does
+    // not declare.
+    localized: "localized" in data && data.localized === true,
+    hasStatus: data.status === true,
+    holdsDrafts: data.draftsEnabled === true,
+    readsDraft: readsHeldDraft(data),
+    useAsTitle: data.admin?.useAsTitle,
+    removed: data,
+    ...historyOf(data),
+    workflowExpected: data.workflow != null,
+  };
+}
+
+function ofSingle(data: SingleRead, slug: string): TranslationSchema {
+  return {
+    label: data.label || slug,
+    fields: fieldsOf(data.fields),
+    localized: data.localized === true,
+    hasStatus: data.status === true,
+    holdsDrafts: data.draftsEnabled === true,
+    readsDraft: data.draftsEnabled === true,
+    useAsTitle: undefined,
+    removed: data,
+    ...historyOf(data),
+    // The schema read carries `workflow`, which the admin's type for it does
+    // not declare.
+    workflowExpected: "workflow" in data ? data.workflow != null : undefined,
+  };
 }
 
 /**
  * The document's collection or Single. Both hooks are called, as hooks must
  * be, and the one the document is not of is asked for nothing.
  */
-function useTranslationSchema(document: TranslatedDocument): SchemaAnswer {
-  const { kind, slug } = document;
+function useTranslationSchema({
+  kind,
+  slug,
+}: TranslatedDocument): SchemaAnswer {
   const collection = useCollectionSchema(
     kind === "collection" ? slug : undefined
   );
   const single = useSingleSchema(kind === "single" ? slug : undefined);
-  if (kind === "single") {
-    const { data, isLoading, error } = single;
-    return {
-      isLoading,
-      error,
-      schema:
-        data === undefined
-          ? undefined
-          : {
-              label: data.label || slug,
-              fields: fieldsOf(data.fields),
-              localized: data.localized === true,
-              hasStatus: data.status === true,
-              holdsDrafts: data.draftsEnabled === true,
-              readsDraft: data.draftsEnabled === true,
-              useAsTitle: undefined,
-              removed: data,
-              ...historyOf(data),
-              // The schema read carries `workflow`, which the admin's type
-              // for it does not declare.
-              workflowExpected:
-                "workflow" in data ? data.workflow != null : undefined,
-            },
-    };
-  }
-  const { data, isLoading, error } = collection;
-  return {
-    isLoading,
-    error,
-    schema:
-      data === undefined
-        ? undefined
-        : {
-            label: data.label || data.name || slug,
-            fields: fieldsOf(getCollectionFields(data)),
-            // The schema read carries `localized`, which the admin's type for
-            // it does not declare.
-            localized: "localized" in data && data.localized === true,
-            hasStatus: data.status === true,
-            holdsDrafts: data.draftsEnabled === true,
-            readsDraft: readsHeldDraft(data),
-            useAsTitle: data.admin?.useAsTitle,
-            removed: data,
-            ...historyOf(data),
-            workflowExpected: data.workflow != null,
-          },
-  };
+  const { isLoading, error } = kind === "single" ? single : collection;
+  const schema =
+    kind === "single"
+      ? single.data && ofSingle(single.data, slug)
+      : collection.data && ofCollection(collection.data, slug);
+  return { isLoading, error, schema };
 }
 
 /** What both of the page's reads of the document ask for. */
