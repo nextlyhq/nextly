@@ -16,6 +16,10 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { retargetName } from "../../field-groups/migration/manifest";
 import { MIGRATION_TARGET } from "../../field-groups/migration/target";
+import {
+  CURRENT_NAMES_SHOWN,
+  LEGACY_NAMES_SHOWN,
+} from "../../field-groups/services/field-group-names-shown";
 import type { FieldGroupNaming } from "../../field-groups/services/field-group-storage-names";
 import type {
   ContributedElements,
@@ -98,9 +102,9 @@ export function refuseNamingAgainstHistory(
     code: "VALIDATION_ERROR",
     publicMessage:
       requested === "current"
-        ? "This database's field groups are on the current names (dynamic_field_groups, fg_<slug>), and the project's migration history is still on the legacy ones (dynamic_components, comp_<slug>). " +
+        ? `This database's field groups are on the current names (${CURRENT_NAMES_SHOWN}), and the project's migration history is still on the legacy ones (${LEGACY_NAMES_SHOWN}). ` +
           `${ACROSS_NAMINGS} Nothing was written. Run \`${FIELD_GROUP_TRANSITION_COMMAND}\` to move the history to the current names first.`
-        : "The project's migration history keeps field groups under the current names (dynamic_field_groups, fg_<slug>), and this run named them under the legacy ones (dynamic_components, comp_<slug>). " +
+        : `The project's migration history keeps field groups under the current names (${CURRENT_NAMES_SHOWN}), and this run named them under the legacy ones (${LEGACY_NAMES_SHOWN}). ` +
           `${ACROSS_NAMINGS} Nothing was written. Move this database's field groups with \`${FIELD_GROUP_STORAGE_MIGRATION_COMMAND}\`.`,
     logContext: {
       reason: "field-group-naming-differs-from-history",

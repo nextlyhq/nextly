@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 
+import { CURRENT_NAMES_SHOWN } from "../../domains/field-groups/services/field-group-names-shown";
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { withDryRun } from "../dry-run";
 import { DATABASE_LINE, declareFirstLine } from "../first-line";
@@ -46,7 +47,7 @@ export function registerMigrateCreateCommand(program: Command): void {
       )
       .option(
         "--field-group-names <naming>",
-        "Move the migration history's field groups to the current names (dynamic_field_groups, fg_<slug>): writes one migration that changes nothing. Move each database first with `nextly migrate:field-groups --apply --backup-confirmed`. The only value is `current`"
+        `Move the migration history's field groups to the current names (${CURRENT_NAMES_SHOWN}): writes one migration that changes nothing. Move each database first with \`nextly migrate:field-groups --apply --backup-confirmed\`. The only value is \`current\``
       )
       .option(
         "--no-transaction",

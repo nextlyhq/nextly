@@ -25,6 +25,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ManifestEntry } from "../../field-groups/migration/manifest";
 import { readMigrationState } from "../../field-groups/migration/state";
+import { CURRENT_NAMES_SHOWN } from "../../field-groups/services/field-group-names-shown";
 import type { FieldGroupNaming } from "../../field-groups/services/field-group-storage-names";
 import {
   fieldGroupRegistryUnreadable,
@@ -194,7 +195,7 @@ export function rollbackRefusedError(newest: string): NextlyError {
   return new NextlyError({
     code: "VALIDATION_ERROR",
     publicMessage:
-      `This database's field groups cannot be moved back to the legacy names: its applied migration history is on the current ones (dynamic_field_groups, fg_<slug>), as ${newest} records. ` +
+      `This database's field groups cannot be moved back to the legacy names: its applied migration history is on the current ones (${CURRENT_NAMES_SHOWN}), as ${newest} records. ` +
       "Every migration after it is planned against those names, and no command moves a history back. " +
       "Nothing was changed. The field-group storage stays on the current names while this history is applied.",
     logContext: {

@@ -26,6 +26,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { CURRENT_NAMES_SHOWN } from "../../field-groups/services/field-group-names-shown";
 import {
   consentToCover,
   describeDeletion,
@@ -338,7 +339,7 @@ ${SCOPED_ENTITIES_MARKER}
 --
 -- Written by \`nextly migrate:create --field-group-names=current\`. It changes
 -- nothing in the database: from this migration on, the history keeps field
--- groups under the current names (dynamic_field_groups, fg_<slug>). Move each
+-- groups under the current names (${CURRENT_NAMES_SHOWN}). Move each
 -- database first with \`nextly migrate:field-groups --apply --backup-confirmed\`;
 -- \`nextly migrate\` refuses this file on a database that has not moved.
 

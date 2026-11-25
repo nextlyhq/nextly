@@ -16,6 +16,10 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { retargetName } from "../../field-groups/migration/manifest";
 import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import {
+  CURRENT_NAMES_SHOWN,
+  LEGACY_NAMES_SHOWN,
+} from "../../field-groups/services/field-group-names-shown";
+import {
   namingOfRegistry,
   type FieldGroupNaming,
 } from "../../field-groups/services/field-group-storage-names";
@@ -161,7 +165,7 @@ export function currentNamesNotRecordedError(filename: string): NextlyError {
   return new NextlyError({
     code: "VALIDATION_ERROR",
     publicMessage:
-      `${filename} is on the current field-group names (dynamic_field_groups, fg_<slug>), and this database's field groups are still on the legacy ones (dynamic_components, comp_<slug>). ` +
+      `${filename} is on the current field-group names (${CURRENT_NAMES_SHOWN}), and this database's field groups are still on the legacy ones (${LEGACY_NAMES_SHOWN}). ` +
       "Recording it as applied would say the database moved when it has not. " +
       `Nothing was recorded. Move the field groups with \`${FIELD_GROUP_STORAGE_MIGRATION_COMMAND}\`, then run \`nextly migrate\`.`,
     logContext: {
@@ -178,7 +182,7 @@ export function fieldGroupStorageNotMigratedError(
   return new NextlyError({
     code: "VALIDATION_ERROR",
     publicMessage:
-      `${filename} moves the migration history to the current field-group names (dynamic_field_groups, fg_<slug>), and this database's field groups are still on the legacy ones (dynamic_components, comp_<slug>). ` +
+      `${filename} moves the migration history to the current field-group names (${CURRENT_NAMES_SHOWN}), and this database's field groups are still on the legacy ones (${LEGACY_NAMES_SHOWN}). ` +
       "Applying it would record a move the database has not made. " +
       `It was not applied. Move the field groups with \`${FIELD_GROUP_STORAGE_MIGRATION_COMMAND}\`, then run \`nextly migrate\` again.`,
     logContext: {
@@ -213,7 +217,7 @@ export function fieldGroupHistoryBehindStorageError(): NextlyError {
   return new NextlyError({
     code: "VALIDATION_ERROR",
     publicMessage:
-      "This database's field groups were moved to the current names (dynamic_field_groups, fg_<slug>), and the project's migration history is still on the legacy ones (dynamic_components, comp_<slug>). " +
+      `This database's field groups were moved to the current names (${CURRENT_NAMES_SHOWN}), and the project's migration history is still on the legacy ones (${LEGACY_NAMES_SHOWN}). ` +
       "Every file after this point would be planned against tables the database no longer has. " +
       `No file was applied. Run \`${FIELD_GROUP_TRANSITION_COMMAND}\`, then \`nextly migrate\` again.`,
     logContext: { reason: "field-group-history-behind-storage" },

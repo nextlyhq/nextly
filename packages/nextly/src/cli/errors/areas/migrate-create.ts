@@ -4,6 +4,7 @@
  * @module cli/errors/areas/migrate-create
  */
 
+import { CURRENT_NAMES_SHOWN } from "../../../domains/field-groups/services/field-group-names-shown";
 import type { NextlyError } from "../../../errors/nextly-error";
 import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
@@ -223,7 +224,7 @@ export function fieldGroupNamesOptionInvalid(value: string): CliError {
         : "`--field-group-names` takes `current`, and was given `" +
           value +
           "`.",
-    why: "It writes the one migration that moves the app's history to the current field-group names (dynamic_field_groups, fg_<slug>), and there is no other naming to move it to.",
+    why: `It writes the one migration that moves the app's history to the current field-group names (${CURRENT_NAMES_SHOWN}), and there is no other naming to move it to.`,
     next: "Run `nextly migrate:create --field-group-names=current` on its own.",
   });
 }
