@@ -162,9 +162,12 @@ function textOntoLevel(
 ): Record<string, unknown> {
   let out = { ...current };
   for (const child of fields) {
-    // A group with no name lays its fields out at this level.
+    // A group with no name lays its fields out at this level. Saying it is not translated, it
+    // shares every field it lays out, as storage keeps them, so none takes another language's.
     if (child.type === "group" && !child.name) {
-      out = textOntoLevel(out, source, childrenOf(child), documentLocalized);
+      if (child.localized !== false) {
+        out = textOntoLevel(out, source, childrenOf(child), documentLocalized);
+      }
     } else if (child.name) {
       const value = fieldTextFrom(
         out[child.name],

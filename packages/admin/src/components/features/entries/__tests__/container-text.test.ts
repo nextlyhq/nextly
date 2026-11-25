@@ -363,6 +363,34 @@ describe("sourceValueAt", () => {
   });
 });
 
+describe("a shared layout group inside a container", () => {
+  // A group with no name saying it is not translated shares the fields it lays out, at any depth:
+  // copying the container's text from another language leaves them as this language holds them.
+  const CARD = {
+    type: "group",
+    name: "card",
+    fields: [
+      { type: "text", name: "label" },
+      {
+        type: "group",
+        localized: false,
+        fields: [{ type: "text", name: "code" }],
+      },
+    ],
+  };
+
+  it("copies the container's text and leaves the shared group's fields alone", () => {
+    expect(
+      withTextFrom(
+        { label: "", code: "own" },
+        { label: "Label", code: "theirs" },
+        CARD,
+        true
+      )
+    ).toEqual({ label: "Label", code: "own" });
+  });
+});
+
 describe("withTextFrom, field by field", () => {
   const CARD = {
     type: "group",
