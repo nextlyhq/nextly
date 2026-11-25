@@ -51,14 +51,14 @@ export function newestEventsByFilename(
 /**
  * Filenames whose NEWEST event is `applied` — what "is this module applied?"
  * means for a plugin's history, which keeps that rule. An app migration's
- * state is its latest outcome instead (`migration-state.ts`).
+ * state is its latest outcome instead: `appliedAppMigrations` reads that.
  *
  * Not "has an `applied` row": `migrate:down` and `plugins uninstall` record a
  * rollback by INSERTING a `rolled_back` event after the `applied` one, and a
  * failed re-apply inserts a `failed` one, so an older `applied` row says
  * nothing about the file's current state.
  */
-export function appliedFilenames(rows: SchemaEventRow[]): Set<string> {
+export function appliedPluginModules(rows: SchemaEventRow[]): Set<string> {
   const applied = new Set<string>();
   for (const [filename, event] of newestEventsByFilename(rows)) {
     if (event.status === "applied") applied.add(filename);

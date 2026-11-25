@@ -21,7 +21,7 @@ import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
 import type { BusyTableRun } from "../../domains/schema/busy-table/run-unit";
 import { pluginOfLedgerRow } from "../../domains/schema/events/ledger-scope";
 import {
-  appliedFilenames,
+  appliedPluginModules,
   newestEventsByFilename,
 } from "../../domains/schema/events/newest-event";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -318,14 +318,14 @@ async function connect(
   //
   // Newest row per filename decides it, not the first: `migrate:down` records
   // a rollback by INSERTING a `rolled_back` event after the `applied` one, so
-  // the latest state is what "is this applied?" asks. `appliedFilenames` is
+  // the latest state is what "is this applied?" asks. `appliedPluginModules` is
   // that rule, shared with `migrate:down`, so the two cannot drift.
   const readAppliedModules = async (): Promise<Set<string>> => {
     const events = new SchemaEventsRepository(
       (adapter as unknown as DrizzleAdapter).getDrizzle(),
       dialect
     );
-    return appliedFilenames(
+    return appliedPluginModules(
       (await events.listFileApplies()).filter(row =>
         row.filename?.startsWith("plugin:")
       )

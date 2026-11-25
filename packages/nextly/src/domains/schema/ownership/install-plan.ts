@@ -39,7 +39,7 @@ export interface InstallDependencyInput {
   configured: readonly InstallCandidate[];
   /**
    * Ledger filenames whose NEWEST `file_apply` event is `applied` — see
-   * `appliedFilenames`. A module with an older `applied` row and a newer
+   * `appliedPluginModules`. A module with an older `applied` row and a newer
    * `rolled_back` one is not applied.
    */
   appliedFilenames: ReadonlySet<string>;

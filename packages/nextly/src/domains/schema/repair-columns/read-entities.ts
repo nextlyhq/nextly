@@ -26,8 +26,8 @@ import { FieldGroupRegistryService } from "../../field-groups/services/field-gro
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { UserExtSchemaService } from "../../users/services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../users/services/user-field-definition-service";
+import { ledgerFilename } from "../events/ledger-scope";
 import { removedOnPurpose } from "../events/migration-state";
-import { appliedFilenames } from "../events/newest-event";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
   DEFAULT_TABLE_NAME_RESOLVERS,
@@ -45,6 +45,7 @@ import {
 } from "../migrate-create/entity-settings";
 import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
 import { isCodeOwned } from "../pipeline/registered-collections";
+import { appliedAppMigrations } from "../schema-version";
 import { readUiSchema } from "../ui-schema/loader";
 
 import {
@@ -633,10 +634,11 @@ async function snapshotEntities(
   // With no ledger nothing has been applied, so no snapshot speaks for the database.
   if (!(await adapter.tableExists("nextly_schema_events"))) return [];
   const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
-  // The ledger read once for every snapshot. A file is applied where its newest event is, which is
-  // what `isFileApplied` asks of each file in turn.
+  // The ledger read once for every snapshot. A migration is applied where its latest outcome says
+  // so, which is what `isFileApplied` asks of each file in turn: an attempt recorded after it that
+  // failed, stopped or was cleared leaves it applied, and its snapshot the newest.
   const rows = await events.listFileApplies();
-  const applied = appliedFilenames(rows);
+  const applied = new Set([...appliedAppMigrations(rows)].map(ledgerFilename));
   const removed = removedOnPurpose(rows, await events.listFileRemovals());
   const metaDir = resolve(migrationsDir, "meta");
   const [listed, withFile] = await Promise.all([
