@@ -1562,7 +1562,13 @@ export async function ensureLocalizedCompanions(
     )) {
       if (!storesPerLanguage(entity)) continue;
       const companionTableName = `${entity.tableName}_locales`;
-      if (!(await adapter.tableExists(companionTableName))) continue;
+      if (
+        !(await (adapter as unknown as DrizzleAdapter).tableExists(
+          companionTableName
+        ))
+      ) {
+        continue;
+      }
       // A field group's transitions are recorded as `fieldGroup`, as its builder is named.
       const kind = entity.kind === "component" ? "fieldGroup" : entity.kind;
       await reconcileCompanionColumns(

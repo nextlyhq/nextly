@@ -311,14 +311,21 @@ export function fieldsTurningTranslatedInside(
   before: readonly StructuredField[],
   after: readonly StructuredField[]
 ): string[] {
-  const named = (fields: readonly StructuredField[] | undefined) =>
-    new Map(
-      addressableFields(fields ?? []).flatMap(field =>
-        typeof field.name === "string" && field.name !== ""
-          ? [[field.name, field] as const]
-          : []
-      )
-    );
+  // A level's fields by name, a group with no name read through, as `shapeOfLevel` reads it.
+  const named = (fields: readonly StructuredField[] | undefined) => {
+    const out = new Map<string, StructuredField>();
+    const visit = (level: readonly StructuredField[]) => {
+      for (const field of level) {
+        if (typeof field.name === "string" && field.name !== "") {
+          out.set(field.name, field);
+        } else if (field.type === "group" && field.fields) {
+          visit(field.fields);
+        }
+      }
+    };
+    visit(fields ?? []);
+    return out;
+  };
   const found: string[] = [];
   const walk = (
     was: SharedStructureShape,
