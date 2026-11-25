@@ -71,6 +71,91 @@ describe("movesHeldBack", () => {
   });
 });
 
+// A move that can never be made as it is says why, in the Schema Builder's words: today's text
+// says to run migrate:create, which refuses it.
+describe("a move the push can say is refused for what it is", () => {
+  const unique = { ...text("code"), unique: true };
+  const repeater = (name: string, fields: object[]) => ({
+    name,
+    type: "repeater",
+    fields,
+  });
+  const held = (recordedFields: object[], fields: object[]) =>
+    movesHeldBack([
+      { kind: "collection", slug: "posts", recordedFields, fields },
+    ])[0]?.reasons;
+
+  it.each([
+    ["a group", "group", "meta", group("meta", [])],
+    ["a repeater", "repeater", "items", repeater("items", [])],
+  ] as const)(
+    "a field kept unique into %s",
+    (_what, noun, holder, container) => {
+      const reasons = held(
+        [unique, container],
+        [
+          {
+            ...container,
+            fields: [...container.fields, unique],
+          },
+        ]
+      );
+      expect(reasons).toEqual([
+        `code cannot be moved into the ${noun} ${holder}: a ${noun} keeps its values in one JSON value, which cannot be kept unique. It can be moved once it is no longer unique (a one-to-one changed to many-to-one, or its unique setting removed), as a change of its own. The change was not applied.`,
+      ]);
+    }
+  );
+
+  it("a one-to-one relationship, translated or not, into a group", () => {
+    const person = (extra: object = {}) => ({
+      name: "person",
+      type: "relationship",
+      relationTo: "people",
+      unique: true,
+      ...extra,
+    });
+    for (const moved of [person(), person({ localized: true })]) {
+      expect(
+        held([moved, group("meta", [])], [group("meta", [moved])])
+      ).toEqual([
+        expect.stringMatching(
+          /^person cannot be moved into the group meta: a group keeps its values in one JSON value, which cannot be kept unique\. .* The change was not applied\.$/
+        ),
+      ]);
+    }
+  });
+
+  it("a field out of a repeater, whose entries hold several rows of it", () => {
+    expect(
+      held(
+        [repeater("items", [text("label")])],
+        [text("label"), repeater("items", [])]
+      )
+    ).toEqual([
+      expect.stringMatching(
+        /^label cannot be moved out of the repeating rows items: each entry may hold several rows of it, which one field cannot keep\. Add a new field instead\. The change was not applied\.$/
+      ),
+    ]);
+  });
+
+  // What the push cannot answer keeps its own words: a field that changes how it stores its values
+  // is refused for that only by a road that knows how each is stored.
+  it("keeps its own words for a move it refuses for a reason it cannot give", () => {
+    const views = (fractions: boolean) => ({
+      name: "views",
+      type: "number",
+      ...(fractions ? { dbType: "decimal" } : {}),
+    });
+    expect(
+      held([views(false), group("meta", [])], [group("meta", [views(true)])])
+    ).toEqual([
+      expect.stringMatching(
+        /^views looks moved to meta\.views, and the development push would delete views with its values\. Run nextly migrate:create/
+      ),
+    ]);
+  });
+});
+
 describe("withMovesHeldBack", () => {
   it("names an entity held for both once, its type change's reasons first", () => {
     expect(

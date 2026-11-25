@@ -104,6 +104,7 @@ import {
   createContentEventsNamespace,
   createJobsNamespace,
   createNoticesNamespace,
+  createTranslationsNamespace,
   createVersionsNamespace,
   createWorkflowsNamespace,
   createReleasesNamespace,
@@ -124,6 +125,7 @@ import {
   type ContentEventsNamespace,
   type JobsNamespace,
   type NoticesNamespace,
+  type TranslationsNamespace,
   type VersionsNamespace,
   type WorkflowsNamespace,
   type ReleasesNamespace,
@@ -322,6 +324,8 @@ export class Nextly implements NextlyContext {
   public readonly releases: ReleasesNamespace;
   /** A person's own notices. */
   public readonly notices: NoticesNamespace;
+  /** @experimental A translated field and its source. */
+  public readonly translations: TranslationsNamespace;
   /** A document's history: list, read, compare, name, restore. */
   public readonly versions: VersionsNamespace;
   /** A subject's content events: a document's or a release's. */
@@ -371,6 +375,7 @@ export class Nextly implements NextlyContext {
     this.jobs = withLanguagesPinned(createJobsNamespace());
     this.releases = withLanguagesPinned(createReleasesNamespace(this));
     this.notices = withLanguagesPinned(createNoticesNamespace());
+    this.translations = withLanguagesPinned(createTranslationsNamespace(this));
     this.versions = withLanguagesPinned(createVersionsNamespace(this));
     this.contentEvents = withLanguagesPinned(
       createContentEventsNamespace(this)
@@ -1200,6 +1205,13 @@ export const nextly = {
     markRead: async (args: Parameters<NoticesNamespace["markRead"]>[0]) =>
       (await requireNextlyOnceStarted()).notices.markRead(args),
   },
+
+  translations: {
+    sourceChange: async args =>
+      (await requireNextlyOnceStarted()).translations.sourceChange(args),
+    keepCurrent: async args =>
+      (await requireNextlyOnceStarted()).translations.keepCurrent(args),
+  } satisfies TranslationsNamespace,
 
   contentEvents: {
     list: async args =>

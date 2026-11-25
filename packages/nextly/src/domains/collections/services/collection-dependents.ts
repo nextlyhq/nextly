@@ -523,6 +523,64 @@ export async function fieldGroupUsedBy(
   return placementsAmong(await sources.fieldOwners(), slug);
 }
 
+/**
+ * One use of a field group: a field placing it, or, with `via`, a field placing another field group
+ * that uses it, directly or further down a chain.
+ */
+export interface FieldGroupUse extends FieldReference {
+  /**
+   * The field groups between the holder and the one asked about, holder side first: a Single
+   * placing `c`, which places `b`, which places the one asked about, is `["c", "b"]`; its
+   * `fieldPath` places `c`. Absent for a direct use.
+   */
+  readonly via?: readonly string[];
+}
+
+/**
+ * Every use of one field group among `owners`: each field placing it, then each holder reaching it
+ * through other field groups, marked with the chain (`via`). A field group is never its own user,
+ * and each field group on a chain is walked once, in the order first met, so a ring ends. What the
+ * field group's own "used by" list shows with its indirect users, and who a move into or out of it
+ * is refused naming (`fieldGroupUsersClause`).
+ */
+export function fieldGroupUsesAmong(
+  owners: readonly FieldOwner[],
+  slug: string
+): FieldGroupUse[] {
+  const uses: FieldGroupUse[] = [...placementsAmong(owners, slug)];
+  const walked = new Set([slug]);
+  const pending = uses
+    .filter(use => use.entityType === "fieldGroup")
+    .map(use => ({ group: use.entitySlug, via: [use.entitySlug] }));
+  for (let next = pending.shift(); next !== undefined; next = pending.shift()) {
+    if (walked.has(next.group)) continue;
+    walked.add(next.group);
+    for (const use of placementsAmong(owners, next.group)) {
+      if (use.entityType === "fieldGroup" && use.entitySlug === slug) continue;
+      uses.push({ ...use, via: next.via });
+      if (use.entityType === "fieldGroup") {
+        pending.push({
+          group: use.entitySlug,
+          via: [use.entitySlug, ...next.via],
+        });
+      }
+    }
+  }
+  return uses;
+}
+
+/**
+ * Every use of one field group, directly and through other field groups (`fieldGroupUsesAmong`),
+ * read from every stored field list `sources` gives. Rejects when they cannot be read, as
+ * `fieldGroupUsedBy` does.
+ */
+export async function fieldGroupUsedThrough(
+  slug: string,
+  sources: Pick<DependentsSources, "fieldOwners">
+): Promise<FieldGroupUse[]> {
+  return fieldGroupUsesAmong(await sources.fieldOwners(), slug);
+}
+
 /** The fields that place one field group: the walk below, for that one. */
 function placementsAmong(
   owners: readonly FieldOwner[],

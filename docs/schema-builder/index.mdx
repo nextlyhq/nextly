@@ -137,6 +137,8 @@ Repeater, Group, and Component fields can themselves contain fields, to any dept
 
 A Component field embeds a reusable field group definition (created via the Field Groups Builder or `defineFieldGroup()`). It can target a single field group or a list of allowed field groups, and can be marked repeatable to act as an inline content zone.
 
+A field group's fields are read-only inside the collections, Singles and field groups that use it: they are changed only in the field group's own editor, and a change there reaches every one of them. A save of a host that adds, removes, edits or reorders them is refused, naming the field group, and so is a field moved between a host and a field group it uses, in either direction: the refusal names the field group and every collection, Single and field group using it, directly or through another field group. A field cannot be moved into or out of a Blocks field either, which holds blocks declared in code, not fields.
+
 ## Walkthrough: create a Blog Posts collection
 
 1. Open `/admin/builder/collections` and click **New Collection**.

@@ -21,6 +21,9 @@ export const APPLIED_SNAPSHOT_INVALID_REASON = "applied snapshot invalid";
 export const APPLIED_MIGRATION_FILE_MISSING_REASON =
   "applied migration file missing";
 
+/** An applied migration newer than the newest snapshot read has none. */
+export const APPLIED_SNAPSHOT_MISSING_REASON = "applied snapshot missing";
+
 /** The snapshots are there and the disk does not give them. */
 export const MIGRATION_SNAPSHOTS_UNREADABLE_REASON =
   "migration snapshots unreadable";

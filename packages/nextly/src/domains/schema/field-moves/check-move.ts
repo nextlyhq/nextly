@@ -4,11 +4,14 @@
  * to a key in the group's JSON or back; every move a group cannot hold is refused before anything
  * changes, with the reason it gives the person:
  *
- * - a field the database keeps unique into a group, whose JSON value cannot be kept unique;
+ * - a field the database keeps unique into a group or repeater, at any depth, whose JSON value cannot
+ *   be kept unique (one moved out of a group into a unique column is moved, its repeats counted
+ *   first);
  * - a move into repeating rows (not available yet) or out of them (an entry's many rows cannot
  *   become one value);
- * - a move into or out of a field group, which is changed only in its own editor, or a blocks
- *   field, which holds blocks declared in code;
+ * - a move into or out of a field group, which is changed only in its own editor (named with every
+ *   collection, Single and field group using it), or a blocks field, which holds blocks declared in
+ *   code;
  * - a move that would change whether the field keeps a value for each language, which a group
  *   kept the same for every language cannot hold;
  * - a move made in the same save as a change of the field's type;
@@ -22,7 +25,11 @@
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { addressableFields } from "../../../shared/addressable-fields";
-import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
+import {
+  extractFieldGroupReferences,
+  isFieldGroupFieldType,
+} from "../../field-groups/storage/field-group-field-type";
+import { fieldGroupUsersClause } from "../../field-groups/storage/field-group-users-clause";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { keepsTranslationsInside } from "../../i18n/shared-structure";
 import { builderColumnIsUnique, toSnakeCase } from "../field-rules";
@@ -33,6 +40,8 @@ import {
   isTextStorageKind,
 } from "../services/field-column-descriptor";
 import { sameRelationTarget } from "../services/relationship-key-target";
+
+import type { FieldGroupUsers } from "./field-group-users";
 
 /** Where a field's values are: a column of their own, or a key inside a container's JSON column. */
 export type StoragePlace =
@@ -81,6 +90,11 @@ export type MoveCheck =
 /** What the entity says of translation, which decides where a translated field's values are. */
 export interface MoveEntity {
   localized?: boolean;
+  /**
+   * Who uses each field group, by slug, which a refused move into or out of one names. Absent, or
+   * answering nothing for a slug, the refusal names the field group alone.
+   */
+  fieldGroupUsers?: (slug: string) => FieldGroupUsers | undefined;
 }
 
 function nameOf(field: FieldDefinition): string | undefined {
@@ -127,6 +141,29 @@ export function placeOf(
   return null;
 }
 
+/**
+ * The first field above `path`'s last name that is a field group's reference or a blocks field,
+ * if any: a definition holds neither's fields, so a path through one names nothing it holds.
+ */
+function holderOnPath(
+  fields: readonly FieldDefinition[],
+  path: readonly string[]
+): FieldDefinition | undefined {
+  let level = fields;
+  for (const segment of path.slice(0, -1)) {
+    const found = (
+      addressableFields(level) as unknown as FieldDefinition[]
+    ).find(field => nameOf(field) === segment);
+    if (!found) return undefined;
+    // A blocks field is a plugin's type, so its name is compared as the text it is.
+    if (String(found.type) === "blocks" || isFieldGroupFieldType(found.type)) {
+      return found;
+    }
+    level = childrenOf(found);
+  }
+  return undefined;
+}
+
 /** Whether a field's values are kept for each language where it stands. */
 function keptPerLanguage(placed: PlacedField, entity: MoveEntity): boolean {
   const localized = entity.localized === true;
@@ -147,23 +184,49 @@ function refuse(reason: MoveRefusalReason, message: string): MoveCheck {
   return { ok: false, reason, message };
 }
 
+/**
+ * The refusal of a move into or out of a field group: named by the field groups the field places
+ * (its label where it names none), with everyone using each, as `entity` knows them.
+ */
+function fieldGroupRefusal(
+  fieldName: string,
+  fieldGroup: FieldDefinition,
+  entity: MoveEntity
+): MoveCheck {
+  const { single, many } = extractFieldGroupReferences(fieldGroup);
+  const slugs = [...(single === undefined ? [] : [single]), ...(many ?? [])];
+  const name = slugs.length > 0 ? slugs.join(" or ") : label(fieldGroup);
+  // Named in the words the Schema Builder's refusal of the same gesture uses.
+  const used = slugs.flatMap(slug => {
+    const users = entity.fieldGroupUsers?.(slug);
+    const clause =
+      users === undefined
+        ? ""
+        : fieldGroupUsersClause(users.uses, users.complete);
+    return clause === "" ? [] : [clause];
+  });
+  return refuse(
+    "field-group",
+    [
+      `${fieldName} cannot be moved into or out of the field group ${name}: a field group is changed only in its own editor.`,
+      ...used,
+    ].join(" ")
+  );
+}
+
 /** The refusal of crossing a container a field's values cannot move into or out of, if any. */
 function crossingRefusal(
   field: FieldDefinition,
   left: readonly FieldDefinition[],
-  entered: readonly FieldDefinition[]
+  entered: readonly FieldDefinition[],
+  entity: MoveEntity
 ): MoveCheck | null {
   const kinds = (list: readonly FieldDefinition[], type: string) =>
     list.find(each => each.type === type);
   const fieldGroup = [...left, ...entered].find(each =>
     isFieldGroupFieldType(each.type)
   );
-  if (fieldGroup) {
-    return refuse(
-      "field-group",
-      `${label(field)} cannot be moved into or out of the field group ${label(fieldGroup)}: a field group is changed only in its own editor.`
-    );
-  }
+  if (fieldGroup) return fieldGroupRefusal(label(field), fieldGroup, entity);
   const blocks = kinds(left, "blocks") ?? kinds(entered, "blocks");
   if (blocks) {
     return refuse(
@@ -201,15 +264,32 @@ export function checkMove(
   const from = placeOf(before, request.from);
   const to = placeOf(after, request.to);
   if (!from || !to) {
+    // A path through a field group's reference or a blocks field, neither of which holds the
+    // fields there, is refused for what it goes through.
+    const holder =
+      holderOnPath(before, request.from) ?? holderOnPath(after, request.to);
+    const named = request.to.at(-1) ?? request.from.at(-1) ?? "This field";
+    if (holder && isFieldGroupFieldType(holder.type)) {
+      return fieldGroupRefusal(named, holder, entity);
+    }
+    if (holder) {
+      return refuse(
+        "blocks",
+        `${named} cannot be moved into or out of ${label(holder)}: a blocks field holds blocks declared in code, not fields.`
+      );
+    }
     return refuse(
       "not-found",
       `The move names a field that is not at ${(from ? request.to : request.from).join(".")}.`
     );
   }
   const refusal =
-    translatedContainerRefusal(from, to, entity) ??
     storageRefusal(from, to) ??
-    placesRefusal(from, to) ??
+    uniqueRefusal(from, to) ??
+    placesRefusal(from, to, entity) ??
+    // After what says why a move cannot be made: this one waits, and the order decides only which
+    // message a refused move gets, never whether it is refused.
+    translatedContainerRefusal(from, to, entity) ??
     valuesRefusal(from, to, entity);
   if (refusal) return refusal;
   return {
@@ -221,6 +301,40 @@ export function checkMove(
       perLanguage: keptPerLanguage(from, entity),
     },
   };
+}
+
+/**
+ * The refusals whose message the two field lists decide alone, with nothing the database or the
+ * reader says: what `checkMove` refuses a move for wherever its road is.
+ */
+const DECIDED_BY_DEFINITIONS: ReadonlySet<MoveRefusalReason> =
+  new Set<MoveRefusalReason>([
+    "unique",
+    "into-repeater",
+    "within-repeater",
+    "out-of-repeater",
+    "blocks",
+  ]);
+
+/**
+ * What refuses a move that can never be made as it is sent, where a road that would refuse it
+ * anyway, for a reason of its own, would say it waits: the message `checkMove` gives for a move
+ * its definitions alone refuse (`DECIDED_BY_DEFINITIONS`), and for a field group's, where the
+ * users it names are given. None for a move `checkMove` allows, or one it refuses for what the
+ * road already tells, which stays the road's to answer.
+ */
+export function definitionRefusal(
+  before: readonly FieldDefinition[],
+  after: readonly FieldDefinition[],
+  request: FieldMoveRequest,
+  entity: MoveEntity = {}
+): string | undefined {
+  const checked = checkMove(before, after, request, entity);
+  if (checked.ok) return undefined;
+  const decided =
+    DECIDED_BY_DEFINITIONS.has(checked.reason) ||
+    (checked.reason === "field-group" && entity.fieldGroupUsers !== undefined);
+  return decided ? checked.message : undefined;
 }
 
 /**
@@ -272,8 +386,55 @@ function storageRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
   return null;
 }
 
+/**
+ * The refusal of a field the database keeps unique moved into a group or a repeater, at any depth,
+ * named by the first one it enters: its values would sit in one JSON value, which no index keeps
+ * unique. Judged before the containers themselves, so a repeater's "not available yet" never
+ * stands in for it. Never for a move another refusal stands against whatever the field is: it
+ * would advise a change that helps nothing. Unique before the move or after it: a move that also
+ * drops the uniqueness is two changes, and the uniqueness is changed in a save of its own first.
+ */
+function uniqueRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
+  if (to.place.kind !== "json") return null;
+  if (!builderColumnIsUnique(from.field) && !builderColumnIsUnique(to.field)) {
+    return null;
+  }
+  if (refusedWhateverItIs(from, to)) return null;
+  const holder =
+    to.containers.slice(sharedDepth(from.containers, to.containers))[0] ??
+    to.containers[0];
+  if (holder.type !== "group" && holder.type !== "repeater") return null;
+  const noun = holder.type === "repeater" ? "repeater" : "group";
+  return refuse(
+    "unique",
+    `${label(to.field)} cannot be moved into the ${noun} ${label(holder)}: a ${noun} keeps its values in one JSON value, which cannot be kept unique. It can be moved once it is no longer unique (a one-to-one changed to many-to-one, or its unique setting removed), as a change of its own.`
+  );
+}
+
+/**
+ * Whether a move is refused whatever its field is (`placesRefusal`): from inside a repeater for its
+ * rows, and through a field group, a blocks field or a container that stores nothing, on either
+ * side. Taking the field's uniqueness away would change none of them.
+ */
+function refusedWhateverItIs(from: PlacedField, to: PlacedField): boolean {
+  return (
+    from.containers.some(each => each.type === "repeater") ||
+    [...from.containers, ...to.containers].some(
+      each =>
+        isFieldGroupFieldType(each.type) ||
+        // A blocks field is a plugin's type, so its name is compared as the text it is.
+        String(each.type) === "blocks" ||
+        !fieldProducesColumn(each)
+    )
+  );
+}
+
 /** The refusal of a move between places its values cannot be carried between. */
-function placesRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
+function placesRefusal(
+  from: PlacedField,
+  to: PlacedField,
+  entity: MoveEntity
+): MoveCheck | null {
   const shared = sharedDepth(from.containers, to.containers);
   // A move that stays inside repeating rows would have to move the value in every row of the
   // list its column holds, which these statements do not do yet.
@@ -290,7 +451,8 @@ function placesRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
   const crossing = crossingRefusal(
     to.field,
     from.containers.slice(shared),
-    to.containers.slice(shared)
+    to.containers.slice(shared),
+    entity
   );
   if (crossing) return crossing;
   // A container that stores nothing (a virtual group, or one a field group holds), anywhere on
@@ -312,29 +474,8 @@ function valuesRefusal(
   to: PlacedField,
   entity: MoveEntity
 ): MoveCheck | null {
-  // Unique before the move or after it: a move that also drops the uniqueness is two changes, and
-  // the uniqueness is changed in a save of its own first.
-  if (
-    to.place.kind === "json" &&
-    (builderColumnIsUnique(from.field) || builderColumnIsUnique(to.field))
-  ) {
-    return refuse(
-      "unique",
-      `${label(to.field)} cannot be moved into the group ${label(to.containers[0])}: a group keeps its values in one JSON value, which cannot be kept unique. It can be moved once it is no longer unique (a one-to-one changed to many-to-one, or its unique setting removed), as a change of its own.`
-    );
-  }
-  // Out of a group into a unique column: the column's uniqueness stands before the copy brings
-  // the values that would have to meet it, so the field is moved first and made unique after.
-  if (
-    from.place.kind === "json" &&
-    to.place.kind === "column" &&
-    builderColumnIsUnique(to.field)
-  ) {
-    return refuse(
-      "unique",
-      `${label(to.field)} cannot be moved out of the group ${label(from.containers[0])} as a unique field: its values arrive after the uniqueness is set. Move it first, then make it unique as a change of its own.`
-    );
-  }
+  // Out of a group into a unique column is moved: its repeats are counted before anything is
+  // written, and its file stops over any the database it runs on holds (`repeatedValuesStop`).
   const perLanguage = keptPerLanguage(from, entity);
   if (perLanguage === keptPerLanguage(to, entity)) return null;
   return refuse(
