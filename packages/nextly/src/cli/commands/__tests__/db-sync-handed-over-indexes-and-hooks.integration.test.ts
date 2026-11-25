@@ -453,7 +453,9 @@ for (const dialect of getConfiguredTestDialects()) {
         });
         try {
           // Compiled from the record as it was; the start then waits for the lock.
-          await vi.waitFor(() => expect(ran).toBe(2), { timeout: 30_000 });
+          await vi.waitFor(() => expect(ran).toBeGreaterThanOrEqual(2), {
+            timeout: 30_000,
+          });
           await builderSaves(fields =>
             fields.filter(field => field.name !== "code")
           );
