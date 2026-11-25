@@ -22,18 +22,10 @@
 import { fetcher } from "../lib/api/fetcher";
 import { protectedApi } from "../lib/api/protectedApi";
 import type { BulkResponse, ListResponse } from "../lib/api/response-types";
-import {
-  DOCUMENT_REVS_KEY,
-  everyLanguageBody,
-  type EveryLanguageVersion,
-} from "../lib/document-version";
+import { DOCUMENT_REVS_KEY } from "../lib/document-version";
 import type { HookWarning, MutationResult } from "../lib/mutation-warnings";
 import type { Entry, EntryValue, FieldDefinition } from "../types/collection";
 
-import type {
-  PublishAllLanguageOutcome,
-  PublishAllPreview,
-} from "./publishAllPreview";
 import {
   publishPartsBody,
   type PublishPartsChoice,
@@ -919,53 +911,6 @@ export const entryApi = {
     );
     return result.item;
   },
-
-  /**
-   * Publish every language of an entry at once.
-   * Hits `POST /api/collections/{slug}/entries/{id}/publish-all`.
-   */
-  publishAllLocales: async (
-    collectionSlug: string,
-    id: string,
-    /**
-     * The version of every language, as a read of every language gives it: a
-     * publish of every language is refused when any of them changed since.
-     * Or the overwrite choice, from a caller refused that read.
-     */
-    version?: EveryLanguageVersion
-  ): Promise<{
-    id: string;
-    status?: string;
-    languages?: PublishAllLanguageOutcome[];
-  }> => {
-    // The publish reports each language's outcome beside the entry, which
-    // the result message names language by language.
-    const result = await protectedApi.post<{
-      message: string;
-      item: {
-        id: string;
-        status?: string;
-        languages?: PublishAllLanguageOutcome[];
-      };
-    }>(
-      `/collections/${collectionSlug}/entries/${id}/publish-all`,
-      everyLanguageBody(version)
-    );
-    return result.item;
-  },
-
-  /**
-   * What publishing every language of an entry would do, language by
-   * language, without doing it: asked as the publish is, and writing nothing.
-   * Hits `GET /api/collections/{slug}/entries/{id}/publish-all`.
-   */
-  previewPublishAllLocales: async (
-    collectionSlug: string,
-    id: string
-  ): Promise<PublishAllPreview> =>
-    protectedApi.get<PublishAllPreview>(
-      `/collections/${collectionSlug}/entries/${id}/publish-all`
-    ),
 
   /**
    * Publish or unpublish the parts of an entry a person chose: some of its languages, and

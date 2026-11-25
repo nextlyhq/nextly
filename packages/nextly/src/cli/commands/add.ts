@@ -33,7 +33,6 @@
  * ```
  */
 
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -86,6 +85,7 @@ import {
   type PluginShape,
   type Registration,
 } from "./plugins-add/registration";
+import { runInstall } from "./plugins-add/run-install";
 
 export type PackageManager = "pnpm" | "yarn" | "npm";
 
@@ -153,23 +153,6 @@ async function installFor(
 ): Promise<{ pm: PackageManager; args: string[] }> {
   const pm = detectPackageManager(cwd);
   return { pm, args: buildInstallArgs(pm, await installSpec(cwd, pkg), dev) };
-}
-
-function runInstall(
-  pm: PackageManager,
-  args: string[],
-  cwd: string
-): Promise<number> {
-  return new Promise(resolve => {
-    const child = spawn(pm, args, {
-      cwd,
-      stdio: "inherit",
-      // Windows resolves package-manager shims via the shell.
-      shell: process.platform === "win32",
-    });
-    child.on("error", () => resolve(1));
-    child.on("close", code => resolve(code ?? 1));
-  });
 }
 
 /** Asks for an option the plugin needs at the terminal, checking it as it is typed. */

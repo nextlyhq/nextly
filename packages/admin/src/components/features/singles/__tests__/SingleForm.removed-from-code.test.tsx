@@ -1,8 +1,8 @@
 /**
  * The Single editor of a Single removed from code offers no control that would
  * write, for a user holding every permission: no Save or Publish, no
- * Unpublish, no publishing of every language, no page-contributed action, its
- * fields read-only and no claim made on the document. Its history and a
+ * Unpublish, no page-contributed action, the panel's actions held, its fields
+ * read-only and no claim made on the document. Its history and a
  * preview stay. The notice is the page's document banner; the lock strip adds
  * no reader's sentence of its own.
  *
@@ -23,7 +23,7 @@ const { useDocumentLock, sidebarProps } = vi.hoisted(() => ({
 }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
-// Drawn as it is, its props recorded: the publish-all hold is handed down here.
+// Drawn as it is, its props recorded: the panel's holds are handed down here.
 vi.mock(
   "@admin/components/features/entries/EntryForm/EntryFormSidebar",
   async importOriginal => {
@@ -185,11 +185,14 @@ describe("the Single editor of a Single removed from code", () => {
     expect(items).toContain("History");
   });
 
-  it("holds publishing every language, which the page offers a reader", () => {
+  it("holds the panel's actions, and still lets its reader open the other languages", () => {
     renderEditor(true);
 
     expect(sidebarProps).toHaveBeenLastCalledWith(
-      expect.objectContaining({ publishAllDisabled: true })
+      expect.objectContaining({
+        actionsDisabled: true,
+        navigationDisabled: false,
+      })
     );
   });
 
@@ -217,7 +220,10 @@ describe("the Single editor of a Single removed from code", () => {
       expect.objectContaining({ enabled: true })
     );
     expect(sidebarProps).toHaveBeenLastCalledWith(
-      expect.objectContaining({ publishAllDisabled: false })
+      expect.objectContaining({
+        actionsDisabled: false,
+        navigationDisabled: false,
+      })
     );
   });
 });
