@@ -8,14 +8,16 @@
  *   builder" and Enter makes a draft and opens it in the builder.
  * - In the builder, Tab reaches the top bar's ⋯, the arrow keys reach "Open
  *   as form", and Enter opens the page's form; there Tab reaches the
- *   document bar's "Open in builder", which opens the builder again, and its
- *   "Back to Pages" goes back to the list.
+ *   document bar's main button's arrow, the arrow keys reach its "Open in
+ *   builder", which opens the builder again, and its "Back to Pages" goes back
+ *   to the list.
  *
  * @module tests/entry-and-settings-keyboard.spec
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { MAIN_MENU } from "./support/document-bar";
 // Whether a computed style draws a visible focus mark, shared with its guard
 // test in scripts.
 import { focusMarkShown } from "./support/focus-mark.mjs";
@@ -186,12 +188,18 @@ test("opens a page as a form from the builder and back, by keyboard alone", asyn
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(formAt(id));
 
-  // The form's own way back, in its document bar.
-  const inBuilder = page
+  // The form's own way back, on its document bar's main button's menu.
+  const arrow = page
     .getByTestId("document-bar")
-    .getByRole("link", { name: "Open in builder", exact: true });
-  await expect(inBuilder).toBeVisible({ timeout: 30_000 });
-  await tabTo(page, inBuilder);
+    .getByRole("button", { name: MAIN_MENU });
+  await expect(arrow).toBeVisible({ timeout: 30_000 });
+  await tabTo(page, arrow);
+  await page.keyboard.press("Enter");
+  const inBuilder = page.getByRole("menuitem", {
+    name: "Open in builder",
+    exact: true,
+  });
+  await pressUntilFocused(page, inBuilder, "ArrowDown", 20);
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(builderAt(id));
   await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({

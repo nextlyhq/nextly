@@ -149,7 +149,7 @@ function renderBoth() {
 }
 
 describe("the shared fields' approval and their version under review", () => {
-  it("is held in the header, approve-all and the side panel when French, which the reviewer can't read, was saved last", async () => {
+  it("is held in the header and approve-all when French, which the reviewer can't read, was saved last", async () => {
     // The shared fields' version under review is French v9; the reviewer sees English v8 newest.
     answering(9, [saved(8, "en"), saved(7, "en")]);
 
@@ -163,14 +163,14 @@ describe("the shared fields' approval and their version under review", () => {
     expect(screen.getByTestId("approve-all")).toHaveTextContent(
       SHARED_APPROVAL_HELD
     );
+    // English and the shared fields wait in one stage, so the header's
+    // Approve moves both and carries the hold: the side panel offers no
+    // second Approve for the shared fields.
     const shared = document.querySelector('[data-review-part=""]');
     expect(shared).not.toBeNull();
     expect(
-      within(shared as HTMLElement).getByRole("button", { name: "Approve" })
-    ).toBeDisabled();
-    expect(
-      within(shared as HTMLElement).getByText(SHARED_APPROVAL_HELD)
-    ).toBeInTheDocument();
+      within(shared as HTMLElement).queryByRole("button", { name: "Approve" })
+    ).toBeNull();
   });
 
   it("is not held for the same reviewer when English was saved last, which is the control", async () => {
@@ -185,9 +185,6 @@ describe("the shared fields' approval and their version under review", () => {
     await waitFor(() =>
       expect(screen.getByTestId("approve-all")).toHaveTextContent("free")
     );
-    const shared = document.querySelector('[data-review-part=""]');
-    expect(
-      within(shared as HTMLElement).getByRole("button", { name: "Approve" })
-    ).toBeEnabled();
+    expect(document.querySelector('[data-review-part=""]')).not.toBeNull();
   });
 });

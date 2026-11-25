@@ -11,6 +11,7 @@
 import {
   findNode,
   type BlockDocument,
+  type BlockNode,
   type BlockInspectorProps,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
@@ -20,6 +21,7 @@ import * as React from "react";
 
 import { EMBED_BLOCK_TYPE, embedLinkOp } from "../canvas/embed-states-model";
 import type { EditorState } from "../editor-state";
+import { applyOps, type BuilderOp } from "../op-vocabulary";
 import {
   useVisitorUnreadable,
   VisitorUnreadableNote,
@@ -39,6 +41,7 @@ import { formSectionBodies, formSourceSections } from "./content/form-sections";
 import { useFormSources } from "./content/form-source-control";
 import { galleryContentSections } from "./content/gallery-fields";
 import { commitLinkChanges } from "./content/link-control";
+import { PropRefusalContext, type PropRefusal } from "./content/prop-refusal";
 import {
   blockIsReadOnly,
   builderContentSectionsOf,
@@ -96,20 +99,24 @@ function DrawnContentTab({
   /** The page around the block, for a section the builder draws itself. */
   around?: ContentAround | undefined;
 }): React.JSX.Element {
+  // Why a write was refused, for a field that says so (`prop-refusal.ts`).
+  const refusal = usePropRefusal(editor);
   return (
-    <ContentSurface
-      // Keyed by node, so a custom inspector holding local state does not
-      // carry one block's draft to the next, as the generated fields do not.
-      key={`${block.nodeId}:content`}
-      inspection={block}
-      editor={editor}
-      onCommit={commit}
-      inspectors={inspectors}
-      services={services}
-      reasonId={reasonId}
-      fields={fields}
-      around={around}
-    />
+    <PropRefusalContext.Provider value={refusal}>
+      <ContentSurface
+        // Keyed by node, so a custom inspector holding local state does not
+        // carry one block's draft to the next, as the generated fields do not.
+        key={`${block.nodeId}:content`}
+        inspection={block}
+        editor={editor}
+        onCommit={commit}
+        inspectors={inspectors}
+        services={services}
+        reasonId={reasonId}
+        fields={fields}
+        around={around}
+      />
+    </PropRefusalContext.Provider>
   );
 }
 
@@ -147,24 +154,88 @@ export function commitProp(
   if (!propIsWritable(document, id, name, lockViewOf(editor))) return null;
   const node = findNode(document.nodes, id);
   if (node === undefined) return null;
-  // An Embed's link, typed or pasted into its Link field, takes the
-  // provider's shape with it, in the same step, as a link pasted on the
-  // canvas does.
+  return editor.apply(propWriteOp(editor, document, node, name, value));
+}
+
+/**
+ * The op that sets one prop of `node`: the props copied whole
+ * (`propPatch`). An Embed's link, typed or pasted into its Link field, takes
+ * the provider's shape with it, in the same step, as a link pasted on the
+ * canvas does.
+ */
+function propWriteOp(
+  editor: EditorState,
+  document: BlockDocument,
+  node: BlockNode,
+  name: string,
+  value: unknown
+): BuilderOp {
   if (
     node.type === EMBED_BLOCK_TYPE &&
     name === "src" &&
     typeof value === "string"
   ) {
-    const linked = embedLinkOp(document, id, value, {
-      shape: designIsWritable(document, id, lockViewOf(editor)),
+    const linked = embedLinkOp(document, node.id, value, {
+      shape: designIsWritable(document, node.id, lockViewOf(editor)),
     });
-    if (linked !== null) return editor.apply(linked);
+    if (linked !== null) return linked;
   }
-  return editor.apply({
-    kind: "update",
-    id,
-    patch: propPatch(node, name, value),
-  });
+  return { kind: "update", id: node.id, patch: propPatch(node, name, value) };
+}
+
+/**
+ * Why {@link commitProp} refused to write `value`, for the field that asked
+ * to say so. Asked once it has refused, of the rules it was refused by: the
+ * lock rule the write asks first, then the op layer, with the page's size
+ * limit lifted. An edit the op layer refuses under the page's limits and
+ * takes without the size limit was refused for its size.
+ */
+export function propRefusal(
+  editor: EditorState,
+  document: BlockDocument,
+  id: string,
+  name: string,
+  value: unknown
+): PropRefusal {
+  if (!propIsWritable(document, id, name, lockViewOf(editor))) return "locked";
+  const node = findNode(document.nodes, id);
+  if (node === undefined) return "refused";
+  const op = propWriteOp(editor, document, node, name, value);
+  if (applies(document, op, editor.limits)) return "refused";
+  const unsized = { ...editor.limits, maxBytes: Number.MAX_SAFE_INTEGER };
+  return applies(document, op, unsized) ? "size-limit" : "refused";
+}
+
+/**
+ * {@link propRefusal} for the panel's selected block, as the Content tab's
+ * `PropRefusalContext` gives it: asked of the block and document the panel's
+ * write used, which is the selection at the moment of asking.
+ */
+function usePropRefusal(
+  editor: EditorState
+): (name: string, value: unknown) => PropRefusal {
+  return React.useCallback(
+    (name: string, value: unknown): PropRefusal => {
+      const id = editor.selectedId;
+      if (id === null) return "refused";
+      return propRefusal(editor, editor.document, id, name, value);
+    },
+    [editor]
+  );
+}
+
+/** Whether the op layer takes `op` on `document` under `limits`. */
+function applies(
+  document: BlockDocument,
+  op: BuilderOp,
+  limits: EditorState["limits"]
+): boolean {
+  try {
+    applyOps(document, [op], limits);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** The Content sections the builder draws itself for the block, if any. */

@@ -2822,6 +2822,62 @@ export function functionsDefinedBy(
   );
 }
 
+/**
+ * The tables a statement list leaves dropped, lower-cased, read in order: each name the database
+ * could hold before the list runs, and which the list leaves absent. A table dropped and then made
+ * again, or renamed onto (SQLite's rebuild of a table under a new name, renamed back), is not among
+ * them; one renamed away is, and so is one dropped, made again and dropped. A name is known to be
+ * new only where the list first makes it unconditionally (a plain `CREATE TABLE`, or a rename onto
+ * it), which would fail on a table already there; one made `IF NOT EXISTS` may be the table the
+ * database held. What the localisation steps leave out ahead of a run whose files remove an
+ * entity, since the run never reaches the rows those tables hold.
+ */
+export function tablesLeftDropped(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): string[] {
+  // Each name the list touches: whether the database could hold it before, from the first step
+  // naming it, and whether the list leaves it there, from the last.
+  const names = new Map<string, { heldBefore: boolean; there: boolean }>();
+  const step = (table: string, there: boolean, provesNew: boolean) => {
+    const seen = names.get(table);
+    names.set(table, {
+      heldBefore: seen?.heldBefore ?? !provesNew,
+      there,
+    });
+  };
+  // The names a temporary table the list made shadows, as `FileWalk` reads them: an unqualified
+  // drop of such a name drops the temporary table and gives the name back to the table it hid, a
+  // temporary drop of any other name drops none of the database's tables, and a temporary table
+  // renamed away takes its shadow with it.
+  const shadowed = new Set<string>();
+  for (const statement of statements) {
+    for (const read of readStatement(statement, dialect)) {
+      if (read.kind === "drop") {
+        const table = read.table.toLowerCase();
+        if (shadowed.delete(table) || read.temporary === true) continue;
+        step(table, false, false);
+      } else if (read.kind === "create") {
+        const table = read.table.toLowerCase();
+        if (read.temporary === true) shadowed.add(table);
+        else step(table, true, read.conditional !== true);
+      } else if (read.kind === "rename-table") {
+        const from = read.from.toLowerCase();
+        const to = read.to.toLowerCase();
+        if (shadowed.delete(from)) {
+          shadowed.add(to);
+          continue;
+        }
+        step(from, false, false);
+        step(to, true, true);
+      }
+    }
+  }
+  return [...names]
+    .filter(([, { heldBefore, there }]) => heldBefore && !there)
+    .map(([table]) => table);
+}
+
 /** A read that answers undefined rather than throwing. */
 async function settle<T>(read: () => Promise<T>): Promise<T | undefined> {
   try {

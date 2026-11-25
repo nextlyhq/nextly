@@ -57,9 +57,9 @@ export function useReturnFocusOnClose(open: boolean): (event: Event) => void {
  * Where focus goes once a schedule has landed: the place that shows its
  * outcome, where the opener sits inside one, otherwise the opener.
  *
- * The Publishing section's own offer is drawn under "Not scheduled." and so
- * goes the moment the new release shows, taking focus with it to the top of
- * the page. The section itself stays, and names the release next.
+ * An opener inside such a place may go the moment the new release shows,
+ * taking focus with it to the top of the page; the place itself stays, and
+ * names the release next.
  */
 export function focusAfterScheduling(
   opener: HTMLElement | null

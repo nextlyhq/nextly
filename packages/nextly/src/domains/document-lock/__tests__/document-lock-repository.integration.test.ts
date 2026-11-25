@@ -291,6 +291,65 @@ describe.each(getConfiguredTestDialects())("document soft lock (%s)", d => {
     );
   });
 
+  it("takes a claim back with its own token, under a new one", async () => {
+    const app = await boot(d);
+    const lapsed = await claim(app, ADA);
+
+    const got = await acquireDocumentLock(app.adapter, DOC, ADA, {
+      reclaimToken: lapsed.token,
+    });
+    expect(got.status).toBe("acquired");
+    if (got.status !== "acquired") return;
+    // A new token, so a release still on its way with the old one deletes
+    // nothing when it lands.
+    expect(got.claimToken).not.toBe(lapsed.token);
+    expect(
+      (await renewDocumentLock(app.adapter, DOC, got.claimToken)).status
+    ).toBe("renewed");
+  });
+
+  it("takes a document back with a reclaim when nobody holds it any more", async () => {
+    const app = await boot(d);
+    const lapsed = await claim(app, ADA);
+    await expireClaim(app);
+
+    const got = await acquireDocumentLock(app.adapter, DOC, ADA, {
+      reclaimToken: lapsed.token,
+    });
+    expect(got.status).toBe("acquired");
+  });
+
+  it("refuses a reclaim while the same author's other tab holds the claim", async () => {
+    const app = await boot(d);
+    const lapsed = await claim(app, ADA);
+    // The author opened the document in another tab meanwhile.
+    const otherTab = await claim(app, ADA);
+
+    const got = await acquireDocumentLock(app.adapter, DOC, ADA, {
+      reclaimToken: lapsed.token,
+    });
+    // A plain claim of theirs would take it from that tab; a reclaim names
+    // the claim it may replace, and that one is gone.
+    expect(got.status).toBe("held");
+    expect(got.holder.ownerId).toBe("user-ada");
+    expect(
+      (await renewDocumentLock(app.adapter, DOC, otherTab.token)).status
+    ).toBe("renewed");
+  });
+
+  it("refuses a reclaim while a colleague holds the claim", async () => {
+    const app = await boot(d);
+    const lapsed = await claim(app, ADA);
+    await expireClaim(app);
+    await claim(app, GRACE);
+
+    const got = await acquireDocumentLock(app.adapter, DOC, ADA, {
+      reclaimToken: lapsed.token,
+    });
+    expect(got.status).toBe("held");
+    expect(got.holder.ownerId).toBe("user-grace");
+  });
+
   it("transfers the document on a deliberate takeover", async () => {
     const app = await boot(d);
     await claim(app, ADA);

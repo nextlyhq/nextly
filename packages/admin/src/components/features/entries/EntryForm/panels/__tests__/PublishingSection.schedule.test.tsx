@@ -1,8 +1,13 @@
 /**
- * Scheduling from the panel's Publishing section, end to end inside the
- * admin: "Not scheduled." with Schedule…, the dialog, the one
- * request, and then the new release shown where the editor looks for it, in
- * the scheduled-release banner and in the Publishing section.
+ * The panel's Publishing section around a schedule, end to end inside the
+ * admin: no section while the document is in no release; then a schedule
+ * made from the main button's menu row, the one request, and the new release
+ * shown where the editor looks for it, in the scheduled-release banner and in
+ * the Publishing section.
+ *
+ * The section no longer offers Schedule… itself (it is a row of the main
+ * button's menu, `ScheduleDocumentAction`'s own tests), so the cases about
+ * that offer's focus and the place it held while loading went with it.
  *
  * The requests go through the real hooks and API client to a stubbed
  * `fetch`, which answers as the releases API does: the document is in no
@@ -11,7 +16,6 @@
  * @module components/features/entries/EntryForm/panels/__tests__/PublishingSection.schedule.test
  */
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, waitFor, within } from "@admin/__tests__/utils";
@@ -21,23 +25,14 @@ import {
   type ScheduleDocumentProps,
 } from "@admin/components/features/releases/ScheduleDocumentAction";
 
-import { acceptContributions } from "../../DocumentActionBar";
-import type { DocumentActionBindings } from "../../useDocumentActionBindings";
 import { PublishingSection } from "../PublishingSection";
 
-const { grants, hosted } = vi.hoisted(() => ({
+const { grants } = vi.hoisted(() => ({
   grants: { missing: [] as string[] },
-  hosted: { current: null as Partial<DocumentActionBindings> | null },
 }));
 
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (slug: string) => !grants.missing.includes(slug),
-}));
-
-// The editor's action model, as the page's contribution reaches it: the
-// section reads the action from there and runs it as the split's row does.
-vi.mock("../../DocumentActionsContext", () => ({
-  useDocumentActionsContext: () => hosted.current,
 }));
 
 const DOCUMENT = {
@@ -86,8 +81,11 @@ function json(status: number, body: unknown): Response {
   });
 }
 
-/** The page's contribution, handed to the section as the editor hands it. */
-function Editor(props: { children: ReactNode }) {
+/**
+ * The editor with the page's Schedule contribution, and a stand-in for the
+ * main button's menu row that runs it, as the header's row does.
+ */
+function Editor() {
   const PROPS: ScheduleDocumentProps = {
     ...DOCUMENT,
     lifecycleEnabled: true,
@@ -97,34 +95,22 @@ function Editor(props: { children: ReactNode }) {
   };
   const schedule = useScheduleDocumentAction(PROPS);
   const contributed = schedule.contributed;
-  // Folded in as the editor folds a page's contribution, so the section
-  // runs the same control the split's row runs.
-  const offered =
-    contributed === null ? null : acceptContributions([], {}, [contributed]);
-  hosted.current =
-    contributed === null || offered === null
-      ? null
-      : {
-          ...offered,
-          run: async () => {
-            offered.bindings[contributed.action.id]?.onSelect();
-            return { ok: true } as never;
-          },
-        };
   return (
     <>
-      {props.children}
-      {schedule.dialog}
-    </>
-  );
-}
-
-function showEditor() {
-  render(
-    <Editor>
+      {contributed === null ? null : (
+        <button
+          type="button"
+          // A contribution is handed the document as edited, as the
+          // header's row hands it; this one holds no unsaved edits.
+          onClick={() => contributed.binding.onSelect({ values: {} })}
+        >
+          {contributed.action.label}
+        </button>
+      )}
       <ScheduledReleaseBanner document={DOCUMENT} onDefaultLocale />
       <PublishingSection document={DOCUMENT} />
-    </Editor>
+      {schedule.dialog}
+    </>
   );
 }
 
@@ -140,22 +126,26 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
-  hosted.current = null;
 });
 
-const publishing = () =>
-  screen.getByRole("heading", { name: "Publishing" }).closest("section") ??
-  screen.getByRole("heading", { name: "Publishing" }).parentElement!;
+const releasesRead = () =>
+  fetchMock.mock.calls.some(([url]) =>
+    new URL(String(url), "http://x").pathname.endsWith("/releases")
+  );
 
-describe("scheduling from the Publishing section", () => {
-  it("offers Schedule… under Not scheduled", async () => {
-    showEditor();
-    expect(await screen.findByText("Not scheduled.")).toBeTruthy();
+describe("the Publishing section around a schedule", () => {
+  it("draws no section while the document is in no release", async () => {
+    render(<Editor />);
+    await waitFor(() => expect(releasesRead()).toBe(true));
+    // The control: the read answered, and the page still offers scheduling,
+    // from its menu row rather than from a card in the panel.
     expect(screen.getByRole("button", { name: "Schedule…" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Publishing" })).toBeNull();
+    expect(screen.queryByText(/Not scheduled/)).toBeNull();
   });
 
   it("shows the new release in the banner and the section once it lands", async () => {
-    showEditor();
+    render(<Editor />);
     await userEvent.click(
       await screen.findByRole("button", { name: "Schedule…" })
     );
@@ -178,137 +168,13 @@ describe("scheduling from the Publishing section", () => {
     expect(banner.textContent).toMatch(
       /goes live .+ on its own, as Spring launch\./
     );
-    // The section, which names the release and when, in place of the offer.
-    await waitFor(() =>
-      expect(screen.queryByText("Not scheduled.")).toBeNull()
-    );
-    const section = publishing();
+    // The section, which appears with the release and when.
+    const section = await screen.findByRole("region", { name: "Publishing" });
     expect(
       within(section).getByRole("link", { name: "Spring launch" })
     ).toBeTruthy();
     expect(within(section).getByText(/^Goes live /)).toBeTruthy();
-    expect(
-      within(section).queryByRole("button", { name: "Schedule…" })
-    ).toBeNull();
     // The dialog closed.
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  });
-
-  it("leaves focus in the section, not on the page, once the offer it came from is gone", async () => {
-    showEditor();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Schedule…" })
-    );
-    const dialog = await screen.findByRole("dialog", {
-      name: /^Schedule “/,
-    });
-    await userEvent.click(
-      within(dialog).getByRole("button", { name: /^Schedule for/ })
-    );
-    await waitFor(() =>
-      expect(screen.queryByText("Not scheduled.")).toBeNull()
-    );
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-
-    // The button that opened the dialog went with "Not scheduled.", so
-    // focus is handed to the section, which names the new release next.
-    await waitFor(() => expect(document.activeElement).toBe(publishing()));
-    expect(document.activeElement).not.toBe(document.body);
-  });
-
-  it("shows where focus landed, with the focus ring the editor's controls use", async () => {
-    // The section draws no outline of its own, so without a ring a keyboard
-    // user handed focus here cannot see where it went. Inset, so the panel's
-    // edges do not clip it.
-    showEditor();
-    await screen.findByText("Not scheduled.");
-    const ring = publishing().className.split(/\s+/);
-    expect(ring).toEqual(
-      expect.arrayContaining([
-        "focus-visible:ring-2",
-        "focus-visible:ring-inset",
-        "focus-visible:ring-ring",
-      ])
-    );
-  });
-
-  it("holds the offer's place, unseen, while the schedule is checked, so the sections under it stay put", async () => {
-    // The releases read never answers: the section stays on its check.
-    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}));
-    showEditor();
-    const checking = await screen.findByText("Checking releases");
-    const body = checking.parentElement!;
-    expect(body.getAttribute("aria-busy")).toBe("true");
-    // The same button "Not scheduled." is drawn over, at its own size (its
-    // height is its size's, whatever it says), but neither seen, reached nor
-    // read while it only holds the place.
-    const held = within(body).getByRole("button", { hidden: true });
-    expect(held.getAttribute("data-slot")).toBe("button.outline");
-    expect(held.className.split(/\s+/)).toContain("invisible");
-    expect(held.getAttribute("tabindex")).toBe("-1");
-    expect(held.getAttribute("aria-hidden")).toBe("true");
-    expect(screen.queryByRole("button", { name: "Schedule…" })).toBeNull();
-  });
-
-  it("draws the check with valid nesting, so React reports no hydration error", async () => {
-    // A bar is a block element, and HTML closes a paragraph at one: the
-    // server's markup and the browser's tree then differ, and React says so.
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}));
-      showEditor();
-      const checking = await screen.findByText("Checking releases");
-      const body = checking.parentElement!;
-      expect(body.querySelector("p div, p p, p ul")).toBeNull();
-      expect(
-        errors.mock.calls.filter(call =>
-          call.some(arg => String(arg).includes("cannot be a descendant of"))
-        )
-      ).toEqual([]);
-    } finally {
-      errors.mockRestore();
-    }
-  });
-
-  it("holds the place of the reason the offer is off, too, while the schedule is checked", async () => {
-    // A reader who may not schedule now (a colleague holds the document):
-    // the answer draws the offer with the reason under it, so the place
-    // held for it must be as tall.
-    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}));
-    function Withheld(props: { children: ReactNode }) {
-      const inner = Editor({ children: props.children });
-      if (hosted.current !== null) {
-        const [id] = Object.keys(hosted.current.bindings ?? {});
-        hosted.current = {
-          ...hosted.current,
-          bindings: {
-            ...hosted.current.bindings,
-            [id]: {
-              ...hosted.current.bindings![id]!,
-              disabledReason: "Someone else is editing this document.",
-            },
-          },
-        } as typeof hosted.current;
-      }
-      return inner;
-    }
-    render(
-      <Withheld>
-        <PublishingSection document={DOCUMENT} />
-      </Withheld>
-    );
-    const checking = await screen.findByText("Checking releases");
-    const body = checking.parentElement!;
-    const held = body.querySelector("p.text-xs");
-    expect(held?.textContent).toBe("Someone else is editing this document.");
-    expect(held?.className.split(/\s+/)).toContain("invisible");
-    expect(held?.getAttribute("aria-hidden")).toBe("true");
-  });
-
-  it("offers nothing to a person who may not create releases, since every way makes or joins one", async () => {
-    grants.missing = ["create-content-releases"];
-    showEditor();
-    expect(await screen.findByText("Not scheduled.")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Schedule…" })).toBeNull();
   });
 });

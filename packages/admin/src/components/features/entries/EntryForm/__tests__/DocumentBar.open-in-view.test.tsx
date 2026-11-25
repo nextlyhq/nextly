@@ -10,7 +10,7 @@ import type { ReactNode } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 import { navigateTo } from "@admin/lib/navigation";
 
 import {
@@ -148,8 +148,27 @@ function renderBar(
   );
 }
 
-const openInBuilder = () =>
-  screen.queryByRole("link", { name: "Open in builder" });
+/**
+ * The main button's "Open in builder" row, read from its menu (opened, then
+ * closed again), or null where the menu holds none. A menu with no row to
+ * hold draws no arrow at all, which offers it nowhere either.
+ */
+async function openInBuilder(): Promise<HTMLElement | null> {
+  const arrow = screen.queryByRole("button", {
+    name: /^More (ways to publish|document actions)$/,
+  });
+  if (arrow === null) return null;
+  await userEvent.click(arrow);
+  const menu = await screen.findByRole("menu");
+  const row = within(menu).queryByRole("menuitem", { name: "Open in builder" });
+  const href = row?.getAttribute("href") ?? null;
+  await userEvent.keyboard("{Escape}");
+  if (row === null) return null;
+  // A detached copy keeping what the row said, for the assertions below.
+  const copy = document.createElement("a");
+  if (href !== null) copy.setAttribute("href", href);
+  return copy;
+}
 
 beforeEach(() => {
   access.mayUpdate = true;
@@ -157,87 +176,92 @@ beforeEach(() => {
 });
 
 describe("DocumentBar — opening the document in its other view", () => {
-  it("offers a page's form the builder, beside History, at the page's blocks field", () => {
+  it("offers a page's form the builder, as a link on the main button's menu, at the page's blocks field", async () => {
     renderBar("pages");
-    const link = screen.getByRole("link", { name: "Open in builder" });
-    expect(link).toHaveAttribute(
+    // Not a button of its own in the bar.
+    expect(
+      screen.queryByRole("link", { name: "Open in builder" })
+    ).not.toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: /^More (ways to publish|document actions)$/,
+      })
+    );
+    const row = await screen.findByRole("menuitem", {
+      name: "Open in builder",
+    });
+    // A link, so a modified click opens it in a new tab.
+    expect(row.tagName).toBe("A");
+    expect(row).toHaveAttribute(
       "href",
       "/admin/collections/pages/e1/builder?field=content"
     );
-    // Beside History: History is the very next control in the bar.
-    expect(link.nextElementSibling).toBe(
-      screen.getByRole("button", { name: "History" })
-    );
   });
 
-  it("offers a post, which opens as a form, the builder at its blocks field", () => {
+  it("offers a post, which opens as a form, the builder at its blocks field", async () => {
     renderBar("posts");
-    expect(openInBuilder()).toHaveAttribute(
+    expect(await openInBuilder()).toHaveAttribute(
       "href",
       "/admin/collections/posts/e1/builder?field=sections"
     );
   });
 
-  it("offers nothing on a document with no blocks field", () => {
+  it("offers nothing on a document with no blocks field", async () => {
     renderBar("authors");
-    expect(openInBuilder()).not.toBeInTheDocument();
+    expect(await openInBuilder()).toBeNull();
     // The control: the bar itself drew.
     expect(screen.getByRole("button", { name: "History" })).toBeInTheDocument();
   });
 
-  it("offers nothing while creating, as there is no saved entry to open", () => {
+  it("offers nothing while creating, as there is no saved entry to open", async () => {
     renderBar("posts", { mode: "create", entry: null });
-    expect(openInBuilder()).not.toBeInTheDocument();
+    expect(await openInBuilder()).toBeNull();
   });
 
-  it("offers nothing to a reader who may not update the document", () => {
+  it("offers nothing to a reader who may not update the document", async () => {
     access.mayUpdate = false;
     renderBar("posts");
-    expect(openInBuilder()).not.toBeInTheDocument();
+    expect(await openInBuilder()).toBeNull();
   });
 
-  it("offers nothing on a form edited in another language, as the builder edits the default one", () => {
+  it("offers nothing on a form edited in another language, as the builder edits the default one", async () => {
     renderBar("posts", {}, editedIn("fr", true));
-    expect(openInBuilder()).not.toBeInTheDocument();
+    expect(await openInBuilder()).toBeNull();
   });
 
-  it("offers it on a form edited in the default language", () => {
+  it("offers it on a form edited in the default language", async () => {
     // The control for the case above: a language is named, but it is the
     // default one.
     renderBar("posts", {}, editedIn("en", false));
-    expect(openInBuilder()).toHaveAttribute(
+    expect(await openInBuilder()).toHaveAttribute(
       "href",
       "/admin/collections/posts/e1/builder?field=sections"
     );
   });
 
-  it("folds it into the document's menu on a phone, where it opens the builder", async () => {
-    const user = userEvent.setup();
+  it("keeps it on the main button's menu on a phone, the same link", async () => {
     renderBar("posts", { panelMode: "sheet" });
-    expect(openInBuilder()).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "More actions" }));
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Open in builder" })
-    );
-    expect(navigateTo).toHaveBeenCalledWith(
+    expect(await openInBuilder()).toHaveAttribute(
+      "href",
       "/admin/collections/posts/e1/builder?field=sections"
     );
   });
 
-  it("offers a Single's form the builder at the Single's own address", () => {
+  it("offers a Single's form the builder at the Single's own address", async () => {
     renderBar("home", { scope: "single" });
-    expect(openInBuilder()).toHaveAttribute(
+    expect(await openInBuilder()).toHaveAttribute(
       "href",
       "/admin/singles/home/builder?field=layout"
     );
   });
 
-  it("offers a Single read here, or with no blocks field, nothing", () => {
-    renderBar("contact", { scope: "single" });
-    expect(openInBuilder()).not.toBeInTheDocument();
+  it("offers a Single read here, or with no blocks field, nothing", async () => {
+    const first = renderBar("contact", { scope: "single" });
+    expect(await openInBuilder()).toBeNull();
+    first.unmount();
     access.mayUpdate = false;
     renderBar("home", { scope: "single" });
-    expect(openInBuilder()).not.toBeInTheDocument();
+    expect(await openInBuilder()).toBeNull();
     // The control: the bar itself drew.
     expect(
       screen.getAllByRole("button", { name: "History" }).length
