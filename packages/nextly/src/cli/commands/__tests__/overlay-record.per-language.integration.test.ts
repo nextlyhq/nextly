@@ -1,7 +1,6 @@
 /**
- * A container of text whose overlay column the newest snapshot does not record, on per-language storage, as every
- * installation runs
- * (`overlayRecordCases`).
+ * A translated entity's group of text and its overlay column, on per-language storage, as every
+ * installation runs (`overlayRecordCases`).
  */
 import { vi } from "vitest";
 
@@ -17,4 +16,4 @@ vi.mock("../../utils/config-loader", async importOriginal => ({
   loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
 }));
 
-overlayRecordCases(loaded, "on per-language storage");
+overlayRecordCases(loaded, "on per-language storage", true);

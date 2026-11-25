@@ -1,7 +1,6 @@
 /**
- * A container of text whose overlay column the newest snapshot does not record, on the earlier layout, as the
- * suites run by default
- * (`overlayRecordCases`).
+ * A translated entity's group of text and its overlay column, on the earlier layout, as the suites
+ * run by default (`overlayRecordCases`).
  */
 import { vi } from "vitest";
 
@@ -13,4 +12,4 @@ vi.mock("../../utils/config-loader", async importOriginal => ({
   loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
 }));
 
-overlayRecordCases(loaded, "on the earlier layout");
+overlayRecordCases(loaded, "on the earlier layout", false);
