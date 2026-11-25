@@ -311,10 +311,10 @@ describe.each(LEFT_SAVE_SUITES)(
       600_000
     );
 
-    // A field group's rows are kept in its own table, which its save changed: each field of the
-    // collection holding the group is held, and the collection's reads, which reach that table.
+    // A field group's rows are kept in its own table, which its save changed: every write of the
+    // collection holding the group reaches that table, whatever it sets, and so does every read.
     it.runIf(dialect === "mysql")(
-      "refuses a write setting a field that holds a field group a committed rename changed, and the collection's reads, naming the field group",
+      "refuses every write of a collection that holds a field group a committed rename changed, and the collection's reads, naming the field group",
       async () => {
         const t = await boot({ card: true });
         const schemaVersion = await versionOf(t, "dynamic_components", card);
@@ -364,7 +364,13 @@ describe.each(LEFT_SAVE_SUITES)(
             { kind: "read", via: "api" },
           ]);
 
-        for (const refused of [restSets!, apiSets!, restRead!, apiRead!]) {
+        for (const refused of [
+          restSets!,
+          apiSets!,
+          apiOther!,
+          restRead!,
+          apiRead!,
+        ]) {
           expect(refused.ok, JSON.stringify(refused)).toBe(false);
           expect(refused.code, JSON.stringify(refused)).toBe(
             "BUILDER_SAVE_FIELD_UNSETTLED"
@@ -374,13 +380,11 @@ describe.each(LEFT_SAVE_SUITES)(
           );
           expect(refused.message, JSON.stringify(refused)).toMatch(/"card"/);
         }
-        // What each write left, read past the guard: a refused write nothing, the other its row.
+        // What each write left, read past the guard: nothing.
         const rows = (await t.adapter.executeQuery(
           `SELECT slug FROM ${table} ORDER BY slug`
         )) as unknown as Array<{ slug: unknown }>;
-        const left = rows.map(row => row.slug);
-        expect(apiOther!.ok, JSON.stringify({ apiOther, left })).toBe(true);
-        expect(left).toEqual(["c3", "first"]);
+        expect(rows.map(row => row.slug)).toEqual(["first"]);
       },
       600_000
     );

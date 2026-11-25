@@ -43,8 +43,12 @@ const stubs = vi.hoisted(() => ({
     required: [] as string[],
     shapeServed: true,
   },
-  fields: [] as Array<{ name: string; type: string }>,
+  fields: [] as Array<Record<string, unknown>>,
   localized: false,
+  // Whose save is left part-way: the entity's own, or a field group's, and each group's own fields.
+  standing: "collection:posts",
+  groups: {} as Record<string, Array<Record<string, unknown>>>,
+  groupsRead: [] as Array<{ slug: string; on: unknown }>,
 }));
 
 vi.mock("../../pipeline/schema-lock", async original => ({
@@ -55,7 +59,7 @@ vi.mock("../save-in-progress", async original => ({
   ...(await original<typeof import("../save-in-progress")>()),
   readStandingSaves: async () => [
     {
-      key: "builder-save-in-progress:collection:posts",
+      key: `builder-save-in-progress:${stubs.standing}`,
       record: { id: stubs.record, applies: true },
     },
   ],
@@ -74,6 +78,11 @@ vi.mock("../../../../di/service-access", () => ({
       status: false,
       localized: stubs.localized,
     }),
+    getComponentBySlug: async (slug: string, on: unknown) => {
+      stubs.groupsRead.push({ slug, on });
+      const fields = stubs.groups[slug];
+      return fields === undefined ? null : { slug, fields };
+    },
   }),
 }));
 // The running tables the guard narrows to what the tables hold: watched, never built.
@@ -129,6 +138,9 @@ beforeEach(() => {
   stubs.joined = 0;
   stubs.registry = undefined;
   stubs.localized = false;
+  stubs.standing = "collection:posts";
+  stubs.groups = {};
+  stubs.groupsRead = [];
   // The comparison finds `heading`'s column gone, as a committed rename leaves it.
   stubs.found = {
     unserved: [{ field: "heading", missing: true }],
@@ -350,5 +362,94 @@ describe("a left save that made a row need a value its registry row lets it leav
     };
     await expect(create({ note: "x" })).resolves.toBeUndefined();
     await expect(create({ heading: "x" })).rejects.toMatchObject(refused);
+  });
+});
+
+describe("a left save of a field group the entity places", () => {
+  const holds = (name: string, component: string) => ({
+    name,
+    type: "component",
+    component,
+  });
+  const note = { name: "note", type: "text" };
+  beforeEach(() => {
+    stubs.standing = "fieldGroup:card";
+    stubs.groups = { card: [{ name: "label", type: "text" }] };
+  });
+
+  it.each([
+    ["a field of its own", [holds("card", "card")], "card"],
+    [
+      "a group",
+      [{ name: "meta", type: "group", fields: [holds("card", "card")] }],
+      "meta.card",
+    ],
+    [
+      "a repeater",
+      [{ name: "rows", type: "repeater", fields: [holds("card", "card")] }],
+      "rows.card",
+    ],
+    [
+      "a zone of several field groups",
+      [{ name: "zone", type: "component", components: ["plain", "card"] }],
+      "zone",
+    ],
+    ["a field group that places it", [holds("deck", "deck")], "deck"],
+    [
+      "a field group two levels above it",
+      [{ name: "rows", type: "repeater", fields: [holds("shelf", "shelf")] }],
+      "rows.shelf",
+    ],
+  ])(
+    "refuses every write of it, naming the group, where it is held in %s",
+    async (_where, fields, path) => {
+      stubs.fields = [note, ...fields];
+      stubs.groups.deck = [holds("card", "card")];
+      stubs.groups.shelf = [
+        { name: "decks", type: "repeater", fields: [holds("deck", "deck")] },
+      ];
+      for (const data of [{ note: "x" }, { status: "published" }, {}]) {
+        const error: unknown = await write(data).catch(
+          (thrown: unknown) => thrown
+        );
+        expect(error).toMatchObject(refused);
+        const said = (error as { publicMessage?: string }).publicMessage;
+        expect(said).toContain('the field group "card" was left part-way');
+        expect(said).toContain(`"${path}" of the collection "posts"`);
+        expect(said).toContain("Every write and read of the collection");
+      }
+      await expect(create({ note: "x" })).rejects.toMatchObject(refused);
+      expect(stubs.compared, "nothing compared from the tables").toBe(0);
+    }
+  );
+
+  // The controls: a field group that reaches it nowhere, a cycle of them included.
+  it.each([
+    ["places no field group", []],
+    ["places another field group", [holds("plain", "plain")]],
+    ["places field groups that place each other", [holds("loop", "loop")]],
+    ["places one no longer there", [holds("gone", "gone")]],
+  ])("lets the writes of an entity that %s go on", async (_what, fields) => {
+    stubs.fields = [note, ...fields];
+    stubs.groups.plain = [{ name: "label", type: "text" }];
+    stubs.groups.loop = [holds("back", "back")];
+    stubs.groups.back = [holds("loop", "loop")];
+    await expect(write({ note: "x" })).resolves.toBeUndefined();
+    await expect(create({ note: "x" })).resolves.toBeUndefined();
+  });
+
+  it("holds nothing while a schema change holds the lock", async () => {
+    stubs.fields = [note, holds("card", "card")];
+    stubs.lock = ["busy"];
+    await expect(write({ note: "x" })).resolves.toBeUndefined();
+    await expect(write({ note: "x" })).rejects.toMatchObject(refused);
+  });
+
+  it("reads the field groups on the write's own transaction", async () => {
+    stubs.fields = [note, holds("deck", "deck")];
+    stubs.groups.deck = [holds("card", "card")];
+    await expect(write({ note: "x" }, true)).rejects.toMatchObject(refused);
+    expect(stubs.groupsRead.map(read => read.slug)).toContain("deck");
+    expect(stubs.groupsRead.every(read => read.on === tx)).toBe(true);
   });
 });
