@@ -1639,19 +1639,23 @@ export async function generateMigration(
     });
   });
   forwardPlans.forEach(({ plan, entity }, i) => {
+    // The answers it settles (`companionFileSettling`).
+    const settled = (args.resolutions ?? []).filter(
+      r => companionFileSettling(r, companionPlans) === plan
+    );
     companionFiles.push({
       spec: plan.spec,
       opts: {
         // `none` plans are filtered out by the planner, so the kind is always writable here.
         kind: plan.kind === "none" ? "create-only" : plan.kind,
         entity,
-        // After its own statements, the answers it settles (`companionFileSettling`): their column
-        // is there by then, added by this file where the field is new.
-        upSql: (args.resolutions ?? [])
-          .filter(r => companionFileSettling(r, companionPlans) === plan)
+        // After its own statements, its answers: their column is there by then, added by this file
+        // where the field is new.
+        upSql: settled
           .flatMap(r => resolutionStatements(r, args.dialect))
           .reduce(joinSql, plan.upSql),
         downSql: plan.downSql,
+        ...answeringIn(settled),
         now: new Date(now.getTime() + i + 1),
       },
     });
@@ -1789,6 +1793,11 @@ export async function generateMigration(
     hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
     settingsChanges: changedSettings.map(describeSettingsChange),
     permissionChanges: changedPermissions.map(describePermissionChange),
+    ...answeringIn(
+      (args.resolutions ?? []).filter(
+        r => companionFileSettling(r, companionPlans) === undefined
+      )
+    ),
     deletions: judged.main,
     // A junction table the caller adds is a table this file changes.
     changesNoTable:
@@ -3063,6 +3072,15 @@ function renamePairs(
 /** Two SQL texts as one, with the statement breakpoint between them. */
 const joinSql = (a: string, b: string) =>
   a === "" ? b : b === "" ? a : `${a}\n--> statement-breakpoint\n${b}`;
+
+/** The language the answers among `resolutions` are decided in, for their file's header. */
+function answeringIn(resolutions: readonly ColumnResolution[]): {
+  answersIn?: string;
+} {
+  const answersIn = resolutions.find(r => r.perLanguage !== undefined)
+    ?.perLanguage?.locale;
+  return answersIn === undefined ? {} : { answersIn };
+}
 
 /**
  * The companion file of this run that settles `resolution`'s rows, or undefined where the main file

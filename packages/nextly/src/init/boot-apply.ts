@@ -692,6 +692,7 @@ async function applyPendingMigrations(label: string): Promise<number> {
       knownJunctions: resolvedSchema.knownJunctions,
       declaredTables: resolvedSchema.declaredTables,
       junctionsByEntity: resolvedSchema.junctionsByEntity,
+      localization: configResult.config.localization,
       label,
     });
 
@@ -743,6 +744,8 @@ export interface DevBootMigrateDeps<TLogger> {
     tables?: ReadonlySet<string>;
   };
   allowDestructive: boolean;
+  /** The default language a file's answers are judged against (`MigrateCoreDeps.defaultLanguage`). */
+  defaultLanguage: () => Promise<string>;
   /** What the run does with the registry rows (`MigrateCoreDeps.registryRows`). */
   registryRows: "insert-missing";
   ensureLedger: () => Promise<void>;
@@ -783,6 +786,8 @@ export async function migrateAtDevBoot<
   declaredTables?: ReadonlySet<string>;
   /** Each collection's custom junction names, by its slug (`declared`). */
   junctionsByEntity?: ReadonlyMap<string, ReadonlySet<string>>;
+  /** The languages the configuration declares, where it declares any. */
+  localization?: { defaultLocale?: string };
   label: string;
 }): Promise<TResult> {
   const { adapter, label } = args;
@@ -790,6 +795,9 @@ export async function migrateAtDevBoot<
   // boot does not load the migration engine.
   const { ensureSchemaEventsTable } = await import(
     "../domains/schema/events/schema-events-ddl"
+  );
+  const { siteDefaultLanguage } = await import(
+    "../domains/i18n/migration/transition-recorder"
   );
   return args.migrateCore({
     extensionSchema: args.extensionSchema,
@@ -808,6 +816,8 @@ export async function migrateAtDevBoot<
     },
     // The development boot lets the core reconcile make destructive changes.
     allowDestructive: true,
+    defaultLanguage: () =>
+      siteDefaultLanguage(adapter, { localization: args.localization }),
     // Its start keeps the registry rows in step with the code as it is
     // edited, ahead of any migration, so only absent rows are inserted here.
     registryRows: "insert-missing",

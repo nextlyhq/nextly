@@ -39,6 +39,11 @@ import { container } from "../../di/container";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
+  answerLanguageRefusals,
+  refuseAnswersInAnotherLanguage,
+} from "../../domains/i18n/migration/answer-language";
+import { recordedAnswerLanguage } from "../../domains/i18n/migration/answer-language-names";
+import {
   isLocalizationIntentRefusal,
   parseLocalizationIntent,
   type LocalizationMigrationIntent,
@@ -49,6 +54,7 @@ import {
   filesWithinStep,
   stepContinuedNotice,
 } from "../../domains/i18n/migration/step-windows";
+import { siteDefaultLanguage } from "../../domains/i18n/migration/transition-recorder";
 import { databaseIdentity } from "../../domains/schema/builder-save/saved-database";
 import {
   recheckBeforeFiles,
@@ -485,6 +491,8 @@ interface ParsedMigration {
    * both apply verbatim, which is what they have always done.
    */
   localization?: LocalizationMigrationIntent;
+  /** The language its header records for its answers (`recordedAnswerLanguage`), where it does. */
+  answersIn?: string;
   /** Timestamp extracted from filename */
   timestamp: string;
   /** Source of the migration (core bundled or app) */
@@ -877,6 +885,11 @@ export async function runMigrate(
         plugins: configResult.config.plugins ?? [],
         step: options.step,
         logger,
+        defaultLanguage: () =>
+          siteDefaultLanguage(
+            adapter as unknown as DrizzleAdapter,
+            configResult.config
+          ),
         serverConstructs,
         extensionSchema,
       });
@@ -1421,6 +1434,11 @@ export interface MigrateCoreDeps {
   knownJunctions?: ReadonlySet<string>;
   /** What the declared schema names, which old Builder files are judged against. */
   declared?: DeclaredNames;
+  /**
+   * The database's default language, which a file's answers are judged against
+   * (`refuseAnswersInAnotherLanguage`). Absent, the one Settings stores, or the implicit one.
+   */
+  defaultLanguage?: () => Promise<string>;
   withLock?: typeof withMigrateLock;
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
@@ -1614,6 +1632,8 @@ export async function previewMigrate(args: {
   plugins: Parameters<typeof pluginMigrationArgs>[0];
   step?: number;
   logger: CommandContext["logger"];
+  /** As `MigrateCoreDeps.defaultLanguage`. */
+  defaultLanguage?: () => Promise<string>;
   /** As `MigrateCoreDeps.readEventTriggersFn`. */
   readEventTriggers?: () => Promise<readonly string[]>;
   /** Connected server capabilities, judged identically to execution. */
@@ -1753,6 +1773,15 @@ export async function previewMigrate(args: {
     db,
     dialect
   )) {
+    logger.info(`  ✖ a real run would refuse ${file}: ${message}`);
+  }
+  // The files a real run refuses for the language their answers are decided in.
+  const { refusals: languageRefusals } = await answerLanguageRefusals(
+    pendingFiles,
+    dialect,
+    () => defaultLanguageOf({ adapter, defaultLanguage: args.defaultLanguage })
+  );
+  for (const { file, message } of languageRefusals) {
     logger.info(`  ✖ a real run would refuse ${file}: ${message}`);
   }
   // The translations tables a real run checks before its first file, judged the same way.
@@ -3956,6 +3985,14 @@ async function judgeFileDeletions(
     deps.db,
     deps.dialect
   );
+  // A file whose answers are decided in another language than this database's default settles other
+  // rows than the ones they were given for, so it is refused here too, before any statement and
+  // before anyone is asked to consent to what it deletes (`refuseAnswersInAnotherLanguage`).
+  await refuseAnswersInAnotherLanguage(
+    appFilesInStep(listed, appStepAfter(deps.step, modules.length)),
+    deps.dialect,
+    () => defaultLanguageOf(deps)
+  );
   const units = [...modules, ...fileUnits];
   // The translations tables deleted entities left standing, asked about with the files' deletions
   // and dropped by the metadata pass once covered: a table drop runs only under the consent.
@@ -4013,6 +4050,16 @@ async function judgeFileDeletions(
     fileUnits.map(unit => [unit.label, textDigest(unit.text)])
   );
   return { agreement, files, leftovers: leftovers.map(left => left.table) };
+}
+
+/** The database's default language, as the run was given it or as Settings stores it. */
+function defaultLanguageOf(
+  deps: Pick<MigrateCoreDeps, "adapter" | "defaultLanguage">
+): Promise<string> {
+  return (
+    deps.defaultLanguage?.() ??
+    siteDefaultLanguage(deps.adapter as unknown as DrizzleAdapter, {})
+  );
 }
 
 /** The word a deletion's reason names each kind of entity by. */
@@ -6002,6 +6049,7 @@ function parseMigrationFile(
 
   const { upSql, downSql } = parseSqlSections(content);
   const localization = parseLocalizationIntent(content, `${name}.sql`);
+  const answersIn = recordedAnswerLanguage(content);
 
   return {
     name,
@@ -6017,6 +6065,7 @@ function parseMigrationFile(
     source,
     transaction: !marksNoTransaction(content),
     ...(localization === null ? {} : { localization }),
+    ...(answersIn === undefined ? {} : { answersIn }),
   };
 }
 

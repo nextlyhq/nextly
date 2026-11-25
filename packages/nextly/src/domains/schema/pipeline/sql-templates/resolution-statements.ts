@@ -190,6 +190,27 @@ function perLanguageStatements(
   ];
 }
 
+/** One identifier, quoted as any of the dialects quotes it. */
+const QUOTED = '["`][^"`]+["`]';
+
+/**
+ * The first statements of `perLanguageStatements`, a delete's and a fill's, as a file holds them:
+ * what a file that settles a field kept per language is known by, whatever its header says.
+ */
+const SETTLES_PER_LANGUAGE = [
+  new RegExp(
+    `DELETE FROM ${QUOTED} WHERE ["\`]id["\`] NOT IN \\(SELECT DISTINCT ["\`]_parent["\`] FROM ${QUOTED} WHERE ["\`]_locale["\`] = '`
+  ),
+  new RegExp(
+    `UPDATE ${QUOTED} SET [\\s\\S]*, ["\`]_updated_at["\`] = [\\s\\S]* WHERE ["\`]_locale["\`] = '(?:[^']|'')*' AND ${QUOTED} IS NULL`
+  ),
+];
+
+/** Whether `statement` is one that settles a field kept per language (`perLanguageStatements`). */
+export function settlesPerLanguage(statement: string): boolean {
+  return SETTLES_PER_LANGUAGE.some(shape => shape.test(statement));
+}
+
 /** `value` as the JSON text a JSON column stores; refused where it has none. */
 function jsonText(value: unknown): string {
   const text = JSON.stringify(value) as string | undefined;
