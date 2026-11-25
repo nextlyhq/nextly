@@ -15,13 +15,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text } from "nextly/config";
 import { createAdapter } from "nextly/database";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -30,6 +30,18 @@ import { pageBuilder } from "../plugin";
 import { SITE_CODE_SLUG, SITE_CODE_WRITE_CONTEXT } from "../site-code/storage";
 
 import { scratchDatabase, type ScratchDatabase } from "./scratch-database";
+
+/**
+ * The field type the page builder's collections use and nothing else of it: they stay in the
+ * database, and a start refuses a stored field whose type nothing offers.
+ */
+const blocksFieldAlone = () =>
+  definePlugin({
+    name: "@test/blocks-field",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    contributes: { fieldTypes: pageBuilder().contributes?.fieldTypes ?? [] },
+  });
 
 describe.each(getConfiguredTestDialects())(
   "site code while the page builder is out of the configuration (%s)",
@@ -57,10 +69,7 @@ describe.each(getConfiguredTestDialects())(
       await site?.destroy();
       site = await createTestNextly({
         adapter: await createAdapter({ type: dialect, url: database.url }),
-        collections: [
-          defineCollection({ slug: "notes", fields: [text({ name: "body" })] }),
-        ],
-        plugins: withPlugin ? [pageBuilder()] : [],
+        plugins: [withPlugin ? pageBuilder() : blocksFieldAlone()],
       });
       return site;
     }
