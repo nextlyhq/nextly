@@ -15,6 +15,16 @@ export const STAGE_FILTER = "nextly.review-stage";
 export const REVIEW_FILTER = "nextly.review";
 
 /**
+ * Whether a `pf` value (`<filter>:<value>`) chooses one of the review filters: offered from the
+ * collection's own metadata, never from the plugins' meta, so a link choosing one needs only the
+ * collection to be read.
+ */
+export function choosesReviewFilter(param: string): boolean {
+  const name = param.slice(0, Math.max(param.lastIndexOf(":"), 0));
+  return name === STAGE_FILTER || name === REVIEW_FILTER;
+}
+
+/**
  * The review filters a collection's list offers: none where no workflow holds it; the stage
  * filter only where its stages are known.
  */

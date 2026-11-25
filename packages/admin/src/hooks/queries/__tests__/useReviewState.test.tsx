@@ -22,12 +22,15 @@ vi.mock("@admin/services/workflowApi", async importOriginal => ({
   assignWorkflowParts: assignSpy,
 }));
 
+import { entryKeys } from "@admin/services/entryApi";
+
 import {
   reviewKeys,
   useAssignPart,
   useReviewState,
   useTakeStep,
 } from "../useReviewState";
+import { waitingKeys } from "../useWaitingForMe";
 
 const post = {
   scopeKind: "collection" as const,
@@ -151,5 +154,45 @@ describe("useReviewState", () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: reviewKeys.document(post),
     });
+  });
+
+  it("marks what waits for review and the collection's lists stale after a step and after an assignment", async () => {
+    // A move changes who a part waits for and where it stands, which the waiting view and each
+    // list's Review column show; another collection's lists are not this document's.
+    const WAITING = waitingKeys.page(1, 20);
+    const POSTS = entryKeys.list("posts", { page: 1 } as never);
+    const PAGES = entryKeys.list("pages", { page: 1 } as never);
+    stepSpy.mockResolvedValue({ message: "Step taken.", item: {} });
+    assignSpy.mockResolvedValue({ message: "Assigned.", item: {} });
+    for (const move of ["step", "assign"] as const) {
+      const queryClient = client();
+      for (const key of [WAITING, POSTS, PAGES]) {
+        queryClient.setQueryData(key, { items: [], meta: {} });
+      }
+      if (move === "step") {
+        const { result } = renderHook(() => useTakeStep(post), {
+          wrapper: wrapperFor(queryClient),
+        });
+        await result.current.mutateAsync({
+          step: "submit",
+          parts: [null],
+          seen: [{ part: null, revision: 0, version: "v1" }],
+        });
+      } else {
+        const { result } = renderHook(() => useAssignPart(post), {
+          wrapper: wrapperFor(queryClient),
+        });
+        await result.current.mutateAsync({
+          part: null,
+          revision: 0,
+          assignee: { kind: "user", id: "u1" },
+        });
+      }
+      await waitFor(() =>
+        expect(queryClient.getQueryState(WAITING)?.isInvalidated).toBe(true)
+      );
+      expect(queryClient.getQueryState(POSTS)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(PAGES)?.isInvalidated).toBe(false);
+    }
   });
 });

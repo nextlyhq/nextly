@@ -14,15 +14,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionForColumns } from "../EntryTableColumns";
 import { useEntryBulkActions } from "../useEntryBulkActions";
 
-const { canFor } = vi.hoisted(() => ({
+const { canFor, grantedFor } = vi.hoisted(() => ({
   canFor: vi.fn((_slug: string) => false),
+  // What the reader's roles grant, before a collection's code-defined access is applied.
+  grantedFor: vi.fn((_slug: string) => false),
 }));
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (slug: string) => canFor(slug),
 }));
-const { reviews } = vi.hoisted(() => ({ reviews: { value: false } }));
+// The server's answer, access rules included, is what `useCan` and this both read.
+vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
+  useCurrentUserPermissions: () => ({ can: (slug: string) => canFor(slug) }),
+}));
+vi.mock("@admin/hooks/useHasPermission", () => ({
+  useHasPermission: () => (slug: string) => grantedFor(slug),
+}));
+
+// The reader reviews somewhere: the global waiting scope says so. It decides nothing here, since
+// whether moves are offered on a collection is judged on that collection's own steps.
 vi.mock("@admin/hooks/queries/useWaitingForMe", () => ({
-  useWaitingScope: () => ({ data: { reviews: reviews.value, stages: 0 } }),
+  useWaitingScope: () => ({ data: { reviews: true, stages: 1 } }),
 }));
 
 /** A caller holding exactly these permission slugs. */
@@ -40,8 +51,9 @@ const notes: CollectionForColumns = { slug: "notes", fields: [] };
 
 beforeEach(() => {
   canFor.mockReset();
+  grantedFor.mockReset();
+  grantedFor.mockImplementation(() => false);
   holding();
-  reviews.value = false;
 });
 
 describe("useEntryBulkActions", () => {
@@ -53,6 +65,7 @@ describe("useEntryBulkActions", () => {
       publish: false,
       unpublish: false,
       workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
       any: false,
     });
   });
@@ -65,6 +78,7 @@ describe("useEntryBulkActions", () => {
       publish: false,
       unpublish: false,
       workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
       any: true,
     });
   });
@@ -77,6 +91,7 @@ describe("useEntryBulkActions", () => {
       publish: false,
       unpublish: true,
       workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
       any: true,
     });
   });
@@ -89,6 +104,7 @@ describe("useEntryBulkActions", () => {
       publish: false,
       unpublish: false,
       workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
       any: false,
     });
   });
@@ -103,6 +119,7 @@ describe("useEntryBulkActions", () => {
       publish: true,
       unpublish: false,
       workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
       any: true,
     });
   });
@@ -113,10 +130,23 @@ describe("useEntryBulkActions", () => {
     expect(result.current.any).toBe(false);
   });
 
-  it("offers the workflow's moves on a collection a workflow holds, to an editor or a reviewer alone", () => {
+  it("offers the workflow's moves on a collection a workflow holds, to an editor or a reviewer of it alone", () => {
     const held: CollectionForColumns = {
       ...posts,
-      workflow: { slug: "review", label: "Review" },
+      workflow: {
+        slug: "review",
+        label: "Review",
+        steps: [
+          { name: "submit", label: "Submit", kind: "submit", action: "update" },
+          { name: "clear", label: "Clear", kind: "approve", action: "approve" },
+          {
+            name: "bounce",
+            label: "Send back",
+            kind: "request-changes",
+            action: "sign-off",
+          },
+        ],
+      },
     };
     holding("read-posts");
     expect(
@@ -129,17 +159,93 @@ describe("useEntryBulkActions", () => {
       renderHook(() => useEntryBulkActions(held)).result.current
     ).toMatchObject({ workflowMoves: true, any: true });
 
-    // A reviewer who may take some review step, and edits nothing.
-    holding("read-posts");
-    reviews.value = true;
+    // A reviewer who may send work back on this collection, and edits nothing.
+    holding("read-posts", "sign-off-posts");
     expect(
       renderHook(() => useEntryBulkActions(held)).result.current
     ).toMatchObject({ workflowMoves: true, any: true });
+
+    // A reviewer of another collection only: no step here is theirs, so no checkbox leads them
+    // to moves every document would refuse.
+    holding("read-posts", "sign-off-pages");
+    expect(
+      renderHook(() => useEntryBulkActions(held)).result.current
+    ).toMatchObject({ workflowMoves: false, any: false });
 
     // No workflow, no moves, whatever the reader holds.
     holding("read-posts", "update-posts");
     expect(
       renderHook(() => useEntryBulkActions(posts)).result.current
     ).toMatchObject({ workflowMoves: false });
+  });
+
+  it("offers Assign… to a reader who may take a stage's primary step, and the steps to one who may take them", () => {
+    // In review, the primary step is Clear (`approve`): holding it lets a reader assign a part
+    // there, as the server judges, though neither bulk step (submit, send back) is theirs. One who
+    // may only send back takes that step and assigns nowhere, since no stage leads with it.
+    const held: CollectionForColumns = {
+      ...posts,
+      workflow: {
+        slug: "review",
+        label: "Review",
+        stages: [
+          { name: "draft", label: "Draft", primaryAction: "update" },
+          { name: "review", label: "In review", primaryAction: "approve" },
+          { name: "done", label: "Done" },
+        ],
+        steps: [
+          { name: "submit", label: "Submit", kind: "submit", action: "update" },
+          { name: "clear", label: "Clear", kind: "approve", action: "approve" },
+          {
+            name: "bounce",
+            label: "Send back",
+            kind: "request-changes",
+            action: "sign-off",
+          },
+        ],
+      },
+    };
+    holding("read-posts", "approve-posts");
+    expect(
+      renderHook(() => useEntryBulkActions(held)).result.current
+    ).toMatchObject({
+      workflowMoves: true,
+      workflowMoveKinds: { steps: false, assign: true },
+      any: true,
+    });
+
+    holding("read-posts", "sign-off-posts");
+    expect(
+      renderHook(() => useEntryBulkActions(held)).result.current
+    ).toMatchObject({
+      workflowMoves: true,
+      workflowMoveKinds: { steps: true, assign: false },
+    });
+
+    // The approve permission of another collection assigns nothing here.
+    holding("read-posts", "approve-pages");
+    expect(
+      renderHook(() => useEntryBulkActions(held)).result.current
+    ).toMatchObject({
+      workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
+    });
+
+    // An editor takes the steps and assigns.
+    holding("read-posts", "update-posts");
+    expect(
+      renderHook(() => useEntryBulkActions(held)).result.current
+    ).toMatchObject({ workflowMoveKinds: { steps: true, assign: true } });
+
+    // A role grants approve here, but the collection's access rule refuses it: the server's
+    // answer decides, as it decides the assignment, so Assign… is not offered.
+    holding("read-posts");
+    grantedFor.mockImplementation(slug => slug === "approve-posts");
+    expect(
+      renderHook(() => useEntryBulkActions(held)).result.current
+    ).toMatchObject({
+      workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
+    });
   });
 });

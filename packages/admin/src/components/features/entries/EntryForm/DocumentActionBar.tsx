@@ -39,9 +39,11 @@ import {
   Fragment,
   useEffect,
   useId,
+  useRef,
   useState,
   type ComponentProps,
   type JSX,
+  type RefObject,
 } from "react";
 
 import { useInTopBar } from "@admin/components/layout/header/TopBarPlaces";
@@ -545,10 +547,12 @@ function MainPress({
   const reasonId = useId();
   const hold = explainsHold ? primary.action.disabledReason : undefined;
   const { open, setOpen, toggle } = useHoldReason(hold !== undefined);
+  const returnFocus = useReasonFocusReturn();
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverAnchor asChild>
         <Button
+          ref={returnFocus.pressRef}
           size="sm"
           {...(hold === undefined
             ? readyPressProps(primary, reason)
@@ -568,11 +572,43 @@ function MainPress({
       <span id={reasonId} className="sr-only">
         {hold ?? ""}
       </span>
-      <PopoverContent align="end" className="w-72 text-sm">
+      <PopoverContent
+        align="end"
+        className="w-72 text-sm"
+        onInteractOutside={returnFocus.onInteractOutside}
+        onCloseAutoFocus={returnFocus.onCloseAutoFocus}
+      >
         <p>{hold}</p>
       </PopoverContent>
     </Popover>
   );
+}
+
+/**
+ * Where focus goes as a held press's reason closes. The reason is anchored to
+ * the press, not triggered by it, so the popover has no trigger to hand focus
+ * back to and would leave it on the page. Closed with Escape, or by the hold
+ * lifting, focus goes back to the press; closed by pressing something else, it
+ * stays where the person put it, as a trigger-opened popover's does.
+ */
+function useReasonFocusReturn(): {
+  pressRef: RefObject<HTMLButtonElement | null>;
+  onInteractOutside: () => void;
+  onCloseAutoFocus: (event: Event) => void;
+} {
+  const pressRef = useRef<HTMLButtonElement | null>(null);
+  const interactedOutside = useRef(false);
+  return {
+    pressRef,
+    onInteractOutside: () => {
+      interactedOutside.current = true;
+    },
+    onCloseAutoFocus: event => {
+      event.preventDefault();
+      if (!interactedOutside.current) pressRef.current?.focus();
+      interactedOutside.current = false;
+    },
+  };
 }
 
 /**
