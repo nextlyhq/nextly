@@ -1115,6 +1115,61 @@ export function settleAnswerCases(args: {
             expect(await pendingNames(target.adapter, after)).toEqual([]);
           }, 240_000);
 
+          it(`refuses ${named} where an earlier file of the run changes Settings' default`, async () => {
+            const { before, after, path } = await answered();
+            const target = await seeded(before, translated);
+            reach(target.url);
+            await settingsLanguages(target.adapter, ["en", "es"]);
+            const entries = await entriesOf(target.adapter);
+            const name = `${files(before)
+              .at(-1)!
+              .replace(/\.sql$/, "")}_default`;
+            const isDefault = (code: string, value: boolean) =>
+              `UPDATE ${q("nextly_languages")} SET ${q("is_default")} = ${dialect === "postgresql" ? String(value) : value ? "1" : "0"} WHERE ${q("code")} = '${code}';`;
+            writeFileSync(
+              join(after, "database", "history", `${name}.sql`),
+              `-- UP\n${isDefault("en", false)}\n${isDefault("es", true)}\n\n-- DOWN\n${isDefault("es", false)}\n${isDefault("en", true)}\n`
+            );
+
+            const refused = await migrate(after, consent, "Settings");
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            expect(refused.said).toMatch(/None of its statements ran/);
+            expect(await entriesOf(target.adapter)).toEqual(entries);
+            expect((await pendingNames(target.adapter, after))[0]).toBe(
+              basename(path, ".sql")
+            );
+          }, 240_000);
+
+          // The by-hand way ends in a record of the file. A translations table's file has no
+          // snapshot to compare, so it is recorded only with the comparison left out.
+          if (decided.file === "the translations table's file") {
+            it(`records ${named} settled by hand`, async () => {
+              const { before, after, path } = await answered();
+              const target = await seeded(before, translated);
+              reach(target.url);
+              const file = basename(path);
+              const refused = await migrate(after, consent, spanish);
+              expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+              const resolve = (skipVerify: boolean) =>
+                ran(() => {
+                  context.cwd = after;
+                  return runMigrateResolve(
+                    { cwd: after, applied: file, skipVerify } as never,
+                    context
+                  );
+                });
+
+              const compared = await resolve(false);
+              expect(compared.said).toMatch(/--skip-verify/);
+              const recorded = await resolve(true);
+              expect(recorded.code, recorded.said).toBeUndefined();
+              expect(await pendingNames(target.adapter, after)).not.toContain(
+                basename(path, ".sql")
+              );
+            }, 240_000);
+          }
+
           it(`refuses ${named} where the run renames the table it settles into place`, async () => {
             const { before, after, path } = await answered();
             const target = await seeded(before, translated);
