@@ -2561,7 +2561,14 @@ export async function companionDriftItems(
   if (presence !== undefined) return presence;
   const taken = new Set([...(pushTarget?.columns ?? [])].map(key));
 
-  const recorded = recordedTable.localizedColumns ?? [];
+  // Every column the history records on the translations table: the translated values, and the
+  // overlay of each repeater or group keeping its text per language (`overlayColumns`), which
+  // stands there beside its structure on the main table. An overlay is no drift; taken for one,
+  // the advice to drop what the history does not record would delete its text.
+  const recorded = [
+    ...(recordedTable.localizedColumns ?? []),
+    ...(recordedTable.overlayColumns ?? []),
+  ];
   const recordedKeys = new Set(recorded.map(key));
   // The structural columns by the same key, so `_LOCALE` is the structural `_locale` where the
   // dialect compares without case.
