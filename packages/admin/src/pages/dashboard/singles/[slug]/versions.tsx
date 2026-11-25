@@ -13,10 +13,10 @@
  * @module pages/dashboard/singles/[slug]/versions
  */
 
-import type { FieldConfig } from "nextly/config";
 import { useMemo, type JSX } from "react";
 
 import { fieldsWrittenPerLanguage } from "@admin/components/features/translations/page/translation-fields";
+import { fieldsOf } from "@admin/components/features/translations/page/useTranslationDocument";
 import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
 import {
   readLocaleParam,
@@ -46,9 +46,7 @@ export default function SingleVersionsPage({
     () =>
       single === undefined
         ? undefined
-        : fieldsWrittenPerLanguage(
-            (single.fields ?? []) as unknown as FieldConfig[]
-          ),
+        : fieldsWrittenPerLanguage(fieldsOf(single.fields)),
     [single]
   );
   const documentId = document.data?.id;
