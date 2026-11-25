@@ -45,6 +45,7 @@ import {
   writeCollectionSave,
 } from "../../../schema/builder-save/collection-save";
 import type { Resolution } from "../../../schema/pipeline/resolution/types";
+import { resolutionStatements } from "../../../schema/pipeline/sql-templates/resolution-statements";
 import { applyCollectionSchemaChange } from "../../../schema/services/collection-schema-apply";
 import { encodeStamp } from "../../runtime/companion-stamp-column";
 import { loadUiSchema } from "../../../schema/ui-schema/loader";
@@ -1217,6 +1218,51 @@ export function requiredTextFieldCases(
         });
       }
 
+      // PostgreSQL's `now()` is the moment its transaction began; a fill's stamp is the moment its
+      // statement runs, so a translation written while the transaction waited is older than it.
+      it.runIf(dialect === "postgresql")(
+        "stamps a fill with its statement's moment, later than its transaction's",
+        async () => {
+          const slug = `${prefix}_clock`;
+          const ids = await notesWithEntries(slug, true);
+          const fill = resolutionStatements(
+            {
+              kind: "fill",
+              tableName: `dc_${slug}`,
+              columnName: "note",
+              value: "filled",
+              perLanguage: {
+                companionTable: `dc_${slug}_locales`,
+                locale: "en",
+              },
+            },
+            dialect
+          );
+          let began = 0;
+          await (
+            current.adapter as unknown as {
+              transaction<T>(
+                work: (tx: {
+                  execute<R>(statement: string): Promise<R[]>;
+                }) => Promise<T>
+              ): Promise<T>;
+            }
+          ).transaction(async tx => {
+            const [start] = await tx.execute<{ began: unknown }>(
+              `SELECT EXTRACT(EPOCH FROM now()) * 1000 AS began`
+            );
+            began = Number(start?.began);
+            await tx.execute("SELECT pg_sleep(0.5)");
+            for (const statement of fill) await tx.execute(statement);
+          });
+
+          const stamps = await stampsOf(slug);
+          for (const id of [ids.empty, ids.bare]) {
+            expect(stamps[`${id}:en`]!).toBeGreaterThanOrEqual(began + 500);
+          }
+        }
+      );
+
       it("stores a localized date a Single's push is given as its default as its file stores it", async () => {
         // A translated Single, so the date is kept per language on either layout.
         const stored = new Map<string, unknown>();
@@ -1269,6 +1315,7 @@ export function requiredTextFieldCases(
         const value = (v: unknown) =>
           v instanceof Date ? v.toISOString() : String(v);
         expect(stored.get("development")).toBeDefined();
+        expect(stored.get("development")).not.toBeNull();
         expect(value(stored.get("production"))).toBe(
           value(stored.get("development"))
         );

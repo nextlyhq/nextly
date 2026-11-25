@@ -844,7 +844,11 @@ export function codeRenameCases(args: {
           const run = await create("add_views", counted("views"));
           expect(run.code, run.said).toBeUndefined();
           const sql = textOf(run.files);
-          expect(sql).toMatch(/ADD (COLUMN )?[`"]views[`"]/);
+          expect(
+            [...sql.matchAll(/ADD (?:COLUMN )?[`"](\w+)[`"]/g)].map(
+              added => added[1]
+            )
+          ).toEqual(["views"]);
           expect(sql).not.toMatch(/RENAME COLUMN/);
           expect(sql).not.toMatch(/DROP COLUMN/);
           await applied();

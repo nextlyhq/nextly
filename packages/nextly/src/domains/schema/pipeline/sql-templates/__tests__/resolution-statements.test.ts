@@ -82,13 +82,13 @@ describe("resolutionStatements for a field kept per language", () => {
         "postgresql"
       )
     ).toEqual([
-      `UPDATE "dc_posts_locales" SET "note" = 'it''s', "_updated_at" = now() WHERE "_locale" = 'en' AND "note" IS NULL;`,
-      `INSERT INTO "dc_posts_locales" ("_parent", "_locale", "_updated_at", "note") SELECT "id", 'en', now(), 'it''s' FROM "dc_posts" WHERE "id" NOT IN (SELECT "_parent" FROM (SELECT DISTINCT "_parent" FROM "dc_posts_locales" WHERE "_locale" = 'en') AS "with_row");`,
+      `UPDATE "dc_posts_locales" SET "note" = 'it''s', "_updated_at" = statement_timestamp() WHERE "_locale" = 'en' AND "note" IS NULL;`,
+      `INSERT INTO "dc_posts_locales" ("_parent", "_locale", "_updated_at", "note") SELECT "id", 'en', statement_timestamp(), 'it''s' FROM "dc_posts" WHERE "id" NOT IN (SELECT "_parent" FROM (SELECT DISTINCT "_parent" FROM "dc_posts_locales" WHERE "_locale" = 'en') AS "with_row");`,
     ]);
   });
 
   it.each([
-    ["postgresql", "now()"],
+    ["postgresql", "statement_timestamp()"],
     ["mysql", "UTC_TIMESTAMP(3)"],
     ["sqlite", "CAST(strftime('%s', 'now') AS INTEGER)"],
   ] as const)(

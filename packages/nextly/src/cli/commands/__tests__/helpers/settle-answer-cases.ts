@@ -104,6 +104,9 @@ export function settleAnswerCases(args: {
       let closers: Array<() => Promise<void>> = [];
 
       beforeEach(() => {
+        // Recorded before a scratch database is made, which sets it directly: what
+        // `vi.unstubAllEnvs` puts back after the case is the runner's own address.
+        vi.stubEnv("DATABASE_URL", process.env.DATABASE_URL);
         project = mkdtempSync(join(tmpdir(), "nextly-settle-answers-"));
         mkdirSync(join(project, "database"), { recursive: true });
       });
@@ -536,6 +539,17 @@ export function settleAnswerCases(args: {
             const target = await seeded(before, translated);
             const ids = [target.kept, target.empty, target.bare].sort();
             expect(await entriesOf(target.adapter)).toEqual(ids);
+            // The other language's rows, which a fill of the default one leaves as they were.
+            const spanish = async () =>
+              (await languageRowsOf(target.adapter, "note")).filter(
+                row => row[1] === "es"
+              );
+            const spanishBefore = filling ? await spanish() : [];
+            if (filling) {
+              expect(spanishBefore).toEqual(
+                translated ? [[target.bare, "es", "nota"]] : []
+              );
+            }
             reach(target.url);
             const applied = await migrate(
               after,
@@ -572,10 +586,13 @@ export function settleAnswerCases(args: {
               expect(await entriesOf(target.adapter)).toEqual(ids);
             }
 
+            if (filling) expect(await spanish()).toEqual(spanishBefore);
+
             // A second run finds nothing to do, and says so; nothing is pending or run again.
             expect((await pendingIn(target.adapter, after)).length).toBe(0);
             const again = await migrate(after);
             expect(again.code, again.said).toBeUndefined();
+            if (filling) expect(await spanish()).toEqual(spanishBefore);
             expect(await englishOf(target.adapter, answered.settled)).toEqual(
               expected
             );
@@ -720,6 +737,9 @@ export function settleAnswerCases(args: {
             );
             expect(refused.said).toMatch(/UPDATE [^)]*\) is unknown/);
             expect(await languageRowsOf(target.adapter, "note")).toEqual(notes);
+            expect(await languageRowsOf(target.adapter, "summary")).toEqual(
+              notes.map(row => [row[0], row[1], null])
+            );
 
             // Undone as the message says, the file runs whole.
             const file = files(after).find(name =>

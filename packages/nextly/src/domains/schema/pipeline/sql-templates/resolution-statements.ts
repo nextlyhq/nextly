@@ -115,11 +115,13 @@ export function resolutionStatement(
 /**
  * The database's clock as a stamp column (`_updated_at`) stores the moment it reads: the epoch
  * seconds SQLite keeps, the UTC datetime with milliseconds MySQL keeps, and an instant on
- * PostgreSQL, the same forms the runtime's encoder gives a stamp (`encodeStamp`).
+ * PostgreSQL, the same forms the runtime's encoder gives a stamp (`encodeStamp`). PostgreSQL's
+ * `now()` is when the transaction began, before it waited for the table; the statement's own clock
+ * is read, as the other two read theirs.
  */
 function stampClock(dialect: SupportedDialect): string {
   return dialect === "postgresql"
-    ? "now()"
+    ? "statement_timestamp()"
     : dialect === "mysql"
       ? "UTC_TIMESTAMP(3)"
       : "CAST(strftime('%s', 'now') AS INTEGER)";
