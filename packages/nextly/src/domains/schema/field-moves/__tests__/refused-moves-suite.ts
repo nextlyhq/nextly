@@ -95,6 +95,12 @@ const OUTER = (inside: Field[] = [], deep: Field[] = []) =>
 const ITEMS = (inside: Field[] = []) =>
   repeater("items", [NOTE, group("row", [NOTE, ...inside])]);
 const CONTAINERS = [META(), OUTER(), ITEMS()];
+/**
+ * The group a field is moved into or out of where the move is allowed: its text is shared, so it
+ * keeps none for each language, which a move would leave behind.
+ */
+const SHARED_META = (inside: Field[] = []) =>
+  group("meta", [{ ...NOTE, localized: false }, ...inside]);
 
 /** Where a unique field is moved to, at one depth, two and three, and what the refusal names. */
 const TARGETS: {
@@ -475,7 +481,8 @@ export function describeRefusedMoves(): void {
       describe("the way round: a one-to-one changed to many-to-one, then moved into a group", () => {
         it("keeps every entry's target", async () => {
           const t = await boot();
-          await createEntities(t, [ONE_TO_ONE, HEADLINE, ...CONTAINERS]);
+          const containers = [SHARED_META(), OUTER(), ITEMS()];
+          await createEntities(t, [ONE_TO_ONE, HEADLINE, ...containers]);
           const ann = await someone(t, "ann");
           const ben = await someone(t, "ben");
           const cam = await someone(t, "cam");
@@ -487,11 +494,11 @@ export function describeRefusedMoves(): void {
             new Set([ann, ben, cam])
           );
 
-          await save(t, [MANY_TO_ONE, HEADLINE, ...CONTAINERS]);
+          await save(t, [MANY_TO_ONE, HEADLINE, ...containers]);
           expect(await persons(t)).toEqual(targets);
           await save(
             t,
-            [HEADLINE, META([MANY_TO_ONE]), OUTER(), ITEMS()],
+            [HEADLINE, SHARED_META([MANY_TO_ONE]), OUTER(), ITEMS()],
             [{ from: ["person"], to: ["meta", "person"] }]
           );
 
@@ -638,15 +645,18 @@ export function describeRefusedMoves(): void {
 
       // A translated entity's save goes to the push, which carries no values, so the road refuses
       // every move of it: one its fields alone refuse is told why first, and one they would allow is
-      // told it waits, as before. The Single's and the field group's say so in their planner's words.
+      // told it waits, as before. The Single's and the field group's say so in their planner's words:
+      // the group keeps its text for each language, whatever the field.
       describe("a translated entity's moves, on each road", () => {
         const UNIQUE = person({ unique: true, localized: true });
         const WORDS_HERE: Field = { ...WORDS, localized: true };
+        const KEEPS_TEXT =
+          "cannot be moved into or out of meta: meta keeps the text inside it for each language, and the move would leave those translations behind. This is not available yet.";
         const FIELDS = [UNIQUE, WORDS_HERE, HEADLINE, ...CONTAINERS];
         const WAITS = [
           "Fields in a translated collection can't be moved yet.",
-          "keeps a value for each language",
-          "keeps a value for each language",
+          KEEPS_TEXT,
+          KEEPS_TEXT,
         ];
         it.each(
           roadsFor(FIELDS, true).map((road, at) => ({ road, waits: WAITS[at] }))
@@ -686,6 +696,38 @@ export function describeRefusedMoves(): void {
             );
           }
         );
+
+        // Of the container's, not the field's: a number holds no text of its own in any language.
+        const VIEWS: Field = { name: "views", type: "number" };
+        const ON_ROW = [VIEWS, HEADLINE, META()];
+        const GROUPED = [HEADLINE, META([VIEWS])];
+        it.each<[string, Field[], Field[], Move[]]>([
+          [
+            "into",
+            ON_ROW,
+            GROUPED,
+            [{ from: ["views"], to: ["meta", "views"] }],
+          ],
+          [
+            "out of",
+            GROUPED,
+            ON_ROW,
+            [{ from: ["meta", "views"], to: ["views"] }],
+          ],
+        ])(
+          "refuses a shared number %s a translated Single's group that keeps its text for each language, nothing changed",
+          async (_way, created, fields, moves) => {
+            const t = await boot();
+            const [, single] = roadsFor(created, true);
+            await single.create(t);
+            await expectRoadRefuses(
+              t,
+              single,
+              ["preview", "apply"],
+              [{ fields, moves, message: `views ${KEEPS_TEXT}` }]
+            );
+          }
+        );
       });
 
       // A Single's and a field group's save outside development is applied at once, while the file
@@ -721,8 +763,13 @@ export function describeRefusedMoves(): void {
       });
 
       describe("a one-to-one out of a group onto its entity's row", () => {
-        const GROUPED = [HEADLINE, META([MANY_TO_ONE]), OUTER(), ITEMS()];
-        const ON_ROW = [ONE_TO_ONE, HEADLINE, META(), OUTER(), ITEMS()];
+        const GROUPED = [
+          HEADLINE,
+          SHARED_META([MANY_TO_ONE]),
+          OUTER(),
+          ITEMS(),
+        ];
+        const ON_ROW = [ONE_TO_ONE, HEADLINE, SHARED_META(), OUTER(), ITEMS()];
         const OUT: Move[] = [{ from: ["meta", "person"], to: ["person"] }];
 
         it("is moved, its column unique: every target kept, and a duplicate refused", async () => {
