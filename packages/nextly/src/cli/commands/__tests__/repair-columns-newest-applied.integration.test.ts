@@ -249,5 +249,76 @@ describe.each(getConfiguredTestDialects())(
         await expectUntouched();
       }
     );
+
+    /** Both runs stop with `code`, at exit 1, with nothing converted. */
+    async function expectStopped(code: string) {
+      const before = await columns();
+      const errors: Array<Record<string, string>> = [];
+      for (const apply of [false, true]) {
+        const { document, exitCode } = await run(apply);
+        expect(document.result).toBeNull();
+        expect(exitCode).toBe(1);
+        expect(document.errors.map(error => error.code)).toEqual([code]);
+        errors.push(document.errors[0]);
+      }
+      expect(await columns()).toEqual(before);
+      expect(errors[1]).toEqual(errors[0]);
+      return errors[0];
+    }
+
+    /** Take a migration out of the checkout, as one made before it was written. */
+    function notCheckedOut(name: string) {
+      rmSync(path(`${name}.sql`));
+      rmSync(path("meta", `${name}.snapshot.json`));
+    }
+
+    it.each([
+      ["the newer configuration", SECOND],
+      ["its own configuration", FIRST],
+    ])(
+      "stops in a checkout without an applied migration, with %s",
+      async (_whose, fields) => {
+        state.collections = [{ slug: "rnaposts", fields }];
+        notCheckedOut("0002_second");
+        const error = await expectStopped("MIGRATION_MISSING");
+        expect(error.message).toBe(
+          "The ledger records 1 applied migration this build's migrations folder lacks (`0002_second.sql`), so `nextly repair-columns` ran nothing."
+        );
+        expect(error.next).toContain("`nextly migrate:resolve --removed");
+      }
+    );
+
+    it("goes on where the migration's file was removed on purpose and its snapshot is there", async () => {
+      rmSync(path("0002_second.sql"));
+      await events().recordRemoval({
+        filename: "0002_second.sql",
+        sha256: "a".repeat(64),
+      });
+      await expectUntouched();
+    });
+
+    it("names the migration's file where its snapshot is still there", async () => {
+      rmSync(path("0002_second.sql"));
+      const error = await expectStopped("MISSING_MIGRATION");
+      expect(error.message).toContain("`0002_second`");
+    });
+
+    it("goes on where the checkout lacks a migration that was rolled back", async () => {
+      await migration("0003_third", null);
+      const retired = (await events().findFileApplies("0003_third.sql")).map(
+        row => row.id
+      );
+      const id = await events().insertEvent({
+        eventType: "file_apply",
+        status: "rolled_back",
+        source: "cli-migrate",
+        filename: "0003_third.sql",
+        endedAt: new Date(),
+        supersededEventIds: retired,
+      });
+      await events().supersede({ supersededEventIds: retired, byEventId: id });
+      rmSync(path("0003_third.sql"));
+      await expectUntouched();
+    });
   }
 );

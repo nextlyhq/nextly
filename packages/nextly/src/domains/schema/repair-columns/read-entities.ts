@@ -729,16 +729,25 @@ export async function readRepairEntities(args: {
   waits?: TableWaits;
   /** The app's column overrides, as the configuration declares them. */
   overrides?: RepairOverrides;
+  /**
+   * Refuses where the folder lacks an app migration the database has applied, whose snapshot is
+   * the definition last applied: the app's history check, which the caller has. Made in the same
+   * tries as the reads, and after them, so a snapshot that is there is judged as what it is.
+   */
+  checkHistory?: () => Promise<void>;
 }): Promise<RepairEntity[]> {
   const { adapter, dialect, logger } = args;
   const codeFields = args.config.users?.fields ?? [];
   // Independent reads, so none waits on another.
-  const fromDatabase = () =>
-    Promise.all([
+  const fromDatabase = async () => {
+    const read = await Promise.all([
       registryEntities(adapter, logger),
       snapshotEntities(adapter, dialect, args.migrationsDir),
       userFieldSources(adapter, dialect, logger, codeFields),
     ]);
+    await args.checkHistory?.();
+    return read;
+  };
   const [{ entities: configured, hasManifest }, read] = await Promise.all([
     configuredEntities(args),
     args.waits === undefined || dialect !== "sqlite"

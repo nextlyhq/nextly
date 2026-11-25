@@ -12,7 +12,8 @@
  * converted: every column of an entity no migration has applied yet, or of one the configuration
  * or a checked-out Builder manifest removes, and every column a table rename moves. A record of
  * what was applied that cannot be read (a migration snapshot, or a registry row naming no table)
- * is a run that could not run.
+ * is a run that could not run. So is a checkout without a migration the database has applied: its
+ * snapshot is the definition last applied, and an older one would convert columns back.
  *
  * Without `--apply` it changes nothing: no table, row, registry entry or ledger row, and it never
  * takes the schema lock, only reads who holds it. With `--apply` it takes the schema lock, converts
@@ -176,11 +177,15 @@ async function report(
     { dryRunReport },
     { applyRepairs },
     { compileExtensionSchema },
+    { declaredNamesOf },
+    { assertAppliedFilesPresent },
   ] = await Promise.all([
     import("../../domains/schema/repair-columns/read-entities"),
     import("../../domains/schema/repair-columns/run-report"),
     import("../../domains/schema/repair-columns/apply"),
     import("../../domains/schema/extension/publish"),
+    import("../../domains/schema/migrate/resolved-schema"),
+    import("./migrate"),
   ]);
 
   const adapter = (await createCliAdapter({
@@ -206,6 +211,26 @@ async function report(
       extensionSchema === undefined
         ? undefined
         : { byTable: extensionSchema.columnOverrides };
+    const migrationsDir = resolve(cwd, config.db.migrationsDir);
+    // A checkout older than the database holds no snapshot of what was last applied, so it is
+    // refused as `nextly migrate` refuses it. The declared names tell an old Schema Builder file,
+    // as they do there.
+    const checkHistory = async () => {
+      const declared = await declaredNamesOf({
+        projectRoot,
+        config,
+        ...(deferredExtends !== undefined ? { deferredExtends } : {}),
+      });
+      await assertAppliedFilesPresent({
+        adapter,
+        db: adapter.getDrizzle(),
+        dialect,
+        migrationsDir,
+        logger,
+        ...(declared !== undefined ? { declared } : {}),
+        command: "nextly repair-columns",
+      });
+    };
     const readEntities = (waits: TableWaits | undefined) =>
       readRepairEntities({
         ...(overrides !== undefined ? { overrides } : {}),
@@ -216,7 +241,8 @@ async function report(
         // migration would apply it, not only as the registry last saved it.
         projectRoot,
         ...(deferredExtends !== undefined ? { deferredExtends } : {}),
-        migrationsDir: resolve(cwd, config.db.migrationsDir),
+        migrationsDir,
+        checkHistory,
         logger: { debug, info: debug, warn: debug, error: debug },
         ...(waits === undefined ? {} : { waits }),
       });
