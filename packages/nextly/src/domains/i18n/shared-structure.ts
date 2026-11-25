@@ -592,7 +592,7 @@ export function pruneOverlay(
   const kept = valueOf(structure);
   if (shape.kind === "group") {
     const structureKept = isPlainRecord(kept) ? kept : {};
-    return pruneLevel(level, structureKept, shapeOfRow(structureKept, shape));
+    return pruneLevel(level, structureKept, shape);
   }
   const rows = new Map<string, Record<string, unknown>>();
   if (Array.isArray(kept)) {
@@ -610,21 +610,40 @@ export function pruneOverlay(
       changed = true;
       continue;
     }
-    const pruned = pruneLevel(entry, row, shapeOfRow(row, shape));
+    const pruned = pruneLevel(entry, row, shape);
     out[id] = pruned.overlay;
     changed ||= pruned.changed;
   }
   return { overlay: out, changed };
 }
 
-/** One row's (or one group's) overlay entry pruned against its structure's nested containers. */
+/**
+ * One row's (or one group's) overlay entry pruned against its structure, read by the type it
+ * records (`shapeOfRow`): its nested containers' removed rows go, and so does the text of another
+ * type of the same component, which an instance that changed type no longer holds. A key no type
+ * describes is left alone: this level's shape may have been read without its components' fields.
+ */
 function pruneLevel(
   entry: OverlayLevel,
   structure: Record<string, unknown>,
-  shape: SharedStructureShape
+  levelShape: SharedStructureShape
 ): { overlay: OverlayLevel; changed: boolean } {
+  const shape = shapeOfRow(structure, levelShape);
   const out: OverlayLevel = { ...entry };
   let changed = false;
+  if (shape !== levelShape) {
+    const own = new Set([...shape.texts, ...Object.keys(shape.inner)]);
+    const anyType = new Set([
+      ...levelShape.texts,
+      ...Object.keys(levelShape.inner),
+    ]);
+    for (const name of Object.keys(out)) {
+      if (anyType.has(name) && !own.has(name)) {
+        delete out[name];
+        changed = true;
+      }
+    }
+  }
   for (const [name, nestedShape] of Object.entries(shape.inner)) {
     if (!Object.hasOwn(out, name)) continue;
     const nested = pruneOverlay(out[name], structure[name], nestedShape);

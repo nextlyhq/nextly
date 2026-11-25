@@ -306,6 +306,61 @@ describe("pruneOverlay", () => {
     expect(changed).toBe(false);
     expect(overlay).toEqual(kept);
   });
+
+  // An instance that keeps its id but changes type no longer holds the earlier type's fields. Kept
+  // in the other languages' overlays, that text would come back if the instance were changed back.
+  describe("an instance changed to another component type", () => {
+    const fieldsOf = (slug: string) =>
+      slug === "hero"
+        ? [{ name: "title", type: "text" }]
+        : slug === "cta"
+          ? [{ name: "label", type: "text" }]
+          : undefined;
+
+    it("drops the earlier type's text from a list's instance, keeping the new type's", () => {
+      const shape = componentStructureShape(
+        {
+          name: "layout",
+          type: "component",
+          components: ["hero", "cta"],
+          repeatable: true,
+        },
+        fieldsOf
+      )!;
+      const { overlay, changed } = pruneOverlay(
+        { i1: { title: "Hola", label: "Compra" } },
+        [{ id: "i1", _componentType: "cta" }],
+        shape
+      );
+      expect(changed).toBe(true);
+      expect(overlay).toEqual({ i1: { label: "Compra" } });
+    });
+
+    it("drops the earlier type's text from a single instance", () => {
+      const shape = componentStructureShape(
+        { name: "lead", type: "component", components: ["hero", "cta"] },
+        fieldsOf
+      )!;
+      const { overlay, changed } = pruneOverlay(
+        { title: "Hola" },
+        { _componentType: "cta" },
+        shape
+      );
+      expect(changed).toBe(true);
+      expect(overlay).toEqual({});
+    });
+
+    // The control: the instance kept its type, so nothing of its text goes.
+    it("keeps an instance's text while its type stays", () => {
+      const shape = componentStructureShape(
+        { name: "lead", type: "component", components: ["hero", "cta"] },
+        fieldsOf
+      )!;
+      expect(
+        pruneOverlay({ title: "Hola" }, { _componentType: "hero" }, shape)
+      ).toEqual({ overlay: { title: "Hola" }, changed: false });
+    });
+  });
 });
 
 describe("componentStructureShape", () => {
