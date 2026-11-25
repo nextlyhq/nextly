@@ -44,8 +44,9 @@ export function commitsOnMysql(statement: string): boolean {
 
 /**
  * The first words of the statements that change no row a run could be judged by: a read, the
- * session's own housekeeping, and a schema statement, whose shape is judged from the tables. A
- * `SELECT` that calls a stored function changing rows is the exception nothing here reads.
+ * session's own housekeeping, and a schema statement, whose shape is judged from the tables, but for
+ * the ones that change rows too (`fillsTheTableItMakes`, `changesAPartitionsRows`). A `SELECT` that
+ * calls a stored function changing rows is the exception nothing here reads.
  */
 const LEAVES_ROWS_ALONE = new Set([
   "SELECT",
@@ -67,6 +68,7 @@ const LEAVES_ROWS_ALONE = new Set([
   "BEGIN",
   "START",
   "COMMIT",
+  "ROLLBACK",
   "SAVEPOINT",
   "RELEASE",
   "USE",
@@ -87,6 +89,7 @@ const NEVER_COMMITS = new Set([
   "EXPLAIN",
   "DESCRIBE",
   "DESC",
+  "ROLLBACK",
   "SAVEPOINT",
   "RELEASE",
   "USE",
@@ -144,9 +147,56 @@ function restatementsRunIn(statements: readonly string[]): ReadonlySet<number> {
 /** Whether `statement` may change rows on MySQL: every one not known to leave them alone. */
 function mayChangeRowsOnMysql(statement: string): boolean {
   const first = leadingWords(statement, "mysql", 1)[0] ?? "";
-  return first === "SET"
-    ? !setsPlainVariables(statement)
-    : !LEAVES_ROWS_ALONE.has(first);
+  if (first === "SET") return !setsPlainVariables(statement);
+  return (
+    !LEAVES_ROWS_ALONE.has(first) ||
+    fillsTheTableItMakes(statement) ||
+    changesAPartitionsRows(statement)
+  );
+}
+
+/**
+ * Whether `statement` is a `CREATE TABLE` that fills the table it makes from a query: one that ends in
+ * a `SELECT`, a `TABLE` or a `VALUES ROW`. A partition's own `VALUES LESS THAN` and `VALUES IN` are
+ * none, and a temporary table's rows last no longer than the session.
+ */
+function fillsTheTableItMakes(statement: string): boolean {
+  const [first, second, ...rest] = statementTokens(statement, "mysql");
+  if (first !== "CREATE" || second !== "TABLE") return false;
+  return rest.some(
+    (token, at) =>
+      token === "SELECT" ||
+      token === "TABLE" ||
+      (token === "VALUES" && rest[at + 1] === "ROW")
+  );
+}
+
+/** The words that take, before `PARTITION`, a partition's rows with them, or swap them. */
+const CHANGES_PARTITION_ROWS = new Set(["TRUNCATE", "DROP", "EXCHANGE"]);
+
+/** Whether `statement` is an `ALTER TABLE` that empties, drops or exchanges a partition. */
+function changesAPartitionsRows(statement: string): boolean {
+  const tokens = statementTokens(statement, "mysql");
+  if (tokens[0] !== "ALTER" || tokens[1] !== "TABLE") return false;
+  return tokens.some((token, at) => {
+    const before = tokens[at - 1];
+    return (
+      token === "PARTITION" &&
+      typeof before === "string" &&
+      CHANGES_PARTITION_ROWS.has(before)
+    );
+  });
+}
+
+/**
+ * Whether `statement` undoes every open row: a `ROLLBACK` of the whole transaction. One to a savepoint
+ * undoes only those since, so the rows before it stay open.
+ */
+function undoesOpenRows(statement: string): boolean {
+  return (
+    leadingWords(statement, "mysql", 1)[0] === "ROLLBACK" &&
+    !statementTokens(statement, "mysql").includes("TO")
+  );
 }
 
 /**
@@ -161,7 +211,26 @@ function mayCommitOnMysql(statement: string): boolean {
   if ((first === "CREATE" || first === "DROP") && second === "TEMPORARY") {
     return false;
   }
+  // A file loaded is rows alone, kept or undone with the rest (on an NDB table it commits, which
+  // nothing here reads); an index loaded into a cache commits.
+  if (first === "LOAD") return second !== "DATA" && second !== "XML";
   return !NEVER_COMMITS.has(first ?? "");
+}
+
+/** Whether `statement` opens a transaction of its own, once it has ended the one before it. */
+function opensTransaction(statement: string): boolean {
+  const [first, second] = leadingWords(statement, "mysql", 2);
+  return first === "BEGIN" || (first === "START" && second === "TRANSACTION");
+}
+
+/**
+ * Whether, once `statement` ran, the session may be left with no transaction open, each statement after
+ * it committing as it runs: it may have committed, or rolled the transaction back, and the run opens
+ * one again only after a statement `commitsOnMysql` reads.
+ */
+function mayLeaveNoTransaction(statement: string): boolean {
+  if (commitsOnMysql(statement) || opensTransaction(statement)) return false;
+  return mayCommitOnMysql(statement) || undoesOpenRows(statement);
 }
 
 /**
@@ -193,7 +262,9 @@ export interface DurableRows {
  * The statements of a unit run in one transaction that MySQL made durable with rows among them. A
  * statement that commits (`mayCommitOnMysql`) commits the open transaction before it runs, so a row
  * statement before it stays applied from the moment it starts, and the committing statement itself
- * once it ran. A try resumed at `from` starts past statements an earlier try kept, committed
+ * once it ran. A `ROLLBACK` undoes the rows still open. Where the session may be left with no
+ * transaction open (`mayLeaveNoTransaction`), a row statement stays applied as it runs, until one is
+ * open again. A try resumed at `from` starts past statements an earlier try kept, committed
  * already. Only rows decide it: a unit whose committed statements change no row is judged from its
  * tables, as before, and other dialects keep nothing here.
  */
@@ -216,7 +287,9 @@ export function durableRowsOf(
   let kept = statements.slice(0, from).some(changesRowsAt) ? from : undefined;
   // A statement that may have changed rows since the last commit, which the next one makes durable.
   let rowsOpen = false;
-  // What both were before the statement just started.
+  // Whether each statement may commit as it runs, no transaction being open.
+  let alone = false;
+  // What the first two were before the statement just started.
   let before = { kept, rowsOpen };
   return {
     starting(statement, index) {
@@ -230,8 +303,15 @@ export function durableRowsOf(
       if (mayCommitOnMysql(statement)) {
         // One that changes rows and may commit has made its own durable, whatever came before it.
         if (kept !== undefined || changesRows) kept = index + 1;
+      } else if (undoesOpenRows(statement)) {
+        rowsOpen = false;
       } else if (changesRows) {
-        rowsOpen = true;
+        if (alone) kept = index + 1;
+        else rowsOpen = true;
+      }
+      if (mayLeaveNoTransaction(statement)) alone = true;
+      else if (commitsOnMysql(statement) || opensTransaction(statement)) {
+        alone = false;
       }
     },
     unread() {
