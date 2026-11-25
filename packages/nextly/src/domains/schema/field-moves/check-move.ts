@@ -225,15 +225,22 @@ export function checkMove(
 
 /**
  * The refusal of a move into or out of a repeater or group that keeps one structure in every
- * language with each language's text beside it (`keepsTranslationsInside`): the move's statements
- * carry the structure's values, so the text each language keeps for the field would be left
- * behind. Asked of the outermost container on either side, which holds the translations.
+ * language with each language's text beside it (`keepsTranslationsInside`), of a field whose text
+ * is kept there for each language: the move's statements carry the structure's values, so the text
+ * each language keeps for the field would be left behind. Asked of the outermost container on
+ * either side, which holds the translations. A field kept once for every language (a number, a
+ * shared text) is held in the structure itself, so the move carries it, and it goes ahead.
  */
 function translatedContainerRefusal(
   from: PlacedField,
   to: PlacedField,
   entity: MoveEntity
 ): MoveCheck | null {
+  // The text the field keeps for each language inside a container, a container's own text inside
+  // it among it: translated text, or a container keeping its text apart.
+  const keepsText = (field: FieldDefinition) =>
+    isFieldLocalized(field, true) || keepsTranslationsInside(field, true);
+  if (!keepsText(from.field) && !keepsText(to.field)) return null;
   const localized = entity.localized === true;
   const holder = [from.containers[0], to.containers[0]].find(
     container =>
