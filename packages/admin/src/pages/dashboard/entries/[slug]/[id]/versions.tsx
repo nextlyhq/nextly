@@ -13,6 +13,7 @@
 import { useMemo, type JSX } from "react";
 
 import { fieldsWrittenPerLanguage } from "@admin/components/features/translations/page/translation-fields";
+import { fieldsOf } from "@admin/components/features/translations/page/useTranslationDocument";
 import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
 import {
   readLocaleParam,
@@ -62,7 +63,7 @@ export default function EntryVersionsPage({
     () =>
       collection === undefined
         ? undefined
-        : fieldsWrittenPerLanguage(getCollectionFields(collection)),
+        : fieldsWrittenPerLanguage(fieldsOf(getCollectionFields(collection))),
     [collection]
   );
 

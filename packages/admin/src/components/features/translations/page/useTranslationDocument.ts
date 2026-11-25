@@ -85,8 +85,13 @@ export interface TranslationDocument {
 /** One list for a collection or Single with no fields, as its own is one. */
 const NO_FIELDS: FieldConfig[] = [];
 
-/** A declaration's fields, the same list for as long as it is the same read. */
-function fieldsOf(declared: readonly object[] | undefined): FieldConfig[] {
+/**
+ * A schema read's fields, the same list for as long as it is the same read. The
+ * admin declares the read more loosely than the config it is of.
+ */
+export function fieldsOf(
+  declared: readonly object[] | undefined
+): FieldConfig[] {
   return declared === undefined || declared.length === 0
     ? NO_FIELDS
     : (declared as unknown as FieldConfig[]);
