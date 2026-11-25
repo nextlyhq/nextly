@@ -57,6 +57,21 @@ export function withFieldGroupRegistryFor(
 }
 
 /**
+ * The names of the registry a database already holds, or undefined where it holds neither: what a
+ * setup keeps, so a database with a registry is never given a second one. The legacy registry
+ * first, as every reader that finds both takes it.
+ */
+export async function standingRegistryNaming(adapter: {
+  tableExists(table: string): Promise<boolean>;
+}): Promise<FieldGroupNaming | undefined> {
+  if (await adapter.tableExists(STORAGE_FORMAT.registryTable)) return "legacy";
+  if (await adapter.tableExists(MIGRATION_TARGET.registryTable)) {
+    return "current";
+  }
+  return undefined;
+}
+
+/**
  * Record that a new site's field-group storage is on the current names.
  *
  * Written as the storage migration writes its own end state: settled on the current generation,

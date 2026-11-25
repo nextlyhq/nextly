@@ -66,7 +66,10 @@ import { runFieldGroupMigration } from "../migration/run";
 import { getFieldGroupRegistryAliases } from "../storage/registry-schemas";
 import { forgetFieldGroupStorageNames } from "../storage/resolve-storage-names";
 
-import { hasTable } from "./helpers/storage-generation-site";
+import {
+  hasTable,
+  seedLegacyCoreTables,
+} from "./helpers/storage-generation-site";
 
 /** The layout this project's suites run on, put back after a case that chose another. */
 const useEarlierLayout = () => setPerLanguageStorage(false);
@@ -162,6 +165,23 @@ function registerResolver(adapter: DrizzleAdapter, dialect: TestDialect): void {
     ...getFieldGroupRegistryAliases(dialect),
   });
   adapter.setTableResolver(registry);
+}
+
+/** `nextly migrate:field-groups --apply --backup-confirmed` on the database at `url`. */
+async function moveStorage(dialect: TestDialect, url: string): Promise<void> {
+  const adapter = await connect(dialect, url);
+  registerResolver(adapter, dialect);
+  forgetFieldGroupStorageNames();
+  const outcome = await runFieldGroupMigration({
+    adapter,
+    logger: SILENT as never,
+    direction: "up",
+    dryRun: false,
+    backupConfirmed: true,
+  });
+  expect(outcome).toMatchObject({ ran: true });
+  forgetFieldGroupStorageNames();
+  await shutdownServices().catch(() => {});
 }
 
 /** A development start of the project over the database at `url`. */
@@ -292,26 +312,16 @@ describe.each(getConfiguredTestDialects())(
         expect(await hasTable(adapter, "fg_fdh_card")).toBe(false);
       }, 180_000);
 
-      // A history that moved part-way is legacy up to its move and current after it: the newest file
-      // says which names the project is on now, and the files before it are not replayed here.
-      it(`starts on the current names of a history that moved, set up by ${road}, and a Builder save and nextly migrate go on`, async () => {
+      // A history that moved part-way is legacy up to its move. An empty database starts where its
+      // replay does, on the names of its first file, and goes on through the move as every other
+      // database of the project did: the storage migration, then nextly migrate.
+      it(`starts on the names a moved history begins on, set up by ${road}, and goes on through its move`, async () => {
         const first = await emptyDatabase(dialect);
         await legacyHistory(dialect);
         const applied = await migrate();
         expect(applied.exit, applied.said).toBeUndefined();
         await developmentStart(dialect, first);
-        const site = await connect(dialect, first);
-        registerResolver(site, dialect);
-        forgetFieldGroupStorageNames();
-        const outcome = await runFieldGroupMigration({
-          adapter: site,
-          logger: SILENT as never,
-          direction: "up",
-          dryRun: false,
-          backupConfirmed: true,
-        });
-        expect(outcome).toMatchObject({ ran: true });
-        await shutdownServices().catch(() => {});
+        await moveStorage(dialect, first);
         const moved = await run(context =>
           runMigrateCreate(
             undefined,
@@ -327,9 +337,16 @@ describe.each(getConfiguredTestDialects())(
         await setUp(url);
 
         const adapter = await connect(dialect, url);
-        expect(await hasTable(adapter, "dynamic_field_groups")).toBe(true);
-        expect(await hasTable(adapter, "fg_fdh_card")).toBe(true);
-        expect(await hasTable(adapter, "dynamic_components")).toBe(false);
+        expect(await hasTable(adapter, "dynamic_components")).toBe(true);
+        expect(await hasTable(adapter, "comp_fdh_card")).toBe(true);
+        expect(await hasTable(adapter, "dynamic_field_groups")).toBe(false);
+        // The move is the next step, and is named.
+        await shutdownServices().catch(() => {});
+        const stopped = await migrate();
+        expect(stopped.exit, stopped.said).not.toBeUndefined();
+        expect(stopped.said).toContain("FIELD_GROUP_STORAGE_NOT_MIGRATED");
+
+        await moveStorage(dialect, url);
         const recorded = await migrate();
         expect(recorded.exit, recorded.said).toBeUndefined();
         await developmentStart(dialect, url);
@@ -508,6 +525,44 @@ describe.each(getConfiguredTestDialects())(
       expect(await hasTable(adapter, "dynamic_components")).toBe(false);
       expect(await hasTable(adapter, "dynamic_field_groups")).toBe(false);
     }, 180_000);
+
+    // A database with no ledger is set up as a new one is, and one with a registry is still not new:
+    // a second registry made beside the live one would hide every group in it.
+    for (const [road, setUp] of [
+      ["a development start", (url: string) => developmentStart(dialect, url)],
+      [
+        "nextly db:sync",
+        async () => {
+          const synced = await dbSync();
+          expect(synced.exit, synced.said).toBeUndefined();
+        },
+      ],
+      [
+        "nextly migrate",
+        async () => {
+          loaded.config = defineConfig({ db: DB });
+          const migrated = await migrate();
+          expect(migrated.exit, migrated.said).toBeUndefined();
+          loaded.config = PROJECT;
+        },
+      ],
+    ] as const) {
+      it(`keeps the legacy registry a database without a ledger holds, at ${road}`, async () => {
+        const url = await emptyDatabase(dialect);
+        const adapter = await connect(dialect, url);
+        await seedLegacyCoreTables(adapter, dialect);
+        await adapter.executeQuery(
+          dialect === "mysql"
+            ? "DROP TABLE `nextly_schema_events`"
+            : 'DROP TABLE "nextly_schema_events"'
+        );
+
+        await setUp(url);
+
+        expect(await hasTable(adapter, "dynamic_components")).toBe(true);
+        expect(await hasTable(adapter, "dynamic_field_groups")).toBe(false);
+      }, 180_000);
+    }
 
     // Read only where a database is empty: an existing one's start does not depend on the folder.
     it("still starts over a database already set up, whatever its history says", async () => {

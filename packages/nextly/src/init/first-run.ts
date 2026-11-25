@@ -827,12 +827,17 @@ async function setUpNewDatabase(
   // depend on plugin config.
   const extensionSchema =
     args.extensionSchema ?? getActiveExtensionSchema(dialect);
+  const {
+    standingRegistryNaming,
+    withFieldGroupRegistryFor,
+    recordNewSiteOrWarn,
+  } = await import("../domains/field-groups/services/field-group-new-site");
   // A new site starts its field groups on the current names
-  // (`field-group-new-site`), unless its project's history is on the legacy ones.
-  const fieldGroupNaming = args.newSiteFieldGroupNaming ?? "current";
-  const { withFieldGroupRegistryFor, recordNewSiteOrWarn } = await import(
-    "../domains/field-groups/services/field-group-new-site"
-  );
+  // (`field-group-new-site`), unless its project's history begins on the
+  // legacy ones. A database with a registry and no ledger keeps the one it has.
+  const standing = await standingRegistryNaming(adapter);
+  const fieldGroupNaming =
+    standing ?? args.newSiteFieldGroupNaming ?? "current";
   const staticTables = {
     ...withFieldGroupRegistryFor(
       dialect,
@@ -907,7 +912,8 @@ async function setUpNewDatabase(
   );
 
   await recordNewSiteNaming(
-    fieldGroupNaming,
+    // A registry that stood already is no new site's: what its storage went through is its marker's.
+    standing === undefined ? fieldGroupNaming : undefined,
     staticTables.nextlyMeta !== undefined,
     recordNewSiteOrWarn,
     adapter,
@@ -1263,7 +1269,7 @@ async function markMediaUsageRecordedOnNewSite(
  * rather than thrown (`recordNewSiteOrWarn`).
  */
 async function recordNewSiteNaming(
-  naming: "legacy" | "current",
+  naming: "legacy" | "current" | undefined,
   hasMeta: boolean,
   record: typeof recordNewSite,
   adapter: EnsureFirstRunSetupArgs["adapter"],
