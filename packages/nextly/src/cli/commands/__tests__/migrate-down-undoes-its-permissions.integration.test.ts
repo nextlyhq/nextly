@@ -23,6 +23,8 @@
  * - Rolling back a migration that renamed a plugin's collection (`renameMap`) writes the row of the
  *   slug the plugin declares back as the plugin's, though the configuration still renames it, and
  *   where the point records the app's own collection on the new slug too.
+ * - Before the registry record exists, a rollback between two migrations
+ *   whose snapshots predate the registry metadata changes no orphan mark.
  */
 import {
   mkdirSync,
