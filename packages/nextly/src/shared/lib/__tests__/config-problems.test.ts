@@ -1199,13 +1199,12 @@ describe("an entity with no system field set aside and no name at fault", () => 
 });
 
 describe("a Builder container marked translatable as a whole", () => {
-  // The Builder saves the mark, and `nextly migrate` takes it off; the same field in the
-  // configuration is refused, as its author takes it off there.
+  // Refused as the configuration's is, and told what to do in the file: the mark is taken out by
+  // hand, as nothing takes it out of there, and the change needs a migration.
   it.each([
     ["repeater", { fields: [{ name: "inner", type: "text" }] }],
     ["group", { fields: [{ name: "inner", type: "text" }] }],
-    ["component", { component: "card" }],
-  ])("is not reported for a %s, at any depth", (type, rest) => {
+  ])("is reported for a %s, at any depth, with what to edit", (type, rest) => {
     const marked = { name: "holder", type, localized: true, ...rest };
     const entity = {
       slug: "posts",
@@ -1215,14 +1214,59 @@ describe("a Builder container marked translatable as a whole", () => {
       ],
     };
 
-    expect(
-      configurationProblems({ collections: [entity] }).map(each => each.code)
-    ).toContain("FIELD_STRUCTURE_NOT_TRANSLATABLE");
     for (const list of ["collections", "singles", "components"]) {
+      const problems = builderDefinitionProblems(
+        { [list]: [entity] },
+        {},
+        "ui-schema.json"
+      );
+
       expect(
-        builderDefinitionProblems({ [list]: [entity] }, {}, "ui-schema.json"),
+        problems.map(problem => [problem.code, problem.path]),
         list
-      ).toEqual([]);
+      ).toEqual([
+        [
+          "FIELD_STRUCTURE_NOT_TRANSLATABLE",
+          `ui-schema.json ${list}[0].fields[0].localized`,
+        ],
+        [
+          "FIELD_STRUCTURE_NOT_TRANSLATABLE",
+          `ui-schema.json ${list}[0].fields[1].fields[0].localized`,
+        ],
+      ]);
+      const [first, deep] = problems.map(problem => problem.message);
+      expect(first).toContain('"holder"');
+      expect(deep).toContain('"deep"');
+      for (const message of [first, deep]) {
+        expect(message).toContain("remove `localized: true`");
+        expect(message).toContain("ui-schema.json");
+        expect(message).toContain("`nextly migrate:create`");
+      }
     }
+  });
+});
+
+describe("a Builder field group placement marked translatable as a whole", () => {
+  it.each(["component", "fieldGroup"])("is not reported for a %s", type => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [
+          {
+            slug: "posts",
+            fields: [
+              { name: "hero", type, component: "card", localized: true },
+            ],
+          },
+        ],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(
+      problems.filter(
+        problem => problem.code === "FIELD_STRUCTURE_NOT_TRANSLATABLE"
+      )
+    ).toEqual([]);
   });
 });

@@ -777,8 +777,7 @@ describe("a Builder problem a load warns of, loaded again in the same process", 
 });
 
 describe("a Builder definition file a release saved with a repeater translatable as a whole", () => {
-  // `nextly migrate` converts it and takes the mark off, so the load it makes must not refuse it.
-  it("loads for a command that reads the entities", async () => {
+  const marked = () => {
     exported.config = {
       collections: [
         { slug: "notes", fields: [{ name: "body", type: "text" }] },
@@ -806,8 +805,41 @@ describe("a Builder definition file a release saved with a repeater translatable
         components: [],
       })
     );
+    return cwd;
+  };
 
-    const loaded = await loadConfig({ cwd, missing: "refuse" });
+  it("is refused, at the field, by a command that reads the entities", async () => {
+    const refused = await loadConfig({
+      cwd: marked(),
+      missing: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    const problems =
+      (
+        refused as {
+          publicData?: { errors?: Array<{ path?: string; code?: string }> };
+        }
+      )?.publicData?.errors ?? [];
+    expect(problems.map(({ path, code }) => [path, code])).toEqual([
+      [
+        "ui-schema.json collections[0].fields[0].localized",
+        "FIELD_STRUCTURE_NOT_TRANSLATABLE",
+      ],
+    ]);
+  });
+
+  it("is warned of, and loads, for a running site", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const loaded = await loadConfig({
+      cwd: marked(),
+      missing: "refuse",
+      builderDefinitions: "warn",
+    });
+    vi.restoreAllMocks();
 
     expect(loaded.configPath).toBeDefined();
   });

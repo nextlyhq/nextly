@@ -613,14 +613,13 @@ export function configurationProblems(
  * ask only of a new or changed address, as they know which are; one that already exists keeps
  * working. A slug that is missing or not a string is still reported: the Builder never writes one.
  * A field named by a SQL keyword (`select`, `order`) too: the Builder's field save takes one
- * (`applySchemaChanges`), though creating a collection with one is refused. And a repeater, group
- * or field group marked translatable as a whole: the Builder saves the mark, and `nextly migrate`
- * takes it off its definitions and keeps each language's values, so it must be able to run.
+ * (`applySchemaChanges`), though creating a collection with one is refused.
+ * A repeater or group marked translatable as a whole is not among them, though the Builder saves
+ * the mark: it is taken out of the file by hand, before an upgrade runs over it.
  */
 const BUILDER_ALLOWS: ReadonlySet<string> = new Set([
   "FIELDS_EMPTY",
   "FIELD_NAME_SQL_KEYWORD",
-  "FIELD_STRUCTURE_NOT_TRANSLATABLE",
   "SLUG_INVALID_FORMAT",
   "SLUG_TOO_LONG",
   "SLUG_RESERVED",
@@ -683,6 +682,20 @@ function isLayoutGroupName(
   );
 }
 
+/**
+ * Whether `problem` is the mark of a field placing a field group: the Builder saves it, and it is
+ * left as it is in the definition file.
+ */
+function isComponentMark(
+  lists: Readonly<Record<string, readonly unknown[]>>,
+  problem: ConfigProblem
+): boolean {
+  if (problem.code !== "FIELD_STRUCTURE_NOT_TRANSLATABLE") return false;
+  const field = entryAt(lists, problem.path.slice(0, -".localized".length));
+  const type = (field as { type?: unknown } | undefined)?.type;
+  return type === "component" || type === "fieldGroup";
+}
+
 /** What `path` (`collections[0].fields[2]`) names inside `root`, or undefined. */
 function entryAt(root: unknown, path: string): unknown {
   let at = root;
@@ -705,6 +718,17 @@ export interface BuilderDefinitionEntities {
   collections?: readonly unknown[];
   singles?: readonly unknown[];
   components?: readonly unknown[];
+}
+
+/**
+ * What else is said of `code` in `file`, after the rule's own sentence. The mark on a container is
+ * the one problem whose fix in the file makes a change to migrate: the rule's sentence is written
+ * for the configuration, and names the upgrade alone.
+ */
+function editOf(code: string, file: string): string {
+  return code === "FIELD_STRUCTURE_NOT_TRANSLATABLE"
+    ? ` Edit it in ${file}, then run \`nextly migrate:create\` and \`nextly migrate\`.`
+    : "";
 }
 
 /**
@@ -751,10 +775,12 @@ export function builderDefinitionProblems(
       problem =>
         !BUILDER_ALLOWS.has(problem.code) &&
         !shadowed(problem.path) &&
-        !isLayoutGroupName(lists, problem)
+        !isLayoutGroupName(lists, problem) &&
+        !isComponentMark(lists, problem)
     )
     .map(problem => ({
       ...problem,
+      message: problem.message + editOf(problem.code, file),
       // The file names field groups `components`.
       path: `${file} ${problem.path.replace(/^fieldGroups\[/, "components[")}`,
     }));

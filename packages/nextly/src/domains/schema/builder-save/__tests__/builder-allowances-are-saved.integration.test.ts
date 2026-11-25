@@ -243,14 +243,14 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
-    // Saved as it is sent, and taken off by the upgrade (`nextly migrate`), which must be able to
-    // run over the file that holds it.
+    // The one place the Builder's saves and the check part on purpose: a file holding the mark is
+    // refused, so the mark is taken out before an upgrade runs over it.
     it.each(
       ["collection", "Single", "field group"].flatMap(name =>
         ["repeater", "group"].map(type => [name, type] as const)
       )
     )(
-      "take a %s's %s marked translatable as a whole, and the file is not refused for it",
+      "take a %s's %s marked translatable as a whole, and the file is refused for it, by name",
       async (name, type) => {
         await boot();
         const kind = kindOf(name);
@@ -262,6 +262,42 @@ describe.each(getConfiguredTestDialects())(
         await kind.create(fields);
 
         expect(written(kind)).toEqual(fields);
+        expect(reported()).toEqual([
+          [
+            "FIELD_STRUCTURE_NOT_TRANSLATABLE",
+            `schema/builder.json ${kind.list}[0].fields[1].localized`,
+          ],
+        ]);
+      }
+    );
+
+    it.each(["collection", "Single", "field group"])(
+      "take a %s's field group placement marked translatable as a whole, and the file is not refused for it",
+      async name => {
+        await boot();
+        const kind = kindOf(name);
+        await dispatchComponents(
+          "createComponent",
+          {},
+          { slug: "card", label: "Card", fields: [text("inner")] }
+        );
+        const fields = [
+          text("heading"),
+          {
+            name: "hero",
+            type: "component",
+            localized: true,
+            component: "card",
+          },
+        ];
+
+        await kind.create(fields);
+
+        const file = JSON.parse(
+          readFileSync(join(basePath, DEFINITION), "utf8")
+        ) as Record<Kind["list"], Array<{ slug: string; fields: unknown[] }>>;
+        const at = file[kind.list].findIndex(({ slug }) => slug === "cases");
+        expect(file[kind.list][at]?.fields).toEqual(fields);
         expect(reported()).toEqual([]);
       }
     );
