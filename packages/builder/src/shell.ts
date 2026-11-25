@@ -647,6 +647,14 @@ export {
 export { MAX_HISTORY, useDocumentView, useEditorState } from "./editor-state";
 
 /**
+ * Keeping an editor's history across a remount of the same document, for a
+ * host that unmounts its editor for a while (`UseEditorStateArgs.keeping`).
+ * @experimental
+ */
+export { startsFromKept } from "./editor-keeping";
+export type { EditorStateKeeping, KeptEditorState } from "./editor-keeping";
+
+/**
  * A handler that keeps its identity across renders and calls the newest one,
  * for a surface memoised so a selection draws it nothing again.
  */
