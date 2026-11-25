@@ -45,6 +45,7 @@ import {
 import type { SchemaHook } from "../../../domains/schema/extension/draft";
 import { DEMOTED_FROM_CODE } from "../../../domains/schema/pipeline/demoted-from-code";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
+import { withSchemaLock } from "../../../domains/schema/pipeline/schema-lock";
 import { calculateSchemaHash } from "../../../domains/schema/services/schema-hash";
 import { reloadNextlyConfig } from "../../../init/reload-config";
 import {
@@ -92,6 +93,15 @@ function indexing(...columns: string[]): SchemaHook {
       indexes: columns.map(column => ({ columns: [column] })),
     });
   };
+}
+
+/** What one side waits on until the other opens it. */
+function gate(): { opened: Promise<void>; open: () => void } {
+  let open = (): void => {};
+  const opened = new Promise<void>(done => {
+    open = done;
+  });
+  return { opened, open };
 }
 
 const quiet = {
@@ -330,8 +340,13 @@ for (const dialect of getConfiguredTestDialects()) {
         );
       }, 120_000);
 
-      it("starts with a hook on a field the Builder added", async () => {
+      it("starts with a hook on a field the Builder added, run no more than one compile runs it", async () => {
         await addsRank();
+        let ran = 0;
+        const counted: SchemaHook = each => {
+          ran += 1;
+          return indexing("rank")(each);
+        };
         const own = (await createAdapter({
           type: dialect,
           url,
@@ -345,11 +360,13 @@ for (const dialect of getConfiguredTestDialects()) {
           db: {
             migrationsDir: "./migrations",
             uiSchemaFile: "./ui-schema.json",
-            schema: { extend: [indexing("rank")] },
+            schema: { extend: [counted] },
           },
           basePath: dir,
         });
 
+        // Twice: a compile runs each hook again, to tell one that answers differently.
+        expect(ran).toBe(2);
         expect(
           activeExtensionSchema()
             ?.entityIndexes.get(TABLE)
@@ -388,6 +405,71 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(warned).toHaveLength(1);
         expect(warned[0]).toContain("hoi_posts");
         expect(warned[0]).toContain('names the column "code"');
+      }, 120_000);
+
+      it("starts by the record as it is once it holds the schema lock, where a save was waited for", async () => {
+        const own = (await createAdapter({
+          type: dialect,
+          url,
+        } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
+        connections.push(own);
+        freshProcess();
+        const warnings: string[] = [];
+        let ran = 0;
+        const counted: SchemaHook = each => {
+          ran += 1;
+          return indexing("code")(each);
+        };
+        const held = gate();
+        const saved = gate();
+        const holder = withSchemaLock(
+          {
+            adapter,
+            command: "test: a Schema Builder save",
+            whenHeld: "wait",
+            mayCreateTables: true,
+            logger: quiet,
+          },
+          async () => {
+            held.open();
+            await saved.opened;
+          }
+        );
+        await held.opened;
+
+        const start = createTestNextly({
+          adapter: own as never,
+          collections: [posts()],
+          db: {
+            migrationsDir: "./migrations",
+            uiSchemaFile: "./ui-schema.json",
+            schema: { extend: [counted] },
+          },
+          basePath: dir,
+          logger: {
+            ...quiet,
+            warn: (message: string) => warnings.push(message),
+          } as never,
+        });
+        try {
+          // Compiled from the record as it was; the start then waits for the lock.
+          await vi.waitFor(() => expect(ran).toBe(2), { timeout: 30_000 });
+          await builderSaves(fields =>
+            fields.filter(field => field.name !== "code")
+          );
+        } finally {
+          saved.open();
+          await holder;
+        }
+        await start;
+
+        expect(
+          warnings.filter(
+            line =>
+              line.includes("schema hook") &&
+              line.includes('names the column "code"')
+          )
+        ).toHaveLength(1);
       }, 120_000);
 
       it("starts with a warning where hooks name a field the Builder added and one it removed", async () => {

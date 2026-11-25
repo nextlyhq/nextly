@@ -171,11 +171,16 @@ function contributionsOf(
  * Called at boot before the schema syncs, and again on every HMR reload — the
  * compiled result is what the push pipeline merges, so a stale one describes a
  * schema the config no longer asks for.
+ *
+ * `compile` is how, where the caller has more to judge the hooks by than `input` says.
  */
 export async function compileAndPublishExtensionSchema(
-  input: PublishInput
+  input: PublishInput,
+  compile: (
+    input: PublishInput
+  ) => Promise<ExtensionSchema | undefined> = compileExtensionSchema
 ): Promise<ExtensionSchema | undefined> {
-  const schema = await compileExtensionSchema(input);
+  const schema = await compile(input);
   if (schema === undefined) {
     // Nothing declares a schema. Cleared rather than left alone, so a reload
     // that REMOVES the last plugin does not leave its tables in the desired

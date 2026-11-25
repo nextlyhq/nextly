@@ -5,6 +5,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import {
   compileExtensionSchema,
   declaresExtensionSchema,
@@ -20,8 +21,16 @@ import { configWithRecordedHandOversIn } from "./load-dynamic-tables";
 
 type CompileInput = Parameters<typeof compileExtensionSchema>[0];
 
+/** What a start compiled its schema hooks to. */
+export interface StartSchema {
+  /** None where nothing declares a schema. */
+  schema: ExtensionSchema | undefined;
+  /** The collections handed to the Schema Builder it was compiled with, as their records had them. */
+  handedOver: string;
+}
+
 /**
- * `input`'s configuration with each collection handed to the Schema Builder described by its record
+ * Compiles `input` with each collection handed to the Schema Builder described by its record
  * (`configWithRecordedHandOvers`), as `db:sync` and a reload compile it, so a hook one of them
  * accepted does not stop the next start.
  *
@@ -33,29 +42,66 @@ type CompileInput = Parameters<typeof compileExtensionSchema>[0];
  * In production the configuration as written, with no read: the migrations production runs on were
  * written from it. So too where nothing declares a schema hook, as the compile then reads no entity.
  */
-export async function developmentStartConfig(
+export async function compileForStart(
+  adapter: DrizzleAdapter,
+  input: CompileInput
+): Promise<StartSchema> {
+  const recorded = await startConfig(adapter, input);
+  return {
+    schema: await compileRecorded(input, recorded),
+    handedOver: handedOverAs(input.config, recorded),
+  };
+}
+
+/**
+ * `compiled` as it is now: compiled again where a record it was compiled with has changed since, or
+ * a collection has been handed over or taken back, and otherwise the same, its hooks not run again.
+ *
+ * Asked once the start holds the schema lock, which it may have waited for while a Schema Builder
+ * save changed a record: the hooks are then judged by the columns the rest of the start works from.
+ */
+export async function compiledForNow(
+  adapter: DrizzleAdapter,
+  input: CompileInput,
+  compiled: StartSchema
+): Promise<StartSchema> {
+  const recorded = await startConfig(adapter, input);
+  const handedOver = handedOverAs(input.config, recorded);
+  if (handedOver === compiled.handedOver) return compiled;
+  return { schema: await compileRecorded(input, recorded), handedOver };
+}
+
+/** The configuration a start's hooks are judged by first: `compileForStart` says which that is. */
+async function startConfig(
   adapter: DrizzleAdapter,
   input: CompileInput
 ): Promise<CompileInput["config"]> {
-  if (isProductionStart() || !declaresExtensionSchema(input)) {
-    return input.config;
-  }
-  const recorded = await configWithRecordedHandOversIn(adapter, input.config);
-  if (recorded === input.config) return recorded;
+  return isProductionStart() || !declaresExtensionSchema(input)
+    ? input.config
+    : configWithRecordedHandOversIn(adapter, input.config);
+}
+
+/** `input` compiled with `recorded`, or with the entry's other fields beside it. */
+async function compileRecorded(
+  input: CompileInput,
+  recorded: CompileInput["config"]
+): Promise<ExtensionSchema | undefined> {
+  if (recorded === input.config) return compileExtensionSchema(input);
   try {
-    await compileExtensionSchema({ ...input, config: recorded });
-    return recorded;
+    return await compileExtensionSchema({ ...input, config: recorded });
   } catch (error) {
-    const both = withEntryFields(input.config, recorded);
-    // Throws where a hook names a field neither has, as the start's own compile would.
-    await compileExtensionSchema({ ...input, config: both });
+    // Throws where a hook names a field neither has, as any compile would.
+    const schema = await compileExtensionSchema({
+      ...input,
+      config: withEntryFields(input.config, recorded),
+    });
     const problem = NextlyError.is(error) ? problemOf(error) : String(error);
     input.logger.warn(
-      `A schema hook does not fit a collection handed to the Schema Builder (${handedOverIn(input.config, recorded)}): ${problem} ` +
+      `A schema hook does not fit a collection handed to the Schema Builder (${handedOverIn(input.config, recorded).join(", ")}): ${problem} ` +
         "The start goes on, with the fields of its entry in nextly.config beside the Builder's; `nextly db:sync` and a reload refuse the hook. " +
         "Change the hook, or put the field back in the Schema Builder."
     );
-    return both;
+    return schema;
   }
 }
 
@@ -97,15 +143,32 @@ function columnsOf(fields: readonly NamedField[]): string[] {
   );
 }
 
+/** The entries `recorded` describes by their records. */
+function recordedIn(
+  config: CompileInput["config"],
+  recorded: CompileInput["config"]
+): unknown[] {
+  return (recorded.collections ?? []).filter(
+    (entry, at) => entry !== config.collections?.[at]
+  );
+}
+
 /** The collections `recorded` describes by their records, by slug. */
 function handedOverIn(
   config: CompileInput["config"],
   recorded: CompileInput["config"]
+): string[] {
+  return recordedIn(config, recorded).map(entry =>
+    String((entry as { slug?: unknown }).slug)
+  );
+}
+
+/** Those collections as their records have them, to tell one reading from another. */
+function handedOverAs(
+  config: CompileInput["config"],
+  recorded: CompileInput["config"]
 ): string {
-  return (recorded.collections ?? [])
-    .filter((entry, at) => entry !== config.collections?.[at])
-    .map(entry => String((entry as { slug?: unknown }).slug))
-    .join(", ");
+  return JSON.stringify(recordedIn(config, recorded));
 }
 
 /** What a refused compile says of the hook: each problem it lists, or its message. */
