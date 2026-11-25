@@ -32,4 +32,4 @@
 `nextly repair-columns` stops, with exit code 1, its dry run included, while an attempt at a migration is unresolved and may have stopped part-way (`NEXTLY_MIGRATION_PARTIALLY_APPLIED`), as `nextly migrate` does. `--apply` undid the part of a pending migration that had run. Finish the migration's statements by hand and record it with `nextly migrate:resolve --applied`, or reverse them and run `nextly migrate:resolve --failed-cleanup` (a down section finished by hand is recorded with `--rolled-back`). Two cases that reported before stop now:
 
 - A migration that is applied and has a later unresolved attempt. A cleared attempt does not stop it.
-- A dry run while a migration or its rollback runs outside a transaction, or on MySQL, a Schema Builder save's migration included. So does an `--apply` in a terminal, which reads before it takes the lock. Run it again once the migration has ended.
+- A dry run while a migration or its rollback runs outside a transaction, or on MySQL, a Schema Builder save's migration included. It stops with `NEXTLY_MIGRATE_LOCK_BUSY`, naming the run. Run it again once that has ended. `--apply` waits for the lock, as before.

@@ -63,13 +63,18 @@ import {
   f,
   tableTools,
 } from "../../../domains/schema/repair-columns/__tests__/apply-fixture";
+import { withSchemaLock } from "../../../domains/schema/pipeline/schema-lock";
+import { dryRunReport } from "../../../domains/schema/repair-columns/run-report";
+import type { RepairEntity } from "../../../domains/schema/repair-columns/types";
 import { COLUMN_REPAIRS_TABLE } from "../../../domains/schema/repair-columns/record";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { NextlyError } from "../../../errors/nextly-error";
 import { createContext } from "../../context";
+import { toCliError } from "../../errors";
 import { repairColumnsAction } from "../repair-columns";
 
 const TABLE = "dc_rnaposts";
@@ -469,13 +474,216 @@ describe.each(getConfiguredTestDialects())(
       expect(await columns()).toEqual(before);
     });
 
-    it("stops an --apply in a terminal over a migration that is running", async () => {
+    /** Another run holds the schema lock, in its own async context, until it is let go. */
+    async function schemaLockHeld(command: string) {
+      let letGo!: () => void;
+      const released = new Promise<void>(resolve => {
+        letGo = resolve;
+      });
+      let holding!: () => void;
+      const held = new Promise<void>(resolve => {
+        holding = resolve;
+      });
+      const holder = withSchemaLock(
+        {
+          adapter: handle.adapter as unknown as DrizzleAdapter,
+          command,
+          whenHeld: "refuse",
+        },
+        async () => {
+          holding();
+          await released;
+        }
+      );
+      await held;
+      return async () => {
+        letGo();
+        await holder;
+      };
+    }
+
+    const LOCK_BUSY = "NEXTLY_MIGRATE_LOCK_BUSY";
+
+    it.each([
+      ["in progress", "nextly migrate"],
+      // Nothing says the attempt is the holder's: whichever runs, nothing is to be done by hand yet.
+      ["failed", "nextly db:sync"],
+    ] as const)(
+      "names the run holding the lock in a dry run over an attempt %s, and says to wait (%s)",
+      async (outcome, command) => {
+        await stoppedPartWay(outcome);
+        const release = await schemaLockHeld(command);
+        try {
+          const { document, exitCode } = await run(false);
+          expect(exitCode).toBe(1);
+          expect(document.result).toBeNull();
+          const [error] = document.errors;
+          expect(error.code).toBe(LOCK_BUSY);
+          expect(error.message).toBe(
+            "`nextly repair-columns` did not start, and changed nothing: the schema lock is still held."
+          );
+          expect(error.cause).toContain(`\`${command}\` holds it`);
+          expect(error.cause).toContain("the lock lapses in");
+          expect(error.next).toBe("Run it again once that finishes.");
+          // Nothing a reader would do by hand under a migration that runs.
+          expect(Object.values(error).join(" ")).not.toMatch(
+            /by hand |reverse|--failed-cleanup|--applied/
+          );
+        } finally {
+          await release();
+        }
+        // Nothing holds it now: what is left is an attempt to settle.
+        await expectStopped(PARTIALLY_APPLIED);
+      }
+    );
+
+    it("says so in the words the lock's own refusal has", async () => {
       await stoppedPartWay("in progress");
-      const before = await columns();
-      const { text, exitCode } = await printed({ apply: true, terminal: true });
+      const release = await schemaLockHeld("nextly migrate");
+      try {
+        const own: unknown = await withSchemaLock(
+          {
+            adapter: handle.adapter as unknown as DrizzleAdapter,
+            command: "nextly repair-columns",
+            whenHeld: "refuse",
+          },
+          () => Promise.resolve()
+        ).catch((error: unknown) => error);
+        const { what, next, code } = toCliError(own);
+        const { document } = await run(false);
+        expect(document.errors[0]).toMatchObject({ code, message: what, next });
+      } finally {
+        await release();
+      }
+    });
+
+    it.each([
+      ["in a terminal", { terminal: true }],
+      ["where nothing is asked", { terminal: false }],
+    ])(
+      "waits for a running migration's lock in an --apply %s, then judges what it left",
+      async (_where, { terminal }) => {
+        const id = await stoppedPartWay("in progress");
+        const release = await schemaLockHeld("nextly migrate");
+        let settled = false;
+        const running = printed({ apply: true, terminal }).finally(() => {
+          settled = true;
+        });
+        try {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          expect(settled).toBe(false);
+          // The migration ends: its second statement ran, and its attempt is recorded applied.
+          await tools.run(addNote("note_two"));
+          await events().markApplied(id, {
+            uniqueFilename: "0003_third.sql",
+          });
+        } finally {
+          await release();
+        }
+        const { text, exitCode } = await running;
+        expect(text).not.toContain(PARTIALLY_APPLIED);
+        expect(text).not.toContain(LOCK_BUSY);
+        expect(exitCode).not.toBe(1);
+        // What 0003 made is what was last applied, so nothing sets `author` NOT NULL again.
+        expect((await columns()).author?.nullable).toBe(true);
+      }
+    );
+
+    it("stops an --apply in a terminal under the lock where the migration it waited for failed", async () => {
+      const id = await stoppedPartWay("in progress");
+      const release = await schemaLockHeld("nextly migrate");
+      const running = printed({ apply: true, terminal: true });
+      try {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await events().markFailed(id, { errorMessage: "statement 2 failed" });
+      } finally {
+        await release();
+      }
+      const { text, exitCode } = await running;
       expect(exitCode).toBe(1);
       expect(text).toContain(`(${PARTIALLY_APPLIED})`);
-      expect(await columns()).toEqual(before);
+      expect((await columns()).author?.nullable).toBe(true);
+    });
+
+    it("refuses an older checkout in a terminal before it waits for the lock", async () => {
+      notCheckedOut("0002_second");
+      const release = await schemaLockHeld("nextly migrate");
+      try {
+        const { text, exitCode } = await printed({
+          apply: true,
+          terminal: true,
+        });
+        expect(exitCode).toBe(1);
+        expect(text).toContain("(MIGRATION_MISSING)");
+      } finally {
+        await release();
+      }
+    });
+
+    describe("a dry run whose migration ends between its reads", () => {
+      const open = () =>
+        new NextlyError({
+          code: PARTIALLY_APPLIED,
+          publicMessage: "an unresolved attempt",
+          logContext: { reason: "partially-applied" },
+        });
+      const dryRun = (entities: () => Promise<RepairEntity[]>) =>
+        dryRunReport({
+          adapter: handle.adapter as unknown as DrizzleAdapter,
+          dialect,
+          nextlyVersion: "0.0.0",
+          entities,
+        });
+
+      it("reads again, and reports what the migration left", async () => {
+        let reads = 0;
+        const document = await dryRun(() => {
+          reads += 1;
+          return reads === 1 ? Promise.reject(open()) : Promise.resolve([]);
+        });
+        expect(reads).toBe(2);
+        expect(document.result).not.toBeNull();
+      });
+
+      it("stops on the attempt where nothing holds the lock and it is still open", async () => {
+        let reads = 0;
+        await expect(
+          dryRun(() => {
+            reads += 1;
+            return Promise.reject(open());
+          })
+        ).rejects.toMatchObject({ code: PARTIALLY_APPLIED });
+        expect(reads).toBe(2);
+      });
+
+      it("names the holder where another run takes the lock before the second read", async () => {
+        let reads = 0;
+        let release: (() => Promise<void>) | undefined;
+        try {
+          await expect(
+            dryRun(async () => {
+              reads += 1;
+              if (reads === 2) {
+                release = await schemaLockHeld("nextly migrate");
+              }
+              throw open();
+            })
+          ).rejects.toMatchObject({ code: LOCK_BUSY });
+        } finally {
+          await release?.();
+        }
+      });
+
+      it("stops at once on any other error", async () => {
+        let reads = 0;
+        await expect(
+          dryRun(() => {
+            reads += 1;
+            return Promise.reject(new Error("unreachable"));
+          })
+        ).rejects.toThrow("unreachable");
+        expect(reads).toBe(1);
+      });
     });
 
     it("goes on once the migration is recorded applied, and leaves what it made", async () => {
