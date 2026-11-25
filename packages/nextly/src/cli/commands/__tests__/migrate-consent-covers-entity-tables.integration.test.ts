@@ -233,6 +233,17 @@ describe.each(LOCK_DIALECTS)(
         origin: "machine",
         writtenAt: now,
       });
+      await adapter.insert("nextly_translation_sources", {
+        id: randomUUID(),
+        scopeKind: kind,
+        scopeSlug: slug,
+        entryId: "e1",
+        sourceLocale: "en",
+        fieldPath: "title",
+        fingerprint: "f",
+        content: { value: "a" },
+        recordedAt: now,
+      });
       await adapter.insert("permissions", {
         id: randomUUID(),
         name: `Read ${slug}`,
@@ -550,6 +561,9 @@ describe.each(LOCK_DIALECTS)(
       );
       expect(listing).toContain(
         `rows of collection "posts" in nextly_translation_provenance (1 row): the record of where its translations came from`
+      );
+      expect(listing).toContain(
+        `rows of collection "posts" in nextly_translation_sources (1 row): the source text its translations were made from`
       );
       expect(listing).not.toContain(`"pages"`);
     }, 180_000);
