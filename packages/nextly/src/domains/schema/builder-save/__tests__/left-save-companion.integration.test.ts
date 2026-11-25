@@ -1,11 +1,17 @@
 /**
- * A Builder save that drops a translatable field, killed on MySQL after its own migration file ran and
- * before its translations table is brought in step (`helpers/left-save-fixture.ts`). The registry row
- * no longer names the field, the file is recorded applied, and the column and its values are still
- * there. Nothing a save settles may say it applied whole: the save stays left part-way and named, the
- * migration commands and the next save of the entity refuse, saying so, and the values a person
- * confirmed the loss of are never read back.
+ * A Builder save that drops what a translations table holds, killed after its own migration file ran
+ * and before that table is brought in step (`helpers/left-save-fixture.ts`). The registry row no longer
+ * names the field, the file is recorded applied, and the column and its values are still there. Nothing
+ * that settles such a save may say it applied whole: it stays left part-way and named, the migration
+ * commands and the next save of the entity refuse, saying so, and the values a person confirmed the
+ * loss of are never read back. A save that had nothing of that table left to drop applied whole, and is
+ * settled so: one that finished, one that only adds, one whose own file moved a field out of
+ * translation, one a later migration of the entity moved past.
+ *
+ * The column is a translatable field's, or the one a repeater or group keeps its text per language in,
+ * which the snapshots record apart from the fields'.
  */
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
@@ -17,6 +23,8 @@ import { runBootTimeApplyIfDev } from "../../../../init/boot-apply";
 import type { TestNextly } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 import { createLogger } from "../../../../cli/utils/logger";
+import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { recordAlreadyApplied } from "../../migrate/drift-reconcile";
 import {
   basePath,
   killedAt,
@@ -83,7 +91,7 @@ vi.mock("../../../../cli/utils/config-loader", async original => {
 leftSaveHooks();
 
 describe.each(LEFT_SAVE_SUITES)(
-  "a Builder save that drops a translatable field, killed before its translations table is in step ($dialect, $layout)",
+  "a Builder save that drops what a translations table holds, killed before that table is in step ($dialect, $layout)",
   ({ dialect, perLanguage }) => {
     const {
       slug,
@@ -94,14 +102,42 @@ describe.each(LEFT_SAVE_SUITES)(
       versionOf,
       killSave,
       settle,
+      rows,
       fromAnotherProcess,
     } = leftSaveSuite({ dialect, perLanguage });
 
-    /** What the drop of `heading` sends to be confirmed, with the one value it takes. */
-    const confirmed = {
-      resolutions: { heading: { action: "confirm_drop" } },
-      confirmedDeletions: [{ field: "heading", count: 1 }],
+    /** What a save drops: its field, the value written to it, and the column it is kept in. */
+    interface Taken {
+      name: string;
+      column: string;
+      field: Field;
+      data: Record<string, unknown>;
+    }
+    const HEADING: Taken = {
+      name: "a translatable field",
+      column: "heading",
+      field: text("heading"),
+      data: { heading: "OLD VALUE" },
     };
+    const BOX: Taken = {
+      name: "a group holding text",
+      column: "box",
+      field: { name: "box", type: "group", fields: [text("label")] },
+      data: { box: { label: "OLD VALUE" } },
+    };
+    // A container's column is reached on the entities not marked translated, which the save's
+    // own comparison of the translations table asks nothing of.
+    const TAKEN = perLanguage ? [HEADING, BOX] : [HEADING];
+
+    /** What the drop of `taken` sends to be confirmed, with the one value it takes. */
+    const confirmed = (taken: Taken) => ({
+      resolutions: { [taken.column]: { action: "confirm_drop" } },
+      confirmedDeletions: [{ field: taken.column, count: 1 }],
+    });
+
+    /** The fields each entity keeps beside the one dropped. */
+    const kept = (taken: Taken): Field[] =>
+      taken === BOX ? [text("heading"), field("note")] : [field("note")];
 
     /** The entity the drop is made on, and how it is made. */
     interface Dropped {
@@ -156,8 +192,8 @@ describe.each(LEFT_SAVE_SUITES)(
       },
     ];
 
-    /** The site, the entity with `heading` translatable and its one value written. */
-    async function setUp(entity: Dropped): Promise<TestNextly> {
+    /** The site, and the entity with `taken`'s field and its one value written. */
+    async function setUp(entity: Dropped, taken: Taken): Promise<TestNextly> {
       const t = await boot(
         perLanguage ? { translatable: true } : { languages: true }
       );
@@ -169,68 +205,92 @@ describe.each(LEFT_SAVE_SUITES)(
             slug: hero,
             label: hero,
             ...translated,
-            fields: [text("heading"), field("note")],
+            fields: [...kept(taken), taken.field],
           }
         );
         await t.nextly.updateSingle({
           slug: hero,
-          data: { heading: "OLD VALUE", note: "n", _overwrite: true },
+          data: { ...taken.data, note: "n", _overwrite: true },
         } as never);
         return t;
       }
+      if (taken === BOX) await entity.save(t, [...kept(taken), taken.field]);
       const [first] = (await t.adapter.executeQuery(
         `SELECT id FROM ${table} WHERE slug = 'first'`
       )) as unknown as Array<{ id: unknown }>;
       await t.nextly.update({
         collection: slug,
         id: String(first?.id),
-        data: { heading: "OLD VALUE", _overwrite: true },
+        data: { ...taken.data, _overwrite: true },
       } as never);
       return t;
     }
 
-    /** The drop of `heading`, killed once its file ran and before its translations column is dropped. */
-    async function killDrop(t: TestNextly, entity: Dropped): Promise<void> {
+    /** The drop of `taken`, killed once its file ran: before its translations column is dropped, or after. */
+    async function killDrop(
+      t: TestNextly,
+      entity: Dropped,
+      taken: Taken,
+      at: "companion: before" | "companion: after" = "companion: before"
+    ): Promise<void> {
       await killSave(
         t,
-        point => point === "companion: before",
-        () => entity.save(t, [field("note")], confirmed)
+        point => point === at,
+        () => entity.save(t, kept(taken), confirmed(taken))
       );
-      // The column, and the value in it, are still there; the row no longer names the field.
-      expect(await storedHeading(t, entity), `killed at ${killedAt}`).toContain(
-        "OLD VALUE"
-      );
-      expect(await namesHeading(t, entity)).toBe(false);
+      // Before: the column, and the value in it, are still there. The row names the field no more.
+      const stored = await storedIn(t, entity, taken.column);
+      if (at === "companion: before") {
+        expect(stored, `killed at ${killedAt}`).toContain("OLD VALUE");
+      } else {
+        expect(stored, `killed at ${killedAt}`).toBe("no such column");
+      }
+      expect(await namesField(t, entity, taken.column)).toBe(false);
     }
 
-    /** What the entity's translations table holds under `heading`. */
-    async function storedHeading(
+    /** What the entity's translations table holds under `column`. */
+    async function storedIn(
       t: TestNextly,
-      entity: Dropped
+      entity: Dropped,
+      column: string
     ): Promise<string> {
-      const rows = await t.adapter
-        .executeQuery(`SELECT heading FROM ${entity.table}_locales`)
-        .catch(() => []);
-      return JSON.stringify(rows);
+      const held = (await t.adapter.executeQuery(
+        `SELECT * FROM ${entity.table}_locales`
+      )) as unknown as Array<Record<string, unknown>>;
+      expect(held.length, "rows per language").toBeGreaterThan(0);
+      return held.some(row => column in row)
+        ? JSON.stringify(held.map(row => row[column]))
+        : "no such column";
     }
 
-    /** Whether the entity's registry row names `heading`. */
-    async function namesHeading(
+    /** Whether the entity's registry row names `name`. */
+    async function namesField(
       t: TestNextly,
-      entity: Dropped
+      entity: Dropped,
+      name: string
     ): Promise<boolean> {
       const [row] = (await t.adapter.executeQuery(
         `SELECT fields FROM ${entity.registry} WHERE slug = '${entity.slug}'`
       )) as unknown as Array<{ fields: unknown }>;
-      return JSON.stringify(row?.fields).includes("heading");
+      const fields =
+        typeof row?.fields === "string"
+          ? (JSON.parse(row.fields) as Field[])
+          : (row?.fields as Field[]);
+      return fields.some(each => each.name === name);
     }
+
+    /** Each entity with each thing a save drops of it, by name. */
+    const drops = entities.flatMap(entity =>
+      TAKEN.map(taken => [entity.kind, taken.name, entity, taken] as const)
+    );
 
     /** Whether the save's record still stands. */
     async function recordStands(t: TestNextly): Promise<boolean> {
-      const rows = (await t.adapter.executeQuery(
-        "SELECT `key` FROM nextly_meta WHERE `key` LIKE 'builder-save-in-progress:%'"
+      const key = dialect === "mysql" ? "`key`" : '"key"';
+      const records = (await t.adapter.executeQuery(
+        `SELECT ${key} FROM nextly_meta WHERE ${key} LIKE 'builder-save-in-progress:%'`
       )) as unknown as unknown[];
-      return rows.length > 0;
+      return records.length > 0;
     }
 
     /** A development start over the project, its migrate step running the folder's files. */
@@ -259,14 +319,17 @@ describe.each(LEFT_SAVE_SUITES)(
       }
     }
 
-    it.runIf(dialect === "mysql").each(entities.map(e => [e.kind, e] as const))(
-      "a %s's stays left part-way, named by the settle, a start, the commands and the next save",
-      async (_kind, entity) => {
-        const t = await setUp(entity);
-        await killDrop(t, entity);
+    it.each(drops)(
+      "a %s that drops %s stays left part-way, named by the settle, a start, the commands and the next save",
+      async (_kind, _name, entity, taken) => {
+        const t = await setUp(entity, taken);
+        await killDrop(t, entity, taken);
 
         const settled = await settle(t);
         expect.soft(settled.map(one => one.outcome)).toEqual(["left"]);
+        expect
+          .soft(settled.flatMap(one => one.notes ?? []).join("; "))
+          .toContain(`${entity.table}_locales.${taken.column}`);
         expect.soft(await recordStands(t), "after the settle").toBe(true);
         await start();
         expect.soft(await recordStands(t), "after a start").toBe(true);
@@ -290,7 +353,7 @@ describe.each(LEFT_SAVE_SUITES)(
 
         // The next save of the entity is refused saying the save was left, never as drift.
         const refused = await saidBy(
-          entity.save(t, [field("note"), field("extra")])
+          entity.save(t, [...kept(taken), field("extra")])
         );
         expect.soft(refused).toContain("left part-way");
         expect.soft(refused).not.toContain("schema drift");
@@ -299,17 +362,17 @@ describe.each(LEFT_SAVE_SUITES)(
     );
 
     // The field added again takes the column that was never dropped, with the values in it.
-    it.runIf(dialect === "mysql").each(entities.map(e => [e.kind, e] as const))(
-      "a %s's never reads back the values confirmed as deleted, once the field is added again",
-      async (kind, entity) => {
-        const t = await setUp(entity);
-        await killDrop(t, entity);
+    it.each(drops)(
+      "a %s that drops %s never reads back the values confirmed as deleted, once it is added again",
+      async (kind, _name, entity, taken) => {
+        const t = await setUp(entity, taken);
+        await killDrop(t, entity, taken);
         await settle(t);
         await start();
 
-        await saidBy(entity.save(t, [field("note"), field("extra")]));
+        await saidBy(entity.save(t, [...kept(taken), field("extra")]));
         await saidBy(
-          entity.save(t, [text("heading"), field("note"), field("extra")])
+          entity.save(t, [...kept(taken), taken.field, field("extra")])
         );
 
         const reads =
@@ -331,13 +394,32 @@ describe.each(LEFT_SAVE_SUITES)(
       300_000
     );
 
-    // Where the field leaves translation, its column in the translations table is the one left. On
-    // per-language storage the Builder refuses that save before its file.
-    it.runIf(dialect === "mysql" && !perLanguage)(
-      "a field that leaves translation stays left part-way, named by the settle",
+    // The column dropped by hand, as the note says to, the save applied whole.
+    it.each(drops)(
+      "a %s that drops %s is settled whole once the column it left is dropped by hand",
+      async (_kind, _name, entity, taken) => {
+        const t = await setUp(entity, taken);
+        await killDrop(t, entity, taken);
+        expect((await settle(t)).map(one => one.outcome)).toEqual(["left"]);
+
+        await t.adapter.executeQuery(
+          `ALTER TABLE ${entity.table}_locales DROP COLUMN ${taken.column}`
+        );
+
+        expect((await settle(t)).map(one => one.outcome)).toEqual(["all"]);
+        expect(await recordStands(t)).toBe(false);
+      },
+      300_000
+    );
+
+    // A field that leaves translation is moved by a file of the save's own, its column dropped there:
+    // nothing of the translations table is left for the step. On per-language storage the Builder
+    // refuses that save before its file.
+    it.runIf(!perLanguage)(
+      "a field that leaves translation is settled whole, its own file having moved its values",
       async () => {
         const entity = entities[0]!;
-        const t = await setUp(entity);
+        const t = await setUp(entity, HEADING);
         await killSave(
           t,
           point => point === "companion: before",
@@ -347,10 +429,86 @@ describe.each(LEFT_SAVE_SUITES)(
               text("note"),
             ])
         );
+        expect(await storedIn(t, entity, "heading")).toBe("no such column");
+        expect(await rows(t)).toEqual([
+          expect.stringContaining('"heading":"OLD VALUE"'),
+        ]);
 
-        const settled = await settle(t);
-        expect.soft(settled.map(one => one.outcome)).toEqual(["left"]);
-        expect.soft(await recordStands(t)).toBe(true);
+        expect((await settle(t)).map(one => one.outcome)).toEqual(["all"]);
+        expect(await recordStands(t)).toBe(false);
+      },
+      300_000
+    );
+
+    it.each(drops)(
+      "a %s that drops %s is settled whole where the save had brought the translations table in step",
+      async (_kind, _name, entity, taken) => {
+        const t = await setUp(entity, taken);
+        await killDrop(t, entity, taken, "companion: after");
+
+        expect((await settle(t)).map(one => one.outcome)).toEqual(["all"]);
+        expect(await recordStands(t)).toBe(false);
+      },
+      300_000
+    );
+
+    // A save that only adds has nothing of the translations table to drop: its own files made the
+    // columns, so it applied whole whether or not it was killed before that table's step.
+    it.each(
+      entities.flatMap(entity =>
+        (["companion: before", "companion: after"] as const).flatMap(at =>
+          (perLanguage
+            ? [text("added"), { ...BOX.field, name: "crate" }]
+            : [text("added")]
+          ).map(
+            added =>
+              [entity.kind, String(added.name), at, entity, added] as const
+          )
+        )
+      )
+    )(
+      "a %s that adds %s is settled whole, killed at %s",
+      async (_kind, _name, at, entity, added) => {
+        const t = await setUp(entity, HEADING);
+        await killSave(
+          t,
+          point => point === at,
+          () => entity.save(t, [text("heading"), field("note"), added])
+        );
+
+        expect((await settle(t)).map(one => one.outcome)).toEqual(["all"]);
+        expect(await recordStands(t)).toBe(false);
+      },
+      300_000
+    );
+
+    // A later migration of the entity applied since: the column is that migration's to speak of.
+    it.each(drops)(
+      "a %s that drops %s is settled whole where a later migration of it applied since",
+      async (kind, _name, entity, taken) => {
+        const t = await setUp(entity, taken);
+        await killDrop(t, entity, taken);
+        const later = "29991231_000000_000_later.sql";
+        writeFileSync(
+          join(basePath, MIGRATIONS, later),
+          [
+            `-- Migration: ${entity.slug}_later`,
+            `-- ${kind === "single" ? "Singles" : "Collections"}: ${entity.slug}`,
+            "-- Entity scope: touched",
+            "",
+            "-- UP",
+            "",
+            "-- DOWN",
+            "",
+          ].join("\n")
+        );
+        await recordAlreadyApplied(
+          { filename: later },
+          new SchemaEventsRepository(t.adapter.getDrizzle(), t.adapter.dialect)
+        );
+
+        expect((await settle(t)).map(one => one.outcome)).toEqual(["all"]);
+        expect(await recordStands(t)).toBe(false);
       },
       300_000
     );

@@ -87,6 +87,10 @@ import {
   removeStaleMarkers,
   type LeftSave,
 } from "./save-in-progress";
+import {
+  translationsLeftOver,
+  type LeftOverColumn,
+} from "./translations-left-over";
 
 /** How a left save was settled. */
 /**
@@ -508,10 +512,50 @@ async function settledOutcome(
     return settleStopOrLeave(deps, repo, record, files, notes, kept);
   }
   if (judged === "none") return settleNone(deps, repo, record, files, notes);
+  const over =
+    judged === "all" ? await leftOnTranslations(deps, repo, record, files) : [];
+  if (over.length > 0) return leaveOver(deps, record, over, notes);
   // "all" or "pending": the saved definition stands, which its files are written from.
   notes.push(...(await keepSavedDefinition(deps, record)));
   if (judged === "pending") return settlePending(deps, record);
   return settleAll(deps, repo, record, files, notes, kept);
+}
+
+/**
+ * What a save whose files all applied left on its translations table (`translationsLeftOver`): none
+ * where a later migration of the entity has applied since, whose columns they may be.
+ */
+async function leftOnTranslations(
+  deps: SettleDeps,
+  repo: SchemaEventsRepository,
+  record: LeftSave,
+  files: readonly string[]
+): Promise<LeftOverColumn[]> {
+  const target = await newestSnapshotOf(deps, files);
+  if (target === undefined) return [];
+  const over = await translationsLeftOver(
+    deps.adapter,
+    await snapshotNamed(deps, record.startedFrom ?? null),
+    target,
+    record.renamed ?? []
+  );
+  if (over.length === 0) return [];
+  return (await movedPast(deps, repo, record, files)) ? [] : over;
+}
+
+/** Leaves a save over what it left on its translations table, its record kept and each column named. */
+function leaveOver(
+  deps: SettleDeps,
+  record: LeftSave,
+  over: readonly LeftOverColumn[],
+  notes: string[]
+): "left" {
+  const named = over.map(each => `${each.column} holds ${each.holds}`);
+  deps.logger.warn(
+    `A Builder save of the ${described(record)} applied its migration files and stopped before its translations table was brought in step: ${named.join("; ")}. It is not settled; its record stays. Once no such column is left, the next development start settles it.`
+  );
+  notes.push(...named);
+  return "left";
 }
 
 /**
