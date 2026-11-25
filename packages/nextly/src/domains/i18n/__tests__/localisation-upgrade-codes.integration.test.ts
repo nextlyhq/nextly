@@ -519,6 +519,71 @@ describeEachDialect(
       }
     );
 
+    // MySQL compares codes by each column's collation. One that keeps letter case apart
+    // (`utf8mb4_bin`) holds `pt_BR` and `PT_br` as two spellings, so the same document under both
+    // stops the conversion, naming both, as on PostgreSQL. Broken (the dialect taken to fold case
+    // everywhere), the two are taken for one and the conversion goes ahead.
+    it.runIf(dialect === "mysql")(
+      "stops where two cases of one older spelling hold the same document, on a MySQL column that keeps case apart",
+      async () => {
+        await legacyArticle();
+        const adapter = database!.adapter;
+        const [described] = await adapter.queryStatement<{ type: string }>(
+          sql`SELECT COLUMN_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${"dc_articles_locales"} AND COLUMN_NAME = ${"_locale"}`
+        );
+        await runStatement(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          sql.raw(
+            `ALTER TABLE \`dc_articles_locales\` MODIFY \`_locale\` ${described!.type} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL`
+          )
+        );
+        await translationAlsoUnder("PT_br");
+
+        await expect(migrateData(adapter as never, STANDARD)).rejects.toThrow(
+          /pt_BR[\s\S]*PT_br|PT_br[\s\S]*pt_BR/
+        );
+
+        expect(await storedLanguages()).toEqual(["PT_br", "en", "pt_BR"]);
+      }
+    );
+
+    // Collation is judged column by column. A binary `_locale` holding `PT_br` beside a
+    // case-insensitive version history holding `pt_BR` makes two older spellings, but in the
+    // history the two are one stored code, so one row there matches both and is no document kept
+    // under both. Each spelling converts. Broken (one rule for every column), that row is taken
+    // for a pair and the conversion is refused.
+    it.runIf(dialect === "mysql")(
+      "converts two cases of one older spelling kept in columns of different collations",
+      async () => {
+        await legacyArticle();
+        const adapter = database!.adapter;
+        const [described] = await adapter.queryStatement<{ type: string }>(
+          sql`SELECT COLUMN_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${"dc_articles_locales"} AND COLUMN_NAME = ${"_locale"}`
+        );
+        await runStatement(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          sql.raw(
+            `ALTER TABLE \`dc_articles_locales\` MODIFY \`_locale\` ${described!.type} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL`
+          )
+        );
+        await runStatement(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          sql`UPDATE ${sql.identifier("dc_articles_locales")} SET ${sql.identifier("_locale")} = ${"PT_br"} WHERE ${sql.identifier("_locale")} = ${"pt_BR"}`
+        );
+        const [history] = await adapter.queryStatement<{ held: number }>(
+          sql`SELECT COUNT(*) AS ${sql.identifier("held")} FROM ${sql.identifier(VERSIONS_TABLE)} WHERE ${sql.identifier("locale")} = ${"pt_BR"}`
+        );
+        expect(Number(history?.held)).toBeGreaterThan(0);
+
+        await migrateData(adapter as never, STANDARD);
+
+        expect(await storedLanguages()).toEqual(["en", "pt-BR"]);
+      }
+    );
+
     /** A copy of the article's `pt_BR` translation row under `locale`: one language kept twice. */
     async function translationAlsoUnder(locale: string): Promise<void> {
       const table = sql.identifier("dc_articles_locales");

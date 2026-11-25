@@ -137,6 +137,9 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_LEGACY_BOOKKEEPING_DETECTED: 409,
   NEXTLY_UPGRADE_TABLE_NAME_COLLISION: 409,
   NEXTLY_UPGRADE_IN_PROGRESS: 409,
+  // A column the upgrade moves to the translations table is held by something a drop of it would
+  // break or silently change: an index on more columns than it, or one on part of it.
+  NEXTLY_UPGRADE_COLUMN_HELD: 409,
   // Plan C2 — nextly migrate phases.
   NEXTLY_MIGRATE_LOCK_BUSY: 409,
   // A schema change waited for a table another database session holds, past

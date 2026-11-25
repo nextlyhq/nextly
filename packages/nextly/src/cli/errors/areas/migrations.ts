@@ -10,6 +10,7 @@ import {
   perLanguageMoveWhy,
   type PerLanguageMove,
 } from "../../../domains/i18n/per-language-move-guidance";
+import { builderMigrationRemedy } from "../../../domains/schema/migrate/builder-migration-remedy";
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
 import {
   dialectVariantOf,
@@ -31,7 +32,6 @@ import {
   WRITER_START_MOVED_REASON,
 } from "../../../domains/schema/migrate-create/writer-hold-reasons";
 import { NextlyError } from "../../../errors/nextly-error";
-import { builderMigrationRemedy } from "../../utils/builder-migration-remedy";
 import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
 import { asSentence, deepestMessage, sentences } from "../messages";

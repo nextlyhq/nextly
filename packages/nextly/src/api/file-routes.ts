@@ -39,7 +39,10 @@ import { ensureServicesInitialized } from "../route-handler";
 import { attachmentDisposition } from "../storage/private-files";
 
 import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
-import { SKIP_DATE_FORMATTING_HEADER, respondMutation } from "./response-shapes";
+import {
+  SKIP_DATE_FORMATTING_HEADER,
+  respondMutation,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
