@@ -135,6 +135,35 @@ const singleWith = (box: "translated" | "shared") =>
     ],
   });
 
+const BUILT = "orbuilt";
+
+/** A site whose one collection is the Schema Builder's, in its definition file (`builtWith`). */
+const builtProject = defineConfig({
+  localization: { locales: ["en", "es"], defaultLocale: "en" },
+  db: { migrationsDir: "./migrations" },
+  collections: [],
+});
+
+/** The Builder's definition file: a translated collection with a group declared as `box`. */
+const builtWith = (box: "translated" | "shared") =>
+  JSON.stringify({
+    collections: [
+      {
+        slug: BUILT,
+        localized: true,
+        fields: [
+          { name: "heading", type: "text", localized: true },
+          {
+            name: "box",
+            type: "group",
+            fields: [{ name: "label", type: "text" }],
+            ...(box === "shared" ? { localized: false } : {}),
+          },
+        ],
+      },
+    ],
+  });
+
 /** What these cases read and change of a snapshot file. */
 interface NewestSnapshot {
   entities?: Record<
@@ -162,6 +191,9 @@ const MAIN_COLUMN_ADDED = new RegExp(`\\+ add_column dc_${SLUG}\\.box `);
 
 /** What says a file beside the main migration is not recorded. */
 const NOT_RECORDED = "not recorded yet";
+
+/** What a notice says of what `nextly migrate` makes itself. */
+const MADE_BY_MIGRATE = "`nextly migrate` makes what is missing";
 
 /** What a notice of it must not send anyone to: the file seeds the default language's text again. */
 const CREATE_ADVICE = "`nextly migrate:create` writes and records";
@@ -565,6 +597,64 @@ export function overlayRecordCases(
           expect(started.warned).not.toContain(CREATE_ADVICE);
           await refusedByNone(project, true);
           await writtenAndApplied(project);
+        }, 120_000);
+      });
+
+      // `nextly migrate` makes the translations tables of what the configuration declares, and no
+      // other: the Schema Builder's own are made by its saves and by the migrations written of them.
+      describe("a Schema Builder collection an earlier release left", () => {
+        const LINE = `~ translations table dc_${BUILT}`;
+        const builtColumns = () => columnsOf(`dc_${BUILT}_locales`);
+        beforeEach(async () => {
+          const file = join(dir, "ui-schema.json");
+          await writeFile(file, builtWith("shared"));
+          await migrateTheProject(builtProject);
+          await withNewestSnapshot(snapshot => {
+            const box = snapshot.entities?.collections[
+              BUILT
+            ]?.settings.fields.find(field => field.name === "box");
+            expect(box?.localized).toBe(false);
+            delete box?.localized;
+          });
+          await writeFile(file, builtWith("translated"));
+          expect(await builtColumns()).not.toContain("box");
+        }, 120_000);
+
+        it("is refused by every surface, naming the overlay's file, which nextly migrate does not make", async () => {
+          const checked = await check(builtProject);
+          expect(checked.code, checked.said).toBe(1);
+          const ran = await migrate(builtProject);
+          expect(ran.code, ran.said).toBe(1);
+          const started = await startsCheck(builtProject);
+          for (const said of [checked.said, ran.said, started]) {
+            expect(said).toContain(LINE);
+            expect(said).not.toContain(NOT_RECORDED);
+          }
+          expect(await builtColumns()).not.toContain("box");
+        }, 120_000);
+
+        it("has the column added by migrate:create, and nothing left after", async () => {
+          const written = await create(builtProject);
+          expect(written.code, written.said).toBeUndefined();
+          const applied = await migrate(builtProject);
+          expect(applied.code, applied.said).toBeUndefined();
+          expect(await builtColumns()).toContain("box");
+          await refusedByNone(builtProject);
+        }, 120_000);
+
+        it("is refused by no surface where no settings are recorded, and the notice never says nextly migrate makes it", async () => {
+          await forgetTheSettings();
+          const checked = await check(builtProject);
+          expect(checked.code, checked.said).toBeUndefined();
+          const ran = await migrate(builtProject);
+          expect(ran.code, ran.said).toBeUndefined();
+          expect(await startsCheck(builtProject)).toBeUndefined();
+          for (const said of [checked.said, ran.said, warned.join("\n")]) {
+            expect(said).toContain(NOT_RECORDED);
+            expect(said).toContain(LINE);
+            expect(said).not.toContain(MADE_BY_MIGRATE);
+          }
+          expect(await builtColumns()).not.toContain("box");
         }, 120_000);
       });
 
