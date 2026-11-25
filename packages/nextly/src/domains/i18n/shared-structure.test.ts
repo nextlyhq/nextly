@@ -453,6 +453,41 @@ describe("rows keyed by an id their repeater declares", () => {
     ]);
   });
 
+  // A declared text `id` is the row's key, never its text: taken for text, it leaves the structure
+  // for the overlay, so the structure's rows hold no id, no overlay entry is found for them, and
+  // every text of those rows, the id among them, reads as none.
+  it("keeps a declared text id on the structure, the row's text keyed by it", () => {
+    const TEXT_LINES = {
+      name: "lines",
+      type: "repeater",
+      fields: [
+        { name: "id", type: "text" },
+        { name: "label", type: "text" },
+      ],
+    };
+    const textShape = sharedStructureShape(TEXT_LINES)!;
+    expect(textShape.texts).toEqual(["label"]);
+    const { structure, overlay } = splitSharedStructure(
+      [
+        { id: "a", label: "first" },
+        { id: "b", label: "second" },
+      ],
+      textShape
+    );
+    expect(structure).toEqual([{ id: "a" }, { id: "b" }]);
+    expect(overlay).toEqual({ a: { label: "first" }, b: { label: "second" } });
+    expect(
+      assembleSharedStructure(
+        structure,
+        [{ a: { label: "primero" } }, overlay],
+        textShape
+      )
+    ).toEqual([
+      { id: "a", label: "primero" },
+      { id: "b", label: "second" },
+    ]);
+  });
+
   // Two rows under one id would share one overlay entry, one row's text read on the other.
   it("keeps the text of a row repeating an earlier row's id on the structure", () => {
     const { structure, overlay } = splitSharedStructure(
