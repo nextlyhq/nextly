@@ -15,6 +15,9 @@ import {
 } from "../../../../config";
 
 export const LIVE_COLLECTION = "fglive_posts";
+export const LIVE_RULED = "fglive_ruled";
+/** The user whose writes the ruled collection judges. */
+export const LIVE_WRITER = "fglive-writer";
 export const LIVE_SINGLE = "fglive_home";
 export const LIVE_GROUP = "fglive_card";
 /** The legacy table the group's rows live in before the migration. */
@@ -45,6 +48,20 @@ export const livePosts = defineCollection({
   ],
 });
 
+/** A collection whose update rule is a filter on the group: only an entry that holds `Kept`. */
+export const liveRuled = defineCollection({
+  slug: LIVE_RULED,
+  access: {
+    read: () => true,
+    update: () =>
+      ({ "card.heading": { equals: "Kept" } }) as unknown as boolean,
+  },
+  fields: [
+    text({ name: "title" }),
+    fieldGroup({ name: "card", component: LIVE_GROUP }),
+  ],
+});
+
 /** A Single holding the same group: it reads the groups it holds on its transaction to save. */
 export const liveHome = defineSingle({
   slug: LIVE_SINGLE,
@@ -56,7 +73,7 @@ export const liveHome = defineSingle({
 });
 
 export const LIVE_DECLARED = {
-  collections: [livePosts],
+  collections: [livePosts, liveRuled],
   singles: [liveHome],
   fieldGroups: [liveCard],
 };

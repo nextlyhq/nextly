@@ -39,6 +39,10 @@ vi.mock("../../../cli/utils/config-loader", async importOriginal => ({
   }),
 }));
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { withStopPoints } from "../../schema/migrate/stop-points";
 import {
   startScript,
@@ -51,7 +55,9 @@ import {
   LIVE_COLLECTION,
   LIVE_DECLARED,
   LIVE_LOCALIZATION,
+  LIVE_RULED,
   LIVE_SINGLE,
+  LIVE_WRITER,
 } from "./helpers/live-site-entities";
 import {
   legacyObjects,
@@ -327,6 +333,43 @@ describe.each(getConfiguredTestDialects())(
         });
         expect(await listed()).toMatchObject(kept);
         expect(await listed()).toHaveLength(1);
+      }, 300_000);
+
+      it("is a write a rule judges by a filter on the group, saves it on the retry it is told to make", async () => {
+        let id = "";
+        await openMigratedUnder({
+          before: async () => {
+            // The user and the entry are made beside the server, then the same write made before
+            // the migration: the control, and what leaves the server holding what it resolved.
+            const suite = site!.current!;
+            await userWhoMay(suite, LIVE_WRITER, "read", [LIVE_RULED]);
+            await grantTo(suite, LIVE_WRITER, "update", [LIVE_RULED]);
+            const made = await suite.nextly.create({
+              collection: LIVE_RULED as never,
+              data: {
+                title: "R",
+                card: { heading: "Kept", tagline: "Kept" },
+              } as never,
+            });
+            id = (made.item as { id: string }).id;
+            expect(await ask(server!, `save-ruled ${id} before`)).toBe("OK");
+            // Not matched by the rule, so refused: the rule is what decides.
+            const other = await suite.nextly.create({
+              collection: LIVE_RULED as never,
+              data: {
+                title: "O",
+                card: { heading: "Other", tagline: "Other" },
+              } as never,
+            });
+            expect(
+              await ask(
+                server!,
+                `save-ruled ${(other.item as { id: string }).id} refused`
+              )
+            ).not.toBe("OK");
+          },
+        });
+        await untilDone(`save-ruled ${id} after`);
       }, 300_000);
 
       it("is a list filtered as before it, sees the moved table's name without any other request", async () => {

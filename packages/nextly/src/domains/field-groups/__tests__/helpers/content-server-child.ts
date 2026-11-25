@@ -13,6 +13,7 @@
  *   the group's translated tagline too.
  * - `<id> list [<field> <value>]` answers `OK <json>`: the group of each entry, or of those whose
  *   group holds that value.
+ * - `<id> save-ruled <entryId> <title>` saves an entry whose rule filters on the group.
  * - `<id> duplicate <entryId>` answers `OK <new entryId>`.
  * - `<id> plugin-save <entryId> <heading>` and `plugin-tx-save` save through a plugin's context;
  *   `plugin-tx-save-unwarmed` does so without warming the collection's readiness first.
@@ -45,8 +46,14 @@ const { setPerLanguageStorage } = await import(
 );
 setPerLanguageStorage(layout === "on");
 const { createTestNextly } = await import("../../../../plugins/test-nextly");
-const { LIVE_COLLECTION, LIVE_DECLARED, LIVE_LOCALIZATION, LIVE_SINGLE } =
-  await import("./live-site-entities");
+const {
+  LIVE_COLLECTION,
+  LIVE_DECLARED,
+  LIVE_LOCALIZATION,
+  LIVE_RULED,
+  LIVE_SINGLE,
+  LIVE_WRITER,
+} = await import("./live-site-entities");
 
 const { definePlugin } = await import("../../../../plugins/plugin-context");
 
@@ -187,6 +194,17 @@ const COMMANDS: Record<string, (args: string[]) => Promise<string>> = {
     return `OK ${JSON.stringify(
       found.items.map(item => (item as { card?: unknown }).card ?? null)
     )}`;
+  },
+  // A write its collection's rule judges by a filter on the group, as the user who may make it.
+  "save-ruled": async ([id, title]) => {
+    await instance.nextly.update({
+      collection: LIVE_RULED as never,
+      id: id!,
+      data: { title, _overwrite: true } as never,
+      overrideAccess: false,
+      user: { id: LIVE_WRITER },
+    });
+    return "OK";
   },
   duplicate: async ([id]) => {
     const copied = await instance.nextly.duplicate({
