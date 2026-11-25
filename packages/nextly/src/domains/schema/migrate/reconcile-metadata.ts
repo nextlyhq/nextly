@@ -63,6 +63,7 @@ import {
   holdsUnresolvedArchiveRowsOf,
   labelLegacyArchiveRows,
 } from "../../i18n/migration/label-legacy-archive-rows";
+import { removeUntranslatedFieldSources } from "../../i18n/provenance/removed-field-sources";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type {
@@ -486,6 +487,7 @@ export async function reconcileMigrationMetadata(
   // The registry write has committed (`stop-points.ts`).
   await reachStopPoint("registry written");
   const leftovers = await leftoversOfDroppedEntities(deps);
+  await removeSourcesOfRemovedFields(deps);
   return {
     ...swept.result,
     leftoversRemoved: leftovers.removed,
@@ -664,6 +666,29 @@ async function leftoversOfDroppedEntities(
       }. The next \`nextly migrate\` tries again.`
     );
     return { removed: [], left: ["deleted entities"] };
+  }
+}
+
+/**
+ * Removes the source text kept for fields the applied migrations removed or
+ * stopped translating (`removeUntranslatedFieldSources`), once the registry
+ * write above has committed what the fields are now. Not inside a registry
+ * write a caller holds open, whose rows are not there to read yet. A failure
+ * costs only this removal, which the next run tries again.
+ */
+async function removeSourcesOfRemovedFields(
+  deps: ReconcileMetadataDeps
+): Promise<void> {
+  if (registryWriteOpen()) return;
+  try {
+    await removeUntranslatedFieldSources(deps.adapter);
+  } catch (error) {
+    if (endsTheRun(error)) throw error;
+    deps.logger.warn(
+      `Could not remove the source text kept for removed fields: ${
+        error instanceof Error ? error.message : String(error)
+      }. The next \`nextly migrate\` tries again.`
+    );
   }
 }
 

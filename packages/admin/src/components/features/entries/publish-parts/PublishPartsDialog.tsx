@@ -36,6 +36,7 @@ import {
   Label,
 } from "@admin/components/ui";
 import {
+  useDescribePartsAgain,
   usePublishParts,
   usePublishPartsDescription,
   type PartsRequest,
@@ -427,6 +428,8 @@ function usePartsMove({
   confirm: (withoutReview?: string) => Promise<void>;
   pending: boolean;
   error: Error | null;
+  /** The last refusal no longer holds the parts it was of. */
+  forgetRefusal: () => void;
 } {
   const move = usePublishParts({ target, direction, shown });
   const [refusedChoice, setRefusedChoice] = useState<PartsChoice | null>(null);
@@ -469,6 +472,7 @@ function usePartsMove({
     confirm,
     pending: move.isPending,
     error: ofThisChoice ? move.error : null,
+    forgetRefusal: () => setRefusedChoice(null),
   };
 }
 
@@ -544,6 +548,7 @@ export function PublishPartsDialog(
   });
   const { request } = parts;
   const { rows, facts } = useDrawnParts({ ...props, choice, parts });
+  const describeAgain = useDescribePartsAgain(props.target);
   const move = usePartsMove({
     ...props,
     choice,
@@ -618,7 +623,15 @@ export function PublishPartsDialog(
         <Facts facts={facts} />
 
         {review === undefined ? null : (
-          <ReadyToPublish document={review.document} problems={problems} />
+          <ReadyToPublish
+            document={review.document}
+            problems={problems}
+            onStepTaken={() => {
+              // What the parts were refused for may be settled now: asked of the server again.
+              move.forgetRefusal();
+              describeAgain();
+            }}
+          />
         )}
         {reason === null ? null : (
           <WithoutReviewReason

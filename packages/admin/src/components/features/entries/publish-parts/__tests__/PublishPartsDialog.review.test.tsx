@@ -139,8 +139,8 @@ function review(
   };
 }
 
-function open(withReview?: PublishReview) {
-  return render(
+function dialog(withReview?: PublishReview) {
+  return (
     <PublishPartsDialog
       open
       onOpenChange={() => undefined}
@@ -153,6 +153,8 @@ function open(withReview?: PublishReview) {
     />
   );
 }
+
+const open = (withReview?: PublishReview) => render(dialog(withReview));
 
 /** The moves sent, describes left out. */
 const moves = () =>
@@ -214,6 +216,60 @@ describe("Ready to publish?", () => {
         seen: [{ part: "es", revision: 3, version: "v3" }],
       })
     );
+  });
+
+  it("asks what the parts do again once a step listed there is taken, so an approved part can be published", async () => {
+    const user = userEvent.setup();
+    const unapproved = refusal([
+      { path: "es", code: "NOT_APPROVED", message: "Not approved." },
+    ]);
+    api.publishParts.mockImplementation(
+      (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
+        choice.locales !== "all" && api.takeStep.mock.calls.length === 0
+          ? Promise.reject(unapproved)
+          : Promise.resolve(describing(choice))
+    );
+    const drawn = open(review([part({}), APPROVED_SHARED]));
+    await screen.findByText("Not approved.");
+    const publish = screen.getByRole("button", { name: "Publish selected" });
+    expect(publish).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Submit for review" }));
+    await waitFor(() => expect(api.takeStep).toHaveBeenCalledTimes(1));
+    // The review state, read again by the page, approves the part.
+    drawn.rerender(
+      dialog(
+        review([
+          part({
+            stage: "approved",
+            stageLabel: "Approved",
+            publishable: true,
+            steps: [],
+          }),
+          APPROVED_SHARED,
+        ])
+      )
+    );
+
+    await pressConfirm(publish);
+    await waitFor(() =>
+      expect(moves().map(move => move.locales)).toEqual([["es"]])
+    );
+  });
+
+  it("asks nothing again when the step is refused", async () => {
+    const user = userEvent.setup();
+    api.takeStep.mockRejectedValue(new Error("Not yours to take."));
+    open(review([part({}), APPROVED_SHARED]));
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
+    await waitFor(() => expect(screen.queryByText(CHECKING)).toBeNull());
+    const asked = api.publishParts.mock.calls.length;
+
+    await user.click(screen.getByRole("button", { name: "Submit for review" }));
+    await waitFor(() => expect(api.takeStep).toHaveBeenCalledTimes(1));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(api.publishParts.mock.calls).toHaveLength(asked);
   });
 
   it("asks the comment a fix's step requires before taking it, and sends it with the step", async () => {
