@@ -31,6 +31,7 @@ import {
   openPostgresBesidePool,
   poolCanSpareOne,
 } from "../busy-table/watch-connection";
+import { withSaveHoldAsked } from "../pipeline/save-hold-check";
 
 /** A save's hold, kept until `end`. */
 export interface SaveHoldScope {
@@ -40,6 +41,12 @@ export interface SaveHoldScope {
    * hold's wait (`COLLECTION_BEING_CHANGED`).
    */
   take(adapter: DrizzleAdapter, slug: string): Promise<void>;
+  /**
+   * Runs `work`, a part of the save that sends statements. Where the hold taken is on a connection of
+   * its own that the statements do not run on (MySQL), each is sent only while it is still kept
+   * (`assertSaveHoldKept`); elsewhere `work` runs as it is.
+   */
+  during<T>(work: () => Promise<T>): Promise<T>;
   /**
    * Lets the hold go, however the save ended. A release that fails is told and passed over: the
    * connection the hold was taken on is closed, which lets it go.
@@ -51,16 +58,17 @@ export interface SaveHoldScope {
 export function saveHoldScope(logger: {
   warn(message: string): void;
 }): SaveHoldScope {
-  let held: { slug: string; release: () => Promise<void> } | undefined;
+  let held: ({ slug: string } & TakenHold) | undefined;
   let taking: Promise<void> | undefined;
   return {
     async take(adapter, slug) {
       // Taken once: a second save step of the same scope (its count, then its push) finds it held.
-      taking ??= takeSaveHold(adapter, slug).then(release => {
-        held = { slug, release };
+      taking ??= takeSaveHold(adapter, slug).then(taken => {
+        held = { slug, ...taken };
       });
       await taking;
     },
+    during: work => withSaveHoldAsked(held?.kept, work),
     async end() {
       const ending = held;
       held = undefined;
@@ -85,11 +93,17 @@ async function busyTimeoutOf(adapter: DrizzleAdapter): Promise<number> {
   return Number(Object.values(row ?? {})[0] ?? 0);
 }
 
-/** Collection `slug`'s hold for a save through `adapter`, and what lets it go. */
+/** A hold taken: what lets it go, and where the save asks it again, whether it is still kept. */
+interface TakenHold {
+  release: () => Promise<void>;
+  kept?: () => Promise<boolean>;
+}
+
+/** Collection `slug`'s hold for a save through `adapter`. */
 async function takeSaveHold(
   adapter: DrizzleAdapter,
   slug: string
-): Promise<() => Promise<void>> {
+): Promise<TakenHold> {
   const dialect = adapter.getCapabilities().dialect;
   if (dialect === "sqlite") {
     const release = await holdEntityInProcess(
@@ -97,30 +111,34 @@ async function takeSaveHold(
       { kind: "collection", slug },
       { busyTimeoutMs: await busyTimeoutOf(adapter) }
     );
-    return () => Promise.resolve(release());
+    return { release: () => Promise.resolve(release()) };
   }
   const { session, close } =
     (await sessionBesidePool(adapter)) ?? (await sessionKeptOpen(adapter));
-  let release: () => Promise<void>;
+  let taken: TakenHold;
   try {
-    ({ release } =
+    taken =
       dialect === "mysql"
         ? await holdCollectionOnSession(adapter, session, slug)
         : await holdEntityOnPostgresSession(session, {
             kind: "collection",
             slug,
-          }));
+          });
   } catch (error) {
     await close().catch(() => undefined);
     throw error;
   }
   // Released on its connection, which then closes whatever the release did.
-  return async () => {
-    try {
-      await release();
-    } finally {
-      await close();
-    }
+  const { release, kept } = taken;
+  return {
+    release: async () => {
+      try {
+        await release();
+      } finally {
+        await close();
+      }
+    },
+    ...(kept === undefined ? {} : { kept }),
   };
 }
 

@@ -205,6 +205,7 @@ import type {
   Resolution,
 } from "./resolution/types";
 import { withRetainedSizesColumn } from "./retained-core-columns";
+import { assertSaveHoldKept, isSaveHoldLost } from "./save-hold-check";
 import { assertSchemaLockHeld, schemaLockConfirmedUntil } from "./schema-lock";
 import {
   refuseSeveralReferencesForOne,
@@ -1044,13 +1045,16 @@ export class PushSchemaPipeline {
       // stays: the tries that ended waiting, and what this try finished that has committed, none
       // of it where this try ran in one SQLite transaction that rolled back.
       if (oneByOne) {
-        keptSoFar = failure =>
-          sqliteTryWhole
+        keptSoFar = failure => {
+          // A save stopped before a statement for its lost hold never sent it.
+          const sent = inFlight && !isSaveHoldLost(failure);
+          return sqliteTryWhole
             ? keptBySqliteTry(failure, finishedEarlier, finishedThisTry.length)
-            : inFlight && !refusedByDatabase(failure)
+            : sent && !refusedByDatabase(failure)
               ? undefined
               : finishedEarlier +
-                committedOf(finishedThisTry, dialect, nextIsSchema);
+                committedOf(finishedThisTry, dialect, sent && nextIsSchema);
+        };
       }
       // What each MySQL or SQLite try planned, and what the tries that ended waiting planned in
       // all: a later try plans from the live database, where what an earlier one committed is no
@@ -1070,6 +1074,9 @@ export class PushSchemaPipeline {
             return;
           }
           for (const statement of statementsOneByOne(statements, dialect)) {
+            // A save that lost its hold starts no further statement; a key put back after a stop
+            // (`restoreLiftedKeys`) is not asked.
+            await assertSaveHoldKept();
             nextIsSchema = isSchemaStatement(statement);
             inFlight = true;
             await this.deps.executor.executeStatements(tx, [statement]);

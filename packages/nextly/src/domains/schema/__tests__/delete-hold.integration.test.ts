@@ -19,6 +19,7 @@
  * - a review that lists only the top-level fields shows no count for a field removed from a group
  *   with no name, and a save that compares the row's fields then refuses every such removal.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import {
   existsSync,
@@ -238,9 +239,38 @@ vi.mock("../schema-version", async importOriginal => {
   };
 });
 
+// A gate before the next statement a schema change sends, once `reached` says the case's moment has
+// come: where each statement, of the file, of the push and of the translations step, asks whether
+// the schema lock is still held, and before what else is asked there.
+const nextStatement = vi.hoisted(() => ({
+  armed: false,
+  reached: undefined as undefined | (() => Promise<boolean>),
+  paused: undefined as undefined | (() => void),
+  release: undefined as undefined | Promise<void>,
+  letGo: undefined as undefined | (() => void),
+}));
+vi.mock("../pipeline/schema-lock", async importOriginal => {
+  const real = await importOriginal<typeof import("../pipeline/schema-lock")>();
+  return {
+    ...real,
+    assertSchemaLockHeld: async () => {
+      await real.assertSchemaLockHeld();
+      if (!nextStatement.armed) return;
+      if ((await nextStatement.reached?.()) !== true) return;
+      nextStatement.armed = false;
+      nextStatement.paused?.();
+      await nextStatement.release;
+    },
+  };
+});
+
 // A switch that fails the step bringing a collection's translations table in step, after the save's
-// file has committed and before that step changes anything.
-const translationsStep = vi.hoisted(() => ({ fails: false, failed: false }));
+// file has committed and before that step changes anything; and whether the step has been reached.
+const translationsStep = vi.hoisted(() => ({
+  fails: false,
+  failed: false,
+  reached: false,
+}));
 vi.mock("../../i18n/migration/held-leaving-drops", async importOriginal => {
   const real =
     await importOriginal<
@@ -251,6 +281,7 @@ vi.mock("../../i18n/migration/held-leaving-drops", async importOriginal => {
     applyCompanionTransition: async (
       ...args: Parameters<typeof real.applyCompanionTransition>
     ) => {
+      translationsStep.reached = true;
       if (translationsStep.fails) {
         translationsStep.failed = true;
         throw new Error("the translations step was refused");
@@ -369,10 +400,14 @@ afterEach(async () => {
   registryWrite.armed = false;
   translationsStep.fails = false;
   translationsStep.failed = false;
+  translationsStep.reached = false;
+  nextStatement.armed = false;
+  nextStatement.reached = undefined;
   // A save a failed case left at a gate goes on, so its transaction ends before the app does.
   fileStart.letGo?.();
   afterCount.letGo?.();
   registryWrite.letGo?.();
+  nextStatement.letGo?.();
   vi.unstubAllEnvs();
   await instance?.destroy();
   instance = undefined;
@@ -483,6 +518,43 @@ function gated(gate: typeof fileStart) {
   gate.armed = true;
   gate.letGo = release;
   return { paused, release };
+}
+
+/**
+ * Ends the MySQL connection holding the collection's named locks, as a lost one ends: another
+ * connection kills it, and its locks go. Answers whether one held them.
+ */
+async function endHoldingConnection(
+  rows: <T>(text: string) => Promise<T[]>
+): Promise<boolean> {
+  const [database] = await rows<{ name: string }>("SELECT DATABASE() AS name");
+  const [name] = namedCollectionLockNames(String(database?.name), [SLUG]);
+  const holder = async () => {
+    const [row] = await rows<{ id: number | string | null }>(
+      `SELECT IS_USED_LOCK('${String(name)}') AS id`
+    );
+    return row?.id ?? null;
+  };
+  const id = await holder();
+  if (id === null) return false;
+  await rows(`KILL ${String(id)}`);
+  for (let tries = 0; tries < 50 && (await holder()) === id; tries += 1) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  return true;
+}
+
+/**
+ * How often this database's connections have asked whether a named lock is still their own: what a
+ * save asks before each statement where its hold is on a connection of its own.
+ */
+async function holdAsked(
+  rows: <T>(text: string) => Promise<T[]>
+): Promise<number> {
+  const [row] = await rows<{ n: number | string | null }>(
+    "SELECT SUM(COUNT_STAR) AS n FROM performance_schema.events_statements_summary_by_digest WHERE SCHEMA_NAME = DATABASE() AND DIGEST_TEXT LIKE '%IS_USED_LOCK%CONNECTION_ID%' AND DIGEST_TEXT NOT LIKE '%performance_schema%'"
+  );
+  return Number(row?.n ?? 0);
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -2486,6 +2558,151 @@ describe.each(getConfiguredTestDialects())(
       60_000
     );
 
+    // A push's statements run on other connections than the one holding the collection (MySQL). That
+    // one lost, entry writes go ahead, so no statement may follow: what it would drop was counted
+    // under a hold that is gone. Lost before the push's first statement, nothing is dropped; lost
+    // between two, the second does not run.
+    it.runIf(dialect === "mysql").each([
+      { lost: "before its first drop", gone: 0 },
+      { lost: "between its drops", gone: 1 },
+    ])(
+      "runs no statement of a push once the connection holding the collection is gone, $lost",
+      async ({ gone }) => {
+        const t = await boot([...NOTED, { name: "memo", type: "text" }]);
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        // `memo` holds the same values as `note`.
+        await sql(t, `UPDATE ${q(TABLE)} SET ${q("memo")} = ${q("note")}`);
+        const version = await schemaVersion(t);
+        pushRoad.forced = true;
+        const left = async () => {
+          const [row] = await sql<{ n: number | string }>(
+            t,
+            `SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${TABLE}' AND COLUMN_NAME IN ('note', 'memo')`
+          );
+          return Number(row?.n);
+        };
+        // Asked from outside the save's flow, which may hold a transaction.
+        const outside = AsyncLocalStorage.snapshot();
+        nextStatement.reached = () =>
+          outside(async () => (await left()) === 2 - gone);
+        const { paused, release } = gated(
+          gone === 0 ? afterCount : nextStatement
+        );
+        const saving = dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: SLUG },
+          {
+            fields: REMAINING,
+            confirmed: true,
+            schemaVersion: version,
+            resolutions: {
+              note: { action: "confirm_drop" },
+              memo: { action: "confirm_drop" },
+            },
+            confirmedDeletions: [
+              { field: "note", count: 3 },
+              { field: "memo", count: 3 },
+            ],
+          }
+        ).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+        let ended = false;
+        try {
+          const reached = await Promise.race([
+            paused.then(() => true),
+            saving.then(() => false),
+          ]);
+          expect(reached).toBe(true);
+          ended = await endHoldingConnection(text => sql(t, text));
+        } finally {
+          release();
+        }
+        const outcome = await saving;
+        expect(ended).toBe(true);
+        expect(outcome).not.toBe("applied");
+        expect(await left()).toBe(2 - gone);
+        const held = async (column: string) =>
+          sql<{ n: number | string }>(
+            t,
+            `SELECT COUNT(*) AS n FROM ${q(TABLE)} WHERE ${q(column)} IS NOT NULL`
+          ).then(
+            ([row]) => Number(row?.n),
+            () => -1
+          );
+        // What is left holds all three of its values.
+        expect(
+          [await held("note"), await held("memo")].filter(n => n === 3)
+        ).toHaveLength(2 - gone);
+      },
+      60_000
+    );
+
+    // Only a save whose hold is on a connection of its own asks about it: not one that deletes
+    // nothing, on either road, and not one whose file runs on the connection that holds.
+    it.runIf(dialect === "mysql")(
+      "asks nothing about its hold in a save that has none on a connection of its own",
+      async () => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        const rows = <T>(text: string) => sql<T>(t, text);
+        const asked = await holdAsked(rows);
+        const added = async (name: string) =>
+          dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: SLUG },
+            {
+              fields: [...NOTED, { name, type: "text" }],
+              confirmed: true,
+              schemaVersion: await schemaVersion(t),
+              resolutions: {},
+            }
+          );
+        await added("by_file");
+        expect(await holdAsked(rows)).toBe(asked);
+        pushRoad.forced = true;
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: SLUG },
+          {
+            fields: [
+              ...NOTED,
+              { name: "by_file", type: "text" },
+              { name: "by_push", type: "text" },
+            ],
+            confirmed: true,
+            schemaVersion: await schemaVersion(t),
+            resolutions: {},
+          }
+        );
+        expect(await holdAsked(rows)).toBe(asked);
+        pushRoad.forced = false;
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: SLUG },
+          {
+            fields: [
+              { name: "label", type: "text" },
+              { name: "by_file", type: "text" },
+              { name: "by_push", type: "text" },
+            ],
+            confirmed: true,
+            schemaVersion: await schemaVersion(t),
+            resolutions: { note: { action: "confirm_drop" } },
+            confirmedDeletions: [{ field: "note", count: 3 }],
+          }
+        );
+        expect(await hasNoteColumn(t)).toBe(false);
+        expect(await holdAsked(rows)).toBe(asked);
+      },
+      60_000
+    );
+
     // On SQLite another connection of the file (another process is one) may hold it when the save's
     // file starts: past the tries the save stops, with nothing deleted.
     it.runIf(dialect === "sqlite")(
@@ -3476,6 +3693,150 @@ describe.each(getConfiguredTestDialects())(
         }
         expect(await recorded(t)).toEqual(before);
         expect(await valuesIn(t, "note")).toBe(3);
+      },
+      60_000
+    );
+
+    // A translated collection's registry row is written after its file, so on MySQL the save holds
+    // the collection on a connection of its own: the translations step drops on another. That one
+    // lost, no drop may follow: before the step neither translated field is dropped, between its
+    // drops the second is not.
+    it.runIf(dialect === "mysql").each([
+      { lost: "before the translations step's first drop", gone: 0 },
+      { lost: "between the translations step's drops", gone: 1 },
+    ])(
+      "runs no drop of a removed translated field once the connection holding the collection is gone, $lost",
+      async ({ gone }) => {
+        const t = await bootWithMemo();
+        const rows = <T>(text: string) => query<T>(t, text);
+        const left = async () => {
+          const [row] = await rows<{ n: number | string }>(
+            `SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${VALUES_TABLE}' AND COLUMN_NAME IN ('note', 'memo')`
+          );
+          return Number(row?.n);
+        };
+        // Asked from outside the save's flow, which may hold a transaction.
+        const outside = AsyncLocalStorage.snapshot();
+        nextStatement.reached = () =>
+          outside(
+            async () => translationsStep.reached && (await left()) === 2 - gone
+          );
+        const { paused, release } = gated(nextStatement);
+        const saving = saveRemoving(
+          t,
+          [{ name: "label", type: "text" }],
+          ["note", "memo"]
+        );
+        let ended = false;
+        try {
+          const reached = await Promise.race([
+            paused.then(() => true),
+            saving.then(() => false),
+          ]);
+          expect(reached).toBe(true);
+          ended = await endHoldingConnection(rows);
+        } finally {
+          release();
+        }
+        const outcome = await saving;
+        expect(ended).toBe(true);
+        expect(outcome).not.toBe("applied");
+        expect(await left()).toBe(2 - gone);
+        expect(
+          [await valuesIn(t, "note"), await valuesIn(t, "memo")].filter(
+            n => n === 3
+          )
+        ).toHaveLength(2 - gone);
+      },
+      60_000
+    );
+
+    // The same file's own statements, which drop the fields every language shares, run on another
+    // connection than the one that holds too: lost between two of them, the second does not run.
+    it.runIf(dialect === "mysql")(
+      "runs no later statement of a translated collection's file once the connection holding it is gone",
+      async () => {
+        vi.stubEnv("NODE_ENV", "development");
+        const t = await createTestNextly({
+          dialect,
+          perLanguageStorage: true,
+          db: {
+            migrationsDir: "./database/history",
+            uiSchemaFile: "./schema/builder.json",
+          },
+        });
+        instance = t;
+        const shared = (name: string) => ({
+          name,
+          type: "text",
+          localized: false,
+        });
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: SLUG,
+            label: "Note",
+            fields: [
+              { name: "label", type: "text" },
+              shared("code"),
+              shared("rank"),
+            ],
+          }
+        );
+        for (const value of ["a", "b", "c"]) {
+          await t.nextly.create({
+            collection: SLUG,
+            data: { label: "l", code: value, rank: value },
+          } as never);
+        }
+        const rows = <T>(text: string) => query<T>(t, text);
+        const left = async () => {
+          const [row] = await rows<{ n: number | string }>(
+            `SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${TABLE}' AND COLUMN_NAME IN ('code', 'rank')`
+          );
+          return Number(row?.n);
+        };
+        // Paused before the statement that follows the file's first drop, from outside its flow.
+        let between: () => void = () => undefined;
+        const reachedBetween = new Promise<void>(resolve => {
+          between = resolve;
+        });
+        let letGo: () => void = () => undefined;
+        const goes = new Promise<void>(resolve => {
+          letGo = resolve;
+        });
+        const saving = withStopPoints(
+          async point => {
+            const drops = lastSplit.statements.flatMap((statement, index) =>
+              /drop column/i.test(statement) ? [index + 1] : []
+            );
+            if (!point.endsWith(`: before statement ${String(drops[1])}`)) {
+              return;
+            }
+            between();
+            await goes;
+          },
+          () =>
+            saveRemoving(t, [{ name: "label", type: "text" }], ["code", "rank"])
+        );
+        let ended = false;
+        try {
+          const reached = await Promise.race([
+            reachedBetween.then(() => true),
+            saving.then(() => false),
+          ]);
+          expect(reached).toBe(true);
+          expect(await left()).toBe(1);
+          ended = await endHoldingConnection(rows);
+        } finally {
+          letGo();
+        }
+        const outcome = await saving;
+        expect(ended).toBe(true);
+        expect(outcome).not.toBe("applied");
+        expect(await left()).toBe(1);
       },
       60_000
     );

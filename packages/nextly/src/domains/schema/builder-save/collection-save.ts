@@ -604,13 +604,15 @@ async function writeCollectionSaveHeld(
           scope,
           options.inLastTransaction !== undefined
         );
-        await runWritten(
-          deps,
-          written.files,
-          written.table,
-          bounds,
-          options.inLastTransaction,
-          hold
+        await scope.during(() =>
+          runWritten(
+            deps,
+            written.files,
+            written.table,
+            bounds,
+            options.inLastTransaction,
+            hold
+          )
         );
       } else if (options.appliedAfter !== undefined) {
         // The counts the person confirmed, compared just before the change is made here, as before
@@ -4641,7 +4643,7 @@ export async function countedThroughApply<T>(
     await (adapter.getCapabilities().dialect === "sqlite"
       ? adapter.transaction(tx => hold.compare(tx.getDrizzle()))
       : hold.compare(adapter.getDrizzle()));
-    return await apply();
+    return await held.during(apply);
   } finally {
     if (scope === undefined) await held.end();
   }

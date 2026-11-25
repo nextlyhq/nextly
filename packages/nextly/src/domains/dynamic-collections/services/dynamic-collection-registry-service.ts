@@ -1018,7 +1018,7 @@ async function takeNamedCollectionLocks(
    * waited for on its own, as long as the hold's wait.
    */
   waitMs?: number
-): Promise<{ release: () => Promise<void> }> {
+): Promise<{ release: () => Promise<void>; kept: () => Promise<boolean> }> {
   const names = namedCollectionLockNames(
     await databaseNameOf(adapter, rowsOn),
     slugs
@@ -1035,6 +1035,15 @@ async function takeNamedCollectionLocks(
         sql`, `
       )}`
     );
+  };
+  const kept = async (): Promise<boolean> => {
+    const [row] = await rowsOn<{ kept: unknown }>(
+      sql`SELECT ${sql.join(
+        names.map(name => sql`IS_USED_LOCK(${name}) = CONNECTION_ID()`),
+        sql` AND `
+      )} AS ${sql.identifier("kept")}`
+    );
+    return Number(row?.kept) === 1;
   };
   let got: number;
   try {
@@ -1053,7 +1062,7 @@ async function takeNamedCollectionLocks(
   }
   if (got === names.length) {
     held = got;
-    return { release };
+    return { release, kept };
   }
   // Refused part way: the names it got are released. A count that cannot be read says nothing of
   // which it got, so every name is.
@@ -1114,7 +1123,7 @@ async function holdCollectionWith(
   rowsOn: RowsOn,
   slug: string,
   rowRead: "in-transaction" | "own-transaction"
-): Promise<{ release: () => Promise<void> }> {
+): Promise<{ release: () => Promise<void>; kept: () => Promise<boolean> }> {
   const named = await takeNamedCollectionLocks(adapter, rowsOn, [slug]);
   const own = rowRead === "own-transaction";
   try {
@@ -1142,7 +1151,7 @@ export function holdCollectionOnSession(
   adapter: object,
   session: StatementSession,
   slug: string
-): Promise<{ release: () => Promise<void> }> {
+): Promise<{ release: () => Promise<void>; kept: () => Promise<boolean> }> {
   return holdCollectionWith(
     adapter,
     rowsOnSession(session),

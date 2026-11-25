@@ -52,6 +52,7 @@ import {
 // templates. Eliminates the byte-identical-SQL drift risk.
 import { referenceConversionStatements } from "../reference-list-conversion";
 import { conversionForRename } from "../rename-conversion";
+import { assertSaveHoldKept } from "../save-hold-check";
 import { assertSchemaLockHeld, markedForSchemaLock } from "../schema-lock";
 import { generateSQL } from "../sql-templates/index";
 
@@ -170,13 +171,17 @@ const NO_RECORD: RanStatements = {
   finished: () => undefined,
 };
 
-/** `runRaw`, telling `record` as the statement starts and once it has run. */
+/**
+ * `runRaw`, telling `record` as the statement starts and once it has run. A save that lost its hold
+ * starts none; a session's setting put back (`runRaw` alone) is no statement of the save's.
+ */
 async function runTold(
   txOrDb: unknown,
   statement: string,
   dialect: SupportedDialect,
   record: RanStatements
 ): Promise<void> {
+  await assertSaveHoldKept();
   record.starting(statement);
   await runRaw(txOrDb, statement, dialect);
   record.finished(statement);

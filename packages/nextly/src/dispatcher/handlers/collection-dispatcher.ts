@@ -2684,17 +2684,20 @@ async function registryInTheFile(
  * What a save's file does not reach, brought in step once the file ran (`fileRoad.after`). Where
  * that stops at a renamed field's provenance move (`isProvenanceNotMoved`), the file is recorded,
  * so the change it carried landed as the save prepared it: the caller is handed `fields`, the ones
- * the file and the definition hold, before the failure is passed on.
+ * the file and the definition hold, before the failure is passed on. Run under the save's hold, as
+ * the file was (`SaveHoldScope.during`).
  */
 async function afterTheFile(
   change: {
+    holdScope?: SaveHoldScope;
     fileRoad?: { after: () => Promise<void> };
     provenanceNotMoved?: (fields: FieldDefinition[]) => Promise<void>;
   },
   fields: FieldDefinition[]
 ): Promise<void> {
+  const after = async () => change.fileRoad?.after();
   try {
-    await change.fileRoad?.after();
+    await (change.holdScope?.during(after) ?? after());
   } catch (error) {
     if (isProvenanceNotMoved(error)) await change.provenanceNotMoved?.(fields);
     throw error;
