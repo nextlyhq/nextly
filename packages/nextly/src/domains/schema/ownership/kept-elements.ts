@@ -417,7 +417,8 @@ function keptElementRefusal(
         message:
           `This schema change would ${change.act} the ${noun} "${change.name}" that the plugin "${ownerId}" added to the table "${change.table}"${why ?? ""}. ` +
           `"${ownerId}" is no longer in the configuration, so its ${noun} is kept as it is and nothing was applied. ` +
-          `Add "${ownerId}" back to the configuration, or run \`nextly plugins uninstall ${ownerId}\` to remove what it added, then apply the change again.`,
+          // An uninstall looks the plugin up in the configuration, so it is put back before it.
+          `Add "${ownerId}" back to the configuration, uninstall it with \`nextly plugins uninstall ${ownerId}\`, then remove it from the configuration and apply the change again.`,
       },
     ],
     logContext: {
