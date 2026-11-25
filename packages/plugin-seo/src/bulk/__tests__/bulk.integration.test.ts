@@ -236,7 +236,8 @@ describe.each(getConfiguredTestDialects())("bulk edit (%s)", dialect => {
 
     const after = await seoBySlug(t);
     expect(after.surfer).toMatchObject({
-      metaTitle: "",
+      // Cleared: the `seo` group stores a blank text as no text, which reads as none.
+      metaTitle: null,
       metaDescription: "New description",
       canonical: "https://rext.ai/x",
       noindex: true,

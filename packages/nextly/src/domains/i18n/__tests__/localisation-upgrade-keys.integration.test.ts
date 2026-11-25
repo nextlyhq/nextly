@@ -29,6 +29,7 @@ import {
   migrateData,
   openUpgradeDatabase,
   previewMigrateData,
+  refusalBeforeSchemaChanges,
   SITE,
   type UpgradeDatabase,
 } from "./helpers/localisation-upgrade-fixture";
@@ -77,7 +78,9 @@ describeEachDialect(
       id: string,
       locale: string,
       title: string,
-      savedAt: Date
+      savedAt: Date,
+      /** A change to the article's shared `code` the draft carries too. */
+      code?: string
     ): Promise<void> {
       await database!.adapter.insert(
         VERSIONS_TABLE,
@@ -89,7 +92,11 @@ describeEachDialect(
           versionNo: null,
           status: "draft",
           isAutosave: false,
-          snapshot: JSON.stringify({ title, summary: "s" }),
+          snapshot: JSON.stringify({
+            title,
+            summary: "s",
+            ...(code === undefined ? {} : { code }),
+          }),
           label: null,
           locale,
           draftKey: null,
@@ -204,6 +211,133 @@ describeEachDialect(
       expect(
         (await draftsOf(id)).filter(row => row.locale === "es")
       ).toHaveLength(2);
+    });
+
+    // `nextly migrate` asks its steps for a refusal before its schema changes, but a step reads what
+    // the steps before it repair, so its count waits for them. Here the earlier Spanish save shares
+    // its moment with the French one and changes the shared code differently, which, counted
+    // against the database as it stands, is a tie the draft split refuses. Keying first lets the
+    // earlier Spanish save go, so the run has no tie. Broken, the run is refused up front.
+    it("refuses nothing up front that keying the pending changes settles first", async () => {
+      database = await openUpgradeDatabase(dialect);
+      const t = await bootSite(database, "legacy");
+      const created = await entriesOf(t).createEntry(
+        { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
+        { title: "hello", summary: "s", code: "code-1", status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      const moment = new Date("2026-08-01T10:00:00Z");
+      await storeKeylessDraft(id, "es", "hola, earlier", moment, "code-es");
+      await storeKeylessDraft(
+        id,
+        "es",
+        "hola, later",
+        new Date("2026-08-02T10:00:00Z")
+      );
+      await storeKeylessDraft(id, "fr", "bonjour", moment, "code-fr");
+
+      expect(
+        await refusalBeforeSchemaChanges(database.adapter, SITE)
+      ).toBeUndefined();
+      expect(
+        (await previewMigrateData(database.adapter, SITE)).refusals ?? []
+      ).toEqual([]);
+      // The run itself has no tie: the earlier Spanish save is let go before the split, which
+      // keeps the later one (and moves the French change to the shared code into the shared part).
+      await migrateData(database.adapter, SITE);
+      const spanish = (await draftsOf(id)).filter(row => row.locale === "es");
+      expect(spanish).toHaveLength(1);
+      expect(JSON.stringify(spanish[0]?.snapshot)).toContain("hola, later");
+    });
+
+    // A refusal that depends on an earlier repair step is made in order, after that step (and, in
+    // `nextly migrate`, after the schema changes), which stay applied. Here keying has work on one
+    // article, and another holds a real tie that keying does not settle: the draft split refuses
+    // it in the run. The dry run names that refusal as one the run may make; the run's refusal
+    // says what applied, never "Nothing was changed"; and once the cause is fixed, the next run
+    // carries on from the keyed drafts and completes. Broken, the refusal claims nothing changed,
+    // or the dry run is silent, or the second run trips over what the first one applied.
+    it("refuses a tie keying does not settle after keying, saying so, and completes once it is fixed", async () => {
+      database = await openUpgradeDatabase(dialect);
+      const t = await bootSite(database, "legacy");
+      const article = async (code: string) =>
+        (
+          (
+            await entriesOf(t).createEntry(
+              { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
+              { title: "hello", summary: "s", code, status: "published" }
+            )
+          ).data as { id: string }
+        ).id;
+      const keyed = await article("code-keyed");
+      const tied = await article("code-tied");
+      const moment = new Date("2026-08-01T10:00:00Z");
+      // Keying's work: two Spanish saves of one article, the earlier of which it lets go.
+      await storeKeylessDraft(keyed, "es", "hola, earlier", moment);
+      await storeKeylessDraft(
+        keyed,
+        "es",
+        "hola, later",
+        new Date("2026-08-02T10:00:00Z")
+      );
+      // A real tie: Spanish and French changed the shared code differently at one moment.
+      await storeKeylessDraft(tied, "es", "hola", moment, "code-es");
+      await storeKeylessDraft(tied, "fr", "bonjour", moment, "code-fr");
+
+      expect(
+        await refusalBeforeSchemaChanges(database.adapter, SITE)
+      ).toBeUndefined();
+      expect(
+        (await previewMigrateData(database.adapter, SITE)).notes
+      ).toContainEqual(
+        expect.stringContaining(
+          'may be refused once "give every pending change its key" has run'
+        )
+      );
+
+      const refusal = await migrateData(database.adapter, SITE).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      const message = (refusal as { publicMessage?: string }).publicMessage;
+      expect(message).toMatch(new RegExp(`${tied}[\\s\\S]*code`));
+      expect(message).toContain('the step "give every pending change its key"');
+      expect(message).toContain("stay applied");
+      expect(message).not.toContain("Nothing was changed");
+      // What keying applied stays: the earlier Spanish save let go, the later one keyed.
+      const titleOf = (row: DraftRow): unknown => {
+        const snapshot: unknown =
+          typeof row.snapshot === "string"
+            ? JSON.parse(row.snapshot)
+            : row.snapshot;
+        return (snapshot as { title?: unknown }).title;
+      };
+      expect((await draftsOf(keyed)).map(titleOf)).toEqual(["hola, later"]);
+      // The tied article's two changes are as they were.
+      expect((await draftsOf(tied)).map(row => row.locale).sort()).toEqual([
+        "es",
+        "fr",
+      ]);
+
+      // The cause fixed as the refusal says: the French change saved later.
+      const later = new Date("2026-08-03T10:00:00Z");
+      await database.adapter.update(
+        VERSIONS_TABLE,
+        { createdAt: later, updatedAt: later },
+        {
+          and: [
+            { column: "entryId", op: "=", value: tied },
+            { column: "locale", op: "=", value: "fr" },
+          ],
+        }
+      );
+      await migrateData(database.adapter, SITE);
+      expect(
+        await refusalBeforeSchemaChanges(database.adapter, SITE)
+      ).toBeUndefined();
+      expect(
+        (await previewMigrateData(database.adapter, SITE)).changes
+      ).toEqual([]);
     });
 
     it("refuses pending changes in a version history laid out by an earlier release", async () => {

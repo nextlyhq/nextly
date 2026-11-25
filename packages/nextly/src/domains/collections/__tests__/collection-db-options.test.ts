@@ -99,16 +99,22 @@ describe("the registry sync", () => {
     ]);
 
     await registryWithoutStorage().syncCodeFirstCollections([
-      toCodeFirstCollectionConfig({
-        slug: "events",
-        fields: [],
-        db: { idType: "uuidv7" },
-      }),
-      toCodeFirstCollectionConfig({
-        slug: "notes",
-        fields: [],
-        db: { allowIdOnCreate: true },
-      }),
+      toCodeFirstCollectionConfig(
+        {
+          slug: "events",
+          fields: [],
+          db: { idType: "uuidv7" },
+        },
+        "code"
+      ),
+      toCodeFirstCollectionConfig(
+        {
+          slug: "notes",
+          fields: [],
+          db: { allowIdOnCreate: true },
+        },
+        "code"
+      ),
     ]);
 
     expect(collectionDbOptions("events")).toEqual({ allowIdOnCreate: true });

@@ -21,6 +21,10 @@
  * Each row's own fields are then walked with the stored row holding the same
  * final id, so a nested repeater's rows pair with the rows they replace.
  *
+ * The instances of a field-group list held inline in a row get an id too, minted once and moved
+ * with the instance: one sent with an id keeps it, one sent without gets a fresh one, so a
+ * language's text inside an instance is kept by that id.
+ *
  * Run as the LAST step before a value is shaped for storage: after field-rule
  * merging and password keeping, so the ids never change what those decide,
  * and after populated references are reduced to ids, so an unchanged row
@@ -311,9 +315,19 @@ function assignInstances(
   };
   if (Array.isArray(value)) {
     const storedList = Array.isArray(previous) ? previous : [];
+    // Each instance of a list keeps one id, minted once: a repeater or group holding the list
+    // keeps one structure in every language, and an instance's text in each language is kept by
+    // its id. Sent, the id is kept (a repeat in the list names a copy, which gets its own); sent
+    // without one, the instance gets a fresh id, never a stored instance's by its place.
+    const used = new Set<string>();
     value.forEach((instance, index) => {
       if (!isPlainRecord(instance)) return;
-      visit(instance, storedInstanceFor(instance, index, storedList));
+      const candidate = storedInstanceFor(instance, index, storedList);
+      const given = rowId(instance);
+      const id = given !== undefined && !used.has(given) ? given : walk.newId();
+      instance.id = id;
+      used.add(id);
+      visit(instance, candidate);
     });
     return;
   }

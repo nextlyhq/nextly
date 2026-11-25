@@ -105,3 +105,25 @@ describe("the kept Content panel", () => {
     ]);
   });
 });
+
+describe("the kept Content panel and removed collections", () => {
+  it("leaves out a collection removed from code, as the live lists do", () => {
+    // Drawn from what is kept while the live lists load, a removed collection
+    // would stand among the everyday ones, then jump into the Removed fold.
+    lists.collections = [
+      POSTS,
+      {
+        id: "c-old",
+        name: "journal",
+        label: "Journal",
+        removedFromCode: true,
+        removedFromCodeState: { state: "not-dropped" },
+      },
+    ];
+    render(keep(true));
+
+    expect(recallMenu()?.collections).toEqual([
+      { slug: "posts", label: "Posts" },
+    ]);
+  });
+});

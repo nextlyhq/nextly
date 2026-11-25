@@ -68,7 +68,7 @@ describe("the workbench's variable check", () => {
       })
     );
     await waitFor(() =>
-      expect(result.current).toEqual({ undeclared: [], missing: [] })
+      expect(result.current).toMatchObject({ undeclared: [], missing: [] })
     );
   });
 
@@ -88,7 +88,7 @@ describe("the workbench's variable check", () => {
       })
     );
     await waitFor(() =>
-      expect(result.current).toEqual({ undeclared: [], missing: [] })
+      expect(result.current).toMatchObject({ undeclared: [], missing: [] })
     );
   });
 
@@ -129,8 +129,42 @@ describe("the workbench's variable check", () => {
       expect(result.current).toEqual({
         undeclared: [{ name: "who", paths: ["who"] }],
         missing: [],
+        blanks: "kept",
       })
     );
+  });
+
+  it("takes a dotted declaration for the paths it names, and no others", async () => {
+    const { result } = renderHook(() =>
+      useTemplateVariables({
+        sources: [
+          "{{ customer.name }} {{ customer.name.first }} {{ customer.namesake }} {{ order.id }}",
+        ],
+        declared: DOTTED,
+        data: EMPTY,
+        isLayoutRow: false,
+        liquid: true,
+      })
+    );
+    await waitFor(() => expect(result.current.blanks).toBe("checked"));
+    expect(result.current.undeclared).toEqual([
+      { name: "customer", paths: ["customer.namesake"] },
+      { name: "order", paths: ["order.id"] },
+    ]);
+  });
+
+  it("says blanks are checked only once the analysis has loaded", async () => {
+    const { result } = renderHook(() =>
+      useTemplateVariables({
+        sources: ["{{ a }}"],
+        declared: [],
+        data: EMPTY,
+        isLayoutRow: false,
+        liquid: true,
+      })
+    );
+    expect(result.current.blanks).toBe("loading");
+    await waitFor(() => expect(result.current.blanks).toBe("checked"));
   });
 
   it("always reads envelope fields (From, Reply-To) with Liquid, even for a kept template", async () => {
@@ -157,3 +191,7 @@ describe("the workbench's variable check", () => {
     );
   });
 });
+
+/** Stable across renders, as the form's own values are. */
+const EMPTY: Record<string, unknown> = {};
+const DOTTED = [{ name: "customer.name" }];

@@ -20,6 +20,7 @@ import { join } from "node:path";
 
 import type { DryRunPlan } from "../../dry-run";
 import { CliError } from "../../errors";
+import { holdingSignals } from "../../utils/stop-with-command";
 
 import {
   detectPackageManager,
@@ -233,6 +234,12 @@ function putFilesBack(project: Project, saved: Saved): void {
   if (created !== undefined) rmSync(created, { force: true });
 }
 
+/** Puts both files back where the run was stopped, and says what is left to do. */
+function putBackAndSay(project: Project, saved: Saved): string {
+  putFilesBack(project, saved);
+  return `package.json and the lockfile were put back as they were. Run \`${project.detected.manager} install\` to put the installed packages back.`;
+}
+
 /** Each package not at the version it had before, as `name: had → has`. */
 function differingFrom(project: Project, saved: Saved): string[] {
   const now = installedOf(project);
@@ -263,7 +270,9 @@ async function restoreAndFail(
   const again = await runManager(
     manager,
     installArgs(manager, yarn),
-    project.dir
+    project.dir,
+    // The install may have made a lockfile by then, or changed the one put back.
+    { onStopped: () => putBackAndSay(project, saved) }
   );
   // A project that had no lockfile has none again.
   if (saved.lockfile === undefined) putFilesBack(project, saved);
@@ -300,34 +309,20 @@ async function move(
 ): Promise<void> {
   const { manager, yarn } = project.detected;
   const saved = save(project);
-  // Interrupted while the manager installs, the manager is stopped and its
-  // end waited for, so nothing goes on changing the project; then the two
-  // files are put back, and the operator is told the one thing left undone.
-  const stop = new AbortController();
-  const interrupt = () => stop.abort();
-  process.once("SIGINT", interrupt);
-  process.once("SIGTERM", interrupt);
-  let run: Awaited<ReturnType<typeof runManager>>;
-  try {
-    replaceFile(
-      join(project.dir, "package.json"),
-      withVersions(project.manifestText, project.packages, version)
-    );
-    log(`Installing with ${manager}...`);
-    run = await runManager(manager, installArgs(manager, yarn), project.dir, {
-      signal: stop.signal,
-    });
-  } finally {
-    process.off("SIGINT", interrupt);
-    process.off("SIGTERM", interrupt);
-  }
-  if (stop.signal.aborted) {
-    putFilesBack(project, saved);
-    process.stderr.write(
-      `\nInterrupted: package.json and the lockfile were put back as they were. Run \`${manager} install\` to put the installed packages back.\n`
-    );
-    process.exit(130);
-  }
+  replaceFile(
+    join(project.dir, "package.json"),
+    withVersions(project.manifestText, project.packages, version)
+  );
+  log(`Installing with ${manager}...`);
+  // Stopped while the manager installs, the manager is stopped first, so
+  // nothing goes on changing the project; then the two files are put back, and
+  // the operator is told the one thing left undone.
+  const run = await runManager(
+    manager,
+    installArgs(manager, yarn),
+    project.dir,
+    { onStopped: () => putBackAndSay(project, saved) }
+  );
   // A package the install leaves out on purpose, as a development one under
   // an omit setting, was not installed before and need not be after.
   const left = project.packages
@@ -465,7 +460,9 @@ export async function upgradePackages(
   for (const { name, from } of toMove(project, version)) {
     log(`  ${name}: ${from} → ${version}`);
   }
-  await move(project, version, log);
+  // From before the first write: a stop that comes while no manager runs
+  // stops the next one as it starts, and what was written is put back.
+  await holdingSignals(() => move(project, version, log));
 
   log(`Every Nextly package is at ${version}.`);
   log(`Release notes: ${RELEASE_NOTES}${version}`);

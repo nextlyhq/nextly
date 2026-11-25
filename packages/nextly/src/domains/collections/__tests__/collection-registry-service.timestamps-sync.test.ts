@@ -22,11 +22,14 @@ const fields: CodeFirstCollectionConfig["fields"] = [
 ];
 
 const declared = (timestamps?: boolean): CodeFirstCollectionConfig =>
-  toCodeFirstCollectionConfig({
-    slug: "notes",
-    fields,
-    ...(timestamps === undefined ? {} : { timestamps }),
-  });
+  toCodeFirstCollectionConfig(
+    {
+      slug: "notes",
+      fields,
+      ...(timestamps === undefined ? {} : { timestamps }),
+    },
+    "code"
+  );
 
 /** A registry whose stored row for `notes` matches `declared()` but for `timestamps`. */
 function registryHolding(

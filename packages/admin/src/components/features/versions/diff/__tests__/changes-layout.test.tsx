@@ -1,7 +1,8 @@
 /**
  * Inline is the default, and side by side is a choice each person keeps: it
  * survives leaving the comparison, and one person's choice is not another's on
- * the same browser.
+ * the same browser. Both are in view as one choice, Inline or Side by side, so
+ * the one not chosen is a press away and the chosen one is said as chosen.
  */
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,7 +30,10 @@ function Chooser() {
   return <ChangesLayoutToggle layout={layout} onChange={setLayout} />;
 }
 
-const toggle = () => screen.getByRole("button", { name: "Side by side" });
+const choice = () =>
+  screen.getByRole("radiogroup", { name: "How changes are shown" });
+const inline = () => screen.getByRole("radio", { name: "Inline" });
+const toggle = () => screen.getByRole("radio", { name: "Side by side" });
 
 describe("the changes layout preference", () => {
   beforeEach(() => {
@@ -39,15 +43,22 @@ describe("the changes layout preference", () => {
 
   it("starts inline, and remembers side by side for the person who chose it", async () => {
     const { unmount } = render(<Chooser />);
-    expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    expect(choice()).toContainElement(inline());
+    expect(inline()).toBeChecked();
+    expect(toggle()).not.toBeChecked();
 
     await userEvent.click(toggle());
-    expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    expect(toggle()).toBeChecked();
+    expect(inline()).not.toBeChecked();
     unmount();
 
     // Back again: the choice was kept.
     render(<Chooser />);
-    expect(await screen.findByRole("button", { pressed: true })).toBe(toggle());
+    expect(await screen.findByRole("radio", { checked: true })).toBe(toggle());
+
+    // And Inline is one press away.
+    await userEvent.click(inline());
+    expect(inline()).toBeChecked();
   });
 
   it("keeps one person's choice from another's on the same browser", async () => {
@@ -57,7 +68,8 @@ describe("the changes layout preference", () => {
 
     userMock.mockReturnValue({ user: { id: "u2" } });
     render(<Chooser />);
-    expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    expect(toggle()).not.toBeChecked();
+    expect(inline()).toBeChecked();
   });
 });
 
@@ -118,7 +130,7 @@ describe("whether a comparison has a side-by-side view", () => {
     expect(honoursSideBySide(text("unchanged"))).toBe(false);
   });
 
-  it("offers no toggle that would do nothing, and says why", () => {
+  it("offers no side by side that would do nothing, and says why", () => {
     render(
       <ChangesLayoutToggle
         layout="split"
@@ -127,8 +139,10 @@ describe("whether a comparison has a side-by-side view", () => {
       />
     );
     expect(toggle()).toBeDisabled();
-    expect(toggle()).toHaveAttribute("aria-pressed", "false");
-    expect(toggle()).toHaveAccessibleDescription(
+    expect(toggle()).not.toBeChecked();
+    // Inline is what is drawn, so it reads as chosen.
+    expect(inline()).toBeChecked();
+    expect(choice()).toHaveAccessibleDescription(
       "This comparison has no side-by-side view"
     );
   });

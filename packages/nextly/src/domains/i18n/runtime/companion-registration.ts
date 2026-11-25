@@ -14,15 +14,24 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { generateCompanionRuntimeSchema } from "../../schema/services/runtime-schema-generator";
-import { deriveCompanionSpec } from "../migration/derive-companion-spec";
+import { deriveCompanionTableSpec } from "../migration/derive-companion-spec";
+import type { StructuredField } from "../shared-structure";
 
 export interface CompanionRuntimeArgs {
   /** Entity slug (cosmetic for table naming here — `tableName` drives the physical name). */
   slug: string;
   /** Physical main table name (e.g. `dc_pages`). The companion is `<tableName>_locales`. */
   tableName: string;
-  /** The entity's field definitions (need `name` + `type` + optional `localized`). */
-  fields: { name: string; type: string; localized?: boolean }[];
+  /**
+   * The entity's field definitions (need `name` + `type` + optional `localized`, and a container's
+   * `fields`, which decide whether it keeps translations inside).
+   */
+  fields: {
+    name: string;
+    type: string;
+    localized?: boolean;
+    fields?: readonly StructuredField[];
+  }[];
   dialect: SupportedDialect;
   /** Whether the entity is localized. When false, this returns `null`. */
   localized: boolean;
@@ -58,7 +67,9 @@ export function buildCompanionRuntimeTable(
   args: CompanionRuntimeArgs
 ): CompanionRuntimeTable | null {
   if (!args.localized) return null;
-  const spec = deriveCompanionSpec({
+  // The table as it physically stands: translated columns and the overlay columns of containers
+  // keeping translations inside.
+  const spec = deriveCompanionTableSpec({
     slug: args.slug,
     dbName: args.tableName,
     fields: args.fields,

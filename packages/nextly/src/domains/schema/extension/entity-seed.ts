@@ -25,7 +25,9 @@ import {
   buildDesiredTableFromFields,
   type DeclaredIndex,
 } from "../pipeline/diff/build-from-fields";
+import { builtByFor } from "../pipeline/registered-collections";
 import {
+  fieldsStoredOnRow,
   getColumnDescriptor,
   getSystemColumnDescriptors,
   kindAndSizes,
@@ -42,6 +44,12 @@ export interface SeedableEntity {
   localized?: boolean;
   /** Compound indexes the config declares (a collection's `indexes`), by field. */
   indexes?: readonly DeclaredIndex[];
+  /**
+   * Whether the Schema Builder describes the table, as it does a collection a demote handed to it
+   * (`configWithRecordedHandOvers`): its columns are then seeded by the Builder's rules, which size
+   * some differently. Absent, the entity is code-first.
+   */
+  builderOwned?: boolean;
 }
 
 type BuilderFields = Parameters<typeof buildDesiredTableFromFields>[1];
@@ -69,10 +77,13 @@ export function entitySeed(
   columns: SeedEntityTable["columns"];
   indexes: NonNullable<SeedEntityTable["ownIndexes"]>;
 } {
-  // Code-first: the seed is built from the config, which is what these
-  // entities come from, and the builder only decides column TYPES — the
-  // names, which are what the draft checks, do not depend on it.
-  const builtBy = "codeFirst" as const;
+  // The rules the table's columns are described by, which decide their types:
+  // code-first for an entity the config declares, the Builder's for a
+  // collection handed to it.
+  const builtBy = builtByFor(
+    entity.entityKind === "component" ? "fieldGroup" : entity.entityKind,
+    entity.builderOwned
+  );
   // Where the entity's translatable values live, as its desired and runtime
   // tables decide it (`storesPerLanguage`): with every field kept per
   // language, a translatable field's column is on the language table even
@@ -120,12 +131,12 @@ export function entitySeed(
   // kind gives it: only these may have their storage overridden. A field of
   // the same name as a system column (`title`, `slug`) is the field's.
   const fieldColumns = new Set<string>();
-  for (const field of entity.fields) {
-    const descriptor = getColumnDescriptor(
-      field as unknown as DescribedField,
-      dialect,
-      builtBy
-    );
+  // The fields stored on the entity's own row: a group with no name keeps its
+  // fields there, as columns of the table, and has no column of its own.
+  for (const field of fieldsStoredOnRow(
+    entity.fields as unknown as DescribedField[]
+  )) {
+    const descriptor = getColumnDescriptor(field, dialect, builtBy);
     if (descriptor === null) continue;
     typed.set(descriptor.name, kindAndSizes(descriptor));
     fieldColumns.add(descriptor.name);

@@ -76,10 +76,7 @@ import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/E
 import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
 import { PanelSectionsAboveForm } from "@admin/components/features/entries/EntryForm/panels";
-import {
-  readerStatusWrite,
-  statusWritesHeld,
-} from "@admin/components/features/entries/EntryForm/reader-status-write";
+import { readerStatusWrite } from "@admin/components/features/entries/EntryForm/reader-status-write";
 import type { RecoveryPointState } from "@admin/components/features/entries/EntryForm/SaveStateIndicator";
 import { submitDocument } from "@admin/components/features/entries/EntryForm/submit-document";
 import {
@@ -121,6 +118,8 @@ import { VersionConflictDialog } from "@admin/components/features/entries/EntryF
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
+import { smartPublishHandler } from "@admin/components/features/entries/publish-parts/smart-publish-handler";
+import type { SmartPublish } from "@admin/components/features/entries/publish-parts/useSmartPublish";
 import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { storedStampOf } from "@admin/components/features/entries/review/review-words";
 import { ReviewChanges } from "@admin/components/features/entries/review/ReviewChanges";
@@ -155,7 +154,6 @@ import {
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { useEditorRevealHold } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
-import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
@@ -166,7 +164,6 @@ import {
 } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
-import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import {
@@ -360,6 +357,11 @@ export interface SingleFormProps {
    * (publishing chosen parts) that must be refused when the Single changed since it opened.
    */
   shownCopy?: ShownCopyHandle;
+  /**
+   * What the page's Publish runs on a document with several languages: one
+   * click, or the choice of what goes live. Absent, Publish is one click.
+   */
+  smartPublish?: SmartPublish;
 }
 
 // ============================================================================
@@ -451,29 +453,26 @@ function useSingleWriteGate(
 /**
  * The Single's holds with a refused publish's recovery on top: until its
  * reloaded document is on screen it holds the actions and the autosave
- * (`busy`), the language panels' copies into the form, publishing every
- * language and a version's own writes, as the lock holds the fields.
+ * (`busy`), the language panels' copies into the form and a version's own
+ * writes, as the lock holds the fields.
  */
 function recoveryHolds(
   recovering: boolean,
   own: {
     writePending: boolean;
     editsHeld: boolean;
-    publishAllHeld: boolean;
     versionWritesHeld: boolean;
     writesHeld: boolean;
   }
 ): {
   busy: boolean;
   contentHeld: boolean;
-  publishAllDisabled: boolean;
   versionWritesHeld: boolean;
   navigationHeld: boolean;
 } {
   return {
     busy: own.writePending || recovering,
     contentHeld: own.editsHeld || recovering,
-    publishAllDisabled: own.publishAllHeld || recovering,
     versionWritesHeld: own.versionWritesHeld || recovering,
     // Moving to another language as well, so the recovery's Save and take
     // stay on the one they are for.
@@ -510,9 +509,7 @@ function sharedChangesPendingOf(document: unknown): boolean {
 function SingleFormLanguagePanel({
   actionsDisabled,
   navigationDisabled,
-  publishAllDisabled,
   enabled,
-  hasStatus,
   locale,
   onLocaleChange,
   panelDocked,
@@ -521,9 +518,7 @@ function SingleFormLanguagePanel({
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
-  publishAllDisabled: boolean;
   enabled: boolean;
-  hasStatus: boolean;
   locale?: string;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Whether the docked panel, which carries the language panel, is on screen. */
@@ -540,10 +535,8 @@ function SingleFormLanguagePanel({
         translations={translations}
         locale={locale}
         onLocaleChange={onLocaleChange}
-        hasStatus={hasStatus}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
-        publishAllDisabled={publishAllDisabled}
         sharedChangesPending={sharedChangesPending}
       />
     </div>
@@ -616,7 +609,6 @@ function SingleFormFieldsPanel({
 function SingleFormRail({
   actionsDisabled,
   navigationDisabled,
-  publishAllDisabled,
   entry,
   hasStatus,
   documentStatus,
@@ -631,7 +623,6 @@ function SingleFormRail({
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
-  publishAllDisabled: boolean;
   entry: React.ComponentProps<typeof EntryFormSidebar>["entry"];
   hasStatus: boolean;
   documentStatus: React.ComponentProps<
@@ -677,7 +668,6 @@ function SingleFormRail({
             })}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
-        publishAllDisabled={publishAllDisabled}
         {...(locale === undefined ? {} : { locale })}
         reviewHold={reviewHold}
         {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
@@ -750,6 +740,7 @@ export function SingleForm({
   revealOutline,
   revealWaiting = false,
   shownCopy,
+  smartPublish,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -1123,13 +1114,6 @@ export function SingleForm({
   // Single removed from code, whose publish the server refuses as it refuses
   // a save.
   const statusWriteHold = writesHeld || removedFromCode;
-  // Publishing every language changes only each language's status, so a
-  // reader whose document nothing else holds is still offered it.
-  const publishAllHeld = statusWritesHeld({
-    editsHeld,
-    refused: readOnlyForReader,
-    writesHeld: statusWriteHold,
-  });
   // A refused publish's recovery changes the content, so it is held exactly
   // as the content's own saves are.
   writesHeldNow.current = editsHeld;
@@ -1150,22 +1134,16 @@ export function SingleForm({
   // A save or a discard in flight.
   const writePending = isSubmitting || discardMutation.isPending;
   // Each of the Single's holds, and a refused publish's recovery on top.
-  const {
-    busy,
-    contentHeld,
-    publishAllDisabled,
-    versionWritesHeld,
-    navigationHeld,
-  } = recoveryHolds(recovering, {
-    writePending,
-    editsHeld,
-    publishAllHeld,
-    // A colleague's claim or a reader's page, without the version on
-    // screen: what holds the actions a version's own surfaces offer,
-    // Restore among them.
-    versionWritesHeld: lock.actionsDisabled || updatesHeld,
-    writesHeld,
-  });
+  const { busy, contentHeld, versionWritesHeld, navigationHeld } =
+    recoveryHolds(recovering, {
+      writePending,
+      editsHeld,
+      // A colleague's claim or a reader's page, without the version on
+      // screen: what holds the actions a version's own surfaces offer,
+      // Restore among them.
+      versionWritesHeld: lock.actionsDisabled || updatesHeld,
+      writesHeld,
+    });
   // Every switch to another language goes through here, held with the rest,
   // and while a told change waits for an answer about this language's edits.
   const switchLocale = heldLocaleChange(
@@ -1231,7 +1209,7 @@ export function SingleForm({
    */
   const keepsRecoveryPoints =
     autosaveScope !== null && autosaveEnabledFor(schema);
-  // Where a save and publishing every language wait for its recordings.
+  // Where a save, and a publish of chosen parts, wait for its recordings.
   const recordingsFor = documentRecordingKey(autosaveScope);
 
   // Resolves to what the submission came to, never rejects, as the entry
@@ -1581,13 +1559,10 @@ export function SingleForm({
   // the action collection-only by accident of addressing rather than by intent;
   // it now gates on `fetchSourceValues`, which a single can answer. Inert for
   // non-localized singles.
-  // The Single's own publish-every-language mutation, handed to the shared
-  // availability rule through the locale context. A Single is addressed by its
-  // slug alone, so it supplies its own action exactly as it supplies its own
-  // source read.
-  // The copy on screen, read as the editor reads it, so a publish of every
-  // language, or of chosen parts from the page, is refused when that language
-  // changed since it opened, and waits for the copy's recordings on their way.
+  //
+  // The copy on screen, read as the editor reads it, so a publish of chosen
+  // parts from the page is refused when that language changed since it opened,
+  // and waits for the copy's recordings on their way.
   const startedFrom = version.startedFrom;
   const readsDraft = schema.draftsEnabled === true;
   const shownCopyOf = useCallback(
@@ -1606,15 +1581,6 @@ export function SingleForm({
       shownCopy.current = null;
     };
   }, [shownCopy, shownCopyOf]);
-  const publishAllSingleLanguages = usePublishAllSingleLocales({
-    slug: schema.slug,
-    shown: shownCopyOf,
-  });
-  // Publishing every language waits for the Single's recordings in flight.
-  const afterRecordings = useAfterRecordings(
-    recordingsFor,
-    publishAllSingleLanguages.isPending
-  );
 
   const translationMode = useTranslationSource({
     fields: schema.fields,
@@ -1692,14 +1658,6 @@ export function SingleForm({
     // A single is addressed by its slug alone, so it supplies its own read and
     // no entry addressing at all.
     fetchSourceValues: singleSourceFetcher(schema.slug),
-    publishAllLanguages: {
-      slug: schema.slug,
-      // After this Single's recordings in flight land, as a save waits.
-      publish: () => afterRecordings.run(publishAllSingleLanguages.mutate),
-      pending: afterRecordings.pending,
-      preview: () => singleApi.previewPublishAllLocales(schema.slug),
-      previewKey: ["publish-all-preview", "single", schema.slug],
-    },
   });
 
   /*
@@ -1849,6 +1807,19 @@ export function SingleForm({
     // entry editor hands it.
     currentValues: () => form.getValues(),
     ...storingHandlers(handleSubmit),
+    // Where the page publishes more than the language on screen, its Publish
+    // runs in place of the plain one, through the same submit.
+    ...smartPublishHandler(smartPublish, {
+      submit: handleSubmit,
+      published: documentStatus === "published",
+      draftsEnabled: schema.draftsEnabled === true,
+      // A user who may not change the document has nothing of their own to
+      // store: their Publish is a write of the status alone.
+      unsaved: () => mayEdit && (hasUnsavedWork || form.formState.isDirty),
+      form,
+      fields: schema.fields,
+      localized: schema.localized === true,
+    }),
     onDiscardWorkingDraft: discardWorkingDraft,
     onCancel: handleCancel,
     ...(review.binding === undefined ? {} : { review: review.binding }),
@@ -2162,11 +2133,9 @@ export function SingleForm({
                               of the rail, shown where the rail is not. */}
                                     <SingleFormLanguagePanel
                                       actionsDisabled={contentHeld}
-                                      publishAllDisabled={publishAllDisabled}
                                       // A reader may still open the other languages.
                                       navigationDisabled={navigationHeld}
                                       enabled={localizationEnabled}
-                                      hasStatus={hasStatus}
                                       panelDocked={panel.docked}
                                       sharedChangesPending={
                                         sharedChangesPending
@@ -2209,7 +2178,6 @@ export function SingleForm({
                                 width, as the entry editor's is. */}
                                 <SingleFormRail
                                   actionsDisabled={contentHeld}
-                                  publishAllDisabled={publishAllDisabled}
                                   navigationDisabled={navigationHeld}
                                   entry={entryLike}
                                   hasStatus={hasStatus}

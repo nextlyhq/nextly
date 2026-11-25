@@ -6,6 +6,9 @@
  * draws them, and a binding on a page reads them. One list, so those readers
  * cannot name the two differently.
  *
+ * Both say they are not translated: their columns are on the shared row, one
+ * value for every language, where a text field that says nothing is translated.
+ *
  * Pure, with no service imports, so the public reader can load it.
  *
  * @module domains/collections/system-text-fields
@@ -17,6 +20,7 @@ const TITLE_FIELD: FieldDefinition = {
   type: "text",
   label: "Title",
   required: true,
+  localized: false,
   admin: {
     placeholder: "Enter title",
   },
@@ -28,6 +32,7 @@ const SLUG_FIELD: FieldDefinition = {
   label: "Slug",
   required: true,
   unique: true,
+  localized: false,
   admin: {
     placeholder: "my-entry-slug",
   },

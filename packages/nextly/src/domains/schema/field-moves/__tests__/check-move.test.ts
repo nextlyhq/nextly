@@ -414,15 +414,59 @@ describe("checkMove", () => {
   describe("in an entity kept per language", () => {
     const translated = { localized: true };
 
-    it("refuses a translated field into a group that keeps one value for every language", () => {
-      expect(
-        checkMove(
-          before,
-          after,
-          { from: ["title"], to: ["meta", "title"] },
-          translated
-        )
-      ).toMatchObject({ ok: false, reason: "translation-changes" });
+    // A group holding text keeps one structure in every language and each language's text beside
+    // it, which the move's statements do not carry: moving a field into or out of it is refused,
+    // naming the field. Broken, the move carries the structure's values and leaves every
+    // language's text behind.
+    it("refuses a translated field into a group that keeps text inside, naming the field", () => {
+      const checked = checkMove(
+        before,
+        after,
+        { from: ["title"], to: ["meta", "title"] },
+        translated
+      );
+      expect(checked).toMatchObject({
+        ok: false,
+        reason: "translated-container",
+      });
+      expect(!checked.ok && checked.message).toMatch(/^title cannot be moved/);
+    });
+
+    it("refuses a field out of a group that keeps text inside, naming the field", () => {
+      const inside = [
+        text("title"),
+        group("box", [text("label"), text("note")]),
+      ];
+      const outside = [
+        text("title"),
+        text("label"),
+        group("box", [text("note")]),
+      ];
+      const checked = checkMove(
+        inside,
+        outside,
+        { from: ["box", "label"], to: ["label"] },
+        translated
+      );
+      expect(checked).toMatchObject({
+        ok: false,
+        reason: "translated-container",
+      });
+      expect(!checked.ok && checked.message).toMatch(
+        /^label cannot be moved into or out of box/
+      );
+    });
+
+    it("plans a field out of a group that keeps no text inside, which has nothing per language", () => {
+      const number = (name: string) =>
+        ({ name, label: name, type: "number" }) as FieldDefinition;
+      const checked = checkMove(
+        [text("title"), group("stats", [number("count"), number("total")])],
+        [text("title"), number("count"), group("stats", [number("total")])],
+        { from: ["stats", "count"], to: ["count"] },
+        translated
+      );
+      expect(checked).toMatchObject({ ok: true });
     });
 
     it("plans a translated field into a translated group, each language's value moving with it", () => {

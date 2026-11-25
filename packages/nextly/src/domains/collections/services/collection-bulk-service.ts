@@ -2420,24 +2420,31 @@ export class CollectionBulkService extends BaseService {
       // Opened through `entryTransaction`, so the batch holds the collection once, before its first
       // item, against a Builder save deleting its values.
       await this.mutationService.inWriteTries(async tries => {
-        await this.mutationService.entryTransaction(params.collectionName, async tx => {
-          try {
-            await this.runDeleteBatch(
-              tx,
-              params,
-              ids,
-              { batchSize, stopOnError, skipHooks, rowGate },
-              state
-            );
-          } catch (innerError) {
-            callbackThrew = true;
-            throw innerError;
-          }
+        await this.mutationService.entryTransaction(
+          params.collectionName,
+          async tx => {
+            try {
+              await this.runDeleteBatch(
+                tx,
+                params,
+                ids,
+                { batchSize, stopOnError, skipHooks, rowGate },
+                state
+              );
+            } catch (innerError) {
+              callbackThrew = true;
+              throw innerError;
+            }
+          },
+          undefined,
           // Compared, under the hold, with the registry row the batch was made for, and opened
           // again where it changed: no item, and no hook of one, has run before the hold.
-        }, undefined, await this.mutationService.loadedRegistryRowFor(params.collectionName, [], {
-          tries,
-        }));
+          await this.mutationService.loadedRegistryRowFor(
+            params.collectionName,
+            [],
+            { tries }
+          )
+        );
       });
       committed = true;
     } catch (error: unknown) {

@@ -71,6 +71,16 @@ export function withLanguage(
   };
 }
 
+/** Whether two choices are of the same parts, in whatever order. */
+export function sameParts(a: PartsChoice, b: PartsChoice): boolean {
+  const chosen = new Set(a.locales);
+  return (
+    a.shared === b.shared &&
+    a.locales.length === b.locales.length &&
+    b.locales.every(locale => chosen.has(locale))
+  );
+}
+
 /** Whether anything is chosen at all: a request choosing nothing is refused by the server. */
 export function choosesAnything(choice: PartsChoice): boolean {
   return choice.locales.length > 0 || choice.shared;

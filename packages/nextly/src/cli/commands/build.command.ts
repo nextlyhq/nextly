@@ -34,6 +34,6 @@ export function registerBuildCommand(program: Command): void {
       .action(lazyAction(async () => (await import("./build")).buildAction)),
     // The build names its database only when it checks the migrations, which
     // `--skip-migrations-check` leaves out.
-    startLine("Building...")
+    startLine("Building...", "may connect")
   );
 }
