@@ -1107,6 +1107,12 @@ export async function reconcileCompanionColumns(
      * caller that judges nothing.
      */
     recordedBefore?: RecordedEntity | null;
+    /**
+     * The site's default language: a container's overlay column added here, for a container whose
+     * text is on the main table already, is seeded with it as that language's
+     * (`buildOverlaySeedStatements`). Left out, nothing is seeded.
+     */
+    defaultLocale?: string;
   },
   onError?: (error: unknown) => void,
   /** Told of a column left as it is that cannot hold its field, which fails nothing. */
@@ -1263,6 +1269,38 @@ export async function reconcileCompanionColumns(
     });
     for (const stmt of statements) {
       await adapter.executeQuery(stmt);
+    }
+    // A container whose overlay column was added now and whose text is on the main table already
+    // (one an earlier release kept shared, now keeping its text apart): the default language's
+    // overlay is seeded from it, as `migrate:create` and the Builder seed it. Left empty, a first
+    // save in another language writes the structure without that text, and the default
+    // language's text is gone. Run once: the column is present on every later run.
+    if (args.defaultLocale !== undefined) {
+      const added = desired
+        .filter(f => keepsTranslationsInside(f, true))
+        .map(f => toColumn(f.name))
+        .filter(column => !present.has(column));
+      if (added.length > 0) {
+        const onMain = new Set(
+          (await liveColumnsOf(adapter, args.tableName)).map(c => c.name)
+        );
+        const seeded = added.filter(column => onMain.has(column));
+        const { buildOverlaySeedStatements } = await import(
+          "../migration/generate-up"
+        );
+        for (const stmt of buildOverlaySeedStatements(
+          {
+            dialect: args.dialect,
+            mainTable: args.tableName,
+            companionTable: companionTableName,
+            defaultLocale: args.defaultLocale,
+          },
+          seeded,
+          { status: hasStatus && onMain.has("status") }
+        )) {
+          await adapter.executeQuery(stmt);
+        }
+      }
     }
   } catch (error) {
     // Same check-then-act window as the create path: a concurrent sync or reload may have added
@@ -2221,9 +2259,18 @@ async function buildSeedingCreateStatements(
     }),
   };
 
+  // A container whose column is on the main table already holds its text there: copied whole into
+  // the default language's overlay with the seed, as `migrate:create` seeds it. Its column on main
+  // is its structure, and stays (nothing is dropped here). Left empty, a first save in another
+  // language writes the structure without that text, and the default language's text is gone.
+  const overlaysOnMain = new Set(
+    overlays
+      .map(f => toColumn(f.name))
+      .filter(column => liveMain.some(main => main.name === column))
+  );
   const columnsOnMain = spec.columns
     .map(c => c.name)
-    .filter(name => present.has(name));
+    .filter(name => present.has(name) || overlaysOnMain.has(name));
   // Whether the main table has been reshaped for Draft/Published YET, which is a different
   // question from whether the entity has it. This copy runs before the schema push, so one
   // configuration edit turning on both localization and Draft/Published reaches here with
