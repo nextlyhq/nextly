@@ -181,9 +181,8 @@ async function runTold(
   dialect: SupportedDialect,
   record: RanStatements
 ): Promise<void> {
-  await assertSaveHoldKept();
   record.starting(statement);
-  await runRaw(txOrDb, statement, dialect);
+  await runRaw(txOrDb, statement, dialect, assertSaveHoldKept);
   record.finished(statement);
 }
 
@@ -609,10 +608,13 @@ function statementsForOp(op: Operation, dialect: SupportedDialect): string[] {
 export async function runRaw(
   txOrDb: unknown,
   sqlString: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /** Asked last, just before the statement is sent. */
+  asked: () => Promise<void> = () => Promise.resolve()
 ): Promise<void> {
   // A run that lost the schema lock starts no further statement (`assertSchemaLockHeld`).
   await assertSchemaLockHeld();
+  await asked();
   if (dialect === "sqlite") {
     // better-sqlite3 / drizzle-orm/better-sqlite3 uses synchronous .run()
     // (and tx wrappers also expose .run()). The F3 pipeline runs SQLite
