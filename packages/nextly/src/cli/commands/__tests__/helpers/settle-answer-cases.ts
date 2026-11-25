@@ -30,7 +30,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -833,6 +833,10 @@ export function settleAnswerCases(args: {
             expect(said).toMatch(/"en"/);
             expect(said).toMatch(new RegExp(`"${runs}"`));
             expect(said).toMatch(/Nothing was changed/);
+            // The ways out: the save made again, or by hand and recorded.
+            expect(said).toMatch(/make the save again/);
+            expect(said).toMatch(/migrate:resolve --applied/);
+            expect(said).not.toMatch(/the default again/);
           };
 
           it(`refuses ${named} where the configuration's default is another language`, async () => {
@@ -1036,6 +1040,79 @@ export function settleAnswerCases(args: {
             const applied = await migrate(after, consent);
             expect(applied.code, applied.said).toBeUndefined();
             expect(await pendingIn(target.adapter, after)).toEqual([]);
+          }, 240_000);
+
+          // A hand-written file that puts an entry in ahead of the answer, in one run: there is
+          // nothing to settle before the run, and an entry once its first file has applied.
+          const seededInTheRun = async () => {
+            const { before, after, path } = await answered();
+            const target = await database();
+            reach(target.url);
+            const first = await migrate(before);
+            expect(first.code, first.said).toBeUndefined();
+            const app = await site(target.adapter, before, "production");
+            const entry = String(
+              (
+                await app.nextly.create({
+                  collection: "posts" as never,
+                  data: { heading: "Empty" } as never,
+                  locale: "en",
+                } as never)
+              ).item.id
+            );
+            // Its row, kept aside for the file to put back, with no row in any language.
+            await target.adapter.executeQuery(
+              `CREATE TABLE ${q("seed_rows")} AS SELECT * FROM ${q(MAIN)}`
+            );
+            await target.adapter.executeQuery(`DELETE FROM ${q(COMPANION)}`);
+            await target.adapter.executeQuery(`DELETE FROM ${q(MAIN)}`);
+            // After the files before the save, and before the save's own.
+            const seed = `${files(before)
+              .at(-1)!
+              .replace(/\.sql$/, "")}_seed`;
+            writeFileSync(
+              join(after, "database", "history", `${seed}.sql`),
+              `-- UP\nINSERT INTO ${q(MAIN)} SELECT * FROM ${q("seed_rows")};\n\n-- DOWN\nDELETE FROM ${q(MAIN)};\n`
+            );
+            const pending = await pendingNames(target.adapter, after);
+            expect(pending[0]).toBe(seed);
+            const file = basename(path, ".sql");
+            expect(pending).toContain(file);
+            return { after, target, entry, seed, file, pending };
+          };
+          /** What the ledger holds of file \`name\`: the status of each attempt at it. */
+          const ledgerOf = async (adapter: DrizzleAdapter, name: string) =>
+            (
+              await adapter.executeQuery<{ status: unknown }>(
+                `SELECT ${q("status")} AS status FROM ${q("nextly_schema_events")} WHERE ${q("filename")} = '${name}.sql' AND ${q("event_type")} = 'file_apply'`
+              )
+            ).map(row => String(row.status));
+
+          it(`refuses ${named} where an earlier file of the run added an entry, which stays applied`, async () => {
+            const { after, target, entry, seed, file, pending } =
+              await seededInTheRun();
+
+            const refused = await migrate(after, consent, spanish);
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            expect(refused.said).toContain(`${file}.sql`);
+            expect(refused.said).toMatch(/None of its statements ran/);
+            expect(refused.said).not.toMatch(/Nothing was changed/);
+            // The files before it are applied, and nothing of it is.
+            expect(await entriesOf(target.adapter)).toEqual([entry]);
+            expect(await pendingNames(target.adapter, after)).toEqual(
+              pending.slice(pending.indexOf(file))
+            );
+            expect(await ledgerOf(target.adapter, seed)).toEqual(["applied"]);
+            expect(await ledgerOf(target.adapter, file)).toEqual([]);
+          }, 240_000);
+
+          it(`runs ${named} after an earlier file of the run added an entry, in its own language`, async () => {
+            const { after, target } = await seededInTheRun();
+
+            const applied = await migrate(after, consent);
+            expect(applied.code, applied.said).toBeUndefined();
+            expect(await pendingNames(target.adapter, after)).toEqual([]);
           }, 240_000);
 
           it(`refuses ${named} where the run renames the table it settles into place`, async () => {
