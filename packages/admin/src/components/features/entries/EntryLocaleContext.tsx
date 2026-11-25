@@ -12,8 +12,6 @@
 import type { Provider } from "react";
 import { createContext, useContext } from "react";
 
-import type { PublishAllPreview } from "@admin/services/publishAllPreview";
-
 export interface EntryLocaleContextValue {
   /** The active content locale code (undefined = the app default). */
   locale?: string;
@@ -75,18 +73,6 @@ export interface EntryLocaleContextValue {
    */
   fetchSourceValues?: (locale: string) => Promise<Record<string, unknown>>;
   /**
-   * Publish every language of this document at once.
-   *
-   * Supplied by the form for the same reason `fetchSourceValues` is: entries
-   * and singles are addressed differently, and the mutation each owns carries
-   * its own query keys. Making the ACTION the seam lets one availability rule
-   * serve both, instead of the action existing only where its address shape
-   * happened to be hardcoded.
-   *
-   * Absent means the surface cannot publish every language, and the action does
-   * not offer itself.
-   */
-  /**
    * Enter translation mode, reading the source from the named language.
    *
    * A seam for the same reason the others are: the URL state belongs to the
@@ -96,25 +82,6 @@ export interface EntryLocaleContextValue {
    * been taught to render the panes.
    */
   onEnterTranslationMode?: (source: string) => void;
-  publishAllLanguages?: {
-    /**
-     * The slug whose `publish-{slug}` permission this owes. The permission
-     * NAME is built by the shared rule, not here, so the two surfaces cannot
-     * come to disagree about what publishing is called.
-     */
-    slug: string;
-    /** Issue the publish and refresh the document. */
-    publish: () => void;
-    /** True while it is in flight. */
-    pending: boolean;
-    /**
-     * What the publish would do to each language, read from the server's
-     * preview of it, which judges the request as the publish would.
-     */
-    preview: () => Promise<PublishAllPreview>;
-    /** The query key the preview is cached under, one per document. */
-    previewKey: readonly unknown[];
-  };
 }
 
 /**

@@ -80,7 +80,7 @@ function storedAdmin(
 
 /** What the code-first sync stores for the printed code, beside what the record holds. */
 function storedBack(from: PromotedRecord) {
-  const config = toCodeFirstCollectionConfig(printed(from));
+  const config = toCodeFirstCollectionConfig(printed(from), "code");
   const of = (
     r: {
       labels?: unknown;
