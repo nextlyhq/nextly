@@ -122,85 +122,94 @@ function detailOf(error: unknown): string {
     .join(" | ");
 }
 
-async function answer(command: string, args: string[]): Promise<string> {
-  if (command === "read") {
+/** What a save of `heading` carries: the group's heading, and its translated tagline too. */
+const saved = (heading: string | undefined) => ({
+  card: { heading, tagline: heading },
+  // Last write wins: a server saving what its form holds, as the suite asks it to.
+  _overwrite: true,
+});
+
+/** The Single as a read of it returns it. */
+const readSingle = async (translations?: "all") =>
+  (await instance.nextly.findSingle({
+    slug: LIVE_SINGLE as never,
+    ...(translations === undefined ? {} : { translations }),
+  })) as { card?: unknown; _allLocales?: unknown };
+
+/** A plugin's save on a transaction it opens, its readiness warmed first or not. */
+async function pluginSaveInTransaction(
+  warm: boolean,
+  [id, heading]: string[]
+): Promise<string> {
+  const collections = pluginCollections!;
+  // Before the transaction, as a write on one of the plugin's own needs: what it warms can only be
+  // read inside one, never resolved.
+  if (warm) await collections.warmLocalizedReadiness(LIVE_COLLECTION);
+  await collections.withTransaction(tx =>
+    collections.updateEntryInTransaction(
+      tx,
+      LIVE_COLLECTION,
+      id!,
+      saved(heading),
+      {}
+    )
+  );
+  return "OK";
+}
+
+const COMMANDS: Record<string, (args: string[]) => Promise<string>> = {
+  read: async ([id]) => {
     const read = await instance.nextly.findByID({
       collection: LIVE_COLLECTION as never,
-      id: args[0]!,
+      id: id!,
     });
     const item = (read as { item?: { card?: unknown } }).item ?? read;
     return `OK ${JSON.stringify((item as { card?: unknown }).card ?? null)}`;
-  }
-  if (command === "save") {
+  },
+  save: async ([id, heading]) => {
     await instance.nextly.update({
       collection: LIVE_COLLECTION as never,
-      id: args[0]!,
-      // Last write wins: a server saving what its form holds, as the suite asks it to. The
-      // translation carries the same text, so a read shows whether it came back with the rest.
-      data: {
-        card: { heading: args[1], tagline: args[1] },
-        _overwrite: true,
-      } as never,
+      id: id!,
+      data: saved(heading) as never,
     });
     return "OK";
-  }
-  if (
-    command === "plugin-save" ||
-    command === "plugin-tx-save" ||
-    command === "plugin-tx-save-unwarmed"
-  ) {
-    if (!pluginCollections) return "ERROR NO_PLUGIN the plugin did not start";
-    const collections = pluginCollections;
-    const [id, heading] = args;
-    const data = {
-      card: { heading, tagline: heading },
-      _overwrite: true,
-    };
-    if (command === "plugin-save") {
-      await collections.updateEntry(LIVE_COLLECTION, id!, data, {});
-    } else {
-      // Before the transaction, as a write on one of the plugin's own needs: what it warms can
-      // only be read inside one, never resolved.
-      if (command === "plugin-tx-save") {
-        await collections.warmLocalizedReadiness(LIVE_COLLECTION);
-      }
-      await collections.withTransaction(tx =>
-        collections.updateEntryInTransaction(tx, LIVE_COLLECTION, id!, data, {})
-      );
-    }
-    return "OK";
-  }
-  if (command === "read-single-all") {
-    const read = (await instance.nextly.findSingle({
-      slug: LIVE_SINGLE as never,
-      translations: "all",
-    })) as { card?: unknown; _allLocales?: unknown };
-    return `OK ${JSON.stringify({ card: read.card, all: read._allLocales })}`;
-  }
-  if (command === "duplicate") {
+  },
+  duplicate: async ([id]) => {
     const copied = await instance.nextly.duplicate({
       collection: LIVE_COLLECTION as never,
-      id: args[0]!,
+      id: id!,
     });
     return `OK ${String(copied.item.id)}`;
-  }
-  if (command === "read-single") {
-    const read = await instance.nextly.findSingle({
-      slug: LIVE_SINGLE as never,
-    });
-    return `OK ${JSON.stringify((read as { card?: unknown }).card ?? null)}`;
-  }
-  if (command === "save-single") {
+  },
+  "plugin-save": async ([id, heading]) => {
+    await pluginCollections!.updateEntry(
+      LIVE_COLLECTION,
+      id!,
+      saved(heading),
+      {}
+    );
+    return "OK";
+  },
+  "plugin-tx-save": args => pluginSaveInTransaction(true, args),
+  "plugin-tx-save-unwarmed": args => pluginSaveInTransaction(false, args),
+  "read-single": async () =>
+    `OK ${JSON.stringify((await readSingle()).card ?? null)}`,
+  "read-single-all": async () => {
+    const read = await readSingle("all");
+    return `OK ${JSON.stringify({ card: read.card, all: read._allLocales })}`;
+  },
+  "save-single": async ([heading]) => {
     await instance.nextly.updateSingle({
       slug: LIVE_SINGLE as never,
-      data: {
-        card: { heading: args[0], tagline: args[0] },
-        _overwrite: true,
-      } as never,
+      data: saved(heading) as never,
     });
     return "OK";
-  }
-  return `ERROR UNKNOWN_COMMAND ${command}`;
+  },
+};
+
+async function answer(command: string, args: string[]): Promise<string> {
+  const run = COMMANDS[command];
+  return run === undefined ? `ERROR UNKNOWN_COMMAND ${command}` : run(args);
 }
 
 console.log("READY");

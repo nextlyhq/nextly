@@ -96,23 +96,40 @@ const FIELD_GROUP_TABLE = new RegExp(
  * any other is the project's own, missing because its migration has not run.
  */
 function moveCandidate(error: unknown): MoveCandidate | undefined {
+  const cause = beneathRefusals(error);
+  const found = missingSchemaObject(cause);
+  if (found === undefined) return undefined;
+  return found.object === "column"
+    ? movedColumn(found.text, cause)
+    : movedTable(found.object, found.text);
+}
+
+/** The first error beneath any NextlyError `error` is or was raised from. */
+function beneathRefusals(error: unknown): unknown {
   let cause: unknown = error;
   for (let depth = 0; NextlyError.is(cause) && depth < 8; depth += 1) {
     cause = (cause as { cause?: unknown }).cause;
   }
-  const found = missingSchemaObject(cause);
-  if (found?.object === "table" || found?.object === "unregistered") {
-    const missing = FIELD_GROUP_TABLE.exec(found.text)?.[1];
-    const other = missing === undefined ? undefined : otherTableName(missing);
-    return missing === undefined || other === undefined
-      ? undefined
-      : { kind: found.object, missing, other };
-  }
-  if (found?.object !== "column") return undefined;
-  const missing = firstIdentifierNamed(found.text, TYPE_COLUMNS);
+  return cause;
+}
+
+/** A missing table's candidate: a name of either generation, and what the other calls it. */
+function movedTable(
+  kind: "table" | "unregistered",
+  text: string
+): MoveCandidate | undefined {
+  const missing = FIELD_GROUP_TABLE.exec(text)?.[1];
+  const other = missing === undefined ? undefined : otherTableName(missing);
+  return missing === undefined || other === undefined
+    ? undefined
+    : { kind, missing, other };
+}
+
+/** A missing column's candidate: the discriminator alone, and the table it is missing from. */
+function movedColumn(text: string, cause: unknown): MoveCandidate | undefined {
+  const missing = firstIdentifierNamed(text, TYPE_COLUMNS);
   if (missing === undefined) return undefined;
-  const table =
-    tableOfMissingColumn(found.text, missing) ?? statementTableOf(cause);
+  const table = tableOfMissingColumn(text, missing) ?? statementTableOf(cause);
   return {
     kind: "column",
     missing,
@@ -348,24 +365,14 @@ export async function lookingUpRegistry<T>(args: {
 }): Promise<T> {
   const { adapter, lookup } = args;
   const executor = onTransaction(adapter, args.executor);
-  const savepoint =
-    executor === undefined ? undefined : await takeSavepoint(adapter, executor);
+  if (executor === undefined) return lookingUpOffTransaction(adapter, lookup);
+
+  const savepoint = await takeSavepoint(adapter, executor);
   try {
     return await lookup();
   } catch (error) {
     const candidate = moveCandidate(error);
     if (candidate === undefined || !isRegistry(candidate)) throw error;
-    if (executor === undefined) {
-      if (adapter.transactionOpenInFlow()) {
-        await adapter.afterRollback(() => resolveAgain(adapter));
-        throw error;
-      }
-      await resolveAgain(adapter);
-      // A second failure says no more than the first, which is the one raised.
-      return lookup().catch(() => {
-        throw error;
-      });
-    }
     if (!(await canAsk(adapter, executor, savepoint))) {
       await adapter.afterRollback(() => resolveAgain(adapter));
       throw error;
@@ -375,10 +382,7 @@ export async function lookingUpRegistry<T>(args: {
       error,
       catalogOn(adapter, executor)
     );
-    if (
-      moved &&
-      (adapter.dialect !== "postgresql" || savepoint?.taken === true)
-    ) {
+    if (moved && losesNothingByLookingAgain(adapter, savepoint)) {
       const other = REGISTRY_TABLES.find(name => name === candidate.other);
       if (other !== undefined) noteRegistryName(adapter, other);
       return lookup();
@@ -388,6 +392,39 @@ export async function lookingUpRegistry<T>(args: {
     await adapter.afterRollback(() => resolveAgain(adapter));
     throw storageMovingRefusal(candidate.missing);
   }
+}
+
+/** `lookingUpRegistry` with no transaction of the caller's: resolved again, and looked up once more. */
+async function lookingUpOffTransaction<T>(
+  adapter: DrizzleAdapter,
+  lookup: () => Promise<T>
+): Promise<T> {
+  try {
+    return await lookup();
+  } catch (error) {
+    if (!isRegistry(moveCandidate(error))) throw error;
+    if (adapter.transactionOpenInFlow()) {
+      await adapter.afterRollback(() => resolveAgain(adapter));
+      throw error;
+    }
+    await resolveAgain(adapter);
+    // A second failure says no more than the first, which is the one raised.
+    return lookup().catch(() => {
+      throw error;
+    });
+  }
+}
+
+/**
+ * Whether a lookup can be made again on a transaction once its failure was asked about: always
+ * where the failure left the transaction usable, and on PostgreSQL only while nothing of it came
+ * after the savepoint it was rolled back to.
+ */
+function losesNothingByLookingAgain(
+  adapter: DrizzleAdapter,
+  savepoint: TransactionSavepoint | undefined
+): boolean {
+  return adapter.dialect !== "postgresql" || savepoint?.taken === true;
 }
 
 /**

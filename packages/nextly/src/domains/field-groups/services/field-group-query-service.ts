@@ -54,7 +54,6 @@ import {
   isMovedStorageError,
   isOnTransaction,
   raiseIfMoved,
-  refusingMovedStorage,
 } from "../migration/moved-storage";
 import { passwordReachOf } from "../password-reach";
 import {
@@ -948,16 +947,14 @@ export class FieldGroupQueryService extends BaseService {
   async populateComponentData(
     params: PopulateComponentDataParams
   ): Promise<Record<string, unknown>> {
-    const [populated] = await this.guarded(params.executor, () =>
-      this.populateComponentDataInEach(params, [
-        {
-          locale: params.locale,
-          fallbackLocale: params.fallbackLocale,
-          // The languages the entry is not published in travel with the language read.
-          skipLanguages: params.skipLanguages,
-        },
-      ])
-    );
+    const [populated] = await this.populateComponentDataInEach(params, [
+      {
+        locale: params.locale,
+        fallbackLocale: params.fallbackLocale,
+        // The languages the entry is not published in travel with the language read.
+        skipLanguages: params.skipLanguages,
+      },
+    ]);
     return populated;
   }
 
@@ -976,23 +973,7 @@ export class FieldGroupQueryService extends BaseService {
       languages: readonly ComponentReadLanguage[];
     }
   ): Promise<Record<string, unknown>[]> {
-    return this.guarded(params.executor, () =>
-      this.populateComponentDataInEach(params, params.languages)
-    );
-  }
-
-  /**
-   * A read of field groups, refused to be retried when it runs on a write's transaction and meets
-   * storage the migration moved (`refusingMovedStorage`). Every public read is made through it: a
-   * write reads the groups it holds before it writes them, and afterwards for what it records.
-   */
-  private guarded<T>(executor: unknown, work: () => Promise<T>): Promise<T> {
-    return refusingMovedStorage({
-      adapter: this.adapter,
-      rows: this.registryService,
-      executor,
-      work,
-    });
+    return this.populateComponentDataInEach(params, params.languages);
   }
 
   private async populateComponentDataInEach(
@@ -1172,14 +1153,6 @@ export class FieldGroupQueryService extends BaseService {
   async populateComponentDataMany(
     params: PopulateComponentDataManyParams
   ): Promise<Record<string, unknown>[]> {
-    return this.guarded(params.executor, () =>
-      this.populateComponentDataManyOn(params)
-    );
-  }
-
-  private async populateComponentDataManyOn(
-    params: PopulateComponentDataManyParams
-  ): Promise<Record<string, unknown>[]> {
     const {
       entries,
       parentTable,
@@ -1332,22 +1305,6 @@ export class FieldGroupQueryService extends BaseService {
       pending?: { locale: string; values: Record<string, unknown> };
     }
   ): Promise<void> {
-    return this.guarded(params.executor, () =>
-      this.populateComponentDataBesideEntriesOn(params)
-    );
-  }
-
-  private async populateComponentDataBesideEntriesOn(
-    params: Omit<
-      PopulateComponentDataManyParams,
-      "locale" | "fallbackLocale" | "access"
-    > & {
-      /** Who each language's related rows are read for, asked in that language. */
-      accessIn: (locale: string) => ComponentReadAccess;
-      /** One language's pending change, by top-level field, shown in place of its stored values. */
-      pending?: { locale: string; values: Record<string, unknown> };
-    }
-  ): Promise<void> {
     const { entries, skipLanguagesOf, pending } = params;
     const localization = this.localization;
     if (!localization || entries.length === 0) return;
@@ -1424,6 +1381,42 @@ export class FieldGroupQueryService extends BaseService {
   }
 
   /**
+   * One field's stored instances, read with their translations where they have any in one language,
+   * and the registry row their translations are then overlaid from (`metaAfterRead`).
+   */
+  private async instancesOf(
+    componentSlug: string,
+    at: {
+      parentId: string;
+      parentTable: string;
+      fieldName: string;
+      languages: readonly ComponentReadLanguage[];
+      executor: unknown;
+      strict: boolean;
+    }
+  ) {
+    const meta = await this.registryService.getComponent(
+      componentSlug,
+      at.executor
+    );
+    const { rows, joined } = await this.getExistingInstances(
+      meta.tableName,
+      at.parentId,
+      at.parentTable,
+      at.fieldName,
+      at.executor,
+      at.strict,
+      await this.oneLanguagePlan(meta, at.languages, at.executor)
+    );
+    return {
+      componentFields: meta.fields,
+      rows,
+      joined,
+      current: await this.metaAfterRead(componentSlug, at.executor),
+    };
+  }
+
+  /**
    * A single component field's instance, in each language asked: the row is
    * read once and deserialized for each language, so no language's overlay
    * reaches another's copy.
@@ -1440,22 +1433,17 @@ export class FieldGroupQueryService extends BaseService {
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<(Record<string, unknown> | null)[]> {
-    const meta = await this.registryService.getComponent(
+    const { componentFields, rows, joined, current } = await this.instancesOf(
       componentSlug,
-      executor
+      {
+        parentId,
+        parentTable,
+        fieldName,
+        languages,
+        executor,
+        strict,
+      }
     );
-    const componentFields = meta.fields;
-    // Read with its translations when it has any in one language.
-    const { rows, joined } = await this.getExistingInstances(
-      meta.tableName,
-      parentId,
-      parentTable,
-      fieldName,
-      executor,
-      strict,
-      await this.oneLanguagePlan(meta, languages, executor)
-    );
-    const current = await this.metaAfterRead(componentSlug, executor);
 
     if (rows.length === 0) return languages.map(() => null);
 
@@ -1511,22 +1499,17 @@ export class FieldGroupQueryService extends BaseService {
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Record<string, unknown>[][]> {
-    const meta = await this.registryService.getComponent(
+    const { componentFields, rows, joined, current } = await this.instancesOf(
       componentSlug,
-      executor
+      {
+        parentId,
+        parentTable,
+        fieldName,
+        languages,
+        executor,
+        strict,
+      }
     );
-    const componentFields = meta.fields;
-    // Read with their translations when they have any in one language.
-    const { rows, joined } = await this.getExistingInstances(
-      meta.tableName,
-      parentId,
-      parentTable,
-      fieldName,
-      executor,
-      strict,
-      await this.oneLanguagePlan(meta, languages, executor)
-    );
-    const current = await this.metaAfterRead(componentSlug, executor);
 
     const reach = await this.passwordReach(componentFields, executor);
     const byLanguage = languages.map(language => ({

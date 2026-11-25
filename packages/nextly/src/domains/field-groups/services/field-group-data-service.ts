@@ -7,6 +7,7 @@ import type { FieldGroupRegistryService } from "../../../services/field-groups/f
 import type { Logger } from "../../../shared/types";
 import type { LocalizationSource } from "../../i18n/localization-source";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { refusingMovedStorage } from "../migration/moved-storage";
 
 import {
   FieldGroupMutationService,
@@ -32,7 +33,7 @@ export class FieldGroupDataService {
   private readonly mutationService: FieldGroupMutationService;
 
   constructor(
-    adapter: DrizzleAdapter,
+    private readonly adapter: DrizzleAdapter,
     logger: Logger,
     private readonly registryService: FieldGroupRegistryService,
     relationshipService?: CollectionRelationshipService,
@@ -133,6 +134,20 @@ export class FieldGroupDataService {
     return record?.tableName ?? null;
   }
 
+  /**
+   * A read of field groups, refused to be retried when it runs on a write's transaction and meets
+   * storage the migration moved (`refusingMovedStorage`). Every read is made through it: a write
+   * reads the groups it holds before it writes them, and afterwards for what it records.
+   */
+  private guarded<T>(executor: unknown, work: () => Promise<T>): Promise<T> {
+    return refusingMovedStorage({
+      adapter: this.adapter,
+      rows: this.registryService,
+      executor,
+      work,
+    });
+  }
+
   setRelationshipService(service: CollectionRelationshipService): void {
     this.queryService.setRelationshipService(service);
   }
@@ -191,13 +206,17 @@ export class FieldGroupDataService {
   populateComponentData(
     params: PopulateComponentDataParams
   ): Promise<Record<string, unknown>> {
-    return this.queryService.populateComponentData(params);
+    return this.guarded(params.executor, () =>
+      this.queryService.populateComponentData(params)
+    );
   }
 
   populateComponentDataMany(
     params: PopulateComponentDataManyParams
   ): Promise<Record<string, unknown>[]> {
-    return this.queryService.populateComponentDataMany(params);
+    return this.guarded(params.executor, () =>
+      this.queryService.populateComponentDataMany(params)
+    );
   }
 
   /**
@@ -209,7 +228,9 @@ export class FieldGroupDataService {
       FieldGroupQueryService["populateComponentDataBesideEntries"]
     >[0]
   ): Promise<void> {
-    return this.queryService.populateComponentDataBesideEntries(params);
+    return this.guarded(params.executor, () =>
+      this.queryService.populateComponentDataBesideEntries(params)
+    );
   }
 
   /**
@@ -225,6 +246,8 @@ export class FieldGroupDataService {
       FieldGroupQueryService["populateComponentDataByLanguage"]
     >[0]
   ): Promise<Record<string, unknown>[]> {
-    return this.queryService.populateComponentDataByLanguage(params);
+    return this.guarded(params.executor, () =>
+      this.queryService.populateComponentDataByLanguage(params)
+    );
   }
 }

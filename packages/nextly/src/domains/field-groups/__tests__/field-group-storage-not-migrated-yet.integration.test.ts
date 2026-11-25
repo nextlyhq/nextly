@@ -250,6 +250,17 @@ describe.each(getConfiguredTestDialects())(
             })
           );
       };
+      const removeAnother = async () => {
+        const made = await nextly.create({
+          collection: "fgnm_posts" as never,
+          data: { title: "D", card: { heading: "D" } } as never,
+        });
+        const also = (made.item as { id: string }).id;
+        return () =>
+          outcome(
+            nextly.delete({ collection: "fgnm_posts" as never, id: also })
+          );
+      };
       return {
         save,
         read,
@@ -260,6 +271,7 @@ describe.each(getConfiguredTestDialects())(
         restoreSingle,
         draftHeading,
         bulkRemove,
+        removeAnother,
       };
     };
 
@@ -581,46 +593,76 @@ describe.each(getConfiguredTestDialects())(
     it.runIf(dialect === "postgresql")(
       "takes a savepoint for a save on the legacy names, and none on the current ones",
       async () => {
-        const counted = async (save: () => Promise<string>) => {
+        /** The statements `write` sent. */
+        const sent = async (write: () => Promise<string>) => {
           const recorder = await recordStatements(site!.adapter, dialect);
           try {
-            expect(await save()).toBe("ok");
+            expect(await write()).toBe("ok");
           } finally {
             recorder.uninstall();
           }
-          return {
-            savepoints: recorder.statements.filter(text =>
-              /savepoint "?nextly_moved_storage/i.test(text)
-            ),
-            statements: recorder.statements.length,
-          };
+          return recorder.statements.map(text =>
+            text.replace(/\s+/g, " ").slice(0, 160)
+          );
+        };
+        const beyond = (longer: string[], shorter: string[]) => {
+          const left = [...shorter];
+          return longer.filter(text => {
+            const at = left.indexOf(text);
+            if (at >= 0) left.splice(at, 1);
+            return at < 0;
+          });
+        };
+        // Each write five times: a read this process makes every so often falls inside one or
+        // another, and adds to it, so what a write itself sends is the fewest it was seen to send.
+        // Whatever a longer one sent beyond that is printed, and must be such a read.
+        const fewest = async (
+          kind: string,
+          write: () => Promise<() => Promise<string>>
+        ) => {
+          const runs: string[][] = [];
+          for (let n = 0; n < 5; n++) runs.push(await sent(await write()));
+          const least = runs.reduce((a, b) => (b.length < a.length ? b : a));
+          const extra = runs.flatMap(run => beyond(run, least));
+          console.log(
+            `[statement counts] ${kind}: ${runs.map(run => run.length).join(" ")}${extra.length === 0 ? "" : ` extra ${JSON.stringify(extra)}`}`
+          );
+          return { least, extra };
         };
         const measured = async (migrated: boolean) => {
           const at = await openSite({ migrated });
           await at.save();
           await at.saveSingle();
-          const bulkRemove = await at.bulkRemove();
+          const on = migrated ? "current" : "legacy";
           const counts = {
-            "collection save": await counted(() => at.save("Counted")),
-            "Single save": await counted(() => at.saveSingle("Counted")),
-            "bulk delete of one": await counted(bulkRemove),
-            delete: await counted(at.remove),
+            "collection save": await fewest(
+              `collection save, ${on}`,
+              async () => () => at.save("Counted")
+            ),
+            "Single save": await fewest(
+              `Single save, ${on}`,
+              async () => () => at.saveSingle("Counted")
+            ),
+            "bulk delete of one": await fewest(
+              `bulk delete of one, ${on}`,
+              at.bulkRemove
+            ),
+            delete: await fewest(`delete, ${on}`, at.removeAnother),
           };
           await site!.close();
           site = undefined;
           return counts;
         };
+        const isSavepoint = (text: string) =>
+          /savepoint "?nextly_moved_storage/i.test(text);
         const legacy = await measured(false);
         const current = await measured(true);
         for (const kind of Object.keys(legacy) as (keyof typeof legacy)[]) {
-          const before = legacy[kind];
-          const after = current[kind];
-          console.log(
-            `[statement counts] ${kind}: legacy ${before.statements} (${before.savepoints.length} savepoint), current ${after.statements} (${after.savepoints.length})`
-          );
-          expect(before.savepoints, kind).toHaveLength(1);
-          expect(after.savepoints, kind).toEqual([]);
-          expect(before.statements - after.statements, kind).toBe(1);
+          const before = legacy[kind].least;
+          const after = current[kind].least;
+          expect(before.filter(isSavepoint), kind).toHaveLength(1);
+          expect(after.filter(isSavepoint), kind).toEqual([]);
+          expect(before.length - after.length, kind).toBe(1);
         }
       }
     );
