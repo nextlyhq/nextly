@@ -61,7 +61,27 @@ function reversed(step: HistoryStep): HistoryStep {
 
 /** How many entries change the document, which is what a save point counts. */
 function documentEntries(stack: readonly HistoryEntry[]): number {
-  return stack.filter(entry => entry.kind === "ops").length;
+  return stack.filter(isDocumentEntry).length;
+}
+
+/** Whether an entry changes the document, rather than something beside it. */
+function isDocumentEntry(entry: HistoryEntry): boolean {
+  return entry.kind === "ops";
+}
+
+/**
+ * The part of a history a later mount of the same editor can start from: the
+ * document's own edits on both stacks, and how many fell off the old end.
+ *
+ * Only the document's edits. A step recorded from outside it (a write to the
+ * site's shared styles) changes state another person may have changed since,
+ * so it is not kept; leaving it out moves no document edit, as withdrawing
+ * one does not.
+ */
+export interface KeptHistory {
+  readonly undo: readonly HistoryEntry[];
+  readonly redo: readonly HistoryEntry[];
+  readonly forgotten: number;
 }
 
 /**
@@ -72,7 +92,7 @@ function documentEntries(stack: readonly HistoryEntry[]): number {
  * history would then describe an edit that never happened. `applyOps` returns
  * them already in undo order and already frozen to the type.
  */
-export function useHistoryStacks(): {
+export function useHistoryStacks(seed?: HistorySeed): {
   depths: { undo: number; redo: number; document: number };
   push: (
     entry: HistoryEntry,
@@ -97,21 +117,26 @@ export function useHistoryStacks(): {
   settle: (origin: HistoryStep) => void;
   /** Forget everything: both stacks, and what fell off the old end. */
   clear: () => void;
+  /** What a later mount may start from (`KeptHistory`), as it stands now. */
+  keep: () => KeptHistory;
 } {
-  const undoStack = useRef<HistoryEntry[]>([]);
-  const redoStack = useRef<HistoryEntry[]>([]);
+  // Started from `seed` where an earlier mount kept one, else empty. Read on
+  // the first render only, as every initial value is.
+  const start = seedOrEmpty(seed);
+  const undoStack = useRef<HistoryEntry[]>(start.undo);
+  const redoStack = useRef<HistoryEntry[]>(start.redo);
   // Mirrors the stack lengths so the flags below are STATE and re-render when
   // they change. Reading `undoStack.current.length` directly would leave an
   // undo button disabled after the first edit, because a ref mutation does not
   // schedule a render.
-  const [depths, setDepths] = useState({ undo: 0, redo: 0, document: 0 });
+  const [depths, setDepths] = useState(() => depthsOf(start));
   /*
    * Document edits dropped off the old end. The save point measures the
    * document's position in its history, and that position does not move
    * because the history forgets how it got there: counted in, a page saved
    * before a run of style changes stays saved once its edit falls off.
    */
-  const forgotten = useRef(0);
+  const forgotten = useRef(start.forgotten);
   const sync = useCallback(() => {
     setDepths({
       undo: undoStack.current.length,
@@ -262,9 +287,9 @@ export function useHistoryStacks(): {
     },
     [push, withdraw]
   );
-  // The two that reset the stacks without replaying anything, made together:
-  // each reads only the refs and `sync`, so both keep one identity.
-  const { clear, withdrawTyping } = useMemo(
+  // The ones that read or reset the stacks without replaying anything, made
+  // together: each reads only the refs and `sync`, so all keep one identity.
+  const { clear, withdrawTyping, keep } = useMemo(
     () => ({
       clear: () => {
         generation.current += 1;
@@ -281,10 +306,63 @@ export function useHistoryStacks(): {
           run,
           sync
         ),
+      // Read at the moment it is asked, so an edit made on the way out is in it.
+      keep: (): KeptHistory => ({
+        undo: undoStack.current.filter(isDocumentEntry),
+        redo: redoStack.current.filter(isDocumentEntry),
+        forgotten: forgotten.current,
+      }),
     }),
     [sync]
   );
-  return { depths, push, pop, remove, withdrawTyping, record, settle, clear };
+  return {
+    depths,
+    push,
+    pop,
+    remove,
+    withdrawTyping,
+    record,
+    settle,
+    clear,
+    keep,
+  };
+}
+
+/**
+ * A kept history as a new history starts from it: its own copies of the
+ * stacks, which it then changes in place (`seedOf`).
+ */
+export interface HistorySeed {
+  readonly undo: HistoryEntry[];
+  readonly redo: HistoryEntry[];
+  readonly forgotten: number;
+}
+
+/** A history's start: the seed it was given, else new empty stacks. */
+function seedOrEmpty(seed: HistorySeed | undefined): HistorySeed {
+  return seed ?? { undo: [], redo: [], forgotten: 0 };
+}
+
+/** The depths a history started from `seed` reads first. */
+function depthsOf(seed: HistorySeed): {
+  undo: number;
+  redo: number;
+  document: number;
+} {
+  return {
+    undo: seed.undo.length,
+    redo: seed.redo.length,
+    document: documentEntries(seed.undo) + seed.forgotten,
+  };
+}
+
+/** What a new history starts from: copies of a kept one's stacks. */
+export function seedOf(kept: KeptHistory): HistorySeed {
+  return {
+    undo: [...kept.undo],
+    redo: [...kept.redo],
+    forgotten: kept.forgotten,
+  };
 }
 
 /** The run of typing a step was pushed for, or nothing for an edit that is not typing. */
