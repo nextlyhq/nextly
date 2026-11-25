@@ -156,8 +156,11 @@ describe("the document's Languages button", () => {
   it("says no stage of a language standing in none, nor the shared fields' own", async () => {
     standsIn({ es: null });
     const menu = await open();
-    expect(item(menu, /^Spanish.*changes not published/)).not.toBeNull();
-    expect(within(menu).queryByText(/Approved|stage/)).toBeNull();
+    // The whole row, so a part left empty between its dots is seen too.
+    expect(item(menu, /^Spanish/)?.textContent).toBe(
+      "Spanish, Live · , changes not published, Translate"
+    );
+    expect(within(menu).queryByText(/Approved/)).toBeNull();
   });
 
   it("says no stage where no workflow holds the document", async () => {
@@ -173,6 +176,7 @@ describe("the document's Languages button", () => {
   });
 
   it("says a stage named as the status is, beside it", async () => {
+    const complaint = vi.spyOn(console, "error").mockReturnValue(undefined);
     standsIn({ es: "Live" });
     const menu = await open({
       document: {
@@ -181,6 +185,9 @@ describe("the document's Languages button", () => {
       },
     });
     expect(item(menu, /^Spanish.*Live.*Live/)).not.toBeNull();
+    // Two parts with the same words are still two, not one under one key.
+    expect(complaint).not.toHaveBeenCalled();
+    complaint.mockRestore();
   });
 
   it("is drawn on a site with languages, and on no other", () => {
