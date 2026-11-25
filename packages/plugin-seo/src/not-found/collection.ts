@@ -28,11 +28,15 @@ export function notFoundCollection(): CollectionConfig {
     // tag, and read only by the admin's routes, which no cache holds: a write
     // here has nothing to expire, and trying would log a failure every time.
     revalidate: { disable: true },
+    // Every text value here is the plugin's own bookkeeping (keys, ids, languages,
+    // paths, states, actors), never translated: each says `localized: false`, so its
+    // column stays on the main table, where a lookup by it finds it in every language.
     fields: [
       // The SHA-256 of the language and the address, so one address is one
       // row on every dialect, whatever its length.
       text({
         name: "pathKey",
+        localized: false,
         label: "Path key",
         required: true,
         unique: true,
@@ -40,12 +44,22 @@ export function notFoundCollection(): CollectionConfig {
       // The address asked for, by its language and path as addresses are
       // kept: `/de/alt` is `/alt` in `de`, and the same path on two
       // languages' domains is two addresses.
-      text({ name: "locale", label: "Language", required: true }),
-      textarea({ name: "path", label: "Address", required: true }),
+      text({
+        name: "locale",
+        localized: false,
+        label: "Language",
+        required: true,
+      }),
+      textarea({
+        name: "path",
+        localized: false,
+        label: "Address",
+        required: true,
+      }),
       // The address exactly as a visitor asked for it, where that is not how
       // the site's language rule spells the kept one (an unprefixed old link
       // on a site whose languages are all prefixed).
-      textarea({ name: "asked", label: "Asked for" }),
+      textarea({ name: "asked", localized: false, label: "Asked for" }),
       number({ name: "hits", label: "Visits", required: true, index: true }),
       date({
         name: "lastSeen",
@@ -55,11 +69,11 @@ export function notFoundCollection(): CollectionConfig {
       }),
       // `missing` for a request that found nothing, `moved` for an old
       // address a deploy moved whose redirect could not be saved.
-      text({ name: "kind", label: "Kind", required: true }),
+      text({ name: "kind", localized: false, label: "Kind", required: true }),
       // Where the last visitor sent from another page came from: another
       // site's host, or a path on this site without its query. Empty while
       // every visitor came directly.
-      textarea({ name: "cameFrom", label: "Came from" }),
+      textarea({ name: "cameFrom", localized: false, label: "Came from" }),
       // Someone chose to ignore the address: listed only when asked for.
       checkbox({ name: "ignored", label: "Ignored", defaultValue: false }),
     ],

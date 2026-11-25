@@ -17,8 +17,10 @@ import type { JSX } from "react";
 
 import { TranslationWorklist } from "@admin/components/features/translations/TranslationWorklist";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { Breadcrumbs } from "@admin/components/shared/breadcrumbs";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
+import { ROUTES } from "@admin/constants/routes";
 import { LOCALE_PARAM } from "@admin/constants/search-params";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { setSearchParam } from "@admin/lib/navigation";
@@ -56,6 +58,13 @@ export default function TranslationsPage(): JSX.Element {
               subtitle promising untranslated work describes them as the opposite of what they are.
               Naming the page's SUBJECT rather than one of its questions keeps it true whichever tab
               is showing, and does not need updating when another is added. */}
+        {/* Where the page is, in the top bar, as on every other page. */}
+        <Breadcrumbs
+          items={[
+            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+            { label: "Translations" },
+          ]}
+        />
         <PageHeader
           title="Translations"
           description="Outstanding translation work, across every collection, in one language."

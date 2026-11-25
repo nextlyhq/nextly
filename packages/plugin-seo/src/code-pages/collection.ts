@@ -33,16 +33,25 @@ export function codePagesCollection(): CollectionConfig {
     slug: CODE_PAGES_SLUG,
     labels: { singular: "Page with no entry", plural: "Pages with no entry" },
     internal: true,
+    // Its keys, ids, states and actors are bookkeeping, never translated: each says
+    // `localized: false`, so its column stays on the main table, where a lookup by it
+    // finds it in every language. Its editorial text is translated as any field is.
     fields: [
       // The SHA-256 of the address, so one address is one row on every
       // dialect, whatever its length.
       text({
         name: "pathKey",
+        localized: false,
         label: "Path key",
         required: true,
         unique: true,
       }),
-      textarea({ name: "path", label: "Address", required: true }),
+      textarea({
+        name: "path",
+        localized: false,
+        label: "Address",
+        required: true,
+      }),
       // What `{Title}` stands for in the site's title pattern.
       textarea({ name: "name", label: "Name" }),
       // What a person typed for the address.

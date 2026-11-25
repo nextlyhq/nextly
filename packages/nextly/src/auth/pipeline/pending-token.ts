@@ -15,12 +15,11 @@ import { verifyToken } from "../jwt/verify";
 export { PENDING_AUTH_TYP };
 
 /**
- * Sentinel `challengeId` for the forced first-sign-in password change. A user
- * whose account still holds an admin-set password is issued a pending token
- * carrying this id instead of a session; `handleSetInitialPassword` accepts
- * only tokens marked with it.
+ * Defined in `must-change-password` and re-exported here, where its consumers
+ * look for it, so the plugin resolver can refuse a plugin's use of it without
+ * importing this module, which loads the token library.
  */
-export const MUST_CHANGE_PASSWORD_CHALLENGE = "must-change-password";
+export { MUST_CHANGE_PASSWORD_CHALLENGE } from "./must-change-password";
 
 /**
  * The id of one interrupted login, minted when the login is paused and carried
