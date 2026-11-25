@@ -879,6 +879,91 @@ export function settleAnswerCases(args: {
           }, 240_000);
         }
 
+        // A run refuses for the entries a file would settle by another language's values: where it
+        // has none to settle, on a database whose table it makes or whose table is empty, the same
+        // file runs. A table the run renames before it answers is read as holding entries, since
+        // what the rename brings is not there yet to be counted.
+        for (const decided of decidedSaves(translated)) {
+          const kind = translated ? "a translated" : "an untranslated";
+          const named = `${kind} collection's ${decided.deletes ? "delete" : "fill"} in ${decided.file}`;
+          const consent = decided.deletes
+            ? { acceptDataLoss: true as const }
+            : {};
+          const spanish = { ...LOCALIZATION, defaultLocale: "es" };
+          /** The save's files, and the one that answers. */
+          const answered = async () => {
+            const { before, after } = await built(
+              translated,
+              decided.save,
+              false
+            );
+            const file = files(after).find(
+              name =>
+                !files(before).includes(name) &&
+                /^(UPDATE|INSERT INTO|DELETE FROM)\b.*_locales/m.test(
+                  runs(after, name)
+                )
+            );
+            expect(file).toBeDefined();
+            return {
+              before,
+              after,
+              path: join(after, "database", "history", file!),
+            };
+          };
+
+          it(`runs ${named} on a new database whose default is another language`, async () => {
+            const { after } = await answered();
+            const target = await database();
+            reach(target.url);
+
+            const applied = await migrate(after, consent, spanish);
+            expect(applied.code, applied.said).toBeUndefined();
+            expect(await pendingIn(target.adapter, after)).toEqual([]);
+            expect(await entriesOf(target.adapter)).toEqual([]);
+          }, 240_000);
+
+          it(`runs ${named} on a new database where the file records no language`, async () => {
+            const { after, path } = await answered();
+            const text = readFileSync(path, "utf8");
+            writeFileSync(path, text.replace(/^-- Answers in: .*\n/m, ""));
+            const target = await database();
+            reach(target.url);
+
+            const applied = await migrate(after, consent);
+            expect(applied.code, applied.said).toBeUndefined();
+            expect(await pendingIn(target.adapter, after)).toEqual([]);
+          }, 240_000);
+
+          it(`refuses ${named} where the run renames the table it settles into place`, async () => {
+            const { before, after, path } = await answered();
+            const target = await seeded(before, translated);
+            reach(target.url);
+            // The entries are under another name, and the answering file brings them back first.
+            const rename = (from: string, to: string) =>
+              `ALTER TABLE ${q(from)} RENAME TO ${q(to)};`;
+            await target.adapter.executeQuery(rename(MAIN, `${MAIN}_parked`));
+            const text = readFileSync(path, "utf8");
+            const renaming = text.replace(
+              /^-- UP$/m,
+              `-- UP\n${rename(`${MAIN}_parked`, MAIN)}`
+            );
+            expect(renaming).not.toBe(text);
+            writeFileSync(path, renaming);
+
+            const refused = await migrate(after, consent, spanish);
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            // Still under the other name, with every entry.
+            const parked = await target.adapter.executeQuery<{ id: unknown }>(
+              `SELECT ${q("id")} AS id FROM ${q(`${MAIN}_parked`)}`
+            );
+            expect(parked.map(row => String(row.id)).sort()).toEqual(
+              [target.kept, target.empty, target.bare].sort()
+            );
+          }, 240_000);
+        }
+
         it.runIf(dialect === "mysql")(
           `leaves ${translated ? "a translated" : "an untranslated"} collection's file whole where a run stopped between its ALTER and its fill, and finishes once that is undone`,
           async () => {
