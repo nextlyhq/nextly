@@ -118,6 +118,7 @@ function draw(props: Partial<DocumentLanguagesButtonProps> = {}) {
       locale={undefined}
       translating={false}
       hold={NOTHING_HELD}
+      canEdit
       onPublishOthers={undefined}
       panelMode="docked"
       {...props}
@@ -212,6 +213,29 @@ describe("the document's Languages button", () => {
       "href",
       `${EDITOR}?locale=en`
     );
+  });
+
+  it("leads there on the tab this language is open on", async () => {
+    window.history.replaceState(null, "", `${EDITOR}?locale=ar&tab=acme.seo`);
+    try {
+      const menu = await open({ locale: "es" });
+      expect(item(menu, /^Spanish/)).toHaveAttribute(
+        "href",
+        `${EDITOR}?locale=es&translate=en&tab=acme.seo`
+      );
+      expect(item(menu, /^English/)).toHaveAttribute(
+        "href",
+        `${EDITOR}?locale=en&tab=acme.seo`
+      );
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
+  it("offers someone who may not change the language to open another", async () => {
+    const menu = await open({ canEdit: false });
+    expect(item(menu, /^English.*Viewing/)).not.toBeNull();
+    expect(item(menu, /^Spanish.*Open$/)).not.toBeNull();
   });
 
   it("still leads there for someone who may not read every language's state", async () => {

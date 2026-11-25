@@ -1771,10 +1771,13 @@ export function EntryForm({
                                               recovering,
                                               changeAwaiting,
                                               documentHeld:
-                                                lock.actionsDisabled,
+                                                lock.actionsDisabled &&
+                                                !readOnlyForReader,
                                             }}
+                                            canEdit={!lock.readOnly}
                                             onPublishOthers={
-                                              isSubmitting
+                                              isSubmitting ||
+                                              lock.actionsDisabled
                                                 ? undefined
                                                 : onPublishOthers
                                             }

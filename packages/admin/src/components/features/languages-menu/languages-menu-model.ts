@@ -220,16 +220,21 @@ function sentenceCase(words: string): string {
 /**
  * A row's line, in the parts its dots set apart: "Live" and "1 field out of date", or for the
  * language on screen "Editing" and "live, 1 field out of date". Empty where nothing is said of it.
+ * Someone who may not change the language is "Viewing" it.
  */
 export function statusParts(
   { standing, need }: Pick<LanguageRow, "standing" | "need">,
-  editing: boolean
+  onScreen: boolean,
+  canEdit = true
 ): string[] {
   const facts = [standing, need].filter(
     (each): each is string => each !== null
   );
-  if (editing)
-    return ["Editing", ...(facts.length === 0 ? [] : [facts.join(", ")])];
+  if (onScreen)
+    return [
+      canEdit ? "Editing" : "Viewing",
+      ...(facts.length === 0 ? [] : [facts.join(", ")]),
+    ];
   return facts.map((words, index) =>
     index === 0 ? sentenceCase(words) : words
   );

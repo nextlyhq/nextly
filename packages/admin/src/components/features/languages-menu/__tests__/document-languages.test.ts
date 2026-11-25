@@ -14,6 +14,7 @@ import {
   currentLanguageOf,
   documentLanguagesOf,
   editAddress,
+  keepingQuery,
   languagesHeldReason,
   type LanguagesHold,
 } from "../document-languages";
@@ -46,6 +47,31 @@ describe("the languages' addresses", () => {
     // What the named address is there for.
     navigateTo(EDITOR);
     expect(here()).toBe(`${EDITOR}?locale=es&translate=en`);
+  });
+});
+
+describe("a language's address, opened from a place in the editor", () => {
+  it("keeps the rest of the query, such as the open tab", () => {
+    expect(
+      keepingQuery(translateAddress(EDITOR, "es", "en"), {
+        tab: "acme-seo.seo",
+        locale: "ar",
+        translate: "en",
+        ref: ["a", "b"],
+      })
+    ).toBe(`${EDITOR}?locale=es&translate=en&tab=acme-seo.seo&ref=a&ref=b`);
+  });
+
+  it("keeps nothing of the language on screen, its version among it", () => {
+    expect(
+      keepingQuery(editAddress(EDITOR, "en"), {
+        locale: "es",
+        translate: "en",
+        history: "1",
+        version: "3",
+        restore: "title",
+      })
+    ).toBe(`${EDITOR}?locale=en`);
   });
 });
 
@@ -97,7 +123,7 @@ describe("what holds the languages", () => {
     { hold: "viewingPastVersion", says: /past version/ },
     { hold: "recovering", says: /live values/ },
     { hold: "changeAwaiting", says: /changed elsewhere/ },
-    { hold: "documentHeld", says: /yours to edit/ },
+    { hold: "documentHeld", says: /can be edited here/ },
   ])("says why, for $hold", ({ hold, says }) => {
     expect(languagesHeldReason({ ...FREE, [hold]: true })).toMatch(says);
   });

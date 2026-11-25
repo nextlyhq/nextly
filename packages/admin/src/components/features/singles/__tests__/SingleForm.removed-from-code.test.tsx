@@ -17,7 +17,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { cleanup, createTestQueryClient, screen } from "@admin/__tests__/utils";
 
-const { useDocumentLock, menuProps, siteLocales } = vi.hoisted(() => ({
+const { useDocumentLock, menuProps, siteLocales, reader } = vi.hoisted(() => ({
+  // Whether the person may change it, and who has it, as a reader is told.
+  reader: {
+    update: "allowed" as "allowed" | "refused",
+    holder: null as unknown,
+  },
   useDocumentLock: vi.fn(),
   menuProps: vi.fn(),
   // The site's languages; none unless a case configures them.
@@ -25,6 +30,9 @@ const { useDocumentLock, menuProps, siteLocales } = vi.hoisted(() => ({
 }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
+vi.mock("@admin/hooks/queries/useDocumentLockHolder", () => ({
+  useDocumentLockHolder: () => reader.holder,
+}));
 // The Languages menu, as what the editor hands it.
 vi.mock(
   "@admin/components/features/languages-menu/DocumentLanguagesButton",
@@ -66,7 +74,7 @@ vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
 }));
 vi.mock("@admin/hooks/useUpdateAnswer", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/hooks/useUpdateAnswer")>()),
-  useUpdateAnswer: () => "allowed",
+  useUpdateAnswer: () => reader.update,
 }));
 
 import {
@@ -142,7 +150,11 @@ async function menuItems(): Promise<string[]> {
   return [...buttons, ...items.map(item => item.textContent ?? "")];
 }
 
-function renderEditor(removed: boolean, localized = false) {
+function renderEditor(
+  removed: boolean,
+  localized = false,
+  onPublishOthers?: () => void
+) {
   render(
     <SingleForm
       schema={banner(removed, localized)}
@@ -150,6 +162,7 @@ function renderEditor(removed: boolean, localized = false) {
       onSubmit={vi.fn()}
       documentBanner={<p>the page's banner</p>}
       documentActions={[releaseAction]}
+      onPublishOthers={onPublishOthers}
     />,
     { wrapper: Providers }
   );
@@ -158,6 +171,8 @@ function renderEditor(removed: boolean, localized = false) {
 beforeEach(() => {
   vi.clearAllMocks();
   siteLocales.list = [];
+  reader.update = "allowed";
+  reader.holder = null;
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
     takeOver: vi.fn(),
@@ -222,6 +237,61 @@ describe("the Single editor of a Single removed from code", () => {
     );
     expect(useDocumentLock).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: true })
+    );
+  });
+});
+
+describe("the Languages menu of a Single", () => {
+  const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
+
+  beforeEach(() => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+  });
+
+  it("holds no reader while a colleague has it, and publishes nothing for them", () => {
+    reader.update = "refused";
+    reader.holder = bob;
+    renderEditor(false, true, vi.fn());
+
+    expect(menuProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        hold: expect.objectContaining({ documentHeld: false }) as unknown,
+        canEdit: false,
+        onPublishOthers: undefined,
+      })
+    );
+  });
+
+  it("holds a person who may change it while a colleague has it", () => {
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-other", holder: bob, requestSent: false },
+      takeOver: vi.fn(),
+      requestAccess: vi.fn(),
+    });
+    renderEditor(false, true, vi.fn());
+
+    expect(menuProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        hold: expect.objectContaining({ documentHeld: true }) as unknown,
+        canEdit: false,
+        onPublishOthers: undefined,
+      })
+    );
+  });
+
+  it("is told of a person editing it, who may publish the others", () => {
+    const onPublishOthers = vi.fn();
+    renderEditor(false, true, onPublishOthers);
+
+    expect(menuProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        hold: expect.objectContaining({ documentHeld: false }) as unknown,
+        canEdit: true,
+        onPublishOthers,
+      })
     );
   });
 });

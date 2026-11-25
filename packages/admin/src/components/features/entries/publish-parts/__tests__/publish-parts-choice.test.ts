@@ -75,7 +75,6 @@ describe("the choice of other languages", () => {
         languages: LANGUAGES,
         onScreen: "en",
         overview,
-        sharedPending: false,
       })
     ).toEqual({ locales: ["es"], shared: false });
     expect(
@@ -83,9 +82,8 @@ describe("the choice of other languages", () => {
         languages: LANGUAGES,
         onScreen: "ar",
         overview,
-        sharedPending: true,
       })
-    ).toEqual({ locales: ["en", "es"], shared: true });
+    ).toEqual({ locales: ["en", "es"], shared: false });
   });
 
   it("chooses none where no language's state was read", () => {
@@ -94,7 +92,6 @@ describe("the choice of other languages", () => {
         languages: LANGUAGES,
         onScreen: "en",
         overview: undefined,
-        sharedPending: false,
       })
     ).toEqual({ locales: [], shared: false });
   });

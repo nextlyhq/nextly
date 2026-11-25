@@ -57,7 +57,8 @@ export function defaultPartsChoice(args: {
 
 /**
  * The choice "Publish other languages…" opens with: every language but the one on screen that
- * holds a saved change. A draft is not chosen, as nothing of it has been put live before.
+ * holds a saved change. A draft is not chosen, as nothing of it has been put live before; nor are
+ * the shared fields, which are no language's and are asked for by themselves.
  */
 export function otherLanguagesChoice(args: {
   languages: readonly string[];
@@ -66,7 +67,6 @@ export function otherLanguagesChoice(args: {
   overview:
     | Readonly<Record<string, { pendingChange?: boolean } | undefined>>
     | undefined;
-  sharedPending: boolean;
 }): PartsChoice {
   return {
     locales: args.languages.filter(
@@ -74,7 +74,7 @@ export function otherLanguagesChoice(args: {
         language !== args.onScreen &&
         args.overview?.[language]?.pendingChange === true
     ),
-    shared: args.sharedPending,
+    shared: false,
   };
 }
 

@@ -566,6 +566,8 @@ describe("a row's line", () => {
   it("says only that it is edited, or nothing, where no state was read", () => {
     const unread = { standing: null, need: null };
     expect(statusParts(unread, true)).toEqual(["Editing"]);
+    // To someone who may not change it.
+    expect(statusParts(unread, true, false)).toEqual(["Viewing"]);
     expect(statusParts(unread, false)).toEqual([]);
   });
 });

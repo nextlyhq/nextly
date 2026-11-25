@@ -5,7 +5,9 @@
  * @module components/features/languages-menu/document-languages
  */
 
-import { LOCALE_PARAM } from "@admin/constants/search-params";
+import { HISTORY_ADDRESS_PARAMS } from "@admin/components/features/versions/history-address";
+import { LOCALE_PARAM, TRANSLATE_PARAM } from "@admin/constants/search-params";
+import type { SearchParams } from "@admin/lib/search-params";
 
 import type { LanguageOverview } from "./languages-menu-model";
 
@@ -47,6 +49,29 @@ export function editAddress(
   return `${editorPath}?${new URLSearchParams({ [LOCALE_PARAM]: defaultLanguage }).toString()}`;
 }
 
+/** What an address says of its own language, or of the version of it on screen. */
+const LANGUAGE_KEYS: ReadonlySet<string> = new Set([
+  LOCALE_PARAM,
+  TRANSLATE_PARAM,
+  ...HISTORY_ADDRESS_PARAMS,
+]);
+
+/**
+ * A language's `address` with the rest of the query on screen kept: another language is opened on
+ * the tab this one is open on.
+ */
+export function keepingQuery(address: string, onScreen: SearchParams): string {
+  const [path, query = ""] = address.split("?");
+  const kept = new URLSearchParams(query);
+  for (const [key, value] of Object.entries(onScreen)) {
+    if (LANGUAGE_KEYS.has(key)) continue;
+    for (const each of [value].flat()) {
+      if (each !== undefined) kept.append(key, each);
+    }
+  }
+  return `${path}?${kept.toString()}`;
+}
+
 /**
  * The language whose row says it is being edited, or undefined where none does.
  *
@@ -73,7 +98,10 @@ export interface LanguagesHold {
   recovering: boolean;
   /** A change made elsewhere waits for the author's answer about this language's edits. */
   changeAwaiting: boolean;
-  /** The document is not this person's to edit now: someone else's, or not known to be theirs. */
+  /**
+   * The document can't be edited here now by a person who otherwise could: someone else has it, or
+   * its latest version isn't loaded. A reader, who edits nothing, is never held by this.
+   */
   documentHeld: boolean;
 }
 
@@ -89,7 +117,7 @@ export function languagesHeldReason(hold: LanguagesHold): string | undefined {
     return "This document changed elsewhere. Answer that above before you switch languages.";
   }
   if (hold.documentHeld) {
-    return "You can switch languages once this document is yours to edit.";
+    return "You can switch languages once this document can be edited here.";
   }
   return undefined;
 }

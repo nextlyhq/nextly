@@ -364,6 +364,24 @@ describe("the row of the language on screen", () => {
   });
 });
 
+describe("to a person who may not change the language on screen", () => {
+  it("says what opens a language, and that the one on screen is viewed", async () => {
+    await open({ canEdit: false, currentLanguage: "es" });
+    expect(row("Spanish, Viewing, live, 1 field out of date")).toHaveAttribute(
+      "aria-current",
+      "true"
+    );
+    expect(row("Arabic, Not started, Open")).toHaveAttribute(
+      "href",
+      ARABIC_HREF
+    );
+    expect(row("English, default, Live, Open")).toHaveAttribute(
+      "href",
+      EDIT_HREF
+    );
+  });
+});
+
 describe("while something holds the language on screen", () => {
   const HELD = "You are viewing a past version.";
 
@@ -381,6 +399,11 @@ describe("while something holds the language on screen", () => {
     const spanish = row("Spanish, Live, 1 field out of date");
     expect(spanish).toHaveAttribute("aria-disabled", "true");
     expect(spanish).not.toHaveAttribute("href");
+    // Heard where the keyboard is, and not on the language that isn't held.
+    expect(spanish).toHaveAccessibleDescription(HELD);
+    expect(row("English, default, Editing, live")).not.toHaveAttribute(
+      "aria-describedby"
+    );
     await user.click(spanish);
     expect(navigateTo).not.toHaveBeenCalled();
     // Still open: nothing was chosen.

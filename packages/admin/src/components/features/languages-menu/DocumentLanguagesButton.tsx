@@ -16,6 +16,7 @@ import { barFolds } from "@admin/components/layout/header/bar-fold";
 import { useTopBarWidth } from "@admin/components/layout/header/TopBarPlaces";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 
@@ -23,6 +24,7 @@ import {
   currentLanguageOf,
   documentLanguagesOf,
   editAddress,
+  keepingQuery,
   languagesHeldReason,
   type LanguagesHold,
 } from "./document-languages";
@@ -44,7 +46,12 @@ export interface DocumentLanguagesButtonProps {
   translating: boolean;
   /** What holds the language on screen. */
   hold: LanguagesHold;
-  /** Opens the choice of which languages to publish. Absent where the person may not publish. */
+  /** Whether the person may change the language on screen now. */
+  canEdit: boolean;
+  /**
+   * Opens the choice of which languages to publish. Absent where the person may not publish, or
+   * not at this moment.
+   */
   onPublishOthers: (() => void) | undefined;
   /** How the document panel sits: as a sheet, on a phone, the bar keeps icons alone. */
   panelMode: DocumentPanelMode;
@@ -58,12 +65,14 @@ export function DocumentLanguagesButton({
   locale,
   translating,
   hold,
+  canEdit,
   onPublishOthers,
   panelMode,
 }: DocumentLanguagesButtonProps): JSX.Element | null {
   const { locales, defaultLocale } = useLocalization();
   const { hasPermission } = useCurrentUserPermissions();
   const barWidth = useTopBarWidth();
+  const query = useSearchParams();
   const heldReason = languagesHeldReason(hold);
   const stages = useLanguageReviewStages(reviewed);
   return (
@@ -73,8 +82,11 @@ export function DocumentLanguagesButton({
         defaultLanguage: defaultLocale,
         ...documentLanguagesOf(document, hasStatus),
       })}
-      translateHref={code => translateAddress(editorPath, code, defaultLocale)}
-      editHref={editAddress(editorPath, defaultLocale)}
+      translateHref={code =>
+        keepingQuery(translateAddress(editorPath, code, defaultLocale), query)
+      }
+      editHref={keepingQuery(editAddress(editorPath, defaultLocale), query)}
+      canEdit={canEdit}
       currentLanguage={currentLanguageOf({
         locale,
         defaultLanguage: defaultLocale,

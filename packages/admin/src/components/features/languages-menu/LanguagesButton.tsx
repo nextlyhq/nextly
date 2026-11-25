@@ -59,6 +59,11 @@ export interface LanguagesButtonProps {
   heldReason?: string | undefined;
   /** Opens the choice of which languages to publish. Absent where the person may not publish. */
   onPublishOthers?: (() => void) | undefined;
+  /**
+   * Whether the person may change the language on screen now. Where they may not, the rows say
+   * what opens a language rather than what would be done there.
+   */
+  canEdit?: boolean;
   /** Whether the person may manage the site's languages. */
   canManageLanguages: boolean;
   /** Whether the bar is too narrow for the button's word, which it then only speaks. */
@@ -95,14 +100,16 @@ function StatusLine({ parts }: { parts: string[] }): JSX.Element | null {
 function RowContent({
   row,
   stage,
-  editing = false,
+  canEdit,
+  onScreen = false,
   action = null,
 }: {
   row: LanguageRow;
   /** Its stage in a workflow, said after its status. */
   stage: string | undefined;
+  canEdit: boolean;
   /** Whether it is the language on screen. */
-  editing?: boolean;
+  onScreen?: boolean;
   action?: ReactNode;
 }): JSX.Element {
   return (
@@ -122,7 +129,7 @@ function RowContent({
         ) : null}
         <StatusLine
           parts={[
-            ...statusParts(row, editing),
+            ...statusParts(row, onScreen, canEdit),
             ...(stage === undefined ? [] : [stage]),
           ]}
         />
@@ -133,30 +140,40 @@ function RowContent({
   );
 }
 
+/** What choosing a language's row does there, where the person may do it. */
+function actionWord({ isDefault }: LanguageRow, canEdit: boolean): string {
+  if (!canEdit) return "Open";
+  return isDefault ? "Edit" : "Translate";
+}
+
 /** A language's row: the way to it, or a note that it is the one on screen. */
 function LanguageMenuRow({
   row,
   stage,
   href,
+  canEdit,
   current,
-  held,
+  heldBy,
 }: {
   row: LanguageRow;
   stage: string | undefined;
   href: string;
+  canEdit: boolean;
   current: boolean;
-  /** Whether no other language can be opened now. */
-  held: boolean;
+  /** The sentence saying why no other language can be opened now; undefined where one can. */
+  heldBy: string | undefined;
 }): JSX.Element {
-  if (held && !current) {
+  if (heldBy !== undefined && !current) {
     // Reached by keyboard still, so its status is heard, with the reason above it.
     return (
       <DropdownMenuItem
         aria-disabled="true"
+        // Heard on the row, which is where the keyboard is.
+        aria-describedby={heldBy}
         className={ROW_CLASS}
         onSelect={event => event.preventDefault()}
       >
-        <RowContent row={row} stage={stage} />
+        <RowContent row={row} stage={stage} canEdit={canEdit} />
       </DropdownMenuItem>
     );
   }
@@ -165,7 +182,7 @@ function LanguageMenuRow({
     // the menu, back to the document it names.
     return (
       <DropdownMenuItem aria-current="true" className={ROW_CLASS}>
-        <RowContent row={row} stage={stage} editing />
+        <RowContent row={row} stage={stage} canEdit={canEdit} onScreen />
       </DropdownMenuItem>
     );
   }
@@ -175,9 +192,10 @@ function LanguageMenuRow({
         <RowContent
           row={row}
           stage={stage}
+          canEdit={canEdit}
           action={
             <span className="inline-flex h-8 shrink-0 items-center rounded-md border border-border bg-background px-3 text-sm font-medium">
-              {row.isDefault ? "Edit" : "Translate"}
+              {actionWord(row, canEdit)}
             </span>
           }
         />
@@ -238,6 +256,7 @@ export function LanguagesButton({
   stages,
   heldReason,
   onPublishOthers,
+  canEdit = true,
   canManageLanguages,
   iconOnly = false,
 }: LanguagesButtonProps): JSX.Element | null {
@@ -296,7 +315,8 @@ export function LanguagesButton({
               stage={stages?.[row.code]}
               href={row.isDefault ? editHref : translateHref(row.code)}
               current={row.code === currentLanguage}
-              held={heldReason !== undefined}
+              canEdit={canEdit}
+              heldBy={heldReason === undefined ? undefined : reasonId}
             />
           ))}
         </DropdownMenuGroup>

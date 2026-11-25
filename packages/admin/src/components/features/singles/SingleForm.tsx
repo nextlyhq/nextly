@@ -1963,10 +1963,15 @@ export function SingleForm({
                                             recovering,
                                             changeAwaiting:
                                               lock.changeAwaitingAnswer,
-                                            documentHeld: lock.actionsDisabled,
+                                            documentHeld:
+                                              lock.actionsDisabled &&
+                                              !readOnlyForReader,
                                           }}
+                                          canEdit={!lock.readOnly}
                                           onPublishOthers={
-                                            busy ? undefined : onPublishOthers
+                                            busy || lock.actionsDisabled
+                                              ? undefined
+                                              : onPublishOthers
                                           }
                                           panelMode={panel.mode}
                                         />

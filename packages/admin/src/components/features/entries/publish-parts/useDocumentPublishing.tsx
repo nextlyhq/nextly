@@ -202,10 +202,7 @@ export function useDocumentPublishing({
   });
 
   const publishOthers = () =>
-    open(
-      otherLanguagesChoice({ languages, onScreen, overview, sharedPending }),
-      "menu"
-    );
+    open(otherLanguagesChoice({ languages, onScreen, overview }), "menu");
 
   return {
     contributed,
