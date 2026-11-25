@@ -56,7 +56,7 @@ function Harness({
 /** A control the header always renders, asserted before an absence. */
 function headerRendered() {
   expect(
-    screen.getByRole("button", { name: /save draft/i })
+    screen.getByRole("button", { name: /^publish$/i })
   ).toBeInTheDocument();
 }
 

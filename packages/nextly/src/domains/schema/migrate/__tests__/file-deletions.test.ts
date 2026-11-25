@@ -21,6 +21,7 @@ import {
   runDeletions,
   type DeletionFacts,
   type NulledColumn,
+  tablesLeftDropped,
 } from "../file-deletions";
 import { guardedIndexDrop } from "../../pipeline/sql-templates/mysql-live-restate";
 
@@ -1991,5 +1992,92 @@ describe("a prepared statement on MySQL", () => {
         description: expect.stringContaining("not read, may delete data"),
       })
     );
+  });
+});
+
+describe("the tables a statement list leaves dropped", () => {
+  it("names a dropped table, a translations table dropped with it, lower-cased", () => {
+    expect(
+      tablesLeftDropped(
+        [
+          'DROP TABLE IF EXISTS "dc_Notes_locales" CASCADE',
+          'DROP TABLE "dc_notes"',
+        ],
+        "postgresql"
+      ).sort()
+    ).toEqual(["dc_notes", "dc_notes_locales"]);
+  });
+
+  it("leaves out a table made again after it is dropped, as SQLite rebuilds one", () => {
+    expect(
+      tablesLeftDropped(
+        [
+          'CREATE TABLE "__new_dc_posts" ("id" text PRIMARY KEY)',
+          'DROP TABLE "dc_posts"',
+          'ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts"',
+          'DROP TABLE "dc_tags"',
+          'CREATE TABLE "dc_tags" ("id" text PRIMARY KEY)',
+        ],
+        "sqlite"
+      )
+    ).toEqual([]);
+  });
+
+  // Only a plain CREATE TABLE proves a name new, since it fails on a table already there. One made
+  // IF NOT EXISTS may be the table the database held, and one dropped, made again and dropped is
+  // that table gone; a table the list itself made and dropped never held rows. Broken, the two are
+  // taken for tables the list made, and their rows still refuse the run.
+  it("names a table dropped after a conditional create or after it is made again, not one the list made", () => {
+    expect(
+      tablesLeftDropped(
+        [
+          'CREATE TABLE IF NOT EXISTS "dc_notes" ("id" text PRIMARY KEY)',
+          'DROP TABLE "dc_notes"',
+          'DROP TABLE "dc_tags"',
+          'CREATE TABLE "dc_tags" ("id" text PRIMARY KEY)',
+          'DROP TABLE "dc_tags"',
+          'CREATE TABLE "scratch" ("id" text PRIMARY KEY)',
+          'DROP TABLE "scratch"',
+        ],
+        "sqlite"
+      ).sort()
+    ).toEqual(["dc_notes", "dc_tags"]);
+  });
+
+  // A temporary table shadows the live one of its name: an unqualified drop then drops the
+  // temporary table, and the live one stands again. Broken (the temporary create ignored), the
+  // live table is taken for dropped and its rows go unchecked.
+  it("leaves out a live table a temporary one shadowed when the drop met the temporary one", () => {
+    expect(
+      tablesLeftDropped(
+        [
+          'CREATE TEMPORARY TABLE "dc_notes" ("id" text)',
+          'DROP TABLE "dc_notes"',
+        ],
+        "postgresql"
+      )
+    ).toEqual([]);
+    expect(
+      tablesLeftDropped(
+        [
+          'CREATE TEMPORARY TABLE "dc_notes" ("id" text)',
+          'DROP TABLE "dc_notes"',
+          'DROP TABLE "dc_notes"',
+        ],
+        "postgresql"
+      )
+    ).toEqual(["dc_notes"]);
+  });
+
+  it("names a table renamed away, and nothing for a statement that drops none", () => {
+    expect(
+      tablesLeftDropped(
+        [
+          'ALTER TABLE "dc_old" RENAME TO "dc_new"',
+          'ALTER TABLE "dc_new" ADD COLUMN "x" text',
+        ],
+        "postgresql"
+      )
+    ).toEqual(["dc_old"]);
   });
 });

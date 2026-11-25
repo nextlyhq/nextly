@@ -118,13 +118,19 @@ export async function siteEntities(
     context.adapter as unknown as DrizzleAdapter,
     context.site ?? {}
   );
-  return [
+  const entities = [
     ...declared,
     ...(await readLayoutScanEntities(
       context.adapter as unknown as DrizzleAdapter,
       new Set(declared.map(entity => entity.tableName))
     )),
   ];
+  // Counted before the run's migrations, an entity they remove is left out: the run never reaches
+  // its rows, so nothing is refused or counted over them (`UpgradeStepContext.droppedAhead`).
+  const dropped = context.droppedAhead;
+  return dropped === undefined
+    ? entities
+    : entities.filter(entity => !dropped.has(entity.tableName.toLowerCase()));
 }
 
 /** The version-history columns the steps that rewrite pending changes read and write. */

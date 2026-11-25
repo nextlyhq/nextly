@@ -18,6 +18,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -26,6 +27,7 @@ import {
   useWorkflowEntities,
   workflowMayHold,
 } from "@admin/hooks/useWorkflowEntities";
+import { entryKeys } from "@admin/services/entryApi";
 import {
   assignWorkflowParts,
   fetchReviewState,
@@ -41,6 +43,7 @@ import type {
   WorkflowDocumentRef,
 } from "@admin/types/workflows";
 
+import { waitingKeys } from "./useWaitingForMe";
 import { workflowKeys } from "./workflow-keys";
 
 export const reviewKeys = {
@@ -112,6 +115,30 @@ export function useReviewState(
   });
 }
 
+/**
+ * What a move of `document` (a step or an assignment) is shown in, marked stale: its review state,
+ * the waiting view (who each part waits for, and where it stands), and its collection's lists,
+ * whose Review column shows the same. A Single has no list; its review state is all of it.
+ */
+function refreshAfterMove(
+  queryClient: QueryClient,
+  document: ReleaseDocumentRef
+): Promise<unknown> {
+  return Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: reviewKeys.document(document),
+    }),
+    queryClient.invalidateQueries({ queryKey: waitingKeys.all() }),
+    ...(document.scopeKind === "collection"
+      ? [
+          queryClient.invalidateQueries({
+            queryKey: entryKeys.listsByCollection(document.scopeSlug),
+          }),
+        ]
+      : []),
+  ]);
+}
+
 /** A step as the editor asks it, the document named by the hook. */
 export type StepRequest = Omit<TakeStepPayload, "document">;
 
@@ -133,9 +160,7 @@ export function useTakeStep(
     onSettled: async () => {
       if (document === undefined) return;
       await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: reviewKeys.document(document),
-        }),
+        refreshAfterMove(queryClient, document),
         queryClient.invalidateQueries({ queryKey: workflowKeys.list() }),
       ]);
     },
@@ -158,11 +183,10 @@ export function useAssignPart(
           ...request,
         },
       ]),
+    // An assignment changes who the part waits for, wherever that is shown.
     onSettled: () =>
       document === undefined
         ? undefined
-        : queryClient.invalidateQueries({
-            queryKey: reviewKeys.document(document),
-          }),
+        : refreshAfterMove(queryClient, document),
   });
 }

@@ -39,8 +39,21 @@ vi.mock("@admin/hooks/useLocalization", () => ({
   }),
 }));
 vi.mock("@admin/hooks/queries/useReleasesContaining", () => ({
+  // In one scheduled release, so the Publishing section, drawn only while a
+  // document is scheduled, takes its place in the order.
   useReleasesContaining: () => ({
-    data: { items: [] },
+    data: {
+      items: [
+        {
+          id: "r1",
+          title: "Spring launch",
+          state: "scheduled",
+          scheduledAt: "2026-10-31T09:00:00Z",
+          timezone: "UTC",
+          memberAction: "publish",
+        },
+      ],
+    },
     isError: false,
     isPending: false,
   }),

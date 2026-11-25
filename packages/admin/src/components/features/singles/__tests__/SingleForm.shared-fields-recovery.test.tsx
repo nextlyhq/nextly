@@ -444,7 +444,7 @@ describe("a Single's form, for a publish refused over shared values", () => {
       fireEvent.submit(container.querySelector("form") as HTMLFormElement);
       await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
       expect(hero).not.toHaveAttribute("readonly");
-      expect(writeControls().some(control => !control.disabled)).toBe(true);
+      expect(writeControls().some(control => !isHeld(control))).toBe(true);
 
       // Made before the recovery starts, which runs its work a task later.
       const finish = {} as Finish;
@@ -477,7 +477,7 @@ describe("a Single's form, for a publish refused over shared values", () => {
       expect(hero.closest("form")).toHaveAttribute("aria-busy", "true");
       // And so is every write the document offers.
       for (const control of writeControls()) {
-        expect(control, control.textContent ?? "").toBeDisabled();
+        expect(isHeld(control), control.textContent ?? "").toBe(true);
       }
 
       await act(async () => {
@@ -658,9 +658,21 @@ describe("a Single's form, for a publish refused over shared values", () => {
 
 /** The document's Save and Publish controls, wherever they are drawn. */
 function writeControls(): HTMLButtonElement[] {
-  return screen.getAllByRole("button", {
-    name: /save|publish/i,
-  }) as HTMLButtonElement[];
+  // The document's own actions (`data-action`), not the arrow that opens the
+  // main button's menu, which writes nothing itself.
+  return (
+    screen.getAllByRole("button", {
+      name: /save|publish/i,
+    }) as HTMLButtonElement[]
+  ).filter(control => control.hasAttribute("data-action"));
+}
+
+/**
+ * Whether a write control is held: disabled, or held by the model and
+ * explaining why (`data-held`), which runs nothing when pressed.
+ */
+function isHeld(control: HTMLButtonElement): boolean {
+  return control.disabled || control.hasAttribute("data-held");
 }
 
 interface Finish {
