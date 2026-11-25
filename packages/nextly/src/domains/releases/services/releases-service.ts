@@ -778,6 +778,12 @@ export interface ReleaseBlocker {
   scopeKind: VersionScopeKind;
   scopeSlug: string;
   entryId: string;
+  /**
+   * For a stop over a field a Builder save changed (`FIELD_REMOVED`, `FIELD_CHANGED`,
+   * `FIELD_UNSETTLED`), the field it names, or several joined with ", "; `null` where the refusal
+   * named none. Absent for every other reason.
+   */
+  field?: string | null;
 }
 
 /**
@@ -1303,7 +1309,24 @@ function blockerOf(
     scopeKind: finding.scopeKind,
     scopeSlug: finding.scopeSlug,
     entryId: finding.entryId,
+    // The field a field stop names, so the fix names it too.
+    ...(finding.source === FIELD_STOP_SOURCE
+      ? { field: fieldOfStop(finding.detail?.field) }
+      : {}),
   };
+}
+
+/**
+ * The source key a field stop recorded by the release's run is reported under (`blockersOf`): not
+ * a check asked of the member, since only the write that met the field knows it.
+ */
+const FIELD_STOP_SOURCE = "core.field-stop";
+
+/** A field stop's field as its finding carries it. */
+function fieldOfStop(
+  field: string | null | readonly string[] | undefined
+): string | null {
+  return typeof field === "string" ? field : null;
 }
 
 /**
@@ -2372,11 +2395,32 @@ export class ReleasesService {
     const { hard } = await this.checkMembers(release, members, [
       CORE_AUTHOR_SOURCE,
     ]);
-    const { named, hidden } = await this.problemsVisibleTo(
-      actor,
-      members,
-      hard
+    // The field stops the release's run recorded when it stopped it, for the release as it now
+    // stands, beside what the members themselves say: the same visibility rule names both.
+    const stops = await this.deps.repository.memberStopsOf(release.id);
+    const byId = new Map(members.map(member => [member.id, member]));
+    const stopped = stops.flatMap(
+      (stop): ReadinessFinding<ReleaseBlockerReason>[] => {
+        const member = byId.get(stop.memberId);
+        if (member === undefined) return [];
+        return [
+          {
+            memberId: member.id,
+            code: stop.reason,
+            detail: { field: stop.field },
+            source: FIELD_STOP_SOURCE,
+            action: member.action,
+            scopeKind: member.scopeKind,
+            scopeSlug: member.scopeSlug,
+            entryId: member.entryId,
+          },
+        ];
+      }
     );
+    const { named, hidden } = await this.problemsVisibleTo(actor, members, [
+      ...hard,
+      ...stopped,
+    ]);
     return { items: named.map(blockerOf), hidden };
   }
 

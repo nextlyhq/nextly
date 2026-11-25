@@ -108,7 +108,32 @@ export type ReleaseBlockerReason =
   /** The recorded author has been deleted or deactivated. */
   | "AUTHOR_GONE"
   /** The member names one locale, which the engine cannot materialise. */
-  | "LOCALE_SCOPED";
+  | "LOCALE_SCOPED"
+  | ReleaseFieldStopReason;
+
+/**
+ * Why a release's run stopped at a member's write over a field a Builder save changed: what the
+ * run met, recorded on the member when it stopped the release, since nothing about the member
+ * itself says it (`stop_reason`, read only for the revision it stopped at). No retry settles any
+ * of them; a person's step does, and the release is then run again.
+ */
+export type ReleaseFieldStopReason =
+  /** A Builder save removed a field the write sets. */
+  | "FIELD_REMOVED"
+  /** A Builder save changed the type or storage of a field the write sets. */
+  | "FIELD_CHANGED"
+  /**
+   * A Builder save left part-way changed a field the write sets without recording it yet: the
+   * next development start, or the next save of the collection in the Builder, settles it.
+   */
+  | "FIELD_UNSETTLED";
+
+/** A member's field stop: why, and the field (or fields, joined with ", ") it names. */
+export interface ReleaseMemberStop {
+  memberId: string;
+  reason: ReleaseFieldStopReason;
+  field: string | null;
+}
 
 /**
  * Which states each lifecycle move may START from.

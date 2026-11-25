@@ -30,6 +30,7 @@ import {
   RELEASE_STATES,
   RELEASE_STATES_AFFECTING_CONTENT,
   type ReleaseMemberAction,
+  type ReleaseMemberStop,
   type ReleaseKind,
   type ReleaseState,
 } from "../../schemas/releases/types";
@@ -236,6 +237,12 @@ export interface BlockRequest {
    * schedule does.
    */
   revision?: number;
+  /**
+   * The members whose write stopped the release over a field a Builder save changed, recorded on
+   * each member in the stop's own transaction for the revision the stop leaves the release at
+   * (`stop_reason`, `stop_field`, `stop_revision`), so they are read for exactly that stop.
+   */
+  stops?: readonly ReleaseMemberStop[];
 }
 
 /** The document a member points at. */
@@ -1543,6 +1550,25 @@ export class ReleasesRepository {
         ],
       }),
       async (tx, entry, revision) => {
+        // Each member whose write stopped the release over a field a Builder save changed, for the
+        // revision the stop leaves the release at (`memberStopsOf`), in the stop's transaction, so
+        // the stop and what it names stand or fall together.
+        for (const stop of entry.stops ?? []) {
+          await tx.updateCount(
+            MEMBERS,
+            {
+              stopReason: stop.reason,
+              stopField: stop.field,
+              stopRevision: revision,
+            },
+            {
+              and: [
+                { column: "id", op: "=", value: stop.memberId },
+                { column: "releaseId", op: "=", value: entry.id },
+              ],
+            }
+          );
+        }
         await this.tellOwner(tx, entry.id, {
           kind: RELEASE_STOPPED_NOTICE,
           occurrence: String(revision),
@@ -2514,6 +2540,38 @@ export class ReleasesRepository {
    * transaction only when the write stored the action's status, so it answers
    * both without reading the document, which a read hook could rewrite.
    */
+  /**
+   * The field stops recorded on `releaseId`'s members (`blockReleases`) for the release as it now
+   * stands: those whose `stop_revision` is its current revision. A stop recorded at an earlier
+   * revision describes a release that has moved since (run again, rescheduled, edited), so
+   * nothing needs to clear it.
+   */
+  async memberStopsOf(releaseId: string): Promise<ReleaseMemberStop[]> {
+    const [release] = await this.db.select<{ revision: number }>(RELEASES, {
+      columns: ["revision"],
+      where: { and: [{ column: "id", op: "=", value: releaseId }] },
+    });
+    if (release === undefined) return [];
+    const rows = await this.db.select<{
+      id: string;
+      stopReason: ReleaseMemberStop["reason"] | null;
+      stopField: string | null;
+    }>(MEMBERS, {
+      columns: ["id", "stopReason", "stopField"],
+      where: {
+        and: [
+          { column: "releaseId", op: "=", value: releaseId },
+          { column: "stopRevision", op: "=", value: release.revision },
+        ],
+      },
+    });
+    return rows.flatMap(row =>
+      row.stopReason === null
+        ? []
+        : [{ memberId: row.id, reason: row.stopReason, field: row.stopField }]
+    );
+  }
+
   async isMemberApplied(memberId: string, revision: number): Promise<boolean> {
     const [row] = await this.db.select<Pick<DrainMemberRow, "appliedRevision">>(
       MEMBERS,

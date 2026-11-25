@@ -1779,3 +1779,157 @@ describe("applyDueReleases asks whether each document going live is held back", 
     expect(retried).toMatchObject({ applied: 1, blocked: 0, published: 1 });
   });
 });
+
+describe("a write refused while its collection is changing is tried again in the pass", () => {
+  /** A write refused `refusals` times with `error`, then landing as the real write does. */
+  function refusedThen(refusals: number, error: () => unknown) {
+    let calls = 0;
+    return vi.fn(async (_input: { ref: unknown }) => {
+      calls += 1;
+      if (calls <= refusals) throw error();
+    });
+  }
+  const beingChanged = () =>
+    new NextlyError({
+      code: "COLLECTION_BEING_CHANGED",
+      publicMessage:
+        "This collection is being changed elsewhere. Try again in a moment.",
+    });
+  /** A driver's busy error as it reaches the run unconverted: SQLite's code on a plain Error. */
+  const rawBusy = () =>
+    Object.assign(new Error("database is locked"), {
+      code: "SQLITE_BUSY",
+    });
+
+  // Broken (no retry in the pass), each of these is a failed write the next sweep tries again, and
+  // a release due now goes live a sweep late, or overdue, over a Builder save that ended in a moment.
+  it.each([
+    ["COLLECTION_BEING_CHANGED", beingChanged],
+    ["DATABASE_BUSY", () => NextlyError.databaseBusy()],
+    ["a driver's busy error", rawBusy],
+  ] as const)(
+    "applies a write refused with %s once it clears, in the same pass",
+    async (_label, error) => {
+      const publish = refusedThen(2, error);
+      const sleep = vi.fn(async (_ms: number) => {});
+      const result = await applyDueReleases({
+        ...deps({ mutations: { publish } }),
+        sleep,
+      });
+
+      expect(publish).toHaveBeenCalledTimes(3);
+      expect(sleep).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({ applied: 1, failed: 0, published: 1 });
+    }
+  );
+
+  it("stops trying after a bounded number of tries, leaving a failed write for the next sweep", async () => {
+    const publish = refusedThen(Number.POSITIVE_INFINITY, beingChanged);
+    const sleep = vi.fn(async (_ms: number) => {});
+    const result = await applyDueReleases({
+      ...deps({ mutations: { publish } }),
+      sleep,
+    });
+
+    expect(publish).toHaveBeenCalledTimes(3);
+    expect(result.outcomes[0]?.failure).toBe("WRITE_FAILED");
+    expect(result.outcomes[0]?.detail).toMatch(/3 tries/);
+    // Still a failed write, not a stop: the next sweep tries again.
+    expect(result.blocked).toBe(0);
+  });
+
+  it("tries any other refusal once, as before", async () => {
+    const publish = refusedThen(Number.POSITIVE_INFINITY, () =>
+      NextlyError.forbidden()
+    );
+    const sleep = vi.fn(async (_ms: number) => {});
+    await applyDueReleases({ ...deps({ mutations: { publish } }), sleep });
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("tries no more once the pass's deadline has passed", async () => {
+    const publish = refusedThen(Number.POSITIVE_INFINITY, beingChanged);
+    let at = NOW.getTime();
+    const sleep = vi.fn(async (ms: number) => {
+      at += ms;
+    });
+    await applyDueReleases({
+      ...deps({ mutations: { publish } }),
+      now: () => new Date(at),
+      // The first wait fits before it; the second would run past it, so it is not begun.
+      deadline: new Date(NOW.getTime() + 300),
+      sleep,
+    });
+
+    expect(publish).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a write refused over a field a Builder save changed STOPS its release, naming the field", () => {
+  /** The stops each release was handed to `blockReleases` with, by release id. */
+  function stopsBy(d: ReturnType<typeof deps>) {
+    return vi
+      .mocked(d.repository.blockReleases)
+      .mock.calls.flatMap(call =>
+        call[0].map(entry => [entry.id, entry.stops ?? []] as const)
+      );
+  }
+  const fieldIssue = (name: string, code: string) =>
+    NextlyError.validation({
+      errors: [{ path: `fields.${name}`, code, message: `${name}: ${code}` }],
+    });
+
+  // Broken (taken for a failed write), the release is tried every sweep, goes overdue and says
+  // nothing of the field; a retry cannot help, since only a person's step settles the field.
+  it.each([
+    ["FIELD_REMOVED", () => fieldIssue("subtitle", "FIELD_REMOVED")],
+    ["FIELD_CHANGED", () => fieldIssue("subtitle", "FIELD_CHANGED")],
+    [
+      "FIELD_UNSETTLED",
+      () =>
+        new NextlyError({
+          code: "BUILDER_SAVE_FIELD_UNSETTLED",
+          publicMessage: "A Builder save was left part-way.",
+          logContext: {
+            reason: "builder-save-field-unsettled",
+            kind: "collection",
+            slug: "posts",
+            fields: ["subtitle"],
+          },
+        }),
+    ],
+  ] as const)(
+    "stops the release on %s, tried once, naming the field",
+    async (reason, error) => {
+      const publish = vi.fn(async (_input: { ref: unknown }) => {
+        throw error();
+      });
+      const sleep = vi.fn(async (_ms: number) => {});
+      const d = {
+        ...deps({ members: [member({ id: "m1" })], mutations: { publish } }),
+        sleep,
+      };
+      const result = await applyDueReleases(d);
+
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(result.outcomes[0]?.failure).toBe("FIELD_UNWRITABLE");
+      expect(result.blocked).toBe(1);
+      expect(stopsBy(d)).toEqual([
+        ["r1", [{ memberId: "m1", reason, field: "subtitle" }]],
+      ]);
+    }
+  );
+
+  it("keeps a refusal at a field for anything else a failed write, tried again next sweep", async () => {
+    const publish = vi.fn(async (_input: { ref: unknown }) => {
+      throw fieldIssue("subtitle", "REQUIRED");
+    });
+    const d = deps({ mutations: { publish } });
+    const result = await applyDueReleases(d);
+
+    expect(result.outcomes[0]?.failure).toBe("WRITE_FAILED");
+    expect(result.blocked).toBe(0);
+  });
+});

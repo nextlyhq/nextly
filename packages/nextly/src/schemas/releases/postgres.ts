@@ -28,7 +28,12 @@ import {
 import { NEXTLY_RELEASES_INDEXES, pgIndexes } from "../_internal/core-indexes";
 import type { VersionScopeKind } from "../versions/types";
 
-import type { ReleaseKind, ReleaseMemberAction, ReleaseState } from "./types";
+import type {
+  ReleaseFieldStopReason,
+  ReleaseKind,
+  ReleaseMemberAction,
+  ReleaseState,
+} from "./types";
 
 export const nextlyReleasesPg = pgTable(
   "nextly_releases",
@@ -116,6 +121,15 @@ export const nextlyReleaseMembersPg = pgTable(
     // reschedule, a cancel, an edit, a membership change) leaves it stale
     // without anything having to clear it.
     appliedRevision: integer("applied_revision"),
+
+    // Why the release's run stopped at this member's write over a field a Builder save changed
+    // (FIELD_REMOVED, FIELD_CHANGED, FIELD_UNSETTLED), the field or fields it named, and the
+    // release `revision` the stop left the release at, written in the stop's own transaction. Read
+    // only while `stop_revision` equals the release's current revision, so running the release
+    // again (any move raises the revision) leaves it stale without anything having to clear it.
+    stopReason: text("stop_reason").$type<ReleaseFieldStopReason>(),
+    stopField: text("stop_field"),
+    stopRevision: integer("stop_revision"),
 
     // Materialisation acts AS this user, so the transition is subject to their
     // permissions and the audit trail names the person who scheduled it rather

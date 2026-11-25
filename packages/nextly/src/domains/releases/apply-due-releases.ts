@@ -62,8 +62,10 @@
  * @module domains/releases/apply-due-releases
  */
 
+import { isDatabaseBusy } from "../../database/errors";
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
+import type { ReleaseMemberStop } from "../../schemas/releases/types";
 import { resolveRunAs, type RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { UserContext } from "../collections/services/collection-types";
 
@@ -230,6 +232,39 @@ export interface ApplyDueReleasesDeps {
    * tick.
    */
   deadline?: Date;
+  /**
+   * How a write refused for a moment ({@link TRIED_AGAIN}) waits before it is tried again: a timer
+   * when left out. A test passes its own, so it neither waits nor depends on the clock.
+   */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * How many times a write refused for a moment is tried in one pass, the first included, and how
+ * long the first wait before trying again is; each wait after it is twice the one before. Bounded,
+ * so a collection held for long leaves a failed write the next sweep tries again rather than a
+ * pass spent waiting: on PostgreSQL and MySQL each refused try has itself waited out the hold.
+ */
+const WRITE_TRIES = 3;
+const FIRST_RETRY_WAIT_MS = 250;
+
+/**
+ * Whether a write was refused for a moment, which a try a little later may not meet: its
+ * collection being changed by a Builder save (`COLLECTION_BEING_CHANGED`), or the database busy
+ * (`DATABASE_BUSY`, or a driver's busy error arriving unconverted, as SQLite's does while another
+ * connection holds its write lock). The same answer on every dialect.
+ */
+function refusedForAMoment(error: unknown): boolean {
+  return (
+    NextlyError.isCode(error, "COLLECTION_BEING_CHANGED") ||
+    NextlyError.isCode(error, "DATABASE_BUSY") ||
+    isDatabaseBusy(error)
+  );
+}
+
+/** Waits `ms` on a timer. */
+function onTimer(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /** Why one action did not happen. Recorded, never swallowed. */
@@ -272,7 +307,13 @@ export type MaterialisationFailure =
    * Asking whether the document is held back failed; not evidence either
    * way, so nothing is written and the next pass asks again.
    */
-  | "APPROVAL_CHECK_FAILED";
+  | "APPROVAL_CHECK_FAILED"
+  /**
+   * The write was refused over a field a Builder save changed (`fieldStopOf`): removed, its type
+   * or storage changed, or changed by a save left part-way and not settled. Recorded on the
+   * member with the field (`MaterialisationOutcome.stop`), so the stop names it.
+   */
+  | "FIELD_UNWRITABLE";
 
 /**
  * Whether retrying could ever change this outcome.
@@ -294,6 +335,10 @@ const RETRY_COULD_HELP: Record<MaterialisationFailure, boolean> = {
   // release retried each tick meanwhile would hold silently, looking healthy.
   // Stopped, so its owner is told and schedules it again once it is approved.
   NOT_APPROVED: false,
+  // A field a Builder save removed or changed is not written again by waiting, and one a save left
+  // part-way is settled only by the next development start or Builder save of its collection.
+  // Retried each tick, the release would go overdue saying nothing of the field.
+  FIELD_UNWRITABLE: false,
 
   // Documented at their declarations as evidence of nothing: a lookup that
   // errored does not mean the user is gone, and a re-read that errored does not
@@ -356,7 +401,12 @@ async function stopHopelessReleases(
   let blocked = 0;
   for (const entries of componentsToStop(plan, permanent, id => {
     const at = plannedInstants.get(id);
-    return at === undefined ? undefined : { id, scheduledAt: at };
+    if (at === undefined) return undefined;
+    // Each member whose write met a field a Builder save changed, recorded with the stop.
+    const stops = outcomes.flatMap(o =>
+      o.releaseId === id && o.stop !== undefined ? [o.stop] : []
+    );
+    return { id, scheduledAt: at, ...(stops.length > 0 ? { stops } : {}) };
   })) {
     // A component stopped for holds alone stays scheduled once part of it is written. Asked
     // again inside the stop's transaction (`unlessBegun`), for a receipt this pass committed
@@ -512,6 +562,8 @@ export interface MaterialisationOutcome {
   failure: MaterialisationFailure | null;
   /** The underlying message, when there was one. */
   detail?: string;
+  /** For `FIELD_UNWRITABLE`, the field stop recorded on the member when its release stops. */
+  stop?: ReleaseMemberStop;
 }
 
 export interface ApplyDueReleasesResult {
@@ -833,36 +885,68 @@ async function writeAndConfirm(
   user: UserContext,
   base: Omit<MaterialisationOutcome, "failure">
 ): Promise<MaterialisationOutcome> {
-  try {
-    // Called ON the object rather than through an extracted reference: a
-    // mutations implementation that is a class method would lose `this` and
-    // fail at a point that looks like the write being refused.
-    //
-    // As the release's own run, so the write is not taken for an event that
-    // stops this release between two of its documents (`asReleaseRun`).
-    const input: ReleaseWrite = {
-      ref: action.ref,
-      user,
-      receipt: { memberId: action.memberId, revision: action.revision },
-    };
-    await asReleaseRun(action.ref, () =>
-      action.effect === "publish"
-        ? deps.mutations.publish(input)
-        : deps.mutations.unpublish(input)
-    );
-  } catch (error) {
-    // A rejection is not proof the write did not land. Ask the member's mark,
-    // which only a committed write leaves — and if THAT cannot be answered,
-    // report the failure, which is the safe direction: a retry of an applied
-    // action rewrites one document, while treating an unapplied one as done
-    // loses it silently.
-    const landed = await confirmApplied(deps, action, false);
-    if (landed) return { ...base, failure: null, detail: messageOf(error) };
-    return {
-      ...base,
-      failure: refusedForApproval(error) ? "NOT_APPROVED" : "WRITE_FAILED",
-      detail: messageOf(error),
-    };
+  // Called ON the object rather than through an extracted reference: a
+  // mutations implementation that is a class method would lose `this` and
+  // fail at a point that looks like the write being refused.
+  //
+  // As the release's own run, so the write is not taken for an event that
+  // stops this release between two of its documents (`asReleaseRun`).
+  const input: ReleaseWrite = {
+    ref: action.ref,
+    user,
+    receipt: { memberId: action.memberId, revision: action.revision },
+  };
+  const now = deps.now ?? (() => new Date());
+  for (let tries = 1; ; tries += 1) {
+    try {
+      await asReleaseRun(action.ref, () =>
+        action.effect === "publish"
+          ? deps.mutations.publish(input)
+          : deps.mutations.unpublish(input)
+      );
+      break;
+    } catch (error) {
+      // A rejection is not proof the write did not land. Ask the member's mark,
+      // which only a committed write leaves — and if THAT cannot be answered,
+      // report the failure, which is the safe direction: a retry of an applied
+      // action rewrites one document, while treating an unapplied one as done
+      // loses it silently.
+      const landed = await confirmApplied(deps, action, false);
+      if (landed) return { ...base, failure: null, detail: messageOf(error) };
+      // Refused over a field a Builder save changed: never tried again, its release stopped
+      // naming the field.
+      const stop = fieldStopOf(error);
+      if (stop !== undefined) {
+        return {
+          ...base,
+          failure: "FIELD_UNWRITABLE",
+          detail: messageOf(error),
+          stop: { memberId: action.memberId, ...stop },
+        };
+      }
+      // Refused for a moment (`refusedForAMoment`): tried again in this pass, a bounded number of
+      // times, after a wait that ends before the pass's deadline, so a release due now is not left
+      // a sweep late by a Builder save that ended in a moment.
+      const wait = FIRST_RETRY_WAIT_MS * 2 ** (tries - 1);
+      const momentary = refusedForAMoment(error);
+      if (
+        momentary &&
+        tries < WRITE_TRIES &&
+        (deps.deadline === undefined ||
+          now().getTime() + wait < deps.deadline.getTime())
+      ) {
+        await (deps.sleep ?? onTimer)(wait);
+        continue;
+      }
+      return {
+        ...base,
+        failure: refusedForApproval(error) ? "NOT_APPROVED" : "WRITE_FAILED",
+        detail:
+          momentary && tries > 1
+            ? `still refused after ${String(tries)} tries: ${messageOf(error)}`
+            : messageOf(error),
+      };
+    }
   }
 
   // A resolved promise is not proof the action was APPLIED. A
@@ -886,6 +970,62 @@ async function writeAndConfirm(
   }
 
   return { ...base, failure: null };
+}
+
+/**
+ * Why a write was refused over a field a Builder save changed, and the field, or undefined for any
+ * other refusal:
+ *
+ * - a validation refusal with an issue at `fields.<name>` coded `FIELD_REMOVED` (the save removed
+ *   the field the write sets) or `FIELD_CHANGED` (its type or storage changed);
+ * - `BUILDER_SAVE_FIELD_UNSETTLED`, a save left part-way that changed the field and has not
+ *   recorded it: its fields are read from the error's data, or else from its log context, the
+ *   only place that refusal names them.
+ *
+ * The names of several fields are joined with ", ". A field that cannot be read is `null`: the stop
+ * still stands, and names the collection.
+ */
+function fieldStopOf(
+  error: unknown
+): Omit<ReleaseMemberStop, "memberId"> | undefined {
+  if (NextlyError.isCode(error, "BUILDER_SAVE_FIELD_UNSETTLED")) {
+    const named =
+      namesIn(recordOf(error.publicData)?.fields) ??
+      namesIn(error.logContext?.fields);
+    return { reason: "FIELD_UNSETTLED", field: named ?? null };
+  }
+  if (!NextlyError.isCode(error, "VALIDATION_ERROR")) return undefined;
+  const issues = recordOf(error.publicData)?.errors;
+  if (!Array.isArray(issues)) return undefined;
+  for (const reason of ["FIELD_REMOVED", "FIELD_CHANGED"] as const) {
+    const fields = issues.flatMap((issue: unknown) => {
+      const read = recordOf(issue);
+      const path = read?.path;
+      return read?.code === reason &&
+        typeof path === "string" &&
+        path.startsWith("fields.")
+        ? [path.slice("fields.".length)]
+        : [];
+    });
+    if (fields.length > 0) return { reason, field: fields.join(", ") };
+  }
+  return undefined;
+}
+
+/** `value` as a record, or undefined. */
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** A list of field names as one, joined with ", ", or undefined where it holds none. */
+function namesIn(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const names = value.filter(
+    (name): name is string => typeof name === "string" && name.length > 0
+  );
+  return names.length > 0 ? names.join(", ") : undefined;
 }
 
 /**
