@@ -13,7 +13,7 @@ A Schema Builder save records that it is in progress until its outcome is record
 
 Start the app in development (`next dev`) on this project: its start settles the earlier save. Then save again.
 
-If the message says the earlier save could not be settled, or the start's log says it left the save as it was, check that the save finished and that no Builder save is running. Then remove the row and the file the message names, and save again.
+If the message says the earlier save could not be settled, or the start's log says it left the save as it was, the log names what keeps it from being settled, where there is something to put right: put that right, and start again. Only where it names nothing, check that the save finished and that no Builder save is running. Then remove the row and the file the message names, and save again.
 
 If the earlier save was left on another machine, start the app in development on that machine: its start settles the save.
 

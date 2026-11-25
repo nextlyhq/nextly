@@ -583,7 +583,7 @@ exports[`each code, as a command ends with it > BUILDER_SAVE_FIELD_UNSETTLED 1`]
 exports[`each code, as a command ends with it > BUILDER_SAVE_LEFT_PART_WAY 1`] = `
 "✗ A Builder save was left part-way, so the database does not match its migrations yet.
   Why:  Left part-way: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio.
-  Next: To settle it, run \`nextly migrate\`, or start the app in development (\`next dev\`), on this project: either settles the save.
+  Next: To settle it, run \`nextly migrate\`, or start the app in development (\`next dev\`), on this project: either settles the save, or names what keeps it from being settled.
   Docs: https://nextlyhq.com/docs/cli/errors/builder-save-left-part-way  (BUILDER_SAVE_LEFT_PART_WAY)"
 `;
 

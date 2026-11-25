@@ -90,6 +90,9 @@ vi.mock("../../../../cli/utils/config-loader", async original => {
 
 leftSaveHooks();
 
+/** What the refusals over a save no start can settle yet say of where to look. */
+const NAMES_WHAT = "names what keeps it from being settled";
+
 describe.each(LEFT_SAVE_SUITES)(
   "a Builder save that drops what a translations table holds, killed before that table is in step ($dialect, $layout)",
   ({ dialect, perLanguage }) => {
@@ -346,6 +349,8 @@ describe.each(LEFT_SAVE_SUITES)(
           for (const [name, ended] of Object.entries(commands)) {
             expect.soft(ended.ok, `${name}: ${ended.said}`).toBe(false);
             expect.soft(ended.said, name).toContain("left part-way");
+            // Neither settles this one while its column is there: each says where it is named.
+            expect.soft(ended.said, name).toContain(NAMES_WHAT);
           }
         } finally {
           loadedConfig.value = undefined;
@@ -357,6 +362,12 @@ describe.each(LEFT_SAVE_SUITES)(
         );
         expect.soft(refused).toContain("left part-way");
         expect.soft(refused).not.toContain("schema drift");
+        // What keeps it from being settled comes before clearing its record by hand, which would
+        // leave the column, and the values in it, with nothing to say so.
+        expect.soft(refused).toContain(NAMES_WHAT);
+        expect
+          .soft(refused.indexOf(NAMES_WHAT))
+          .toBeLessThan(refused.indexOf("remove the row"));
       },
       300_000
     );

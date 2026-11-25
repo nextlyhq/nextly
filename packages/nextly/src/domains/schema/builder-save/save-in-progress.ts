@@ -914,11 +914,12 @@ async function clearRecords(
 }
 
 /**
- * The way out of a record left by a save that ended, which nothing clears by itself yet: the row
- * and the marker, removed by hand once the save is known to have finished.
+ * The way out of a record a start may not settle: what its log names, put right first, since a record
+ * cleared by hand leaves nothing to say of it; the row and the marker, removed by hand, only where it
+ * names nothing and the save is known to have finished.
  */
 function clearByHand(projectRoot: string, record: SaveInProgress): string {
-  return `Once you have checked that the save finished and no Builder save is running, remove the row "${saveInProgressKey(record.kind, record.slug)}" from the nextly_meta table and the file ${relative(projectRoot, markerPath(projectRoot, record))}.`;
+  return `A development start settles it, or its log names what keeps it from being settled: put that right, and start again. Only where it names nothing to put right, and once you have checked that the save finished and no Builder save is running, remove the row "${saveInProgressKey(record.kind, record.slug)}" from the nextly_meta table and the file ${relative(projectRoot, markerPath(projectRoot, record))}.`;
 }
 
 /** A marker as read: the record, or why it could not be read. */
@@ -975,7 +976,7 @@ function unreadableRecordStep(key: string): string {
 }
 
 const SETTLES =
-  "run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save";
+  "run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save, or names what keeps it from being settled";
 
 /**
  * Refuse while the project's markers record a save left part-way on this host against this

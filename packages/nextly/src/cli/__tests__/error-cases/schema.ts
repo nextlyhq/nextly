@@ -165,7 +165,7 @@ export const SCHEMA_CASES = {
     NextlyError.conflict({
       reason: "state",
       message:
-        'A Builder save was left part-way, so the database does not match its migrations yet: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio. To settle it, run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save.',
+        'A Builder save was left part-way, so the database does not match its migrations yet: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio. To settle it, run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save, or names what keeps it from being settled.',
       logContext: {
         reason: "builder-save-left-part-way",
         saves: ["builder-save-in-progress:collection:posts"],
