@@ -23,6 +23,7 @@ import {
   pruneOverlay,
   sharedStructureShape,
   splitSharedStructure,
+  type StructuredField,
 } from "./shared-structure";
 
 const SLIDES = {
@@ -790,7 +791,7 @@ describe("componentFieldsChangingTranslation", () => {
 
 describe("fieldsTurningTranslatedInside", () => {
   // A repeater kept in both shapes, translating its caption either way, with a group inside it.
-  const slidesWith = (details: Record<string, unknown>) => [
+  const slidesWith = (details: StructuredField): StructuredField[] => [
     {
       name: "slides",
       type: "repeater",
