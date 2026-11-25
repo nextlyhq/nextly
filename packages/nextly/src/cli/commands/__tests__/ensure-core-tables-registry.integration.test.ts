@@ -174,6 +174,35 @@ describe("ensureCoreTables and the field-group registry", () => {
   });
 
   /**
+   * A bootstrap that did not finish: a registry, and no `users`. The whole-schema push runs, and
+   * the database is still no new site, so the registry it holds is the only one afterwards.
+   */
+  it("keeps the registry a database without users holds", async () => {
+    const { adapter, drizzleAdapter } = await adapterFor();
+    await runEnsureCoreTables(adapter);
+    await drizzleAdapter.executeQuery(
+      `DROP TABLE "${MIGRATION_TARGET.registryTable}"`
+    );
+    await drizzleAdapter.executeQuery(`DELETE FROM "nextly_meta"`);
+    await runEnsureCoreTables(adapter);
+    await drizzleAdapter.executeQuery(`DROP TABLE "users"`);
+    expect(await drizzleAdapter.tableExists(STORAGE_FORMAT.registryTable)).toBe(
+      true
+    );
+
+    await runEnsureCoreTables(adapter);
+
+    expect(await drizzleAdapter.tableExists("users")).toBe(true);
+    expect(await drizzleAdapter.tableExists(STORAGE_FORMAT.registryTable)).toBe(
+      true
+    );
+    expect(
+      await drizzleAdapter.tableExists(MIGRATION_TARGET.registryTable),
+      "a second registry beside the one it holds"
+    ).toBe(false);
+  });
+
+  /**
    * Where the schema push cannot run, SQLite's core tables are created from raw statements, and
    * the system-table service makes the registry: under the current name on a new site too.
    */
