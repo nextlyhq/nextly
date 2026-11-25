@@ -74,6 +74,9 @@ function detailKey(target: PartsTarget): readonly unknown[] {
     : singleDocumentKeys.detail(target.slug);
 }
 
+/** The part of a description's key every description of the target shares. */
+const PARTS_DESCRIPTION = "parts-description";
+
 /**
  * What the request would do, asked of the server once, without changing anything. A description
  * writes nothing and carries no version: it describes the document as it stands.
@@ -108,7 +111,7 @@ export function usePublishPartsDescription(args: {
   return useQuery({
     queryKey: [
       ...detailKey(target),
-      "parts-description",
+      PARTS_DESCRIPTION,
       direction,
       request.locales,
       request.shared ?? false,
@@ -119,6 +122,19 @@ export function usePublishPartsDescription(args: {
     staleTime: 0,
     retry: false,
   });
+}
+
+/**
+ * Asks again what the parts would do, once something a description is judged by changed beside
+ * the document itself: a step that approves a part moves no content.
+ */
+export function useDescribePartsAgain(target: PartsTarget): () => void {
+  const queryClient = useQueryClient();
+  return () => {
+    void queryClient.invalidateQueries({
+      queryKey: [...detailKey(target), PARTS_DESCRIPTION],
+    });
+  };
 }
 
 export interface UsePublishPartsOptions {
