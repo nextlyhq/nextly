@@ -280,7 +280,11 @@ async function createInTheBuilder(): Promise<void> {
     {
       name: OTHER,
       label: OTHER,
-      fields: [fieldGroup({ name: "meta", component: META })],
+      localized: true,
+      fields: [
+        text({ name: "body", localized: true }),
+        fieldGroup({ name: "meta", component: META }),
+      ],
     }
   );
 }
@@ -368,6 +372,19 @@ async function seedSharedRows(
     origin: "machine",
     writtenAt: now,
   });
+  await adapter.insert("nextly_translation_sources", {
+    id: randomUUID(),
+    scopeKind: "collection",
+    scopeSlug: slug,
+    entryId: "e1",
+    sourceLocale: "en",
+    // A translated field of both collections: text kept for a field a collection does not
+    // translate goes with any migrate run, whatever was deleted.
+    fieldPath: "body",
+    fingerprint: "f",
+    content: { value: "a" },
+    recordedAt: now,
+  });
 }
 
 /** How many rows of each kind `slug` (whose table is `table`) holds on `adapter`. */
@@ -418,6 +435,10 @@ async function rowsOf(
       scoped,
       ["collection", slug]
     ),
+    translationSources: await count("nextly_translation_sources", scoped, [
+      "collection",
+      slug,
+    ]),
   };
 }
 
@@ -430,6 +451,7 @@ const NONE = {
   seenMarkers: 0,
   translationArchive: 0,
   translationProvenance: 0,
+  translationSources: 0,
 };
 
 /** How many migrations the deployed database's ledger records applied. */

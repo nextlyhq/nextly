@@ -32,9 +32,12 @@ const WITHOUT_REVIEW_REASON_MAX = 2000;
 export function ReadyToPublish({
   document,
   problems,
+  onStepTaken,
 }: {
   document: ReleaseDocumentRef;
   problems: readonly ReadyProblem[];
+  /** Told that a step listed here was taken. */
+  onStepTaken: () => void;
 }): JSX.Element | null {
   const headingId = useId();
   const taker = useStepTaker(document);
@@ -68,7 +71,9 @@ export function ReadyToPublish({
                   onClick={() => {
                     const fix = problem.fix;
                     if (fix === undefined) return;
-                    void taker.take(fix.step, [fix.part]);
+                    void taker.take(fix.step, [fix.part]).then(outcome => {
+                      if (outcome.ok) onStepTaken();
+                    });
                   }}
                 >
                   {problem.fix.step.label}

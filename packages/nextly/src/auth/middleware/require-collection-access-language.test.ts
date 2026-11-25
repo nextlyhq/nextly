@@ -296,6 +296,20 @@ describe("the REST route gate, asking a rule that closes French", () => {
     expect(await status("read", "readDocumentHistory", "?locale=")).toBe(200);
   });
 
+  it("judges a translation's read in the language it names, filled from no other", async () => {
+    const [english] = services.config.localization.locales;
+    english.fallbackLocale = ["fr"];
+    try {
+      for (const method of ["getEntrySourceChange", "getSingleSourceChange"]) {
+        expect(await status("read", method, "?locale=en"), method).toBe(200);
+        expect(await status("read", method, "?locale=fr"), method).toBe(403);
+        expect(await status("read", method), method).toBe(403);
+      }
+    } finally {
+      english.fallbackLocale = [];
+    }
+  });
+
   it("refuses an operation on the whole entry, whatever language the request names", async () => {
     expect(await status("update", "publishAllLocales")).toBe(403);
     expect(await status("delete", "deleteEntry", "?locale=en")).toBe(403);
@@ -311,6 +325,38 @@ describe("the REST route gate, asking a rule that closes French", () => {
 
   it("tells a caller that names no operation every language", async () => {
     expect(await status("read", undefined, "?locale=en")).toBe(403);
+  });
+});
+
+describe("the REST route gate, asking a rule open in German alone", () => {
+  beforeEach(() => {
+    const germanAlone = ({ locales }: { locales: string[] }) =>
+      locales.length === 1 && locales[0] === "de";
+    state.rules.set("notes", { read: germanAlone, update: germanAlone });
+  });
+
+  it("admits a translation's read in German, and in no other language", async () => {
+    expect(await status("read", "getEntrySourceChange", "?locale=de")).toBe(
+      200
+    );
+    expect(await status("read", "getEntrySourceChange", "?locale=en")).toBe(
+      403
+    );
+  });
+
+  it("admits a change to a translation its body names, which the service then judges", async () => {
+    for (const method of ["keepEntryTranslation", "keepSingleTranslation"]) {
+      expect(await status("update", method), method).toBe(200);
+      // Its language is the body's, whatever the query says.
+      expect(await status("update", method, "?locale=en"), method).toBe(200);
+    }
+    // The control: an ordinary write names its language, and is judged in it.
+    expect(await status("update", "updateEntry", "?locale=en")).toBe(403);
+  });
+
+  it("refuses a change to a translation where the rule admits no language", async () => {
+    state.rules.set("notes", { update: () => false });
+    expect(await status("update", "keepEntryTranslation")).toBe(403);
   });
 });
 

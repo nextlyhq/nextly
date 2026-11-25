@@ -1012,9 +1012,13 @@ describe.each(eachSite())(
       await deployed.adapter.executeQuery(
         `DELETE FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${NOTES}'`
       );
-      if (await deployed.adapter.tableExists("nextly_translation_provenance")) {
+      for (const records of [
+        "nextly_translation_provenance",
+        "nextly_translation_sources",
+      ]) {
+        if (!(await deployed.adapter.tableExists(records))) continue;
         await deployed.adapter.executeQuery(
-          `DELETE FROM ${q("nextly_translation_provenance")} WHERE ${q("scope_slug")} = '${NOTES}'`
+          `DELETE FROM ${q(records)} WHERE ${q("scope_slug")} = '${NOTES}'`
         );
       }
       const key = `i18n.transition.collection.${NOTES}`;

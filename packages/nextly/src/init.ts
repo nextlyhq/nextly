@@ -270,6 +270,9 @@ function buildNextlyInstance(
     files: directAPI.files,
     // A person's own notices, forwarded for the same reason.
     notices: directAPI.notices,
+
+    // A translated field and its source, forwarded for the same reason.
+    translations: directAPI.translations,
     // Review state under a workflow, and the email delivery log, forwarded
     // for the same reason.
     workflows: directAPI.workflows,

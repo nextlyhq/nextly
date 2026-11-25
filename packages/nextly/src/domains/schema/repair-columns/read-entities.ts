@@ -17,6 +17,10 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import {
+  readableMigrationFiles,
+  type DeclaredNames,
+} from "../../../cli/utils/migration-discovery";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 import type { Logger } from "../../../shared/types";
@@ -24,12 +28,19 @@ import { CollectionRegistryService } from "../../collections/services/collection
 import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { recordedFieldGroupTable } from "../../field-groups/services/field-group-storage-names";
+import { LOCALIZATION_MIGRATION_MARKER } from "../../i18n/migration/write-migration-file";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { UserExtSchemaService } from "../../users/services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../users/services/user-field-definition-service";
+import { ledgerFilename } from "../events/ledger-scope";
 import { removedOnPurpose } from "../events/migration-state";
-import { appliedFilenames } from "../events/newest-event";
-import { SchemaEventsRepository } from "../events/schema-events-repository";
+import {
+  SchemaEventsRepository,
+  type SchemaEventRow,
+} from "../events/schema-events-repository";
+import { blankMigrationNames } from "../migrate/history-line";
+import { compareMigrationRecency } from "../migrate/migration-order";
+import { readOldBuilderLedger } from "../migrate/old-builder-ledger";
 import {
   DEFAULT_TABLE_NAME_RESOLVERS,
   resolveDeclaredSchema,
@@ -46,6 +57,7 @@ import {
 } from "../migrate-create/entity-settings";
 import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
 import { isCodeOwned } from "../pipeline/registered-collections";
+import { appliedAppMigrations } from "../schema-version";
 import { readUiSchema } from "../ui-schema/loader";
 
 import {
@@ -59,6 +71,7 @@ import {
 import {
   appliedMigrationFileMissingError,
   appliedSnapshotInvalidError,
+  appliedSnapshotsMissingError,
   rowsDivergedError,
   rowsWithoutTableError,
   snapshotFileUnreadableError,
@@ -179,6 +192,13 @@ function codeFirstEntities(
   ];
 }
 
+/** The configured side: its entities, whether a manifest is checked out, and the names declared. */
+interface Configuration {
+  entities: ConfiguredEntity[];
+  hasManifest: boolean;
+  declared: DeclaredNames;
+}
+
 /** Where the manifest lists each kind of entity. */
 const MANIFEST_LISTS = {
   collection: "collections",
@@ -203,7 +223,7 @@ const MANIFEST_LISTS = {
 async function builderEntities(
   args: ConfigurationArgs,
   ownerOf: (kind: RecordedKind, slug: string) => string | undefined
-): Promise<{ entities: ConfiguredEntity[]; hasManifest: boolean }> {
+): Promise<Configuration> {
   const { manifest, exists } = await readUiSchema({
     projectRoot: args.projectRoot,
     uiSchemaFile: args.config.db.uiSchemaFile,
@@ -237,7 +257,14 @@ async function builderEntities(
         ...(plugin !== undefined ? { plugin } : {}),
       };
     });
-  return { entities, hasManifest: exists };
+  return {
+    entities,
+    hasManifest: exists,
+    declared: {
+      junctions: declared.junctionsByEntity,
+      tables: declared.declaredTables,
+    },
+  };
 }
 
 /** What the configured side is read from. */
@@ -255,14 +282,14 @@ interface ConfigurationArgs {
  */
 async function configuredEntities(
   args: ConfigurationArgs
-): Promise<{ entities: ConfiguredEntity[]; hasManifest: boolean }> {
+): Promise<Configuration> {
   const owners = pluginOwners(args.config.plugins);
   const ownerOf = (kind: RecordedKind, slug: string) =>
     owners.get(entityKey(kind, slug));
   const builder = await builderEntities(args, ownerOf);
   return {
+    ...builder,
     entities: [...codeFirstEntities(args.config, ownerOf), ...builder.entities],
-    hasManifest: builder.hasManifest,
   };
 }
 
@@ -503,6 +530,10 @@ async function snapshotsWithMigration(metaDir: string): Promise<string[]> {
   }
 }
 
+/** The migration a snapshot file is of, by base name. */
+const migrationOf = (snapshotFile: string) =>
+  snapshotFile.replace(/\.snapshot\.json$/, "");
+
 /** A snapshot file's text; one that cannot be opened stops the run. */
 async function snapshotText(metaDir: string, file: string): Promise<string> {
   try {
@@ -562,10 +593,7 @@ async function refuseUnreadSnapshot(
   const text = await snapshotText(metaDir, file);
   const recorded = await snapshotsWithMigration(metaDir);
   if (!recorded.includes(file)) {
-    throw appliedMigrationFileMissingError(
-      file,
-      file.replace(/\.snapshot\.json$/, "")
-    );
+    throw appliedMigrationFileMissingError(file, migrationOf(file));
   }
   parsedSnapshot(file, text);
   throw snapshotReadFailedOnceError(file);
@@ -592,14 +620,17 @@ async function assertAppliedSnapshotsRead(
 /**
  * The entity record of the newest applied snapshot that has one, or undefined where none does.
  *
- * A snapshot whose migration has not been applied is skipped, and so is one written before
+ * Its file is named beside it. A snapshot whose migration has not been applied is skipped, and so
+ * is one written before
  * snapshots recorded entities: its silence says nothing about what was applied. One that has an
  * entity record this version cannot read stops the run rather than be passed over for an older one.
  */
 function newestAppliedRecord(
   loaded: readonly LoadedSnapshot[]
-): { record: EntitySettingsRecord; snapshot: object } | undefined {
-  // Lexicographic order is migration order, so the newest is the last one that qualifies.
+):
+  | { file: string; record: EntitySettingsRecord; snapshot: object }
+  | undefined {
+  // Ordered by recency, so the newest is the last one that qualifies.
   for (const { file, snapshot, applied } of [...loaded].reverse()) {
     if (!applied) continue;
     const parsed: unknown = snapshot;
@@ -612,13 +643,88 @@ function newestAppliedRecord(
     }
     if (!Object.hasOwn(parsed, "entities")) continue;
     const record = (parsed as { entities?: unknown }).entities;
-    if (isEntitySettingsRecord(record)) return { record, snapshot: parsed };
+    if (isEntitySettingsRecord(record)) {
+      return { file, record, snapshot: parsed };
+    }
     throw appliedSnapshotInvalidError(
       file,
       "It records its entities in a shape that cannot be read."
     );
   }
   return undefined;
+}
+
+/** What the snapshots are read from, and the app's history check made among the reads. */
+interface SnapshotArgs {
+  adapter: DrizzleAdapter;
+  dialect: SupportedDialect;
+  migrationsDir: string;
+  /** What the configuration and the manifest declare, of the one read of them. */
+  declared: () => Promise<DeclaredNames>;
+  checkHistory?: (declared: DeclaredNames) => Promise<void>;
+}
+
+/**
+ * The localization migrations of the folder, by name, as the file this dialect runs says: another
+ * dialect's variant says nothing of it.
+ */
+async function localizationMigrations(
+  { migrationsDir, dialect }: Pick<SnapshotArgs, "migrationsDir" | "dialect">,
+  declared: DeclaredNames
+): Promise<ReadonlySet<string>> {
+  const files = await readableMigrationFiles(migrationsDir, dialect, declared);
+  return new Set(
+    files
+      .filter(file => file.content.includes(LOCALIZATION_MIGRATION_MARKER))
+      .map(file => file.baseName)
+  );
+}
+
+/**
+ * Stop where an applied migration newer than `newest`, the one whose snapshot was read, has no
+ * snapshot: the older one would stand in for it. A blank migration and a localization migration
+ * have none by design, as `migrate:check` judges them, and an earlier Schema Builder's file is no
+ * app migration, for any check. An older one says nothing here: the snapshot read records everything up to itself.
+ */
+async function assertNewestHasSnapshot(
+  args: SnapshotArgs,
+  read: {
+    events: SchemaEventsRepository;
+    rows: readonly SchemaEventRow[];
+    newest: string;
+    withSnapshot: ReadonlySet<string>;
+    applied: ReadonlySet<string>;
+  }
+): Promise<void> {
+  const { newest, withSnapshot } = read;
+  const without = [...read.applied]
+    .filter(
+      name =>
+        compareMigrationRecency(name, newest) > 0 && !withSnapshot.has(name)
+    )
+    .sort(compareMigrationRecency);
+  if (without.length === 0) return;
+  const { migrationsDir, dialect } = args;
+  const declared = await args.declared();
+  const [blank, oldBuilder] = await Promise.all([
+    blankMigrationNames(migrationsDir, withSnapshot),
+    readOldBuilderLedger(
+      { migrationsDir, dialect, declared },
+      read.events,
+      read.rows
+    ),
+  ]);
+  const localization = await localizationMigrations(args, {
+    ...declared,
+    ...(oldBuilder.marked !== undefined ? { marks: oldBuilder.marked } : {}),
+  });
+  const missing = without.filter(
+    name =>
+      !blank.has(name) &&
+      !localization.has(name) &&
+      !oldBuilder.ignoredRows.has(ledgerFilename(name))
+  );
+  if (missing.length > 0) throw appliedSnapshotsMissingError(missing, newest);
 }
 
 /**
@@ -629,18 +735,17 @@ function newestAppliedRecord(
  * record had been removed by then, and an older snapshot's record of it is out of date, so it has
  * no snapshot record at all.
  */
-async function snapshotEntities(
-  adapter: DrizzleAdapter,
-  dialect: SupportedDialect,
-  migrationsDir: string
-): Promise<SnapshotEntity[]> {
+async function snapshotEntities(args: SnapshotArgs): Promise<SnapshotEntity[]> {
+  const { adapter, dialect, migrationsDir } = args;
   // With no ledger nothing has been applied, so no snapshot speaks for the database.
   if (!(await adapter.tableExists("nextly_schema_events"))) return [];
   const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
-  // The ledger read once for every snapshot. A file is applied where its newest event is, which is
-  // what `isFileApplied` asks of each file in turn.
+  // The ledger read once for every snapshot. A migration is applied where its latest outcome says
+  // so, which is what `isFileApplied` asks of each file in turn: an attempt recorded after it that
+  // failed, stopped or was cleared leaves it applied, and its snapshot the newest.
   const rows = await events.listFileApplies();
-  const applied = appliedFilenames(rows);
+  const migrations = appliedAppMigrations(rows);
+  const applied = new Set([...migrations].map(ledgerFilename));
   const removed = removedOnPurpose(rows, await events.listFileRemovals());
   const metaDir = resolve(migrationsDir, "meta");
   const [listed, withFile] = await Promise.all([
@@ -655,12 +760,23 @@ async function snapshotEntities(
   const loaded = [
     ...withFile,
     ...(await removedSnapshots(metaDir, unread, removed)),
-  ].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+  ].sort((a, b) =>
+    compareMigrationRecency(migrationOf(a.file), migrationOf(b.file))
+  );
   await assertAppliedSnapshotsRead(metaDir, listed, loaded, applied);
   const newest = newestAppliedRecord(loaded);
-  return newest === undefined
-    ? []
-    : recordedEntities(newest.record, recordedColumnTypes(newest.snapshot));
+  // Asked here, so a snapshot that is there is judged as what it is first, and every migration
+  // judged below is one the folder holds or whose removal is recorded.
+  await args.checkHistory?.(await args.declared());
+  if (newest === undefined) return [];
+  await assertNewestHasSnapshot(args, {
+    events,
+    rows,
+    newest: migrationOf(newest.file),
+    withSnapshot: new Set(listed.map(migrationOf)),
+    applied: migrations,
+  });
+  return recordedEntities(newest.record, recordedColumnTypes(newest.snapshot));
 }
 
 /**
@@ -747,18 +863,29 @@ export async function readRepairEntities(args: {
   waits?: TableWaits;
   /** The app's column overrides, as the configuration declares them. */
   overrides?: RepairOverrides;
+  /**
+   * Refuses where the folder lacks an app migration the database has applied, whose snapshot is
+   * the definition last applied: the app's history check, which the caller has. It is handed the
+   * names the configuration and the manifest declare, which tell an old Schema Builder file.
+   */
+  checkHistory?: (declared: DeclaredNames) => Promise<void>;
 }): Promise<RepairEntity[]> {
   const { adapter, dialect, logger } = args;
   const codeFields = args.config.users?.fields ?? [];
   // Independent reads, so none waits on another.
+  // Read once: the entities compared and the names the checks are made with are of one read.
+  const configuration = configuredEntities(args);
   const fromDatabase = () =>
     Promise.all([
       registryEntities(adapter, logger),
-      snapshotEntities(adapter, dialect, args.migrationsDir),
+      snapshotEntities({
+        ...args,
+        declared: async () => (await configuration).declared,
+      }),
       userFieldSources(adapter, dialect, logger, codeFields),
     ]);
   const [{ entities: configured, hasManifest }, read] = await Promise.all([
-    configuredEntities(args),
+    configuration,
     args.waits === undefined || dialect !== "sqlite"
       ? fromDatabase().then(value => ({ kind: "done" as const, value }))
       : // SQLite's tries are the whole database's, whichever table names them.

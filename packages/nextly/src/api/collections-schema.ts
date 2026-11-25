@@ -23,6 +23,7 @@ import { schemaListed } from "../auth/access/route-gate-adapters";
 import { getRBACService } from "../auth/code-access";
 import { COLLECTION_DEFINITION_PERMISSIONS } from "../auth/collection-definition-policy";
 import { getService } from "../di";
+import { refuseFieldGroupFieldsChangedInHost } from "../domains/field-groups/field-group-fields-read-only";
 import { withSchemaChangeExcluded } from "../domains/schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../domains/schema/sibling-fields";
@@ -292,6 +293,12 @@ export const POST = withErrorHandler(async (request: Request) => {
       issuesDdl: false,
     },
     async () => {
+      // A field group's fields are changed only in its own editor, a new collection's too:
+      // compared with each field group as stored while the lock is held.
+      await refuseFieldGroupFieldsChangedInHost(
+        validated.fields,
+        getService("fieldGroupRegistryService")
+      );
       // A new address beside another collection's or Single's of the same snake_case form is
       // refused here, before the row is written: the registry's own guard leaves that check to
       // the road.

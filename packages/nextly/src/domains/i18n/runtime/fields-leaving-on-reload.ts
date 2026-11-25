@@ -742,9 +742,38 @@ async function dropEveryEntity(
     } catch (error) {
       stopped.push(e.slug);
       args.report(notMoved(e.slug, error));
+      continue;
     }
+    await removeLeavingSources(args, e);
   }
   return stopped;
+}
+
+/**
+ * Removes the source text the translations of `e`'s leaving fields were made from, with their
+ * languages' values. The fields have moved by now, so a failure is reported and stops nothing.
+ */
+async function removeLeavingSources(
+  args: Mover,
+  e: FieldsLeavingOnReload
+): Promise<void> {
+  if (e.kind === "fieldGroup") return;
+  try {
+    const { removeFieldSources } = await import(
+      "../provenance/removed-field-sources"
+    );
+    await removeFieldSources(
+      args.adapter,
+      { scopeKind: e.kind, scopeSlug: e.slug },
+      field => e.leaving.has(field)
+    );
+  } catch (error) {
+    args.report(
+      `[nextly] The source text kept for the fields leaving translation on ${e.slug} was not removed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
 }
 
 /**

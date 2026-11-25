@@ -515,6 +515,21 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_translation_provenance" ("scope_kind", "scope_slug", "entry_id", "locale", "part_state", "field_path")`,
     `CREATE INDEX IF NOT EXISTS "nextly_translation_provenance_field_idx"
       ON "nextly_translation_provenance" ("scope_kind", "scope_slug", "entry_id", "field_path", "part_state")`,
+    // The source text each translation was made from. Columns match
+    // schemas/translation-sources/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_translation_sources" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "source_locale" TEXT NOT NULL,
+      "field_path" TEXT NOT NULL,
+      "fingerprint" TEXT NOT NULL,
+      "content" TEXT NOT NULL,
+      "recorded_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_translation_sources_uidx"
+      ON "nextly_translation_sources" ("scope_kind", "scope_slug", "entry_id", "source_locale", "field_path", "fingerprint")`,
     // What admins change for each workflow. Columns match schemas/workflow-settings/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_workflow_settings" (
       "id" TEXT PRIMARY KEY NOT NULL,

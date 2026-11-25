@@ -611,8 +611,10 @@ function LanguageRow({
               disabled={actionsDisabled}
               // Named for the language it acts on. Read out of context — a
               // screen reader listing this panel's controls — three buttons
-              // all saying "Start from…" name no language at all.
-              aria-label={`${seedVerb(state, metaKnown)} ${label} from another language`}
+              // all saying "Start from…" name no language at all. The name
+              // starts with the visible text, so a speech-input user saying
+              // what they see reaches it (label in name).
+              aria-label={`${seedVerb(state, metaKnown)} from… another language, into ${label}`}
               onClick={onSeed}
             >
               {seedVerb(state, metaKnown)} from…

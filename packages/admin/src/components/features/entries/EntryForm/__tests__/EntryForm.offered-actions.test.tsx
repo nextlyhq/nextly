@@ -310,6 +310,63 @@ describe("the other ways to publish", () => {
   });
 });
 
+describe("a smart Publish", () => {
+  // As a collection without a title of its own is read: the system title, one value for every
+  // language, beside a translated text.
+  const notes = {
+    ...(categories as object),
+    status: true,
+    localized: true,
+    fields: [
+      { name: "title", type: "text", label: "Title", localized: false },
+      { name: "body", type: "text", label: "Body" },
+    ],
+  } as never;
+  const note = {
+    id: "c1",
+    title: "News",
+    body: "Text",
+    status: "draft",
+  } as never;
+
+  /** Whether the press is told a shared field changed, `field` retyped before it. */
+  async function sharedEdited(field: RegExp): Promise<boolean> {
+    holding("read-categories", "update-categories", "publish-categories");
+    const told: boolean[] = [];
+    const smartPublish = vi.fn((host: { sharedEdited: () => boolean }) => {
+      told.push(host.sharedEdited());
+      return Promise.resolve({ ok: true as const });
+    });
+    render(
+      <EntryForm
+        collection={notes}
+        entry={note}
+        mode="edit"
+        smartPublish={smartPublish}
+      />,
+      { wrapper: Providers }
+    );
+    const input = screen.getByRole("textbox", { name: field });
+    await userEvent.clear(input);
+    await userEvent.type(input, "Edited");
+    await userEvent.click(
+      within(await screen.findByTestId("document-bar")).getByRole("button", {
+        name: "Publish",
+      })
+    );
+    expect(smartPublish).toHaveBeenCalledTimes(1);
+    return told[0];
+  }
+
+  it("is told that an edit to the system title changes every language", async () => {
+    expect(await sharedEdited(/title/i)).toBe(true);
+  });
+
+  it("is told that an edit to a translated text does not", async () => {
+    expect(await sharedEdited(/body/i)).toBe(false);
+  });
+});
+
 describe("a quick-edit modal's Save", () => {
   it("is not offered without the update permission, and a submit sends nothing", async () => {
     holding("read-categories");
