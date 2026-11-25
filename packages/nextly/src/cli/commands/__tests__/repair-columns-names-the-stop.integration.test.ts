@@ -223,6 +223,7 @@ describe("repair-columns names what stopped it, without --verbose", () => {
     await expectStop("MISSING_MIGRATION", [
       "no migration file of `0001_lost` does",
       "Restore the migration's .sql file from version control",
+      "`nextly migrate:resolve --removed <file>`",
     ]);
   });
 });

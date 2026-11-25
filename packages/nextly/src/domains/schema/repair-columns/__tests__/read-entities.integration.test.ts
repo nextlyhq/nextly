@@ -234,7 +234,7 @@ describe.each(getConfiguredTestDialects())(
         code: "MISSING_MIGRATION",
         what: "The snapshot `0002_second.snapshot.json` exists but no migration file of `0002_second` does.",
         why: "The migration is applied, and a snapshot is read only with its migration file beside it, so what the database last had applied cannot be known.",
-        next: "Restore the migration's .sql file from version control, then run `nextly repair-columns` again.",
+        next: "Restore the migration's .sql file from version control, or, if it was removed on purpose, record that with `nextly migrate:resolve --removed <file>`, then run `nextly repair-columns` again.",
       });
     });
 

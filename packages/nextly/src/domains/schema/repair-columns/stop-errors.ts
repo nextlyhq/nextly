@@ -185,7 +185,7 @@ export function appliedMigrationFileMissingError(
     {
       what: `The snapshot \`${file}\` exists but no migration file of \`${migration}\` does.`,
       why: `The migration is applied, and a snapshot is read only with its migration file beside it, ${UNKNOWN_APPLIED}`,
-      next: `Restore the migration's .sql file from version control, ${RUN_AGAIN}`,
+      next: `Restore the migration's .sql file from version control, or, if it was removed on purpose, record that with \`nextly migrate:resolve --removed <file>\`, ${RUN_AGAIN}`,
     },
     { file, migration }
   );
