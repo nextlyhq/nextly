@@ -35,6 +35,8 @@ const READERS: Record<string, string> = {
     "reads through `discoverMigrationGroups`",
   "domains/schema/migrate/old-builder-ledger.ts":
     "reads `readMigrationFolder` to judge their ledger rows",
+  "domains/schema/repair-columns/read-entities.ts":
+    "reads through `readableMigrationFiles`, and leaves their ledger rows out",
   "domains/dynamic-collections/services/removed-from-code-state.ts":
     "reads through `discoverMigrationGroups`, so an old drop file names no removal",
   "domains/i18n/migration/companion-history.ts":
@@ -75,6 +77,9 @@ const MARKS: Record<string, { reads: string } | { without: string }> = {
   },
   "domains/schema/migrate/old-builder-ledger.ts": {
     reads: "currentOldBuilderMarks()",
+  },
+  "domains/schema/repair-columns/read-entities.ts": {
+    reads: "readOldBuilderLedger(",
   },
   "domains/dynamic-collections/services/removed-from-code-state.ts": {
     without:
