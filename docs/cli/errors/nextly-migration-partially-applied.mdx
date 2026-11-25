@@ -11,10 +11,13 @@ A migration marked `-- nextly:no-transaction` runs statement by statement, so a 
 
 A Schema Builder save on MySQL can end here too. MySQL commits each schema statement as it runs, so a save that stops part-way through a change it cannot settle on its own, such as turning Draft/Published on for a collection, keeps the columns it already added. The save keeps its migration file unrecorded, and the next save of that collection is refused until the attempt is resolved as below.
 
+`nextly repair-columns` stops on such an attempt too, with exit code 1 and nothing converted, its dry run included: what the attempt changed is in no snapshot, and a conversion would undo it. A migration or a rollback that is still running outside a transaction, or on MySQL, stops it as well.
+
 ## Fix
 
-- Look at what the statements before the failure changed, and complete or undo them by hand.
-- Then record the outcome with `nextly migrate:resolve`, `--applied` or `--failed-cleanup`, and run `nextly migrate` again.
+- If a migration or a Schema Builder save is still running, wait until it ends, then run the command again. Change nothing by hand meanwhile.
+- Otherwise look at what the statements before the failure changed, and complete or undo them by hand.
+- Then record the outcome with `nextly migrate:resolve`, `--applied` or `--failed-cleanup` (for a down section finished by hand, `--rolled-back`), and run the command again.
 
 ## Example
 

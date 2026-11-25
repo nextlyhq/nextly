@@ -13,7 +13,9 @@
  * or a checked-out Builder manifest removes, and every column a table rename moves. A record of
  * what was applied that cannot be read (a migration snapshot, or a registry row naming no table)
  * is a run that could not run. So is a checkout without a migration the database has applied: its
- * snapshot is the definition last applied, and an older one would convert columns back.
+ * snapshot is the definition last applied, and an older one would convert columns back. So is an
+ * attempt at a migration that is unresolved and may have stopped part-way, one running now
+ * included.
  *
  * Without `--apply` it changes nothing: no table, row, registry entry or ledger row, and it never
  * takes the schema lock, only reads who holds it. With `--apply` it takes the schema lock, converts
@@ -178,7 +180,7 @@ async function report(
     { dryRunReport },
     { applyRepairs },
     { compileExtensionSchema },
-    { assertAppliedFilesPresent },
+    { assertAppliedFilesPresent, refuseUnresolvedAppAttempts },
   ] = await Promise.all([
     import("../../domains/schema/repair-columns/read-entities"),
     import("../../domains/schema/repair-columns/run-report"),
@@ -214,8 +216,11 @@ async function report(
     // A checkout older than the database holds no snapshot of what was last applied, so it is
     // refused as `nextly migrate` refuses it. The declared names tell an old Schema Builder file,
     // as they do there.
-    const checkHistory = (declared: DeclaredNames) =>
-      assertAppliedFilesPresent({
+    // So is an attempt at a migration that may have stopped part-way: what of it ran is in the
+    // database and in no snapshot, and a conversion would undo it. Asked in the order
+    // `nextly migrate` asks them.
+    const checkHistory = async (declared: DeclaredNames) => {
+      const history = {
         adapter,
         db: adapter.getDrizzle(),
         dialect,
@@ -223,7 +228,10 @@ async function report(
         logger,
         declared,
         command: "nextly repair-columns",
-      });
+      };
+      await assertAppliedFilesPresent(history);
+      await refuseUnresolvedAppAttempts(history);
+    };
     const readEntities = (waits: TableWaits | undefined) =>
       readRepairEntities({
         ...(overrides !== undefined ? { overrides } : {}),

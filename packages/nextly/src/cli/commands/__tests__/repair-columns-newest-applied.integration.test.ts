@@ -9,6 +9,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
@@ -57,6 +58,7 @@ import { DynamicCollectionService } from "../../../domains/dynamic-collections/s
 import { LOCALIZATION_MIGRATION_MARKER } from "../../../domains/i18n/migration/write-migration-file";
 import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
+import { checksumOf } from "../../../domains/schema/migrate/applied-checksums";
 import {
   f,
   tableTools,
@@ -71,6 +73,7 @@ import { createContext } from "../../context";
 import { repairColumnsAction } from "../repair-columns";
 
 const TABLE = "dc_rnaposts";
+const PARTIALLY_APPLIED = "NEXTLY_MIGRATION_PARTIALLY_APPLIED";
 const FILES = [
   "0001_first.sql",
   "0002_second.sql",
@@ -225,6 +228,50 @@ describe.each(getConfiguredTestDialects())(
       return { document, exitCode: process.exitCode };
     }
 
+    /** Run the command as a person does, and return what it printed and its exit code. */
+    async function printed({ apply = false, terminal = false } = {}) {
+      const ttys = [process.stdin, process.stdout].map(stream => ({
+        stream,
+        tty: Object.getOwnPropertyDescriptor(stream, "isTTY"),
+      }));
+      for (const { stream } of ttys) {
+        Object.defineProperty(stream, "isTTY", {
+          value: terminal,
+          configurable: true,
+        });
+      }
+      const out: string[] = [];
+      const spies = [
+        vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+          out.push(String(chunk));
+          return true;
+        }),
+        vi.spyOn(process.stderr, "write").mockImplementation(chunk => {
+          out.push(String(chunk));
+          return true;
+        }),
+        vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+          out.push(args.join(" "));
+        }),
+      ];
+      process.exitCode = undefined;
+      try {
+        await repairColumnsAction(createContext)({ apply }, {
+          optsWithGlobals: () => ({ cwd: state.root }),
+        } as unknown as Command);
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+        for (const { stream, tty } of ttys) {
+          if (tty === undefined) Reflect.deleteProperty(stream, "isTTY");
+          else Object.defineProperty(stream, "isTTY", tty);
+        }
+      }
+      return {
+        text: stripVTControlCharacters(out.join("\n")),
+        exitCode: process.exitCode,
+      };
+    }
+
     const columns = async () => ({
       author: await tools.columnState(TABLE, "author"),
       links: await tools.columnState(TABLE, "links"),
@@ -252,22 +299,6 @@ describe.each(getConfiguredTestDialects())(
       await expectUntouched();
     });
 
-    it.each(["failed", "in progress", "cleared"])(
-      "leaves the columns alone after a later attempt that is %s",
-      async outcome => {
-        const id = await events().recordStart({
-          eventType: "file_apply",
-          source: "cli-migrate",
-          filename: "0002_second.sql",
-        });
-        if (outcome !== "in progress") {
-          await events().markFailed(id, { errorMessage: "already exists" });
-        }
-        if (outcome === "cleared") await events().markRolledBack(id);
-        await expectUntouched();
-      }
-    );
-
     /** Both runs stop with `code`, at exit 1, with nothing converted. */
     async function expectStopped(code: string) {
       const before = await columns();
@@ -283,6 +314,198 @@ describe.each(getConfiguredTestDialects())(
       expect(errors[1]).toEqual(errors[0]);
       return errors[0];
     }
+
+    /** Start another attempt at a migration's file, as the runner records one, and end it so. */
+    async function attempt(
+      name: string,
+      outcome: "failed" | "in progress" | "cleared",
+      sha256: string | undefined
+    ) {
+      const id = await events().recordStart({
+        eventType: "file_apply",
+        source: "cli-migrate",
+        filename: `${name}.sql`,
+        ...(sha256 === undefined ? {} : { sha256 }),
+      });
+      if (outcome === "in progress") return id;
+      await events().markFailed(id, { errorMessage: "statement 2 failed" });
+      if (outcome === "cleared") await events().markRolledBack(id);
+      return id;
+    }
+
+    it("leaves the columns alone after a later attempt that was cleared", async () => {
+      await attempt("0002_second", "cleared", undefined);
+      await expectUntouched();
+    });
+
+    it.each(["failed", "in progress"] as const)(
+      "stops over an applied migration's later attempt that is %s, as nextly migrate does",
+      async outcome => {
+        // The migration is applied, and the database may hold part of the attempt since.
+        await attempt("0002_second", outcome, undefined);
+        const error = await expectStopped(PARTIALLY_APPLIED);
+        expect(error.message).toContain("0002_second.sql");
+      }
+    );
+
+    /** 0003's two statements; it makes `author` optional again by its snapshot. */
+    const THIRD = [TITLE, f(AUTHOR), f({ name: "links", type: "textarea" })];
+    const addNote = (column: string) =>
+      `ALTER TABLE ${tools.q(TABLE)} ADD COLUMN ${tools.q(column)} ${dialect === "mysql" ? "varchar(20)" : "text"}`;
+
+    /** The migration's text, run outside a transaction unless `transaction`. */
+    const thirdSql = (transaction = false) =>
+      [
+        ...(transaction ? [] : ["-- nextly:no-transaction"]),
+        "-- UP",
+        `${addNote("note_one")};`,
+        "--> statement-breakpoint",
+        `${addNote("note_two")};`,
+        "-- DOWN",
+        "",
+      ].join("\n");
+
+    /**
+     * 0003, pending, stopped after its first statement: what a part of it that ran left is there,
+     * `author` optional among it, which an `--apply` would set NOT NULL again.
+     */
+    async function stoppedPartWay(
+      outcome: "failed" | "in progress" | "cleared",
+      sql = thirdSql()
+    ) {
+      const { tables } = await tools.definition(TABLE);
+      await migration("0003_third", { fields: THIRD, tables }, sql, false);
+      state.collections = [{ slug: "rnaposts", fields: THIRD }];
+      const id = await attempt("0003_third", outcome, checksumOf(sql));
+      await tools.run(`DROP TABLE ${tools.q(TABLE)}`);
+      await tools.createTable(TABLE, THIRD);
+      await tools.insert(TABLE, [
+        { id: "p1", title: "a", author: "u1", links: '[{"url":"z"}]' },
+      ]);
+      await tools.run(addNote("note_one"));
+      return id;
+    }
+
+    it.each(["failed", "in progress"] as const)(
+      "stops over a pending migration whose attempt is %s, saying what of it ran",
+      async outcome => {
+        await stoppedPartWay(outcome);
+        expect((await columns()).author?.nullable).toBe(true);
+        const error = await expectStopped(PARTIALLY_APPLIED);
+        expect(error.message).toBe(
+          "nextly repair-columns stops before changing anything: 0003_third.sql has an unresolved attempt at its UP."
+        );
+        expect(error.cause).toContain(
+          outcome === "failed"
+            ? "The attempt at 0003_third.sql's UP failed"
+            : "recorded no outcome (the process running it stopped, or is still running)"
+        );
+        expect(error.cause).toMatch(/statement 1 \(.*\) is done/);
+        expect(error.cause).toMatch(/statement 2 \(.*\) is not done/);
+        expect(error.next).toContain(
+          "`nextly migrate:resolve --failed-cleanup 0003_third.sql`"
+        );
+      }
+    );
+
+    it("says so in its text too, with exit code 1", async () => {
+      await stoppedPartWay("failed");
+      const { text, exitCode } = await printed();
+      expect(exitCode).toBe(1);
+      expect(text).toContain(
+        "✗ nextly repair-columns stops before changing anything: 0003_third.sql has an unresolved attempt at its UP."
+      );
+      expect(text).toContain(`(${PARTIALLY_APPLIED})`);
+    });
+
+    it("stops over an attempt at a down section that recorded no outcome", async () => {
+      await events().recordStart({
+        eventType: "file_rollback",
+        source: "cli-migrate",
+        filename: "0002_second.sql",
+      });
+      const error = await expectStopped(PARTIALLY_APPLIED);
+      expect(error.message).toContain("0002_second.sql");
+      expect(error.message).toContain("down section");
+    });
+
+    /** Neither run stops; what each reports is not this case's. */
+    async function expectRuns() {
+      for (const apply of [false, true]) {
+        const { document } = await run(apply);
+        expect(document.errors).toEqual([]);
+        expect(document.result).not.toBeNull();
+      }
+    }
+
+    it("goes on over a pending migration no attempt was made at", async () => {
+      const { tables } = await tools.definition(TABLE);
+      await migration(
+        "0003_third",
+        { fields: THIRD, tables },
+        thirdSql(),
+        false
+      );
+      await expectUntouched();
+    });
+
+    it("goes on once the attempt is cleared, its statements reversed", async () => {
+      await stoppedPartWay("cleared");
+      await tools.run(`DROP TABLE ${tools.q(TABLE)}`);
+      await tools.createTable(TABLE, SECOND);
+      const before = await columns();
+      expect(before.author?.nullable).toBe(false);
+      for (const apply of [false, true]) {
+        const { document } = await run(apply);
+        expect(document.errors).toEqual([]);
+        // What 0003 will change, and nothing to convert.
+        expect(
+          document.result?.records
+            .filter(record => record.table === TABLE)
+            .filter(record => ["author", "links"].includes(record.column))
+            .map(record => [record.column, record.outcome])
+        ).toEqual([["author", "pending-migration"]]);
+      }
+      expect(await columns()).toEqual(before);
+    });
+
+    it("stops an --apply in a terminal over a migration that is running", async () => {
+      await stoppedPartWay("in progress");
+      const before = await columns();
+      const { text, exitCode } = await printed({ apply: true, terminal: true });
+      expect(exitCode).toBe(1);
+      expect(text).toContain(`(${PARTIALLY_APPLIED})`);
+      expect(await columns()).toEqual(before);
+    });
+
+    it("goes on once the migration is recorded applied, and leaves what it made", async () => {
+      const id = await stoppedPartWay("failed");
+      const applied = await events().insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: "0003_third.sql",
+        sha256: checksumOf(thirdSql()),
+        endedAt: new Date(),
+      });
+      await events().supersede({
+        supersededEventIds: [id],
+        byEventId: applied,
+      });
+      await expectRuns();
+      expect((await columns()).author?.nullable).toBe(true);
+    });
+
+    it.runIf(dialect !== "mysql")(
+      "goes on over a failure that rolled back whole, in the file's transaction",
+      async () => {
+        const sql = thirdSql(true);
+        const { tables } = await tools.definition(TABLE);
+        await migration("0003_third", { fields: THIRD, tables }, sql, false);
+        await attempt("0003_third", "failed", checksumOf(sql));
+        await expectUntouched();
+      }
+    );
 
     /** Take a migration out of the checkout, as one made before it was written. */
     function notCheckedOut(name: string) {
