@@ -90,9 +90,13 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         untranslated([container("crate")])
       );
 
-      // POPULATION CONTROL: the container keeps its text in an overlay column.
-      expect(first).toMatch(new RegExp(`${escape(q("box"))}`));
-      expect(first).toMatch(new RegExp(escape(q("dc_boxes_locales"))));
+      // POPULATION CONTROL: the container keeps its text in an overlay column, which the
+      // translations table's own statement declares.
+      expect(first).toMatch(
+        new RegExp(
+          `CREATE TABLE[^;]*${escape(q("dc_boxes_locales"))}[^;]*${escape(q("box"))}`
+        )
+      );
 
       expect(up).toMatch(
         onCompanion(
