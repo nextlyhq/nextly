@@ -390,20 +390,38 @@ describe.each(getConfiguredTestDialects())(
         expect(await legacyObjects(site!.adapter, dialect)).toEqual([]);
       }, 300_000);
 
-      it("is applying a release that is due, publishes what it holds within three passes", async () => {
+      it("is applying a release that is due, publishes what it holds in that pass", async () => {
         let id = "";
         await openMigratedUnder({
           before: async () => {
             id = await draftBeside(true);
           },
         });
-        // A pass that meets the move leaves the release due, and the job passes again.
-        const passes: string[] = [];
-        for (let n = 0; n < 3; n++) {
-          passes.push(await ask(server!, "apply-releases"));
-          if (/"applied":1/.test(passes.at(-1)!)) break;
+        expect(await ask(server!, "apply-releases")).toMatch(
+          /"applied":1,"failed":0/
+        );
+        // What the publish kept and announced holds the group too.
+        for (const [table, column] of [
+          ["nextly_versions", "snapshot"],
+          ["nextly_events", "payload"],
+        ] as const) {
+          const rows = await site!.adapter.executeQuery<
+            Record<string, unknown>
+          >(`SELECT ${column} AS document FROM ${table}`);
+          const published = rows
+            .map(row =>
+              typeof row.document === "string"
+                ? row.document
+                : JSON.stringify(row.document)
+            )
+            .filter(
+              text => text.includes(id) && /"status":\s*"published"/.test(text)
+            );
+          expect(published.length, table).toBeGreaterThan(0);
+          for (const text of published) {
+            expect(text, table).toMatch(/"heading":\s*"Kept"/);
+          }
         }
-        expect(passes.at(-1), passes.join(" / ")).toMatch(/"applied":1/);
         expect(headingOf(await ask(server!, `read-published ${id}`))).toBe(
           "Kept"
         );
