@@ -175,7 +175,9 @@ export type LegacyShape =
   /** A component's many-to-many held in a scalar column, where the descriptor names a JSON list. */
   | "component-list-in-scalar"
   /** A field-group column in the type the field group's creator gave it before it read the descriptor. */
-  | "field-group-creator-spelling";
+  | "field-group-creator-spelling"
+  /** A Single's required relationship or upload held NOT NULL, where its column allows a null. */
+  | "single-required-reference";
 
 /** Why a column differs, where that is known. */
 export type DifferenceCause =
