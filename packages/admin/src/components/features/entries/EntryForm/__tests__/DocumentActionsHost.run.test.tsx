@@ -133,6 +133,50 @@ describe("running a document action through the host", () => {
     });
   });
 
+  it("refuses a Publish the review holds, without running what Publish runs", async () => {
+    const onPublish = vi.fn(() => Promise.resolve(saved));
+    const runner = renderHost({
+      onPublish,
+      review: {
+        state: {
+          stageLabel: "In review",
+          publishable: false,
+          steps: [],
+          waitingFor: "Editors",
+        },
+        takeStep: () => Promise.resolve({ ok: true }),
+      },
+    });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await runner.run("publish");
+    });
+
+    expect(onPublish).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({
+      ok: false,
+      message: "Needs approval: In review, waiting for Editors",
+    });
+  });
+
+  it("passes on a Publish that stored the work and stopped to ask, never as published", async () => {
+    const asking = {
+      ok: false as const,
+      reason: "cancelled" as const,
+      message: "Choose what to publish.",
+      stored: true as const,
+    };
+    const runner = renderHost({ onPublish: () => Promise.resolve(asking) });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await runner.run("publish");
+    });
+
+    expect(outcome).toEqual(asking);
+  });
+
   it("refuses an invalid form as invalid", async () => {
     const onPublish = vi.fn(() => Promise.resolve(saved));
     const runner = renderHost({ onPublish, isInvalid: true });

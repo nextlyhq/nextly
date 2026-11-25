@@ -294,6 +294,12 @@ import {
   translationProvenancePresent,
 } from "../../i18n/provenance/record-provenance";
 import {
+  forgetDocumentSources,
+  sourceReaderOf,
+  translationSourcesPresent,
+  type WriteSources,
+} from "../../i18n/provenance/source-text";
+import {
   configuredLocale,
   isValidLocale,
   resolveLocaleChain,
@@ -6725,10 +6731,11 @@ export class CollectionMutationService extends BaseService {
         // What the draft said about where its values came from goes with
         // it; the live values keep their own record.
         if (draftLocale !== null && (await this.provenanceRecorded(tx))) {
-          await discardDraftProvenance(tx, {
-            ...discardedRef,
-            locale: draftLocale,
-          });
+          await discardDraftProvenance(
+            tx,
+            { ...discardedRef, locale: draftLocale },
+            (await this.sourceTextKept(tx)) ? tx : undefined
+          );
         }
         // The discarded part has nothing unpublished left to review: its
         // review closes with the draft, in this transaction.
@@ -14475,6 +14482,67 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Whether this user may update the entry, decided without writing as
+   * {@link canUpdateEntry} decides it, and again of its row once a transaction
+   * has locked it: each filter the gate answered is matched there as an update
+   * matches it, so an entry moved out of one in between is not changed. For a
+   * write of something beside the document that holds the document's lock.
+   *
+   * @experimental
+   */
+  async judgeEntryUpdate(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    /** The language the write acts in, which a rule's filter is matched in. */
+    locale?: string;
+  }): Promise<{
+    allowed: boolean;
+    stillAllowed(tx: TransactionContext): Promise<boolean>;
+  }> {
+    const refused = {
+      allowed: false,
+      stillAllowed: () => Promise.resolve(false),
+    };
+    if (!(await this.storedEntry(params.collectionName, params.entryId))) {
+      return refused;
+    }
+    const gate = {
+      collectionName: params.collectionName,
+      operation: "update" as const,
+      entryId: params.entryId,
+      user: params.user,
+      // Never overridden: this exists to apply the document's rules.
+      overrideAccess: false,
+      authenticatedScope: params.authenticatedScope,
+    };
+    const access = await this.accessService.checkCollectionWrite(gate);
+    if (access.denied) return refused;
+    const schema = (await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    )) as Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
+    const filters: FilteredWriteCheck[] = [];
+    const outside = await this.addWriteFilter(filters, {
+      schema,
+      access,
+      params: gate,
+      locale: params.locale,
+    });
+    if (outside) return refused;
+    return {
+      allowed: true,
+      stillAllowed: async tx =>
+        (await this.refusalOutsideWriteFilters(
+          tx,
+          schema,
+          params.entryId,
+          filters
+        )) === null,
+    };
+  }
+
+  /**
    * The status a write in `locale` is classified against, as the update's own
    * gate classifies it: where the collection keeps its status per language,
    * the write names that language's companion `_status`, and the gate judges
@@ -15281,6 +15349,12 @@ export class CollectionMutationService extends BaseService {
       defaultLocale: this.localization.defaultLocale,
       savedBy: args.savedBy,
       claims: provenance.claims,
+      sources: await this.writeSources(
+        tx,
+        provenance.collectionName,
+        args.entryId,
+        translation.writeLocale
+      ),
     });
   }
 
@@ -16808,6 +16882,78 @@ export class CollectionMutationService extends BaseService {
       this.logger,
       transactionTableProbe(this.adapter, tx)
     );
+  }
+
+  /**
+   * Whether the source text translations are made from is kept on `tx`: the
+   * table is there, asked as `provenanceRecorded` asks for its own.
+   */
+  private sourceTextKept(tx: TransactionContext): Promise<boolean> {
+    return translationSourcesPresent(
+      this.adapter,
+      this.logger,
+      transactionTableProbe(this.adapter, tx)
+    );
+  }
+
+  /**
+   * Where a write of entry `entryId` in `locale` reads the values its
+   * translations are made from, and keeps them, on its transaction. None for
+   * a write in the default language, which is made from no other.
+   */
+  private async writeSources(
+    tx: TransactionContext,
+    collectionName: string,
+    entryId: string,
+    locale: string
+  ): Promise<WriteSources | undefined> {
+    if (!this.localization || locale === this.localization.defaultLocale) {
+      return undefined;
+    }
+    const db = tx.getDrizzle();
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      db
+    );
+    if (!companion) return undefined;
+    return {
+      db: tx,
+      kept: await this.sourceTextKept(tx),
+      read: sourceReaderOf({
+        db,
+        companion,
+        // Remembered, never resolved here: the write resolved it, and a probe
+        // of a missing table aborts a PostgreSQL transaction.
+        readiness: cachedCompanionReadiness(
+          this.adapter,
+          companion.companionTableName
+        ),
+        entryId,
+      }),
+    };
+  }
+
+  /**
+   * Remove what is recorded about a deleted entry's translations, in every
+   * language and part, on the delete's transaction: where each value came
+   * from, and the source text it was made from.
+   */
+  private async forgetTranslationRecords(
+    tx: TransactionContext,
+    collectionName: string,
+    entryId: string
+  ): Promise<void> {
+    const document = {
+      scopeKind: "collection" as const,
+      scopeSlug: collectionName,
+      entryId,
+    };
+    if (await this.provenanceRecorded(tx)) {
+      await forgetDocumentProvenance(tx, document);
+    }
+    if (await this.sourceTextKept(tx)) {
+      await forgetDocumentSources(tx, document);
+    }
   }
 
   /**
@@ -22315,13 +22461,11 @@ export class CollectionMutationService extends BaseService {
           });
           // And the record of where its translated values came from, in every
           // language and part.
-          if (await this.provenanceRecorded(tx)) {
-            await forgetDocumentProvenance(tx, {
-              scopeKind: "collection",
-              scopeSlug: params.collectionName,
-              entryId: params.entryId,
-            });
-          }
+          await this.forgetTranslationRecords(
+            tx,
+            params.collectionName,
+            params.entryId
+          );
 
           // The document's last history event: the whole document, every
           // language, is gone. Its history is kept for the activity log's window
@@ -25617,13 +25761,7 @@ export class CollectionMutationService extends BaseService {
         entryId,
       });
       // Where its translated values came from; see the single-delete path.
-      if (await this.provenanceRecorded(tx)) {
-        await forgetDocumentProvenance(tx, {
-          scopeKind: "collection",
-          scopeSlug: params.collectionName,
-          entryId,
-        });
-      }
+      await this.forgetTranslationRecords(tx, params.collectionName, entryId);
 
       // The document's last history event; see the single-delete path.
       await this.recordHistoryEvent(tx, params.collectionName, entryId, {

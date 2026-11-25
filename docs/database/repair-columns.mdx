@@ -1,0 +1,196 @@
+---
+title: Repair old columns
+description: Find columns an earlier release of Nextly made with another type or nullability, and convert them with nextly repair-columns. What it reports, what it converts, and what each database blocks while it runs.
+---
+
+An earlier release of Nextly made some columns with another type than it gives the same field today, or with another nullability: `NOT NULL` where the field allows a null, or the reverse. `nextly repair-columns` finds those columns and, with `--apply`, converts the ones it can convert without losing anything.
+
+Start with a dry run. It reports every column that differs from its field, with what would happen to it, and changes nothing:
+
+```bash
+npx nextly repair-columns
+```
+
+<Callout type="warn">
+  Run it only from a checkout that holds every migration applied to that
+  database, with its snapshots (the files in the migrations folder's `meta/`).
+  The command compares each column with its field as last migrated, and that
+  record is in those files. It stops, with nothing converted, in a checkout
+  without a migration the database has applied, and where an applied migration
+  newer than the newest snapshot has none: see [If it stops](#if-it-stops). A
+  blank migration and a localization migration have no snapshot, and do not stop
+  it.
+</Callout>
+
+## Who should run it
+
+Run the dry run once if your site holds tables that an earlier release made in the Schema Builder, or field groups from an earlier release. These are the columns the report recognises as made by an earlier release, each with the first release that no longer makes it:
+
+| Column                                         | Held as                                              | Made before      |
+| ---------------------------------------------- | ---------------------------------------------------- | ---------------- |
+| A repeater or group                            | `text`, where the field is JSON (PostgreSQL, MySQL)  | `0.0.2-alpha.67` |
+| A float number                                 | `decimal(10,2)`                                      | `0.0.2-alpha.66` |
+| A select, radio, upload or text field on MySQL | `text`, where the field is a `varchar`               | `0.0.2-alpha.66` |
+| A many-to-many relationship in a field group   | one text or id value, where the field is a JSON list | `0.0.2-alpha.69` |
+| Other columns of a field group                 | the types the field group's creator gave them        | `0.0.2-alpha.77` |
+
+A required relationship or upload of a Single is also reported where its column is `NOT NULL`: it should allow a null, and converting it drops the `NOT NULL`. A collection's required relationship or upload is `NOT NULL` on purpose since `0.0.2-alpha.79`. There the reverse is reported: a column an earlier migration created nullable. So is a required user field added to a site that already had user fields. Converting it sets `NOT NULL`, and is blocked while a row holds a null. For a collection, the next `nextly migrate:create` plans the same change.
+
+A site first made on this release holds none of the columns in the table. When nothing differs, the dry run answers "Every column matches its field."
+
+Where a line says `created by the current version's generator`, the report names this release's own generator as the one that makes such a column. Where that is so, a table it makes later can hold the same difference, even after a repair.
+
+## Read the report
+
+Each differing column is one line: where it is, its outcome in brackets, what it is and what its field expects, why where that is known, its class with every reason, and what converting it costs. The statements the conversion runs follow, indented. Rows are named by their id, or in a translations table by their parent and locale. Nextly prints no stored value, but where a conversion failed the line holds the database's own message, which can quote one.
+
+```text
+Each column Nextly builds from field definitions, compared with its field as last migrated. Nothing is changed.
+collection "posts", field "links" (dc_posts.links) [would convert]: is text NULL, expected jsonb NULL; created before 0.0.2-alpha.67. safe. Converting it rewrites the table (1 row); reads and writes of the table wait until it ends.
+  Statements:
+    ALTER TABLE "dc_posts" ALTER COLUMN "links" TYPE jsonb USING "links"::jsonb
+1 would convert.
+```
+
+Each line gets one outcome. Where several hold, the first in this table is the one reported. A column has a second line where it differs from its field as last migrated and your configuration also changes that field: one line for the difference, which `--apply` can convert towards the field as last migrated, and one `pending a migration`. Each is counted:
+
+| Outcome                  | Meaning                                                                                                                                                                                                                                                                                      |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `not migrated`           | The table or column does not exist. `nextly migrate` creates it.                                                                                                                                                                                                                             |
+| `pending a migration`    | Your configuration changes the field and no migration has applied it. Migrate first.                                                                                                                                                                                                         |
+| `owned by a plugin`      | A plugin owns the column. It is reported and never converted.                                                                                                                                                                                                                                |
+| `failed`                 | Its conversion failed in this run, with the database's reason, or it could not start, for the reason the line gives. A dry run says this of a MySQL conversion that stopped part-way and whose column was changed since, so that it matches no recorded step: put that column right by hand. |
+| `interrupted`            | Its conversion stopped at a recorded step. The next `--apply` finishes it.                                                                                                                                                                                                                   |
+| `unavailable, locked`    | Another session held its table past the wait. See [A table in use](#a-table-in-use).                                                                                                                                                                                                         |
+| `blocked`                | Converting it would cut, change or invent a value, or drop something the column has.                                                                                                                                                                                                         |
+| `needs consent`          | Dry run: some values cannot be kept, so it converts only if you consent to clearing them.                                                                                                                                                                                                    |
+| `skipped, needs consent` | `--apply`: the same, and no consent named the column.                                                                                                                                                                                                                                        |
+| `would convert`          | Dry run: every value converts.                                                                                                                                                                                                                                                               |
+| `converted`              | This run converted the column.                                                                                                                                                                                                                                                               |
+
+A dry run takes no lock on schema changes and writes nothing. While another schema change runs, it still reports, and says that the report may change once that change ends.
+
+## Safe, lossy and blocked
+
+A column's class is decided from the rows it holds now, so two sites can get different answers for the same field.
+
+**Safe**: every stored value converts and reads back the same. A repeater held in `text` on PostgreSQL, where every row is valid JSON, is the line above.
+
+**Lossy**: some values cannot be held by the new type and would be cleared, that is set to null. The same column with one row that is not JSON:
+
+```text
+collection "posts", field "links" (dc_posts.links) [needs consent]: is text NULL, expected jsonb NULL; created before 0.0.2-alpha.67. lossy: values that do not parse as JSON would be cleared (1 row: id 2). Converting it rewrites the table (2 rows); reads and writes of the table wait until it ends. To convert it, clearing the named values, run with --apply and --accept-data-loss=dc_posts.links.
+  Statements:
+    ALTER TABLE "dc_posts" ALTER COLUMN "links" TYPE jsonb USING "links"::jsonb
+```
+
+On SQLite, JSON is kept as text, so that case does not arise there. There, a number column made as `integer` that holds a word is lossy.
+
+**Blocked**: converting it would cut a value, change one or invent one, or the new type cannot keep something that belongs to the column or reads it, for example a default, an index, a key, a check, a trigger or a view. Nothing is cleared for a blocked column, whatever you consent to, and the line says what you can change. The statements are shown, and are not run. On PostgreSQL, a view that reads the column:
+
+```text
+collection "posts", field "links" (dc_posts.links) [blocked]: is text NULL, expected jsonb NULL; created before 0.0.2-alpha.67. blocked: cannot keep the view "posts_view": the view reads the column, and PostgreSQL changes no column type it reads. The owner can: drop the view or rule, run the repair, then create it again. Converting it rewrites the table (0 rows); reads and writes of the table wait until it ends.
+  Statements:
+    ALTER TABLE "dc_posts" ALTER COLUMN "links" TYPE jsonb USING "links"::jsonb
+```
+
+On MySQL, some conversions to a floating-point type are blocked because a value written between the check of the rows and the change could be stored as a different number with no error: an integer wider than 4 bytes (`bigint`) to `double`, one wider than 2 bytes to `float`, and a decimal of more than 15 digits to `double`. A float number held in `decimal(10,2)` is not one of them.
+
+## Back up, then apply
+
+Back up the database first. A conversion changes stored data, and Nextly does not keep the previous values.
+
+```bash
+npx nextly repair-columns --apply
+```
+
+It takes the same lock as every other schema change, waiting about a minute for it, and stops with exit code 1, naming the holder, if it is still held. Under the lock it reads and judges every column again, so it acts on what the database holds then, not on your earlier report. It converts each safe column, one at a time. One column's failure stops neither the others nor the report.
+
+Each repair is recorded in the `nextly_column_repairs` table, which the first `--apply` that converts a column creates: the column, its type and nullability before and after, the class, whether consent was given, and how many values were cleared.
+
+Then run the dry run again. It answers "Every column matches its field." when nothing is left.
+
+## Clear values the new type cannot hold
+
+A lossy column converts only under a consent that names it, as `table.column`, exactly as the report prints it:
+
+```bash
+npx nextly repair-columns --apply --accept-data-loss=dc_posts.links
+```
+
+Name several with commas. `NEXTLY_ACCEPT_DATA_LOSS` takes the same list. The flag with no list, or with a table's name alone, covers no column here, although other commands accept those forms: a repair runs on a live database with no reviewed migration file behind it. The report says so and names the consent that would cover the column.
+
+In a terminal, `--apply` asks once about each lossy column no consent names, with the rows it would clear, before it takes the lock. It never asks under `--json` or `--non-interactive`, in CI, or where input or output is not a terminal: there, such a column is skipped and reported.
+
+A line counts every row whose value would be cleared, and names at most the first 20. A consent that names the column covers every row the run finds under the lock, including one that became unconvertible since your dry run. A yes in the terminal covers only the rows counted when it asked: if another row would now be cleared, nothing is, and the column is skipped.
+
+Three cases still do not convert. A column that must stay `NOT NULL` cannot be cleared, so it is blocked. A table keyed by neither its id nor its parent and locale cannot name the rows to clear, and on MySQL only a column becoming JSON in one statement can be cleared: either way the column is reported `failed`, and nothing is cleared.
+
+## What a repair keeps
+
+A conversion changes the column's type and nullability and keeps everything else. What it cannot keep makes the column blocked rather than being dropped quietly. The one exception is a collation or a character set that the new type has no place for, as JSON has none for either. The line names each as not carried.
+
+## What each database blocks
+
+The report says, for each column, what others can do while it converts:
+
+| Database                 | While it converts                                                        |
+| ------------------------ | ------------------------------------------------------------------------ |
+| PostgreSQL               | Reads and writes of the table wait until it ends.                        |
+| MySQL, a type change     | Reads continue and writes wait until it ends.                            |
+| MySQL, nullability alone | Reads and writes continue, apart from brief locks as it starts and ends. |
+| SQLite                   | Reads continue and writes to the whole database wait until it ends.      |
+
+How long depends on the rows the line counts: a conversion that rewrites the table reads and writes each of them.
+
+PostgreSQL and SQLite convert a column and record it in one transaction, so a failure leaves the column as it was. MySQL commits each schema statement on its own. There the progress is recorded before the first step and after each one, every step runs in strict mode, so a value that the new type would not hold is refused rather than changed, and a conversion that stops part-way is finished by the next `--apply`. Where the step still to run is the clearing of values, that run needs its own consent.
+
+## A table in use
+
+A table that another session is using is waited for in short tries, up to a total, as [`TABLE_BUSY`](/docs/cli/errors/table-busy) describes. Set the wait with `--lock-timeout` and `--lock-timeout-total`, or `NEXTLY_LOCK_TIMEOUT` and `NEXTLY_LOCK_TIMEOUT_TOTAL`. The notice of each try goes to standard error.
+
+Once it is reading tables, `repair-columns` does not stop with that error. When a table's tries end:
+
+- its columns are reported `unavailable, locked`, or `interrupted` where a conversion holds a recorded step;
+- the report names the table, the tries and, where the database says, what holds it;
+- the run goes on with the other tables, and does not wait for that table again;
+- the exit code is 2, or 3 where a conversion was interrupted.
+
+On SQLite, another connection's write transaction or exclusive lock holds the whole database. The command waits for it once, and then reports every table it has not yet read or converted. With `--apply`, taking the schema lock comes first and is a write too: if the database stays held through the tries, the command stops with `TABLE_BUSY` and exit code 1, having changed nothing.
+
+## In CI
+
+`--json` writes one document to standard output and nothing else there. Its `schema` is `nextly.repair-columns/1`, and a field is never removed or given a new meaning without a new version. It holds the same columns and facts as the report, in `result.records`.
+
+```bash
+npx nextly repair-columns --json
+```
+
+| Exit code | Meaning                                                                                                                                        |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0         | No difference remains.                                                                                                                         |
+| 1         | The command could not run: for example the database is unreachable, the configuration is invalid, or the lock was not taken.                   |
+| 2         | Differences remain: any outcome other than `converted`, `failed` or `interrupted`. A plugin's column and a column that was not read count too. |
+| 3         | A column is reported `failed` or `interrupted`, by a dry run too.                                                                              |
+
+Where more than one holds, 1 comes first, then 3, then 2.
+
+## If it stops
+
+The command stops in these cases, naming what it found and how to put it right:
+
+- [`REGISTRY_ROW_WITHOUT_TABLE`](/docs/cli/errors/registry-row-without-table)
+- [`REGISTRY_ROW_DIVERGED`](/docs/cli/errors/registry-row-diverged)
+- [`MIGRATION_SNAPSHOTS_UNREADABLE`](/docs/cli/errors/migration-snapshots-unreadable)
+- [`INVALID_SNAPSHOT`](/docs/cli/errors/invalid-snapshot)
+- [`MISSING_MIGRATION`](/docs/cli/errors/missing-migration)
+- [`MIGRATION_MISSING`](/docs/cli/errors/migration-missing)
+- [`MISSING_SNAPSHOT`](/docs/cli/errors/missing-snapshot)
+
+A statement that the database refuses is reported on its own column as `failed`, with the database's reason, and the run goes on.
+
+## Related
+
+- [Upgrading an existing site](/docs/guides/upgrading)
+- [Production migrations](/docs/guides/production-migrations)
+- [`TABLE_BUSY`](/docs/cli/errors/table-busy)

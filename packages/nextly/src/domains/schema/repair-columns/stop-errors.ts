@@ -9,10 +9,13 @@
  * @module domains/schema/repair-columns/stop-errors
  */
 import { NextlyError } from "../../../errors";
+import { shellQuote } from "../migrate/drift-error";
+import { BLANK_FILE_LINE } from "../migrate/history-line-names";
 
 import {
   APPLIED_MIGRATION_FILE_MISSING_REASON,
   APPLIED_SNAPSHOT_INVALID_REASON,
+  APPLIED_SNAPSHOT_MISSING_REASON,
   MIGRATION_SNAPSHOTS_UNREADABLE_REASON,
   REGISTRY_ROW_DIVERGED_REASON,
   REGISTRY_ROW_WITHOUT_TABLE_REASON,
@@ -188,6 +191,29 @@ export function appliedMigrationFileMissingError(
       next: `Restore the migration's .sql file from version control, or, if it was removed on purpose, record that with \`nextly migrate:resolve --removed <file>\`, ${RUN_AGAIN}`,
     },
     { file, migration }
+  );
+}
+
+/**
+ * Applied migrations newer than `newest`, the newest whose snapshot is there, that have none: their
+ * snapshots are what the database last had applied, and `newest`'s would convert columns back.
+ */
+export function appliedSnapshotsMissingError(
+  migrations: readonly string[],
+  newest: string
+): NextlyError {
+  const one = migrations.length === 1;
+  const snapshots = listed(
+    migrations.map(name => `\`meta/${name}.snapshot.json\``)
+  );
+  return stopError(
+    APPLIED_SNAPSHOT_MISSING_REASON,
+    {
+      what: `The applied ${one ? "migration" : "migrations"} ${listed(migrations.map(name => `\`${name}\``))} ${one ? "has" : "have"} no snapshot in \`meta/\`.`,
+      why: `${one ? "It is" : "They are"} newer than \`${newest}\`, whose snapshot is the newest applied one there is, ${UNKNOWN_APPLIED}`,
+      next: `Restore ${snapshots} from version control. For SQL you wrote yourself, which has none, put its file back if it was removed and add the line \`${BLANK_FILE_LINE}\` to its header, above \`-- UP\`, then accept the edit with \`nextly migrate:resolve --applied ${one ? shellQuote(migrations[0]) : "<migration>"} --skip-verify\`. Then run \`nextly repair-columns\` again.`,
+    },
+    { migrations, newest }
   );
 }
 

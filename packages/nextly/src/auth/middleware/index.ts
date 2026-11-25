@@ -795,7 +795,9 @@ type OperationLanguage =
   | "query-write"
   | "duplicate"
   | "filtered-history"
-  | "document-history";
+  | "document-history"
+  | "translation-read"
+  | "translation-write";
 
 /**
  * The REST operations whose languages the request names, and how. Every
@@ -833,6 +835,16 @@ type OperationLanguage =
  *   document gate behind it asks the rule in each language the history holds
  *   and returns those alone, and told every language at once, a rule
  *   admitting one language would refuse the history it may read.
+ * - `translation-read`: a read of one translation beside its source, judged
+ *   in the translation's language, which `?locale=` names, and in no other:
+ *   nothing is filled from another language, and the service behind it asks
+ *   of the source's.
+ * - `translation-write`: a change to one translation that writes no content,
+ *   whose language is in the body, which the gate does not see. It is admitted
+ *   where the rule admits a write in any one language, each asked alone
+ *   ({@link admittingLanguages}): the service behind it asks the rule in the
+ *   language the body names, and told every language at once, a rule
+ *   admitting one would refuse the translation it may change.
  */
 const OPERATION_LANGUAGES: ReadonlyMap<string, OperationLanguage> = new Map([
   ["listEntries", "read"],
@@ -857,6 +869,10 @@ const OPERATION_LANGUAGES: ReadonlyMap<string, OperationLanguage> = new Map([
   ["listEntryVersions", "filtered-history"],
   ["listSingleVersions", "filtered-history"],
   [READ_DOCUMENT_HISTORY, "document-history"],
+  ["getEntrySourceChange", "translation-read"],
+  ["getSingleSourceChange", "translation-read"],
+  ["keepEntryTranslation", "translation-write"],
+  ["keepSingleTranslation", "translation-write"],
 ]);
 
 /** What a request names about its languages, as it is dispatched. */
@@ -891,9 +907,12 @@ const LANGUAGES_OF: Record<
   // Told as one language where its request names one; naming none, it is
   // asked in each language alone (`admittingLanguages`).
   "document-history": historyLanguage,
+  "translation-read": historyLanguage,
+  // Asked in each language alone (`admittingLanguages`).
+  "translation-write": everyLanguage,
 };
 
-/** A history read's languages: the one it names, without fallbacks, or every one. */
+/** The languages of a read filled from no other: the one it names, or every one. */
 function historyLanguage(asked: RequestedLanguage): RuleLanguage {
   return asked.locale === undefined
     ? everyLanguage()
@@ -902,25 +921,31 @@ function historyLanguage(asked: RequestedLanguage): RuleLanguage {
 
 /**
  * The languages a route is admitted in, any one of which admits it: the one
- * {@link requestLanguage} works out, or, for a document's history read naming
- * no language, each configured language alone, as a read in it is told.
+ * {@link requestLanguage} works out, or each configured language alone, for a
+ * document's history read naming no language, as a read in it is told, and
+ * for a change to a translation its body names, as a write in it is told.
  */
 function admittingLanguages(
   operation: RouteOperation | undefined
 ): readonly [RuleLanguage, ...RuleLanguage[]] {
   const asked = requestLanguage(operation);
-  if (
-    operation === undefined ||
-    OPERATION_LANGUAGES.get(operation.method) !== "document-history" ||
-    requestedLanguage(operation).locale !== undefined
-  ) {
-    return [asked];
-  }
-  const [first, ...others] = asked.locales.map(locale =>
-    registeredReadLanguagesFor(locale, false)
-  );
-  // A site without languages asks once, as every other read is asked.
+  const alone = operation && eachLanguageAlone(operation);
+  if (alone === undefined) return [asked];
+  const [first, ...others] = asked.locales.map(alone);
+  // A site without languages asks once, as every other request is asked.
   return first === undefined ? [asked] : [first, ...others];
+}
+
+/** How one language alone is told, for an operation asked in each; undefined for any other. */
+function eachLanguageAlone(
+  operation: RouteOperation
+): ((locale: string) => RuleLanguage) | undefined {
+  const kind = OPERATION_LANGUAGES.get(operation.method);
+  if (kind === "translation-write") return registeredWriteLanguagesFor;
+  return kind === "document-history" &&
+    requestedLanguage(operation).locale === undefined
+    ? locale => registeredReadLanguagesFor(locale, false)
+    : undefined;
 }
 
 /**

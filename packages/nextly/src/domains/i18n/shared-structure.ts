@@ -358,7 +358,7 @@ export function shapeOfRow(
  * its text. A row with no such id, or whose id an earlier row of the list already holds, has none,
  * and keeps its translatable values on the structure: two rows never share one overlay entry.
  */
-function rowKeys(rows: readonly unknown[]): (string | undefined)[] {
+export function rowKeys(rows: readonly unknown[]): (string | undefined)[] {
   const taken = new Set<string>();
   return rows.map(row => {
     const key = keyOf(row);
