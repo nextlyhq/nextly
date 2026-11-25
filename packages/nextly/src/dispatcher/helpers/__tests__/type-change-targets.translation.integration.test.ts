@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 import { container } from "../../../di/container";
+import type { ServiceContainer } from "../../../services";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -20,12 +21,15 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 
+import { dispatchCollections } from "../../handlers/collection-dispatcher";
+
 import {
   collection,
   DB,
   fieldGroup,
   LOCALIZATION,
   single,
+  targetsOf,
   type Field,
 } from "./type-change-targets-entities";
 
@@ -165,6 +169,99 @@ describe.each(getConfiguredTestDialects())(
         expect([...seen].sort()).toEqual(expect.arrayContaining(expected));
       },
       600_000
+    );
+  }
+);
+
+// Each installation keeps its text per language, and a container's text field by field beside its one
+// structure, whatever the entity's own switch says.
+describe.each(getConfiguredTestDialects())(
+  "a text inside a group, whatever the collection says of translation (%s)",
+  dialect => {
+    it.each([
+      ["off", { localized: false }],
+      ["not said", {}],
+      ["on", { localized: true }],
+    ])(
+      "%s: a change that stops translating it is unavailable, and the save of a group's only text is refused",
+      async (_said, localized) => {
+        const basePath = await mkdtemp(join(tmpdir(), "nextly-type-targets-"));
+        folders.push(basePath);
+        vi.stubEnv("NODE_ENV", "development");
+        instance = await createTestNextly({
+          dialect: dialect as TestDialect,
+          basePath,
+          db: DB,
+          localization: LOCALIZATION,
+        });
+        const text = (name: string) => ({ name, type: "text" });
+        const group = (name: string, fields: Field[]) => ({
+          name,
+          type: "group",
+          fields,
+        });
+        const ONE = group("one", [text("note")]);
+        const TWO = group("two", [text("note"), text("subtitle")]);
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: "tct_inside",
+            label: "Post",
+            ...localized,
+            fields: [ONE, TWO],
+          }
+        );
+        const marked = async (path: string[], to: string) =>
+          (await targetsOf("tct_inside", path, "text")).find(
+            target => target.type === to
+          );
+        for (const path of [
+          ["one", "note"],
+          ["two", "note"],
+        ]) {
+          expect(await marked(path, "number"), path.join(".")).toMatchObject({
+            blocked: "leaves-translation-inside",
+            outcome: null,
+          });
+          expect(await marked(path, "email"), path.join(".")).toMatchObject({
+            blocked: "unjudged-inside",
+            outcome: null,
+          });
+          expect(await marked(path, "textarea"), path.join(".")).toMatchObject({
+            blocked: null,
+            outcome: "keeps",
+          });
+        }
+
+        // What the picker marks unavailable for a group's only text, the save refuses too.
+        const [row] = (await (
+          instance.adapter as unknown as {
+            executeQuery<R>(statement: string): Promise<R[]>;
+          }
+        ).executeQuery<{ v: number | string | null }>(
+          "SELECT schema_version AS v FROM dynamic_collections WHERE slug = 'tct_inside'"
+        )) as { v: number | string | null }[];
+        const outcome = await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "tct_inside" },
+          {
+            fields: [group("one", [{ name: "note", type: "number" }]), TWO],
+            confirmed: true,
+            schemaVersion: Number(row?.v ?? 1),
+          }
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        expect(outcome).toMatchObject({
+          code: "INVALID_INPUT",
+          logContext: { reason: "container-overlay-left-behind" },
+        });
+      },
+      300_000
     );
   }
 );
