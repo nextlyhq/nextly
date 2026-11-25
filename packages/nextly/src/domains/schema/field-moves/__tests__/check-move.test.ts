@@ -674,9 +674,9 @@ describe("checkMove", () => {
     const translated = { localized: true };
 
     // A group holding text keeps one structure in every language and each language's text beside
-    // it, which the move's statements do not carry: moving a field into or out of it is refused,
-    // naming the field. Broken, the move carries the structure's values and leaves every
-    // language's text behind.
+    // it, which the move's statements do not carry: moving a text kept for each language into or
+    // out of it is refused, naming the field. Broken, the move carries the structure's values and
+    // leaves every language's text behind.
     it("refuses a translated field into a group that keeps text inside, naming the field", () => {
       const checked = checkMove(
         before,
@@ -714,6 +714,26 @@ describe("checkMove", () => {
       expect(!checked.ok && checked.message).toMatch(
         /^label cannot be moved into or out of box/
       );
+    });
+
+    // Held once for every language in the structure the move carries, as a shared text is.
+    it("plans a number, and a shared text, into and out of a group that keeps text inside", () => {
+      for (const field of [
+        { name: "views", label: "views", type: "number" } as FieldDefinition,
+        text("views", { localized: false }),
+      ]) {
+        const onRow = [field, group("box", [text("note")])];
+        const grouped = [group("box", [text("note"), field])];
+        for (const [was, is, from, to] of [
+          [onRow, grouped, ["views"], ["box", "views"]],
+          [grouped, onRow, ["box", "views"], ["views"]],
+        ] as const) {
+          expect(checkMove(was, is, { from, to }, translated)).toMatchObject({
+            ok: true,
+            move: { perLanguage: false },
+          });
+        }
+      }
     });
 
     it("plans a field out of a group that keeps no text inside, which has nothing per language", () => {
