@@ -9,8 +9,10 @@
  * one refuses is blocked with the save's words: a field that stops being translated, or becomes
  * translated, while how it is stored changes, and one kept per language whose translations column
  * would keep its old type. Inside a group or repeating rows, text is kept per language beside the one
- * structure, field by field, and a change that stops translating such a text is blocked there too:
- * every language's text would be left behind it.
+ * structure, field by field, which the save's judgement of the values does not reach yet. A change that
+ * stops translating such a text is blocked there (the field would read nothing in any language, its text
+ * left beside the structure until that language's next write drops it), and so is one that does not keep
+ * every value.
  *
  * @module dispatcher/helpers/type-change-targets
  */
@@ -30,7 +32,6 @@ import {
 import { retypedCompanionColumns } from "../../domains/i18n/migration/plan-companion-type-change";
 import { fieldsLeavingTranslation } from "../../domains/i18n/migration/reconcile-companion";
 import {
-  keepsTranslationsInside,
   sharedStructureShape,
   type SharedStructureShape,
 } from "../../domains/i18n/shared-structure";
@@ -76,7 +77,9 @@ export type TypeChangeBlock =
   /** It stays translated, and its translations column would keep the old type (`translationsColumnChanges`). */
   | "translations-column"
   /** Text its containers keep per language, beside one structure, would stop being translated. */
-  | "leaves-translation-inside";
+  | "leaves-translation-inside"
+  /** It would stay translated there, its values not all kept, which the save does not judge yet. */
+  | "unjudged-inside";
 
 /** A refusal in the save's own words: its code, why, and the changes that get there instead. */
 export interface TypeChangeRefusalWords {
@@ -283,6 +286,19 @@ function saveMayRefuse(from: FieldDefinition, to: FieldDefinition): boolean {
   );
 }
 
+/** Whether the field is text its containers keep per language, on an entity stored so. */
+function keptPerLanguageInside(args: {
+  inJson?: boolean;
+  translatedInside?: boolean;
+  layout?: TranslationLayout;
+}): boolean {
+  return (
+    args.layout?.perLanguage === true &&
+    args.inJson === true &&
+    args.translatedInside === true
+  );
+}
+
 /**
  * Why a translation rule blocks changing the field into `candidate`, on an entity stored per language:
  * on its own row or column, the save's own (`translationRefusal`); inside a container, where the field
@@ -301,7 +317,7 @@ function refusalByTranslation(
 ): { blocked: TypeChangeBlock; refusal: TypeChangeRefusalWords | null } | null {
   if (args.layout?.perLanguage !== true) return null;
   if (args.inJson === true) {
-    return args.translatedInside === true && !isFieldLocalized(candidate, true)
+    return keptPerLanguageInside(args) && !isFieldLocalized(candidate, true)
       ? { blocked: "leaves-translation-inside", refusal: null }
       : null;
   }
@@ -355,14 +371,14 @@ export function typeChangeTargets(args: {
         return { type, blocked, refusal: null, outcome: null };
       const translation = refusalByTranslation(args, candidate);
       if (translation !== null) return { type, ...translation, outcome: null };
-      return {
-        type,
-        blocked: null,
-        refusal: null,
-        outcome: saveMayRefuse(args.field, candidate)
-          ? "may-lose"
-          : pairOutcome(from, to),
-      };
+      const outcome = saveMayRefuse(args.field, candidate)
+        ? "may-lose"
+        : pairOutcome(from, to);
+      // Text kept per language beside a container's structure is not among the values the save judges,
+      // so until it is, a change there is open only where every value is kept.
+      return keptPerLanguageInside(args) && outcome !== "keeps"
+        ? { type, blocked: "unjudged-inside", refusal: null, outcome: null }
+        : { type, blocked: null, refusal: null, outcome };
     });
 }
 
@@ -483,7 +499,6 @@ function translatedInsideContainers(
   const held = rest.at(-1);
   const container = onLevel(fields).find(field => field.name === outermost);
   if (container === undefined || held === undefined) return false;
-  if (!keepsTranslationsInside(container, true)) return false;
   const shape = rest
     .slice(0, -1)
     .reduce<SharedStructureShape | null>(

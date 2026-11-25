@@ -71,6 +71,8 @@ const BLOCKED_WORDS: Readonly<Record<string, string>> = {
   unloaded: "The plugin this type comes from is not loaded.",
   "leaves-translation-inside":
     "Its text is kept in each language inside its group or repeating rows, and this type would leave that text behind. Add a new field beside it instead.",
+  "unjudged-inside":
+    "Its text is kept in each language inside its group or repeating rows, and this change can't be checked there yet. Add a new field beside it instead.",
   "no-rule": "No rule says what this type would do to the saved values.",
 };
 
