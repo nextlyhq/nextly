@@ -15,8 +15,9 @@ npx nextly repair-columns
   Run it only from a checkout that holds every migration applied to that
   database, with its snapshots (the files in the migrations folder's `meta/`).
   The command compares each column with its field as last migrated, and that
-  record is in those files. From an older checkout, or with a snapshot missing,
-  a correct column can look wrong.
+  record is in those files. It stops, with nothing converted, in a checkout
+  without a migration the database has applied, and where the newest applied
+  migration has lost its snapshot: see [If it stops](#if-it-stops).
 </Callout>
 
 ## Who should run it
@@ -181,6 +182,8 @@ The command stops in these cases, naming what it found and how to put it right:
 - [`MIGRATION_SNAPSHOTS_UNREADABLE`](/docs/cli/errors/migration-snapshots-unreadable)
 - [`INVALID_SNAPSHOT`](/docs/cli/errors/invalid-snapshot)
 - [`MISSING_MIGRATION`](/docs/cli/errors/missing-migration)
+- [`MIGRATION_MISSING`](/docs/cli/errors/migration-missing)
+- [`MISSING_SNAPSHOT`](/docs/cli/errors/missing-snapshot)
 
 A statement that the database refuses is reported on its own column as `failed`, with the database's reason, and the run goes on.
 
