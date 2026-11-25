@@ -198,6 +198,36 @@ describe("a field changed to another type", () => {
     expect(back).toEqual(text);
   });
 
+  // A group or repeating rows keep one structure in every language, and what is inside chooses what is
+  // translated: a container has no Localized of its own to keep.
+  it("a field becoming a group or repeating rows keeps Unique and Index, and no Localized", () => {
+    for (const localized of [true, false]) {
+      for (const [from, to] of [
+        ["text", "group"],
+        ["text", "repeater"],
+        ["group", "repeater"],
+      ] as const) {
+        expect(
+          changed(
+            { type: from, advanced: { unique: true, index: true, localized } },
+            to
+          ).advanced,
+          `${from} to ${to}`
+        ).toEqual({ unique: true, index: true });
+      }
+    }
+    // Any other type keeps it as it is set.
+    expect(
+      changed(
+        {
+          type: "text",
+          advanced: { unique: false, index: false, localized: true },
+        },
+        "number"
+      ).advanced
+    ).toEqual({ unique: false, index: false, localized: true });
+  });
+
   it("a group becoming repeating rows keeps the fields it holds", () => {
     const inside = [{ id: "f-2", name: "a", label: "A", type: "text" }];
     expect(changed({ type: "group", fields: inside }, "repeater").fields).toBe(
