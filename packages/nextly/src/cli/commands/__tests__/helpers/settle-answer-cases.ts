@@ -27,6 +27,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -223,7 +224,8 @@ export function settleAnswerCases(args: {
       /** `nextly migrate` in `folder` on the reached database, with nobody to ask. */
       const migrate = (
         folder: string,
-        options: { acceptDataLoss?: true } = {}
+        options: { acceptDataLoss?: true; dryRun?: true } = {},
+        localization: typeof LOCALIZATION | "Settings" = LOCALIZATION
       ) =>
         ran(() => {
           setNonInteractive(true);
@@ -231,7 +233,8 @@ export function settleAnswerCases(args: {
           vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", undefined);
           loaded.config = defineConfig({
             collections: [],
-            localization: LOCALIZATION,
+            // Without it the languages are the ones Settings holds (`nextly_languages`).
+            ...(localization === "Settings" ? {} : { localization }),
             db: {
               migrationsDir: join(folder, "database", "history"),
               uiSchemaFile: join(folder, "schema", "builder.json"),
@@ -391,13 +394,80 @@ export function settleAnswerCases(args: {
         },
       ];
 
+      /** A save whose answer is decided in the default language, and the file it is written in. */
+      const decidedSaves = (
+        translated: boolean
+      ): {
+        deletes: boolean;
+        file: "the main table's file" | "the translations table's file";
+        save: Pick<AnsweredSave, "name" | "fields" | "answers">;
+      }[] => {
+        const [added, , renamed] = savesFor(translated);
+        // Made required with no column changed: the answer is the main file's.
+        const required = (resolution: Record<string, unknown>) => ({
+          name: "added" as const,
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "note", type: "text", required: true },
+          ],
+          answers: {
+            ...(translated ? { localized: true } : {}),
+            eventResolutions: [
+              {
+                ...resolution,
+                eventId: `add_not_null_with_nulls:${MAIN}.note`,
+              },
+            ],
+          },
+        });
+        return [
+          {
+            deletes: false,
+            file: "the translations table's file",
+            save: added!,
+          },
+          {
+            deletes: true,
+            file: "the translations table's file",
+            save: renamed!,
+          },
+          {
+            deletes: false,
+            file: "the main table's file",
+            save: required({ kind: "provide_default", value: "noted" }),
+          },
+          {
+            deletes: true,
+            file: "the main table's file",
+            save: required({ kind: "delete_nonconforming" }),
+          },
+        ];
+      };
+
+      /** Settings' languages on `adapter`'s database, the first of them its default. */
+      async function settingsLanguages(
+        adapter: DrizzleAdapter,
+        codes: readonly string[]
+      ): Promise<void> {
+        const now = dialect === "sqlite" ? "0" : "CURRENT_TIMESTAMP";
+        const yes = dialect === "postgresql" ? "TRUE" : "1";
+        const no = dialect === "postgresql" ? "FALSE" : "0";
+        await adapter.executeQuery(`DELETE FROM ${q("nextly_languages")}`);
+        for (const [at, code] of codes.entries()) {
+          await adapter.executeQuery(
+            `INSERT INTO ${q("nextly_languages")} (${["code", "label", "fallback", "position", "is_default", "active", "created_at", "updated_at"].map(q).join(", ")}) VALUES ('${code}', '${code}', '[]', ${at}, ${at === 0 ? yes : no}, ${yes}, ${now}, ${now})`
+          );
+        }
+      }
+
       /**
        * The project built to an answered save, and its folder as it stood before that save
-       * (`before`) and after it (`after`).
+       * (`before`) and after it (`after`). `withLater` builds a save after it too.
        */
       async function built(
         translated: boolean,
-        answered: AnsweredSave
+        answered: Pick<AnsweredSave, "name" | "fields" | "answers">,
+        withLater = true
       ): Promise<{ before: string; after: string; later: string | undefined }> {
         const dev = await database();
         reach(dev.url);
@@ -429,7 +499,10 @@ export function settleAnswerCases(args: {
         // once a container's overlay column is in its translations table: the save's check takes the
         // column for one the history does not record. Left out there; an untranslated collection's
         // save makes no such check.
-        if (translated && answered.name === "added beside a container") {
+        if (
+          !withLater ||
+          (translated && answered.name === "added beside a container")
+        ) {
           return { before, after, later: undefined };
         }
         // A later save on the same table, which the drift check compares against what the
@@ -696,6 +769,113 @@ export function settleAnswerCases(args: {
             const applied = await migrate(after, { acceptDataLoss: true });
             expect(applied.code, applied.said).toBeUndefined();
             expect(await entriesOf(target.adapter)).toEqual([target.kept]);
+          }, 240_000);
+        }
+
+        // An answer is decided in the language that was the default when its file was made: a run
+        // whose default is another refuses the file before any statement, a fill's and a delete's
+        // alike, in the main table's file and in the translations table's.
+        for (const decided of decidedSaves(translated)) {
+          const kind = translated ? "a translated" : "an untranslated";
+          const named = `${kind} collection's ${decided.deletes ? "delete" : "fill"} in ${decided.file}`;
+          const consent = decided.deletes
+            ? { acceptDataLoss: true as const }
+            : {};
+
+          /** The save's files on a database of its own, with entries, and the file that answers. */
+          const deployed = async () => {
+            const { before, after } = await built(
+              translated,
+              decided.save,
+              false
+            );
+            const answering = files(after).filter(
+              name =>
+                !files(before).includes(name) &&
+                /^(UPDATE|INSERT INTO|DELETE FROM)\b.*_locales/m.test(
+                  runs(after, name)
+                )
+            );
+            expect(answering).toHaveLength(1);
+            const file = answering[0]!;
+            const localizationFile = readFileSync(
+              join(after, "database", "history", file),
+              "utf8"
+            ).includes("-- Generated: localization");
+            expect(localizationFile).toBe(
+              decided.file === "the translations table's file"
+            );
+            const target = await seeded(before, translated);
+            reach(target.url);
+            const state = async () => ({
+              entries: await entriesOf(target.adapter),
+              notes: await languageRowsOf(target.adapter, "note"),
+              pending: await pendingIn(target.adapter, after),
+            });
+            return { after, file, target, state, untouched: await state() };
+          };
+          /** What a refusal says: its code, the file, both languages, and that nothing changed. */
+          const refusedIn = (said: string, file: string, runs: string) => {
+            expect(said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            expect(said).toContain(file);
+            expect(said).toMatch(/"en"/);
+            expect(said).toMatch(new RegExp(`"${runs}"`));
+            expect(said).toMatch(/Nothing was changed/);
+          };
+
+          it(`refuses ${named} where the configuration's default is another language`, async () => {
+            const { after, file, state, untouched } = await deployed();
+            const spanish = { ...LOCALIZATION, defaultLocale: "es" };
+
+            const refused = await migrate(after, consent, spanish);
+            expect(refused.code, refused.said).not.toBeUndefined();
+            refusedIn(refused.said, file, "es");
+            expect(await state()).toEqual(untouched);
+
+            // The dry run names the same refusal.
+            const previewed = await migrate(
+              after,
+              { ...consent, dryRun: true },
+              spanish
+            );
+            expect(previewed.said).toMatch(/would refuse/);
+            expect(previewed.said).toMatch(/"en"/);
+            expect(previewed.said).toMatch(/"es"/);
+
+            // Under the language it was made in, the same file applies.
+            const applied = await migrate(after, consent);
+            expect(applied.code, applied.said).toBeUndefined();
+            expect((await state()).pending).toEqual([]);
+          }, 240_000);
+
+          it(`refuses ${named} where Settings' default is another language`, async () => {
+            const { after, file, target, state, untouched } = await deployed();
+            await settingsLanguages(target.adapter, ["es", "en"]);
+
+            const refused = await migrate(after, consent, "Settings");
+            expect(refused.code, refused.said).not.toBeUndefined();
+            refusedIn(refused.said, file, "es");
+            expect(await state()).toEqual(untouched);
+
+            await settingsLanguages(target.adapter, ["en", "es"]);
+            const applied = await migrate(after, consent, "Settings");
+            expect(applied.code, applied.said).toBeUndefined();
+            expect((await state()).pending).toEqual([]);
+          }, 240_000);
+
+          it(`refuses ${named} where the file records no language`, async () => {
+            const { after, file, state, untouched } = await deployed();
+            const path = join(after, "database", "history", file);
+            const text = readFileSync(path, "utf8");
+            // The line a file with an answer records its language in, taken out.
+            writeFileSync(path, text.replace(/^-- Answers in: .*\n/m, ""));
+
+            const refused = await migrate(after, consent);
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            expect(refused.said).toContain(file);
+            expect(refused.said).toMatch(/records no language/);
+            expect(await state()).toEqual(untouched);
           }, 240_000);
         }
 
