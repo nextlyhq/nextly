@@ -108,6 +108,7 @@ import type { Deletion } from "../migrate/data-loss-consent";
 import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
 import { mergedBy } from "../migrate/history-line";
 import { compareMigrationBaseNames } from "../migrate/migration-order";
+import { tablesDroppedIn } from "../ownership/drop-guard";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -175,6 +176,7 @@ import {
   type PermissionRecord,
 } from "./declared-permissions";
 import { buildInverseOperations } from "./down-generator";
+import { droppedJunctions, junctionDropsPlaced } from "./dropped-junctions";
 import {
   droppedTranslations,
   translationsDropsPlaced,
@@ -1434,6 +1436,22 @@ export async function generateMigration(
     ...translationsDropsPlaced(sqlStatements, translations.up, args.dialect)
   );
   downSqlStatements.push(...translations.down);
+  // 7a''. A removed entity's own many-to-many tables go before the tables they link, and come back,
+  //       empty, with the DOWN (`droppedJunctions`): no snapshot records one either.
+  const junctions = droppedJunctions({
+    operations,
+    previous: previousSnapshot,
+    previousEntities: previous?.data.entities,
+    remaining: { collections: args.collections, singles: args.singles },
+    droppedAlready: tablesDroppedByCaller(args),
+    dialect: args.dialect,
+  });
+  sqlStatements.splice(
+    0,
+    sqlStatements.length,
+    ...junctionDropsPlaced(sqlStatements, junctions.up, args.dialect)
+  );
+  downSqlStatements.push(...junctions.down);
   // A renamed field group's rows move once its tables are as the file leaves them, and move back
   // before the DOWN takes those tables back.
   sqlStatements.push(...groupRenames.up);
@@ -4723,6 +4741,16 @@ function isFieldGroupTable(table: TableSpec): boolean {
   const columns = new Set(table.columns.map(column => column.name));
   if (FIELD_GROUP_SIGNATURE.every(column => columns.has(column))) return true;
   return table.name.startsWith(STORAGE_FORMAT.tablePrefix);
+}
+
+/** The tables the statements the caller adds drop: a Schema Builder save's own. */
+function tablesDroppedByCaller(args: GenerateArgs): Set<string> {
+  const up = args.appendedStatements?.up;
+  return new Set(
+    [...(up?.first ?? []), ...(up?.last ?? [])].flatMap(statement =>
+      tablesDroppedIn(statement, args.dialect)
+    )
+  );
 }
 
 /**

@@ -39,6 +39,7 @@ import {
   KILLED_AT,
   withStopPoints,
 } from "../../../domains/schema/migrate/stop-points";
+import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { resolveComponentTableName } from "../../../domains/schema/utils/resolve-table-name";
 import {
   createTestNextly,
@@ -56,6 +57,7 @@ import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
+import { runMigrateDown } from "../migrate-down";
 import { runMigrateResolve } from "../migrate-resolve";
 
 /** The configuration the commands load. */
@@ -89,6 +91,8 @@ const HOME: Entity = {
   slug: "mrp_home",
   table: "single_mrp_home",
 };
+/** What the three link to, which stays. */
+const TAGGED: Entity = { kind: "collection", slug: TAGS, table: `dc_${TAGS}` };
 const OTHER: Entity = {
   kind: "collection",
   slug: "mrp_other",
@@ -477,6 +481,30 @@ async function grantAll(
   }
 }
 
+/** The table of the collection that stays and its own many-to-many field. */
+const OTHER_LINKS = `dc_mrp_other_dc_${TAGS}_tags`;
+
+/** Everything of an entity: its own rows, those it has elsewhere, its permissions and its events. */
+async function pictureOf(
+  adapter: DrizzleAdapter,
+  dialect: TestDialect,
+  entity: Entity
+) {
+  const events = await adapter.select<{ subjectSlug: string; kind: string }>(
+    "nextly_content_events",
+    {}
+  );
+  return {
+    own: await rowsWhere(adapter, dialect, entity.table),
+    shared: await sharedRowsOf(adapter, dialect, entity),
+    permissions: await permissionsOf(adapter, entity),
+    events: events
+      .filter(event => event.subjectSlug === entity.slug)
+      .map(event => event.kind)
+      .sort(),
+  };
+}
+
 /** How many `deleted` events each document of the entity has. */
 async function deletionsOf(
   adapter: DrizzleAdapter,
@@ -669,6 +697,107 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await migrate(config({}), CONSENT)).toBeUndefined();
       await expectRetired(adapter, ids);
+    }, 300_000);
+
+    it("is rolled back with its link tables and their keys, and goes again", async () => {
+      const { adapter } = await promoted();
+      const keysOf = async () => {
+        const tables = (await adapter.listTables()).filter(table =>
+          table.includes("mrp_")
+        );
+        const live = await introspectLiveSnapshot(
+          adapter.getDrizzle(),
+          dialect,
+          tables
+        );
+        return live.tables
+          .flatMap(table =>
+            (table.foreignKeys ?? []).map(key => ({
+              table: table.name,
+              to: key.referencesTable,
+              columns: key.columns,
+              onDelete: key.onDelete,
+            }))
+          )
+          .map(key => JSON.stringify(key))
+          .sort();
+      };
+      const tables = async () =>
+        (await adapter.listTables())
+          .filter(table => table.includes("mrp_"))
+          .sort();
+      const was = { tables: await tables(), keys: await keysOf() };
+      expect(was.keys.length).toBeGreaterThan(4);
+      expect(await migrateCreate(config({}), "retire")).toBeUndefined();
+      expect(await migrate(config({}), CONSENT)).toBeUndefined();
+
+      clearServices();
+      expect(
+        await command(config({}), context =>
+          runMigrateDown(
+            {
+              cwd: dir,
+              step: 1,
+              acceptDataLoss: true,
+              yes: true,
+            } as Parameters<typeof runMigrateDown>[0],
+            context
+          )
+        )
+      ).toBeUndefined();
+
+      expect({ tables: await tables(), keys: await keysOf() }).toEqual(was);
+      // Empty: what the UP deleted is not in the file to bring back.
+      for (const entity of [NOTES, HOME]) {
+        const own = await ownRowsOf(adapter, dialect, entity);
+        expect(Object.values(own).flat()).toEqual([]);
+      }
+      expect(await migrate(config({}), CONSENT)).toBeUndefined();
+      expect(await tablesOf(adapter, NOTES)).toEqual([]);
+    }, 300_000);
+
+    it("never drops a link table a collection that stays names too", async () => {
+      const { adapter } = await promoted();
+      // In code, the collection that stays keeps its links in the removed one's table.
+      const shared = `${NOTES.table}_dc_${TAGS}_tags`;
+      outOfTheBuildersFile([OTHER]);
+      const kept = {
+        slug: OTHER.slug,
+        labels: { singular: OTHER.slug, plural: OTHER.slug },
+        localized: true,
+        fields: fields().map(field =>
+          (field as { name: string }).name === "tags"
+            ? {
+                ...field,
+                options: {
+                  relationType: "manyToMany",
+                  target: TAGS,
+                  junctionTable: shared,
+                },
+              }
+            : field
+        ),
+      };
+      const written = await migrateCreate(
+        config({ collections: [kept] }),
+        "retire"
+      );
+      expect(written).toBeUndefined();
+      const file = readdirSync(join(dir, "migrations")).find(name =>
+        name.endsWith("_retire.sql")
+      );
+      const sql = readFileSync(join(dir, "migrations", file!), "utf8");
+
+      expect(sql).not.toMatch(
+        new RegExp(`DROP TABLE (IF EXISTS )?[\`"]${shared}`)
+      );
+      // The one no other names still goes.
+      expect(sql).toMatch(
+        new RegExp(`DROP TABLE IF EXISTS [\`"]dc_${TAGS}_single_mrp_home_tags`)
+      );
+      const links = await rowsWhere(adapter, dialect, shared);
+      await migrate(config({ collections: [kept] }), true);
+      expect(await rowsWhere(adapter, dialect, shared)).toEqual(links);
     }, 300_000);
 
     /** Where a stopped file's drops stay: MySQL's always, others' outside a transaction. */
@@ -877,6 +1006,7 @@ describe.each(getConfiguredTestDialects())(
             ],
           });
         }
+        const linkedBefore = await pictureOf(adapter, dialect, TAGGED);
         const before = {
           shared: await sharedRowsOf(adapter, dialect, OTHER),
           own: await ownRowsOf(adapter, dialect, OTHER),
@@ -927,6 +1057,11 @@ describe.each(getConfiguredTestDialects())(
         expect(await ownRowsOf(adapter, dialect, OTHER)).toEqual(before.own);
         expect(await permissionsOf(adapter, OTHER)).toEqual(before.permissions);
         expect(await deletionsOf(adapter, OTHER)).toEqual({});
+        // The entity they linked to, its rows and its other links, as they were.
+        expect(await pictureOf(adapter, dialect, TAGGED)).toEqual(linkedBefore);
+        expect(
+          (await rowsWhere(adapter, dialect, OTHER_LINKS)).length
+        ).toBeGreaterThan(0);
       },
       300_000
     );
