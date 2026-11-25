@@ -501,6 +501,29 @@ for (const dialect of getConfiguredTestDialects()) {
       });
     }, 240_000);
 
+    it("names the migration that drops them, and never prune, on a site that keeps migration files", async () => {
+      const site = (config: ReturnType<typeof defineConfig>) => ({
+        ...config,
+        db: { ...config.db, migrationsDir: "./migrations" },
+      });
+      mkdirSync(join(dir, "migrations"));
+      // An empty folder is no migration: the site applies its schema directly.
+      await dbSync(site(withPlugin()));
+      expect(await dbSync(site(withoutPlugin()))).toContain("nextly prune");
+
+      loaded.config = site(withPlugin());
+      setNonInteractive(true);
+      try {
+        await runMigrateCreate("one", { cwd: dir } as never, context());
+      } finally {
+        setNonInteractive(false);
+      }
+      const said = await dbSync(site(withoutPlugin()));
+      expect(said).toContain("nextly migrate:create");
+      expect(said).not.toContain("nextly prune");
+      expect(said).toContain(`${SETTINGS.slug} (${PLUGIN})`);
+    }, 240_000);
+
     it("takes writes to a departed plugin's Single, as to its collection, and refuses them to one the app removed", async () => {
       await start([asWritten()]);
 
