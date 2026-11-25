@@ -621,6 +621,18 @@ function parseCollectionRoutes(
   );
   if (bulkUpdateByQueryRoute) return bulkUpdateByQueryRoute;
 
+  // What changed in a translated field's source, and keeping its translation
+  // (more specific than getEntry/updateEntry)
+  const sourceReviewRoute = parseCollectionEntrySourceReviewRoute(
+    id,
+    subresource,
+    subId,
+    additionalParams,
+    httpMethod,
+    routeParams
+  );
+  if (sourceReviewRoute) return sourceReviewRoute;
+
   // Check for duplicate route (more specific)
   const duplicateRoute = parseCollectionEntryDuplicateRoute(
     id,
@@ -962,6 +974,64 @@ function parseCollectionEntryPublishAllRoute(
   }
 
   return null;
+}
+
+/**
+ * What one action on a translated field's source is, by its verb and URL token:
+ * reading what changed in it, admitted as a read of the document, and keeping
+ * the translation as it is, admitted as an update (@experimental).
+ */
+function sourceReviewAction(
+  httpMethod: string,
+  action: string | undefined
+): {
+  operation: OperationType;
+  entryMethod: string;
+  singleMethod: string;
+} | null {
+  if (httpMethod === "GET" && action === "source-change") {
+    return {
+      operation: "single",
+      entryMethod: "getEntrySourceChange",
+      singleMethod: "getSingleSourceChange",
+    };
+  }
+  if (httpMethod === "POST" && action === "keep-current") {
+    return {
+      operation: "update",
+      entryMethod: "keepEntryTranslation",
+      singleMethod: "keepSingleTranslation",
+    };
+  }
+  return null;
+}
+
+/**
+ * Parse the source review routes for a collection entry.
+ * GET /api/collections/{slug}/entries/{id}/source-change
+ * POST /api/collections/{slug}/entries/{id}/keep-current
+ */
+function parseCollectionEntrySourceReviewRoute(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  additionalParams: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (!id || subresource !== "entries" || !subId) return null;
+  // The route ends at the action: a path that goes on past it names nothing here.
+  if (additionalParams.length !== 1) return null;
+  const action = sourceReviewAction(httpMethod, additionalParams[0]);
+  if (action === null) return null;
+  routeParams.collectionName = id;
+  routeParams.entryId = subId;
+  return {
+    service: "collections",
+    operation: action.operation,
+    method: action.entryMethod,
+    routeParams,
+  };
 }
 
 /**
@@ -1550,6 +1620,30 @@ function parsePermissionRoutes(
   }
 
   return null;
+}
+
+/**
+ * Parse the source review routes for a Single.
+ * GET /api/singles/{slug}/source-change
+ * POST /api/singles/{slug}/keep-current
+ */
+function parseSingleSourceReviewRoute(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (!id || subId) return null;
+  const action = sourceReviewAction(httpMethod, subresource);
+  if (action === null) return null;
+  routeParams.slug = id;
+  return {
+    service: "singles",
+    operation: action.operation,
+    method: action.singleMethod,
+    routeParams,
+  };
 }
 
 function parseSingleRoutes(
@@ -3722,13 +3816,14 @@ export function parseRestRoute(
     );
     if (versionResult) return versionResult;
 
-    const result = parseSingleRoutes(
-      id,
-      subresource,
-      subId,
-      httpMethod,
-      routeParams
-    );
+    const result =
+      parseSingleSourceReviewRoute(
+        id,
+        subresource,
+        subId,
+        httpMethod,
+        routeParams
+      ) ?? parseSingleRoutes(id, subresource, subId, httpMethod, routeParams);
     if (result) return result;
   }
 

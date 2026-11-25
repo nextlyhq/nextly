@@ -14482,6 +14482,67 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Whether this user may update the entry, decided without writing as
+   * {@link canUpdateEntry} decides it, and again of its row once a transaction
+   * has locked it: each filter the gate answered is matched there as an update
+   * matches it, so an entry moved out of one in between is not changed. For a
+   * write of something beside the document that holds the document's lock.
+   *
+   * @experimental
+   */
+  async judgeEntryUpdate(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    /** The language the write acts in, which a rule's filter is matched in. */
+    locale?: string;
+  }): Promise<{
+    allowed: boolean;
+    stillAllowed(tx: TransactionContext): Promise<boolean>;
+  }> {
+    const refused = {
+      allowed: false,
+      stillAllowed: () => Promise.resolve(false),
+    };
+    if (!(await this.storedEntry(params.collectionName, params.entryId))) {
+      return refused;
+    }
+    const gate = {
+      collectionName: params.collectionName,
+      operation: "update" as const,
+      entryId: params.entryId,
+      user: params.user,
+      // Never overridden: this exists to apply the document's rules.
+      overrideAccess: false,
+      authenticatedScope: params.authenticatedScope,
+    };
+    const access = await this.accessService.checkCollectionWrite(gate);
+    if (access.denied) return refused;
+    const schema = (await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    )) as Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
+    const filters: FilteredWriteCheck[] = [];
+    const outside = await this.addWriteFilter(filters, {
+      schema,
+      access,
+      params: gate,
+      locale: params.locale,
+    });
+    if (outside) return refused;
+    return {
+      allowed: true,
+      stillAllowed: async tx =>
+        (await this.refusalOutsideWriteFilters(
+          tx,
+          schema,
+          params.entryId,
+          filters
+        )) === null,
+    };
+  }
+
+  /**
    * The status a write in `locale` is classified against, as the update's own
    * gate classifies it: where the collection keeps its status per language,
    * the write names that language's companion `_status`, and the gate judges
