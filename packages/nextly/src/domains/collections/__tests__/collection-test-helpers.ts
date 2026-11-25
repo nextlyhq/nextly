@@ -368,6 +368,8 @@ export function createMockHookRegistry(): MockRecord {
 
 export function createMockComponentDataService(): MockRecord {
   return {
+    // No field-group storage moves under a mocked service, so a failed read is not made again.
+    followedMove: vi.fn().mockResolvedValue(false),
     populateComponentDataMany: vi
       .fn()
       .mockImplementation((params: { entries: unknown[] }) =>
