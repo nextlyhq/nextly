@@ -62,7 +62,9 @@ export function CopyFromLanguageMenu({
           size="sm"
           className="h-7 px-2 text-xs"
           disabled={disabled}
-          aria-label={`${verb} ${targetLabel} from another language`}
+          // The visible text first, then the language it fills, so a speech-input user saying
+          // what they see reaches it (label in name).
+          aria-label={`${verb} from… another language, into ${targetLabel}`}
         >
           {verb} from…
         </Button>
