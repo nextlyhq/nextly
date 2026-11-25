@@ -22,8 +22,8 @@ import {
   MIGRATION_PLACE_STATED_TWICE_REASON,
 } from "../../../domains/schema/migrate/history-line-names";
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
-import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-repeats-advice";
 import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
+import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-repeats-advice";
 import {
   WRITER_HOLD_HELD_REASON,
   WRITER_HOLD_LOST_REASON,

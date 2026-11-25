@@ -38,12 +38,12 @@ import {
   loadSnapshots,
   type LoadedSnapshot,
 } from "../migrate/snapshot-source";
-import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
 import {
   isEntitySettingsRecord,
   type EntitySettingsRecord,
   type RecordedEntitySettings,
 } from "../migrate-create/entity-settings";
+import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
 import { readUiSchema } from "../ui-schema/loader";
 
 import {
