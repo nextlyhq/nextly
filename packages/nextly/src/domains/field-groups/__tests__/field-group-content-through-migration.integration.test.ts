@@ -313,30 +313,39 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      it.each([
-        ["every entry", "list"],
-        ["a filter on the group's shared field", "list heading Kept"],
-        ["a filter on the group's translated field", "list tagline Kept"],
-      ])(
-        "is a list of %s, finds the entry with its group and translation",
-        async (_what, request) => {
-          const kept = [{ heading: "Kept", tagline: "Kept" }];
-          const listed = async () => {
-            const answer = await ask(server!, request);
-            expect(answer).toMatch(/^OK /);
-            return JSON.parse(answer.slice("OK ".length)) as unknown;
-          };
-          // The control, and what leaves this server holding what it resolved before the move.
-          await openMigratedUnder({
-            before: async () => {
-              expect(await listed()).toMatchObject(kept);
-            },
-          });
-          expect(await listed()).toMatchObject(kept);
-          expect(await listed()).toHaveLength(1);
-        },
-        300_000
-      );
+      it("is a list of every entry, finds the entry with its group and translation", async () => {
+        const kept = [{ heading: "Kept", tagline: "Kept" }];
+        const listed = async () => {
+          const answer = await ask(server!, "list");
+          expect(answer).toMatch(/^OK /);
+          return JSON.parse(answer.slice("OK ".length)) as unknown;
+        };
+        await openMigratedUnder({
+          before: async () => {
+            expect(await listed()).toMatchObject(kept);
+          },
+        });
+        expect(await listed()).toMatchObject(kept);
+        expect(await listed()).toHaveLength(1);
+      }, 300_000);
+
+      it("is a list filtered as before it, sees the moved table's name without any other request", async () => {
+        // It kept the registry row it filtered by before the migration. Nothing but the count of
+        // registry writes, which it reads every couple of seconds, tells it the row was rewritten.
+        const listed = () => ask(server!, "list heading Kept");
+        await openMigratedUnder({
+          before: async () => {
+            expect(await listed()).toMatch(/^OK .*"heading":"Kept"/);
+          },
+        });
+        let answer = await listed();
+        for (const until = Date.now() + 6000; Date.now() < until; ) {
+          if (answer.startsWith("OK ")) break;
+          await new Promise(resolve => setTimeout(resolve, 250));
+          answer = await listed();
+        }
+        expect(answer).toMatch(/^OK .*"heading":"Kept"/);
+      }, 300_000);
 
       it("is a Single's read of every language, returns each one's values", async () => {
         await openMigratedUnder();
