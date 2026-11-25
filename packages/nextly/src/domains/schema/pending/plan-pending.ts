@@ -16,6 +16,7 @@ import { type PendingChanges, pendingChangesOf } from "./pending-changes";
 /** What a run names when the plan holds nothing: no table, file, setting or permission. */
 const NOTHING: PendingChanges = {
   tables: [],
+  diffed: [],
   beside: [],
   settings: [],
   permissions: [],

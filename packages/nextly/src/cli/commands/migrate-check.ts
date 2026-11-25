@@ -107,7 +107,10 @@ import {
   verifyMigrationHash,
 } from "../../domains/schema/migrate-create/snapshot-io";
 import { templateStartFor } from "../../domains/schema/migrate-create/template-start";
-import { SETTINGS_NOT_RECORDED_NOTICE } from "../../domains/schema/pending/pending-changes";
+import {
+  SETTINGS_NOT_RECORDED_NOTICE,
+  translationsNotRecordedNotice,
+} from "../../domains/schema/pending/pending-changes";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 import {
@@ -588,6 +591,9 @@ export async function runChecks(args: {
   // Settings an earlier snapshot never recorded: a notice, as `migrate:create` gives it.
   if (changes.settingsNotRecorded === true) {
     logger.warn(SETTINGS_NOT_RECORDED_NOTICE);
+  }
+  if (changes.besideNotRecorded !== undefined) {
+    logger.warn(translationsNotRecordedNotice(changes.besideNotRecorded));
   }
 
   try {

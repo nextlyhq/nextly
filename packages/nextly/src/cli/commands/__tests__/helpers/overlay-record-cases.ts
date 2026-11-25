@@ -52,8 +52,11 @@ import {
 
 const SLUG = "orposts";
 
-/** How the group is declared: not at all, keeping its text per language, or shared whole. */
-type Box = "none" | "translated" | "shared";
+/**
+ * How the group is declared: not at all, keeping its text per language, shared whole, or translated
+ * whole, as a release before overlay columns allowed.
+ */
+type Box = "none" | "translated" | "shared" | "whole";
 
 /** A translated collection with one translated field, and a group of text declared as `box`. */
 const projectWith = (box: Box) =>
@@ -74,6 +77,7 @@ const projectWith = (box: Box) =>
                   type: "group" as const,
                   fields: [{ name: "label", type: "text" as const }],
                   ...(box === "shared" ? { localized: false } : {}),
+                  ...(box === "whole" ? { localized: true } : {}),
                 },
               ]),
         ],
@@ -101,6 +105,9 @@ interface Ran {
 
 /** The line that names the overlay's file, beside the main migration. */
 const OVERLAY_LINE = `~ translations table dc_${SLUG}`;
+
+/** The line that names the group's column added to the main table. */
+const MAIN_COLUMN_ADDED = new RegExp(`\\+ add_column dc_${SLUG}\\.box `);
 
 /** What says a file beside the main migration is not recorded. */
 const NOT_RECORDED = "not recorded yet";
@@ -210,7 +217,10 @@ export function overlayRecordCases(
       };
       const migrate = (config: unknown) => {
         tick();
-        return run(config, context => runMigrate({ cwd: dir }, context));
+        // As `--backup-confirmed` does: a group stored whole per language is converted by the run.
+        return run(config, context =>
+          runMigrate({ cwd: dir, backupConfirmed: true }, context)
+        );
       };
       const check = (config: unknown) =>
         run(config, context => runMigrateCheck({ cwd: dir }, context));
@@ -442,6 +452,33 @@ export function overlayRecordCases(
             writtenAndApplied(project));
         }
       );
+
+      // Its column was on the translations table and stays there as its overlay; what is missing is
+      // its structure's column on the main table, a change of that table as any other.
+      describe("a group an earlier release kept translated whole, its flag taken off", () => {
+        const project = projectWith("translated");
+        beforeEach(async () => {
+          await migrateTheProject(projectWith("whole"));
+          expect(await translationColumns()).toContain("box");
+        }, 120_000);
+
+        it("is refused by every surface, naming the main table's column", async () => {
+          const files = sqlFiles();
+          const checked = await check(project);
+          expect(checked.code, checked.said).toBe(1);
+          const ran = await migrate(project);
+          expect(ran.code, ran.said).toBe(1);
+          const started = await startsCheck(project);
+          for (const said of [checked.said, ran.said, started]) {
+            expect(said).toMatch(MAIN_COLUMN_ADDED);
+            expect(said).not.toContain(OVERLAY_LINE);
+          }
+          expect(sqlFiles()).toEqual(files);
+        });
+
+        it("has the column added by migrate:create, and nothing left after", () =>
+          writtenAndApplied(project));
+      });
 
       describe("an upgrade with nothing to make", () => {
         it.each([

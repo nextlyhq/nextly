@@ -41,8 +41,10 @@ export interface BesideFile {
 
 /** Everything a run of `migrate:create` would write a migration for. */
 export interface PendingChanges {
-  /** Each table change, in the diff's order, less the drops a translations file makes itself. */
+  /** Each table change, in the diff's order, less what a translations file does itself. */
   tables: readonly Operation[];
+  /** Every table change, in the diff's order, those a translations file does itself among them. */
+  diffed: readonly Operation[];
   /** Each file planned beside the main migration (`BesideFile`). */
   beside: readonly BesideFile[];
   settings: readonly EntitySettingsChange[];
@@ -68,6 +70,7 @@ export function pendingChangesOf(planned: PlannedRun): PendingChanges {
   ): BesideFile[] => plans.map(({ spec }) => ({ kind, table: spec.mainTable }));
   return {
     tables: planned.operations,
+    diffed: planned.diffed,
     beside: [
       ...beside("translations table", planned.companionPlans),
       ...beside(
@@ -114,6 +117,27 @@ export const SETTINGS_NOT_RECORDED_NOTICE =
   "recorded each entity's settings and the permissions. `nextly migrate:create` records them in " +
   "its next migration; until then they are not compared.";
 
+/** A file beside the main migration as a line. */
+function besideLine(file: BesideFile): string {
+  return `~ ${file.kind} ${file.table}`;
+}
+
+/**
+ * The notice every surface gives of the files a run would write beside the main migration where the
+ * newest snapshot records no settings (`recordsTranslationsTables`): what the translations tables
+ * hold is not recorded, so it is no change of what was recorded before.
+ */
+export function translationsNotRecordedNotice(
+  files: readonly BesideFile[]
+): string {
+  return [
+    "Translations tables not recorded yet in a migration: the newest snapshot was written without " +
+      "each entity's settings, so it does not say what these tables hold. `nextly migrate:create` " +
+      "writes and records the following; until then they are not compared.",
+    ...files.map(file => `  ${besideLine(file)}`),
+  ].join("\n");
+}
+
 /** Whether a run records settings or permissions an earlier snapshot never recorded. */
 export function recordsForTheFirstTime(changes: PendingChanges): boolean {
   return (
@@ -157,7 +181,7 @@ export function pendingChangeLines(
 ): string[] {
   return [
     ...changes.tables.map(op => tableLine(op, changes.perLanguageMoves)),
-    ...changes.beside.map(file => `~ ${file.kind} ${file.table}`),
+    ...changes.beside.map(besideLine),
     ...changes.settings.map(
       change => `~ settings ${describeSettingsChange(change)}`
     ),

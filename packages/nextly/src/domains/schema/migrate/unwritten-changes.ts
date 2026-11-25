@@ -112,6 +112,11 @@ export interface UnwrittenChanges {
    * recording (`recordsForTheFirstTime`): a notice, never a change.
    */
   settingsNotRecorded?: boolean;
+  /**
+   * The files `migrate:create` would write beside the main migration where the newest snapshot does
+   * not say what the translations tables hold (`recordsTranslationsTables`): a notice, never a change.
+   */
+  besideNotRecorded?: readonly BesideFile[];
 }
 
 /** Whether `changes` names nothing. */
@@ -169,11 +174,11 @@ export function compareWithNewestSnapshot(args: {
   /** What `migrate:create` would write: the table changes, which drops are moves, permissions. */
   pending: Pick<
     PendingChanges,
-    "tables" | "beside" | "perLanguageMoves" | "permissions"
+    "tables" | "diffed" | "beside" | "perLanguageMoves" | "permissions"
   >;
   entities: DeclaredEntities;
   permissions: PermissionRecord;
-  latest: { data: SnapshotFile } | null;
+  latest: { data: SnapshotFile; template?: true } | null;
   /** What the database records, read only where the newest snapshot predates a record. */
   recorded?: RecordedInDatabase;
   /**
@@ -182,24 +187,48 @@ export function compareWithNewestSnapshot(args: {
    */
   readsDatabase?: boolean;
 }): UnwrittenChanges {
-  const { entities, latest } = args;
+  const { entities, latest, pending } = args;
+  const recorded = recordsTranslationsTables(latest);
   return {
-    tables: args.pending.tables,
-    beside: args.pending.beside,
+    // With no file of the translations tables named, what one does to the main table is named
+    // itself: the snapshot does record that table.
+    tables: recorded ? pending.tables : pending.diffed,
+    beside: recorded ? pending.beside : [],
+    ...(recorded || pending.beside.length === 0
+      ? {}
+      : { besideNotRecorded: pending.beside }),
     settings: settingsDifferences(entities, latest, args.recorded),
     // With no snapshot at all, a command that reads no database names the permissions the first
     // migration records, as `migrate:create` writes them; a database's first `nextly migrate`
     // records the declared ones itself, so for it they are no change.
     permissions:
       latest === null && args.readsDatabase !== true
-        ? args.pending.permissions.filter(
+        ? pending.permissions.filter(
             (change): change is Extract<PermissionChange, { kind: "owner" }> =>
               change.kind === "owner"
           )
         : permissionDifferences(args.permissions, latest, args.recorded),
     noSnapshot: latest === null,
-    perLanguageMoves: args.pending.perLanguageMoves,
+    perLanguageMoves: pending.perLanguageMoves,
   };
+}
+
+/**
+ * Whether the newest snapshot says what the translations tables hold. A snapshot records their
+ * unique indexes and their containers' overlay columns only where there are some, and one that
+ * records the entities' settings was written by a release that recorded the indexes, and by one that
+ * recorded the overlay columns or made none: in it, none recorded means there were none. One that
+ * records no settings, a baseline or one written before them, says nothing of either. A template's
+ * is read as what its entities were made with, and with no snapshot at all nothing was made.
+ */
+function recordsTranslationsTables(
+  latest: { data: SnapshotFile; template?: true } | null
+): boolean {
+  return (
+    latest === null ||
+    latest.template === true ||
+    latest.data.entities !== undefined
+  );
 }
 
 /**

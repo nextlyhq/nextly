@@ -91,6 +91,7 @@ afterAll(() => rmSync(MIGRATIONS, { recursive: true, force: true }));
 /** No table change: for the cases about settings and permissions alone. */
 const NO_TABLES = {
   tables: [],
+  diffed: [],
   beside: [],
   perLanguageMoves: [],
   permissions: [],
@@ -344,6 +345,72 @@ describe("compareWithNewestSnapshot", () => {
     expect(unwrittenChangeLines(removed)).toEqual([
       "~ permissions @acme/forms: - export-submissions",
     ]);
+  });
+
+  // A change that turns translation on, whose file takes the main table's drop with it, beside a
+  // translations table's new unique indexes.
+  describe("the files beside the main migration", () => {
+    const posts = entitiesOf(collection([TITLE]));
+    const drop = {
+      type: "drop_column" as const,
+      tableName: "dc_posts",
+      columnName: "title",
+      columnType: "text",
+    };
+    const pending = {
+      ...NO_TABLES,
+      diffed: [drop],
+      beside: [
+        { kind: "translations table" as const, table: "dc_posts" },
+        { kind: "per-language unique indexes" as const, table: "dc_pages" },
+      ],
+    };
+    const over = (latest: CompareArgs["latest"]) =>
+      compareWithNewestSnapshot({
+        pending,
+        entities: posts,
+        permissions: NO_PERMISSIONS,
+        latest,
+      });
+    const refused = [
+      "~ translations table dc_posts",
+      "~ per-language unique indexes dc_pages",
+    ];
+
+    it.each([
+      ["no snapshot", null],
+      ["a snapshot that records settings", snapshotOf(posts)],
+      [
+        "a template's snapshot, which records none",
+        {
+          ...snapshotOf(posts, { entities: undefined }),
+          template: true as const,
+        },
+      ],
+    ])("are each a change over %s", (_, latest) => {
+      const changes = over(latest);
+      expect(unwrittenChangeLines(changes)).toEqual(refused);
+      expect(changes.besideNotRecorded).toBeUndefined();
+    });
+
+    it("are a notice over any other snapshot that records none, and what they do to the main table is the change", () => {
+      const changes = over(snapshotOf(posts, { entities: undefined }));
+      expect(unwrittenChangeLines(changes)).toEqual([
+        "- drop_column dc_posts.title",
+      ]);
+      expect(changes.besideNotRecorded).toEqual(pending.beside);
+    });
+
+    it("are no notice where there are none", () => {
+      const changes = compareWithNewestSnapshot({
+        pending: NO_TABLES,
+        entities: posts,
+        permissions: NO_PERMISSIONS,
+        latest: snapshotOf(posts, { entities: undefined }),
+      });
+      expect(nothingUnwritten(changes)).toBe(true);
+      expect(changes).not.toHaveProperty("besideNotRecorded");
+    });
   });
 
   it("never names a snapshot's missing permissions, and compares with the live ones where the database has them", async () => {
