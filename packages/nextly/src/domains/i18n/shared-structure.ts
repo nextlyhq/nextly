@@ -25,6 +25,7 @@
 
 import { isDeepStrictEqual } from "node:util";
 
+import { addressableFields } from "../../shared/addressable-fields";
 import { parsedValue } from "../../shared/lib/json-column-value";
 import { isPlainObject as isPlainRecord } from "../../shared/lib/plain-copy";
 import { componentRowContentEntries } from "../field-groups/storage/component-row-content";
@@ -246,6 +247,43 @@ function childShape(
   }
   // The rule a top-level field of a translated entity is classified by.
   return isFieldLocalized({ ...child, name }, true) ? "text" : null;
+}
+
+/**
+ * The names of the fields a component keeps through an edit (`before` to `after`, both its own
+ * fields) whose translated text a container placing it inline reads differently: a field turned
+ * translated or shared, or a container inside it whose text inside changes so. Derived from the
+ * same reading every inline placement is split and put back by ({@link shapeOfLevel}), so it never
+ * disagrees with what a read does. The component's own `slug` reads as `before` or `after`, and any
+ * other component it places through `fieldsOf`. A field added or removed is no such change.
+ */
+export function componentFieldsChangingTranslation(
+  slug: string,
+  before: readonly StructuredField[],
+  after: readonly StructuredField[],
+  fieldsOf: ComponentFieldsOf = () => undefined
+): string[] {
+  const shapeOf = (fields: readonly StructuredField[]) =>
+    shapeOfLevel("group", fields, new WeakSet(), {
+      fieldsOf: other => (other === slug ? fields : fieldsOf(other)),
+      open: new Set([slug]),
+    });
+  const was = shapeOf(before);
+  const now = shapeOf(after);
+  const part = (shape: SharedStructureShape | null, name: string) =>
+    shape?.texts.includes(name)
+      ? "text"
+      : JSON.stringify(shape?.inner[name] ?? null);
+  const namesIn = (fields: readonly StructuredField[]) =>
+    new Set(
+      addressableFields(fields).flatMap(field =>
+        typeof field.name === "string" ? [field.name] : []
+      )
+    );
+  const kept = namesIn(after);
+  return [...namesIn(before)].filter(
+    name => kept.has(name) && part(was, name) !== part(now, name)
+  );
 }
 
 /** The components a field places: one, or a dynamic zone's several; none for any other field. */

@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   assembleSharedStructure,
+  componentFieldsChangingTranslation,
   componentStructureShape,
   holdsUnkeyedText,
   keepsTranslationsInside,
@@ -525,5 +526,62 @@ describe("holdsUnkeyedText", () => {
     expect(
       holdsUnkeyedText({ headline: "Title" }, sharedStructureShape(SEO)!)
     ).toBe(false);
+  });
+});
+
+describe("componentFieldsChangingTranslation", () => {
+  const CARD = [
+    { name: "label", type: "text" },
+    { name: "size", type: "number" },
+    {
+      name: "notes",
+      type: "repeater",
+      fields: [{ name: "body", type: "text" }],
+    },
+  ];
+
+  it("names a field kept through the edit and turned shared or translated", () => {
+    expect(
+      componentFieldsChangingTranslation("card", CARD, [
+        { name: "label", type: "text", localized: false },
+        CARD[1]!,
+        CARD[2]!,
+      ])
+    ).toEqual(["label"]);
+    // A number turned translated: its value is now read per language.
+    expect(
+      componentFieldsChangingTranslation("card", CARD, [
+        CARD[0]!,
+        { name: "size", type: "number", localized: true },
+        CARD[2]!,
+      ])
+    ).toEqual(["size"]);
+  });
+
+  it("names a container inside whose text changes so", () => {
+    expect(
+      componentFieldsChangingTranslation("card", CARD, [
+        CARD[0]!,
+        CARD[1]!,
+        {
+          name: "notes",
+          type: "repeater",
+          fields: [{ name: "body", type: "text", localized: false }],
+        },
+      ])
+    ).toEqual(["notes"]);
+  });
+
+  it("names none for an unchanged field group, or one whose fields are only added or removed", () => {
+    expect(componentFieldsChangingTranslation("card", CARD, CARD)).toEqual([]);
+    expect(
+      componentFieldsChangingTranslation("card", CARD, [
+        ...CARD,
+        { name: "caption", type: "text" },
+      ])
+    ).toEqual([]);
+    expect(
+      componentFieldsChangingTranslation("card", CARD, [CARD[1]!, CARD[2]!])
+    ).toEqual([]);
   });
 });
