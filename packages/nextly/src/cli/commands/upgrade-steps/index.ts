@@ -27,13 +27,16 @@ const VERSION_SNAPSHOTS = "version snapshots";
  * What each localisation step repairs (`UpgradeStep.group`), and so which later counts wait for it
  * (`UpgradeStep.reads`). Every step reads the codes the conversion writes. The values move reads
  * the main tables, the translations tables and their transition records, which keying the pending
- * changes never touches, so it waits for the conversion alone. The draft split reads the keys, the
- * values it is split against and what pending changes hold (`VERSION_SNAPSHOTS`), which the version
- * history's password removal changes; the dating and the archive list read every step before them.
+ * changes never touches, so it waits for the conversion alone. The one structure for repeaters
+ * and groups translated whole reads the codes and the values per language, which it converts. The
+ * draft split reads the keys, the values and the one structure it is split against, and what
+ * pending changes hold (`VERSION_SNAPSHOTS`), which the version history's password removal
+ * changes; the dating and the archive list read every step before them.
  */
 const LOCALISATION_CODES = "localisation codes";
 const PENDING_CHANGE_KEYS = "pending change keys";
 const VALUES_PER_LANGUAGE = "values per language";
+const ONE_STRUCTURE = "one structure";
 const PENDING_CHANGE_PARTS = "pending change parts";
 const TRANSLATION_DATES = "translation dates";
 /** Every group the localisation steps repair. */
@@ -41,6 +44,7 @@ const LOCALISATION = [
   LOCALISATION_CODES,
   PENDING_CHANGE_KEYS,
   VALUES_PER_LANGUAGE,
+  ONE_STRUCTURE,
   PENDING_CHANGE_PARTS,
   TRANSLATION_DATES,
 ] as const;
@@ -129,7 +133,8 @@ const localisationValuesStep: UpgradeStep = {
  * documents whose languages differ.
  */
 const localisationStructuresStep: UpgradeStep = {
-  group: LOCALISATION,
+  group: ONE_STRUCTURE,
+  reads: [LOCALISATION_CODES, VALUES_PER_LANGUAGE, ONE_STRUCTURE],
   title: "keep one structure for repeaters and groups translated whole",
   pending: async context =>
     (await import("./localisation-structures")).structuresToConvert(context),
@@ -147,6 +152,7 @@ const localisationDraftsStep: UpgradeStep = {
     LOCALISATION_CODES,
     PENDING_CHANGE_KEYS,
     VALUES_PER_LANGUAGE,
+    ONE_STRUCTURE,
     PENDING_CHANGE_PARTS,
     VERSION_SNAPSHOTS,
   ],
