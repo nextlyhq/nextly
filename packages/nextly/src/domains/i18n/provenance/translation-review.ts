@@ -70,6 +70,8 @@ export type SourceUnavailable =
   | "source-moved"
   /** It was written in its own language, and made from none. */
   | "original"
+  /** The language it was made from is no longer one of the site's. */
+  | "source-language-removed"
   /** The version it was made from is known, and its text was not kept. */
   | "not-kept";
 
@@ -191,6 +193,8 @@ export async function fieldSource(
 export interface FieldReview extends TranslatedField {
   /** Whether the value shown was the held draft's, where there is one. */
   heldDraft: boolean;
+  /** The language whose value the person was found to read; none for a value with no source. */
+  sourceLocale: string | undefined;
   /** The translation shown. */
   valueFingerprint: string;
   /** The source shown beside it. */
@@ -262,6 +266,8 @@ export async function reviewField(
     moved("translation", review);
   }
   const sourceLocale = shown?.sourceLocale ?? review.defaultLocale;
+  // Made from another language since the person was found to read this one.
+  if (sourceLocale !== review.sourceLocale) moved("translation", review);
   const source = await recordedSource(db, review, sourceLocale, sources, now);
   if (source !== review.sourceFingerprint) moved("source", review);
 
@@ -280,6 +286,8 @@ export async function reviewField(
     );
   }
   for (const record of records) {
+    // A live value written originally has no source, though a draft holds the same text.
+    if (record.origin === "original") continue;
     if (record.valueFingerprint !== review.valueFingerprint) continue;
     await moveSource(db, review, record, { sourceLocale, source });
   }

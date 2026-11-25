@@ -6,6 +6,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -66,6 +67,11 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
             name: "hidden",
             localized: true,
             access: { read: () => false },
+          }),
+          text({
+            name: "annOnly",
+            localized: true,
+            access: { read: ({ user }) => user?.id === "ann" },
           }),
           text({
             name: "sourceHidden",
@@ -292,6 +298,45 @@ const entryPath = (
   action: "source-change" | "keep-current"
 ) => ["collections", document.slug, "entries", document.id, action];
 
+/** Runs `work` in each transaction that locks a row of `table`, once it has. */
+function whenLocked(
+  table: string,
+  work: (tx: TransactionContext) => Promise<unknown>
+): void {
+  const transaction = t!.adapter.transaction.bind(t!.adapter);
+  vi.spyOn(t!.adapter, "transaction").mockImplementation((callback, options) =>
+    transaction(tx => {
+      const lockRow = tx.lockRow.bind(tx);
+      tx.lockRow = async (locked, id) => {
+        await lockRow(locked, id);
+        if (locked === table) await work(tx);
+      };
+      return callback(tx);
+    }, options)
+  );
+}
+
+/** Has every Spanish record say its value was made from `locale`. */
+async function madeFrom(locale: string): Promise<void> {
+  await t!.adapter.update(
+    "nextly_translation_provenance",
+    { sourceLocale: locale },
+    { and: [{ column: "locale", op: "=", value: "es" }] }
+  );
+}
+
+/** A note live in Spanish, out of date, whose held draft cleared the Spanish title. */
+async function clearedInDraft(): Promise<TranslatedDocument> {
+  const note = await entry("notes", { title: "Hi" });
+  await save(note, "en", { status: "published" });
+  await save(note, "es", { title: "Hola", status: "published" });
+  await save(note, "en", { title: "Hello" });
+  await save(note, "en", { status: "published" });
+  await save(note, "es", { title: "" });
+  expect((await recordsOf()).map(row => row.partState)).toEqual(["live"]);
+  return note;
+}
+
 const inSpanish = (field = "title") => ({ locale: "es", field });
 
 /** A "Keep current" of what `sourceChange` shows `caller` of the field. */
@@ -515,34 +560,102 @@ describe.each(getConfiguredTestDialects())(
 
     it("asks the field rules of a trusted call that asks for them, as whoever it names", async () => {
       await boot(dialect);
-      const post = await entry("posts", { hidden: "Secret" });
-      await save(post, "es", { hidden: "Secreto" });
-      await save(post, "en", { hidden: "Other" });
+      const post = await entry("posts", { annOnly: "Secret" });
+      await save(post, "es", { annOnly: "Secreto" });
+      await save(post, "en", { annOnly: "Other" });
       const { translations } = t!.nextly as unknown as Nextly;
       const named = {
         collection: "posts",
         id: post.id,
-        ...inSpanish("hidden"),
+        ...inSpanish("annOnly"),
+        overrideAccess: true,
       };
       for (const narrowed of [
         { enforceFieldAccess: true },
-        { enforceFieldAccess: true, fieldAccessUser: { id: "ben" } },
+        // Whoever makes the call, the rule is asked of the one it names.
+        {
+          enforceFieldAccess: true,
+          user: { id: "ann" },
+          fieldAccessUser: { id: "ben" },
+        },
       ]) {
         expect(
-          await refusalOf(
-            translations.sourceChange({
-              ...named,
-              overrideAccess: true,
-              ...narrowed,
-            })
-          )
+          await refusalOf(translations.sourceChange({ ...named, ...narrowed }))
         ).toBe("NOT_FOUND");
       }
-      // The control: a trusted call that does not.
-      expect(await translations.sourceChange(named)).toMatchObject({
-        available: true,
-        before: "Secret",
+      const shown = { available: true, before: "Secret" };
+      expect(
+        await translations.sourceChange({
+          ...named,
+          enforceFieldAccess: true,
+          user: { id: "ben" },
+          fieldAccessUser: { id: "ann" },
+        })
+      ).toMatchObject(shown);
+      // The control: a trusted call that does not ask for them.
+      expect(await translations.sourceChange(named)).toMatchObject(shown);
+    });
+
+    it("names the fingerprint of the source it shows, where that is saved as it is read", async () => {
+      await boot(dialect);
+      const post = await entry("posts", { title: "Hi" });
+      await save(post, "es", { title: "Hola" });
+      const getEntry = handler().getEntry.bind(handler());
+      let saved = 0;
+      let saves = 0;
+      const savedAfterRead = (times: number) => {
+        saves = 0;
+        vi.spyOn(handler(), "getEntry").mockImplementation(async params => {
+          const answer = await getEntry(params);
+          if (params.locale === "en" && saves < times) {
+            saves += 1;
+            saved += 1;
+            await save(post, "en", { title: `Hello ${saved}` });
+          }
+          return answer;
+        });
+      };
+
+      savedAfterRead(1);
+      const shown = await sourceChange(post, ANN, inSpanish());
+      expect(saves).toBe(1);
+      expect(shown).toMatchObject({
+        after: "Hello 1",
+        sourceFingerprint: valueFingerprint("Hello 1"),
       });
+
+      // Saved at every read: no fingerprint is given of a value that was not shown.
+      savedAfterRead(9);
+      expect(await sourceChange(post, ANN, inSpanish())).not.toHaveProperty(
+        "sourceFingerprint"
+      );
+    });
+
+    it("tells of no source in a language the site no longer has", async () => {
+      await boot(dialect);
+      const post = await entry("posts", { title: "Hi" });
+      await save(post, "es", { title: "Hola" });
+      await madeFrom("de");
+      const change = await sourceChange(post, ANN, inSpanish());
+      expect(change).toMatchObject({
+        available: false,
+        reason: "source-language-removed",
+        sourceLocale: "de",
+      });
+      // Not the default language's value under the other's name.
+      expect(change).not.toHaveProperty("after");
+      expect(change).not.toHaveProperty("sourceFingerprint");
+    });
+
+    it("is not of the live value where the held draft cleared it", async () => {
+      await boot(dialect);
+      const note = await clearedInDraft();
+      const change = await sourceChange(note, ANN, inSpanish());
+      expect(change).toMatchObject({
+        available: false,
+        reason: "unknown-origin",
+      });
+      expect(change).not.toHaveProperty("valueFingerprint");
     });
 
     it("is read over REST by a person whose rule matches the entry, and by no other", async () => {
@@ -591,9 +704,7 @@ describe.each(getConfiguredTestDialects())(
         ).toBe("NOT_FOUND");
       }
       // Asking gave the Single no document.
-      expect(
-        await t!.adapter.select("single_unwritten").catch(() => [])
-      ).toEqual([]);
+      expect(await t!.adapter.select("single_unwritten")).toEqual([]);
     });
 
     it("refuses a language or a field that has no translation, by name", async () => {
@@ -889,24 +1000,14 @@ describe.each(getConfiguredTestDialects())(
       // Given to Ben in the transaction that locks it: what a write committed just before the lock
       // leaves behind, which a check made before it has not seen.
       let given = 0;
-      const transaction = t!.adapter.transaction.bind(t!.adapter);
-      vi.spyOn(t!.adapter, "transaction").mockImplementation(
-        (callback, options) =>
-          transaction(tx => {
-            const lockRow = tx.lockRow.bind(tx);
-            tx.lockRow = async (table, id) => {
-              await lockRow(table, id);
-              if (table !== "dc_owned") return;
-              given += 1;
-              await tx.update(
-                "dc_owned",
-                { owner: "ben" },
-                { and: [{ column: "id", op: "=", value: post.id }] }
-              );
-            };
-            return callback(tx);
-          }, options)
-      );
+      whenLocked("dc_owned", tx => {
+        given += 1;
+        return tx.update(
+          "dc_owned",
+          { owner: "ben" },
+          { and: [{ column: "id", op: "=", value: post.id }] }
+        );
+      });
       expect(
         await refusalOf(
           keepCurrent(post, ANN, {
@@ -920,6 +1021,100 @@ describe.each(getConfiguredTestDialects())(
       expect((await recordsOf())[0]?.sourceFingerprint).toBe(
         valueFingerprint("Hi")
       );
+    });
+
+    it("is refused where the value was made from another language before its row is held", async () => {
+      await boot(dialect);
+      const post = await entry("posts", { title: "Hi" });
+      await save(post, "es", { title: "Hola" });
+      // The same text in both, so no fingerprint tells one source from the other.
+      await save(post, "en", { title: "Hello" });
+      await save(post, "fr", { title: "Hello" });
+      whenLocked("dc_posts", tx =>
+        tx.update(
+          "nextly_translation_provenance",
+          { sourceLocale: "fr" },
+          { and: [{ column: "locale", op: "=", value: "es" }] }
+        )
+      );
+      expect(
+        await refusalOf(
+          keepCurrent(post, ANN, {
+            ...inSpanish(),
+            valueFingerprint: valueFingerprint("Hola"),
+            sourceFingerprint: valueFingerprint("Hello"),
+          })
+        )
+      ).toBe("CONFLICT");
+    });
+
+    it("is refused where its source is in a language the site no longer has", async () => {
+      await boot(dialect);
+      const post = await entry("posts", { title: "Hi" });
+      await save(post, "es", { title: "Hola" });
+      await madeFrom("de");
+      // What that language's own value was is still recorded.
+      await t!.adapter.update(
+        "nextly_translation_provenance",
+        { locale: "de" },
+        { and: [{ column: "locale", op: "=", value: "en" }] }
+      );
+      expect(
+        await refusalOf(
+          keepCurrent(post, ANN, {
+            ...inSpanish(),
+            valueFingerprint: valueFingerprint("Hola"),
+            sourceFingerprint: valueFingerprint("Hi"),
+          })
+        )
+      ).toBe("VALIDATION_ERROR");
+      expect((await recordsOf())[0]?.sourceLocale).toBe("de");
+    });
+
+    it("is refused where the held draft cleared the value, and leaves the live one out of date", async () => {
+      await boot(dialect);
+      const note = await clearedInDraft();
+      expect(
+        await refusalOf(
+          keepCurrent(note, ANN, {
+            ...inSpanish(),
+            valueFingerprint: valueFingerprint("Hola"),
+            sourceFingerprint: valueFingerprint("Hello"),
+          })
+        )
+      ).toBe("VALIDATION_ERROR");
+      expect((await recordsOf()).map(row => row.sourceFingerprint)).toEqual([
+        valueFingerprint("Hi"),
+      ]);
+    });
+
+    it("gives a live value written originally no source, though a held draft has the same text", async () => {
+      await boot(dialect);
+      const note = await entry("notes", { title: "Hi" });
+      await save(note, "en", { status: "published" });
+      await save(note, "es", {
+        title: "Hola",
+        status: "published",
+        _provenance: { title: { origin: "original" } },
+      });
+      await save(note, "es", {
+        title: "Hola",
+        _provenance: { title: { origin: "machine", engine: "deepl" } },
+      });
+      expect((await recordsOf()).map(row => row.origin)).toEqual([
+        "original",
+        "machine",
+      ]);
+      await save(note, "en", { title: "Hello" });
+      await save(note, "en", { status: "published" });
+
+      await keepShown(note);
+      expect(
+        (await recordsOf()).map(row => [row.origin, row.sourceFingerprint])
+      ).toEqual([
+        ["original", null],
+        ["machine", valueFingerprint("Hello")],
+      ]);
     });
 
     it("needs the right to change the field in the translation's language, and to read its source", async () => {
@@ -938,6 +1133,20 @@ describe.each(getConfiguredTestDialects())(
         valueFingerprint: valueFingerprint("Hola"),
         sourceFingerprint: valueFingerprint("Hi"),
       });
+      const fields = ["title", "locked", "sourceHidden"];
+      const allRecords = async () =>
+        (await Promise.all(fields.map(recordsOf)))
+          .flat()
+          .sort((a, b) => a.id.localeCompare(b.id));
+      const recorded = await allRecords();
+      expect(
+        recorded.map(row => `${row.entryId} ${row.fieldPath}`).sort()
+      ).toEqual(
+        [
+          ...fields.map(field => `${post.id} ${field}`),
+          `${guarded.id} title`,
+        ].sort()
+      );
 
       // A field rule refuses the field, where a save would leave it out and succeed.
       expect(await refusalOf(keepCurrent(post, ANN, asked("locked")))).toBe(
@@ -954,12 +1163,7 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await refusalOf(keepCurrent(post, ANN, asked("sourceHidden")))
       ).toBe("NOT_FOUND");
-      for (const field of ["title", "locked", "sourceHidden"]) {
-        const rows = await recordsOf(field);
-        expect(
-          rows.every(row => row.sourceFingerprint === valueFingerprint("Hi"))
-        ).toBe(true);
-      }
+      expect(await allRecords()).toEqual(recorded);
     });
   }
 );

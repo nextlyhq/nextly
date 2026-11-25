@@ -303,6 +303,53 @@ async function readableSource(
 }
 
 /**
+ * Whether a held draft's `value` is that of a cleared translation, which has no record: the live
+ * one's is not of what is shown. A blank a hook may have made says nothing of what is stored.
+ */
+function clearedIn(store: TranslationStore, value: unknown): boolean {
+  return isBlank(value) && !store.readThroughHook;
+}
+
+/** Whether a recorded language is still one of the site's: a read in one that is not is of another. */
+function isConfigured(locale: string): boolean {
+  const localization = appLocalization();
+  return (
+    localization !== undefined &&
+    configuredLocale(localization, locale) !== undefined
+  );
+}
+
+/**
+ * The source's live value as the caller reads it, and that value's fingerprint. A source saved
+ * while it is read is read once more; saved again, it is answered with no fingerprint, so nothing
+ * is reviewed against a version the caller was not shown.
+ */
+async function sourceNow(
+  store: TranslationStore,
+  recorded: boolean,
+  sourceLocale: string,
+  read: () => Promise<unknown>
+): Promise<{ after: unknown; fingerprint?: string }> {
+  const { adapter, field } = store;
+  const fingerprintNow = async () =>
+    (recorded
+      ? await liveFingerprint(adapter, field, sourceLocale)
+      : undefined) ??
+    (await storedReader(store)(sourceLocale)).get(field.fieldPath)?.fingerprint;
+  const attempt = async () => {
+    const before = await fingerprintNow();
+    const after = await read();
+    const fingerprint = await fingerprintNow();
+    return { after, fingerprint, settled: before === fingerprint };
+  };
+  const first = await attempt();
+  const { after, fingerprint, settled } = first.settled
+    ? first
+    : await attempt();
+  return settled ? { after, fingerprint } : { after };
+}
+
+/**
  * What changed in the source of one translated field since its translation was made.
  *
  * The caller must be able to read the field in both languages now: the kept text is content, and a
@@ -319,39 +366,50 @@ export async function sourceChange(
   named: FieldInLanguage
 ): Promise<SourceChange> {
   const locale = translationLanguage(appLocalization(), named.locale);
-  const { heldDraft } = await shownTranslation(document, caller, named, locale);
+  const { value, heldDraft } = await shownTranslation(
+    document,
+    caller,
+    named,
+    locale
+  );
   const store = await translationStore(document, named);
   const { adapter, field } = store;
   const recorded = await translationProvenancePresent(adapter, store.logger);
-  const record = recorded
-    ? shownRecords(await fieldRecords(adapter, field), heldDraft).at(0)
-    : undefined;
+  const cleared = heldDraft && clearedIn(store, value);
+  const record =
+    recorded && !cleared
+      ? shownRecords(await fieldRecords(adapter, field), heldDraft).at(0)
+      : undefined;
   const source = await fieldSource(
     adapter,
     field,
     record,
     await translationSourcesPresent(adapter, store.logger)
   );
-  const reads = storedReader(store);
-  const value =
-    record?.valueFingerprint ??
-    (await reads(locale)).get(named.field)?.fingerprint;
+  const fingerprint = cleared
+    ? undefined
+    : (record?.valueFingerprint ??
+      (await storedReader(store)(locale)).get(named.field)?.fingerprint);
   const shown: ReviewFingerprints =
-    value === undefined ? {} : { valueFingerprint: value };
-  if (source.sourceLocale === undefined) {
+    fingerprint === undefined ? {} : { valueFingerprint: fingerprint };
+  const { sourceLocale } = source;
+  if (sourceLocale === undefined) {
     return { ...shown, available: false, reason: "original" };
   }
-  const after = await readableSource(
-    document,
-    caller,
-    named,
-    source.sourceLocale
+  if (!isConfigured(sourceLocale)) {
+    return {
+      ...shown,
+      available: false,
+      reason: "source-language-removed",
+      sourceLocale,
+    };
+  }
+  const { after, fingerprint: now } = await sourceNow(
+    store,
+    recorded,
+    sourceLocale,
+    () => readableSource(document, caller, named, sourceLocale)
   );
-  const now =
-    (recorded
-      ? await liveFingerprint(adapter, field, source.sourceLocale)
-      : undefined) ??
-    (await reads(source.sourceLocale)).get(named.field)?.fingerprint;
   if (now !== undefined) shown.sourceFingerprint = now;
   if (!source.available) return { ...shown, ...source, after };
   return !store.readThroughHook && readsAsStored(after, now)
@@ -360,7 +418,7 @@ export async function sourceChange(
         ...shown,
         available: false,
         reason: "not-kept",
-        sourceLocale: source.sourceLocale,
+        sourceLocale,
         after,
       };
 }
@@ -425,16 +483,29 @@ export async function keepCurrent(
       logContext: { reason: "translation-provenance-missing" },
     });
   }
+  if (heldDraft && clearedIn(store, value)) {
+    refuse(
+      "field",
+      "TRANSLATION_IS_EMPTY",
+      "This field has no translation to review."
+    );
+  }
   const record = shownRecords(await fieldRecords(adapter, field), heldDraft).at(
     0
   );
-  if (record?.origin !== "original") {
-    await readableSource(
-      document,
-      caller,
-      input,
-      record?.sourceLocale ?? field.defaultLocale
-    );
+  const sourceLocale =
+    record?.origin === "original"
+      ? undefined
+      : (record?.sourceLocale ?? field.defaultLocale);
+  if (sourceLocale !== undefined) {
+    if (!isConfigured(sourceLocale)) {
+      refuse(
+        "field",
+        "TRANSLATION_SOURCE_LANGUAGE_REMOVED",
+        "The language this translation was made from is no longer one of the site's languages."
+      );
+    }
+    await readableSource(document, caller, input, sourceLocale);
   }
   await adapter.transaction(async tx => {
     // Held as a save holds it, so the records cannot move between their read and their write.
@@ -445,6 +516,7 @@ export async function keepCurrent(
       {
         ...field,
         heldDraft,
+        sourceLocale,
         valueFingerprint: input.valueFingerprint,
         sourceFingerprint: input.sourceFingerprint,
       },
