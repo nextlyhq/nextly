@@ -1233,6 +1233,8 @@ export const nextly = {
       (await requireNextlyOnceStarted()).releases.readinessOf(args),
     memberCounts: async args =>
       (await requireNextlyOnceStarted()).releases.memberCounts(args),
+    fieldStopsOf: async args =>
+      (await requireNextlyOnceStarted()).releases.fieldStopsOf(args),
     addMember: async args =>
       (await requireNextlyOnceStarted()).releases.addMember(args),
     addMembers: async args =>

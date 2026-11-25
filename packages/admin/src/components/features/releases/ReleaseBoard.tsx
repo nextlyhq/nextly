@@ -35,7 +35,7 @@ import {
   releaseRowStatus,
 } from "./release-list";
 import { readerZone } from "./release-timezone";
-import { ReleaseStatusBadge } from "./ReleaseListCells";
+import { FieldStopLine, ReleaseStatusBadge } from "./ReleaseListCells";
 import { useMinuteClock } from "./useMinuteClock";
 
 export interface ReleaseBoardProps {
@@ -181,6 +181,7 @@ function BoardTile({
           <ReleaseStatusBadge status={status} />
         </span>
       ) : null}
+      <FieldStopLine release={release} />
       <span className="text-xs text-muted-foreground">
         {releaseBoardWhen(release, tab, {
           readerZone: zone,

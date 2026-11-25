@@ -64,6 +64,7 @@ import {
   type ReleaseCapabilities,
   type ReleaseKind,
   type ReleaseState,
+  type ReleaseStopsView,
 } from "../schemas/releases/types";
 import {
   readIsoInstant,
@@ -626,7 +627,38 @@ async function decorateListPage(
   releases: ReleaseContext["releases"]
 ) {
   const decorated = await withCapabilities(rows, caller, releases);
-  return withOwners(await withMemberCounts(decorated, caller, releases));
+  return withOwners(
+    await withFieldStops(
+      await withMemberCounts(decorated, caller, releases),
+      caller,
+      releases
+    )
+  );
+}
+
+/**
+ * Each listed release a run stopped with why it stopped over a field a Builder save changed
+ * (`fieldStops`), for the page in one read: asked only for the `blocked` rows, since only a stop
+ * leaves a release there, and absent on the others. What Needs attention shows beside such a
+ * release: the field, and what settles it.
+ */
+async function withFieldStops<Row extends { id: string; state: ReleaseState }>(
+  rows: Row[],
+  caller: ReleaseContext["caller"],
+  releases: ReleaseContext["releases"]
+): Promise<Array<Row & { fieldStops?: ReleaseStopsView }>> {
+  const stopped = rows.filter(row => row.state === "blocked");
+  if (stopped.length === 0) return rows;
+  const stops = await releases.fieldStopsOf({
+    ...caller,
+    releaseIds: stopped.map(row => row.id),
+  });
+  return rows.map(row => {
+    const view = stops[row.id];
+    return view !== undefined && (view.items.length > 0 || view.hidden > 0)
+      ? { ...row, fieldStops: view }
+      : row;
+  });
 }
 
 /**
@@ -895,8 +927,11 @@ const RELEASE_OPERATIONS: Record<
       release.state === "blocked"
         ? await releases.blockersOf({ ...caller, releaseId })
         : undefined;
+    // And why its run stopped it over a field a Builder save changed, which no blocker says: the
+    // field is no fault of a member's, and the release is run again once it is settled.
+    const [withStops] = await withFieldStops([item], caller, releases);
     return respondDoc({
-      ...item,
+      ...withStops,
       ...(blockers ? { blockedBy: blockers.items } : {}),
       ...(blockers && blockers.hidden.length > 0
         ? { hiddenBlockers: blockers.hidden }

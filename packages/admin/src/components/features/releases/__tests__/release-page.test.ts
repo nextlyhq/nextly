@@ -115,6 +115,32 @@ describe("readinessHeadline", () => {
       detail: "1 needs a fix. Once fixed, schedule it again.",
     });
   });
+
+  // Broken (the stop left out), the page says nothing is stopping it, and the field a Builder
+  // save changed is named nowhere.
+  it("says which field stopped a release's run, and what settles it, where no document needs a fix", () => {
+    const fieldStops = {
+      items: [
+        {
+          memberId: "m1",
+          reason: "FIELD_UNSETTLED" as const,
+          field: "subtitle",
+          action: "publish" as const,
+          scopeKind: "collection" as const,
+          scopeSlug: "posts",
+          entryId: "p1",
+        },
+      ],
+      hidden: 0,
+    };
+    expect(
+      readinessHeadline({ state: "blocked", fieldStops }, 1, READY)
+    ).toMatchObject({
+      tone: "stopped",
+      detail:
+        "The field “subtitle” of posts was changed by a Builder save that did not finish. Start dev or save posts in the Builder, then run the release again.",
+    });
+  });
 });
 
 describe("commitBlockedBy", () => {

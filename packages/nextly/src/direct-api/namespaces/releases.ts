@@ -55,6 +55,7 @@ import type {
   ReleaseCapabilities,
   ReleaseKind,
   ReleaseMemberAction,
+  ReleaseStopsView,
 } from "../../schemas/releases/types";
 import type { ListResult } from "../types/shared";
 
@@ -230,6 +231,16 @@ export interface ReleasesNamespace {
   memberCounts(
     args: { releaseIds: readonly string[] } & ReleaseCallerArgs
   ): Promise<Record<string, ReleaseMemberCounts>>;
+  /**
+   * Why each of these releases' run last stopped it over a field a Builder save changed (removed,
+   * its type or storage changed, or changed by a save left part-way), keyed by release id: each
+   * stop with its document and field, and how many are on documents the caller may not read.
+   * Every id asked about is answered, with none for a release no such stop names. A release run
+   * again since names none.
+   */
+  fieldStopsOf(
+    args: { releaseIds: readonly string[] } & ReleaseCallerArgs
+  ): Promise<Record<string, ReleaseStopsView>>;
   /**
    * Put a document into a release under a lifecycle action.
    *
@@ -608,6 +619,9 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
 
     memberCounts: args =>
       service().memberCounts(args.releaseIds, actorOf(ctx, args)),
+
+    fieldStopsOf: args =>
+      service().fieldStopsOf(args.releaseIds, actorOf(ctx, args)),
 
     changeMemberAction: args =>
       service().changeMemberAction(

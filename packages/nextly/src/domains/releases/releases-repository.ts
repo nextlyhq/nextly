@@ -2541,35 +2541,61 @@ export class ReleasesRepository {
    * both without reading the document, which a read hook could rewrite.
    */
   /**
-   * The field stops recorded on `releaseId`'s members (`blockReleases`) for the release as it now
-   * stands: those whose `stop_revision` is its current revision. A stop recorded at an earlier
-   * revision describes a release that has moved since (run again, rescheduled, edited), so
-   * nothing needs to clear it.
+   * The field stops recorded on these releases' members (`blockReleases`), for each release as it
+   * now stands: those whose `stop_revision` is its current revision, by release id, in one read of
+   * the releases and one of their members. A stop recorded at an earlier revision describes a
+   * release that has moved since (run again, rescheduled, edited), so nothing needs to clear it.
    */
-  async memberStopsOf(releaseId: string): Promise<ReleaseMemberStop[]> {
-    const [release] = await this.db.select<{ revision: number }>(RELEASES, {
-      columns: ["revision"],
-      where: { and: [{ column: "id", op: "=", value: releaseId }] },
-    });
-    if (release === undefined) return [];
-    const rows = await this.db.select<{
-      id: string;
-      stopReason: ReleaseMemberStop["reason"] | null;
-      stopField: string | null;
-    }>(MEMBERS, {
-      columns: ["id", "stopReason", "stopField"],
+  async memberStopsOf(
+    releaseIds: readonly string[]
+  ): Promise<
+    Map<string, Array<ReleaseMemberStop & { member: ReleaseMemberRow }>>
+  > {
+    const stops = new Map<
+      string,
+      Array<ReleaseMemberStop & { member: ReleaseMemberRow }>
+    >();
+    if (releaseIds.length === 0) return stops;
+    const releases = await this.db.select<{ id: string; revision: number }>(
+      RELEASES,
+      {
+        columns: ["id", "revision"],
+        where: { and: [{ column: "id", op: "IN", value: [...releaseIds] }] },
+      }
+    );
+    const revisionOf = new Map(releases.map(r => [r.id, r.revision]));
+    const rows = await this.db.select<
+      ReleaseMemberRow & {
+        stopReason: ReleaseMemberStop["reason"] | null;
+        stopField: string | null;
+        stopRevision: number | null;
+      }
+    >(MEMBERS, {
+      columns: [...MEMBER_COLUMNS, "stopReason", "stopField", "stopRevision"],
       where: {
         and: [
-          { column: "releaseId", op: "=", value: releaseId },
-          { column: "stopRevision", op: "=", value: release.revision },
+          { column: "releaseId", op: "IN", value: [...releaseIds] },
+          { column: "stopRevision", op: "IS NOT NULL" },
         ],
       },
     });
-    return rows.flatMap(row =>
-      row.stopReason === null
-        ? []
-        : [{ memberId: row.id, reason: row.stopReason, field: row.stopField }]
-    );
+    for (const { stopReason, stopField, stopRevision, ...member } of rows) {
+      if (
+        stopReason === null ||
+        stopRevision !== revisionOf.get(member.releaseId)
+      ) {
+        continue;
+      }
+      const held = stops.get(member.releaseId) ?? [];
+      held.push({
+        memberId: member.id,
+        reason: stopReason,
+        field: stopField,
+        member,
+      });
+      stops.set(member.releaseId, held);
+    }
+    return stops;
   }
 
   async isMemberApplied(memberId: string, revision: number): Promise<boolean> {

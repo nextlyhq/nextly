@@ -46,6 +46,7 @@ import type {
   ReleaseReadinessEntry,
 } from "@admin/types/releases";
 
+import { fieldStopsLine } from "./release-blockers";
 import { describeHidden } from "./release-hidden";
 import {
   releaseOwnerView,
@@ -172,6 +173,25 @@ export function ReleaseTitleCell({
           {release.description}
         </span>
       ) : null}
+      <FieldStopLine release={release} />
+    </span>
+  );
+}
+
+/**
+ * Why a stopped release's run stopped over a field a Builder save changed, and what settles it,
+ * under its title wherever it is listed (Needs attention, the board). Nothing for any other.
+ */
+export function FieldStopLine({
+  release,
+}: {
+  release: Pick<Release, "fieldStops">;
+}): JSX.Element | null {
+  const line = fieldStopsLine(release.fieldStops);
+  if (line === null) return null;
+  return (
+    <span className="mt-0.5 inline-block w-full text-xs font-normal text-destructive">
+      {line}
     </span>
   );
 }

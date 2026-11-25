@@ -105,6 +105,7 @@ export type {
   ReleaseBlockerReason,
   ReleaseFieldStopReason,
   ReleaseMemberStop,
+  ReleaseStopsView,
   ReleaseCapabilities,
 } from "./releases/types";
 // The one value a client needs to say a release is full or over the limit,

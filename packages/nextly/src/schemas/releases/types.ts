@@ -108,14 +108,17 @@ export type ReleaseBlockerReason =
   /** The recorded author has been deleted or deactivated. */
   | "AUTHOR_GONE"
   /** The member names one locale, which the engine cannot materialise. */
-  | "LOCALE_SCOPED"
-  | ReleaseFieldStopReason;
+  | "LOCALE_SCOPED";
 
 /**
  * Why a release's run stopped at a member's write over a field a Builder save changed: what the
  * run met, recorded on the member when it stopped the release, since nothing about the member
  * itself says it (`stop_reason`, read only for the revision it stopped at). No retry settles any
  * of them; a person's step does, and the release is then run again.
+ *
+ * Not a {@link ReleaseBlockerReason}: a blocker is what WOULD stop a release, derived from its
+ * members and refusing its schedule, while this is why a run DID stop it, and the release is
+ * scheduled again once the field is settled.
  */
 export type ReleaseFieldStopReason =
   /** A Builder save removed a field the write sets. */
@@ -133,6 +136,25 @@ export interface ReleaseMemberStop {
   memberId: string;
   reason: ReleaseFieldStopReason;
   field: string | null;
+}
+
+/**
+ * Why a release's run last stopped it, as a reader is told: each field stop on a document the
+ * reader may read, with the document it is on and what the member was going to do, and how many
+ * stops are on documents they may not read (counted, never named). Empty for a release no run
+ * stopped over a field, or one run again since.
+ */
+export interface ReleaseStopsView {
+  items: Array<
+    ReleaseMemberStop & {
+      action: ReleaseMemberAction;
+      /** As the member row carries it (`VersionScopeKind`), spelled here: this module imports nothing. */
+      scopeKind: "collection" | "single" | "page";
+      scopeSlug: string;
+      entryId: string;
+    }
+  >;
+  hidden: number;
 }
 
 /**

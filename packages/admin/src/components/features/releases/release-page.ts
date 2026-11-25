@@ -10,6 +10,7 @@
  */
 import type { Release, ReleaseReadiness } from "@admin/types/releases";
 
+import { fieldStopsLine } from "./release-blockers";
 import {
   describeNeedFix,
   describeReadiness,
@@ -84,7 +85,7 @@ export interface ReadinessHeadline {
  * someone acts on it.
  */
 export function readinessHeadline(
-  release: Pick<Release, "state">,
+  release: Pick<Release, "state" | "fieldStops">,
   total: number,
   readiness: Pick<ReleaseReadiness, "hard" | "soft" | "hidden">
 ): ReadinessHeadline {
@@ -98,13 +99,17 @@ export function readinessHeadline(
       : null;
   const lead = `${describeReadiness(summary)}.`;
   if (release.state === "blocked") {
+    // A field a Builder save changed is why its run stopped where no document is at fault: said
+    // first, with what settles it, since no check of the documents can say it.
+    const stoppedOverField = fieldStopsLine(release.fieldStops);
     return {
       tone: "stopped",
       lead: "This release stopped and won't run on its own.",
       detail:
         summary.needFix > 0
           ? `${describeNeedFix(summary.needFix)}. Once fixed, schedule it again.`
-          : "Nothing is stopping it now. Schedule it again to let it run.",
+          : (stoppedOverField ??
+            "Nothing is stopping it now. Schedule it again to let it run."),
       summary,
     };
   }

@@ -30,9 +30,26 @@ const SPEAKS_TO_THE_CALLER = new Set([
   "CONFLICT",
 ]);
 
+/**
+ * Refusals that pass in a moment, in our words: the server's sentence for them is about the
+ * collection's state, not the caller's input, and the one thing an editor needs is to try again.
+ * A release write meets this while a Builder save is changing a collection one of its documents
+ * is in.
+ */
+const PASSES_IN_A_MOMENT: Readonly<Record<string, string>> = {
+  COLLECTION_BEING_CHANGED:
+    "A collection in this release is being changed in the Builder. Try again in a moment.",
+};
+
 export function releaseErrorMessage(error: unknown, fallback: string): string {
   if (typeof error !== "object" || error === null) return fallback;
   const { code, message } = error as { code?: unknown; message?: unknown };
+  if (
+    typeof code === "string" &&
+    Object.prototype.hasOwnProperty.call(PASSES_IN_A_MOMENT, code)
+  ) {
+    return PASSES_IN_A_MOMENT[code] ?? fallback;
+  }
   if (typeof code !== "string" || !SPEAKS_TO_THE_CALLER.has(code)) {
     return fallback;
   }

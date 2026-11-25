@@ -12,9 +12,11 @@
 import type {
   ReleaseBlockerReason,
   ReleaseCapabilities,
+  ReleaseFieldStopReason,
   ReleaseKind,
   ReleaseMemberAction,
   ReleaseState,
+  ReleaseStopsView,
 } from "nextly/schemas";
 
 /**
@@ -33,9 +35,11 @@ import type {
  */
 export type {
   ReleaseBlockerReason,
+  ReleaseFieldStopReason,
   ReleaseKind,
   ReleaseMemberAction,
   ReleaseState,
+  ReleaseStopsView,
 };
 
 /**
@@ -102,6 +106,12 @@ export interface Release {
    * to say "unknown" rather than read an absent count as none.
    */
   memberCounts?: ReleaseMemberCounts;
+  /**
+   * Why its run last stopped it over a field a Builder save changed: each stop on a document the
+   * reader may read, with the field, and how many are on documents they may not. Sent with a
+   * stopped release on the list and its own read only, and only where a field stopped it.
+   */
+  fieldStops?: ReleaseStopsView;
   /**
    * Who owns it, by name only, as the release list names it. `null` for an
    * owner who cannot be named (deleted, or a lookup that failed), while
