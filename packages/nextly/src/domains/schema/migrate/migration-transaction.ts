@@ -1077,13 +1077,16 @@ async function runUnitStatements(
           `${unit.source} ran outside a transaction, and left ${String(count)} row(s) referencing rows that do not exist (${pairs}). Its statements stayed applied: repair or remove those rows${unit.direction === "down" ? "" : `, then ${markAppliedAdvice(unit.source)}`}.`
       );
     });
-  } else if (dialect === "mysql") {
-    // Strict mode, as `executeTransaction` gives a unit run in a transaction:
-    // a statement that would cut a value short, such as a column narrowed
-    // below a stored value's length, fails instead of applying with a
-    // warning nobody reads. A session setting covers only its own
-    // connection, so every statement runs on the one connection the session
-    // holds, which is closed afterwards rather than pooled.
+  } else if (dialect === "mysql" || bound !== undefined || retirement.retires) {
+    // On MySQL, strict mode, as `executeTransaction` gives a unit run in a
+    // transaction: a statement that would cut a value short, such as a column
+    // narrowed below a stored value's length, fails instead of applying with a
+    // warning nobody reads. A session setting covers only its own connection,
+    // so every statement runs on the one connection the session holds, which
+    // is closed afterwards rather than pooled.
+    // On PostgreSQL, a try is watched on one session, so a bounded unit runs on
+    // one too, rather than each statement on whichever pooled one is free; and
+    // a drop's short transaction (`retirement.sending`) is that session's.
     await adapter.withSession(
       session => {
         const each = () =>
@@ -1095,22 +1098,8 @@ async function runUnitStatements(
           ? each()
           : boundSessionTry(session, dialect, bound, each);
       },
-      { strictSqlMode: true }
+      dialect === "mysql" ? { strictSqlMode: true } : undefined
     );
-  } else if (bound !== undefined || retirement.retires) {
-    // A try is watched on one session, so a bounded unit runs on one connection the session
-    // holds and closes afterwards, rather than each statement on whichever pooled one is free;
-    // and a drop's short transaction (`retirement.sending`) is that one connection's.
-    await adapter.withSession(session => {
-      const each = () =>
-        runEachHeld(
-          statement => session.execute(statement),
-          sessionReader(session, dialect)
-        );
-      return bound === undefined
-        ? each()
-        : boundSessionTry(session, dialect, bound, each);
-    });
   } else {
     await runEachHeld(onPool, adapter.getDrizzle());
   }

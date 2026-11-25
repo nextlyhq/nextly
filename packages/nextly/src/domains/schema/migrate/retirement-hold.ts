@@ -88,14 +88,18 @@ export function tableHold(
       if (!(await mayLock)) {
         return "this account has no LOCK TABLES privilege of its own";
       }
-      const beside = await outside.runInAsyncScope(() => openBeside(adapter));
-      if (beside === undefined) {
-        return "no connection could be opened beside the run's own";
-      }
+      // A connection of its own, beside the pool, for what is captured (`withSession` on MySQL).
+      let opened = false;
       try {
-        return await holdOnMysql(on, tables, beside.db, work);
-      } finally {
-        await beside.close();
+        return await outside.runInAsyncScope(() =>
+          adapter.withSession(session => {
+            opened = true;
+            return holdOnMysql(on, tables, handleOn(session), work);
+          })
+        );
+      } catch (error) {
+        if (opened) throw error;
+        return "no connection could be opened beside the run's own";
       }
     },
   };
@@ -183,38 +187,13 @@ function sqliteHold(adapter: DrizzleAdapter): TableHold {
   };
 }
 
-/** A MySQL session beside the pool, as a handle to read and write through, until it is closed. */
-async function openBeside(
-  adapter: DrizzleAdapter
-): Promise<{ db: unknown; close(): Promise<void> } | undefined> {
-  let release: () => void = () => undefined;
-  const released = new Promise<void>(resolve => {
-    release = resolve;
-  });
-  let opened: (session: StatementSession | undefined) => void = () => undefined;
-  const ready = new Promise<StatementSession | undefined>(resolve => {
-    opened = resolve;
-  });
-  const ended = adapter
-    .withSession(async session => {
-      opened(session);
-      await released;
-    })
-    .catch(() => undefined)
-    .finally(() => opened(undefined));
-  const session = await ready;
-  if (session === undefined) return undefined;
+/** A MySQL session as a handle to read and write through. */
+function handleOn(session: StatementSession): { execute(query: SQL): unknown } {
   const compiler = new MySqlDialect();
   return {
-    db: {
-      execute: async (query: SQL) => {
-        const { sql: text, params } = compiler.sqlToQuery(query);
-        return [await session.execute(text, params as SqlParam[]), []];
-      },
-    },
-    close: async () => {
-      release();
-      await ended;
+    execute: async (query: SQL) => {
+      const { sql: text, params } = compiler.sqlToQuery(query);
+      return [await session.execute(text, params as SqlParam[]), []];
     },
   };
 }
