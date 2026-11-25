@@ -385,6 +385,32 @@ export async function pruneSources(
 }
 
 /**
+ * One version of one field's source text, or none kept. An empty value that was kept is one:
+ * `{ value: "" }` is the text, and `undefined` is no text.
+ */
+export async function keptSource(
+  db: Pick<SourceTextDb, "select">,
+  document: SourceDocument,
+  fieldPath: string,
+  source: RecordedSource
+): Promise<KeptSource | undefined> {
+  const [row] = await db.select<{ content: KeptSource }>(
+    TRANSLATION_SOURCES_TABLE,
+    {
+      columns: ["content"],
+      where: {
+        and: [
+          ...documentWhere(document, [fieldPath]).and,
+          { column: "sourceLocale", op: "=", value: source.sourceLocale },
+          { column: "fingerprint", op: "=", value: source.fingerprint },
+        ],
+      },
+    }
+  );
+  return row?.content;
+}
+
+/**
  * Removes every source text a deleted document's translations were made from, on `db`, the
  * delete's own transaction.
  */
