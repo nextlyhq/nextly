@@ -299,6 +299,70 @@ export function componentFieldsChangingTranslation(
   );
 }
 
+/**
+ * The fields inside an entity's repeaters and groups, at any depth, that a change makes translated
+ * where they were shared, by path (`slides.rank`): each field kept by name in a container kept by
+ * name, of the same kind, that already kept its text per language before the change. Its value
+ * stored on the structure, every language's, would be read as one language's text from then on.
+ * A field added holds no stored value yet; a container that starts keeping text has its overlay
+ * seeded from the structure, so neither is named.
+ */
+export function fieldsTurningTranslatedInside(
+  before: readonly StructuredField[],
+  after: readonly StructuredField[]
+): string[] {
+  const named = (fields: readonly StructuredField[] | undefined) =>
+    new Map(
+      addressableFields(fields ?? []).flatMap(field =>
+        typeof field.name === "string" && field.name !== ""
+          ? [[field.name, field] as const]
+          : []
+      )
+    );
+  const found: string[] = [];
+  const walk = (
+    was: SharedStructureShape,
+    now: SharedStructureShape,
+    fieldsBefore: readonly StructuredField[] | undefined,
+    fieldsAfter: readonly StructuredField[] | undefined,
+    path: string
+  ): void => {
+    const earlier = named(fieldsBefore);
+    for (const [name, field] of named(fieldsAfter)) {
+      const prior = earlier.get(name);
+      if (prior === undefined) continue;
+      const nestedWas = was.inner[name];
+      const nestedNow = now.inner[name];
+      if (
+        isStructureContainer(field) &&
+        prior.type === field.type &&
+        nestedWas !== undefined &&
+        nestedNow !== undefined
+      ) {
+        walk(
+          nestedWas,
+          nestedNow,
+          prior.fields,
+          field.fields,
+          `${path}.${name}`
+        );
+      } else if (!was.texts.includes(name) && now.texts.includes(name)) {
+        found.push(`${path}.${name}`);
+      }
+    }
+  };
+  const earlier = named(before);
+  for (const [name, field] of named(after)) {
+    const prior = earlier.get(name);
+    if (prior === undefined || prior.type !== field.type) continue;
+    const was = sharedStructureShape(prior);
+    const now = sharedStructureShape(field);
+    if (was === null || now === null) continue;
+    walk(was, now, prior.fields, field.fields, name);
+  }
+  return found.sort();
+}
+
 /** The components a field places: one, or a dynamic zone's several; none for any other field. */
 function componentSlugsOf(field: StructuredField): string[] {
   const { single, many } = extractFieldGroupReferences(field);
