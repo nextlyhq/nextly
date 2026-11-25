@@ -258,7 +258,10 @@ describe.each(getConfiguredTestDialects())(
     };
 
     /** Asks until it is done, at most three times, each refusal saying to retry. */
-    const untilDone = async (request: string): Promise<string> => {
+    const untilDone = async (
+      request: string,
+      refusal = /^REFUSED FIELD_GROUP_STORAGE_MOVING /
+    ): Promise<string> => {
       const answers: string[] = [];
       for (let tries = 0; tries < 3; tries++) {
         answers.push(await ask(server!, request));
@@ -266,7 +269,7 @@ describe.each(getConfiguredTestDialects())(
       }
       expect(answers.at(-1), answers.join(" / ")).toMatch(/^OK/);
       for (const refused of answers.slice(0, -1)) {
-        expect(refused).toMatch(/^REFUSED FIELD_GROUP_STORAGE_MOVING /);
+        expect(refused).toMatch(refusal);
       }
       return answers.at(-1)!;
     };
@@ -323,7 +326,12 @@ describe.each(getConfiguredTestDialects())(
 
       it("is a bulk save, saves it on the retry it is told to make", async () => {
         const id = await openMigratedUnder();
-        await untilDone(`bulk-save ${id} in-bulk`);
+        // An item of a bulk answer carries a code and a message only, so the refusal is named by
+        // its message.
+        await untilDone(
+          `bulk-save ${id} in-bulk`,
+          /^ERROR SERVICE_UNAVAILABLE The field-group storage migration .*Retry the save/
+        );
         expect(await readHeading(server!, id)).toBe("in-bulk");
         expect(await legacyObjects(site!.adapter, dialect)).toEqual([]);
       }, 300_000);
