@@ -876,6 +876,38 @@ describeEachDialect("one structure across languages", dialect => {
     BOOT_TIMEOUT
   );
 
+  // A filter on a repeater is judged on what a read returns: its one structure, every language's.
+  // Judged on a language's text alone instead, a document whose rows hold no text yet (stored as
+  // no translation, in every language) is taken for one with no rows, though a read shows them.
+  it(
+    "filters on a repeater by its structure, whatever text a language holds inside",
+    async () => {
+      const { nextly } = await site();
+      const created = await nextly.create({
+        collection: "articles",
+        locale: "en",
+        data: {
+          title: "Hello",
+          slides: [{ rank: 1 }],
+        },
+      });
+      const id = (created.item as { id: string }).id;
+      // POPULATION CONTROL: a read shows the row, in every language.
+      expect((await read(nextly, id, "en")).slides).toHaveLength(1);
+      expect((await read(nextly, id, "es")).slides).toHaveLength(1);
+
+      const listed = await nextly.find({
+        collection: "articles",
+        locale: "es",
+        where: { slides: { exists: true } },
+      });
+      expect(listed.items.map(item => (item as { id: string }).id)).toEqual([
+        id,
+      ]);
+    },
+    BOOT_TIMEOUT
+  );
+
   /** The paths of one document's live provenance records in `locale`, sorted. */
   async function livePaths(
     scope: { kind: string; slug: string; id: string },
