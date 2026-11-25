@@ -232,6 +232,28 @@ vi.mock("../schema-version", async importOriginal => {
   };
 });
 
+// A switch that fails the step bringing a collection's translations table in step, after the save's
+// file has committed and before that step changes anything.
+const translationsStep = vi.hoisted(() => ({ fails: false, failed: false }));
+vi.mock("../../i18n/migration/held-leaving-drops", async importOriginal => {
+  const real =
+    await importOriginal<
+      typeof import("../../i18n/migration/held-leaving-drops")
+    >();
+  return {
+    ...real,
+    applyCompanionTransition: async (
+      ...args: Parameters<typeof real.applyCompanionTransition>
+    ) => {
+      if (translationsStep.fails) {
+        translationsStep.failed = true;
+        throw new Error("the translations step was refused");
+      }
+      return real.applyCompanionTransition(...args);
+    },
+  };
+});
+
 // The push road's hold runs on a session of its own (`withSession`): what each case counts of it,
 // and a switch that refuses its release once the release has really run (`sessionsOf`).
 const releaseFails = { on: false, holds: 0, refused: 0 };
@@ -295,6 +317,8 @@ afterEach(async () => {
   fileStart.armed = false;
   afterCount.armed = false;
   registryWrite.armed = false;
+  translationsStep.fails = false;
+  translationsStep.failed = false;
   // A save a failed case left at a gate goes on, so its transaction ends before the app does.
   fileStart.letGo?.();
   afterCount.letGo?.();
@@ -2996,6 +3020,77 @@ describe.each(getConfiguredTestDialects())(
         expect(await translatedNotes(t)).toBe("gone");
       }, 60_000);
     }
+
+    // A save stopped between its file and the translations table's delete leaves the field out of the
+    // registry with its column and values still stored, and its row's version where it was: the
+    // version moves in the write after that step. A write that waited, made from the earlier
+    // definition and setting the field, is refused naming it. Compared by the version alone it finds
+    // nothing changed, and its value is stored in a column the collection no longer has.
+    it.each([
+      {
+        op: "create",
+        send: (t: TestNextly) => write(t, "sent while the save held"),
+      },
+      {
+        op: "update",
+        send: (t: TestNextly, id: string) =>
+          t.nextly.update({
+            collection: SLUG,
+            id,
+            data: { note: "sent while the save held", _overwrite: true },
+          } as never),
+      },
+    ])(
+      "refuses a held $op setting the removed field after a save stopped before the translations table's delete",
+      async ({ send }) => {
+        const t = await bootPerLanguage();
+        for (const note of ["a", "b", "c"]) await write(t, note);
+        const id = await firstId(t);
+        translationsStep.fails = true;
+        const { paused, release } = gated(afterCount);
+        const applying = save(t, 3);
+        const reached = await Promise.race([
+          paused.then(() => true),
+          applying.then(() => false),
+        ]);
+        expect(reached || (await applying)).toBe(true);
+        let settled = false;
+        const writing = send(t, id)
+          .then(
+            () => "written",
+            (error: unknown) => error
+          )
+          .finally(() => {
+            settled = true;
+          });
+        await new Promise(resolve => setTimeout(resolve, 1_000));
+        const heldBack = !settled;
+        release();
+        expect(heldBack).toBe(true);
+        expect(await applying).not.toBe("applied");
+        expect(translationsStep.failed).toBe(true);
+        const outcome = await writing;
+        expect(outcome, told(outcome)).toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "fields.note",
+                code: "FIELD_REMOVED",
+              }),
+            ],
+          },
+        });
+        // The values counted are there still, and nothing beside them.
+        expect(await translatedNotes(t)).toBe(3);
+        const [sent] = await query<{ n: number | string }>(
+          t,
+          `SELECT COUNT(*) AS n FROM ${q(VALUES_TABLE)} WHERE ${q("note")} = 'sent while the save held'`
+        );
+        expect(Number(sent?.n)).toBe(0);
+      },
+      60_000
+    );
 
     /** What came of `send`, sent while the save on `road` holds the collection after its count. */
     async function heldBySave(
