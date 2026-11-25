@@ -1,7 +1,7 @@
 /**
- * An entry write takes its collection's hold first on MySQL (`holdEntityForWrite`), so it waits
- * while a Builder save deleting a field's values holds the collection, and goes on once the save
- * lets go. The hold a deleting save takes is the collection delete's, `holdCollectionsIn` for
+ * An entry write takes its collection's hold first (`holdEntityForWrite`), so it waits while a
+ * Builder save deleting a field's values holds the collection, and goes on once the save lets go.
+ * On MySQL the hold a deleting save takes is the collection delete's, `holdCollectionsIn` for
  * update, taken here by another session as the save takes it.
  *
  * What separates a held write from plausible wrong ones:
@@ -10,8 +10,8 @@
  *   (`createEntryInTransaction`), which the write itself holds;
  * - one that never lets go, or waits on its own hold, does not land once the hold ends.
  *
- * MySQL only: on PostgreSQL and SQLite the deleting save's own transaction keeps writes off the
- * table, and an entry write takes nothing.
+ * The cases of one session waiting for another's hold run on MySQL; what a held write is compared
+ * with runs on every database, each with its own hold.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it } from "vitest";

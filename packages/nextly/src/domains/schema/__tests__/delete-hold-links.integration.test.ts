@@ -221,6 +221,10 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await apply(t, [TITLE], 3)).toMatchObject(refusedWith(4));
       expect(await linksHeld(t)).toBe(4);
+
+      // The new count, confirmed, is deleted.
+      expect(await apply(t, [TITLE], 4)).toBe("applied");
+      expect(await linksHeld(t)).toBe("no table");
     }, 60_000);
   }
 );

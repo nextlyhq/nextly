@@ -105,6 +105,8 @@ const resumable = vi.hoisted(() => ({
   on: false,
   first: "collection" as "collection" | "beside",
 }));
+// The statements of the file split last: what a stop point's number stands for.
+const lastSplit = vi.hoisted(() => ({ statements: [] as readonly string[] }));
 vi.mock("../migrate/split-sql", async importOriginal => {
   const real = await importOriginal<typeof import("../migrate/split-sql")>();
   return {
@@ -113,6 +115,7 @@ vi.mock("../migrate/split-sql", async importOriginal => {
       ...args: Parameters<typeof real.splitSqlStatements>
     ) => {
       const statements = real.splitSqlStatements(...args);
+      lastSplit.statements = statements;
       return resumable.on
         ? [
             resumable.first === "collection"
@@ -361,6 +364,21 @@ async function createInCallersTransaction(
     [data]
   );
   return result.successful === 1 ? "created" : result.errors[0];
+}
+
+/**
+ * A stop just after the statement that drops `note`'s column, whichever of its file's it is; the
+ * statement, once stopped there, in `stopped.after`.
+ */
+function stopAfterTheDelete(stopped: { after: string }) {
+  return (point: string) => {
+    const at = /: after statement (\d+)$/.exec(point)?.[1];
+    const statement = lastSplit.statements[Number(at ?? 0) - 1] ?? "";
+    if (/\bDROP COLUMN\b/i.test(statement) && /\bnote\b/.test(statement)) {
+      stopped.after = statement;
+      throw new Error("stopped after the delete");
+    }
+  };
 }
 
 /** What a write ended with, as a failed assertion names it: the code, its log line, and its cause. */
@@ -818,6 +836,10 @@ describe.each(getConfiguredTestDialects())(
       await expect(applyTranslated(t, 3)).rejects.toMatchObject(refusedWith(4));
       expect(await hasNoteColumn(t)).toBe(true);
       expect(await notesHeld(t)).toBe(4);
+
+      // The new count, confirmed, is deleted.
+      await expect(applyTranslated(t, 4)).resolves.toBeDefined();
+      expect(await hasNoteColumn(t)).toBe(false);
     }, 60_000);
 
     // The push road holds the collection from its count until the save has written its registry
@@ -2146,6 +2168,50 @@ describe.each(getConfiguredTestDialects())(
       expect(await notesHeld(t)).toBe(4);
     }, 60_000);
 
+    // A failure just after the statement that deletes: on PostgreSQL and SQLite the file's
+    // transaction takes the delete back, every value there as it was and the save's files withdrawn;
+    // MySQL commits the statement as it runs, so the save is told it applied part way, its file kept
+    // to be settled. Either way the collection is let go: a write after it lands at once.
+    it("takes its delete back, or says it stayed, when the save fails just after it, and lets the collection go", async () => {
+      const t = await boot();
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      const filesBefore = historyFiles(t);
+      const stopped = { after: "" };
+      const outcome = await withStopPoints(stopAfterTheDelete(stopped), () =>
+        apply(t, 3, REMAINING, { note: { action: "confirm_drop" } }).then(
+          () => "applied",
+          (error: unknown) => error
+        )
+      );
+      expect(stopped.after).toContain("note");
+      expect(outcome).not.toBe("applied");
+      const undone = dialect !== "mysql";
+      expect(await hasNoteColumn(t)).toBe(undone);
+      if (undone) {
+        expect(await notesHeld(t)).toBe(3);
+        expect(historyFiles(t)).toEqual(filesBefore);
+      } else {
+        expect(JSON.stringify(outcome)).toContain(
+          "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
+        );
+        expect(historyFiles(t).length).toBeGreaterThan(filesBefore.length);
+      }
+      expect(
+        await endsWithin(
+          t.nextly.create({ collection: SLUG, data: { label: "after" } }),
+          5_000
+        )
+      ).toBe(true);
+      if (!undone) return;
+      // Counted again, whole, and deleted.
+      expect(
+        await apply(t, 3, REMAINING, {
+          note: { action: "confirm_drop" },
+        }).then(() => "applied")
+      ).toBe("applied");
+      expect(await hasNoteColumn(t)).toBe(false);
+    }, 60_000);
+
     // The save's connection killed between its count and its delete (MySQL): its named locks end
     // with it, so an entry write goes ahead, and the save is told it stopped, with nothing deleted.
     it.runIf(dialect === "mysql")(
@@ -2254,6 +2320,137 @@ describe.each(getConfiguredTestDialects())(
         expect([Number(kept?.n), Number(left?.n)].sort()).toEqual([-1, 3]);
       },
       60_000
+    );
+
+    // The save's connection killed between two statements that delete (MySQL): its named locks end
+    // with it, so a write may land from then on, and the second statement must not run: what it would
+    // drop was counted under a hold that is gone. The statements run on the connection that holds.
+    it.runIf(dialect === "mysql")(
+      "runs no later deleting statement once the connection holding the collection is gone",
+      async () => {
+        const t = await boot([...NOTED, { name: "memo", type: "text" }]);
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        // `memo` holds the same values as `note`.
+        await sql(t, `UPDATE ${q(TABLE)} SET ${q("memo")} = ${q("note")}`);
+        const version = await schemaVersion(t);
+        const [database] = await sql<{ name: string }>(
+          t,
+          "SELECT DATABASE() AS name"
+        );
+        const [name] = namedCollectionLockNames(String(database?.name), [SLUG]);
+        let killed: unknown = null;
+        const outcome = await withStopPoints(
+          async point => {
+            if (!/: before statement 2$/.test(point)) return;
+            const [holder] = await sql<{ id: number | string | null }>(
+              t,
+              `SELECT IS_USED_LOCK('${String(name)}') AS id`
+            );
+            killed = holder?.id ?? null;
+            await sql(t, `KILL ${String(killed)}`);
+          },
+          () =>
+            dispatchCollections(
+              {} as ServiceContainer,
+              "applySchemaChanges",
+              { collectionName: SLUG },
+              {
+                fields: REMAINING,
+                confirmed: true,
+                schemaVersion: version,
+                resolutions: {
+                  note: { action: "confirm_drop" },
+                  memo: { action: "confirm_drop" },
+                },
+                confirmedDeletions: [
+                  { field: "note", count: 3 },
+                  { field: "memo", count: 3 },
+                ],
+              }
+            ).then(
+              () => "applied",
+              (error: unknown) => error
+            )
+        );
+        expect(killed).not.toBeNull();
+        expect(outcome).not.toBe("applied");
+        const left = async (column: string) =>
+          Number(
+            (
+              await sql<{ n: number | string }>(
+                t,
+                `SELECT COUNT(*) AS n FROM ${q(TABLE)} WHERE ${q(column)} IS NOT NULL`
+              ).catch(() => [{ n: -1 }])
+            )[0]?.n
+          );
+        // One of the two went with the first statement; the other is still there, all three.
+        expect([await left("memo"), await left("note")].sort()).toEqual([
+          -1, 3,
+        ]);
+      },
+      60_000
+    );
+
+    // On SQLite another connection of the file (another process is one) may hold it when the save's
+    // file starts: past the tries the save stops, with nothing deleted.
+    it.runIf(dialect === "sqlite")(
+      "stops a save whose file another connection holds past its tries, deleting nothing",
+      async () => {
+        const shared = await bootShared();
+        const other = await createAdapter({
+          type: dialect,
+          url: shared.url,
+        } as Parameters<typeof createAdapter>[0]);
+        try {
+          vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
+          vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "3");
+          // What the save's other statements wait for the file, short of the default.
+          await shared.t.adapter.executeQuery("PRAGMA busy_timeout = 500");
+          const { paused, release } = gated(fileStart);
+          const applying = apply(shared.t, 3, REMAINING, {
+            note: { action: "confirm_drop" },
+          }).then(
+            () => "applied",
+            (error: unknown) => error
+          );
+          const reached = await Promise.race([
+            paused.then(() => true),
+            applying.then(() => false),
+          ]);
+          expect(reached || (await applying)).toBe(true);
+          // The other connection's write, not yet committed, which the save's file waits behind.
+          let letGo: () => void = () => undefined;
+          const goes = new Promise<void>(resolve => {
+            letGo = resolve;
+          });
+          let holding: () => void = () => undefined;
+          const isHolding = new Promise<void>(resolve => {
+            holding = resolve;
+          });
+          const holder = other.transaction(async tx => {
+            await tx.execute(insertStatement(null));
+            holding();
+            await goes;
+          });
+          await isHolding;
+          try {
+            release();
+            expect(await applying).not.toBe("applied");
+          } finally {
+            letGo();
+            await holder;
+          }
+          expect(await hasNoteColumn(shared.t)).toBe(true);
+          expect(await notesHeld(shared.t)).toBe(3);
+        } finally {
+          await other.disconnect();
+          await instance?.destroy();
+          instance = undefined;
+          await shared.drop();
+          _resetEnvCache();
+        }
+      },
+      120_000
     );
 
     /**
@@ -2703,6 +2900,10 @@ describe.each(getConfiguredTestDialects())(
         },
       });
       expect(await translatedNotes(t)).toBe(4);
+
+      // The new count, confirmed, is deleted.
+      expect(await save(t, 4)).toBe("applied");
+      expect(await translatedNotes(t)).toBe("gone");
     }, 60_000);
 
     // The span between the save's file and its registry row, held open: the row is written after
