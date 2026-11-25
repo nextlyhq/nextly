@@ -220,4 +220,41 @@ describe("planCodeMoves", () => {
       })
     );
   });
+
+  it("stops for every entity's moves before any entity's values move, each way", async () => {
+    const tagged = (inSeo: boolean) => [
+      group("seo", inSeo ? [text("tag")] : []),
+      group("meta", inSeo ? [] : [text("tag")]),
+    ];
+    const coded = (onRow: boolean) => [
+      ...(onRow ? [{ ...text("code"), unique: true }] : []),
+      group("meta", onRow ? [] : [text("code")]),
+    ];
+    const plan = await planCodeMoves({
+      ...run([]),
+      entities: [
+        { kind: "collection", entity: entity("first", tagged(false)) },
+        { kind: "collection", entity: entity("second", coded(true)) },
+      ],
+      previous: {
+        ...recorded("collections", "first", tagged(true)),
+        collections: {
+          ...recorded("collections", "first", tagged(true)).collections,
+          ...recorded("collections", "second", coded(false)).collections,
+        },
+      },
+      previousTables: new Set(["dc_first", "dc_second"]),
+    } as never);
+    for (const way of ["up", "down"] as const) {
+      const statements = plan.appended[way].first;
+      const at = (is: RegExp) =>
+        statements.flatMap((statement, i) => (is.test(statement) ? [i] : []));
+      const lastStop = Math.max(...at(/nextly_(repeated|drafted)_/));
+      const firstWrite = Math.min(...at(/^UPDATE /));
+      expect(firstWrite).toBeLessThan(statements.length);
+      expect(lastStop).toBeGreaterThanOrEqual(0);
+      expect(lastStop).toBeLessThan(firstWrite);
+    }
+    expect(plan.appended.up.first.join("\n")).toContain("nextly_repeated_code");
+  });
 });

@@ -219,6 +219,10 @@ vi.mock(
     >("../../../domains/singles/services/reconcile-single-companion");
     return {
       ...actual,
+      // The judgement of what the reconcile would drop of another owner's reads the owner records,
+      // which this file's database double does not hold; it finds nothing to refuse here, as the
+      // recovery after a failed reconcile is what this file records.
+      refuseSingleCompanionTakingOthersElements: vi.fn(async () => undefined),
       reconcileSingleCompanion: vi.fn(
         async (args: Parameters<typeof actual.reconcileSingleCompanion>[0]) => {
           // BEFORE the real call: the reconcile is rejected at its first statement, so nothing it

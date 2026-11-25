@@ -19,6 +19,7 @@ import { preBuilderSaveColumnType } from "../../field-groups/services/pre-builde
 import { declaredSize } from "../pipeline/diff/declared-size";
 import { normalizeType } from "../pipeline/diff/normalize-type";
 import {
+  asSingleRowColumnField,
   toSnakeCase,
   usesJunctionTable,
   type SupportedDialect,
@@ -39,7 +40,7 @@ import type {
  * A repeater or group became JSON in 0.0.2-alpha.67; a float, a select, a radio and an upload
  * started reading the descriptor in 0.0.2-alpha.66; a component's many-to-many became a JSON list
  * in 0.0.2-alpha.69; the field-group creator read every column type from the descriptor in
- * 0.0.2-alpha.77.
+ * 0.0.2-alpha.77; a Single's required relationship or upload became nullable in 0.0.2-alpha.79.
  */
 const LEGACY_BEFORE: Record<LegacyShape, string> = {
   "structured-as-text": "0.0.2-alpha.67",
@@ -47,6 +48,7 @@ const LEGACY_BEFORE: Record<LegacyShape, string> = {
   "mysql-text-fallback": "0.0.2-alpha.66",
   "component-list-in-scalar": "0.0.2-alpha.69",
   "field-group-creator-spelling": "0.0.2-alpha.77",
+  "single-required-reference": "0.0.2-alpha.79",
 };
 
 /** Scalar types an older component row held a many-to-many in. */
@@ -118,6 +120,7 @@ function generatorFor<T>(
 /** The column the Schema Builder's generator creates for a field of a collection or a Single. */
 function collectionGeneratorColumn(
   field: FieldDefinition,
+  kind: RepairEntityKind,
   dialect: SupportedDialect
 ): ColumnState | null {
   const type = generatorFor(
@@ -127,10 +130,12 @@ function collectionGeneratorColumn(
   )
     .plannedColumnTypes([field])
     .get(toSnakeCase(field.name));
-  // The Builder's CREATE writes NOT NULL for every required field, a relationship included.
-  return type === undefined
-    ? null
-    : { type, nullable: field.required !== true };
+  if (type === undefined) return null;
+  // The Builder's CREATE writes NOT NULL for every required field, a relationship included, of the
+  // fields as the table stores them: a Single's reference is not required of its column.
+  const stored =
+    kind === "single" ? asSingleRowColumnField(field, "collection") : field;
+  return { type, nullable: stored.required !== true };
 }
 
 /** The column the field-group generator creates for a field of a field group. */
@@ -177,7 +182,7 @@ function currentGeneratorColumn(args: DifferenceCauseArgs): ColumnState | null {
   if (args.translation) return null;
   switch (args.origin) {
     case "collection":
-      return collectionGeneratorColumn(args.field, args.dialect);
+      return collectionGeneratorColumn(args.field, args.kind, args.dialect);
     case "fieldGroup":
       return fieldGroupGeneratorColumn(args.field, args.dialect);
     case "userFields":
@@ -271,10 +276,28 @@ function isFieldGroupCreatorSpelling({ args }: ShapeFacts): boolean {
 }
 
 /**
+ * A Single's required relationship or upload as the Builder's CREATE made it before
+ * 0.0.2-alpha.79: the column it makes today, held NOT NULL. Which fields those are is the rule that
+ * stopped it (`asSingleRowColumnField`). Asked of the live column whole, never of `expected`, whose
+ * type is the live one where no record says what was applied.
+ */
+function isSingleRequiredReference({ args }: ShapeFacts): boolean {
+  if (args.kind !== "single" || args.origin === "userFields") return false;
+  if (asSingleRowColumnField(args.field, args.origin) === args.field) {
+    return false;
+  }
+  const today = collectionGeneratorColumn(args.field, args.kind, args.dialect);
+  return (
+    today !== null &&
+    compareColumn(args.live, { ...today, nullable: false }) === null
+  );
+}
+
+/**
  * Each legacy shape with the test that recognises it, in the order they are tried. The first four
- * each ask for a different field type, so at most one of them holds; the field-group creator's
- * spelling is tried last, and no column the others recognise is spelled that creator's way, so the
- * order changes no answer.
+ * each ask for a different field type, so at most one of them holds; no column they recognise is
+ * spelled the field-group creator's way, and a Single's reference is of its field's own type, which
+ * none of theirs is. So the order changes no answer.
  */
 const LEGACY_SHAPE_TESTS: ReadonlyArray<
   readonly [LegacyShape, (facts: ShapeFacts) => boolean]
@@ -284,6 +307,7 @@ const LEGACY_SHAPE_TESTS: ReadonlyArray<
   ["mysql-text-fallback", isMysqlTextFallback],
   ["component-list-in-scalar", isComponentListInScalar],
   ["field-group-creator-spelling", isFieldGroupCreatorSpelling],
+  ["single-required-reference", isSingleRequiredReference],
 ];
 
 /** The legacy shape the live column holds, or null when it holds none of them. */

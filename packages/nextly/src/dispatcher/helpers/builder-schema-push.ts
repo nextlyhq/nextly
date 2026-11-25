@@ -198,6 +198,32 @@ export async function pushAndReconcileCompanion(
 }
 
 /**
+ * Refuse a Single's or field group's dialog save, before any statement on either road, where the
+ * companion reconcile that follows its main table's change would drop what another owner built on
+ * the translations table: the reconcile's own plan, judged first (`removed-elements.ts`).
+ */
+export async function refuseBuilderCompanionTakingOthersElements(
+  kind: "single" | "component",
+  companion: BuilderCompanionReconcile
+): Promise<void> {
+  if (kind === "single") {
+    const { refuseSingleCompanionTakingOthersElements } = await import(
+      "../../domains/singles/services/reconcile-single-companion"
+    );
+    await refuseSingleCompanionTakingOthersElements({
+      ...companion,
+      status: companion.status === true,
+      wasStatus: companion.wasStatus === true,
+    });
+    return;
+  }
+  const { refuseComponentCompanionTakingOthersElements } = await import(
+    "../../domains/field-groups/services/field-group-table-provisioning"
+  );
+  await refuseComponentCompanionTakingOthersElements(companion);
+}
+
+/**
  * Brings a Single's or field group's companion in step with its main table, once the main table's
  * change has run: after the dialog's push, or after the writer ran the save's migration file. It
  * plans from the companion as it stands, so a change the file already made there is taken as done.

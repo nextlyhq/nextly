@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   holdsTranslatedText,
   sourceValueAt,
+  textContainersOf,
   withTextFrom,
 } from "../container-text";
 
@@ -58,6 +59,27 @@ describe("holdsTranslatedText", () => {
     expect(holdsTranslatedText({ type: "text", name: "title" }, true)).toBe(
       false
     );
+  });
+});
+
+describe("textContainersOf", () => {
+  // A group with no name only lays fields out: a container inside it is a top-level field of the
+  // document, as storage and the form address it. Kept as the wrapper instead, it is skipped for
+  // having no name, and copying the document from another language leaves its text behind.
+  it("finds a container laid out by a group with no name, never the group itself", () => {
+    const title = { type: "text", name: "title" };
+    const layout = { type: "group", fields: [SLIDES, title] };
+    expect(textContainersOf([layout, title], true)).toEqual([SLIDES]);
+    // The control: a container at the top level is found as it is.
+    expect(textContainersOf([SLIDES, title], true)).toEqual([SLIDES]);
+  });
+
+  // A group with no name saying it is not translated shares every field it lays out, as storage
+  // keeps them: a container inside it holds no language's text, so copying from another language
+  // leaves it alone.
+  it("finds no container laid out by a group with no name that says it is not translated", () => {
+    const shared = { type: "group", localized: false, fields: [SLIDES] };
+    expect(textContainersOf([shared], true)).toEqual([]);
   });
 });
 
@@ -215,6 +237,52 @@ describe("a component inside a container's rows", () => {
       )
     ).toEqual({ lead: { _componentType: "hero", title: "Hello" } });
   });
+
+  // A list offering several types: an instance that kept its id but changed type here is another
+  // component, so it takes nothing from the source's instance of the earlier type, even where both
+  // types name a translated field alike.
+  const ZONE = {
+    type: "group",
+    name: "zone",
+    fields: [
+      {
+        type: "component",
+        name: "blocks",
+        repeatable: true,
+        componentSchemas: {
+          hero: { fields: [{ type: "text", name: "title" }] },
+          cta: { fields: [{ type: "text", name: "title" }] },
+        },
+      },
+    ],
+  };
+
+  it("copies a list instance's text only from the source instance of the same type", () => {
+    const source = {
+      blocks: [
+        { id: "b1", _componentType: "hero", title: "Hello" },
+        { id: "b2", _componentType: "cta", title: "Buy" },
+      ],
+    };
+    expect(
+      withTextFrom(
+        {
+          blocks: [
+            { id: "b1", _componentType: "cta", title: "" },
+            { id: "b2", _componentType: "cta", title: "" },
+          ],
+        },
+        source,
+        ZONE,
+        true
+      )
+    ).toEqual({
+      blocks: [
+        { id: "b1", _componentType: "cta", title: "" },
+        { id: "b2", _componentType: "cta", title: "Buy" },
+      ],
+    });
+  });
 });
 
 describe("sourceValueAt", () => {
@@ -269,6 +337,57 @@ describe("sourceValueAt", () => {
     expect(
       sourceValueAt(source, { slides: [{ id: "new" }] }, "slides.0.caption")
     ).toBeUndefined();
+  });
+
+  // An instance that kept its id but changed type is another component: the source's instance of
+  // the earlier type is not its source, even for a field both types name alike.
+  it("reads no source text for an instance whose component type differs from the source's", () => {
+    const blocks = {
+      blocks: [{ id: "b1", _componentType: "hero", title: "Hello" }],
+    };
+    expect(
+      sourceValueAt(
+        blocks,
+        { blocks: [{ id: "b1", _componentType: "cta" }] },
+        "blocks.0.title"
+      )
+    ).toBeUndefined();
+    // The control: the same type reads its source text.
+    expect(
+      sourceValueAt(
+        blocks,
+        { blocks: [{ id: "b1", _componentType: "hero" }] },
+        "blocks.0.title"
+      )
+    ).toBe("Hello");
+  });
+});
+
+describe("a shared layout group inside a container", () => {
+  // A group with no name saying it is not translated shares the fields it lays out, at any depth:
+  // copying the container's text from another language leaves them as this language holds them.
+  const CARD = {
+    type: "group",
+    name: "card",
+    fields: [
+      { type: "text", name: "label" },
+      {
+        type: "group",
+        localized: false,
+        fields: [{ type: "text", name: "code" }],
+      },
+    ],
+  };
+
+  it("copies the container's text and leaves the shared group's fields alone", () => {
+    expect(
+      withTextFrom(
+        { label: "", code: "own" },
+        { label: "Label", code: "theirs" },
+        CARD,
+        true
+      )
+    ).toEqual({ label: "Label", code: "own" });
   });
 });
 
