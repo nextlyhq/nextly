@@ -7,7 +7,7 @@ description: "A migration's snapshot file is not valid JSON, or not a snapshot t
 
 A migration's snapshot file is not valid JSON, or not a snapshot this version of Nextly reads.
 
-A snapshot in `meta/` could not be read: its JSON is broken, for example by a partial write or a merge, or a different version of Nextly wrote it.
+A snapshot in `meta/` could not be read: its JSON is broken, for example by a partial write or a merge, or a different version of Nextly wrote it. `nextly repair-columns` stops on the snapshot of an applied migration, which records what the database last had applied.
 
 ## Fix
 

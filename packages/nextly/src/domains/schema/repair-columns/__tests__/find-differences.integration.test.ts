@@ -1136,6 +1136,8 @@ describe.each(getConfiguredTestDialects())(
                   entities: [],
                 })
           );
+          // Its migration file beside the folder: without it the missing file is what stops the run.
+          writeFileSync(join(projectRoot, `${name}.sql`), "");
           const events = new SchemaEventsRepository(db(), dialect);
           const id = await events.recordStart({
             eventType: "file_apply",
@@ -1170,10 +1172,10 @@ describe.each(getConfiguredTestDialects())(
             ? { code: "NEXTLY_UI_SCHEMA_INVALID" }
             : {
                 code: "CONFIGURATION_ERROR",
-                logMessage: expect.stringContaining(
+                logMessage: expect.stringMatching(
                   expected.stops === "unreadable snapshot"
-                    ? "0901_rc_matrix_broken.snapshot.json"
-                    : "0901_rc_matrix_malformed.snapshot.json"
+                    ? /meta\/0901_rc_matrix_broken\.snapshot\.json.*JSON parse failed/s
+                    : /meta\/0901_rc_matrix_malformed\.snapshot\.json.*records its entities in a shape/s
                 ) as unknown,
               }
         );

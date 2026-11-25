@@ -1132,6 +1132,13 @@ exports[`each code, as a command ends with it > MIGRATION_PLACE_STATED_TWICE 1`]
   Docs: https://nextlyhq.com/docs/cli/errors/migration-place-stated-twice  (MIGRATION_PLACE_STATED_TWICE)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATION_SNAPSHOTS_UNREADABLE 1`] = `
+"✗ The migration snapshots in \`/app/migrations/meta\` could not be read.
+  Why:  EACCES: permission denied, scandir '/app/migrations/meta'
+  Next: Make the folder readable by the user running the command, then run \`nextly repair-columns\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-snapshots-unreadable  (MIGRATION_SNAPSHOTS_UNREADABLE)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATION_SQL_UNCHECKABLE 1`] = `
 "✗ A migration contains SQL whose drops cannot be read, so which owner's tables it drops cannot be checked.
   Why:  A statement in \`@acme/seo/20261020_120000_add_redirects\` could not be read: unterminated block comment. It has been refused.
@@ -1919,6 +1926,20 @@ exports[`each code, as a command ends with it > REFUSED_STATEMENT 1`] = `
   Why:  "VACUUM" cannot run inside a transaction, and this file runs in one. To run it as a migration, make \`-- nextly:no-transaction\` the file's first line: the file then runs outside a transaction, statement by statement, and a failure part-way leaves the statements before it applied.
   Next: Change each statement as its line above says, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/refused-statement  (REFUSED_STATEMENT)"
+`;
+
+exports[`each code, as a command ends with it > REGISTRY_ROW_DIVERGED 1`] = `
+"✗ The registry row of the field group "card" is marked as diverged.
+  Why:  Its tables were changed and its stored definition still describes the previous shape, so what the database last had applied cannot be known.
+  Next: In development, open Field Groups in the admin and choose "Repair definition" on "card". Then run \`nextly repair-columns\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/registry-row-diverged  (REGISTRY_ROW_DIVERGED)"
+`;
+
+exports[`each code, as a command ends with it > REGISTRY_ROW_WITHOUT_TABLE 1`] = `
+"✗ The registry row of the collection "posts" names no table.
+  Why:  Its \`table_name\` in \`dynamic_collections\` is empty, so where the collection's columns are cannot be known.
+  Next: Set the row's \`table_name\` to the collection's table, then run \`nextly repair-columns\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/registry-row-without-table  (REGISTRY_ROW_WITHOUT_TABLE)"
 `;
 
 exports[`each code, as a command ends with it > REQUIRED_COLUMN_HAS_NULLS 1`] = `
