@@ -99,6 +99,8 @@ vi.mock("../../domains/schema/migrate/resolved-schema", () => ({
 }));
 vi.mock("../../domains/schema/extension/publish", () => ({
   compileExtensionSchema: async () => ({}),
+  // Nothing declares a schema hook here, so the start seeds none from the registry.
+  declaresExtensionSchema: () => false,
 }));
 vi.mock("../reload-dynamic-tables", () => ({ reloadDynamicTables: vi.fn() }));
 vi.mock("../reload-config", () => ({ reloadNextlyConfig: vi.fn() }));
