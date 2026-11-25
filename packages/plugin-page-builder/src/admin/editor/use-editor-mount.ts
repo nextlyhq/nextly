@@ -68,6 +68,7 @@ import {
 import { useEditedComponentVariants } from "../variant-use-client";
 
 import { shellPreferenceStore } from "./editor-preference-stores";
+import { useKeptEditor, type KeptEditorMount } from "./kept-editor";
 import { useRestorableEditorState } from "./restore-as-edit";
 import { useConnectStyleHistory } from "./site-style-history";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
@@ -466,8 +467,9 @@ export function useEditorMount(
   // What the page's edits and a header's edited in place are judged by beside
   // their own document: the site's caps, and the refusals said in words.
   const judged = useJudgedEdits(documentLimits, componentLibrary, notices);
-  // With a recovery point's restore as one edit, so the author can undo it.
-  const { page, editing } = useEditedState(
+  // With a recovery point's restore as one edit, so the author can undo it,
+  // and a history kept while the read-only page was drawn (`kept-editor`).
+  const { page, editing, kept } = useEditedState(
     {
       initialDocument,
       ...judged,
@@ -564,6 +566,7 @@ export function useEditorMount(
     componentFacts,
     componentVariants,
     offerEditComponent,
+    kept,
   };
 }
 
@@ -605,6 +608,8 @@ export type EditorMount = {
   componentVariants: ComponentVariantsHost | undefined;
   /** Give the "Part of" toast the opener its Edit component action calls. */
   offerEditComponent: (open: OpenComponent | undefined) => void;
+  /** The page's save point kept with its history (`useKeptEditor`). */
+  kept: KeptEditorMount;
 };
 
 /**
@@ -621,14 +626,17 @@ function useEditedState(
     readonly sentence: string | undefined;
     readonly raise: (sentence: string) => void;
   }
-): { page: EditorState; editing: EditingTargetState } {
+): { page: EditorState; editing: EditingTargetState; kept: KeptEditorMount } {
+  // Started from a history kept while the builder's view drew the read-only
+  // page, on the same page, and this editor's own kept as it leaves.
+  const kept = useKeptEditor(args.initialDocument);
   const page = usePagelessGuard(
-    useRestorableEditorState(args, kinds),
+    useRestorableEditorState({ ...args, keeping: kept.keeping }, kinds),
     usePagelessRefusal(pageless.sentence, pageless.raise)
   );
   const editing = useEditingTarget(page, judged);
   useConnectStyleHistory(editing.active.recordStep);
-  return { page, editing };
+  return { page, editing, kept };
 }
 
 /** How an edit of a page that has none of its own is refused. */
