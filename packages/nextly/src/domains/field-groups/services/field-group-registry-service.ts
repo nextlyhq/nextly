@@ -1483,20 +1483,20 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     const owners = await readFieldOwners(this.adapter, {
       fieldGroupRegistryName: () => this.resolveRegistryTableName(),
     });
-    return owners.flatMap(owner =>
-      owner.entityType === "fieldGroup"
-        ? []
-        : fieldGroupPlacements(owner.fields)
-            .filter(
-              placement =>
-                !placement.direct && placement.slugs.includes(componentSlug)
-            )
-            .map(placement => ({
-              entityType: owner.entityType,
-              entitySlug: owner.entitySlug,
-              fieldPath: placement.path,
-            }))
-    );
+    return owners.flatMap(owner => {
+      const { entityType, entitySlug } = owner;
+      if (entityType === "fieldGroup") return [];
+      return fieldGroupPlacements(owner.fields)
+        .filter(
+          placement =>
+            !placement.direct && placement.slugs.includes(componentSlug)
+        )
+        .map(placement => ({
+          entityType,
+          entitySlug,
+          fieldPath: placement.path,
+        }));
+    });
   }
 
   /**
