@@ -495,16 +495,7 @@ export function settleAnswerCases(args: {
         );
         const after = copied("after");
         expect(files(after).length).toBeGreaterThan(files(before).length);
-        // A translated collection's next Builder save is refused as drift (NEXTLY_MIGRATION_DRIFT)
-        // once a container's overlay column is in its translations table: the save's check takes the
-        // column for one the history does not record. Left out there; an untranslated collection's
-        // save makes no such check.
-        if (
-          !withLater ||
-          (translated && answered.name === "added beside a container")
-        ) {
-          return { before, after, later: undefined };
-        }
+        if (!withLater) return { before, after, later: undefined };
         // A later save on the same table, which the drift check compares against what the
         // answered save's file left.
         await save(
