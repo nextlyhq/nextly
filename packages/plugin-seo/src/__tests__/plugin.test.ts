@@ -1,7 +1,13 @@
 import { createRequire } from "node:module";
 
 import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
-import { select, text } from "nextly";
+import {
+  fieldGroup,
+  password,
+  select,
+  text,
+  validateCollectionConfig,
+} from "nextly";
 import type { FieldConfig } from "nextly";
 import { describe, expect, it } from "vitest";
 
@@ -101,8 +107,58 @@ describe("seoPlugin", () => {
   it("nests custom fields under the seo group too", () => {
     const custom = [text({ name: "focusKeyword" })];
     const plugin = seoPlugin({ collections: ["pages"], fields: custom });
-    // Custom overrides stay under `seo`, not at the collection's top level.
-    expect(seoGroup(plugin).fields).toBe(custom);
+    // Custom overrides stay under `seo`, not at the collection's top level, each translated
+    // per language where the content is.
+    expect(seoGroup(plugin).fields).toEqual([
+      { ...custom[0], localized: true },
+    ]);
+  });
+
+  // Only a field that can be translated as a whole is marked: a component keeps one structure in
+  // every language, and a password or a virtual field is never translated, so each refuses the
+  // flag at load, and a custom SEO config holding one would stop the site from starting.
+  it("marks translated only the custom fields a language can keep, so the collection still loads", () => {
+    const custom: FieldConfig[] = [
+      text({ name: "focusKeyword" }),
+      fieldGroup({ name: "card", component: "seocard" }),
+      password({ name: "previewKey" }),
+      text({ name: "shareUrl", virtual: true }),
+    ];
+    const group = seoGroup(
+      seoPlugin({ collections: ["pages"], fields: custom })
+    );
+
+    expect(
+      (group.fields as { name: string; localized?: boolean }[]).map(f => [
+        f.name,
+        f.localized,
+      ])
+    ).toEqual([
+      ["focusKeyword", true],
+      ["card", undefined],
+      ["previewKey", undefined],
+      ["shareUrl", undefined],
+    ]);
+    const loaded = validateCollectionConfig({
+      slug: "pages",
+      localized: true,
+      fields: [group as FieldConfig],
+    });
+    expect(loaded.errors).toEqual([]);
+  });
+
+  // A group keeps one structure in every language and is refused at load when marked
+  // translated: the group says nothing, and each field inside says it is translated, so every
+  // language keeps its own title, description and canonical, as before.
+  it("translates each SEO field, and never marks the group itself", () => {
+    const group = seoGroup(seoPlugin({ collections: ["pages"] }));
+    expect(group).not.toHaveProperty("localized");
+    for (const field of group.fields as {
+      name: string;
+      localized?: boolean;
+    }[]) {
+      expect(field.localized, field.name).toBe(true);
+    }
   });
 
   it("serves the sitemap and robots.txt at the site root by default, and the sitemap at its old address too", () => {

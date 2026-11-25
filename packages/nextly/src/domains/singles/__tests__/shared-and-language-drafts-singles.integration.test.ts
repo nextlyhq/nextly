@@ -429,10 +429,11 @@ describe.each(getConfiguredTestDialects())(
       }
     }, 90_000);
 
-    // A named group is stored whole on the shared row, a component inside it
-    // included, so a held edit to that component is the shared draft's, as its
-    // publish writes the shared row.
-    it("keeps a held edit to a component inside a named group in the shared draft", async () => {
+    // A named group keeps one structure in every language, a component inside
+    // it included, and the component's text is translated with it: a held edit
+    // to that text is the language's draft's alone, as its publish writes that
+    // language's text.
+    it("keeps a held edit to the text of a component inside a named group in that language's draft", async () => {
       const singles = await boot(dialect);
       for (const locale of ["en", "es"]) {
         const saved = await singles.update(
@@ -455,13 +456,14 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
 
-      expect(Object.keys(await drafts(NESTED)).sort()).toEqual(["shared"]);
+      expect(Object.keys(await drafts(NESTED)).sort()).toEqual(["es"]);
     }, 90_000);
 
-    // The draft and the publish agree on where the value lives: every
-    // language's editor sees the held edit, and its publish puts the same
-    // value live in every language.
-    it("shows a held edit inside a named group to every language, and publishes it to every language", async () => {
+    // The draft and the publish agree on where the value lives: the text of a
+    // component inside a named group is its language's, so only that
+    // language's editor sees the held edit, and its publish puts it live in
+    // that language alone.
+    it("shows a held edit to a component's text inside a named group to its language, and publishes it to its language", async () => {
       const singles = await boot(dialect);
       for (const locale of ["en", "es"]) {
         const saved = await singles.update(
@@ -486,8 +488,12 @@ describe.each(getConfiguredTestDialects())(
         (data.layout as { hero?: { heading?: unknown } } | undefined)?.hero
           ?.heading;
 
-      // English's editor sees the pending edit too: it is the shared draft's.
-      expect(heading(await read(singles, "en", true, NESTED))).toBe("es held");
+      // The control: Spanish's editor sees its pending edit.
+      expect(heading(await read(singles, "es", true, NESTED))).toBe("es held");
+      // English's does not: the text is Spanish's own.
+      expect(heading(await read(singles, "en", true, NESTED))).toBe(
+        "live heading"
+      );
 
       const published = await singles.update(
         NESTED,
@@ -495,11 +501,10 @@ describe.each(getConfiguredTestDialects())(
         { locale: "es", overrideAccess: true }
       );
       expect(published.success, JSON.stringify(published)).toBe(true);
-      for (const locale of ["en", "es"]) {
-        expect(heading(await read(singles, locale, false, NESTED))).toBe(
-          "es held"
-        );
-      }
+      expect(heading(await read(singles, "es", false, NESTED))).toBe("es held");
+      expect(heading(await read(singles, "en", false, NESTED))).toBe(
+        "live heading"
+      );
     }, 90_000);
 
     // A publish of every language judges a shared-only draft's values under

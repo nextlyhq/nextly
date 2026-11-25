@@ -27,13 +27,16 @@ const VERSION_SNAPSHOTS = "version snapshots";
  * What each localisation step repairs (`UpgradeStep.group`), and so which later counts wait for it
  * (`UpgradeStep.reads`). Every step reads the codes the conversion writes. The values move reads
  * the main tables, the translations tables and their transition records, which keying the pending
- * changes never touches, so it waits for the conversion alone. The draft split reads the keys, the
- * values it is split against and what pending changes hold (`VERSION_SNAPSHOTS`), which the version
- * history's password removal changes; the dating and the archive list read every step before them.
+ * changes never touches, so it waits for the conversion alone. The one structure for repeaters
+ * and groups translated whole reads the codes and the values per language, which it converts. The
+ * draft split reads the keys, the values and the one structure it is split against, and what
+ * pending changes hold (`VERSION_SNAPSHOTS`), which the version history's password removal
+ * changes; the dating and the archive list read every step before them.
  */
 const LOCALISATION_CODES = "localisation codes";
 const PENDING_CHANGE_KEYS = "pending change keys";
 const VALUES_PER_LANGUAGE = "values per language";
+const ONE_STRUCTURE = "one structure";
 const PENDING_CHANGE_PARTS = "pending change parts";
 const TRANSLATION_DATES = "translation dates";
 /** Every group the localisation steps repair. */
@@ -41,6 +44,7 @@ const LOCALISATION = [
   LOCALISATION_CODES,
   PENDING_CHANGE_KEYS,
   VALUES_PER_LANGUAGE,
+  ONE_STRUCTURE,
   PENDING_CHANGE_PARTS,
   TRANSLATION_DATES,
 ] as const;
@@ -124,6 +128,22 @@ const localisationValuesStep: UpgradeStep = {
     (await import("./localisation-values")).valuesMoveReport(context),
 };
 
+/**
+ * Bringing repeaters and groups translated whole into one structure across languages, refusing
+ * documents whose languages differ.
+ */
+const localisationStructuresStep: UpgradeStep = {
+  group: ONE_STRUCTURE,
+  reads: [LOCALISATION_CODES, VALUES_PER_LANGUAGE, ONE_STRUCTURE],
+  title: "keep one structure for repeaters and groups translated whole",
+  pending: async context =>
+    (await import("./localisation-structures")).structuresToConvert(context),
+  run: async context =>
+    (await import("./localisation-structures")).convertStructures(context),
+  report: async context =>
+    (await import("./localisation-structures")).structuresReport(context),
+};
+
 /** Keeping every pending change by part, split against what is live. */
 const localisationDraftsStep: UpgradeStep = {
   group: PENDING_CHANGE_PARTS,
@@ -132,6 +152,7 @@ const localisationDraftsStep: UpgradeStep = {
     LOCALISATION_CODES,
     PENDING_CHANGE_KEYS,
     VALUES_PER_LANGUAGE,
+    ONE_STRUCTURE,
     PENDING_CHANGE_PARTS,
     VERSION_SNAPSHOTS,
   ],
@@ -171,12 +192,15 @@ const localisationArchiveStep: UpgradeStep = {
  * The steps bringing an earlier release's content into the localisation model, in the order they
  * must run: codes first, so every later step reads and writes the standard code; pending changes
  * keyed before they are split, so the split sees one draft per language; values moved before the
- * drafts are split against them; translations dated last, from the history the steps before left.
+ * drafts are split against them; repeaters and groups translated whole given their one structure
+ * once their values are per language and before drafts are split against it; translations dated
+ * last, from the history the steps before left.
  */
 export const LOCALISATION_DATA_STEPS: readonly UpgradeStep[] = [
   localisationCodesStep,
   localisationKeysStep,
   localisationValuesStep,
+  localisationStructuresStep,
   localisationDraftsStep,
   localisationStampsStep,
   localisationArchiveStep,

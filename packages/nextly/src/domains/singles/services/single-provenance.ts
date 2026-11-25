@@ -20,6 +20,10 @@ import {
   recordWrittenValues,
   translationProvenancePresent,
 } from "../../i18n/provenance/record-provenance";
+import {
+  assembleStoredValue,
+  type SharedStructureShape,
+} from "../../i18n/shared-structure";
 import type { SelectsRows } from "../../versions/document-revision";
 
 /** What recording needs of the service writing. */
@@ -35,13 +39,26 @@ export interface SingleProvenanceWrite {
   slug: string;
   entryId: string;
   locale: string;
-  /** The values written, keyed by column. */
+  /**
+   * The values written, keyed by column: for a repeater or group with one structure in every
+   * language, the language's overlay, read with its structure from `structures`.
+   */
   values: Readonly<Record<string, unknown>>;
-  /** The Single's translated fields: each one's column, and whether its storage is JSON. */
+  /**
+   * The structures the same write put on the main row, keyed by column, which a container's
+   * overlay in `values` is the language's text of. Absent, a container's overlay is recorded as
+   * it is.
+   */
+  structures?: Readonly<Record<string, unknown>>;
+  /**
+   * The Single's translated fields: each one's column, whether its storage is JSON, and the
+   * shape of a container with one structure in every language.
+   */
   localizedFields: ReadonlyArray<{
     name: string;
     column: string;
     json?: boolean;
+    sharedStructure?: SharedStructureShape;
   }>;
   /** The Single's translation table, which holds each language's counter. */
   languagesTable?: string;
@@ -80,13 +97,26 @@ export async function recordSingleProvenance(
 ): Promise<void> {
   if (deps.defaultLocale === undefined) return;
   if (!(await singleProvenanceRecorded(deps, tx))) return;
-  const nameOf = new Map(
-    write.localizedFields.map(field => [field.column, field.name])
+  const fieldOf = new Map(
+    write.localizedFields.map(field => [field.column, field])
   );
   const values: Record<string, unknown> = {};
   for (const [column, value] of Object.entries(write.values)) {
-    const name = nameOf.get(column);
-    if (name !== undefined) values[name] = value;
+    const field = fieldOf.get(column);
+    if (field === undefined) continue;
+    // A container with one structure is recorded as written, its structure with this language's
+    // text on it, as a collection's write records it: its rows are what each row's record names.
+    const structures = write.structures;
+    values[field.name] =
+      field.sharedStructure !== undefined &&
+      structures !== undefined &&
+      Object.hasOwn(structures, column)
+        ? assembleStoredValue(
+            structures[column],
+            value === null || value === undefined ? [] : [value],
+            field.sharedStructure
+          )
+        : value;
   }
   await recordWrittenValues(tx, {
     scopeKind: "single",

@@ -73,10 +73,16 @@ async function boot(
             ...(shape.translated ? { localized: true } : {}),
           }),
           fieldGroup({ name: "seo", component: "dlseo" }),
+          // A group keeps one structure in every language: the text inside is what is
+          // translated, marked on the field itself.
           group({
             name: "meta",
-            ...(shape.translated ? { localized: true } : {}),
-            fields: [text({ name: "seoTitle" })],
+            fields: [
+              text({
+                name: "seoTitle",
+                ...(shape.translated ? { localized: true } : {}),
+              }),
+            ],
           }),
         ],
       }),
