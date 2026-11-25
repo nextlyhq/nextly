@@ -44,7 +44,8 @@ export interface OutOfDateNoticeState {
   notice: OutOfDateNoticeContent | null;
   /**
    * Says what a publish of `published` left out of date, against the overview `before` it. A
-   * later publish replaces what an earlier one said; a failed read says nothing.
+   * later publish replaces what an earlier one said; a failed read says nothing, and neither does
+   * a publish that finishes after the editor moved on from where it was made.
    */
   afterPublish: (args: {
     before: TranslationOverview | undefined;
@@ -63,23 +64,27 @@ export function useOutOfDateNotice({
   readOverview,
 }: UseOutOfDateNoticeOptions): OutOfDateNoticeState {
   const [notice, setNotice] = useState<OutOfDateNoticeContent | null>(null);
-  // The scope the last render was for. Updated during render, as React adjusts state from a
-  // changed input, so no render shows one language's notice over another.
-  const [shownFor, setShownFor] = useState(scope);
-  if (shownFor !== scope) {
-    setShownFor(scope);
+  // This visit to the scope, a new one each time it changes, so going away and coming back is a
+  // move too. Updated during render, as React adjusts state from a changed input, so no render
+  // shows one language's notice over another.
+  const [visit, setVisit] = useState({ scope });
+  if (visit.scope !== scope) {
+    setVisit({ scope });
     setNotice(null);
   }
+  // The visit on screen, for a publish that was made in an earlier one.
+  const onScreen = useRef(visit);
   // Which publish is being answered, so a slower read for an earlier one never overwrites it.
   const latest = useRef(0);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    onScreen.current = visit;
+    return () => {
       latest.current += 1;
-    },
-    [scope]
-  );
+    };
+  }, [visit]);
   const afterPublish = useCallback<OutOfDateNoticeState["afterPublish"]>(
     async ({ before, published, source }) => {
+      if (onScreen.current !== visit) return;
       const asked = ++latest.current;
       setNotice(null);
       let after: TranslationOverview | undefined;
@@ -99,7 +104,7 @@ export function useOutOfDateNotice({
         })
       );
     },
-    [languages, labelOf, editorPath, readOverview]
+    [visit, languages, labelOf, editorPath, readOverview]
   );
   const dismiss = useCallback(() => setNotice(null), []);
   return { notice, afterPublish, dismiss };

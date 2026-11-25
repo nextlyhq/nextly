@@ -20,6 +20,8 @@ import type {
 import { useDocumentPublishing } from "../useDocumentPublishing";
 import type { SmartPublishHost } from "../useSmartPublish";
 
+import { pressConfirm } from "./press-confirm";
+
 const api = vi.hoisted(() => ({
   publishParts: vi.fn(),
   findByID: vi.fn(),
@@ -69,21 +71,26 @@ const SPANISH_HOLDS: PartsLanguageOutcome = {
   outcome: "goes-live-with-pending-change",
 };
 
-/** The route, for a post whose English holds a change and whose Spanish stands as `spanish`. */
+/** The route's answer to `choice`, for a post whose English holds a change. */
+function answerTo(choice: PublishPartsChoice, spanish: PartsLanguageOutcome) {
+  return {
+    id: "post-1",
+    languages: [
+      { locale: "en", outcome: "goes-live-with-pending-change" as const },
+      spanish,
+    ].filter(
+      ({ locale }) =>
+        choice.locales === "all" || choice.locales.includes(locale)
+    ),
+    shared: { changes: false, added: false },
+  };
+}
+
+/** The route, for a post whose Spanish stands as `spanish`. */
 function serve(spanish: PartsLanguageOutcome): void {
   api.publishParts.mockImplementation(
     (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
-      Promise.resolve({
-        id: "post-1",
-        languages: [
-          { locale: "en", outcome: "goes-live-with-pending-change" as const },
-          spanish,
-        ].filter(
-          ({ locale }) =>
-            choice.locales === "all" || choice.locales.includes(locale)
-        ),
-        shared: { changes: false, added: false },
-      })
+      Promise.resolve(answerTo(choice, spanish))
   );
 }
 
@@ -93,9 +100,11 @@ const publish = vi.fn<SmartPublishHost["publish"]>();
 function Page({
   document,
   translated = true,
+  currentLocale,
 }: {
   document: unknown;
   translated?: boolean;
+  currentLocale?: string;
 }): ReactElement {
   const publishing = useDocumentPublishing({
     target: { kind: "collection", slug: "posts", id: "post-1" },
@@ -103,7 +112,7 @@ function Page({
     lifecycleEnabled: true,
     translated,
     locales: LOCALES,
-    currentLocale: undefined,
+    currentLocale,
     defaultLocale: "en",
     editorPath: "/admin/collections/posts/post-1",
     shown: () => undefined,
@@ -229,6 +238,35 @@ describe("publishing from an editor's page", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(
       "Published. 1 Spanish field is now out of date."
     );
+  });
+
+  it("says nothing over the language moved to while the dialog's publish was on its way", async () => {
+    let finish: () => void = () => undefined;
+    api.publishParts.mockImplementation(
+      (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
+        new Promise(resolve => {
+          const answer = () => resolve(answerTo(choice, SPANISH_HOLDS));
+          if (choice.describe === true) answer();
+          else finish = answer;
+        })
+    );
+    const { rerender } = render(<Page document={post()} />);
+    await press();
+    const dialog = await screen.findByRole("dialog");
+    await pressConfirm(
+      within(dialog).getByRole("button", { name: "Publish selected" })
+    );
+    await waitFor(() => expect(moves()).toHaveLength(1));
+
+    rerender(<Page document={post()} currentLocale="es" />);
+    finish();
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(overviewReads()).toEqual([]);
+    expect(
+      screen.queryByRole("link", { name: "Translate Spanish" })
+    ).toBeNull();
   });
 
   it("opens the choice with the shared fields chosen where they hold changes", async () => {
