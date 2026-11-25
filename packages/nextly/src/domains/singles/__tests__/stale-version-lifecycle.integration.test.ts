@@ -153,6 +153,18 @@ const publishAll = (t: TestNextly, data: Doc) =>
     data,
   }) as Promise<Result>;
 
+/** Publishes or unpublishes the languages chosen, from `_rev`. */
+const moveChosen = (
+  t: TestNextly,
+  direction: "publish" | "unpublish",
+  locales: string[],
+  _rev: string
+) =>
+  singlesOf(t).publishParts(
+    { slug: BANNER, overrideAccess: true, data: { _rev } },
+    { direction, locales }
+  ) as Promise<Result>;
+
 const overwritesOf = async (t: TestNextly, slug: string) => {
   const [row] = await t.adapter.select<Doc>(`single_${slug}`, {});
   return (
@@ -355,6 +367,89 @@ describe.each(getConfiguredTestDialects())(
             replaced: expect.objectContaining({ kind: "person", id: ANA.id }),
           }),
         ]);
+      });
+    });
+
+    describe("publishing chosen languages", () => {
+      const editBanner = (t: TestNextly, locale: string, headline: string) =>
+        save(t, BANNER, locale, { headline, _overwrite: true });
+
+      it("publishes from a read of every language (`all`) though one not chosen was saved since", async () => {
+        const t = await boot(dialect);
+        await translatedBanner(t);
+        const read = await readRev(t, BANNER, "all");
+        await editBanner(t, "en", "hello again");
+
+        // English is chosen too, and is what changed.
+        const both = await moveChosen(t, "publish", ["en", "es"], read);
+        expect(both.code, JSON.stringify(both)).toBe("STALE_VERSION");
+
+        const spanish = await moveChosen(t, "publish", ["es"], read);
+        expect(spanish.success, JSON.stringify(spanish)).toBe(true);
+        expect((await lifecycleOf(t, BANNER)).languages).toMatchObject({
+          en: expect.stringMatching(/^draft#/),
+          es: expect.stringMatching(/^published#/),
+        });
+      });
+
+      it("refuses that once the chosen language was saved since", async () => {
+        const t = await boot(dialect);
+        await translatedBanner(t);
+        const read = await readRev(t, BANNER, "all");
+        await editBanner(t, "es", "hola otra vez");
+        const before = await lifecycleOf(t, BANNER);
+        expect((await moveChosen(t, "publish", ["es"], read)).code).toBe(
+          "STALE_VERSION"
+        );
+        expect(await lifecycleOf(t, BANNER)).toEqual(before);
+      });
+
+      it("takes a chosen language down from it, though one not chosen was saved since", async () => {
+        const t = await boot(dialect);
+        const every = await translatedBanner(t);
+        const live = await publishAll(t, { _rev: every });
+        expect(live.success, JSON.stringify(live)).toBe(true);
+        const read = await readRev(t, BANNER, "all");
+        await editBanner(t, "en", "hello again");
+        const down = await moveChosen(t, "unpublish", ["es"], read);
+        expect(down.success, JSON.stringify(down)).toBe(true);
+        expect((await lifecycleOf(t, BANNER)).languages).toMatchObject({
+          en: expect.stringMatching(/^published#/),
+          es: expect.stringMatching(/^draft#/),
+        });
+      });
+
+      it("still publishes from a read of the chosen language alone, judged on it", async () => {
+        const t = await boot(dialect);
+        await translatedBanner(t);
+        const stale = await readRev(t, BANNER, "es");
+        expect(stale).not.toContain("en:");
+        await editBanner(t, "es", "hola otra vez");
+        expect((await moveChosen(t, "publish", ["es"], stale)).code).toBe(
+          "STALE_VERSION"
+        );
+
+        const read = await readRev(t, BANNER, "es");
+        await editBanner(t, "en", "hello again");
+        const published = await moveChosen(t, "publish", ["es"], read);
+        expect(published.success, JSON.stringify(published)).toBe(true);
+        // A version of another language says nothing of the one chosen.
+        const english = await readRev(t, BANNER, "en");
+        expect(
+          await codeOf(() => moveChosen(t, "publish", ["es"], english))
+        ).toBe("VALIDATION_ERROR");
+      });
+
+      it("saves one language from it, though another was saved since, and refuses once that language was", async () => {
+        const t = await boot(dialect);
+        await translatedBanner(t);
+        const read = await readRev(t, BANNER, "all");
+        await editBanner(t, "en", "hello again");
+        const saveSpanish = (headline: string) =>
+          save(t, BANNER, "es", { headline, _rev: read });
+        const saved = await saveSpanish("hola 2");
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+        expect((await saveSpanish("hola 3")).code).toBe("STALE_VERSION");
       });
     });
 

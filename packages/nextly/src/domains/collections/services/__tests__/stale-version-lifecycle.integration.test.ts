@@ -381,11 +381,15 @@ describe.each(getConfiguredTestDialects())(
         expect(await listedRev(t, page.id, "es")).toBe(page.es);
       });
 
-      /** Publishes the languages chosen, from `_rev`. */
-      const publishChosen = (
+      /** Publishes or unpublishes the languages chosen, from `_rev`. */
+      const moveChosen = (
         t: TestNextly,
         id: string,
-        locales: string[],
+        request: {
+          direction: "publish" | "unpublish";
+          locales: string[];
+          shared?: boolean;
+        },
         _rev: string
       ) =>
         handlerOf(t).publishParts(
@@ -395,8 +399,23 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             data: { _rev },
           } as never,
-          { direction: "publish", locales } as never
+          request as never
         ) as Promise<Result>;
+
+      const publishChosen = (
+        t: TestNextly,
+        id: string,
+        locales: string[],
+        _rev: string
+      ) => moveChosen(t, id, { direction: "publish", locales }, _rev);
+
+      /** A save of one language's text, or of the shared note. */
+      const edit = (
+        t: TestNextly,
+        id: string,
+        locale: string,
+        data: Record<string, unknown>
+      ) => update(t, PAGES, id, { ...data, _overwrite: true }, { locale });
 
       it("publishes a chosen language other than the default from it", async () => {
         const t = await boot(dialect);
@@ -435,6 +454,97 @@ describe.each(getConfiguredTestDialects())(
           "VALIDATION_ERROR"
         );
         expect(await lifecycleOf(t, page.id)).toEqual(before);
+      });
+
+      it("compares only the languages chosen: one not chosen may have been saved since", async () => {
+        const t = await boot(dialect);
+        const page = await translatedDraft(t);
+        const read = await readRev(t, PAGES, page.id, "all");
+        await edit(t, page.id, "en", { title: "hello again" });
+
+        // English is chosen too, and is what changed.
+        const both = await publishChosen(t, page.id, ["en", "es"], read);
+        expect(both.code, JSON.stringify(both)).toBe("STALE_VERSION");
+
+        const spanish = await publishChosen(t, page.id, ["es"], read);
+        expect(spanish.success, JSON.stringify(spanish)).toBe(true);
+        const after = await lifecycleOf(t, page.id);
+        expect(after.languages.es).toMatch(/^published#/);
+        expect(after.languages.en).not.toMatch(/^published#/);
+      });
+
+      it("takes a chosen language down from it, though one not chosen was saved since", async () => {
+        const t = await boot(dialect);
+        const page = await translatedDraft(t);
+        await update(
+          t,
+          PAGES,
+          page.id,
+          { status: "published", _overwrite: true },
+          { locale: "*" }
+        );
+        const takeDown = { direction: "unpublish" as const, locales: ["es"] };
+        const stale = await readRev(t, PAGES, page.id, "all");
+        await edit(t, page.id, "es", { title: "hola otra vez" });
+        expect((await moveChosen(t, page.id, takeDown, stale)).code).toBe(
+          "STALE_VERSION"
+        );
+
+        const read = await readRev(t, PAGES, page.id, "all");
+        await edit(t, page.id, "en", { title: "hello again" });
+        const down = await moveChosen(t, page.id, takeDown, read);
+        expect(down.success, JSON.stringify(down)).toBe(true);
+        expect((await lifecycleOf(t, page.id)).languages).toMatchObject({
+          en: expect.stringMatching(/^published#/),
+          es: expect.stringMatching(/^draft#/),
+        });
+      });
+
+      it("compares what the languages share, whether the shared part is chosen or goes with them", async () => {
+        const t = await boot(dialect);
+        for (const shared of [true, undefined]) {
+          const page = await translatedDraft(t);
+          const read = await readRev(t, PAGES, page.id, "all");
+          await edit(t, page.id, "en", { note: "changed" });
+          const before = await lifecycleOf(t, page.id);
+
+          const refused = await moveChosen(
+            t,
+            page.id,
+            { direction: "publish", locales: ["es"], shared },
+            read
+          );
+          expect(refused.code, JSON.stringify(refused)).toBe("STALE_VERSION");
+          expect(await lifecycleOf(t, page.id)).toEqual(before);
+        }
+      });
+
+      it("still publishes a chosen language from a read of that language alone", async () => {
+        const t = await boot(dialect);
+        const page = await translatedDraft(t);
+        expect(page.es).not.toContain("en:");
+        await edit(t, page.id, "en", { title: "hello again" });
+        const published = await publishChosen(t, page.id, ["es"], page.es);
+        expect(published.success, JSON.stringify(published)).toBe(true);
+
+        const stale = await translatedDraft(t);
+        await edit(t, stale.id, "es", { title: "hola otra vez" });
+        expect((await publishChosen(t, stale.id, ["es"], stale.es)).code).toBe(
+          "STALE_VERSION"
+        );
+      });
+
+      it("saves one language from it, though another was saved since, and refuses once that language was", async () => {
+        const t = await boot(dialect);
+        const page = await translatedDraft(t);
+        const read = await readRev(t, PAGES, page.id, "all");
+        await edit(t, page.id, "en", { title: "hello again" });
+        const saveSpanish = (title: string) =>
+          update(t, PAGES, page.id, { title, _rev: read }, { locale: "es" });
+        const saved = await saveSpanish("hola 2");
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+        // Its own save moved Spanish past the version read.
+        expect((await saveSpanish("hola 3")).code).toBe("STALE_VERSION");
       });
     });
 
