@@ -218,12 +218,29 @@ describe("refuseFieldGroupFieldsChangedInHost", () => {
         },
       ];
       await expect(
-        refuseFieldGroupFieldsChangedInHost(
-          [cardRef({ fields: heldCard })],
-          stored(),
-          held
-        )
+        refuseFieldGroupFieldsChangedInHost(held(), stored(), held)
       ).resolves.toBeUndefined();
+      // The field renamed, or its group, with the copy it holds.
+      for (const renamed of [
+        [
+          {
+            name: "meta",
+            type: "group",
+            fields: [cardRef({ name: "box", fields: heldCard })],
+          },
+        ],
+        [
+          {
+            name: "info",
+            type: "group",
+            fields: [cardRef({ fields: heldCard })],
+          },
+        ],
+      ]) {
+        await expect(
+          refuseFieldGroupFieldsChangedInHost(renamed, stored(), held)
+        ).resolves.toBeUndefined();
+      }
       await expect(
         refuseFieldGroupFieldsChangedInHost(
           [cardRef({ fields: EDITED })],
@@ -270,8 +287,54 @@ describe("refuseFieldGroupFieldsChangedInHost", () => {
       ).rejects.toThrow(refusedNaming("badge"));
     });
 
+    // A copy the host holds stands for one copy in the save: beside the field that holds it, another
+    // naming the same field group takes none. A host that holds the copy twice keeps it twice.
+    const other = (extra: Field): Field => cardRef({ name: "other", ...extra });
+    const third = cardRef({ name: "third", fields: heldCard });
+    const holding = cardRef({ fields: heldCard });
+    const copied = other({ fields: heldCard });
+    const meta = (...fields: Field[]): Field => ({
+      name: "meta",
+      type: "group",
+      fields,
+    });
+    it.each<[string, Field[], Field[]]>([
+      ["a new field", [holding], [holding, copied]],
+      ["one that held none", [holding, other({})], [holding, copied]],
+      [
+        "one that held another copy",
+        [holding, other({ fields: EDITED })],
+        [holding, copied],
+      ],
+      [
+        "one in a group",
+        [holding, meta(cardRef({}))],
+        [holding, meta(holding)],
+      ],
+      [
+        "one beside the group that holds it",
+        [meta(holding), cardRef({})],
+        [meta(holding), holding],
+      ],
+      ["a third of two", [holding, copied], [holding, copied, third]],
+    ])(
+      "stands for one copy, not for another field's naming the same field group: %s",
+      async (_what, held, sent) => {
+        await expect(
+          refuseFieldGroupFieldsChangedInHost(sent, stored(), () => held)
+        ).rejects.toThrow(refusedNaming("card"));
+        // The host sent back as it is goes through.
+        await expect(
+          refuseFieldGroupFieldsChangedInHost(held, stored(), () => held)
+        ).resolves.toBeUndefined();
+      }
+    );
+
     it("is read once, and only where a copy differs from its field group", async () => {
-      const held = vi.fn(() => [cardRef({ fields: heldCard })]);
+      const held = vi.fn(() => [
+        cardRef({ fields: heldCard }),
+        cardRef({ name: "other", fields: heldCard }),
+      ]);
       await refuseFieldGroupFieldsChangedInHost(
         [cardRef({ fields: CARD_FIELDS })],
         stored(),

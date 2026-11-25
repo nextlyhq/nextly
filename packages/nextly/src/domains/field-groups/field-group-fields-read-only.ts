@@ -142,10 +142,11 @@ function copiesIn(
  * Refuses a host's save that changes the fields of a field group it uses, before anything is
  * written. Each field-group field the save carries, in a group or repeater too, is compared, by
  * every copy of a field group's fields it carries, with that field group's stored fields, and, where
- * it differs, with each copy of that field group's fields the host holds (`held`); and the field
- * groups each copy places are compared with their own in turn, since a read's additions are left out
- * of the comparison that holds them. A field group `fieldGroups` does not hold is left to the save's
- * own checks.
+ * it differs, with the copies of that field group's fields the host holds (`held`). Each of those
+ * stands for one copy in the save, so a field the host holds a copy in may be renamed or moved with
+ * it, and no other field takes the same copy beside it. The field groups each copy places are
+ * compared with their own in turn, since a read's additions are left out of the comparison that
+ * holds them. A field group `fieldGroups` does not hold is left to the save's own checks.
  */
 export async function refuseFieldGroupFieldsChangedInHost(
   fields: unknown,
@@ -155,7 +156,7 @@ export async function refuseFieldGroupFieldsChangedInHost(
   if (fieldGroups === undefined) return;
   const compared: Compared = {
     storedFieldsOf: storedFieldsReader(fieldGroups),
-    heldCopiesOf: heldCopiesReader(held),
+    takeHeld: heldCopiesTaker(held),
   };
   const pending: unknown[] = Array.isArray(fields) ? [...fields] : [];
   for (let field = pending.pop(); field !== undefined; field = pending.pop()) {
@@ -166,17 +167,25 @@ export async function refuseFieldGroupFieldsChangedInHost(
 /** What a save's copies of a field group's fields are compared with, by the field group's slug. */
 interface Compared {
   storedFieldsOf: (slug: string) => Promise<unknown>;
-  heldCopiesOf: (slug: string) => Promise<readonly unknown[][]>;
+  /** Whether the host holds `copy`, taking the one that stands for it. */
+  takeHeld: (slug: string, copy: unknown[]) => Promise<boolean>;
 }
 
-/** The copies of each field group's fields the host holds, read once, when the first is asked for. */
-function heldCopiesReader(
+/**
+ * Takes a copy of a field group's fields the host holds, each once. The host's fields are read once,
+ * when the first copy is asked for.
+ */
+function heldCopiesTaker(
   held: HeldHostFields | undefined
-): Compared["heldCopiesOf"] {
+): Compared["takeHeld"] {
   let copies: Promise<Map<string, unknown[][]>> | undefined;
-  return async slug => {
+  return async (slug, copy) => {
     copies ??= (async () => copiesHeldIn(await held?.()))();
-    return (await copies).get(slug) ?? [];
+    const left = (await copies).get(slug) ?? [];
+    const at = left.findIndex(each => sameFields(copy, each));
+    if (at === -1) return false;
+    left.splice(at, 1);
+    return true;
   };
 }
 
@@ -232,9 +241,12 @@ async function fieldsWithin(
   const within: unknown[] = [];
   for (const { slug, copy } of copiesIn(record)) {
     const stored = await compared.storedFieldsOf(slug);
-    if (stored !== undefined && !sameFields(copy, stored)) {
-      const held = await compared.heldCopiesOf(slug);
-      if (!held.some(each => sameFields(copy, each))) refuseCopy(record, slug);
+    if (
+      stored !== undefined &&
+      !sameFields(copy, stored) &&
+      !(await compared.takeHeld(slug, copy))
+    ) {
+      refuseCopy(record, slug);
     }
     within.push(...copy);
   }
