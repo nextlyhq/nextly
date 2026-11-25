@@ -602,7 +602,11 @@ describe("a Single's form, for a publish refused over shared values", () => {
     ];
     const onSubmit = refusedOnce();
     render(
-      <SingleForm schema={schema} document={first} onSubmit={onSubmit} />,
+      <SingleForm
+        schema={{ ...schema, localized: true }}
+        document={first}
+        onSubmit={onSubmit}
+      />,
       { wrapper: Providers }
     );
     // An edit, so the Single has a Save to offer.

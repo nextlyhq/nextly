@@ -22,20 +22,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import { useId, type JSX, type ReactNode } from "react";
+import { Fragment, useId, type JSX, type ReactNode } from "react";
 
 import { ToolbarLabel } from "@admin/components/features/entries/EntryForm/toolbar-density";
-import {
-  LANGUAGE_MARK_CLASS,
-  type LanguageChipState,
-} from "@admin/components/features/entries/EntryList/language-chips";
 import { ChevronDown, Globe } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
-import { cn } from "@admin/lib/utils";
 
 import {
   needWorkWords,
+  statusParts,
   type LanguageRow,
   type LanguagesMenuModel,
 } from "./languages-menu-model";
@@ -64,42 +60,44 @@ export interface LanguagesButtonProps {
   iconOnly?: boolean;
 }
 
-/** Each state's colour. Amber marks only the two states that ask for work. */
-const MARK_TONE: Record<LanguageChipState, string> = {
-  live: "text-foreground",
-  changes: "text-warning-text",
-  outOfDate: "text-warning-text",
-  draft: "text-foreground",
-  missing: "text-muted-foreground",
-};
+const ROW_CLASS = "items-center gap-3 px-2.5 py-2";
 
-const ROW_CLASS = "items-start gap-2 p-2";
+/** A row's line: its parts set apart by a dot for the eye, and by a comma where it is spoken. */
+function StatusLine({ parts }: { parts: string[] }): JSX.Element | null {
+  if (parts.length === 0) return null;
+  return (
+    <>
+      <span className="sr-only">, </span>
+      <span className="block text-xs text-muted-foreground">
+        {parts.map((part, index) => (
+          <Fragment key={part}>
+            {index === 0 ? null : (
+              <>
+                <span aria-hidden="true"> · </span>
+                <span className="sr-only">, </span>
+              </>
+            )}
+            {part}
+          </Fragment>
+        ))}
+      </span>
+    </>
+  );
+}
 
-/** One language: its mark, its name and status, and what choosing the row does. */
+/** One language: its name and line, and what choosing the row does. */
 function RowContent({
   row,
-  action,
+  editing = false,
+  action = null,
 }: {
   row: LanguageRow;
-  action: ReactNode;
+  /** Whether it is the language on screen. */
+  editing?: boolean;
+  action?: ReactNode;
 }): JSX.Element {
   return (
     <>
-      <span
-        aria-hidden="true"
-        className="flex h-5 w-3 shrink-0 items-center justify-center"
-      >
-        {row.state === null ? null : (
-          <span
-            data-language-state={row.state}
-            className={cn(
-              "inline-block shrink-0",
-              MARK_TONE[row.state],
-              LANGUAGE_MARK_CLASS[row.state]
-            )}
-          />
-        )}
-      </span>
       {/* The hidden commas keep the parts apart where the row is spoken as one name. */}
       <span className="min-w-0 flex-1">
         <bdi {...row.nameAttributes} className="break-words">
@@ -108,17 +106,12 @@ function RowContent({
         {row.isDefault ? (
           <>
             <span className="sr-only">,</span>{" "}
-            <span className="text-xs text-muted-foreground">default</span>
-          </>
-        ) : null}
-        {row.status === null ? null : (
-          <>
-            <span className="sr-only">, </span>
-            <span className="block text-xs text-muted-foreground">
-              {row.status}
+            <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+              default
             </span>
           </>
-        )}
+        ) : null}
+        <StatusLine parts={statusParts(row, editing)} />
         {action === null ? null : <span className="sr-only">, </span>}
       </span>
       {action}
@@ -147,7 +140,7 @@ function LanguageMenuRow({
         className={ROW_CLASS}
         onSelect={event => event.preventDefault()}
       >
-        <RowContent row={row} action={null} />
+        <RowContent row={row} />
       </DropdownMenuItem>
     );
   }
@@ -156,14 +149,7 @@ function LanguageMenuRow({
     // the menu, back to the document it names.
     return (
       <DropdownMenuItem aria-current="true" className={ROW_CLASS}>
-        <RowContent
-          row={row}
-          action={
-            <span className="shrink-0 text-xs leading-5 text-muted-foreground">
-              Editing
-            </span>
-          }
-        />
+        <RowContent row={row} editing />
       </DropdownMenuItem>
     );
   }
@@ -173,7 +159,7 @@ function LanguageMenuRow({
         <RowContent
           row={row}
           action={
-            <span className="inline-flex h-6 shrink-0 items-center rounded-md border border-border bg-background px-2 text-xs font-medium">
+            <span className="inline-flex h-8 shrink-0 items-center rounded-md border border-border bg-background px-3 text-sm font-medium">
               {row.isDefault ? "Edit" : "Translate"}
             </span>
           }
@@ -191,7 +177,7 @@ function NeedWorkCount({ count }: { count: number }): JSX.Element | null {
       <span className="sr-only">{`, ${needWorkWords(count)}`}</span>
       <span
         aria-hidden="true"
-        className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-warning-surface px-1 text-[11px] font-semibold leading-none tabular-nums text-warning-text"
+        className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full border border-border bg-background px-1 text-[11px] font-semibold leading-none tabular-nums text-foreground"
       >
         {count}
       </span>
@@ -246,7 +232,7 @@ export function LanguagesButton({
           type="button"
           variant="outline"
           size="sm"
-          className="gap-1.5"
+          className="gap-1.5 data-[state=open]:bg-muted"
           // Named for a pointer once its word has stepped aside for the icon.
           title="Languages"
         >
@@ -254,7 +240,10 @@ export function LanguagesButton({
           {iconOnly ? (
             <span className="sr-only">Languages</span>
           ) : (
-            <ToolbarLabel priority="secondary">Languages</ToolbarLabel>
+            // With History's word beside it, as one cluster.
+            <ToolbarLabel priority="cluster-with-languages">
+              Languages
+            </ToolbarLabel>
           )}
           <NeedWorkCount count={model.needWork} />
           {iconOnly ? null : (
@@ -265,7 +254,7 @@ export function LanguagesButton({
       <DropdownMenuContent
         align="end"
         collisionPadding={16}
-        className="w-[21.25rem] max-w-[calc(100vw-2rem)]"
+        className="w-[18.75rem] max-w-[calc(100vw-2rem)]"
       >
         {heldReason === undefined ? null : (
           <DropdownMenuLabel

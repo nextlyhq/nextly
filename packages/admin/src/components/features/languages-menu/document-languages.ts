@@ -73,7 +73,7 @@ export interface LanguagesHold {
   recovering: boolean;
   /** A change made elsewhere waits for the author's answer about this language's edits. */
   changeAwaiting: boolean;
-  /** The document is held for someone else, or while that is being checked. */
+  /** The document is not this person's to edit now: someone else's, or not known to be theirs. */
   documentHeld: boolean;
 }
 
@@ -89,7 +89,7 @@ export function languagesHeldReason(hold: LanguagesHold): string | undefined {
     return "This document changed elsewhere. Answer that above before you switch languages.";
   }
   if (hold.documentHeld) {
-    return "This document is being edited elsewhere, so its languages can't be switched now.";
+    return "You can switch languages once this document is yours to edit.";
   }
   return undefined;
 }

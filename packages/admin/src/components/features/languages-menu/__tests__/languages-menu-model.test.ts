@@ -1,5 +1,5 @@
 /**
- * What the Languages menu says: each language's one line, its state, and the count of languages
+ * What the Languages menu says: each language's one line, and the count of languages
  * that need work, each reached by exactly the facts that should reach it.
  *
  * Catches a model that counts a language once for every reason it needs work, counts the default
@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   languagesMenuModel,
   needWorkWords,
+  statusParts,
   type LanguageOverview,
   type LanguageRow,
   type LanguagesMenuModel,
@@ -48,10 +49,17 @@ function rowOf(model: LanguagesMenuModel, code: string): LanguageRow {
   return row;
 }
 
+/** A row's line as it is read, for a language not on screen. */
+const lineOf = (row: LanguageRow) => statusParts(row, false).join(" · ");
+
 /** What the model says of one language, and the count it arrives at. */
 function saidOf(model: LanguagesMenuModel, code: string) {
-  const { status, state, needsWork } = rowOf(model, code);
-  return { status, state, needsWork, needWork: model.needWork };
+  const row = rowOf(model, code);
+  return {
+    status: lineOf(row),
+    needsWork: row.needsWork,
+    needWork: model.needWork,
+  };
 }
 
 /** What the model says of Spanish, the only translation, from its part of the overview. */
@@ -98,8 +106,7 @@ describe("a translation's status", () => {
     },
   ])("is not started when it is $name", ({ overview }) => {
     expect(spanish(overview)).toEqual({
-      status: "not started",
-      state: "missing",
+      status: "Not started",
       needsWork: false,
       needWork: 0,
     });
@@ -107,8 +114,7 @@ describe("a translation's status", () => {
 
   it("is live once published with nothing waiting", () => {
     expect(spanish(LIVE)).toEqual({
-      status: "live",
-      state: "live",
+      status: "Live",
       needsWork: false,
       needWork: 0,
     });
@@ -118,17 +124,17 @@ describe("a translation's status", () => {
     {
       name: "one field",
       overview: { ...LIVE, stale: true, fields: ONE_FIELD },
-      status: "live, 1 field out of date",
+      status: "Live · 1 field out of date",
     },
     {
       name: "several fields",
       overview: { ...LIVE, stale: true, fields: TWO_FIELDS },
-      status: "live, 2 fields out of date",
+      status: "Live · 2 fields out of date",
     },
     {
       name: "the whole of it, where no field's origin is recorded",
       overview: { ...LIVE, stale: true },
-      status: "live, out of date",
+      status: "Live · out of date",
     },
     {
       name: "the whole of it, where fields are recorded and none is marked",
@@ -137,22 +143,21 @@ describe("a translation's status", () => {
         stale: true,
         fields: { title: { outOfDate: false }, body: {} },
       },
-      status: "live, out of date",
+      status: "Live · out of date",
     },
     {
       name: "a field marked where the language itself is not",
       overview: { ...LIVE, fields: ONE_FIELD },
-      status: "live, 1 field out of date",
+      status: "Live · 1 field out of date",
     },
     {
       name: "fields marked where the language is said to be up to date",
       overview: { ...LIVE, stale: false, fields: TWO_FIELDS },
-      status: "live, 2 fields out of date",
+      status: "Live · 2 fields out of date",
     },
   ])("says what is out of date: $name", ({ overview, status }) => {
     expect(spanish(overview)).toEqual({
       status,
-      state: "outOfDate",
       needsWork: true,
       needWork: 1,
     });
@@ -162,8 +167,7 @@ describe("a translation's status", () => {
     expect(
       spanish({ ...LIVE, fields: { title: { outOfDate: false }, body: {} } })
     ).toEqual({
-      status: "live",
-      state: "live",
+      status: "Live",
       needsWork: false,
       needWork: 0,
     });
@@ -171,8 +175,7 @@ describe("a translation's status", () => {
 
   it("says a live one's changes are not published", () => {
     expect(spanish({ ...LIVE, pendingChange: true })).toEqual({
-      status: "live, changes not published",
-      state: "changes",
+      status: "Live · changes not published",
       needsWork: true,
       needWork: 1,
     });
@@ -181,8 +184,7 @@ describe("a translation's status", () => {
   it("says what is out of date first, and only that, when it holds a change too", () => {
     const both = { ...LIVE, stale: true, fields: ONE_FIELD };
     expect(spanish({ ...both, pendingChange: true })).toEqual({
-      status: "live, 1 field out of date",
-      state: "outOfDate",
+      status: "Live · 1 field out of date",
       needsWork: true,
       needWork: 1,
     });
@@ -208,8 +210,7 @@ describe("a translation's status", () => {
 
   it("is a draft, which asks for no work by itself", () => {
     expect(spanish(DRAFT)).toEqual({
-      status: "draft",
-      state: "draft",
+      status: "Draft",
       needsWork: false,
       needWork: 0,
     });
@@ -217,8 +218,7 @@ describe("a translation's status", () => {
 
   it("is a draft that is out of date", () => {
     expect(spanish({ ...DRAFT, stale: true, fields: ONE_FIELD })).toEqual({
-      status: "draft, 1 field out of date",
-      state: "outOfDate",
+      status: "Draft · 1 field out of date",
       needsWork: true,
       needWork: 1,
     });
@@ -226,8 +226,7 @@ describe("a translation's status", () => {
 
   it("is a draft that holds a change", () => {
     expect(spanish({ ...DRAFT, pendingChange: true })).toEqual({
-      status: "draft, changes not published",
-      state: "draft",
+      status: "Draft · changes not published",
       needsWork: true,
       needWork: 1,
     });
@@ -257,8 +256,7 @@ describe("a translation's status", () => {
     "is a started draft, never live, while its first content is held: $name",
     ({ overview }) => {
       const held = {
-        status: "draft, changes not published",
-        state: "draft",
+        status: "Draft · changes not published",
         needsWork: true,
         needWork: 1,
       };
@@ -270,8 +268,7 @@ describe("a translation's status", () => {
 
   it("is live once written, where nothing has a status", () => {
     expect(spanish({ translated: true })).toEqual({
-      status: "live",
-      state: "live",
+      status: "Live",
       needsWork: false,
       needWork: 0,
     });
@@ -279,62 +276,57 @@ describe("a translation's status", () => {
 
   it("is a draft in whatever is itself a draft, even when published", () => {
     expect(spanish(LIVE, "draft")).toEqual({
-      status: "draft",
-      state: "draft",
+      status: "Draft",
       needsWork: false,
       needWork: 0,
     });
     // With that published, the same language is live, and a draft one still is not.
-    expect(spanish(LIVE, "published").status).toBe("live");
-    expect(spanish(DRAFT, "published").status).toBe("draft");
+    expect(spanish(LIVE, "published").status).toBe("Live");
+    expect(spanish(DRAFT, "published").status).toBe("Draft");
   });
 });
 
 describe("the default language's status", () => {
   it("is written even when absent from the overview", () => {
     expect(english(undefined)).toEqual({
-      status: "live",
-      state: "live",
+      status: "Live",
       needsWork: false,
       needWork: 0,
     });
     expect(english(undefined, "draft")).toEqual({
-      status: "draft",
-      state: "draft",
+      status: "Draft",
       needsWork: false,
       needWork: 0,
     });
     // Any other language absent from it has nothing.
     expect(saidOf(modelOf({ translations: {} }), "es").status).toBe(
-      "not started"
+      "Not started"
     );
   });
 
   it("is written even when the overview says it is not translated", () => {
     expect(english({ translated: false, status: "published" }).status).toBe(
-      "live"
+      "Live"
     );
     expect(english({ translated: false, status: "draft" }).status).toBe(
-      "draft"
+      "Draft"
     );
   });
 
   it("is never out of date, though the overview marks it", () => {
     const marked = { ...LIVE, stale: true, fields: TWO_FIELDS };
     expect(english(marked)).toEqual({
-      status: "live",
-      state: "live",
+      status: "Live",
       needsWork: false,
       needWork: 0,
     });
     // The same marks on a translation do count.
-    expect(spanish(marked).status).toBe("live, 2 fields out of date");
+    expect(spanish(marked).status).toBe("Live · 2 fields out of date");
   });
 
   it("says its changes are not published, and is still not counted", () => {
     expect(english({ ...LIVE, pendingChange: true })).toEqual({
-      status: "live, changes not published",
-      state: "changes",
+      status: "Live · changes not published",
       needsWork: false,
       needWork: 0,
     });
@@ -343,10 +335,10 @@ describe("the default language's status", () => {
   it("is that of the one the site names, and of no other row", () => {
     const model = modelOf({ defaultLanguage: "es", translations: {} });
     expect(
-      model.rows.map(row => [row.code, row.isDefault, row.status])
+      model.rows.map(row => [row.code, row.isDefault, lineOf(row)])
     ).toEqual([
-      ["en", false, "not started"],
-      ["es", true, "live"],
+      ["en", false, "Not started"],
+      ["es", true, "Live"],
     ]);
   });
 });
@@ -412,19 +404,14 @@ describe("when there is a menu", () => {
     const unread = modelFor(undefined);
     // Every language, with no state claimed for any, and none to count.
     expect(
-      unread?.rows.map(({ code, status, state, needsWork }) => ({
-        code,
-        status,
-        state,
-        needsWork,
-      }))
+      unread?.rows.map(row => [row.code, lineOf(row), row.needsWork])
     ).toEqual([
-      { code: "en", status: null, state: null, needsWork: false },
-      { code: "es", status: null, state: null, needsWork: false },
+      ["en", "", false],
+      ["es", "", false],
     ]);
     expect(unread?.needWork).toBe(0);
     const empty = modelFor({});
-    expect(empty?.rows.map(row => row.status)).toEqual(["live", "not started"]);
+    expect(empty?.rows.map(lineOf)).toEqual(["Live", "Not started"]);
     expect(empty?.needWork).toBe(0);
   });
 });
@@ -535,8 +522,8 @@ describe("how a name is marked up", () => {
         name: "American",
         nameAttributes: { dir: "auto" },
         isDefault: false,
-        state: "live",
-        status: "live",
+        standing: "live",
+        need: null,
         outOfDate: false,
         pendingChange: false,
         needsWork: false,
@@ -547,6 +534,40 @@ describe("how a name is marked up", () => {
       });
     }
   );
+});
+
+describe("a row's line", () => {
+  const OUT_OF_DATE = {
+    standing: "live",
+    need: "1 field out of date",
+  } as const;
+
+  it("starts with where the language stands, or with its being edited", () => {
+    expect(statusParts(OUT_OF_DATE, false)).toEqual([
+      "Live",
+      "1 field out of date",
+    ]);
+    expect(statusParts(OUT_OF_DATE, true)).toEqual([
+      "Editing",
+      "live, 1 field out of date",
+    ]);
+  });
+
+  it("is one part where the language needs nothing", () => {
+    expect(statusParts({ standing: "draft", need: null }, false)).toEqual([
+      "Draft",
+    ]);
+    expect(statusParts({ standing: "live", need: null }, true)).toEqual([
+      "Editing",
+      "live",
+    ]);
+  });
+
+  it("says only that it is edited, or nothing, where no state was read", () => {
+    const unread = { standing: null, need: null };
+    expect(statusParts(unread, true)).toEqual(["Editing"]);
+    expect(statusParts(unread, false)).toEqual([]);
+  });
 });
 
 describe("needWorkWords", () => {

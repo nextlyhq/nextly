@@ -83,11 +83,12 @@ function Providers({ children }: { children: ReactNode }): ReactElement {
   );
 }
 
-function banner(removed: boolean): SingleSchema {
+function banner(removed: boolean, localized: boolean): SingleSchema {
   return {
     slug: "banner",
     label: "Banner",
     status: true,
+    localized,
     fields: [
       { type: "text", name: "title", label: "Title" },
       { type: "text", name: "headline", label: "Headline" },
@@ -141,10 +142,10 @@ async function menuItems(): Promise<string[]> {
   return [...buttons, ...items.map(item => item.textContent ?? "")];
 }
 
-function renderEditor(removed: boolean) {
+function renderEditor(removed: boolean, localized = false) {
   render(
     <SingleForm
-      schema={banner(removed)}
+      schema={banner(removed, localized)}
       document={document}
       onSubmit={vi.fn()}
       documentBanner={<p>the page's banner</p>}
@@ -185,7 +186,7 @@ describe("the Single editor of a Single removed from code", () => {
       { code: "en", label: "English" },
       { code: "de", label: "German" },
     ];
-    renderEditor(true);
+    renderEditor(true, true);
 
     expect(menuProps).toHaveBeenLastCalledWith(
       expect.objectContaining({

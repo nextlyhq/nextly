@@ -1740,12 +1740,13 @@ export function EntryForm({
                                       {...(shareDocument === undefined
                                         ? {}
                                         : { shareDocument })}
+                                      // None for an entry that is not
+                                      // translated: History keeps its word
+                                      // longer where none is handed over.
                                       languagesControl={
-                                        mode === "edit" ? (
+                                        mode === "edit" &&
+                                        collection.localized === true ? (
                                           <DocumentLanguagesButton
-                                            documentLocalized={
-                                              collection.localized === true
-                                            }
                                             document={entry}
                                             hasStatus={hasStatus}
                                             editorPath={buildRoute(

@@ -156,7 +156,6 @@ describe("the Single editor's document panel", () => {
       Record<string, unknown>
     >;
     expect(control.props).toMatchObject({
-      documentLocalized: true,
       document,
       hasStatus: true,
       editorPath: "/admin/singles/landing-page",
@@ -167,6 +166,22 @@ describe("the Single editor's document panel", () => {
     expect(
       within(dockedPanel()!).queryByRole("region", { name: "Language" })
     ).toBeNull();
+  });
+
+  it("hands the bar no languages control for a Single that is not translated", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+    render(
+      <SingleForm
+        schema={Object.assign({}, schema, { localized: false }) as never}
+        document={document}
+        onSubmit={vi.fn()}
+      />
+    );
+    // Not one that draws nothing: the bar reads that it has one.
+    expect(lastBar().languagesControl).toBeUndefined();
   });
 
   it("reads what it is, Status, Last changed and For developers beside the fields, addressing the Single's releases by its slug", () => {

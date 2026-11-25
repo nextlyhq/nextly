@@ -87,11 +87,12 @@ function Providers({ children }: { children: ReactNode }): ReactElement {
   );
 }
 
-function pages(removed: boolean) {
+function pages(removed: boolean, localized: boolean) {
   return {
     name: "pages",
     label: "Pages",
     status: true,
+    localized,
     fields: [{ name: "title", type: "text", label: "Title" }],
     ...(removed
       ? {
@@ -137,10 +138,10 @@ const releaseAction = {
   binding: { run: vi.fn() },
 } as never;
 
-function renderEditor(removed: boolean) {
+function renderEditor(removed: boolean, localized = false) {
   render(
     <EntryForm
-      collection={pages(removed)}
+      collection={pages(removed, localized)}
       entry={published}
       mode="edit"
       documentBanner={<p>the page's banner</p>}
@@ -184,7 +185,7 @@ describe("the entry editor of a collection removed from code", () => {
       { code: "en", label: "English" },
       { code: "de", label: "German" },
     ];
-    renderEditor(true);
+    renderEditor(true, true);
 
     expect(menuProps).toHaveBeenLastCalledWith(
       expect.objectContaining({

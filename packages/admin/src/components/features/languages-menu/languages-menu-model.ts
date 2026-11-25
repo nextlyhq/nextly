@@ -6,18 +6,15 @@
  * more than the server told this reader. Someone who may not read every language's state is told
  * none, and still finds each language. Free of React, so every state is tested without rendering.
  *
- * A language's state is the list chips' own (`languageChipFacts`), so the menu and the list draw
- * the same mark for the same document. The line says whether readers see the language and the one
- * thing it needs most: what is out of date, else that its changes are not published. The row keeps
- * both facts apart, so neither is lost where the line says only one.
+ * Whether readers see a language is the list chips' own answer (`languageChipFacts`), so the menu
+ * and the list never disagree about a document. The line says that and the one thing the language
+ * needs most: what is out of date, else that its changes are not published. The row keeps both
+ * facts apart, so neither is lost where the line says only one.
  *
  * @module components/features/languages-menu/languages-menu-model
  */
 
-import {
-  languageChipFacts,
-  type LanguageChipState,
-} from "@admin/components/features/entries/EntryList/language-chips";
+import { languageChipFacts } from "@admin/components/features/entries/EntryList/language-chips";
 import type { LocaleTranslationMeta } from "@admin/components/features/entries/translation-meta";
 import { languageName } from "@admin/lib/i18n/language-name";
 
@@ -34,6 +31,9 @@ export interface LanguageOverview extends LocaleTranslationMeta {
   fields?: Readonly<Record<string, { outOfDate?: boolean }>>;
 }
 
+/** Where a language stands with its readers. */
+export type LanguageStanding = "live" | "draft" | "not started";
+
 /** One language's row in the menu. */
 export interface LanguageRow {
   code: string;
@@ -45,10 +45,10 @@ export interface LanguageRow {
    */
   nameAttributes: { lang?: string; dir: "ltr" | "rtl" | "auto" };
   isDefault: boolean;
-  /** The state its mark is drawn in; null where the overview was not read. */
-  state: LanguageChipState | null;
-  /** Its status in one line: "live, 1 field out of date". Null where the overview was not read. */
-  status: string | null;
+  /** Where it stands; null where the overview was not read. */
+  standing: LanguageStanding | null;
+  /** The thing it needs most: "1 field out of date". Null where it needs nothing. */
+  need: string | null;
   /** Whether it is out of date. Never the default language. */
   outOfDate: boolean;
   /** Whether a saved change waits to be published in it, whatever its line says first. */
@@ -105,15 +105,13 @@ function outOfDateWords(fields: number | null): string {
   return `${fields} ${fields === 1 ? "field" : "fields"} out of date`;
 }
 
-/** A started language's line: where it stands, and the first thing it needs. */
-function statusLine(
-  live: boolean,
+/** The thing a language needs most, or null: catching up first, then publishing. */
+function needOf(
   outOfDate: { fields: number | null } | undefined,
   pending: boolean
-): string {
-  const standing = live ? "live" : "draft";
-  if (outOfDate) return `${standing}, ${outOfDateWords(outOfDate.fields)}`;
-  return pending ? `${standing}, changes not published` : standing;
+): string | null {
+  if (outOfDate) return outOfDateWords(outOfDate.fields);
+  return pending ? "changes not published" : null;
 }
 
 type RowIdentity = Pick<
@@ -124,8 +122,8 @@ type RowState = Omit<LanguageRow, keyof RowIdentity>;
 
 /** A row's state where the overview was not read: nothing is said of it. */
 const UNKNOWN: RowState = {
-  state: null,
-  status: null,
+  standing: null,
+  need: null,
   outOfDate: false,
   pendingChange: false,
   needsWork: false,
@@ -147,6 +145,11 @@ function needsWorkIn(
   return !row.isDefault && (row.outOfDate || row.pendingChange);
 }
 
+function standingOf(started: boolean, live: boolean): LanguageStanding {
+  if (!started) return "not started";
+  return live ? "live" : "draft";
+}
+
 function rowStateOf(args: {
   overview: LanguageOverview | undefined;
   isDefault: boolean;
@@ -156,29 +159,20 @@ function rowStateOf(args: {
   const { pending, written, started } = contentOf(overview, isDefault);
   // The default language is what translations are made from, so it never fell behind one.
   const outOfDate = isDefault || !written ? undefined : outOfDateOf(overview);
-  const standing = {
-    isDefault,
-    outOfDate: outOfDate !== undefined,
-    pendingChange: pending,
-  };
-  const facts = languageChipFacts(
+  const facts = { outOfDate: outOfDate !== undefined, pendingChange: pending };
+  const { live } = languageChipFacts(
     {
       translated: started,
       // First content still held is shown to nobody, whatever status the language is given.
       status: written ? overview?.status : "draft",
-      pendingChange: pending,
-      stale: standing.outOfDate,
     },
     args.documentStatus
   );
   return {
-    state: facts.state,
-    status: started
-      ? statusLine(facts.live, outOfDate, pending)
-      : "not started",
-    outOfDate: standing.outOfDate,
-    pendingChange: pending,
-    needsWork: needsWorkIn(standing),
+    standing: standingOf(started, live),
+    need: needOf(outOfDate, pending),
+    ...facts,
+    needsWork: needsWorkIn({ isDefault, ...facts }),
   };
 }
 
@@ -217,6 +211,28 @@ export function languagesMenuModel(args: {
     };
   });
   return { rows, needWork: rows.filter(row => row.needsWork).length };
+}
+
+function sentenceCase(words: string): string {
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * A row's line, in the parts its dots set apart: "Live" and "1 field out of date", or for the
+ * language on screen "Editing" and "live, 1 field out of date". Empty where nothing is said of it.
+ */
+export function statusParts(
+  { standing, need }: Pick<LanguageRow, "standing" | "need">,
+  editing: boolean
+): string[] {
+  const facts = [standing, need].filter(
+    (each): each is string => each !== null
+  );
+  if (editing)
+    return ["Editing", ...(facts.length === 0 ? [] : [facts.join(", ")])];
+  return facts.map((words, index) =>
+    index === 0 ? sentenceCase(words) : words
+  );
 }
 
 /** The count in words: "1 needs attention", "2 need attention". */

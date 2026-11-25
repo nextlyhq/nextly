@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * DocumentLanguagesButton: the Languages button as an editor mounts it, for an entry and a Single
- * alike, given what its form knows about the document and the language on screen.
+ * DocumentLanguagesButton: the Languages button as an editor mounts it for a translated document,
+ * an entry and a Single alike, given what its form knows about it and the language on screen.
  *
  * @module components/features/languages-menu/DocumentLanguagesButton
  */
@@ -28,8 +28,6 @@ import { languagesMenuModel } from "./languages-menu-model";
 import { LanguagesButton } from "./LanguagesButton";
 
 export interface DocumentLanguagesButtonProps {
-  /** Whether the document is translated. */
-  documentLocalized: boolean;
   /** The document, as the editor read it. */
   document: unknown;
   /** Whether it has a Draft / Published lifecycle. */
@@ -49,7 +47,6 @@ export interface DocumentLanguagesButtonProps {
 }
 
 export function DocumentLanguagesButton({
-  documentLocalized,
   document,
   hasStatus,
   editorPath,
@@ -59,12 +56,9 @@ export function DocumentLanguagesButton({
   onPublishOthers,
   panelMode,
 }: DocumentLanguagesButtonProps): JSX.Element | null {
-  const { enabled, locales, defaultLocale } = useLocalization();
+  const { locales, defaultLocale } = useLocalization();
   const { hasPermission } = useCurrentUserPermissions();
   const barWidth = useTopBarWidth();
-  // Both switches: the site has languages, and this document is translated.
-  if (!enabled || !documentLocalized) return null;
-
   const heldReason = languagesHeldReason(hold);
   return (
     <LanguagesButton

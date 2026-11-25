@@ -97,9 +97,15 @@ describe("what holds the languages", () => {
     { hold: "viewingPastVersion", says: /past version/ },
     { hold: "recovering", says: /live values/ },
     { hold: "changeAwaiting", says: /changed elsewhere/ },
-    { hold: "documentHeld", says: /edited elsewhere/ },
+    { hold: "documentHeld", says: /yours to edit/ },
   ])("says why, for $hold", ({ hold, says }) => {
     expect(languagesHeldReason({ ...FREE, [hold]: true })).toMatch(says);
+  });
+
+  it("names no colleague where the document is held: none may have it", () => {
+    expect(languagesHeldReason({ ...FREE, documentHeld: true })).not.toMatch(
+      /elsewhere|someone|colleague/i
+    );
   });
 
   it("says what the person can do something about first", () => {

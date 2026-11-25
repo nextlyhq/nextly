@@ -1936,34 +1936,36 @@ export function SingleForm({
                                     // credential the server grants only to a
                                     // user who may change the Single.
                                     {...(previewHeld ? {} : previewPane.toggle)}
+                                    // None for a Single that is not
+                                    // translated: History keeps its word
+                                    // longer where none is handed over.
                                     languagesControl={
-                                      <DocumentLanguagesButton
-                                        documentLocalized={
-                                          schema.localized === true
-                                        }
-                                        document={document}
-                                        hasStatus={hasStatus}
-                                        editorPath={buildRoute(
-                                          ROUTES.SINGLE_EDIT,
-                                          { slug: schema.slug }
-                                        )}
-                                        locale={locale}
-                                        translating={
-                                          translation?.from !== undefined
-                                        }
-                                        hold={{
-                                          viewingPastVersion:
-                                            viewingVersion !== null,
-                                          recovering,
-                                          changeAwaiting:
-                                            lock.changeAwaitingAnswer,
-                                          documentHeld: lock.actionsDisabled,
-                                        }}
-                                        onPublishOthers={
-                                          busy ? undefined : onPublishOthers
-                                        }
-                                        panelMode={panel.mode}
-                                      />
+                                      schema.localized === true ? (
+                                        <DocumentLanguagesButton
+                                          document={document}
+                                          hasStatus={hasStatus}
+                                          editorPath={buildRoute(
+                                            ROUTES.SINGLE_EDIT,
+                                            { slug: schema.slug }
+                                          )}
+                                          locale={locale}
+                                          translating={
+                                            translation?.from !== undefined
+                                          }
+                                          hold={{
+                                            viewingPastVersion:
+                                              viewingVersion !== null,
+                                            recovering,
+                                            changeAwaiting:
+                                              lock.changeAwaitingAnswer,
+                                            documentHeld: lock.actionsDisabled,
+                                          }}
+                                          onPublishOthers={
+                                            busy ? undefined : onPublishOthers
+                                          }
+                                          panelMode={panel.mode}
+                                        />
+                                      ) : undefined
                                     }
                                     toolbarSlot={versionAwareToolbarSlots(
                                       viewedVersionHost,

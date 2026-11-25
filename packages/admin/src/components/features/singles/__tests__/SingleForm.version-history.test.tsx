@@ -129,6 +129,9 @@ const schema = {
   ],
 } as unknown as SingleSchema;
 
+/** The same Single, translated: only one that is has a Languages menu. */
+const translatedSchema: SingleSchema = { ...schema, localized: true };
+
 /**
  * The same Single with autosave on: only a Single that keeps recovery points
  * records any, so a test about what else holds recording off starts here.
@@ -167,10 +170,10 @@ beforeEach(() => {
 /** What the editor last handed the Languages menu as holding the language on screen. */
 const languagesHold = () => headerProps.current?.languagesControl?.props.hold;
 
-function renderViewing(version: ViewedVersion) {
+function renderViewing(version: ViewedVersion, single = schema) {
   viewed.current = version;
   return render(
-    <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
+    <SingleForm schema={single} document={document} onSubmit={vi.fn()} />
   );
 }
 
@@ -286,24 +289,31 @@ describe("SingleForm — a published version replaces the document", () => {
     // Asserted on what the editor HANDS the Languages menu, not on what the
     // code looks like it hands it: the decision was once connected to a
     // context read that sat above the provider and always read the default.
-    renderViewing({
-      versionNo: 7,
-      snapshot: { heroTitle: "as it was" },
-      locale: null,
-      withheld: [],
-      isLoading: false,
-      error: null,
-      scope: { kind: "single", slug: "homepage", documentId: "d1" },
-      comparedWith: { kind: "first" },
-      about: null,
-    });
+    renderViewing(
+      {
+        versionNo: 7,
+        snapshot: { heroTitle: "as it was" },
+        locale: null,
+        withheld: [],
+        isLoading: false,
+        error: null,
+        scope: { kind: "single", slug: "homepage", documentId: "d1" },
+        comparedWith: { kind: "first" },
+        about: null,
+      },
+      translatedSchema
+    );
     expect(languagesHold()).toMatchObject({ viewingPastVersion: true });
   });
 
   it("holds nothing while the live document is on screen", () => {
     // The other direction, so the gate cannot be satisfied by refusing always.
     render(
-      <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
+      <SingleForm
+        schema={translatedSchema}
+        document={document}
+        onSubmit={vi.fn()}
+      />
     );
     expect(languagesHold()).toEqual({
       viewingPastVersion: false,

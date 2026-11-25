@@ -120,6 +120,8 @@ const collection = {
     { name: "summary", type: "text", label: "Summary" },
   ],
 } as never;
+/** The same collection, its entries translated. */
+const translated = Object.assign({}, collection, { localized: true }) as never;
 const entry = { id: "e1", title: "Hello", status: "published" } as never;
 
 const NOTHING_HELD: LanguagesHold = {
@@ -376,7 +378,7 @@ describe("the entry editor's recovery from a refused publish", () => {
       { code: "de", label: "German" },
     ];
     lockedBy("held-by-me");
-    render(<EntryForm collection={collection} entry={entry} mode="edit" />, {
+    render(<EntryForm collection={translated} entry={entry} mode="edit" />, {
       wrapper: Providers,
     });
     // The author's own entry: nothing holds it.
@@ -417,13 +419,33 @@ describe("the entry editor's recovery from a refused publish", () => {
       { code: "de", label: "German" },
     ];
     lockedBy("held-by-other");
-    render(<EntryForm collection={collection} entry={entry} mode="edit" />, {
+    render(<EntryForm collection={translated} entry={entry} mode="edit" />, {
       wrapper: Providers,
     });
     expect(holds.current.at(-1)).toEqual({
       ...NOTHING_HELD,
       documentHeld: true,
     });
+  });
+
+  it("offers no languages for an entry that is not translated", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+    lockedBy("held-by-me");
+    const { unmount } = render(
+      <EntryForm collection={collection} entry={entry} mode="edit" />,
+      { wrapper: Providers }
+    );
+    expect(holds.current).toEqual([]);
+    unmount();
+
+    // The same entry, where its collection is translated.
+    render(<EntryForm collection={translated} entry={entry} mode="edit" />, {
+      wrapper: Providers,
+    });
+    expect(holds.current.length).toBeGreaterThan(0);
   });
 
   it("keeps the entry's claim and its editor through the recovery", async () => {

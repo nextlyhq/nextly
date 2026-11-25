@@ -1,9 +1,9 @@
 /**
- * The Languages button as an editor mounts it: drawn for a translated document on a site with
- * languages and for no other, leading to this document's own addresses, and offering only what
+ * The Languages button as an editor mounts it for a translated document: drawn on a site with
+ * languages and on no other, leading to this document's own addresses, and offering only what
  * the person may do at this moment.
  *
- * Catches a button on a document that has no languages, a person left with no way to another
+ * Catches a button on a one-language site, a person left with no way to another
  * language because they may not read every language's state, and a publish offered over a past
  * version.
  */
@@ -18,18 +18,18 @@ import {
 } from "../DocumentLanguagesButton";
 
 const { site, permissions, bar } = vi.hoisted(() => ({
-  site: { enabled: true },
+  site: { languages: 2 },
   permissions: { held: [] as string[] },
   bar: { width: 1200 },
 }));
 
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
-    enabled: site.enabled,
+    enabled: site.languages >= 2,
     locales: [
       { code: "en", label: "English", rtl: false, fallbackLocale: [] },
       { code: "es", label: "Spanish", rtl: false, fallbackLocale: [] },
-    ],
+    ].slice(0, site.languages),
     defaultLocale: "en",
     fallback: true,
     getLocale: () => undefined,
@@ -76,7 +76,6 @@ const NOTHING_HELD = {
 function draw(props: Partial<DocumentLanguagesButtonProps> = {}) {
   return render(
     <DocumentLanguagesButton
-      documentLocalized
       document={document}
       hasStatus
       editorPath={EDITOR}
@@ -100,23 +99,20 @@ const item = (menu: HTMLElement, name: RegExp | string) =>
   within(menu).queryByRole("menuitem", { name });
 
 beforeEach(() => {
-  site.enabled = true;
+  site.languages = 2;
   permissions.held = [];
   bar.width = 1200;
 });
 
 describe("the document's Languages button", () => {
-  it("is drawn for a translated document on a site with languages, and for no other", () => {
+  it("is drawn on a site with languages, and on no other", () => {
     const { unmount } = draw();
     expect(
       screen.getByRole("button", { name: "Languages, 1 needs attention" })
     ).toBeInTheDocument();
     unmount();
 
-    draw({ documentLocalized: false });
-    expect(screen.queryByRole("button")).toBeNull();
-
-    site.enabled = false;
+    site.languages = 1;
     draw();
     expect(screen.queryByRole("button")).toBeNull();
   });

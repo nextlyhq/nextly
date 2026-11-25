@@ -107,6 +107,17 @@ const row = (words: string) =>
     name: name => name.replace(/\s*,\s*/g, ", ") === words,
   });
 
+/** What a row shows, less what only a screen reader is given; each block's text apart. */
+function seen(item: HTMLElement): string {
+  const shown = item.cloneNode(true) as HTMLElement;
+  shown.querySelectorAll(".sr-only").forEach(each => each.remove());
+  shown.querySelectorAll("bdi, .block").forEach(each => {
+    each.prepend(" ");
+    each.append(" ");
+  });
+  return (shown.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
 async function menuIsClosed() {
   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
 }
@@ -182,6 +193,13 @@ describe("the Languages button", () => {
     expect(wide.querySelectorAll("svg")).toHaveLength(2);
   });
 
+  it("gives up its word at the width History does beside it", () => {
+    draw();
+    const word = within(theButton()).getByText("Languages");
+    expect(word.className).toContain("@max-[44rem]/toolbar:sr-only");
+    expect(word.className).not.toContain("@max-[51rem]/toolbar:sr-only");
+  });
+
   it("keeps its digit as an icon only", () => {
     draw({ iconOnly: true });
     expect(within(theButton()).getByText("1")).toBeInTheDocument();
@@ -193,38 +211,38 @@ describe("a language's row", () => {
     const { menu } = await open();
     const rows = within(menu).getAllByRole("menuitem");
     expect(rows).toHaveLength(3);
-    expect(rows[0]).toBe(row("English, default, live, Edit"));
-    expect(rows[1]).toBe(row("Spanish, live, 1 field out of date, Translate"));
-    expect(rows[2]).toBe(row("Arabic, not started, Translate"));
+    expect(rows[0]).toBe(row("English, default, Live, Edit"));
+    expect(rows[1]).toBe(row("Spanish, Live, 1 field out of date, Translate"));
+    expect(rows[2]).toBe(row("Arabic, Not started, Translate"));
   });
 
   it.each<{ es: LanguageOverview | undefined; name: string }>([
-    { es: undefined, name: "Spanish, not started, Translate" },
-    { es: LIVE, name: "Spanish, live, Translate" },
+    { es: undefined, name: "Spanish, Not started, Translate" },
+    { es: LIVE, name: "Spanish, Live, Translate" },
     {
       es: {
         ...LIVE,
         fields: { title: { outOfDate: true }, body: { outOfDate: true } },
       },
-      name: "Spanish, live, 2 fields out of date, Translate",
+      name: "Spanish, Live, 2 fields out of date, Translate",
     },
     {
       es: { ...LIVE, stale: true },
-      name: "Spanish, live, out of date, Translate",
+      name: "Spanish, Live, out of date, Translate",
     },
-    { es: PENDING, name: "Spanish, live, changes not published, Translate" },
+    { es: PENDING, name: "Spanish, Live, changes not published, Translate" },
     {
       es: { ...OUT_OF_DATE, pendingChange: true },
-      name: "Spanish, live, 1 field out of date, Translate",
+      name: "Spanish, Live, 1 field out of date, Translate",
     },
-    { es: DRAFT, name: "Spanish, draft, Translate" },
+    { es: DRAFT, name: "Spanish, Draft, Translate" },
     {
       es: { ...OUT_OF_DATE, status: "draft" },
-      name: "Spanish, draft, 1 field out of date, Translate",
+      name: "Spanish, Draft, 1 field out of date, Translate",
     },
     {
       es: { translated: false, pendingChange: true },
-      name: "Spanish, draft, changes not published, Translate",
+      name: "Spanish, Draft, changes not published, Translate",
     },
   ])("is heard as $name", async ({ es, name }) => {
     const { menu } = await open({
@@ -236,20 +254,20 @@ describe("a language's row", () => {
   it("says the default language's own changes, and still edits it", async () => {
     await open({ model: modelOf({ en: PENDING }) });
     expect(
-      row("English, default, live, changes not published, Edit")
+      row("English, default, Live, changes not published, Edit")
     ).toHaveAttribute("href", EDIT_HREF);
   });
 
   it("leads to where its language is written", async () => {
     await open();
-    expect(row("English, default, live, Edit")).toHaveAttribute(
+    expect(row("English, default, Live, Edit")).toHaveAttribute(
       "href",
       EDIT_HREF
     );
     expect(
-      row("Spanish, live, 1 field out of date, Translate")
+      row("Spanish, Live, 1 field out of date, Translate")
     ).toHaveAttribute("href", SPANISH_HREF);
-    expect(row("Arabic, not started, Translate")).toHaveAttribute(
+    expect(row("Arabic, Not started, Translate")).toHaveAttribute(
       "href",
       ARABIC_HREF
     );
@@ -262,40 +280,29 @@ describe("a language's row", () => {
   it("goes there when chosen, and closes the menu", async () => {
     const { user } = await open();
     expect(navigateTo).not.toHaveBeenCalled();
-    await user.click(row("Arabic, not started, Translate"));
+    await user.click(row("Arabic, Not started, Translate"));
     expect(vi.mocked(navigateTo).mock.calls).toEqual([[ARABIC_HREF]]);
     await menuIsClosed();
   });
 
-  it("draws each state's mark, for the eye only", async () => {
+  it("reads as one line under the name, its parts set apart by a dot", async () => {
     const { menu } = await open({
-      model: modelOf({ en: LIVE, es: PENDING, fr: OUT_OF_DATE, de: DRAFT }, [
-        ENGLISH,
-        SPANISH,
-        { code: "fr", label: "French", rtl: false },
-        { code: "de", label: "German", rtl: false },
-        ARABIC,
-      ]),
+      model: modelOf({ en: PENDING, es: OUT_OF_DATE }),
+      currentLanguage: "en",
     });
-    const marks = within(menu)
-      .getAllByRole("menuitem")
-      .map(item => {
-        const mark = item.querySelector("[data-language-state]");
-        const hidden = mark?.closest('[aria-hidden="true"]') ?? null;
-        return {
-          state: mark?.getAttribute("data-language-state"),
-          // Hidden inside its row, rather than the row hidden with it.
-          hiddenInRow:
-            hidden !== null && hidden !== item && item.contains(hidden),
-        };
-      });
-    expect(marks).toEqual([
-      { state: "live", hiddenInRow: true },
-      { state: "changes", hiddenInRow: true },
-      { state: "outOfDate", hiddenInRow: true },
-      { state: "draft", hiddenInRow: true },
-      { state: "missing", hiddenInRow: true },
-    ]);
+    const [english, spanish, arabic] = within(menu).getAllByRole("menuitem");
+    expect(seen(english!)).toBe(
+      "English default Editing · live, changes not published"
+    );
+    expect(seen(spanish!)).toBe("Spanish Live · 1 field out of date Translate");
+    expect(seen(arabic!)).toBe("Arabic Not started Translate");
+  });
+
+  it("tags the default language, and no other", async () => {
+    const { menu } = await open();
+    const tag = within(menu).getByText("default");
+    expect(row("English, default, Live, Edit")).toContainElement(tag);
+    expect(tag).toHaveClass("font-mono");
   });
 });
 
@@ -311,22 +318,21 @@ describe("without any language's state", () => {
     expect(theButtonBehind()).toHaveAccessibleName("Languages");
     expect(row("English, default, Edit")).toHaveAttribute("href", EDIT_HREF);
     expect(row("Spanish, Translate")).toHaveAttribute("href", SPANISH_HREF);
-    expect(menu.querySelector("[data-language-state]")).toBeNull();
   });
 });
 
 describe("the row of the language on screen", () => {
   it("says it is being edited, and is not a link", async () => {
     await open({ currentLanguage: "es" });
-    const current = row("Spanish, live, 1 field out of date, Editing");
+    const current = row("Spanish, Editing, live, 1 field out of date");
     expect(current).toHaveAttribute("aria-current", "true");
     expect(current.tagName).not.toBe("A");
     expect(current).not.toHaveAttribute("href");
 
     // The others are links, and not marked.
     for (const other of [
-      row("English, default, live, Edit"),
-      row("Arabic, not started, Translate"),
+      row("English, default, Live, Edit"),
+      row("Arabic, Not started, Translate"),
     ]) {
       expect(other.tagName).toBe("A");
       expect(other).toHaveAttribute("href");
@@ -336,24 +342,24 @@ describe("the row of the language on screen", () => {
 
   it("is the default language's as much as any other's", async () => {
     await open({ currentLanguage: "en" });
-    const current = row("English, default, live, Editing");
+    const current = row("English, default, Editing, live");
     expect(current).toHaveAttribute("aria-current", "true");
     expect(current).not.toHaveAttribute("href");
     expect(
-      row("Spanish, live, 1 field out of date, Translate")
+      row("Spanish, Live, 1 field out of date, Translate")
     ).toHaveAttribute("href", SPANISH_HREF);
   });
 
   it("closes the menu when chosen, and goes nowhere", async () => {
     const { user } = await open({ currentLanguage: "es" });
-    await user.click(row("Spanish, live, 1 field out of date, Editing"));
+    await user.click(row("Spanish, Editing, live, 1 field out of date"));
     await menuIsClosed();
     expect(navigateTo).not.toHaveBeenCalled();
 
     // The row beside it does go somewhere.
     await user.click(theButton());
     await screen.findByRole("menu");
-    await user.click(row("Arabic, not started, Translate"));
+    await user.click(row("Arabic, Not started, Translate"));
     expect(vi.mocked(navigateTo).mock.calls).toEqual([[ARABIC_HREF]]);
   });
 });
@@ -372,7 +378,7 @@ describe("while something holds the language on screen", () => {
       within(menu).getByRole("group", { name: "Languages" })
     ).toHaveAccessibleDescription(HELD);
 
-    const spanish = row("Spanish, live, 1 field out of date");
+    const spanish = row("Spanish, Live, 1 field out of date");
     expect(spanish).toHaveAttribute("aria-disabled", "true");
     expect(spanish).not.toHaveAttribute("href");
     await user.click(spanish);
@@ -387,11 +393,11 @@ describe("while something holds the language on screen", () => {
     await user.keyboard("{Enter}");
     await screen.findByRole("menu");
     await waitFor(() =>
-      expect(row("English, default, live, Editing")).toHaveFocus()
+      expect(row("English, default, Editing, live")).toHaveFocus()
     );
     await user.keyboard("{ArrowDown}");
     await waitFor(() =>
-      expect(row("Spanish, live, 1 field out of date")).toHaveFocus()
+      expect(row("Spanish, Live, 1 field out of date")).toHaveFocus()
     );
     await user.keyboard("{Enter}");
     expect(navigateTo).not.toHaveBeenCalled();
@@ -443,16 +449,14 @@ describe("what the menu offers below the languages", () => {
         ...(publish ? { onPublishOthers: vi.fn() } : {}),
         canManageLanguages: manage,
       });
-      expect(
-        within(menu)
-          .getAllByRole("menuitem")
-          .map(item => item.textContent)
-      ).toEqual([
-        "English, default, live, Edit",
-        "Spanish, live, 1 field out of date, Translate",
-        "Arabic, not started, Translate",
-        ...below,
-      ]);
+      expect(within(menu).getAllByRole("menuitem")).toEqual(
+        [
+          "English, default, Live, Edit",
+          "Spanish, Live, 1 field out of date, Translate",
+          "Arabic, Not started, Translate",
+          ...below,
+        ].map(row)
+      );
       expect(within(menu).queryAllByRole("separator")).toHaveLength(separators);
     }
   );
@@ -485,9 +489,9 @@ describe("by keyboard", () => {
       canManageLanguages: true,
     });
     const rows = [
-      row("English, default, live, Edit"),
-      row("Spanish, live, 1 field out of date, Editing"),
-      row("Arabic, not started, Translate"),
+      row("English, default, Live, Edit"),
+      row("Spanish, Editing, live, 1 field out of date"),
+      row("Arabic, Not started, Translate"),
       row(PUBLISH),
       row(MANAGE),
     ];
@@ -503,8 +507,8 @@ describe("by keyboard", () => {
   it("goes to a language with Enter", async () => {
     const { user } = await openByKeyboard();
     await walk(user, [
-      row("English, default, live, Edit"),
-      row("Spanish, live, 1 field out of date, Translate"),
+      row("English, default, Live, Edit"),
+      row("Spanish, Live, 1 field out of date, Translate"),
     ]);
     expect(navigateTo).not.toHaveBeenCalled();
     await user.keyboard("{Enter}");
@@ -514,7 +518,7 @@ describe("by keyboard", () => {
 
   it("closes on the current language with Enter, back on the button", async () => {
     const { user } = await openByKeyboard({ currentLanguage: "en" });
-    await walk(user, [row("English, default, live, Editing")]);
+    await walk(user, [row("English, default, Editing, live")]);
     await user.keyboard("{Enter}");
     await menuIsClosed();
     await waitFor(() => expect(theButton()).toHaveFocus());
@@ -524,7 +528,7 @@ describe("by keyboard", () => {
   it("closes with Escape, back on the button", async () => {
     const onPublishOthers = vi.fn();
     const { user } = await openByKeyboard({ onPublishOthers });
-    await walk(user, [row("English, default, live, Edit")]);
+    await walk(user, [row("English, default, Live, Edit")]);
     expect(theButton()).not.toHaveFocus();
     await user.keyboard("{Escape}");
     await menuIsClosed();
@@ -537,9 +541,9 @@ describe("by keyboard", () => {
     const onPublishOthers = vi.fn();
     const { user } = await openByKeyboard({ onPublishOthers });
     await walk(user, [
-      row("English, default, live, Edit"),
-      row("Spanish, live, 1 field out of date, Translate"),
-      row("Arabic, not started, Translate"),
+      row("English, default, Live, Edit"),
+      row("Spanish, Live, 1 field out of date, Translate"),
+      row("Arabic, Not started, Translate"),
       row(PUBLISH),
     ]);
     expect(onPublishOthers).not.toHaveBeenCalled();

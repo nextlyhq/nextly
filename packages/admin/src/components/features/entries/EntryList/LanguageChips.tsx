@@ -31,7 +31,6 @@ import {
   LANGUAGE_CHIP_MEANING,
   LANGUAGE_CHIP_STATES,
   LANGUAGE_CHIP_WORD,
-  LANGUAGE_MARK_CLASS,
   languageChipFacts,
   languageChipSpoken,
   type LanguageChipState,
@@ -43,6 +42,16 @@ import {
  * each named and opened as the first ones are.
  */
 const MAX_CHIPS = 6;
+
+/** Each state's mark: a shape of its own, drawn in the chip's text colour. */
+const MARK_CLASS: Record<LanguageChipState, string> = {
+  live: "size-2 rounded-full bg-current",
+  changes: "size-[7px] rotate-45 rounded-[1px] bg-current",
+  outOfDate: "size-2 bg-current [clip-path:polygon(50%_0,100%_100%,0_100%)]",
+  draft:
+    "size-2 rounded-full border-[1.5px] border-current [background:linear-gradient(90deg,currentColor_50%,transparent_50%)]",
+  missing: "size-2 rounded-full border-[1.5px] border-current",
+};
 
 /**
  * Each state's surface. Amber is the admin's colour for "changed", so it marks the two states
@@ -78,7 +87,7 @@ function LanguageChipFace({
     >
       <span
         aria-hidden="true"
-        className={cn("inline-block shrink-0", LANGUAGE_MARK_CLASS[state])}
+        className={cn("inline-block shrink-0", MARK_CLASS[state])}
       />
       {children}
     </span>
