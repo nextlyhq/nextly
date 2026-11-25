@@ -217,6 +217,12 @@ describe("Change type… on a saved field", () => {
         refusal: null,
         outcome: null,
       },
+      {
+        type: "richText",
+        blocked: "unjudged-inside",
+        refusal: null,
+        outcome: null,
+      },
     ];
     const savedRating = { ...meta.fields![0] };
     const { user, onChanged } = renderChange("f-rating", [
@@ -249,6 +255,9 @@ describe("Change type… on a saved field", () => {
     );
     expect(row("code")).toHaveTextContent(
       "Unavailable: Its text is kept in each language inside its group or repeating rows, and this type would leave that text behind. Add a new field beside it instead."
+    );
+    expect(row("richText")).toHaveTextContent(
+      "Unavailable: Its text is kept in each language inside its group or repeating rows, and this change can't be checked there yet. Add a new field beside it instead."
     );
     // A type the server did not judge cannot be picked either.
     expect(row("email")).toHaveAttribute("aria-disabled", "true");

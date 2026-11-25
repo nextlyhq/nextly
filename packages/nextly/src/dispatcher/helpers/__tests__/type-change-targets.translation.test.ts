@@ -258,14 +258,64 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
           as: { localized: false },
         })
       ).toMatchObject(LEAVES);
-      // A number that says it is translated keeps its place among the translated.
+    });
+
+    // The save judges the values of the structure, not the text each language keeps beside it, so a
+    // change that stays translated there is open only where its pair keeps every value.
+    it("a text that stays translated is open only where every value is kept", async () => {
+      const UNCHECKED = {
+        blocked: "unjudged-inside",
+        refusal: null,
+        outcome: null,
+      };
+      const becoming = (
+        to: string,
+        as?: Record<string, unknown>,
+        type = "text"
+      ) =>
+        inside(
+          holding([{ ...text("note"), type }, text("subtitle")]),
+          ["meta", "note"],
+          to,
+          { type, ...(as === undefined ? {} : { as }) }
+        );
+      for (const to of ["textarea", "code"]) {
+        expect(await becoming(to), to).toMatchObject({
+          blocked: null,
+          outcome: "keeps",
+        });
+      }
+      expect(await becoming("text", undefined, "email")).toMatchObject({
+        blocked: null,
+        outcome: "keeps",
+      });
+      // What may lose a value, what converts each, and a number that says it is translated.
+      expect(await becoming("email")).toMatchObject(UNCHECKED);
+      expect(await becoming("richText")).toMatchObject(UNCHECKED);
+      expect(await becoming("number", { localized: true })).toMatchObject(
+        UNCHECKED
+      );
+      // A rule the draft adds refuses what nothing there checks.
       expect(
-        (
-          await inside(holding(TWO), ["meta", "note"], "number", {
-            as: { localized: true },
-          })
-        )?.blocked
-      ).toBeNull();
+        await becoming("textarea", { validation: { maxLength: 40 } })
+      ).toMatchObject(UNCHECKED);
+    });
+
+    it("what is judged where it is kept is marked as its values are: a shared text, and on the earlier layout", async () => {
+      const shared = holding([
+        text("note", { localized: false }),
+        text("subtitle"),
+      ]);
+      expect(
+        await inside(shared, ["meta", "note"], "email", {
+          as: { localized: false },
+        })
+      ).toMatchObject({ blocked: null, outcome: "may-lose" });
+      expect(
+        await inside(holding(TWO), ["meta", "note"], "richText", {
+          layout: { perLanguage: false, fileRetypes: true },
+        })
+      ).toMatchObject({ blocked: null, outcome: "converts" });
     });
 
     // Controls: what is not translated inside its container leaves nothing behind.
