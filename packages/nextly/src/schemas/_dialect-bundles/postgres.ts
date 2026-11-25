@@ -165,6 +165,7 @@ export { nextlyVersionViewsPg as nextlyVersionViews } from "../version-views/pos
 export { nextlyReviewStatesPg as nextlyReviewStates } from "../review-states/postgres";
 export { nextlyTranslationProvenancePg as nextlyTranslationProvenance } from "../translation-provenance/postgres";
 export { nextlyTranslationSourcesPg as nextlyTranslationSources } from "../translation-sources/postgres";
+export { nextlyTranslationSuggestionsPg as nextlyTranslationSuggestions } from "../translation-suggestions/postgres";
 export { nextlyWorkflowSettingsPg as nextlyWorkflowSettings } from "../workflow-settings/postgres";
 export { nextlyScheduleWindowsPg as nextlyScheduleWindows } from "../schedule-windows/postgres";
 // The record of content events; in the bundle so freshPushSchema creates the

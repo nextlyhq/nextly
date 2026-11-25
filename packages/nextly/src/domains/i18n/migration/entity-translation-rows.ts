@@ -1,7 +1,8 @@
 /**
  * The rows a deleted entity's translations leave outside its translations table, removed by the
  * entity's kind and slug: its rows in the shared `nextly_i18n_archive`, its record of a translation
- * transition in `nextly_meta`, and its records of where its translated values came from.
+ * transition in `nextly_meta`, its records of where its translated values came from, and the
+ * translations suggested for its documents.
  *
  * Rows only, and no DDL, so a caller can remove them on a transaction it holds with other rows of
  * the same entity, all or none, on every dialect (MySQL commits a transaction at any DDL). The
@@ -13,8 +14,8 @@
  * are removed by kind as well as slug.
  *
  * Each table is asked about first, and a missing one is passed over: the archive is created lazily,
- * the transition record lives in a table core setup makes, and the provenance table reaches an
- * installation through `nextly migrate`. Their absence must not block a delete.
+ * the transition record lives in a table core setup makes, and the provenance and suggestions tables
+ * reach an installation through `nextly migrate`. Their absence must not block a delete.
  *
  * @module domains/i18n/migration/entity-translation-rows
  */
@@ -31,6 +32,10 @@ import {
   TRANSLATION_SOURCES_TABLE,
   translationSourcesTables,
 } from "../../../schemas/translation-sources";
+import {
+  TRANSLATION_SUGGESTIONS_TABLE,
+  translationSuggestionsTables,
+} from "../../../schemas/translation-suggestions";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 
 import { labelLegacyArchiveRows } from "./label-legacy-archive-rows";
@@ -70,14 +75,17 @@ export interface RemovedTranslationRows {
   provenanceRowsPurged: number;
   /** The source text its translations were made from, removed as its provenance is. */
   sourceRowsPurged: number;
+  /** Translations suggested for its documents, removed as its provenance is. */
+  suggestionRowsPurged: number;
   /** Its translation transition record, removed: 1, or 0 where it had none. */
   transitionRecordsPurged: number;
 }
 
 /**
- * Remove `kind` `slug`'s archive rows, its translation transition record, its provenance records
- * and the source text kept beside them, in that order. Scoped by kind as well as slug throughout: a collection, a Single and a
- * field group may share a slug, and the shared tables hold every entity's rows.
+ * Remove `kind` `slug`'s archive rows, its translation transition record, its provenance records,
+ * the source text kept beside them and its suggestions, in that order. Scoped by kind as well as
+ * slug throughout: a collection, a Single and a field group may share a slug, and the shared tables
+ * hold every entity's rows.
  */
 export async function removeEntityTranslationRows(args: {
   adapter: TranslationRowsAdapter;
@@ -157,6 +165,7 @@ export async function removeEntityTranslationRows(args: {
     archiveRowsPurged,
     provenanceRowsPurged,
     sourceRowsPurged: await removeEntitySources(adapter, kind, slug),
+    suggestionRowsPurged: await removeEntitySuggestions(adapter, kind, slug),
     transitionRecordsPurged,
   };
 }
@@ -186,6 +195,36 @@ async function removeEntitySources(
       and(
         eq(nextlyTranslationSources.scopeKind, kind),
         eq(nextlyTranslationSources.scopeSlug, slug)
+      )
+    );
+  return affectedRowCount(result, adapter.dialect);
+}
+
+/**
+ * Remove the translations suggested for `kind` `slug`'s documents, and answer how many went. Left
+ * behind, a later entity of the same kind and slug would be offered a predecessor's text. A field
+ * group has no documents of its own, so none are kept for one.
+ */
+export async function removeEntitySuggestions(
+  adapter: Pick<
+    TranslationRowsAdapter,
+    "dialect" | "tableExists" | "getDrizzle"
+  >,
+  kind: I18nTransitionKind,
+  slug: string
+): Promise<number> {
+  if (kind !== "collection" && kind !== "single") return 0;
+  if (!(await adapter.tableExists(TRANSLATION_SUGGESTIONS_TABLE))) return 0;
+  const { nextlyTranslationSuggestions } = translationSuggestionsTables(
+    adapter.dialect
+  );
+  const result = await adapter
+    .getDrizzle<RowDeleteCapableDb>()
+    .delete(nextlyTranslationSuggestions)
+    .where(
+      and(
+        eq(nextlyTranslationSuggestions.scopeKind, kind),
+        eq(nextlyTranslationSuggestions.scopeSlug, slug)
       )
     );
   return affectedRowCount(result, adapter.dialect);

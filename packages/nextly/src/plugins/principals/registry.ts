@@ -18,6 +18,7 @@ import {
 import { CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH } from "../../schemas/content-events/widths";
 import { EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH } from "../../schemas/email-deliveries/widths";
 import { TRANSLATION_PROVENANCE_PRINCIPAL_KIND_LENGTH } from "../../schemas/translation-provenance/table-name";
+import { TRANSLATION_SUGGESTIONS_PRINCIPAL_KIND_LENGTH } from "../../schemas/translation-suggestions/table-name";
 import type { PluginDefinition } from "../plugin-context";
 import { pluginAdminSlug } from "../plugin-slug";
 import { resolutionError } from "../resolution-error";
@@ -79,6 +80,8 @@ export const PRINCIPAL_KIND_MAX_LENGTH = Math.min(
   EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH,
   // Where a translated value's provenance keeps who wrote it.
   TRANSLATION_PROVENANCE_PRINCIPAL_KIND_LENGTH,
+  // Where a suggested translation keeps who submitted it.
+  TRANSLATION_SUGGESTIONS_PRINCIPAL_KIND_LENGTH,
   // Who last changed a document's row, and who acted in its history.
   CHANGED_BY_PRINCIPAL_KIND_LENGTH,
   CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH

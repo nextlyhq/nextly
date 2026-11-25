@@ -169,6 +169,7 @@ describe("teardownEntityI18n (real SQLite)", () => {
       archiveRowsPurged: 0,
       provenanceRowsPurged: 0,
       sourceRowsPurged: 0,
+      suggestionRowsPurged: 0,
       transitionRecordsPurged: 0,
     });
   });
@@ -191,6 +192,7 @@ describe("teardownEntityI18n (real SQLite)", () => {
       archiveRowsPurged: 0,
       provenanceRowsPurged: 0,
       sourceRowsPurged: 0,
+      suggestionRowsPurged: 0,
       transitionRecordsPurged: 0,
     });
     expect(await tableNames()).not.toContain("dc_pages_locales");

@@ -34,6 +34,7 @@ export type EntityOwnedData =
   | "translationArchive"
   | "translationProvenance"
   | "translationSources"
+  | "translationSuggestions"
   | "translationTransition"
   | "autosaves"
   | "versionPins"
@@ -117,6 +118,14 @@ const TRANSLATION_SOURCES: OwnedDataDeclaration = {
   removed: "beforeTheDrop",
 };
 
+/** The translations suggested for a document's texts: kept for collections and Singles only. */
+const TRANSLATION_SUGGESTIONS: OwnedDataDeclaration = {
+  data: "translationSuggestions",
+  keptIn: "its rows in `nextly_translation_suggestions`, by kind and slug",
+  removedBy: "teardownEntityI18n",
+  removed: "beforeTheDrop",
+};
+
 /** What a collection's or Single's documents hold outside their tables, removed with the registry row. */
 const WITH_THE_REGISTRY_ROW: readonly OwnedDataDeclaration[] = [
   {
@@ -183,6 +192,7 @@ export const ENTITY_OWNED_DATA: Readonly<
     ...TRANSLATIONS,
     TRANSLATION_PROVENANCE,
     TRANSLATION_SOURCES,
+    TRANSLATION_SUGGESTIONS,
     ...TABLES,
     ...WITH_THE_REGISTRY_ROW,
   ],
@@ -191,6 +201,7 @@ export const ENTITY_OWNED_DATA: Readonly<
     ...TRANSLATIONS,
     TRANSLATION_PROVENANCE,
     TRANSLATION_SOURCES,
+    TRANSLATION_SUGGESTIONS,
     ...TABLES,
     ...WITH_THE_REGISTRY_ROW,
   ],

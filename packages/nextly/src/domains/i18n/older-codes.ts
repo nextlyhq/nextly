@@ -13,6 +13,7 @@ import { sql } from "drizzle-orm";
 import { MEDIA_USAGE_TABLE } from "../../schemas/media-usage/table-name";
 import { TRANSLATION_PROVENANCE_TABLE } from "../../schemas/translation-provenance/table-name";
 import { TRANSLATION_SOURCES_TABLE } from "../../schemas/translation-sources/table-name";
+import { TRANSLATION_SUGGESTIONS_TABLE } from "../../schemas/translation-suggestions/table-name";
 import { VERSIONS_TABLE } from "../../schemas/versions/types";
 import { introspectLiveColumns } from "../schema/pipeline/diff/introspect-live";
 
@@ -33,8 +34,9 @@ interface CodeColumn {
  * Every column a code is stored in besides the translation tables' `_locale`, each one the
  * conversion rewrites: the versions, by their language and the list of languages each records it
  * changed; a pinned base kept for a language's pending change (its slot); each translation's
- * record of where it came from, and the source text it was made from; the archive of removed
- * translations; the releases' members; and each media use and preview link in a language.
+ * record of where it came from, and the source text it was made from; each suggested translation,
+ * by its language and the one it was made from; the archive of removed translations; the releases'
+ * members; and each media use and preview link in a language.
  */
 const CODE_COLUMNS: readonly CodeColumn[] = [
   { table: VERSIONS_TABLE, column: "locale" },
@@ -43,6 +45,8 @@ const CODE_COLUMNS: readonly CodeColumn[] = [
   { table: TRANSLATION_PROVENANCE_TABLE, column: "locale" },
   { table: TRANSLATION_PROVENANCE_TABLE, column: "source_locale" },
   { table: TRANSLATION_SOURCES_TABLE, column: "source_locale" },
+  { table: TRANSLATION_SUGGESTIONS_TABLE, column: "target_locale" },
+  { table: TRANSLATION_SUGGESTIONS_TABLE, column: "source_locale" },
   { table: "nextly_i18n_archive", column: "locale" },
   { table: "nextly_release_members", column: "locale" },
   { table: MEDIA_USAGE_TABLE, column: "locale" },

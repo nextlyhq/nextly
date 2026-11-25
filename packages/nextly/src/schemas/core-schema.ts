@@ -81,6 +81,7 @@ import {
 import { STORAGE_FORMAT } from "./storage-format";
 import { translationProvenanceTables } from "./translation-provenance";
 import { translationSourcesTables } from "./translation-sources";
+import { translationSuggestionsTables } from "./translation-suggestions";
 import { userTables } from "./users";
 import { versionPinsTables } from "./version-pins";
 import { versionViewsTables } from "./version-views";
@@ -278,6 +279,10 @@ export function getCoreSchema(
     // before it exists, so core-reconcile creating it is sufficient, as for
     // `nextly_versions`.
     ...Object.values(translationSourcesTables(dialect)),
+    // The translation suggested for each text. Nothing keeps one in it before
+    // it exists, so core-reconcile creating it is sufficient, as for
+    // `nextly_versions`.
+    ...Object.values(translationSuggestionsTables(dialect)),
     // A plugin schedule's windows. Nothing writes them before they exist, so
     // core-reconcile creating them is sufficient.
     ...Object.values(scheduleWindowsTables(dialect)),
@@ -418,6 +423,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_workflow_settings",
   "nextly_translation_provenance",
   "nextly_translation_sources",
+  "nextly_translation_suggestions",
   "nextly_schedule_windows",
   "nextly_content_events",
   "nextly_content_event_parts",

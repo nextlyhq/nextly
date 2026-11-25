@@ -11,6 +11,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { TRANSLATION_SUGGESTIONS_TABLE } from "../../../schemas/translation-suggestions/table-name";
 import {
   applyMigrationWhole,
   applyStatementsInTries,
@@ -86,27 +87,41 @@ export async function applyCompanionTransition(args: {
   }
   // A renamed translated field keeps its records of where each language's value came from, under
   // its new name. Moved here, once its column has been, rather than among the plan's statements,
-  // which a migration file may carry: the records are data, not schema.
+  // which a migration file may carry: the records are data, not schema. The translations suggested
+  // for the field move before its records, so a failure of either leaves the records where the
+  // answer says they are.
   if (args.renamed && (args.kind === "collection" || args.kind === "single")) {
     const { renameFieldProvenance, renameFieldProvenanceStatements } =
       await import("../provenance/record-provenance");
+    const { renameFieldSuggestions, renameFieldSuggestionsStatements } =
+      await import("../pipeline/suggestion-rows");
     const rename = {
       scopeKind: args.kind,
       scopeSlug: args.slug,
       from: args.renamed.from,
       to: args.renamed.to,
     };
+    let suggestionsKept = false;
     try {
+      suggestionsKept = await adapter.tableExists(
+        TRANSLATION_SUGGESTIONS_TABLE
+      );
+      if (suggestionsKept) {
+        await adapter.transaction(tx => renameFieldSuggestions(tx, rename));
+      }
       await renameFieldProvenance(adapter, rename);
     } catch (error) {
       // The change has landed by now (its columns moved, its file recorded), so the failure says
       // so, and what finishes it: no later save knows of the rename to move the records again.
       // The statements go to the server log here, whichever entity's save this is, as the answer
       // tells a developer to find them there.
-      const statements = renameFieldProvenanceStatements(
-        adapter.getCapabilities().dialect,
-        rename
-      );
+      const { dialect } = adapter.getCapabilities();
+      const statements = [
+        ...renameFieldProvenanceStatements(dialect, rename),
+        ...(suggestionsKept
+          ? renameFieldSuggestionsStatements(dialect, rename)
+          : []),
+      ];
       const failure = provenanceNotMoved(error, rename, statements);
       const [{ getLoggerFromDI }, { consoleLogger }] = await Promise.all([
         import("../../../dispatcher/helpers/di"),
@@ -134,6 +149,11 @@ export async function applyCompanionTransition(args: {
       args.kind,
       args.slug
     );
+    // Nothing is translated any more, so there is no text left to suggest a translation for.
+    const { removeEntitySuggestions } = await import(
+      "./entity-translation-rows"
+    );
+    await removeEntitySuggestions(adapter, args.kind, args.slug);
   }
 }
 

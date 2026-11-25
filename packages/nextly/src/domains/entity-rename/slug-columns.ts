@@ -489,6 +489,18 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     onRename: "follow",
   },
   {
+    // The translations suggested for the entity's documents. A row follows its
+    // document; its key is of the text's address within the document, which no
+    // slug is part of, so it is kept.
+    table: "nextly_translation_suggestions",
+    slugColumn: "scope_slug",
+    kind: {
+      column: "scope_kind",
+      values: { collection: ["collection"], single: ["single"] },
+    },
+    onRename: "follow",
+  },
+  {
     // Which media items the entity's documents use. A row follows its
     // document, so the item's "Used in" names the entity by its new slug.
     // An email template's rows carry kind "email-template" and are not moved.

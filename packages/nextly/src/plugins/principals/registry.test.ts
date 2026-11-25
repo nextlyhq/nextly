@@ -13,6 +13,7 @@ import { nextlyContentEventsPg } from "../../schemas/content-events/postgres";
 import { emailQueueMysql } from "../../schemas/email-queue/mysql";
 import { emailQueuePg } from "../../schemas/email-queue/postgres";
 import { nextlyTranslationProvenanceMysql } from "../../schemas/translation-provenance/mysql";
+import { nextlyTranslationSuggestionsMysql } from "../../schemas/translation-suggestions/mysql";
 import { SYSTEM_COLUMNS } from "../../lib/system-columns";
 import type { PluginDefinition } from "../plugin-context";
 import { resolvePlugins } from "../resolve";
@@ -147,6 +148,7 @@ describe("collectPrincipalKinds", () => {
       nextlyContentEventsPg.actorPrincipalKind,
       nextlyContentEventsMysql.actorPrincipalKind,
       nextlyTranslationProvenanceMysql.actorPrincipalKind,
+      nextlyTranslationSuggestionsMysql.createdByPrincipalKind,
     ].map(column => (column as { length?: number }).length);
     // The column on every collection and Single that names who last changed a document, written
     // in the same statement as the save: a kind longer than it fails the save itself.
