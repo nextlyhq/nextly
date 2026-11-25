@@ -10,6 +10,8 @@
  * @module cli/lazy-action
  */
 
+import { endAtProbe } from "./startup-probe";
+
 /**
  * The action `load` resolves to, imported on the first call and given every
  * argument Commander passes (the arguments, the options, the command).
@@ -19,6 +21,7 @@ export function lazyAction<Args extends unknown[]>(
 ): (...args: Args) => Promise<void> {
   return async (...args: Args) => {
     const action = await load();
+    await endAtProbe("loaded");
     await action(...args);
   };
 }

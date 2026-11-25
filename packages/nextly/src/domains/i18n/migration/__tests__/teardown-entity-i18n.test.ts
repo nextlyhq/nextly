@@ -104,10 +104,13 @@ describe("teardownEntityI18n dialect SQL", () => {
   });
 
   it("reports the purged archive row count when the archive exists", async () => {
-    // Every table but the provenance record, whose purge has a test of its own on each dialect.
+    // Every table but the provenance record and the source text kept beside it, whose purges have
+    // tests of their own on each dialect.
     const adapter = makeAdapter(
       "postgresql",
-      name => name !== "nextly_translation_provenance"
+      name =>
+        name !== "nextly_translation_provenance" &&
+        name !== "nextly_translation_sources"
     );
 
     const result = await teardownEntityI18n({
@@ -121,6 +124,7 @@ describe("teardownEntityI18n dialect SQL", () => {
       companionDropped: true,
       archiveRowsPurged: 3,
       provenanceRowsPurged: 0,
+      sourceRowsPurged: 0,
       transitionRecordsPurged: 0,
     });
   });
@@ -141,6 +145,7 @@ describe("teardownEntityI18n dialect SQL", () => {
       companionDropped: true,
       archiveRowsPurged: 0,
       provenanceRowsPurged: 0,
+      sourceRowsPurged: 0,
     });
     expect(adapter.getDrizzle).not.toHaveBeenCalled();
     expect(adapter.executeQuery).toHaveBeenCalledWith(

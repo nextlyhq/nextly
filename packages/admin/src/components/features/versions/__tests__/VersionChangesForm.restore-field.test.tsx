@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { FieldDiff, VersionDiff } from "@admin/services/versionApi";
 
+import { defineFieldDiff } from "../diff/field-diff-registry";
 import type { RestoreRow } from "../restore-plan";
 import { VersionChangesForm } from "../VersionChangesForm";
 import { versionChangesOf } from "../version-changes";
@@ -95,6 +96,22 @@ describe("Restore this field", () => {
     expect(restore).toHaveBeenCalledWith("views");
   });
 
+  it("sits in the changed field's heading row, beside its name, and only there", () => {
+    renderChanges({ rowFor: name => row(name), restore: vi.fn() });
+
+    const heading = screen.getByRole("heading", { name: /Views/ });
+    const headingRow = heading.parentElement as HTMLElement;
+    const button = screen.getByRole("button", {
+      name: "Restore this field: Views",
+    });
+    // In the row that names the field and its change, not under its value:
+    // the action reads with the field it acts on.
+    expect(headingRow).toContainElement(button);
+    expect(
+      heading.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it("says why a field cannot be restored, instead of offering it", () => {
     renderChanges({
       rowFor: name =>
@@ -131,5 +148,63 @@ describe("Restore this field", () => {
     expect(
       screen.queryByRole("button", { name: /Restore this field/ })
     ).toBeNull();
+  });
+});
+
+describe("Restore this field, on a field a registered renderer draws", () => {
+  // A plugin's renderer that draws its own row, with no field heading of the
+  // comparison's own for the action to sit in.
+  defineFieldDiff(["test-own-row"], node => (
+    <div>{`${node.name} drawn by its own renderer`}</div>
+  ));
+
+  it("still offers the field's restore", async () => {
+    const restore = vi.fn();
+    const diff = {
+      from: 1,
+      to: 2,
+      locale: null,
+      hasChanges: true,
+      incomplete: false,
+      fields: [
+        {
+          kind: "test-own-row",
+          name: "chart",
+          label: "Chart",
+          type: "json",
+          status: "changed",
+        },
+      ],
+    } as unknown as VersionDiff;
+    render(
+      <WithheldFieldsProvider paths={[]}>
+        <VersionChangesForm
+          fields={[field("chart")]}
+          values={{ chart: "after" }}
+          changes={versionChangesOf(diff)}
+          order={["chart"]}
+          current={null}
+          showUnchanged={false}
+          onToggleUnchanged={vi.fn()}
+          restoreField={{ rowFor: name => row(name), restore }}
+        />
+      </WithheldFieldsProvider>
+    );
+
+    expect(
+      screen.getByText("chart drawn by its own renderer")
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Restore this field: Chart" })
+    );
+    expect(restore).toHaveBeenCalledWith("chart");
+  });
+
+  it("offers it once on a field whose renderer heads it, not twice", () => {
+    renderChanges({ rowFor: name => row(name), restore: vi.fn() });
+
+    expect(
+      screen.getAllByRole("button", { name: "Restore this field: Title" })
+    ).toHaveLength(1);
   });
 });

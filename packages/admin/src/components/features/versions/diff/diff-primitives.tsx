@@ -9,7 +9,13 @@
  */
 
 import type { Provider, JSX } from "react";
-import { createContext, useContext } from "react";
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import { Badge } from "@admin/components/ui";
 import type {
@@ -69,6 +75,88 @@ export function useDrawnContainers(): number {
   return useContext(DrawnContainersContext);
 }
 
+/** What the two sides of a comparison are called, older first. */
+export interface SideLabels {
+  before: string;
+  after: string;
+}
+
+const SideLabelsContext = createContext<SideLabels>({
+  before: "Before",
+  after: "After",
+});
+
+/**
+ * Names the two sides of every change below it: drawn over each side of a
+ * field split side by side, so a field far down a long document still says
+ * which version each column is.
+ */
+export const SideLabelsProvider: Provider<SideLabels> =
+  SideLabelsContext.Provider;
+
+/** What the two sides of the changes here are called. */
+export function useSideLabels(): SideLabels {
+  return useContext(SideLabelsContext);
+}
+
+/**
+ * What a surface offers on one field of a comparison, such as "Restore this
+ * field", drawn in that field's heading row beside its name and its change,
+ * so the action reads with the field it acts on. Taken by the outermost row
+ * below it only: a group's own fields are part of the field it acts on, and
+ * offering it again on each would act on the whole from inside a part.
+ *
+ * `claim` lets the row that draws it say so, so a field whose renderer draws
+ * no heading row of the comparison's own still has the action, in a row of
+ * its own above the field.
+ */
+interface OfferedAction {
+  action: React.ReactNode;
+  claim: (claimed: boolean) => void;
+}
+
+const FieldRowActionContext = createContext<OfferedAction | null>(null);
+
+/**
+ * Offers `action` in the heading row of the field drawn below it, or, where
+ * the field's renderer draws no such row, above the field.
+ */
+export function FieldRowAction({
+  action,
+  children,
+}: {
+  action: React.ReactNode;
+  children: React.ReactNode;
+}): JSX.Element {
+  const [claimed, setClaimed] = useState(false);
+  const offered = useMemo(() => ({ action, claim: setClaimed }), [action]);
+  return (
+    <>
+      {action !== null && !claimed ? (
+        <div className="flex justify-end pt-2.5">{action}</div>
+      ) : null}
+      <FieldRowActionContext.Provider value={offered}>
+        {children}
+      </FieldRowActionContext.Provider>
+    </>
+  );
+}
+
+/**
+ * The action offered on this row, claimed for as long as the row is drawn,
+ * so the offer is not drawn a second time outside it.
+ */
+function useOfferedAction(): React.ReactNode {
+  const offered = useContext(FieldRowActionContext);
+  const claim = offered?.claim;
+  useLayoutEffect(() => {
+    if (!claim) return;
+    claim(true);
+    return () => claim(false);
+  }, [claim]);
+  return offered?.action ?? null;
+}
+
 /**
  * A labelled block wrapping one field's diff.
  *
@@ -88,11 +176,12 @@ export function FieldRow({
   children: React.ReactNode;
 }): JSX.Element {
   const drawn = useDrawnContainers();
+  const action = useOfferedAction();
   const place = node ? placeOf(node.path, drawn) : [];
   const name = node ? fieldNameOf(node) : (label ?? "Field");
   return (
     <div className="py-2.5 border-b border-border last:border-b-0">
-      <div className="flex items-center gap-2 mb-1.5">
+      <div className="flex flex-wrap items-center gap-2 mb-1.5">
         {/* A heading, so a screen reader can move from one changed field to
             the next as from one section to the next. */}
         <h3 className="text-xs font-medium text-muted-foreground">
@@ -106,8 +195,13 @@ export function FieldRow({
           <span className="text-foreground">{name}</span>
         </h3>
         <StatusBadge status={status} />
+        {action ? <div className="ml-auto">{action}</div> : null}
       </div>
-      <div className="text-sm text-foreground">{children}</div>
+      {/* The field's own parts take no action of theirs: it acts on the
+          whole field, which this row heads. */}
+      <FieldRowActionContext.Provider value={null}>
+        <div className="text-sm text-foreground">{children}</div>
+      </FieldRowActionContext.Provider>
     </div>
   );
 }

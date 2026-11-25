@@ -19,16 +19,8 @@ import { fetcher } from "../lib/api/fetcher";
 import { keepaliveOptions } from "../lib/api/keepalive";
 import { protectedApi } from "../lib/api/protectedApi";
 import type { MutationResponse } from "../lib/api/response-types";
-import {
-  everyLanguageBody,
-  type EveryLanguageVersion,
-} from "../lib/document-version";
 
 import { withListOwner, type ListOwner } from "./list-owner";
-import type {
-  PublishAllLanguageOutcome,
-  PublishAllPreview,
-} from "./publishAllPreview";
 import {
   publishPartsBody,
   type PublishPartsChoice,
@@ -158,17 +150,6 @@ type SingleApiType = {
     data: Record<string, unknown>,
     options?: { locale?: string; keepalive?: boolean }
   ) => Promise<SingleDocument>;
-  readonly publishAllLocales: (
-    slug: string,
-    version?: EveryLanguageVersion
-  ) => Promise<{
-    id: string;
-    status?: string;
-    languages?: PublishAllLanguageOutcome[];
-  }>;
-  readonly previewPublishAllLocales: (
-    slug: string
-  ) => Promise<PublishAllPreview>;
   /** @experimental Until publishing per language is complete. */
   readonly publishParts: (
     slug: string,
@@ -374,47 +355,6 @@ export const singleApi: SingleApiType = {
     );
     return result.item;
   },
-
-  /**
-   * Publish every language of a Single at once.
-   *
-   * Hits `POST /api/singles/{slug}/publish-all`, which moves the main status
-   * and every companion `_status` in one transaction — so the document is never
-   * observable with some languages live and others not.
-   */
-  publishAllLocales: async (
-    slug: string,
-    /**
-     * The version of every language, as a read of every language gives it: a
-     * publish of every language is refused when any of them changed since.
-     * Or the overwrite choice, from a caller refused that read.
-     */
-    version?: EveryLanguageVersion
-  ): Promise<{
-    id: string;
-    status?: string;
-    languages?: PublishAllLanguageOutcome[];
-  }> => {
-    // The route answers with the action envelope (`{ message, ...data }`)
-    // rather than a document, since publishing changes status and returns no
-    // content the editor did not already have. It carries each language's
-    // outcome, which the result message names language by language.
-    return protectedApi.post<{
-      message: string;
-      slug: string;
-      id: string;
-      status?: string;
-      languages?: PublishAllLanguageOutcome[];
-    }>(`/singles/${slug}/publish-all`, everyLanguageBody(version));
-  },
-
-  /**
-   * What publishing every language of a Single would do, language by
-   * language, without doing it: asked as the publish is, and writing nothing.
-   * Hits `GET /api/singles/{slug}/publish-all`.
-   */
-  previewPublishAllLocales: async (slug: string): Promise<PublishAllPreview> =>
-    protectedApi.get<PublishAllPreview>(`/singles/${slug}/publish-all`),
 
   /**
    * Publish or unpublish the parts of a Single a person chose: some of its languages, and

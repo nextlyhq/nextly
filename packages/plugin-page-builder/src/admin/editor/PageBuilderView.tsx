@@ -34,6 +34,11 @@ import { BlocksEditor } from "./BlocksEditor";
 import { openAtFromSearch } from "./builder-address";
 import { rememberBuilderReturn } from "./builder-return";
 import { BuilderStartup } from "./builder-startup";
+import {
+  EditorKeeperContext,
+  useEditorKeeper,
+  type EditorKeeper,
+} from "./kept-editor";
 import { rowGuardedWrite } from "./row-commit";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 
@@ -48,6 +53,8 @@ type BoundProps = Pick<
   name: string;
   /** The field's address, which names a repeater's row by its saved id. */
   address: string;
+  /** Where the editor's history waits while the read-only page is drawn. */
+  keeper?: EditorKeeper;
 };
 
 /** The editor, bound to the field the view opened for. */
@@ -60,6 +67,7 @@ function BoundEditor({
   address,
   fieldLocation,
   fieldPathIn,
+  keeper,
 }: BoundProps) {
   const { field } = useController({ name, control });
   // Inside a repeater's row, every hand-over to the form first asks where the
@@ -85,7 +93,9 @@ function BoundEditor({
       : openAtFromSearch(window.location.search)
   );
   return (
-    <>
+    // Where the editor's page history waits while the read-only page is
+    // drawn in its place, read by the editor as it mounts and unmounts.
+    <EditorKeeperContext.Provider value={keeper}>
       {/* First, so the reads the editor asks as it mounts find it sent. */}
       <BuilderStartup />
       <BlocksEditor
@@ -108,7 +118,7 @@ function BoundEditor({
         location={fieldLocation}
         pathIn={fieldPathIn}
       />
-    </>
+    </EditorKeeperContext.Provider>
   );
 }
 
@@ -189,6 +199,9 @@ export function PageBuilderView({
   const address = fieldAddress ?? name;
   const leave = useLeaveToField(exit, address);
   const back = useBackToList();
+  // The editor's history, kept while the lock is lost and the read-only page
+  // is drawn in its place, for the editor that opens again once it is back.
+  const keeper = useEditorKeeper(readOnly, address);
   const surface = useSettledSurface(readOnly);
   if (
     field === undefined ||
@@ -225,6 +238,7 @@ export function PageBuilderView({
       address={address}
       fieldLocation={fieldLocation}
       fieldPathIn={fieldPathIn}
+      keeper={keeper}
     />
   );
 }

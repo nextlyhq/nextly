@@ -25,6 +25,7 @@ import type { CompanionSchema } from "../i18n/runtime/companion-io";
 import {
   combinedDraft,
   draftsKeptByPart,
+  type PartKeys,
   SHARED_DRAFT_SLOT,
   sharedFieldsJudged,
 } from "./part-drafts";
@@ -46,17 +47,37 @@ export type PendingChange = Awaited<
 >[number];
 
 /**
+ * Where a language's held share of a structured field (a repeater or group
+ * keeping one structure across languages) finds the rest of the field: the
+ * document's part keys, and its live document in that language, read only
+ * where the document has such a field.
+ */
+export interface PendingStructure {
+  readonly keys: PartKeys;
+  readonly liveIn: (locale: string) => Promise<Record<string, unknown>>;
+}
+
+/**
  * Every language's pending change, in the order their languages last saved.
  * They are applied to one main row in this order, so where two changed one
  * shared field the later save's value is the one left, whatever order the
  * database returns the rows in.
+ *
+ * Each language's change holds a structured field whole, its held text laid
+ * on the shared draft's structure or the live one (`structure`). A caller
+ * that reads only which languages are pending passes `null`, and gets the
+ * changes' values unassembled.
  */
 export async function pendingChangesInSaveOrder(
   db: TransactionContext | DrizzleAdapter,
-  ref: VersionRef
+  ref: VersionRef,
+  structure: PendingStructure | null
 ): Promise<PendingChange[]> {
   const repo = new VersionsRepository(db);
-  const drafts = withSharedPart(await repo.findAllWorkingDrafts(ref));
+  const drafts = await withSharedPart(
+    await repo.findAllWorkingDrafts(ref),
+    structure
+  );
   if (drafts.length < 2) return drafts;
   const newest = await repo.newestVersionNoByLocale(
     ref,
@@ -71,21 +92,87 @@ export async function pendingChangesInSaveOrder(
  * live: its own values with the shared draft's (`part-drafts`), so every
  * language publishes the shared changes with it and no language's change
  * stands for them alone. The shared draft stays a change of its own, first,
- * so a document whose only changes are shared still puts them live. Without
- * per-language storage the drafts are returned as stored.
+ * so a document whose only changes are shared still puts them live: its
+ * structured fields are their structures alone, which a write puts on the
+ * main row without touching any language's text. Without per-language storage
+ * the drafts are returned as stored.
  */
-function withSharedPart(drafts: PendingChange[]): PendingChange[] {
+async function withSharedPart(
+  drafts: PendingChange[],
+  structure: PendingStructure | null
+): Promise<PendingChange[]> {
   if (!draftsKeptByPart()) return drafts;
   const shared = drafts.find(draft => draft.locale === SHARED_DRAFT_SLOT);
-  if (!shared) return drafts;
-  const languages = drafts
-    .filter(draft => draft.locale !== SHARED_DRAFT_SLOT)
-    .map(draft => ({
+  const languages: PendingChange[] = [];
+  for (const draft of drafts) {
+    if (draft.locale === SHARED_DRAFT_SLOT) continue;
+    languages.push({
       ...draft,
-      snapshot: combinedDraft({}, { shared, language: draft }),
-    }));
-  return [shared, ...languages];
+      snapshot: await withLanguageShare(
+        draft.locale,
+        { shared, language: draft },
+        structure
+      ),
+    });
+  }
+  return shared ? [shared, ...languages] : languages;
 }
+
+/**
+ * Each language's change of `drafts` as it goes live without the shared
+ * part: its own values alone, a structured field's held text laid on the live
+ * structure (`structure`) rather than the shared draft's. The shared draft,
+ * kept under no language, is left out.
+ */
+export async function languageChangesAlone(
+  drafts: readonly PendingChange[],
+  structure: PendingStructure | null
+): Promise<PendingChange[]> {
+  const languages: PendingChange[] = [];
+  for (const draft of drafts) {
+    if (draft.locale === SHARED_DRAFT_SLOT) continue;
+    languages.push({
+      ...draft,
+      snapshot: await withLanguageShare(
+        draft.locale,
+        { language: draft },
+        structure
+      ),
+    });
+  }
+  return languages;
+}
+
+/**
+ * One language's change as the document it puts live: its values over the
+ * shared draft's, a structured field put back together over the live
+ * document in that language (`combinedDraft`). Without a structure source,
+ * or a structured field, the drafts' values laid one over the other.
+ */
+async function withLanguageShare(
+  locale: string,
+  parts: { shared?: PendingChange; language: PendingChange },
+  structure: PendingStructure | null
+): Promise<Record<string, unknown>> {
+  const keys = structure?.keys;
+  if (!structure || !keys || keys.structured.size === 0) {
+    return combinedDraft({}, parts, {
+      keys: keys ?? NO_STRUCTURED_KEYS,
+      live: {},
+    });
+  }
+  return combinedDraft({}, parts, {
+    keys,
+    live: await structure.liveIn(locale),
+  });
+}
+
+/** Part keys naming no field: what a caller without a structure source assembles by. */
+const NO_STRUCTURED_KEYS: PartKeys = {
+  language: new Set(),
+  shared: new Set(),
+  structured: new Map(),
+};
 
 /**
  * The pending changes as each language's validation judges them. Under

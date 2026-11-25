@@ -5,6 +5,8 @@
  * - language codes first, so every later step reads and writes the standard code;
  * - pending changes keyed before they are split, so the split sees one draft per language;
  * - values moved per language before the drafts are split against them;
+ * - repeaters and groups translated whole given their one structure once their values are per
+ *   language, and before the drafts are split against it;
  * - translations dated after that, from the history the steps before left;
  * - the archive listed last, having nothing to change.
  */
@@ -18,11 +20,12 @@ import { LOCALISATION_DATA_STEPS, MIGRATE_DATA_STEPS } from "../index";
 perLanguageStorageSuite();
 
 describe("the localisation data steps' order", () => {
-  it("runs codes, keys, values, drafts, stamps and the archive listing, in that order", () => {
+  it("runs codes, keys, values, structures, drafts, stamps and the archive listing, in that order", () => {
     expect(LOCALISATION_DATA_STEPS.map(step => step.title)).toEqual([
       "convert language codes to their standard form",
       "give every pending change its key",
       "store translatable values per language",
+      "keep one structure for repeaters and groups translated whole",
       "split pending changes into shared and language drafts",
       "date translations from their version history",
       "list archived translations of no known entity",

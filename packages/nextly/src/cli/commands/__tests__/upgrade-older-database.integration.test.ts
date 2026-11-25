@@ -60,6 +60,12 @@ import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
 import { previewLegacyConsolidation } from "../legacy-bookkeeping";
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
+
+// `nextly migrate` as every installation runs it, its localisation steps included: per-language
+// storage (`storage-layout`).
+perLanguageStorageSuite();
 
 type LoadedConfig = Parameters<typeof MergeSetupResultIntoConfig>[0];
 type Row = Record<string, unknown>;
@@ -98,8 +104,18 @@ const POSTS_COLLECTION: CollectionConfig = defineCollection({
   fields: [text({ name: "title" })],
 });
 
+/** A collection that keeps pending changes, which the localisation steps key and split. */
+const NOTES = "uod-notes";
+
+const NOTES_COLLECTION: CollectionConfig = defineCollection({
+  slug: NOTES,
+  status: true,
+  versions: { drafts: true },
+  fields: [text({ name: "title" })],
+});
+
 const CONFIG = defineConfig({
-  collections: [POSTS_COLLECTION],
+  collections: [POSTS_COLLECTION, NOTES_COLLECTION],
   db: { migrationsDir: "./migrations" },
 });
 
@@ -264,7 +280,7 @@ describe.each(getConfiguredTestDialects())(
         adapter: (await createAdapter({ type: dialect, url } as Parameters<
           typeof createAdapter
         >[0])) as never,
-        collections: [POSTS_COLLECTION],
+        collections: [POSTS_COLLECTION, NOTES_COLLECTION],
       });
       try {
         return await fn(t);
@@ -388,6 +404,18 @@ describe.each(getConfiguredTestDialects())(
       return byFile;
     }
 
+    /** The columns `nextly_versions` has, as the database names them. */
+    async function versionColumns(): Promise<string[]> {
+      const rows = await sql(
+        dialect === "sqlite"
+          ? `SELECT name AS column_name FROM pragma_table_info('nextly_versions')`
+          : dialect === "postgresql"
+            ? `SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'nextly_versions'`
+            : `SELECT COLUMN_NAME AS column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'nextly_versions'`
+      );
+      return rows.map(row => String(row.column_name).toLowerCase());
+    }
+
     const startedAt = (value: unknown): Date =>
       value instanceof Date ? value : new Date(Number(value));
 
@@ -432,18 +460,7 @@ describe.each(getConfiguredTestDialects())(
         // A second run has nothing to move or apply; the columns are added.
         await migrate();
         expect((await fileApplies()).get(files[0] ?? "")).toHaveLength(1);
-        const columns = (
-          await on(adapter =>
-            adapter.executeQuery<Row>(
-              dialect === "sqlite"
-                ? `SELECT name AS column_name FROM pragma_table_info('nextly_versions')`
-                : dialect === "postgresql"
-                  ? `SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'nextly_versions'`
-                  : `SELECT COLUMN_NAME AS column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'nextly_versions'`
-            )
-          )
-        ).map(row => String(row.column_name).toLowerCase());
-        expect(columns).toEqual(
+        expect(await versionColumns()).toEqual(
           expect.arrayContaining(["changed_locales", "shared_changed"])
         );
 
@@ -474,6 +491,40 @@ describe.each(getConfiguredTestDialects())(
       },
       240_000
     );
+
+    // The localisation steps key a pending change by columns an earlier release's history lacks,
+    // until the run's own migrations add them. Counted before those migrations, the refusal that
+    // names them says only that they have not applied yet, so the run applies them and goes on.
+    // Broken, every upgrade of a site holding a pending change is refused before it starts.
+    it("adds the version columns before the steps key a pending change the earlier release saved", async () => {
+      await siteOnThisRelease();
+      await start(async t => {
+        const made = await t.nextly.create({
+          collection: NOTES,
+          data: { title: "Live", status: "published" },
+        });
+        await t.nextly.update({
+          collection: NOTES,
+          id: String((made.item as { id: string | number }).id),
+          data: { title: "Pending", _overwrite: true },
+          draft: true,
+        });
+      });
+      await asTheEarlierReleaseLeftIt("earlier-empty");
+      // The premise: a pending change, in a history without the columns.
+      const pending = await sql(
+        `SELECT ${id("id")} FROM ${id(VERSIONS_TABLE)} WHERE ${id("version_no")} IS NULL AND ${id("status")} = 'draft'`
+      );
+      expect(pending.length).toBeGreaterThan(0);
+      expect(await versionColumns()).not.toContain("changed_locales");
+
+      await migrate(true);
+
+      expect(await versionColumns()).toEqual(
+        expect.arrayContaining(["changed_locales", "shared_changed"])
+      );
+      expect((await migrate()).join("\n")).toContain("Nothing to migrate");
+    }, 240_000);
 
     it("refuses the migration helper's table holding records, changing nothing", async () => {
       await siteOnThisRelease();

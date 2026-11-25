@@ -150,11 +150,15 @@ export type SavedAt = number | "unreachable";
  * A store counts only when the document committed to it is still the one on
  * screen. An edit made while it was in flight is not in what it stored.
  */
-export function useSavePoint(editor: {
-  document: BlockDocument;
-  undoDepth: number;
-}): { savedAt: SavedAt; committing: (document: BlockDocument) => void } {
-  const [savedAt, setSavedAt] = useState<SavedAt>(0);
+export function useSavePoint(
+  editor: {
+    document: BlockDocument;
+    undoDepth: number;
+  },
+  // Where an editor that starts from a kept history stood at its last store.
+  start: SavedAt = 0
+): { savedAt: SavedAt; committing: (document: BlockDocument) => void } {
+  const [savedAt, setSavedAt] = useState<SavedAt>(start);
   if (typeof savedAt === "number" && editor.undoDepth < savedAt) {
     setSavedAt("unreachable");
   }

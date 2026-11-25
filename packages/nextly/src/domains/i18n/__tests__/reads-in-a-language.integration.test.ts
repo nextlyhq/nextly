@@ -143,10 +143,10 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
                 ),
             },
           }),
-          // Translated, holding a password in every language.
+          // Its label kept per language beside its one structure, a password in that structure,
+          // so every language's value of it holds the password until it is cleared.
           group({
             name: "vault",
-            localized: true,
             fields: [text({ name: "label" }), password({ name: "pin" })],
           }),
           // Masked by its read hook in every language.
@@ -908,7 +908,7 @@ describe.each(getConfiguredTestDialects())(
       expect(every.blurb).toEqual({ en: "en blurb" });
     }, 90_000);
 
-    // A password inside a translated group never reaches a read hook or the
+    // A password inside a group whose text is kept per language never reaches a read hook or the
     // reader in any language: every language's values are kept from the
     // hooks until judged, and cleared of passwords as the row is.
     it("clears a password in every language before a read hook sees it", async () => {

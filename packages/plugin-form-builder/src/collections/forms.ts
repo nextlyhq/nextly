@@ -879,8 +879,11 @@ export function formsCollection(
       ],
     }),
 
+    // The name of the form's own field it compares: never translated, so it says
+    // `localized: false` and its column stays on the main table.
     text({
       name: "oneResponseField",
+      localized: false,
       label: "Email field for one response per person",
     }),
 
@@ -952,8 +955,11 @@ export function formsCollection(
       access: { read: readableByFormEditors(slug) },
     }),
 
+    // A key the captcha service issued: never translated, so it says
+    // `localized: false` and its column stays on the main table.
     text({
       name: "captchaSiteKey",
+      localized: false,
       label: "reCAPTCHA Site Key",
       admin: {
         description: "Override the default reCAPTCHA site key for this form",

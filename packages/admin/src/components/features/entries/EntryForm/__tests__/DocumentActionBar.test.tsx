@@ -11,7 +11,7 @@
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { fireEvent, render, screen } from "@admin/__tests__/utils";
+import { fireEvent, render, screen, waitFor } from "@admin/__tests__/utils";
 
 import {
   acceptContributions,
@@ -142,7 +142,7 @@ describe("an action a host did not wire", () => {
 });
 
 describe("an action that cannot be used", () => {
-  it("is disabled and says why, from either kind of reason", () => {
+  it("says why, from either kind of reason", () => {
     /*
      * Two sources, deliberately kept apart: the MODEL knows about permission
      * and document state, the BINDING knows about this instant — mid-submit,
@@ -168,9 +168,10 @@ describe("an action that cannot be used", () => {
       />
     );
 
+    // The model's hold: the leading action stays focusable, described by why.
     const publish = screen.getByRole("button", { name: /^publish$/i });
-    expect(publish).toBeDisabled();
-    expect(publish.getAttribute("title")).toMatch(/permission/i);
+    expect(publish).toBeEnabled();
+    expect(publish).toHaveAccessibleDescription(/permission/i);
 
     const save = screen.getByRole("button", { name: /^save$/i });
     expect(save).toBeDisabled();
@@ -203,6 +204,233 @@ describe("an action that cannot be used", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /^publish$/i }));
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("keeps a held leading action enabled and visibly held, opening its reason when pressed", async () => {
+    // A disabled control can be neither focused nor pressed, so its reason
+    // would reach nobody on a keyboard or a touch screen.
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(
+      <DocumentActionBar
+        actions={[
+          {
+            id: "publish",
+            label: "Publish",
+            placement: "primary",
+            disabledReason: "Needs approval: In review, waiting for Editors",
+          },
+        ]}
+        bindings={{ publish: { onSelect } }}
+      />
+    );
+    const publish = screen.getByRole("button", { name: /^publish$/i });
+    expect(publish).toBeEnabled();
+    expect(publish).not.toHaveAttribute("aria-disabled");
+    expect(publish).toHaveAttribute("data-held");
+    expect(publish.querySelector("svg")).not.toBeNull();
+    expect(publish).toHaveAccessibleDescription(
+      "Needs approval: In review, waiting for Editors"
+    );
+    publish.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "Needs approval: In review, waiting for Editors"
+    );
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("keeps the same press as its hold lifts, closing the reason and then running", async () => {
+    // The element a person has focused must not be swapped for another as
+    // the review state arrives, or focus is lost under them.
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    const held = {
+      id: "publish",
+      label: "Publish",
+      placement: "primary" as const,
+      disabledReason: "Checking the review…",
+    };
+    const { rerender } = render(
+      <DocumentActionBar
+        actions={[held]}
+        bindings={{ publish: { onSelect } }}
+      />
+    );
+    const press = screen.getByRole("button", { name: /^publish$/i });
+    await user.click(press);
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "Checking the review…"
+    );
+
+    const { disabledReason: _lifted, ...free } = held;
+    rerender(
+      <DocumentActionBar
+        actions={[free]}
+        bindings={{ publish: { onSelect } }}
+      />
+    );
+    expect(screen.getByRole("button", { name: /^publish$/i })).toBe(press);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(press).not.toHaveAttribute("data-held");
+    await user.click(press);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  describe("focus as a held press's reason closes", () => {
+    const held = {
+      id: "publish",
+      label: "Publish",
+      placement: "primary" as const,
+      disabledReason: "Needs approval: In review, waiting for Editors",
+    };
+
+    it("comes back to the press when the reason is closed with Escape", async () => {
+      // The reason is anchored to the press rather than triggered by it, so
+      // nothing hands focus back unless the bar does: it would fall to the page.
+      const user = userEvent.setup();
+      render(
+        <DocumentActionBar
+          actions={[held]}
+          bindings={{ publish: { onSelect: vi.fn() } }}
+        />
+      );
+      const press = screen.getByRole("button", { name: /^publish$/i });
+      press.focus();
+      await user.keyboard("{Enter}");
+      await screen.findByRole("dialog");
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(press).toHaveFocus();
+    });
+
+    it("comes back to the press when the hold lifts with the reason open", async () => {
+      const user = userEvent.setup();
+      const onSelect = vi.fn();
+      const { rerender } = render(
+        <DocumentActionBar
+          actions={[held]}
+          bindings={{ publish: { onSelect } }}
+        />
+      );
+      const press = screen.getByRole("button", { name: /^publish$/i });
+      press.focus();
+      await user.keyboard("{Enter}");
+      await screen.findByRole("dialog");
+      const { disabledReason: _lifted, ...free } = held;
+      rerender(
+        <DocumentActionBar
+          actions={[free]}
+          bindings={{ publish: { onSelect } }}
+        />
+      );
+      expect(screen.queryByRole("dialog")).toBeNull();
+      // The popover hands focus on as it unmounts, a tick after the close.
+      await waitFor(() => expect(press).toHaveFocus());
+    });
+
+    it("stays where a person put it by pressing something else", async () => {
+      // The control: a press that took focus back on every close would pull it
+      // from the control the person just chose.
+      const user = userEvent.setup();
+      render(
+        <>
+          <DocumentActionBar
+            actions={[held]}
+            bindings={{ publish: { onSelect: vi.fn() } }}
+          />
+          <button type="button">Elsewhere</button>
+        </>
+      );
+      const press = screen.getByRole("button", { name: /^publish$/i });
+      await user.click(press);
+      await screen.findByRole("dialog");
+      const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+      await user.click(elsewhere);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(elsewhere).toHaveFocus();
+    });
+  });
+
+  it("names the arrow for what it holds: publishing where it holds a way to publish, the document's actions where it holds none", () => {
+    // A collection with no publish lifecycle leads with Save, and its arrow
+    // holds the preview and the document's views: nothing that publishes.
+    const { unmount } = render(
+      <DocumentActionBar
+        actions={[{ id: "save", label: "Save", placement: "primary" }]}
+        bindings={{ save: { onSelect: vi.fn() } }}
+        mainMenuItems={[
+          { id: "preview-open", label: "Preview", onSelect: vi.fn() },
+        ]}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "More document actions" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "More ways to publish" })
+    ).toBeNull();
+    unmount();
+    // Save leading over a way to publish (Schedule… on a clean live
+    // document): the arrow holds publishing, and says so.
+    const scheduled = render(
+      <DocumentActionBar
+        actions={[
+          { id: "save", label: "Save", placement: "primary" },
+          {
+            id: "schedule-publish",
+            label: "Schedule…",
+            placement: "publish-menu",
+          },
+        ]}
+        bindings={{
+          save: { onSelect: vi.fn() },
+          "schedule-publish": { onSelect: vi.fn() },
+        }}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "More ways to publish" })
+    ).toBeInTheDocument();
+    scheduled.unmount();
+    // The control: where Publish leads, the arrow says so.
+    render(
+      <DocumentActionBar
+        actions={[{ id: "publish", label: "Publish", placement: "primary" }]}
+        bindings={{ publish: { onSelect: vi.fn() } }}
+        mainMenuItems={[
+          { id: "preview-open", label: "Preview", onSelect: vi.fn() },
+        ]}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "More ways to publish" })
+    ).toBeInTheDocument();
+  });
+
+  it("draws a leading action refused for this instant disabled, with why", () => {
+    // Nothing to save, a submit in flight: not a hold to explain, and the
+    // press would do nothing a moment later either.
+    render(
+      <DocumentActionBar
+        actions={[{ id: "save", label: "Save", placement: "primary" }]}
+        bindings={{
+          save: { onSelect: vi.fn(), disabledReason: "Nothing to save." },
+        }}
+      />
+    );
+    const save = screen.getByRole("button", { name: /^save$/i });
+    expect(save).toBeDisabled();
+    expect(save).not.toHaveAttribute("data-held");
+    expect(save.getAttribute("title")).toBe("Nothing to save.");
+  });
+
+  it("draws a usable leading action without the held look", () => {
+    // The control for the case above.
+    render(<DocumentActionBar actions={ACTIONS} bindings={allBound()} />);
+    const publish = screen.getByRole("button", { name: /^publish changes$/i });
+    expect(publish).not.toHaveAttribute("data-held");
+    expect(publish.querySelector("svg")).toBeNull();
   });
 });
 

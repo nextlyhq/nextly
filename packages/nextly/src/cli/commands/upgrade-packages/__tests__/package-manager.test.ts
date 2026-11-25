@@ -1,7 +1,9 @@
 /**
  * How `nextly upgrade` speaks to each package manager: the arguments it
  * passes, what it reads back of a registry's answer, and that a run it
- * starts can be stopped and is not kept whole in memory.
+ * starts is not kept whole in memory. That one it starts is stopped with the
+ * command is read in
+ * `commands/__tests__/stopped-command-stops-its-package-manager.test.ts`.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -99,24 +101,6 @@ describe("a package manager's run", () => {
     writeFileSync(path, source);
     return path;
   };
-
-  it("is stopped when asked, and its end is waited for", async () => {
-    const stop = new AbortController();
-    const started = Date.now();
-    // `npm exec` would reach a registry; a script of an empty project does not.
-    const running = runManager(
-      "npm",
-      ["exec", "--offline", "--", "node", "-e", "setTimeout(() => {}, 60000)"],
-      process.cwd(),
-      { signal: stop.signal }
-    );
-    setTimeout(() => stop.abort(), 1500);
-
-    const run = await running;
-
-    expect(run.status).not.toBe(0);
-    expect(Date.now() - started).toBeLessThan(30_000);
-  }, 45_000);
 
   it("keeps the end of what was printed, not all of it", async () => {
     const prints = script(

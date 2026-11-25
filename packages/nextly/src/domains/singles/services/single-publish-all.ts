@@ -132,6 +132,7 @@ import {
   companionNotReadyMessage,
   isCompanionReady,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapesOf } from "../../i18n/runtime/component-shapes";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { partsTogether, type ChangedParts } from "../../versions/changed-parts";
 import {
@@ -149,11 +150,13 @@ import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import {
   draftSlotParts,
   draftsKeptByPart,
+  partKeysOf,
   SHARED_DRAFT_SLOT,
 } from "../../versions/part-drafts";
 import {
   judgeSharedValues,
   type LanguageOutcome,
+  languageChangesAlone,
   languagesGoingLiveAsStored,
   languagesTold,
   type LiveSharedDocument,
@@ -162,6 +165,7 @@ import {
   type PendingChange,
   pendingChangesByLanguage,
   pendingChangesInSaveOrder,
+  type PendingStructure,
   type PublishableShape,
   promotionBlockers,
   promotionIssuesOf,
@@ -221,7 +225,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { liveSharedSingle } from "./live-shared-single";
+import { liveSharedSingle, withLiveStructures } from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
@@ -1552,7 +1556,9 @@ export class SinglePublishAllService extends BaseService {
             tx,
             companion,
             plan.existingDoc.id,
-            [...statuses.keys()]
+            [...statuses.keys()],
+            // A repeater's or group's text is laid on the structure the Single holds.
+            plan.existingDoc
           )
         : new Map<string, Record<string, unknown>>();
     const translated = new Set(
@@ -2177,7 +2183,7 @@ export class SinglePublishAllService extends BaseService {
     // writer's. A language with nothing pending goes live as it is stored,
     // judged when it was saved as a draft and never as published, so it is
     // judged as a promotion of an empty change in the same outcome.
-    const stored = await this.pendingChanges(tx, plan);
+    const stored = await this.pendingChanges(tx, plan, tx);
     // Derived from the stored changes, which carry the same languages as the
     // merged ones below: merging shared values replaces a change's values,
     // never a change or its language.
@@ -2697,7 +2703,13 @@ export class SinglePublishAllService extends BaseService {
     access: FieldGroupWriteAccess
   ): Promise<void> {
     if (pending.length === 0) return;
-    const { singleMeta, existingDoc, companion } = plan;
+    const { singleMeta, existingDoc } = plan;
+    // A container placing a component is split by its component's fields, read on this
+    // transaction (`withComponentShapes`).
+    const companion = await withComponentShapesOf(
+      plan.companion,
+      tx.getDrizzle()
+    );
     // So the type tags the drafts record come off at every depth.
     const componentFields = await this.componentFieldsOn(tx, plan.fieldConfigs);
 
@@ -2758,6 +2770,8 @@ export class SinglePublishAllService extends BaseService {
             locale: draft.locale,
             values: companionValues,
             localizedFields: companion.localizedFields,
+            languagesTable: companion.companionTableName,
+            companionTable: companion.table,
             savedBy: plan.actor,
             promotesDraft: true,
           }
@@ -2952,7 +2966,9 @@ export class SinglePublishAllService extends BaseService {
             tx,
             companion,
             plan.existingDoc.id,
-            promoted
+            promoted,
+            // A repeater's or group's text is laid on the structure the Single holds.
+            plan.existingDoc
           )
         : new Map<string, Record<string, unknown>>();
     const holdsComponents = pending.some(
@@ -2997,20 +3013,53 @@ export class SinglePublishAllService extends BaseService {
    */
   private async pendingChanges(
     tx: TransactionContext | DrizzleAdapter,
-    plan: PublishPlan
+    plan: PublishPlan,
+    /**
+     * The publish's transaction, where the changes' values are read to be written: a language's
+     * held text inside a repeater, group or component is then laid on the Single's live
+     * structure in that language. Left out by a caller that reads only which languages are
+     * pending.
+     */
+    valuesOn?: TransactionContext
   ): Promise<PendingChange[]> {
     if (!plan.draftsEligible) return [];
     const { parts } = plan;
+    const structure: PendingStructure | null = valuesOn
+      ? {
+          keys: await partKeysOf(plan.fieldConfigs, {
+            executor: valuesOn.getDrizzle(),
+          }),
+          liveIn: locale =>
+            withLiveStructures(
+              valuesOn,
+              this.adapter,
+              plan.existingDoc,
+              plan.companion,
+              locale,
+              {
+                fieldGroupDataService: this.fieldGroupDataService,
+                singleMeta: plan.singleMeta,
+              }
+            ),
+        }
+      : null;
     if (parts === undefined) {
-      return pendingChangesInSaveOrder(tx, this.workingDraftRef(plan));
+      return pendingChangesInSaveOrder(
+        tx,
+        this.workingDraftRef(plan),
+        structure
+      );
     }
     // Languages moved without the shared part promote their own changes alone. Kept by part, a
     // language's change as stored holds its own values only, where the save-order read lays the
     // shared draft's under it, which would put the shared changes live without the shared part.
     if (!parts.shared && draftsKeptByPart()) {
       return (
-        await new VersionsRepository(tx).findAllWorkingDrafts(
-          this.workingDraftRef(plan)
+        await languageChangesAlone(
+          await new VersionsRepository(tx).findAllWorkingDrafts(
+            this.workingDraftRef(plan)
+          ),
+          structure
         )
       ).filter(
         change => change.locale !== null && parts.locales.has(change.locale)
@@ -3019,7 +3068,7 @@ export class SinglePublishAllService extends BaseService {
     // Each chosen language's change, and the shared part's own (kept under no language) only
     // where the shared part moves.
     return (
-      await pendingChangesInSaveOrder(tx, this.workingDraftRef(plan))
+      await pendingChangesInSaveOrder(tx, this.workingDraftRef(plan), structure)
     ).filter(change => movesPart(parts, change.locale));
   }
 
@@ -3170,7 +3219,7 @@ export class SinglePublishAllService extends BaseService {
       (await tx.selectOne<Record<string, unknown>>(plan.singleMeta.tableName, {
         where: this.whereEq("id", plan.existingDoc.id),
       })) ?? plan.existingDoc;
-    const stored = await this.pendingChanges(tx, plan);
+    const stored = await this.pendingChanges(tx, plan, tx);
     const document =
       stored.length > 0 ? await this.liveSharedDocument(tx, plan) : null;
     const reader = this.fieldNameReader(plan, caller);
@@ -3864,7 +3913,9 @@ export class SinglePublishAllService extends BaseService {
           tx,
           plan.companion,
           plan.existingDoc.id,
-          told.map(language => language.locale)
+          told.map(language => language.locale),
+          // Laid on the structure the publish left, as each language's text is.
+          publishedRow
         )
       : new Map<string, Record<string, unknown>>();
 

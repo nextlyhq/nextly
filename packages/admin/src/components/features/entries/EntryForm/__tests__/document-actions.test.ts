@@ -127,19 +127,23 @@ describe("the action that leads, per state", () => {
       id: "publish",
       label: "Publish",
     });
-    expect(actionsAt(actions, "toolbar").map(a => a.label)).toEqual([
+    // Saving is a row of the main button's menu, not a button beside it:
+    // the header draws one main action.
+    expect(actionsAt(actions, "publish-menu").map(a => a.label)).toEqual([
       "Save draft",
     ]);
+    expect(actionsAt(actions, "toolbar")).toEqual([]);
   });
 
-  it("is Publish on a draft, with saving offered beside it", () => {
+  it("is Publish on a draft, with saving offered on its menu", () => {
     // A draft's purpose is to become published, so Publish leads — and an
     // author not ready for readers still needs somewhere to put the work.
     const actions = documentActions(state({ status: "draft" }));
     expect(actionsAt(actions, "primary")[0]).toMatchObject({ id: "publish" });
-    expect(actionsAt(actions, "toolbar").map(a => a.label)).toEqual([
+    expect(actionsAt(actions, "publish-menu").map(a => a.label)).toEqual([
       "Save draft",
     ]);
+    expect(actionsAt(actions, "toolbar")).toEqual([]);
   });
 
   it("says Publish CHANGES on a live document with pending edits", () => {
@@ -155,7 +159,10 @@ describe("the action that leads, per state", () => {
       id: "publish",
       label: "Publish changes",
     });
-    expect(actionsAt(actions, "toolbar").map(a => a.label)).toEqual(["Save"]);
+    expect(actionsAt(actions, "publish-menu").map(a => a.label)).toEqual([
+      "Save",
+    ]);
+    expect(actionsAt(actions, "toolbar")).toEqual([]);
   });
 
   it("is Save on a clean live document, which has nothing to publish", () => {
