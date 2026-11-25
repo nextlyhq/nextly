@@ -79,6 +79,13 @@ const SHARED_TABLES: readonly SharedTable[] = [
     slugColumn: "scope_slug",
   },
   {
+    // Purged with it.
+    table: "nextly_translation_sources",
+    reason: "the source text its translations were made from",
+    kindColumn: "scope_kind",
+    slugColumn: "scope_slug",
+  },
+  {
     table: "nextly_versions",
     reason: "its autosaves",
     kindColumn: "scope_kind",
