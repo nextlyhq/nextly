@@ -599,7 +599,7 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
-    it("reads the registry for a filter on the group once more on the legacy names, and no more on the current ones", async () => {
+    it("reads the registry no more for a filter on the group on the legacy names than on the current ones: not at all, once warm", async () => {
       /** The registry reads of one filtered list, each time, once the server is warm. */
       const registryReads = async (migrated: boolean) => {
         const { filtered } = await openSite({ migrated });
@@ -631,7 +631,7 @@ describe.each(getConfiguredTestDialects())(
       console.log(
         `[statement counts] registry reads of a filtered list: legacy ${legacy.join(" ")}, current ${current.join(" ")}`
       );
-      expect(Math.min(...legacy)).toBe(1);
+      expect(Math.min(...legacy)).toBe(0);
       expect(Math.min(...current)).toBe(0);
     }, 120_000);
 
