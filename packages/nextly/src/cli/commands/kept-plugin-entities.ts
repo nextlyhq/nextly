@@ -10,8 +10,8 @@ import type { CommandContext } from "../program";
 
 /** A registry row, as far as this reads it. */
 interface RecordedRow {
-  slug: string;
-  source?: string | null;
+  slug?: unknown;
+  source?: unknown;
 }
 
 /** What a kind is called in the line, and the way its entities are removed where there is one. */
@@ -38,7 +38,10 @@ export function reportKeptPluginEntities(
 ): void {
   const slugs = new Set(declared.map(entity => entity.slug));
   const kept = rows.flatMap(({ slug, source }) =>
-    source?.startsWith(PLUGIN_PREFIX) === true && !slugs.has(slug)
+    typeof slug === "string" &&
+    typeof source === "string" &&
+    source.startsWith(PLUGIN_PREFIX) &&
+    !slugs.has(slug)
       ? [`${slug} (${source.slice(PLUGIN_PREFIX.length)})`]
       : []
   );

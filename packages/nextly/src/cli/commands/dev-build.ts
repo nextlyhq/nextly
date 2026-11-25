@@ -262,12 +262,12 @@ export async function syncCollections(
   // What each collection's registry row records before the sync below replaces it, for the apply
   // that follows: on SQLite a relationship switched between one related entry and many is told by
   // nothing else.
-  const collectionRegistry = new CollectionRegistryService(
-    adapter as unknown as DrizzleAdapter,
-    serviceLogger
-  );
   const recordedCollections = await registryRows(
-    () => collectionRegistry.getAllCollections(),
+    () =>
+      new CollectionRegistryService(
+        adapter as unknown as DrizzleAdapter,
+        serviceLogger
+      ).getAllCollections(),
     {
       kind: "collections",
       tableExists: name =>
@@ -292,9 +292,10 @@ export async function syncCollections(
     throw error;
   }
 
+  // From the rows read above: the sync writes only what the configuration declares.
   reportKeptPluginEntities(
     "collection",
-    await collectionRegistry.getAllCollections(),
+    recordedCollections,
     config.collections,
     logger
   );

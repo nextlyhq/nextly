@@ -452,7 +452,10 @@ describe("who owns a field group's row", () => {
 
     await expect(
       ctx.service.updateComponent("seo", { label: "Other" }, { source: "ui" })
-    ).rejects.toMatchObject({ code: "DEFINED_IN_CODE" });
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      publicMessage: expect.stringContaining("defined in code"),
+    });
     expect(ctx.adapter.update).not.toHaveBeenCalled();
   });
 });

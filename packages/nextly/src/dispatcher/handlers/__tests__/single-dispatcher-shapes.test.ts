@@ -204,6 +204,39 @@ describe("dispatchSingles, paginated lists (respondList)", () => {
   });
 });
 
+describe("dispatchSingles, the fields of a Single defined in code", () => {
+  it.each(["code", "plugin:@acme/shop", "built-in"])(
+    "adds none to one whose source is %s, and a title and slug to the Builder's",
+    async source => {
+      const fields = [{ name: "brand", type: "text" }];
+      const registry = makeRegistry({
+        listSingles: vi.fn().mockResolvedValue({
+          data: [
+            { slug: "shop", source, fields },
+            { slug: "made", source: "ui", fields },
+          ],
+          total: 2,
+        }),
+      });
+      wireDi(registry, makeEntry());
+
+      const response = (await dispatchSingles(
+        "listSingles",
+        { limit: "10", offset: "0" },
+        undefined
+      )) as Response;
+
+      const { items } = (await response.json()) as {
+        items: { fields: { name: string }[] }[];
+      };
+      expect(items.map(item => item.fields.map(field => field.name))).toEqual([
+        ["brand"],
+        ["title", "slug", "brand"],
+      ]);
+    }
+  );
+});
+
 describe("dispatchSingles, single-doc reads (respondDoc)", () => {
   it("getSingleSchema returns bare doc body", async () => {
     const fakeSingle = {

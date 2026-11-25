@@ -46,6 +46,7 @@ import { clearServices, shutdownServices } from "../../../di/register";
 import { getService } from "../../../di/service-access";
 import { CollectionRegistryService } from "../../../domains/collections/services/collection-registry-service";
 import { FieldGroupRegistryService } from "../../../domains/field-groups/services/field-group-registry-service";
+import { siteTypes } from "../../../domains/public-addresses/public-address";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { SingleRegistryService } from "../../../domains/singles/services/single-registry-service";
 import { reloadNextlyConfig } from "../../../init/reload-config";
@@ -299,27 +300,32 @@ for (const dialect of getConfiguredTestDialects()) {
     /** A start of an app with `plugins`, on a connection of its own, closed after. */
     async function start(
       plugins: readonly unknown[],
-      during: () => Promise<void> = async () => {}
+      during: (
+        handle: Awaited<ReturnType<typeof createTestNextly>>
+      ) => Promise<void> = async () => {},
+      own: { singles: unknown[]; fieldGroups: unknown[] } = {
+        singles: [APP_SINGLE],
+        fieldGroups: [APP_GROUP],
+      }
     ): Promise<void> {
-      const own = (await createAdapter({
+      const connection = (await createAdapter({
         type: dialect,
         url: process.env.DATABASE_URL,
       } as never)) as unknown as DrizzleAdapter;
       clearServices();
       try {
-        await createTestNextly({
-          adapter: own as never,
+        const handle = await createTestNextly({
+          adapter: connection as never,
           collections: [NOTES],
-          singles: [APP_SINGLE],
-          fieldGroups: [APP_GROUP],
+          ...own,
           plugins: plugins as never,
           basePath: dir,
         } as never);
-        await during();
+        await during(handle);
       } finally {
         await shutdownServices().catch(() => {});
         clearServices();
-        await own.disconnect().catch(() => {});
+        await connection.disconnect().catch(() => {});
       }
     }
 
@@ -490,6 +496,38 @@ for (const dialect of getConfiguredTestDialects()) {
         [HERO.slug]: PLUGIN_SOURCE,
       });
     }, 240_000);
+
+    it("takes writes to a departed plugin's Single, as to its collection, and refuses them to one the app removed", async () => {
+      await start([asWritten()]);
+
+      await start(
+        [],
+        async ({ nextly }) => {
+          const write = (slug: string) =>
+            nextly.updateSingle({
+              slug: slug as never,
+              data: { brand: "Changed" } as never,
+            });
+          await write(SETTINGS.slug);
+          expect(
+            await nextly.findSingle({ slug: SETTINGS.slug as never })
+          ).toMatchObject({ brand: "Changed" });
+          await expect(write(APP_SINGLE.slug)).rejects.toThrow(/code/i);
+        },
+        { singles: [], fieldGroups: [] }
+      );
+    }, 180_000);
+
+    it("leaves a plugin's Single out of the site's own content types", async () => {
+      await start([asWritten()], async () => {
+        const own = (await siteTypes()).map(({ type }) => type.slug);
+        expect(own).toEqual(
+          expect.arrayContaining([NOTES.slug, APP_SINGLE.slug])
+        );
+        expect(own).not.toContain(SETTINGS.slug);
+        expect(own).not.toContain(EVENTS.slug);
+      });
+    }, 180_000);
 
     describe("a row recorded as the app's own", () => {
       it("is the plugin's again after one db:sync", async () => {

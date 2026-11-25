@@ -455,7 +455,10 @@ describe("who owns a Single's row", () => {
         { label: "Other" },
         { source: "ui" }
       )
-    ).rejects.toMatchObject({ code: "DEFINED_IN_CODE" });
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      publicMessage: expect.stringContaining("defined in code"),
+    });
     expect(ctx.adapter.update).not.toHaveBeenCalled();
   });
 });
