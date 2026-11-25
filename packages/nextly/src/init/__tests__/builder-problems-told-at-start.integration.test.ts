@@ -212,14 +212,14 @@ describe.each(getConfiguredTestDialects())(
         await probe.disconnect();
         return recorder.statements;
       };
-      /** The Builder loader's own reads of the registries (`loadBuilderEntities`), beyond the start's. */
-      const ownReads = (sent: readonly string[]) =>
-        sent.filter(statement =>
-          statement
-            .trim()
-            .toLowerCase()
-            .startsWith("select slug, table_name, fields")
-        );
+      /** The registries the Builder loader (`loadBuilderEntities`) read, in order. */
+      const loaderReads = (sent: readonly string[]) =>
+        sent
+          .map(statement => statement.trim().toLowerCase())
+          .filter(statement =>
+            statement.startsWith("select slug, table_name, fields")
+          )
+          .map(statement => statement.split(" ").at(-1));
       // The first production start of a database settles what later ones find settled.
       await statements();
       const sound = await statements();
@@ -227,8 +227,12 @@ describe.each(getConfiguredTestDialects())(
       const withProblem = await statements();
 
       expect(withProblem).toHaveLength(sound.length);
-      // Judged from the rows the start has read: none is read for it.
-      expect(ownReads(withProblem)).toEqual([]);
+      // Judged from the one load the start makes anyway, whose collections a production start has
+      // read already: each of the others once, and nothing more for the warning.
+      expect(loaderReads(withProblem)).toEqual([
+        "dynamic_singles",
+        "dynamic_components",
+      ]);
       expect(said(AT_START)).toHaveLength(1);
     }, 300_000);
 
