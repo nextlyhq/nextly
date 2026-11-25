@@ -87,7 +87,7 @@ describe.each(LEFT_SAVE_SUITES)(
           status: "published",
           card: { label: "kept" },
         },
-      } as never)) as { item: { id: unknown } };
+      } as never)) as { item?: { id?: unknown } };
       await dispatchSingles(
         "createSingle",
         {},
@@ -104,7 +104,7 @@ describe.each(LEFT_SAVE_SUITES)(
       const [first] = (await t.adapter.executeQuery(
         `SELECT id FROM ${table} WHERE slug = 'first'`
       )) as unknown as Array<{ id: unknown }>;
-      return { t, draft: String(first?.id), published: String(made.item.id) };
+      return { t, draft: String(first?.id), published: String(made.item?.id) };
     }
 
     /** Make the collection that holds `card` two levels down, and the one that holds no field group. */
