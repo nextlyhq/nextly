@@ -44,43 +44,42 @@ interface TableRename {
 }
 
 /**
- * Every table rename `units` make, or undefined where a statement may make one that is not read:
- * one that names a rename and is neither a form read here nor an index's.
+ * The table renames `statement` makes, or undefined where it may make one that is not read: it
+ * names a rename and is neither a form read here nor an index's.
  */
+function renamesOf(
+  statement: string,
+  dialect: SupportedDialect
+): TableRename[] | undefined {
+  const whole = renamesIn(statement, dialect);
+  if (whole !== undefined) {
+    return whole.filter(rename => rename.kind === "table");
+  }
+  if (tablesDroppedBy(statement, dialect) !== undefined) return [];
+  // An ALTER TABLE that does more than rename: its table, and each name it is renamed to.
+  const changed = tablesChangedIn(statement, dialect);
+  if (changed !== undefined) {
+    const [from, ...to] = changed;
+    return to.map(name => ({ from: from, to: name }));
+  }
+  const unread =
+    /\brename\b/i.test(statement) &&
+    indexesRenamedBy(statement, dialect) === undefined;
+  return unread ? undefined : [];
+}
+
+/** Every table rename `units` make, or undefined where one of them may not be read (`renamesOf`). */
 function tableRenames(
   units: AnswerRun["units"],
   dialect: SupportedDialect
 ): TableRename[] | undefined {
-  const renames: TableRename[] = [];
-  for (const { statements } of units) {
-    // As the rename check reads them: a run built from the catalog is the one rename it amounts to.
-    const read =
-      dialect === "mysql" ? plainMysqlEquivalents(statements) : statements;
-    for (const statement of read) {
-      const whole = renamesIn(statement, dialect);
-      if (whole !== undefined) {
-        renames.push(...whole.filter(rename => rename.kind === "table"));
-        continue;
-      }
-      // An ALTER TABLE that does more than rename: its table, and each name it is renamed to.
-      const changed =
-        tablesDroppedBy(statement, dialect) === undefined
-          ? tablesChangedIn(statement, dialect)
-          : [];
-      if (changed !== undefined) {
-        const [from, ...to] = changed;
-        renames.push(...to.map(name => ({ from: from, to: name })));
-        continue;
-      }
-      if (
-        /\brename\b/i.test(statement) &&
-        indexesRenamedBy(statement, dialect) === undefined
-      ) {
-        return undefined;
-      }
-    }
-  }
-  return renames;
+  // As the rename check reads them: a run built from the catalog is the one rename it amounts to.
+  const each = units
+    .flatMap(({ statements }) =>
+      dialect === "mysql" ? plainMysqlEquivalents(statements) : statements
+    )
+    .map(statement => renamesOf(statement, dialect));
+  return each.every(renames => renames !== undefined) ? each.flat() : undefined;
 }
 
 /** Whether the answers of the file `upSql` is of may have an entry to settle before `run` starts. */
