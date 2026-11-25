@@ -1,8 +1,9 @@
 /**
  * A committed change of whether a field may be empty, its registry update not run, while the Builder
  * save that made it the process left part-way stands unsettled (`helpers/left-save-fixture.ts`). A
- * write that sets the field is refused, naming it, and changes nothing; writes of other fields go on;
- * a read is answered, never with a database error; and after the settle the writes are accepted.
+ * write that sets the field is refused, naming it, and changes nothing; so is one that makes a row,
+ * which the table takes only with it; other writes of a row already there go on; a read is answered,
+ * never with a database error; and after the settle the writes are accepted.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -10,6 +11,8 @@ import { dispatchCollections } from "../../../../dispatcher/handlers/collection-
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import type { ServiceContainer } from "../../../../services";
 import type { TestNextly } from "../../../../plugins/test-nextly";
+import type { LeftSave } from "../save-in-progress";
+import { fieldsNotServedOf } from "../settle-left-save";
 import {
   killedAt,
   LEFT_SAVE_SUITES,
@@ -84,8 +87,46 @@ describe.each(LEFT_SAVE_SUITES)(
       return String(row?.nullable);
     }
 
+    // SQLite alters no column to be required; what it would need is a table made again.
+    it.runIf(dialect !== "sqlite")(
+      "the comparison finds what a row must be given that its registry row lets it leave out: a field, and a column of no field",
+      async () => {
+        const t = await boot();
+        const required = async () =>
+          (
+            await fieldsNotServedOf(
+              t.adapter,
+              { kind: "collection", slug } as LeftSave,
+              {
+                fields: [field("heading"), field("note")],
+                status: false,
+                localized: false,
+              }
+            )
+          )?.required;
+        expect(await required()).toEqual([]);
+
+        await t.adapter.executeQuery(
+          dialect === "mysql"
+            ? `ALTER TABLE ${table} MODIFY note text NOT NULL`
+            : `ALTER TABLE ${table} ALTER COLUMN note SET NOT NULL`
+        );
+        expect(await required()).toEqual(["note"]);
+
+        await t.adapter.executeQuery(
+          `ALTER TABLE ${table} ADD COLUMN alpha int NOT NULL DEFAULT 0`
+        );
+        expect(await required(), "one with a default").toEqual(["note"]);
+        await t.adapter.executeQuery(
+          `ALTER TABLE ${table} ALTER COLUMN alpha DROP DEFAULT`
+        );
+        expect(await required()).toEqual(["note", "alpha"]);
+      },
+      300_000
+    );
+
     it.runIf(dialect === "mysql")(
-      "refuses a create that sets a field a committed change made required, over REST and the Direct API, changing nothing; lets a create that leaves it out through; answers reads; and accepts the create once settled",
+      "refuses a create over REST and the Direct API, whether it sets a field a committed change made required or leaves it out, naming it and changing nothing; answers reads; and accepts the create once settled",
       async () => {
         const t = await boot();
         await killRequired(t);
@@ -120,12 +161,10 @@ describe.each(LEFT_SAVE_SUITES)(
 
         expectRefused(rest!, "note");
         expectRefused(api!, "note");
-        const after = await rows(t);
-        expect(after.filter(row => before.includes(row))).toEqual(before);
-        // Each road is looked at whatever the other came to.
-        for (const through of [restOther!, apiOther!]) {
-          expect.soft(through.ok, JSON.stringify(through)).toBe(true);
-        }
+        // The table takes no row without it: refused by name, never as the database's own error.
+        expectRefused(restOther!, "note");
+        expectRefused(apiOther!, "note");
+        expect(await rows(t), "nothing made").toEqual(before);
         for (const read of [restRead!, apiRead!]) {
           expect(databaseError(read), JSON.stringify(read)).toBe(false);
           expect(read.ok, JSON.stringify(read)).toBe(true);

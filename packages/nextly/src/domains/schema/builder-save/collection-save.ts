@@ -1374,8 +1374,10 @@ async function desiredTable(
  * `liveJudgedTable`): after its table, so no main-table column shares its name.
  */
 function translationsColumnName(column: string): string {
-  return `_locales.${column}`;
+  return `${TRANSLATIONS_PREFIX}${column}`;
 }
+
+const TRANSLATIONS_PREFIX = "_locales.";
 
 /**
  * The entity's table as the database has it, as the judgement reads it: the main table, and for an
@@ -4617,6 +4619,7 @@ export async function fieldsNotServed(
   const declared = new Map(desired.columns.map(c => [c.name, c]));
   const standing = new Map((live?.columns ?? []).map(c => [c.name, c]));
   const unserved: UnservedField[] = [];
+  const required: string[] = [];
   // Every declared column a field makes, so the rest are the entity's own (its status, a
   // translations table's structural columns).
   const ofFields = new Set<string>();
@@ -4645,21 +4648,38 @@ export async function fieldsNotServed(
       );
     });
     if (missing || differs) unserved.push({ field: field.name, missing });
+    const demanded = columns.some(column => {
+      const live = standing.get(column.name);
+      return live !== undefined && mustBeGiven(live) && !mustBeGiven(column);
+    });
+    if (demanded) required.push(field.name);
+  }
+  // A main-table column the row does not declare, which no insert of it gives.
+  for (const [name, column] of standing) {
+    if (declared.has(name) || name.startsWith(TRANSLATIONS_PREFIX)) continue;
+    if (mustBeGiven(column)) required.push(name);
   }
   // A column of the entity's own the tables lack, which every read selects: no field to hold
   // answers it. One they have beyond the row's is harmless, as nothing selects it.
   const shapeServed = [...declared.keys()].every(
     name => ofFields.has(name) || standing.has(name)
   );
-  return { unserved, shapeServed };
+  return { unserved, required, shapeServed };
+}
+
+/** Whether a row cannot be inserted without `column`: one that may not be empty, with no default. */
+function mustBeGiven(column: TableSpec["columns"][number]): boolean {
+  return !column.nullable && column.default === undefined;
 }
 
 /**
  * What the comparison found (`fieldsNotServed`): each field whose columns the tables do not hold as
- * declared, and whether the entity's own columns beyond its fields are all there.
+ * declared, what a new row must be given that the declaration lets it leave out (a field, or a column
+ * of no field of the row's), and whether the entity's own columns beyond its fields are all there.
  */
 export interface ServedComparison {
   unserved: UnservedField[];
+  required: string[];
   shapeServed: boolean;
 }
 

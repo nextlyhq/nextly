@@ -3236,6 +3236,7 @@ export class SingleQueryService extends BaseService {
       kind: "single",
       slug: singleMeta.slug,
       data: writtenKeys({ ...snakeCaseDefaults, ...localizedDefaults }),
+      creates: true,
     });
     const id = snakeCaseDefaults.id as string;
     const status = (document as { status?: string }).status;

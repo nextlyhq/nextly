@@ -86,7 +86,11 @@ describe.each(LEFT_SAVE_SUITES.filter(suite => suite.perLanguage))(
         (await liveColumns(t)).filter(name => name === "box"),
         "one column on each table"
       ).toHaveLength(2);
-      expect(await found(t)).toEqual({ unserved: [], shapeServed: true });
+      expect(await found(t)).toEqual({
+        unserved: [],
+        required: [],
+        shapeServed: true,
+      });
 
       await t.adapter.executeQuery(
         `ALTER TABLE ${table}_locales DROP COLUMN box`
@@ -94,6 +98,7 @@ describe.each(LEFT_SAVE_SUITES.filter(suite => suite.perLanguage))(
 
       expect(await found(t)).toEqual({
         unserved: [{ field: "box", missing: true }],
+        required: [],
         shapeServed: true,
       });
     }, 300_000);

@@ -9148,6 +9148,7 @@ export class CollectionMutationService extends BaseService {
       kind: "collection",
       slug: params.collectionName,
       data: body,
+      creates: true,
     });
     // A publish made without review, and why, read off the body for the publish gate and never
     // stored; see updateEntry.
@@ -22654,7 +22655,8 @@ export class CollectionMutationService extends BaseService {
   private async refuseLeftSaveWriteInTransaction(
     tx: TransactionContext,
     collectionName: string,
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
+    { creates = false }: { creates?: boolean } = {}
   ): Promise<void> {
     await refuseWriteOverLeftSave({
       adapter: this.adapter,
@@ -22662,6 +22664,7 @@ export class CollectionMutationService extends BaseService {
       slug: collectionName,
       data: body,
       tx: tx.getDrizzle(),
+      creates,
     });
   }
 
@@ -22705,7 +22708,8 @@ export class CollectionMutationService extends BaseService {
     await this.refuseLeftSaveWriteInTransaction(
       tx,
       params.collectionName,
-      body
+      body,
+      { creates: true }
     );
     // A publish made without review, and why, read off the body for the publish gate and never
     // stored; see createEntry.

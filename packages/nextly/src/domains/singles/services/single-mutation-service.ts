@@ -3932,6 +3932,7 @@ export class SingleMutationService extends BaseService {
                   ...pendingLocalizedDefaults,
                 }),
                 tx: tx.getDrizzle(),
+                creates: true,
               });
               existingDoc = await tx.insert<SingleDocument>(
                 singleMeta.tableName,

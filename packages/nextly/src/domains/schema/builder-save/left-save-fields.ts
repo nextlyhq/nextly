@@ -65,6 +65,11 @@ interface HeldFields {
   readonly whole: boolean;
   /** The refusal, naming the held fields and what settles them. */
   readonly refusal: NextlyError;
+  /**
+   * The refusal of a new row, where the tables need a value for what the registry row lets it leave
+   * out (`Unserved.required`): one that gives it sets a field held.
+   */
+  readonly refusedCreate?: NextlyError;
 }
 
 /** An entity's registry row, as far as its running tables are built from it. */
@@ -79,6 +84,8 @@ interface RegistryRow {
 interface Unserved {
   fields: readonly string[];
   missing: readonly string[];
+  /** What a new row must be given that the registry row lets it leave out, by field or column. */
+  required: readonly string[];
   /**
    * Whether the tables lack a column the entity's own shape needs beyond its fields (its status, a
    * translations table's own columns): the whole entity is held, its running tables left as they
@@ -109,7 +116,8 @@ const narrowedBy = new Map<string, { shape: string; table: unknown }>();
 /**
  * Refuses a write to an entry of `kind` `slug` that sets a field a left save holds: a key of
  * `data` naming it, as written or as its column (`toSnakeCase`); any write where the save holds the
- * whole entity. Nothing of the write has run.
+ * whole entity; and, where the write `creates` a row, one the tables would not take without a value the
+ * registry row lets it leave out. Nothing of the write has run.
  */
 export async function refuseWriteOverLeftSave(args: {
   adapter: DrizzleAdapter;
@@ -118,11 +126,16 @@ export async function refuseWriteOverLeftSave(args: {
   data: Readonly<Record<string, unknown>>;
   /** The handle of a transaction the write already runs in (`heldFieldsOf`). */
   tx?: unknown;
+  /** Whether the write inserts a row. */
+  creates?: boolean;
 }): Promise<void> {
   // At a write's entry, what stands is read afresh and kept for its transaction's checks.
   const held = await heldFieldsOf({ ...args, fresh: args.tx === undefined });
   if (held === undefined) return;
   if (held.whole) throw held.refusal;
+  if (args.creates === true && held.refusedCreate !== undefined) {
+    throw held.refusedCreate;
+  }
   const named = (key: string) =>
     [...held.fields].some(
       field => field === key || toSnakeCase(field) === toSnakeCase(key)
@@ -261,11 +274,15 @@ function heldOver(
     };
   }
   const fields = [...new Set([...(mine?.fields ?? []), ...embedding.fields])];
-  if (fields.length === 0) return undefined;
+  const required = mine?.required ?? [];
+  if (fields.length === 0 && required.length === 0) return undefined;
   const group = (mine?.fields.length ?? 0) > 0 ? undefined : embedding.group;
   return {
     fields: new Set(fields),
     whole: false,
+    ...(required.length === 0
+      ? {}
+      : { refusedCreate: createRefusal(args.kind, args.slug, required) }),
     // A field group's save is not compared: the host's reads, which reach its tables, are refused.
     compared:
       (mine === undefined || mine.compared) && embedding.fields.length === 0,
@@ -284,6 +301,7 @@ interface HeldByOwn {
   fields: readonly string[];
   compared: boolean;
   whole?: boolean;
+  required?: readonly string[];
 }
 
 /**
@@ -315,7 +333,11 @@ async function heldByOwnRecord(
     };
   }
   await shapeRunningTables(args, own.record.id, registry, unserved.missing);
-  return { fields: unserved.fields, compared: true };
+  return {
+    fields: unserved.fields,
+    compared: true,
+    required: unserved.required,
+  };
 }
 
 /** The entity's fields a field group's left save holds, and the first such field group. */
@@ -604,6 +626,7 @@ async function unservedOf(
   const unserved: Unserved = {
     fields: found.unserved.map(f => f.field),
     missing: found.unserved.filter(f => f.missing).map(f => f.field),
+    required: found.required,
     whole: !found.shapeServed,
   };
   comparedById.set(record.id, { unserved, final: true });
@@ -709,6 +732,29 @@ function heldWholeRefusal(kind: EntryKind, slug: string): NextlyError {
       reason: "builder-save-entity-unsettled",
       kind,
       slug,
+    },
+  });
+}
+
+/**
+ * The refusal of a new entry of an entity a save of it, left part-way, changed to need `names` without
+ * recording it yet: the registry row lets an entry be made without them, and the table does not.
+ */
+function createRefusal(
+  kind: EntryKind,
+  slug: string,
+  names: readonly string[]
+): NextlyError {
+  const one = names.length === 1;
+  const named = names.map(name => `"${name}"`).join(", ");
+  return new NextlyError({
+    code: "BUILDER_SAVE_FIELD_UNSETTLED",
+    publicMessage: `A Builder save of the ${kind} "${slug}" was left part-way, and it made ${one ? "the field" : "the fields"} ${named} required without recording it yet. ${kind === "collection" ? "A new entry" : "Its first document"} is refused until the save is settled: the next development start (\`next dev\`), or the next save of this ${kind} in the Schema Builder, settles it. Then try again.`,
+    logContext: {
+      reason: "builder-save-required-unsettled",
+      kind,
+      slug,
+      fields: [...names],
     },
   });
 }
