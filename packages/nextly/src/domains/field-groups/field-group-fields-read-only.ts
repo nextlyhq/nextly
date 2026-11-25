@@ -17,6 +17,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { NextlyError } from "../../errors";
+import { isBuiltInFieldType } from "../../schemas/_zod/ui-schema";
 import { deepEqual } from "../../shared/lib/deep-equal";
 
 import {
@@ -78,7 +79,9 @@ const OFF_UNLESS_SET = ["required", "unique", "index"] as const;
  * each field-group field: to a field-group field alone, since another type's `componentFields` or
  * `componentSchemas` is an option of its own (a plugin field's), which a change must be seen in. And
  * without what the Schema Builder writes on every field it sends back though the definition leaves
- * it out: a setting that is off, a label that is the name, an option's id.
+ * it out: a setting that is off, a label that is the name, an option's id. From a built-in type
+ * alone: a type a plugin contributes may mean something of its own by any of them, so a field of one
+ * is compared as it is, and the fields inside it by their own types.
  */
 function asCompared(fields: unknown): unknown {
   return Array.isArray(fields) ? fields.map(fieldAsCompared) : fields;
@@ -88,16 +91,19 @@ function asCompared(fields: unknown): unknown {
 function fieldAsCompared(field: unknown): unknown {
   if (field === null || typeof field !== "object") return field;
   const copy: Record<string, unknown> = { ...field };
-  for (const key of saysNothing(copy)) delete copy[key];
-  if (Array.isArray(copy.options)) copy.options = withoutIds(copy.options);
+  const fieldGroup = isFieldGroupFieldType(copy.type);
+  if (fieldGroup) for (const key of DERIVED) delete copy[key];
+  if (fieldGroup || isBuiltInFieldType(String(copy.type))) {
+    for (const key of saysNothing(copy)) delete copy[key];
+    if (Array.isArray(copy.options)) copy.options = withoutIds(copy.options);
+  }
   if (Array.isArray(copy.fields)) copy.fields = asCompared(copy.fields);
   return copy;
 }
 
-/** The keys of a field that add nothing to its definition (`asCompared`). */
+/** The keys of a built-in field that add nothing to its definition (`asCompared`). */
 function saysNothing(field: Record<string, unknown>): string[] {
   return [
-    ...(isFieldGroupFieldType(field.type) ? DERIVED : []),
     ...OFF_UNLESS_SET.filter(key => field[key] === false),
     ...(field.label === field.name ? ["label"] : []),
   ];
