@@ -22,7 +22,11 @@ import { builtByFor } from "../../../domains/schema/pipeline/registered-collecti
 import type { ColumnOrigin } from "../../../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../../../errors/nextly-error";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
-import type { UpgradeSite, UpgradeStepContext } from "../upgrade-step";
+import {
+  NOTHING_CHANGED,
+  type UpgradeSite,
+  type UpgradeStepContext,
+} from "../upgrade-step";
 
 /**
  * The site a run of the data steps judges by, from the configuration the command loaded: its
@@ -114,13 +118,19 @@ export async function siteEntities(
     context.adapter as unknown as DrizzleAdapter,
     context.site ?? {}
   );
-  return [
+  const entities = [
     ...declared,
     ...(await readLayoutScanEntities(
       context.adapter as unknown as DrizzleAdapter,
       new Set(declared.map(entity => entity.tableName))
     )),
   ];
+  // Counted before the run's migrations, an entity they remove is left out: the run never reaches
+  // its rows, so nothing is refused or counted over them (`UpgradeStepContext.droppedAhead`).
+  const dropped = context.droppedAhead;
+  return dropped === undefined
+    ? entities
+    : entities.filter(entity => !dropped.has(entity.tableName.toLowerCase()));
 }
 
 /** The version-history columns the steps that rewrite pending changes read and write. */
@@ -151,6 +161,9 @@ export async function versionHistoryReady(
   );
   return PENDING_CHANGE_COLUMNS.every(column => present.has(column));
 }
+
+/** The reason `assertVersionHistoryReady`'s refusal carries, which tells it from the steps' others. */
+const HISTORY_NOT_LAID_OUT = "version-history-not-laid-out";
 
 /**
  * Refuses, naming the repair, where the version history is not laid out as this release keeps it
@@ -183,9 +196,21 @@ export async function assertVersionHistoryReady(
       "The version history holds pending changes but is not laid out as this release keeps it " +
       `(it lacks ${PENDING_CHANGE_COLUMNS.join(", ")}). Run \`nextly migrate\` without --step, ` +
       "so its migrations add them before its data steps key and split the pending changes. " +
-      "Nothing was changed.",
-    logContext: { table: VERSIONS_TABLE },
+      NOTHING_CHANGED,
+    logContext: { table: VERSIONS_TABLE, reason: HISTORY_NOT_LAID_OUT },
   });
+}
+
+/**
+ * Whether `error` is `assertVersionHistoryReady`'s refusal: the one refusal of the steps that a
+ * run's own migrations answer, by adding the columns it names. Asked before those migrations
+ * apply, it says only that they have not applied yet.
+ */
+export function refusedForColumnsTheRunAdds(error: unknown): boolean {
+  return (
+    NextlyError.isCode(error, "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED") &&
+    error.logContext?.reason === HISTORY_NOT_LAID_OUT
+  );
 }
 
 /**

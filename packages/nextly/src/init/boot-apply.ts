@@ -660,9 +660,6 @@ async function applyPendingMigrations(label: string): Promise<number> {
     });
     // Compiled from the same config the CLI compiles from; see
     // `MigrateCoreDeps.extensionSchema` for why it is passed, not read.
-    const { compileExtensionSchema } = await import(
-      "../domains/schema/extension/publish"
-    );
     // Each field group's stored table and type column, so a contribution to a group is compiled,
     // and its ownership recorded, against the table the group is in (`fg_<slug>` once migrated),
     // as `nextly migrate` and a production start compile it.
@@ -673,7 +670,10 @@ async function applyPendingMigrations(label: string): Promise<number> {
       drizzleAdapter,
       configResult.config.fieldGroups
     );
-    const extensionSchema = await compileExtensionSchema({
+    // A collection handed to the Schema Builder as its record has it, as this
+    // start's registration compiled its hooks.
+    const { compileForStart } = await import("../di/development-start-hooks");
+    const { schema: extensionSchema } = await compileForStart(drizzleAdapter, {
       ...(fieldGroups === undefined
         ? {}
         : {

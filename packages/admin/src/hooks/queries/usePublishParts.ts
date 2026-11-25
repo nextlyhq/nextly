@@ -4,9 +4,8 @@
  *
  * The description is the server's own answer to the same request with `describe: true`, so what
  * the dialog says each part will do is what the publish then does. The move is sent with the
- * version of every language, from a read of every language just before, as publishing every
- * language is: a part that changed since the editor read it is refused rather than put live
- * unseen.
+ * version of every language, from a read of every language just before: a part that changed since
+ * the editor read it is refused rather than put live unseen.
  *
  * @experimental Until publishing per language is complete.
  *
@@ -76,6 +75,22 @@ function detailKey(target: PartsTarget): readonly unknown[] {
 }
 
 /**
+ * What the request would do, asked of the server once, without changing anything. A description
+ * writes nothing and carries no version: it describes the document as it stands.
+ */
+export function describeParts(
+  target: PartsTarget,
+  direction: PublishPartsDirection,
+  request: PartsRequest
+): Promise<PublishPartsResult> {
+  return send(target, direction, {
+    ...request,
+    describe: true,
+    version: undefined,
+  });
+}
+
+/**
  * What the chosen parts would do, asked of the server without changing anything. Not asked while
  * `enabled` is false or nothing is chosen.
  */
@@ -98,14 +113,7 @@ export function usePublishPartsDescription(args: {
       request.locales,
       request.shared ?? false,
     ],
-    // A description writes nothing, and carries no version: it describes the
-    // document as it stands.
-    queryFn: () =>
-      send(target, direction, {
-        ...request,
-        describe: true,
-        version: undefined,
-      }),
+    queryFn: () => describeParts(target, direction, request),
     enabled: enabled && chosen,
     // Always read afresh when asked: what a part would do changes with every save.
     staleTime: 0,

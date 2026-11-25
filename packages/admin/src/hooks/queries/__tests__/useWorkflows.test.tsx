@@ -28,7 +28,12 @@ vi.mock("@admin/hooks/queries/useAuthSession", () => ({
   useAuthSession: () => ({ data: { isAuthenticated: true } }),
 }));
 
+import { entryKeys } from "@admin/services/entryApi";
+
+import { collectionKeys } from "../useCollections";
 import { reviewKeys } from "../useReviewState";
+import { singleKeys } from "../useSingles";
+import { waitingKeys } from "../useWaitingForMe";
 import { useUpdateWorkflowSettings, useWorkflows } from "../useWorkflows";
 
 const LIST = ["workflows", "list"] as const;
@@ -114,6 +119,64 @@ describe("saving a workflow's settings", () => {
     expect(api.updateWorkflowSettings).toHaveBeenCalled();
     expect(stale(client, LIST)).toBe(false);
     expect(stale(client, REVIEW)).toBe(false);
+  });
+});
+
+describe("saving a workflow's settings, beyond the workflows list", () => {
+  const WAITING = waitingKeys.page(1, 20);
+  const POSTS_LIST = entryKeys.list("posts", { page: 1 } as never);
+  const POSTS = collectionKeys.detail("posts");
+  const HOME = singleKeys.schema("home");
+  const LEDGERS = collectionKeys.detail("ledgers");
+
+  /** Reads of what the workflow `review` (on Posts and the Home Single) is shown in, and one it is not. */
+  function clientWithShownReads(): QueryClient {
+    const client = clientWithReads();
+    client.setQueryData(LIST, {
+      items: [{ slug: "review", collections: ["posts"], singles: ["home"] }],
+      meta: {},
+    });
+    for (const key of [WAITING, POSTS_LIST, POSTS, HOME, LEDGERS]) {
+      client.setQueryData(key, { items: [], meta: {} });
+    }
+    return client;
+  }
+
+  it("marks what waits, the lists, and its collections' and Singles' metadata stale once a label is saved", async () => {
+    // A stage's label is shown in the waiting view, each list's Review column, and the stage
+    // filter the collection's metadata offers; a collection the workflow does not hold is kept.
+    const client = clientWithShownReads();
+    const { result } = renderHook(() => useUpdateWorkflowSettings("review"), {
+      wrapper: wrapperFor(client),
+    });
+
+    await result.current.mutateAsync({
+      revision: 1,
+      labels: { inReview: { label: "Waiting", colour: null } },
+    });
+
+    await waitFor(() => expect(stale(client, WAITING)).toBe(true));
+    expect(stale(client, POSTS_LIST)).toBe(true);
+    expect(stale(client, POSTS)).toBe(true);
+    expect(stale(client, HOME)).toBe(true);
+    expect(stale(client, LEDGERS)).toBe(false);
+  });
+
+  it("marks what waits and the lists stale once a default reviewer or grant is saved, metadata kept", async () => {
+    // Who a part waits for changes; no stage's label does.
+    const client = clientWithShownReads();
+    const { result } = renderHook(() => useUpdateWorkflowSettings("review"), {
+      wrapper: wrapperFor(client),
+    });
+
+    await result.current.mutateAsync({
+      revision: 1,
+      grants: { approve: ["r1"] },
+    });
+
+    await waitFor(() => expect(stale(client, WAITING)).toBe(true));
+    expect(stale(client, POSTS_LIST)).toBe(true);
+    expect(stale(client, POSTS)).toBe(false);
   });
 });
 

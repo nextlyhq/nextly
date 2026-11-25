@@ -78,11 +78,10 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "heading" }),
               text({ name: "secret", access: { update: false } }),
-              // A translated container, held on the companion row and
-              // written whole.
+              // A container whose text is kept per language, beside its one
+              // structure (its overlay on the companion row).
               group({
                 name: "box",
-                localized: true,
                 fields: [
                   text({ name: "open" }),
                   text({ name: "kept", access: { update: false } }),
@@ -114,7 +113,7 @@ describe.each(getConfiguredTestDialects())(
             ],
           }),
           // A localized collection with no field rule of its own, whose
-          // translated group holds a field group inline.
+          // group holds a field group inline, its text kept per language.
           defineCollection({
             slug: "lwrap",
             localized: true,
@@ -127,13 +126,12 @@ describe.each(getConfiguredTestDialects())(
               text({ name: "title" }),
               group({
                 name: "wrap",
-                localized: true,
                 fields: [fieldGroup({ name: "held", component: "lnote2" })],
               }),
             ],
           }),
-          // A localized collection whose own translated group carries a field
-          // no update may change.
+          // A localized collection whose own group carries a text field no
+          // update may change, kept per language in the group's overlay.
           defineCollection({
             slug: "lcoll",
             localized: true,
@@ -146,7 +144,6 @@ describe.each(getConfiguredTestDialects())(
               text({ name: "title" }),
               group({
                 name: "meta",
-                localized: true,
                 fields: [
                   text({ name: "open" }),
                   text({ name: "kept", access: { update: false } }),

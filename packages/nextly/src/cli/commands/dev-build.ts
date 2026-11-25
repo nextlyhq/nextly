@@ -13,7 +13,10 @@ import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { configTheCodeOwnsIn } from "../../di/load-dynamic-tables";
+import {
+  configTheCodeOwnsIn,
+  configWithRecordedHandOversIn,
+} from "../../di/load-dynamic-tables";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { dashboardPinsPresent } from "../../domains/dashboard/dashboard-pins";
@@ -181,9 +184,8 @@ export async function publishExtensionSchema(
   adapter: CLIDatabaseAdapter,
   context: CommandContext
 ): Promise<void> {
-  const { compileAndPublishExtensionSchema } = await import(
-    "../../domains/schema/extension/publish"
-  );
+  const { compileAndPublishExtensionSchema, declaresExtensionSchema } =
+    await import("../../domains/schema/extension/publish");
   const capabilities = (adapter as unknown as DrizzleAdapter).getCapabilities();
   // Each field group under its stored table, so a contribution to a group attaches to the table
   // it is in: `fg_<slug>` on a site whose field-group storage was migrated.
@@ -203,7 +205,18 @@ export async function publishExtensionSchema(
         }),
     dialect: capabilities.dialect,
     plugins: configResult.config.plugins ?? [],
-    config: configResult.config,
+    // A collection handed to the Schema Builder as its record has it, so a hook on its table is
+    // judged by the columns the push keeps, not by the code entry the push ignores.
+    // Read only where something declares a schema: with none, the compile reads no entity.
+    config: declaresExtensionSchema({
+      plugins: configResult.config.plugins ?? [],
+      config: configResult.config,
+    })
+      ? await configWithRecordedHandOversIn(
+          adapter as unknown as DrizzleAdapter,
+          configResult.config
+        )
+      : configResult.config,
     // The connected server's limits: a push that declares a check or
     // expression index the server cannot hold is refused before applying.
     server: capabilities,
@@ -1518,6 +1531,8 @@ export async function ensureLocalizedCompanions(
             kind,
             entity.slug
           ),
+          // A container's overlay column added now is seeded as the default language's text.
+          defaultLocale: transitions?.defaultLocale,
         },
         reportCompanionFailure(
           "update",

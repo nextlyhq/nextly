@@ -27,25 +27,45 @@ export function redirectsCollection(): CollectionConfig {
     labels: { singular: "Redirect", plural: "Redirects" },
     // Kept by the plugin's own screens and by renames, never edited as rows.
     internal: true,
+    // Every text value here is the plugin's own bookkeeping (keys, ids, languages,
+    // paths, states, actors), never translated: each says `localized: false`, so its
+    // column stays on the main table, where a lookup by it finds it in every language.
     fields: [
       // The SHA-256 of the language and the From address: one redirect per
       // address, whatever the collation, and a From address of any length.
       text({
         name: "sourceKey",
+        localized: false,
         label: "Source key",
         required: true,
         unique: true,
       }),
       // Long text, so an address of any length fits.
-      textarea({ name: "source", label: "From", required: true }),
-      text({ name: "locale", label: "Language", required: true, index: true }),
+      textarea({
+        name: "source",
+        localized: false,
+        label: "From",
+        required: true,
+      }),
+      text({
+        name: "locale",
+        localized: false,
+        label: "Language",
+        required: true,
+        index: true,
+      }),
       // Empty for an address that is gone for good, which answers 410
       // rather than sending the visitor anywhere.
-      textarea({ name: "target", label: "To" }),
+      textarea({ name: "target", localized: false, label: "To" }),
       // The key of the To address where it is an exact path on this site, so
       // the redirects pointing at an address are found by an index when a
       // chain is joined.
-      text({ name: "targetKey", label: "Target key", index: true }),
+      text({
+        name: "targetKey",
+        localized: false,
+        label: "Target key",
+        index: true,
+      }),
       checkbox({ name: "permanent", label: "Permanent", defaultValue: true }),
       // The address is gone for good: the Proxy answers 410 Gone, so search
       // engines drop it sooner than they would a 404, and sends no one on.
@@ -56,8 +76,13 @@ export function redirectsCollection(): CollectionConfig {
       date({ name: "lastHit", label: "Last hit" }),
       // `automatic` for a page's own move, `person` from the screen,
       // `import` from a file.
-      text({ name: "origin", label: "Added by", required: true }),
-      textarea({ name: "addedBy", label: "Added by name" }),
+      text({
+        name: "origin",
+        localized: false,
+        label: "Added by",
+        required: true,
+      }),
+      textarea({ name: "addedBy", localized: false, label: "Added by name" }),
     ],
     access: {
       // Constants rather than bare `false`: access rules are validated as

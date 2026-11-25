@@ -23,6 +23,7 @@ import { ShortcutProvider } from "@nextlyhq/ui";
 
 import type { ContentControlProps, ContentServices } from "./content-services";
 import { createOpenPassages } from "../../canvas/open-passages";
+import { refusalWords } from "./prop-refusal";
 import { RichTextControl } from "./rich-text-control";
 import { FULL_EDITOR_WORDS } from "./rich-text-full-editor";
 
@@ -322,7 +323,7 @@ describe("the full editor", () => {
       fireEvent.click(screen.getByRole("button", { name: "Done" }));
     });
     expect(screen.getByRole("dialog")).not.toBeNull();
-    expect(screen.getByText(FULL_EDITOR_WORDS.refused)).not.toBeNull();
+    expect(screen.getByText(refusalWords(undefined, "Cancel"))).not.toBeNull();
     expect(panel.editor.sessions[0]?.hold).toHaveBeenCalled();
     expect(panel.editor.sessions[0]?.detach).not.toHaveBeenCalled();
   });
@@ -382,7 +383,9 @@ describe("the full editor", () => {
       });
       expect(answered).toBeNull();
       expect(screen.getByRole("dialog")).not.toBeNull();
-      expect(screen.getByText(FULL_EDITOR_WORDS.refused)).not.toBeNull();
+      expect(
+        screen.getByText(refusalWords(undefined, "Cancel"))
+      ).not.toBeNull();
       expect(editor.sessions[0]?.detach).not.toHaveBeenCalled();
       expect(openPassages.isOpen()).toBe(true);
     });

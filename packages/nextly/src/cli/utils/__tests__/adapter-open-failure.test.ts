@@ -9,10 +9,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
 
+import { toCliError } from "../../errors/from-thrown";
+
 const createAdapter = vi.fn();
+const installRegistryResolver = vi.fn();
 
 vi.mock("../../../database/factory", () => ({
   createAdapter: (...args: unknown[]) => createAdapter(...args),
+}));
+vi.mock("../registry-resolver", () => ({
+  installRegistryResolver: (...args: unknown[]) =>
+    installRegistryResolver(...args),
 }));
 
 const { createCliAdapter } = await import("../adapter");
@@ -25,6 +32,7 @@ const open = () =>
 
 afterEach(() => {
   createAdapter.mockReset();
+  installRegistryResolver.mockReset();
 });
 
 describe("a database that cannot be opened", () => {
@@ -73,5 +81,44 @@ describe("a database that cannot be opened", () => {
     });
     createAdapter.mockRejectedValue(refusal);
     await expect(open()).rejects.toBe(refusal);
+  });
+});
+
+describe("a database that opened, whose tables cannot be loaded", () => {
+  const failure = new TypeError("Cannot read properties of undefined");
+
+  /** An open whose tables fail, with a disconnect that answers as `disconnect` does. */
+  async function opened(disconnect: () => Promise<void>): Promise<unknown> {
+    createAdapter.mockResolvedValue({ disconnect });
+    installRegistryResolver.mockImplementation(() => {
+      throw failure;
+    });
+    return open().catch((error: unknown) => error);
+  }
+
+  it("is given up, and the command ends on the tables' own error, not on a failed connection", async () => {
+    let closed = false;
+    // Takes a turn, as ending a pool does: the open must wait for it.
+    const disconnect = vi.fn(async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      closed = true;
+    });
+
+    const error = await opened(disconnect);
+
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(closed).toBe(true);
+    expect(error).toBe(failure);
+    const shown = toCliError(error);
+    expect(shown.code).toBe("UNEXPECTED_ERROR");
+    expect(`${shown.what} ${shown.why}`).toContain(failure.message);
+  });
+
+  it("ends on the tables' own error when giving it up fails too", async () => {
+    const error = await opened(async () => {
+      throw new Error("already closed");
+    });
+
+    expect(error).toBe(failure);
   });
 });

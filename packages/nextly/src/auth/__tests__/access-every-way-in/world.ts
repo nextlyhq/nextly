@@ -20,10 +20,12 @@ import {
 import { getDialectTables } from "../../../database/index";
 import { container } from "../../../di/container";
 import { PUBLIC_ROLE_SLUG } from "../../../domains/auth/services/public-role";
+import type { EmailTemplateService } from "../../../domains/email/services/email-template-service";
 import { getWidget, registerWidget } from "../../../domains/widgets/registry";
 import type { RateLimitStore } from "../../../middleware/rate-limit";
 import type { Principal } from "../../../plugins/principals/types";
 import type { PluginRouteContext } from "../../../plugins/routes/route-types";
+import type { PluginEmailTemplate } from "../../../plugins/contributions";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
   createTestNextly,
@@ -582,6 +584,11 @@ export interface World {
   seeded: Map<string, Seeded>;
   /** The id of the one row of each `refsOf` collection, by its slug. */
   refIds: Map<string, string>;
+  /**
+   * The email template whose real records are read from each target the
+   * `sample` door asks, by the target's slug.
+   */
+  sampleTemplates: Map<string, string>;
 }
 
 type Db = {
@@ -598,12 +605,16 @@ async function permissionIds(t: TestNextly, keep: (slug: string) => boolean) {
   }
 }
 
-/** Every permission `user-with` and `custom-role` hold: all but users'. */
+/**
+ * Every permission `user-with` and `custom-role` hold: all but users'. They
+ * read email templates, so the `sample` door's answer is the target's read.
+ */
 function heldByStaff(slug: string): boolean {
   return (
     /^(create|read|update|delete|publish|unpublish)-(x?c|s)_/.test(slug) ||
     /^(create|read|update|delete)-(roles|email-providers)$/.test(slug) ||
     slug === "read-email-deliveries" ||
+    slug === "read-email-templates" ||
     /^read-(x_)?refs$/.test(slug) ||
     slug === "read-media"
   );
@@ -615,6 +626,7 @@ function heldByPartial(slug: string): boolean {
     /^(read|update|publish)-(x?c|s)_/.test(slug) ||
     /^(read|update)-(roles|email-providers)$/.test(slug) ||
     slug === "read-email-deliveries" ||
+    slug === "read-email-templates" ||
     /^read-(x_)?refs$/.test(slug) ||
     slug === "read-media"
   );
@@ -1206,6 +1218,63 @@ const UNCOUNTED_LIMITS: RateLimitStore = {
     }),
 };
 
+/** The slug of the template whose records are read from `collection`. */
+const sampleTemplateOf = (collection: string) =>
+  `sample-${collection.replace(/_/g, "-")}`;
+
+/**
+ * A plugin's template offering real records read from `collection`. The
+ * loader answers one record whatever it is asked: the door's question is
+ * whether the caller reaches it at all.
+ */
+function sampleTemplate(collection: string): PluginEmailTemplate {
+  return {
+    slug: sampleTemplateOf(collection),
+    name: `Records of ${collection}`,
+    subject: "A record",
+    htmlContent: "<p>{{ title }}</p>",
+    sampleRecords: {
+      label: "A record",
+      reads: { collection },
+      list: () => Promise.resolve([{ id: "probe", label: "Probe" }]),
+      load: () => Promise.resolve({ title: "Probe" }),
+    },
+  };
+}
+
+/**
+ * The template asked about each target the `sample` door reads: one per rule
+ * collection of the sets it asks, registered as a running plugin's, and
+ * core's welcome email, whose records are users.
+ */
+async function seedSampleTemplates(
+  t: TestNextly
+): Promise<Map<string, string>> {
+  const collections = (["service", "closed"] as const).flatMap(setup =>
+    RULES.map(rule => collectionOf(rule, setup))
+  );
+  const templates = t.getService(
+    "emailTemplateService"
+  ) as unknown as EmailTemplateService;
+  templates.configureOwnership({
+    plugins: [
+      { name: "access-records", templates: collections.map(sampleTemplate) },
+    ],
+  });
+  await templates.ensureBuiltInTemplates();
+  const ids = new Map<string, string>();
+  const bySlug: [string, string][] = [
+    ...collections.map((c): [string, string] => [c, sampleTemplateOf(c)]),
+    ["users", "welcome"],
+  ];
+  for (const [target, slug] of bySlug) {
+    const found = await t.nextly.emailTemplates.findBySlug({ slug });
+    if (!found) throw new Error(`no template ${slug}`);
+    ids.set(target, String(found.id));
+  }
+  return ids;
+}
+
 export async function boot(dialect: TestDialect): Promise<World> {
   const t = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
@@ -1240,7 +1309,8 @@ export async function boot(dialect: TestDialect): Promise<World> {
       for (const [slug, ids] of own) seeded.set(slug, ids);
       refIds.set(refsOf(set), await seedRefs(t, seeded, set, owner));
     }
-    return { t, callers, seeded, refIds };
+    const sampleTemplates = await seedSampleTemplates(t);
+    return { t, callers, seeded, refIds, sampleTemplates };
   } catch (error) {
     await t.destroy();
     throw error;

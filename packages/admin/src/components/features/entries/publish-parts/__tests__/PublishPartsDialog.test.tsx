@@ -21,6 +21,8 @@ import type {
 
 import { PublishPartsDialog } from "../PublishPartsDialog";
 
+import { pressConfirm } from "./press-confirm";
+
 const api = vi.hoisted(() => ({
   publishParts: vi.fn(),
   findByID: vi.fn(),
@@ -43,13 +45,20 @@ const LANGUAGES = ["en", "es", "ar"];
 const labelOf = (code: string) =>
   ({ en: "English", es: "Spanish", ar: "Arabic" })[code] ?? code;
 
-/** The server's description of `choice`, as the route answers it. */
+/** What Spanish's row says, once the server has described it. */
+const FIRST_TIME_IN_SPANISH =
+  "Goes live for the first time: readers of Spanish see it.";
+
+/**
+ * The server's description of `choice`, as the route answers it for a post whose shared fields
+ * are live: moving them changes their values, never their published state.
+ */
 function describing(choice: PublishPartsChoice): PublishPartsResult {
   const locales = choice.locales === "all" ? LANGUAGES : choice.locales;
   return {
     id: "post-1",
     languages: locales.map(locale => ({ locale, outcome: "goes-live" })),
-    shared: { changes: choice.shared === true, added: false },
+    shared: { changes: false, added: false },
   };
 }
 
@@ -63,6 +72,7 @@ function open(initial = { locales: ["es"], shared: false }) {
       languages={LANGUAGES}
       labelOf={labelOf}
       initialChoice={initial}
+      sharedPending
     />
   );
 }
@@ -104,20 +114,24 @@ describe("choosing what to publish", () => {
       screen.getByRole("checkbox", { name: "Shared fields" })
     ).not.toBeChecked();
     // What Spanish will do is the server's description of exactly this choice.
-    await screen.findByText("Goes live for the first time.");
-    expect(calls()[0]).toEqual({
-      direction: "publish",
-      locales: ["es"],
-      shared: false,
-      describe: true,
-      version: undefined,
-    });
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
+    await waitFor(() =>
+      expect(calls().filter(call => call.locales !== "all")).toEqual([
+        {
+          direction: "publish",
+          locales: ["es"],
+          shared: false,
+          describe: true,
+          version: undefined,
+        },
+      ])
+    );
   });
 
   it("asks again for a choice that adds the shared fields", async () => {
     const user = userEvent.setup();
     open();
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
 
     await user.click(screen.getByRole("checkbox", { name: "Shared fields" }));
 
@@ -133,10 +147,12 @@ describe("choosing what to publish", () => {
   it("publishes the parts chosen and no others, with the version just read", async () => {
     const user = userEvent.setup();
     open();
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
     await user.click(screen.getByRole("checkbox", { name: "Arabic" }));
 
-    await user.click(screen.getByRole("button", { name: "Publish" }));
+    await pressConfirm(
+      screen.getByRole("button", { name: "Publish selected" })
+    );
 
     await waitFor(() =>
       expect(calls().filter(call => call.describe !== true)).toEqual([
@@ -153,14 +169,16 @@ describe("choosing what to publish", () => {
   it("offers nothing to publish when no part is chosen", async () => {
     const user = userEvent.setup();
     open();
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
+    const publish = screen.getByRole("button", { name: "Publish selected" });
+    await waitFor(() => expect(publish).toBeEnabled());
 
     await user.click(screen.getByRole("checkbox", { name: "Spanish" }));
 
-    expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+    expect(publish).toBeDisabled();
   });
 
   it("shows a refusal beside the part it names, and keeps the dialog open", async () => {
-    const user = userEvent.setup();
     const refusal = parseApiError(
       {
         error: {
@@ -193,9 +211,11 @@ describe("choosing what to publish", () => {
           : Promise.reject(refusal)
     );
     open();
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
 
-    await user.click(screen.getByRole("button", { name: "Publish" }));
+    await pressConfirm(
+      screen.getByRole("button", { name: "Publish selected" })
+    );
 
     const spanish = screen.getByRole("checkbox", { name: "Spanish" });
     await waitFor(() =>
@@ -204,7 +224,6 @@ describe("choosing what to publish", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
   it("shows a refusal naming a field rather than a part, with the field's name", async () => {
-    const user = userEvent.setup();
     const refusal = parseApiError(
       {
         error: {
@@ -236,9 +255,11 @@ describe("choosing what to publish", () => {
           : Promise.reject(refusal)
     );
     open();
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
 
-    await user.click(screen.getByRole("button", { name: "Publish" }));
+    await pressConfirm(
+      screen.getByRole("button", { name: "Publish selected" })
+    );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "slug: Another entry already uses this value in Spanish."
@@ -265,7 +286,6 @@ describe("choosing what to publish", () => {
     );
     act(() => recorder.result.current.schedule());
     await waitFor(() => expect(record).toHaveBeenCalledTimes(1));
-    const user = userEvent.setup();
     render(
       <PublishPartsDialog
         open
@@ -278,10 +298,12 @@ describe("choosing what to publish", () => {
         shown={() => ({ version: undefined, recordings: DOC })}
       />
     );
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
     const moves = () => calls().filter(call => call.describe !== true);
 
-    await user.click(screen.getByRole("button", { name: "Publish" }));
+    await pressConfirm(
+      screen.getByRole("button", { name: "Publish selected" })
+    );
     await new Promise(resolve => setTimeout(resolve, 100));
 
     // Held while the recording is on its way: it could land after the publish.

@@ -95,9 +95,8 @@ describe("a document with no workflow attached", () => {
     renderPanel();
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
     // Settled on the answer, with nothing of the review drawn.
-    await waitFor(() =>
-      expect(sections()).toEqual(["Status", "Publishing", "Details"])
-    );
+    // No Publishing section: it is drawn only while the document is scheduled.
+    await waitFor(() => expect(sections()).toEqual(["Status", "Details"]));
     expect(document.querySelector("[data-review-part]")).toBeNull();
   });
 
@@ -114,6 +113,6 @@ describe("a document with no workflow attached", () => {
     });
     renderPanel();
     expect(await screen.findByRole("region", { name: "Review" })).toBeVisible();
-    expect(sections()).toEqual(["Status", "Review", "Publishing", "Details"]);
+    expect(sections()).toEqual(["Status", "Review", "Details"]);
   });
 });

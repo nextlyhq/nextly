@@ -26,9 +26,27 @@ export const HISTORY_PARAM = "history";
 export const VERSION_PARAM = "version";
 /**
  * Set by the comparison page's "Restore…": opens the restore list for the
- * version the address names, once, in the editor that takes the values.
+ * version the address names, once, in the editor that takes the values. `1`
+ * asks for every field; a field's name ("Restore this field") asks for that
+ * field alone chosen, the rest still listed.
  */
 export const RESTORE_PARAM = "restore";
+
+/** The value of `RESTORE_PARAM` that asks for every field. */
+export const RESTORE_ALL = "1";
+
+/**
+ * What a restore hand-off in the address asks for: every field, one field by
+ * name, or nothing.
+ */
+export function restoreAsked(
+  value: string | null
+): { kind: "all" } | { kind: "field"; name: string } | null {
+  if (value === null || value === "") return null;
+  return value === RESTORE_ALL
+    ? { kind: "all" }
+    : { kind: "field", name: value };
+}
 
 /**
  * Every key the panel keeps, so a check that tells a move within the document

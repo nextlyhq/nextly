@@ -815,6 +815,11 @@ export async function prepareSnapshot(
                 ...(t.localizedColumns !== undefined
                   ? { localizedColumns: [...t.localizedColumns].sort() }
                   : {}),
+                // The containers' overlay columns, apart from the columns above: what the next
+                // run reads to know each is already there, so it is never added twice.
+                ...(t.overlayColumns !== undefined
+                  ? { overlayColumns: [...t.overlayColumns].sort() }
+                  : {}),
                 // Ordered by the column each entry names, whether it is the bare name an older
                 // snapshot holds or the name-and-kind a current one does, so the file stays
                 // stable across writes and the two spellings sort together.

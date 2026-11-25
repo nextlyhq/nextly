@@ -10,6 +10,7 @@ import {
   perLanguageMoveWhy,
   type PerLanguageMove,
 } from "../../../domains/i18n/per-language-move-guidance";
+import { builderMigrationRemedy } from "../../../domains/schema/migrate/builder-migration-remedy";
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
 import {
   dialectVariantOf,
@@ -20,21 +21,30 @@ import {
   BLANK_FILE_LINE,
   HISTORY_FORKED_REASON,
   MIGRATION_PLACE_STATED_TWICE_REASON,
-} from "../../../domains/schema/migrate/history-line";
+} from "../../../domains/schema/migrate/history-line-names";
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
-import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
 import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
+import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-repeats-advice";
 import {
   WRITER_HOLD_HELD_REASON,
   WRITER_HOLD_LOST_REASON,
   WRITER_NOT_WRITTEN_REASON,
   WRITER_START_MOVED_REASON,
-} from "../../../domains/schema/migrate-create/writer-hold";
+} from "../../../domains/schema/migrate-create/writer-hold-reasons";
+import {
+  APPLIED_MIGRATION_FILE_MISSING_REASON,
+  APPLIED_SNAPSHOT_INVALID_REASON,
+  MIGRATION_SNAPSHOTS_UNREADABLE_REASON,
+} from "../../../domains/schema/repair-columns/stop-reasons";
 import { NextlyError } from "../../../errors/nextly-error";
-import { builderMigrationRemedy } from "../../utils/migration-discovery";
 import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-import { asSentence, deepestMessage, sentences } from "../messages";
+import {
+  asSentence,
+  contextParts,
+  deepestMessage,
+  sentences,
+} from "../messages";
 
 /**
  * A command's refusal once what the operator agreed to changed before it could act
@@ -544,19 +554,13 @@ function forkedHistoryParts(error: NextlyError): CliErrorParts {
  * (`placeStatedTwiceError`); the whole message stands where they are not there.
  */
 function placeStatedTwiceParts(error: NextlyError): CliErrorParts {
-  const parts = error.logContext?.parts as
-    | Partial<Record<"what" | "why" | "next", unknown>>
-    | undefined;
-  const { what, why, next } = parts ?? {};
-  return typeof what === "string" &&
-    typeof why === "string" &&
-    typeof next === "string"
-    ? { what, why, next }
-    : {
-        what: error.publicMessage,
-        why: "A migration has one place in the history, and its files state two.",
-        next: "Make the `-- Parent:` and `-- Merges:` lines the same in every file of the migration, or keep them in the base file alone.",
-      };
+  return (
+    contextParts(error) ?? {
+      what: error.publicMessage,
+      why: "A migration has one place in the history, and its files state two.",
+      next: "Make the `-- Parent:` and `-- Merges:` lines the same in every file of the migration, or keep them in the base file alone.",
+    }
+  );
 }
 
 /** A writer of migration files that another overtook, as its three parts. */
@@ -569,19 +573,27 @@ function overtakenParts(error: NextlyError): CliErrorParts {
  * (`notWrittenError`); the whole message stands where they are not there.
  */
 function notWrittenParts(error: NextlyError): CliErrorParts {
-  const parts = error.logContext?.parts as
-    | Partial<Record<"what" | "why" | "next", unknown>>
-    | undefined;
-  const { what, why, next } = parts ?? {};
-  return typeof what === "string" &&
-    typeof why === "string" &&
-    typeof next === "string"
-    ? { what, why, next }
-    : {
-        what: error.publicMessage,
-        why: "A file of the migration could not be moved to its name.",
-        next: "Check that the migrations folder can be written to, then run it again.",
-      };
+  return (
+    contextParts(error) ?? {
+      what: error.publicMessage,
+      why: "A file of the migration could not be moved to its name.",
+      next: "Check that the migrations folder can be written to, then run it again.",
+    }
+  );
+}
+
+/**
+ * What `nextly repair-columns` stopped on in the migration snapshots, as the parts the refusal was
+ * built from (`repair-columns/stop-errors`).
+ */
+function snapshotStopParts(error: NextlyError): CliErrorParts {
+  return (
+    contextParts(error) ?? {
+      what: "The migration snapshots could not be read.",
+      why: "They record what the database last had applied, and one of an applied migration could not be used.",
+      next: "Restore the migrations folder from version control, then run it again.",
+    }
+  );
 }
 
 export const MIGRATION_CODES = defineCodes({
@@ -1321,6 +1333,11 @@ export const MIGRATION_CODES = defineCodes({
       "A migration's snapshot file is not valid JSON, or not a snapshot this version of Nextly reads.",
     from: [
       {
+        code: "CONFIGURATION_ERROR",
+        reason: APPLIED_SNAPSHOT_INVALID_REASON,
+        describe: snapshotStopParts,
+      },
+      {
         code: "VALIDATION_ERROR",
         reason: "new-database-history-unreadable",
         describe: error => sentenceParts(error),
@@ -1329,6 +1346,23 @@ export const MIGRATION_CODES = defineCodes({
   },
   MISSING_MIGRATION: {
     cause: "A snapshot file in `meta/` has no migration file beside it.",
+    from: [
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: APPLIED_MIGRATION_FILE_MISSING_REASON,
+        describe: snapshotStopParts,
+      },
+    ],
+  },
+  MIGRATION_SNAPSHOTS_UNREADABLE: {
+    cause: "The migration snapshots are there and could not be read from disk.",
+    from: [
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: MIGRATION_SNAPSHOTS_UNREADABLE_REASON,
+        describe: snapshotStopParts,
+      },
+    ],
   },
   SCHEMA_DRIFT: {
     cause:

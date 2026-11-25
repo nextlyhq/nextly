@@ -46,7 +46,9 @@ import { uniqueTranslatedColumns } from "../../i18n/migration/companion-unique-i
 import {
   companionSpecShell,
   deriveCompanionSpec,
+  deriveCompanionTableSpec,
 } from "../../i18n/migration/derive-companion-spec";
+import { disableKeepingOverlaysRefusal } from "../../i18n/migration/disable-keeping-overlays";
 import { planFieldAddedToTranslationMigration } from "../../i18n/migration/field-added-to-translation";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
@@ -61,6 +63,7 @@ import {
 } from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import { copyLiveness } from "../../i18n/migration/generate-down";
+import { buildOverlaySeedStatements } from "../../i18n/migration/generate-up";
 import {
   planCompanionMigration,
   type CompanionMigrationPlan,
@@ -99,6 +102,10 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import {
+  keepsTranslationsInside,
+  type StructuredField,
+} from "../../i18n/shared-structure";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import type { Deletion } from "../migrate/data-loss-consent";
 import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
@@ -1037,8 +1044,24 @@ export async function generateMigration(
     previousContributions: previous?.data.contributions ?? {},
     desired: withTablesAsTheyStand(
       buildDesiredSnapshotFromConfig(
-        args.collections,
-        args.singles,
+        // A required container leaving whole translation is added nullable in this run, its
+        // rows filled after the migrations (`withStagedContainerColumns`).
+        args.collections.map(c =>
+          withStagedContainerColumns(
+            c,
+            "collection",
+            previous?.data.snapshot,
+            args.dialect
+          )
+        ),
+        args.singles.map(c =>
+          withStagedContainerColumns(
+            c,
+            "single",
+            previous?.data.snapshot,
+            args.dialect
+          )
+        ),
         args.components,
         args.dialect
       ),
@@ -2669,7 +2692,52 @@ function planCompanionMigrations(
       continue;
     }
 
-    if (!spec) continue;
+    if (!spec) {
+      // An entity whose only per-language content is the text inside its containers: its
+      // translations table holds their overlays alone.
+      const prevMain = previousSnapshot.tables.find(
+        t => t.name === c.tableName
+      );
+      const existed =
+        previousTranslation(c, entityKind, previousSnapshot, history)
+          ?.companion ?? false;
+      if (!existed && overlayContainersOf(c).length > 0) {
+        // Created with its overlay columns, empty. Planned as a fresh table: the main table's
+        // container columns are its structure, never moved into it.
+        const tableSpec = deriveCompanionTableSpec({
+          builtBy: columnOriginOf(c, entityKind),
+          slug: c.slug,
+          kind: entityKind,
+          dbName: c.tableName,
+          fields: c.fields,
+          dialect,
+          defaultLocale,
+          collectionLocalized: true,
+          status: publishesPerLanguage(c),
+        });
+        if (tableSpec) {
+          const plan = planCompanionMigration({
+            spec: tableSpec,
+            prevMainColumnNames: [],
+            companionExisted: false,
+          });
+          if (plan.kind !== "none") {
+            entries.push({ spec: tableSpec, plan, entity: entityKind });
+          }
+        }
+        continue;
+      }
+      const overlaysOnly = overlaysEntryFor(
+        c,
+        entityKind,
+        prevMain,
+        dialect,
+        defaultLocale,
+        overlayRenamesOf(renames, c.tableName)
+      );
+      if (overlaysOnly) entries.push(overlaysOnly);
+      continue;
+    }
 
     const prevTable = previousSnapshot.tables.find(
       t => t.name === spec.mainTable
@@ -2738,10 +2806,20 @@ function planCompanionMigrations(
           joining,
           dialect,
           defaultLocale,
-          renames.get(c.tableName) ?? []
+          (renames.get(c.tableName) ?? []).filter(r => r.overlay !== true)
         )
       : undefined;
     if (adds) entries.push(adds);
+    // The overlay columns of its containers keeping text inside, after the table exists.
+    const overlays = overlaysEntryFor(
+      c,
+      entityKind,
+      prevTable,
+      dialect,
+      defaultLocale,
+      overlayRenamesOf(renames, c.tableName)
+    );
+    if (overlays) entries.push(overlays);
   }
   return entries;
 }
@@ -2838,6 +2916,24 @@ function withRestoredAs(
  * transition is emitted — that self-heals as soon as one migrate:create runs while the
  * entity is still localized.
  */
+/**
+ * Refuse, before any file is written, turning translation off for an entity whose repeaters or
+ * groups keep their text per language: the containers with an overlay column in the previous
+ * snapshot (`overlayColumns`), by the rule every road that turns translation off keeps
+ * (`disableKeepingOverlaysRefusal`).
+ */
+function refuseDisableKeepingOverlays(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  prevMain: TableSpec
+): void {
+  const refusal = disableKeepingOverlaysRefusal(
+    { kind, slug: entity.slug },
+    prevMain.overlayColumns ?? []
+  );
+  if (refusal) throw refusal;
+}
+
 function disableEntryFor(
   c: MinimalConfigEntity,
   entityKind: I18nTransitionKind,
@@ -2850,6 +2946,7 @@ function disableEntryFor(
 ): CompanionPlanEntry | undefined {
   const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
   if (prevMain?.localized !== true) return undefined;
+  refuseDisableKeepingOverlays(c, entityKind, prevMain);
   // Turning translation off moves every translated field out of it at once, so each is judged as
   // a field leaving translation alone is (`refusalsForFieldsLeavingTranslation`): one whose shared
   // column is shaped otherwise than its translated one is refused before any file is written. The
@@ -3014,6 +3111,21 @@ function addsEntryFor(
 interface CompanionRename {
   from: string;
   to: string;
+  /** A container's overlay column, which the overlays file renames (`overlaysEntryFor`). */
+  overlay?: true;
+}
+
+/**
+ * Every pair of a column `recorded` names that `now` does not and one `now` names that `recorded`
+ * does not: the renames a run may be making.
+ */
+function renamePairs(
+  recorded: readonly string[],
+  now: readonly string[]
+): { from: string; to: string }[] {
+  const gone = recorded.filter(c => !now.includes(c));
+  const added = now.filter(c => !recorded.includes(c));
+  return gone.flatMap(from => added.map(to => ({ from, to })));
 }
 
 /** Two SQL texts as one, with the statement breakpoint between them. */
@@ -3056,6 +3168,12 @@ function companionRenameStatements(
  * storage changes too (its kind, length or precision, against the column as
  * the history records it) is refused, as the Builder's own path refuses it
  * (`refusalsForTranslatedFieldRenamedAndReshaped`).
+ *
+ * A container keeping its text inside is a candidate the same way, by its overlay column
+ * (`overlayColumns`), paired only with another container's: renamed, its structure column on the
+ * main table follows the main-table rename, and its overlay keeps every language's text under the
+ * new name rather than leaving it in a column no read names. An overlay holds JSON on either side,
+ * so it is never refused as reshaped.
  */
 async function companionRenameDecisions(
   entities: readonly TaggedConfigEntity[],
@@ -3066,10 +3184,16 @@ async function companionRenameDecisions(
   const byTable = new Map<string, CompanionRename[]>();
   for (const { entity, kind } of entities) {
     if (entity.localized !== true) continue;
-    const recorded = previous.tables.find(
+    const previousTable = previous.tables.find(
       t => t.name === entity.tableName
-    )?.localizedColumns;
-    if (recorded === undefined) continue;
+    );
+    if (
+      previousTable?.localizedColumns === undefined &&
+      previousTable?.overlayColumns === undefined
+    ) {
+      continue;
+    }
+    const recorded = previousTable.localizedColumns ?? [];
     // Each translated field's column as the config now describes it, by name.
     const described = new Map(
       entity.fields
@@ -3084,23 +3208,27 @@ async function companionRenameDecisions(
         })
     );
     const now = [...described.keys()];
-    const gone = recorded.filter(c => !now.includes(c));
-    const added = now.filter(c => !recorded.includes(c));
-    if (gone.length === 0 || added.length === 0) continue;
+    // The overlay columns, apart: one is paired only with another, never with a text's column.
+    const recordedOverlays = previousTable.overlayColumns ?? [];
+    const overlaysNow = overlayColumnsOf(entity, kind, args.dialect);
+    const pairs = [
+      ...renamePairs(recorded, now),
+      ...renamePairs(recordedOverlays, overlaysNow),
+    ];
+    if (pairs.length === 0) continue;
+    const overlayTargets = new Set(overlaysNow);
     const table = `${entity.tableName}_locales`;
-    const candidates = gone.flatMap(from =>
-      added.map(
-        (to): RenameCandidate => ({
-          tableName: table,
-          fromColumn: from,
-          toColumn: to,
-          fromType: "text",
-          toType: "text",
-          typesCompatible: true,
-          preservesValues: true,
-          defaultSuggestion: "rename",
-        })
-      )
+    const candidates = pairs.map(
+      ({ from, to }): RenameCandidate => ({
+        tableName: table,
+        fromColumn: from,
+        toColumn: to,
+        fromType: "text",
+        toType: "text",
+        typesCompatible: true,
+        preservesValues: true,
+        defaultSuggestion: "rename",
+      })
     );
     const used = new Set<string>();
     const accepted: CompanionRename[] = [];
@@ -3113,13 +3241,22 @@ async function companionRenameDecisions(
       if (used.has(`to:${candidate.toColumn}`)) continue;
       used.add(`from:${candidate.fromColumn}`);
       used.add(`to:${candidate.toColumn}`);
-      accepted.push({ from: candidate.fromColumn, to: candidate.toColumn });
+      accepted.push({
+        from: candidate.fromColumn,
+        to: candidate.toColumn,
+        ...(overlayTargets.has(candidate.toColumn) ? { overlay: true } : {}),
+      });
     }
     const recordedColumns = history.columns.get(
       companionHistoryKey(kind, entity.slug, entity.tableName)
     );
-    const reshaped = accepted.find(r =>
-      storageDiffers(recordedColumns?.get(r.from), described.get(r.to)?.column)
+    const reshaped = accepted.find(
+      r =>
+        r.overlay !== true &&
+        storageDiffers(
+          recordedColumns?.get(r.from),
+          described.get(r.to)?.column
+        )
     );
     refuseMigration(
       entity,
@@ -3425,8 +3562,12 @@ function fieldsLeavingTranslationIn(
   if (!storesPerLanguage(c)) return [];
   const previous = previousTranslation(c, kind, previousSnapshot, history);
   if (!previous || previous.columns.size === 0) return [];
+  const overlays = new Set(overlayContainersOf(c));
   return c.fields.flatMap(field => {
     if (isFieldLocalized(field, true)) return [];
+    // A repeater or group translated whole before keeps its column there as its overlay: it keeps
+    // one structure in every language now, and the upgrade converts what it holds. It never leaves.
+    if (overlays.has(field)) return [];
     const column = fieldToLocalizedColumnSpec(
       field,
       dialect,
@@ -4035,12 +4176,141 @@ function withLocalizedMarker(
   }).map(c =>
     c.kind === undefined ? c.column : { column: c.column, kind: c.kind }
   );
+  const overlays = overlayColumnsOf(entity, kind, dialect);
   return {
     ...table,
     localized: true,
     ...(spec ? { localizedColumns: spec.columns.map(c => c.name) } : {}),
     ...(unique.length > 0 ? { uniqueLocalizedColumns: unique } : {}),
+    ...(overlays.length > 0 ? { overlayColumns: overlays } : {}),
   };
+}
+
+/**
+ * The containers of `entity` with an overlay column on its translations table: each repeater or
+ * group keeping one structure in every language with text inside (`keepsTranslationsInside`), by
+ * the same rule the runtime builds that table by (`deriveCompanionTableSpec`), a field group's too.
+ */
+function overlayContainersOf(
+  entity: MinimalConfigEntity
+): MinimalConfigEntity["fields"] {
+  return entity.fields.filter(field =>
+    keepsTranslationsInside(field as StructuredField, true)
+  );
+}
+
+/** The overlay columns `entity`'s translations table holds, by name. */
+function overlayColumnsOf(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  dialect: SupportedDialect
+): string[] {
+  return overlayContainersOf(entity).flatMap(field => {
+    const column = fieldToLocalizedColumnSpec(
+      field,
+      dialect,
+      columnOriginOf(entity, kind)
+    );
+    return column ? [column.name] : [];
+  });
+}
+
+/**
+ * The file adding the overlay columns `entity`'s translations table gains in this run: each
+ * container that keeps text inside now and had no overlay column in the previous snapshot
+ * (`overlayColumns`). Planned as a field added to translation is
+ * (`planFieldAddedToTranslationMigration`), then each column seeded for the default language
+ * from the main table: a container already holding text there (its entity turning translation
+ * on, or a container starting to keep its text apart) has it copied whole into the default
+ * language's overlay, which every read takes as that language's text (`overlayOf`), so no
+ * language's first save leaves it without its text. Undefined when there is none.
+ *
+ * A container renamed (`renamed`) has its overlay column renamed, first, rather than a new one
+ * added: every language's text is under the new name once the file has run.
+ */
+function overlaysEntryFor(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  prevTable: TableSpec | undefined,
+  dialect: SupportedDialect,
+  defaultLocale: string,
+  renamed: readonly CompanionRename[] = []
+): CompanionPlanEntry | undefined {
+  // An overlay already there, or a column the container held when it was translated whole, which
+  // stays as its overlay (`fieldsLeavingTranslationIn` leaves it in place), or one a rename brings.
+  const there = new Set([
+    ...(prevTable?.overlayColumns ?? []),
+    ...(prevTable?.localizedColumns ?? []),
+    ...renamed.map(r => r.to),
+  ]);
+  const builtBy = columnOriginOf(entity, kind);
+  const added = overlayContainersOf(entity).filter(field => {
+    const column = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+    return column != null && !there.has(column.name);
+  });
+  if (added.length === 0 && renamed.length === 0) return undefined;
+  const renames = companionRenameStatements(
+    `${entity.tableName}_locales`,
+    renamed,
+    dialect
+  );
+  const planned = planFieldAddedToTranslationMigration({
+    slug: entity.slug,
+    kind,
+    tableName: entity.tableName,
+    dialect,
+    defaultLocale,
+    status: publishesPerLanguage(entity),
+    recorded: entity.fields.filter(f => isFieldLocalized(f, true)),
+    added,
+    builtBy,
+  });
+  // Renames alone: the file holds them and nothing else.
+  if (added.length === 0) {
+    return {
+      spec: planned.spec,
+      plan: {
+        kind: "adds",
+        spec: planned.spec,
+        upSql: renames.up,
+        downSql: renames.down,
+      },
+      entity: kind,
+    };
+  }
+  // Seeded only from a container whose column the main table already had: one new in this run
+  // has nothing there to copy.
+  const onMain = new Set(prevTable?.columns.map(column => column.name) ?? []);
+  const columns = added.flatMap(field => {
+    const column = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+    return column && onMain.has(column.name) ? [column.name] : [];
+  });
+  const seed = buildOverlaySeedStatements(planned.spec, columns, {
+    status: planned.spec.status === true,
+  });
+  // The renames first, so a column added beside them is added to the table as it stands once they
+  // ran; the down undoes them last.
+  return {
+    spec: planned.spec,
+    plan: {
+      kind: "adds",
+      spec: planned.spec,
+      upSql: joinSql(
+        renames.up,
+        [planned.upSql, ...seed.map(statement => `${statement};`)].join("\n\n")
+      ),
+      downSql: joinSql(planned.downSql, renames.down),
+    },
+    entity: kind,
+  };
+}
+
+/** The renames of overlay columns accepted for `tableName`'s translations table. */
+function overlayRenamesOf(
+  renames: ReadonlyMap<string, readonly CompanionRename[]>,
+  tableName: string
+): CompanionRename[] {
+  return (renames.get(tableName) ?? []).filter(r => r.overlay === true);
 }
 
 /**
@@ -4131,6 +4401,48 @@ function stripRelocatedDrops(
     }
     return true;
   });
+}
+
+/**
+ * `entity` with each required repeater or group that was translated whole before, and so had no
+ * column on its main table, made optional for this run's main table: the column that now holds its
+ * one structure is added nullable, since the rows already there get their structure only from
+ * `nextly migrate`'s data step after the migrations, and a NOT NULL column added to rows that have
+ * no value is refused. The next run, which finds the column there and the container no longer
+ * translated whole, makes it required as declared. Nothing changes without a previous snapshot.
+ */
+function withStagedContainerColumns(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  existing: NextlySchemaSnapshot | undefined,
+  dialect: SupportedDialect
+): MinimalConfigEntity {
+  const previous = existing?.tables.find(t => t.name === entity.tableName);
+  if (!previous?.localizedColumns?.length) return entity;
+  const wasTranslated = new Set(previous.localizedColumns);
+  const onMain = new Set(previous.columns.map(column => column.name));
+  const staged = new Set(
+    overlayContainersOf(entity).filter(field => {
+      if (field.required !== true) return false;
+      const column = fieldToLocalizedColumnSpec(
+        field,
+        dialect,
+        columnOriginOf(entity, kind)
+      );
+      return (
+        column != null &&
+        wasTranslated.has(column.name) &&
+        !onMain.has(column.name)
+      );
+    })
+  );
+  if (staged.size === 0) return entity;
+  return {
+    ...entity,
+    fields: entity.fields.map(field =>
+      staged.has(field) ? { ...field, required: false } : field
+    ),
+  };
 }
 
 /**

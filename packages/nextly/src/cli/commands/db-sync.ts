@@ -81,6 +81,7 @@ import {
   ACCEPT_DATA_LOSS_ENV,
   resolveDataLossConsent,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import { configTheCodeOwns } from "../../domains/schema/pipeline/registered-collections";
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
@@ -383,6 +384,12 @@ export async function runDbSync(
       );
     }
 
+    // The schema as it stands before anything below changes it, so a refusal the data steps make
+    // after the sync names the schema changes only where the sync made some (`liveSchemaOf`).
+    const schemaBefore = takesDataSteps
+      ? await liveSchemaOf(adapter)
+      : undefined;
+
     // Step 3.5: Ensure core tables exist.
     // For fresh databases, the system tables (users, roles, permissions,
     // dynamic_collections, etc.) must exist before any sync or query.
@@ -513,8 +520,11 @@ export async function runDbSync(
     // one included. A backup refusal made only now, for work the check before
     // the sync could not see, ends the run with the sync applied.
     if (takesDataSteps) {
+      const schemaChanged = schemaBefore !== (await liveSchemaOf(adapter));
       await runWithFieldTypes(configResult.fieldTypes, () =>
-        storedData.takeAfterSchemaChanges()
+        storedData.takeAfterSchemaChanges(
+          schemaChanged ? "the schema changes this sync applied" : undefined
+        )
       );
     }
     const storedDataRefused = storedData.refusal();
@@ -766,3 +776,35 @@ export async function dbSyncAction(
 }
 
 export { registerDbSyncCommand } from "./db-sync.command";
+
+/**
+ * The live schema of every table, as one comparable text: its tables, their columns, indexes,
+ * keys and checks (`introspectLiveSnapshot`). Read before and after a sync, the two say whether
+ * the sync changed the schema at all, which none of its steps reports. The catalogs return a
+ * table's keys, checks and indexes in no set order, so each is sorted before it is compared: an
+ * unchanged schema reads the same twice.
+ */
+async function liveSchemaOf(adapter: CLIDatabaseAdapter): Promise<string> {
+  const drizzle = adapter as unknown as DrizzleAdapter;
+  const tables = await drizzle.listTables();
+  const snapshot = await introspectLiveSnapshot(
+    drizzle.getDrizzle(),
+    drizzle.getCapabilities().dialect,
+    [...tables].sort()
+  );
+  const inOrder = <T>(items: readonly T[] | undefined) =>
+    items
+      ?.map(item => JSON.stringify(item))
+      .sort()
+      .join("\n");
+  return JSON.stringify(
+    [...snapshot.tables]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(table => ({
+        ...table,
+        foreignKeys: inOrder(table.foreignKeys),
+        checks: inOrder(table.checks),
+        indexes: inOrder(table.indexes),
+      }))
+  );
+}

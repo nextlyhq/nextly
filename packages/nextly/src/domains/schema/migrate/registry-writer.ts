@@ -498,12 +498,17 @@ async function recordedRows(
         kind: "collection" as const,
         slug,
         ...names(recorded, storedCollections, slug),
-        write: () =>
-          collections.writeRecordedCollection(
-            recordedCollection(slug, recorded),
-            collectionOriginOf(recorded, deps.collectionSources?.get(slug)),
+        write: () => {
+          const origin = collectionOriginOf(
+            recorded,
+            deps.collectionSources?.get(slug)
+          );
+          return collections.writeRecordedCollection(
+            recordedCollection(slug, recorded, origin.source),
+            origin,
             options("collection", recorded, storedCollections, slug)
-          ),
+          );
+        },
       })),
     ...Object.entries(entities.singles)
       .filter(kept)
@@ -692,14 +697,17 @@ function recordedFieldGroup(
  */
 function recordedCollection(
   slug: string,
-  recorded: RecordedEntitySettings
+  recorded: RecordedEntitySettings,
+  /** The origin the row it creates takes (`collectionOriginOf`). */
+  source: NonNullable<CodeFirstCollectionConfig["source"]>
 ): CodeFirstCollectionConfig {
   const declared = { ...declaration(recorded), slug };
   if (recorded.source === "code") {
     return toCodeFirstCollectionConfig(
       declared as CodeFirstCollectionSource<
         CodeFirstCollectionConfig["fields"][number]
-      >
+      >,
+      source
     );
   }
   const row = collectionRowValues(declared as UiSchemaEntity);

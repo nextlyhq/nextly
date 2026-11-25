@@ -285,6 +285,9 @@ function HostedSaveAndPublish({
             <LastVisitChip
               label={save.label}
               offer={offer}
+              // In front of the author as the page opens: the Save button
+              // alone was too quiet a place for work from a last visit.
+              openOnArrival
               save={{
                 run: () => {
                   void hosted.run("save");

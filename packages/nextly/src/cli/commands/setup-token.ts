@@ -10,7 +10,6 @@
  *
  * @module cli/commands/setup-token
  */
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { claimFirstSetup } from "../../auth/setup-token/setup-gate";
@@ -21,11 +20,7 @@ import {
   type SetupTokenMeta,
   operatorSetupToken,
 } from "../../auth/setup-token/setup-token";
-import { getDialectTables } from "../../database/index";
-import { SchemaRegistry } from "../../database/schema-registry";
-import { MetaService } from "../../domains/meta/services/meta-service";
-import { superAdminRoleHeld } from "../../domains/users/services/last-super-admin";
-import { NextlyError } from "../../errors/index";
+import { NextlyError } from "../../errors/nextly-error";
 import { reportDryRun, type DryRunPlan } from "../dry-run";
 import { exitWithError, type CliError } from "../errors";
 import {
@@ -34,8 +29,6 @@ import {
   setupTokenSetByEnv,
 } from "../errors/areas/commands";
 import type { CommandContext, GlobalOptions } from "../program";
-import { openCommandAdapter, withAdapter } from "../utils/adapter";
-import { loadConfig } from "../utils/config-loader";
 
 /**
  * What the command concluded, for its shell to print and exit on: the lines
@@ -135,48 +128,52 @@ export async function runSetupTokenCommand(
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
+  // `--generate` touches nothing, so it loads none of the database code a run
+  // over the install's store does, and a dry run of it is the same run.
+  const result = options.generate
+    ? await setupTokenCommand({ generate: true })
+    : await overStore(options, context);
+  if (result === undefined) return;
+  if (!result.ok) exitWithError(logger, result.error);
+  for (const line of result.lines) logger.info(line);
+}
+
+/**
+ * The run over the install's store, and what it concluded; nothing under
+ * `--dry-run`, which reports for itself. The code that reads the store is
+ * imported here, where a run first needs it.
+ */
+async function overStore(
+  options: SetupTokenCommandOptions,
+  context: CommandContext
+): Promise<SetupTokenCommandResult | undefined> {
+  const { logger } = context;
+  const [{ loadConfig }, { withAdapter }, { setupTokenStore }] =
+    await Promise.all([
+      import("../utils/config-loader"),
+      import("../utils/adapter"),
+      import("./setup-token-store"),
+    ]);
   // The config first, as every command that reads the database loads it: it
   // publishes the configured PostgreSQL schema the connection resolves in, so
   // an install in `cms` has its token replaced there, not in `public`.
-  if (!options.generate) {
-    await loadConfig({
-      configPath: context.options.config,
-      cwd: context.options.cwd,
-    });
-  }
-  // `--generate` touches nothing, so a dry run of it is the same run.
-  if (options.dryRun === true && !options.generate) {
+  await loadConfig({
+    configPath: context.options.config,
+    cwd: context.options.cwd,
+  });
+  if (options.dryRun === true) {
     await previewOverStore(logger);
-    return;
+    return undefined;
   }
-  // `--generate` touches nothing, so it needs no database; otherwise the
-  // connection refuses a missing or unusable database setting itself.
-  const result = options.generate
-    ? await setupTokenCommand({ generate: true })
-    : await withAdapter(
-        adapter => {
-          // The tables read here are static system tables, so the static
-          // registration alone resolves them.
-          const drizzleAdapter = adapter as unknown as DrizzleAdapter;
-          const { dialect } = drizzleAdapter.getCapabilities();
-          const schemaRegistry = new SchemaRegistry(dialect);
-          schemaRegistry.registerStaticSchemas(getDialectTables(dialect));
-          drizzleAdapter.setTableResolver(schemaRegistry);
-
-          return setupTokenCommand({
-            generate: false,
-            meta: new MetaService(drizzleAdapter, logger),
-            hasAdministrator: () =>
-              superAdminRoleHeld(
-                drizzleAdapter.getDrizzle(),
-                getDialectTables(dialect)
-              ),
-          });
-        },
-        { logger }
-      );
-  if (!result.ok) exitWithError(logger, result.error);
-  for (const line of result.lines) logger.info(line);
+  // The connection refuses a missing or unusable database setting itself.
+  return withAdapter(
+    adapter =>
+      setupTokenCommand({
+        generate: false,
+        ...setupTokenStore(adapter, logger),
+      }),
+    { logger }
+  );
 }
 
 /**
@@ -186,24 +183,13 @@ export async function runSetupTokenCommand(
 async function previewOverStore(
   logger: CommandContext["logger"]
 ): Promise<void> {
+  const { openCommandAdapter } = await import("../utils/adapter");
+  const { setupTokenStore } = await import("./setup-token-store");
   const adapter = await openCommandAdapter({ dryRun: true }, logger);
   if (adapter === undefined) return;
   try {
-    const drizzleAdapter = adapter as unknown as DrizzleAdapter;
-    const { dialect } = drizzleAdapter.getCapabilities();
-    const schemaRegistry = new SchemaRegistry(dialect);
-    schemaRegistry.registerStaticSchemas(getDialectTables(dialect));
-    drizzleAdapter.setTableResolver(schemaRegistry);
-    reportDryRun(
-      logger,
-      await previewSetupToken({
-        hasAdministrator: () =>
-          superAdminRoleHeld(
-            drizzleAdapter.getDrizzle(),
-            getDialectTables(dialect)
-          ),
-      })
-    );
+    const { hasAdministrator } = setupTokenStore(adapter, logger);
+    reportDryRun(logger, await previewSetupToken({ hasAdministrator }));
   } finally {
     await adapter.disconnect();
   }

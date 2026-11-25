@@ -24,6 +24,7 @@ import { addressableFields } from "../addressable-fields";
 
 import { toCamelCase, toSnakeCase } from "./case-conversion";
 import { rowId, rowPairing } from "./denied-change";
+import { parsedValue } from "./json-column-value";
 import { sameApartFromIds, type InstanceFieldsOf } from "./same-apart-from-ids";
 
 /**
@@ -855,15 +856,9 @@ function hasRowId(row: unknown): boolean {
   return rowId(row) !== undefined;
 }
 
-/** A stored value, parsed where the dialect holds it as JSON text. */
-export function parsedValue(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
-}
+// Kept beside the JSON-column encoding, which imports nothing, so a pure reader of stored values
+// takes it without this module's dependencies; re-exported for this module's importers.
+export { parsedValue };
 
 /** A non-null, non-array object: one level of a value, or one row. */
 export function isPlainRecord(

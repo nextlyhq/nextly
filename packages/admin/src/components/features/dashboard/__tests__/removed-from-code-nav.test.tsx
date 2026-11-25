@@ -93,6 +93,9 @@ vi.mock("@admin/components/ui/link", () => ({
   ),
 }));
 vi.mock("@admin/components/layout/sidebar", () => ({
+  SidebarMenu: ({ children }: { children: React.ReactNode }) => (
+    <ul>{children}</ul>
+  ),
   SidebarMenuItem: ({ children }: { children: React.ReactNode }) => (
     <li>{children}</li>
   ),
@@ -144,5 +147,69 @@ describe("the Content navigation's removed-from-code mark", () => {
     expect(
       screen.getByRole("link", { name: /Settings/ })
     ).not.toHaveTextContent("Removed");
+  });
+});
+
+describe("the Content panel's Removed fold", () => {
+  it("keeps removed collections out of the list, behind a fold that starts closed", async () => {
+    const { ContentCollections } = await import(
+      "@admin/components/layout/sidebar/ContentCollections"
+    );
+    const { useContentFolds } = await import(
+      "@admin/components/layout/sidebar/lib/content-folds"
+    );
+    const { default: userEvent } = await import("@testing-library/user-event");
+    function Panel() {
+      const folds = useContentFolds();
+      return (
+        <ContentCollections
+          matched={lists.collections as never}
+          pluginMatches={0}
+          loading={false}
+          search=""
+          isActive={() => false}
+          folds={folds}
+        />
+      );
+    }
+    render(
+      <TooltipProvider>
+        <Panel />
+      </TooltipProvider>
+    );
+
+    // The everyday list holds only what is in the code.
+    expect(screen.getByRole("link", { name: /Posts/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Pages/ })).toBeNull();
+    // What was removed is one press away, counted, for whoever may read it.
+    const fold = screen.getByRole("button", { name: "Removed, 1" });
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(fold);
+    expect(fold).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("link", { name: /Pages/ })).toHaveTextContent(
+      "Removed"
+    );
+  });
+
+  it("draws no fold where nothing was removed", async () => {
+    const { ContentCollections } = await import(
+      "@admin/components/layout/sidebar/ContentCollections"
+    );
+    const kept = lists.collections.filter(c => c.removedFromCode !== true);
+    render(
+      <TooltipProvider>
+        <ContentCollections
+          matched={kept as never}
+          pluginMatches={0}
+          loading={false}
+          search=""
+          isActive={() => false}
+          folds={{ isFolded: () => false, toggle: () => {} }}
+        />
+      </TooltipProvider>
+    );
+
+    expect(screen.queryByRole("button", { name: /^Removed/ })).toBeNull();
   });
 });
