@@ -47,6 +47,11 @@ describeMysql("a transactional migration that fails on MySQL", () => {
     await adapter.executeQuery(
       "INSERT INTO notes (id, body) VALUES (1, 'one'), (2, 'two')"
     );
+    await adapter.executeQuery(
+      "CREATE TABLE parted (id int PRIMARY KEY) PARTITION BY RANGE (id) (PARTITION low VALUES LESS THAN (10), PARTITION high VALUES LESS THAN (100))"
+    );
+    await adapter.executeQuery("INSERT INTO parted (id) VALUES (1), (50)");
+    await adapter.executeQuery("CREATE TABLE spare (id int PRIMARY KEY)");
   }, 60_000);
 
   afterEach(async () => {
@@ -54,9 +59,33 @@ describeMysql("a transactional migration that fails on MySQL", () => {
     await drop().catch(() => undefined);
   }, 60_000);
 
-  /** The rows the table holds and whether the failure says part of the file stayed applied. */
+  /**
+   * A LOAD DATA of two rows from a file the server wrote itself, under one name it keeps, since no
+   * statement removes one: undefined where the server reads and writes no file (`secure_file_priv`).
+   */
+  async function loadedRows(): Promise<string | undefined> {
+    const [{ dir }] = (await adapter.executeQuery(
+      "SELECT @@secure_file_priv AS dir"
+    )) as unknown as [{ dir: string | null }];
+    if (dir === null) return undefined;
+    const file = `${dir === "" ? "/tmp/" : dir}nextly_durable_rows.csv`;
+    await adapter
+      .executeQuery(
+        `SELECT 10, 'ten' UNION SELECT 11, 'eleven' INTO OUTFILE '${file}'`
+      )
+      .catch((error: unknown) => {
+        // There from an earlier run, with the same two rows.
+        if (!String((error as Error).message).includes("already exists")) {
+          throw error;
+        }
+      });
+    return `LOAD DATA INFILE '${file}' INTO TABLE notes (id, body)`;
+  }
+
+  /** The rows `counting` reads and whether the failure says part of the file stayed applied. */
   async function ran(
-    statements: readonly string[]
+    statements: readonly string[],
+    counting = "SELECT COUNT(*) AS n FROM notes"
   ): Promise<{ rows: number; partly: boolean; code: string }> {
     const error = await runMigrationStatements(adapter, statements, {
       source: "20261124_000000_000_notes.sql",
@@ -66,9 +95,9 @@ describeMysql("a transactional migration that fails on MySQL", () => {
       (thrown: unknown) => thrown
     );
     expect(error, "the file fails").toBeDefined();
-    const [{ n }] = (await adapter.executeQuery(
-      "SELECT COUNT(*) AS n FROM notes"
-    )) as unknown as [{ n: unknown }];
+    const [{ n }] = (await adapter.executeQuery(counting)) as unknown as [
+      { n: unknown },
+    ];
     const code = NextlyError.is(error) ? error.code : String(error);
     return {
       rows: Number(n),
@@ -126,6 +155,35 @@ describeMysql("a transactional migration that fails on MySQL", () => {
         FAILS,
       ],
     ],
+    [
+      "a DELETE, then a partition dropped",
+      ["DELETE FROM notes", "ALTER TABLE parted DROP PARTITION low", FAILS],
+    ],
+    [
+      "a rename Nextly writes, then a DELETE",
+      [...RENAMES, "DELETE FROM notes", FAILS],
+    ],
+    [
+      "a view, whose CREATE commits, then a DELETE",
+      [
+        "CREATE VIEW notes_view AS SELECT id FROM notes",
+        "DELETE FROM notes",
+        FAILS,
+      ],
+    ],
+    [
+      "a DELETE before a savepoint, the rest rolled back to it, then a schema statement",
+      [
+        "DELETE FROM notes",
+        "SAVEPOINT emptied",
+        "INSERT INTO notes (id, body) VALUES (3, 'three')",
+        "ROLLBACK TO SAVEPOINT emptied",
+        ALTERS,
+        FAILS,
+      ],
+    ],
+    ["a COMMIT, then a DELETE", ["COMMIT", "DELETE FROM notes", FAILS]],
+    ["a ROLLBACK, then a DELETE", ["ROLLBACK", "DELETE FROM notes", FAILS]],
   ])(
     "keeps the rows of %s, and says the file is partly applied",
     async (_name, statements) => {
@@ -133,6 +191,85 @@ describeMysql("a transactional migration that fails on MySQL", () => {
     },
     60_000
   );
+
+  // The rows are another table's, or ones a statement brings in, so each case says which it counts.
+  it.each([
+    [
+      "a partition dropped",
+      ["ALTER TABLE parted DROP PARTITION low", FAILS],
+      "SELECT COUNT(*) AS n FROM parted",
+      1,
+    ],
+    [
+      "a partition emptied",
+      ["ALTER TABLE parted TRUNCATE PARTITION low", FAILS],
+      "SELECT COUNT(*) AS n FROM parted",
+      1,
+    ],
+    [
+      "a partition exchanged for a table",
+      ["ALTER TABLE parted EXCHANGE PARTITION low WITH TABLE spare", FAILS],
+      "SELECT COUNT(*) AS n FROM parted",
+      1,
+    ],
+    [
+      "a table made from another",
+      ["CREATE TABLE copied TABLE notes", FAILS],
+      "SELECT COUNT(*) AS n FROM copied",
+      2,
+    ],
+    [
+      "a table made from rows written out",
+      ["CREATE TABLE copied VALUES ROW(1), ROW(2)", FAILS],
+      "SELECT COUNT(*) AS n FROM copied",
+      2,
+    ],
+    [
+      "a table made and filled from a read",
+      ["CREATE TABLE copied SELECT id FROM notes", FAILS],
+      "SELECT COUNT(*) AS n FROM copied",
+      2,
+    ],
+    [
+      "a table made with its columns and filled from a read",
+      [
+        "CREATE TABLE copied (id int PRIMARY KEY) AS SELECT id FROM notes",
+        FAILS,
+      ],
+      "SELECT COUNT(*) AS n FROM copied",
+      2,
+    ],
+  ])(
+    "keeps the rows of %s, and says the file is partly applied",
+    async (_name, statements, counting, rows) => {
+      expect(await ran(statements, counting)).toMatchObject({
+        rows,
+        partly: true,
+      });
+    },
+    60_000
+  );
+
+  // MySQL keeps no row of a load the transaction undoes: it does not commit (on InnoDB).
+  it("brings the rows back after a file loaded, and does not say the file is partly applied", async ({
+    skip,
+  }) => {
+    const loads = await loadedRows();
+    if (loads === undefined) return skip();
+    expect(
+      await ran([loads, FAILS], "SELECT COUNT(*) AS n FROM notes")
+    ).toMatchObject({ rows: 2, partly: false });
+  }, 60_000);
+
+  it("keeps the rows of a file loaded, then a schema statement, and says the file is partly applied", async ({
+    skip,
+  }) => {
+    const loads = await loadedRows();
+    if (loads === undefined) return skip();
+    expect(
+      await ran([loads, ALTERS, FAILS], "SELECT COUNT(*) AS n FROM notes")
+    ).toMatchObject({ rows: 4, partly: true });
+  }, 60_000);
 
   it.each([
     [
@@ -160,6 +297,40 @@ describeMysql("a transactional migration that fails on MySQL", () => {
     [
       "a user variable set from a read, then a schema statement, no row changed",
       ["SET @seen = (SELECT COUNT(*) FROM notes)", ALTERS, FAILS],
+    ],
+    [
+      "a partitioned table made, which no query fills",
+      [
+        "CREATE TABLE made (id int PRIMARY KEY) PARTITION BY RANGE (id) (PARTITION p0 VALUES LESS THAN (10))",
+        FAILS,
+      ],
+    ],
+    [
+      "a partition added, which changes no row",
+      [
+        "ALTER TABLE parted ADD PARTITION (PARTITION top VALUES LESS THAN (1000))",
+        FAILS,
+      ],
+    ],
+    [
+      "a DELETE undone by a ROLLBACK, then a schema statement",
+      ["DELETE FROM notes", "ROLLBACK", ALTERS, FAILS],
+    ],
+    [
+      "a DELETE undone by a ROLLBACK, with nothing after it but the failure",
+      ["DELETE FROM notes", "ROLLBACK", FAILS],
+    ],
+    [
+      "a DELETE after a schema statement, whose transaction the run opened again",
+      [ALTERS, "DELETE FROM notes", FAILS],
+    ],
+    [
+      "a DELETE after a CREATE TEMPORARY TABLE filled from a read",
+      [
+        "DELETE FROM notes",
+        "CREATE TEMPORARY TABLE seen SELECT id FROM notes",
+        FAILS,
+      ],
     ],
   ])(
     "brings the rows back after %s, and does not say the file is partly applied",
