@@ -259,33 +259,37 @@ describe("collectUnresolvedRelationTargets, for a container whose fields are not
 });
 
 describe("validateCrossPluginRelations, for a relationship inside another field", () => {
-  // A relationship nested in a group or a repeater relates to the other plugin all the same, so
-  // the relating plugin must declare it as a dependency.
-  const a = plug("@t/a", { contributes: { collections: [coll("forms")] } });
+  // Which entity such a field points at may be the app's to say, as the pages a form redirects to
+  // are: the plugin holding the field cannot declare a dependency on whichever plugin owns them.
+  const a = plug("@t/pages", { contributes: { collections: [coll("pages")] } });
   const nested = (name: string) =>
     ({
       name,
       type: "group",
-      fields: [rel("form", "forms")],
+      fields: [
+        {
+          name: "redirectPage",
+          type: "relationship",
+          relationTo: ["pages"],
+        },
+      ],
     }) as unknown as FieldConfig;
 
-  it("requires dependsOn for one nested in an entity's field", () => {
-    const b = plug("@t/b", {
-      contributes: { collections: [coll("comments", [nested("meta")])] },
+  it("needs no dependsOn for one nested in an entity's field", () => {
+    const b = plug("@t/forms", {
+      contributes: { collections: [coll("forms", [nested("settings")])] },
     });
 
-    expect(caught(() => validateCrossPluginRelations([a, b])).code).toBe(
-      "NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION"
-    );
+    expect(() => validateCrossPluginRelations([a, b])).not.toThrow();
   });
 
-  it("requires dependsOn for one nested in a field contributes.extend adds", () => {
-    const b = plug("@t/b", {
-      contributes: { extend: [{ target: "posts", fields: [nested("meta")] }] },
+  it("needs no dependsOn for one nested in a field contributes.extend adds", () => {
+    const b = plug("@t/forms", {
+      contributes: {
+        extend: [{ target: "posts", fields: [nested("settings")] }],
+      },
     });
 
-    expect(caught(() => validateCrossPluginRelations([a, b])).code).toBe(
-      "NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION"
-    );
+    expect(() => validateCrossPluginRelations([a, b])).not.toThrow();
   });
 });

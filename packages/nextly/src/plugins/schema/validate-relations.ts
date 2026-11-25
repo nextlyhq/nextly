@@ -33,22 +33,6 @@ interface RelationField {
 }
 
 /**
- * Each target every relationship among `fields` names, nested ones included (`relationFieldsOf`),
- * with the field that names it: one for a single `relationTo`, one for each of a list's.
- */
-function relationTargetsIn(
-  fields: readonly RelationField[] | undefined
-): Array<{ field: RelationField; target: string }> {
-  return relationFieldsOf(fields).flatMap(field => {
-    const named = field.relationTo;
-    if (named == null) return [];
-    return (Array.isArray(named) ? named : [named])
-      .filter((target): target is string => typeof target === "string")
-      .map(target => ({ field, target }));
-  });
-}
-
-/**
  * Every relationship field among `fields`, those nested in a container field included. Only the
  * types the field guards name as holding fields (`typeHasNestedFields`) are walked: a plugin's
  * type may carry a `fields` option of its own, which is not a field list.
@@ -110,13 +94,21 @@ export function collectUnresolvedRelationTargets(
   for (const entity of entities) {
     // Nested ones too: a relationship inside a group or a repeater names its target as one at
     // the top does.
-    for (const { field, target } of relationTargetsIn(entity.fields)) {
-      if (!collectionSlugs.has(target)) {
-        unresolved.push({
-          source: entity.slug,
-          field: field.name ?? "",
-          target,
-        });
+    for (const fieldEntry of relationFieldsOf(entity.fields)) {
+      if (fieldEntry.relationTo == null) {
+        continue;
+      }
+      const targets = Array.isArray(fieldEntry.relationTo)
+        ? fieldEntry.relationTo
+        : [fieldEntry.relationTo];
+      for (const target of targets) {
+        if (typeof target === "string" && !collectionSlugs.has(target)) {
+          unresolved.push({
+            source: entity.slug,
+            field: fieldEntry.name ?? "",
+            target,
+          });
+        }
       }
     }
   }
@@ -195,20 +187,27 @@ export function validateCrossPluginRelations(
 
   // Check each relationship field's relationTo: if it targets an entity owned
   // by a DIFFERENT plugin, the source plugin must declare dependsOn on it.
-  // Nested ones too (`relationFieldsOf`): one inside a group or a repeater
-  // relates to the other plugin as one at the top does.
   const checkFields = (
     fields: RelationField[] | undefined,
     source: PluginDefinition
   ): void => {
-    for (const { target } of relationTargetsIn(fields)) {
-      const targetOwner = owner.get(target);
-      if (
-        targetOwner &&
-        targetOwner !== source.name &&
-        !(source.dependsOn ?? {})[targetOwner]
-      ) {
-        throw crossPluginRelationError(source.name, targetOwner, target);
+    for (const fieldEntry of fields ?? []) {
+      if (fieldEntry.type !== "relationship" || fieldEntry.relationTo == null) {
+        continue;
+      }
+      const targets = Array.isArray(fieldEntry.relationTo)
+        ? fieldEntry.relationTo
+        : [fieldEntry.relationTo];
+      for (const target of targets) {
+        if (typeof target !== "string") continue;
+        const targetOwner = owner.get(target);
+        if (
+          targetOwner &&
+          targetOwner !== source.name &&
+          !(source.dependsOn ?? {})[targetOwner]
+        ) {
+          throw crossPluginRelationError(source.name, targetOwner, target);
+        }
       }
     }
   };
