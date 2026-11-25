@@ -49,6 +49,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
+import type { TranslatedDocument } from "../../domains/i18n/pipeline/document-access";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import type {
   BuilderSaveSetup,
@@ -181,6 +182,10 @@ import { readAccessCallerForDispatch } from "./read-access-caller";
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
+  respondKeepCurrent,
+  respondSourceChange,
+} from "./source-review-handlers";
+import {
   discardWorkingDraftForDocument,
   takeLiveSharedValuesForDocument,
   getVersionDiffForDocument,
@@ -207,6 +212,15 @@ type CollectionsHandlerType = CollectionsHandler;
 function callerUser(): { userId?: string; user?: UserContext } {
   const user = readAuthenticatedUser();
   return user ? { userId: user.id, user } : {};
+}
+
+/** The entry a translation route names. */
+function entryOf(p: Params): TranslatedDocument {
+  return {
+    kind: "collection",
+    slug: requireParam(p, "collectionName"),
+    id: requireParam(p, "entryId"),
+  };
 }
 
 // Decides whether the apply payload carries actionable rename hints we
@@ -1981,6 +1995,15 @@ const COLLECTIONS_METHODS: Record<
   ),
   publishParts: partsLifecycle("publish", "Published."),
   unpublishParts: partsLifecycle("unpublish", "Unpublished."),
+
+  getEntrySourceChange: {
+    execute: async (_svc, p, _body, request) =>
+      respondSourceChange(entryOf(p), p, request),
+  },
+  keepEntryTranslation: {
+    execute: async (_svc, p, body, request) =>
+      respondKeepCurrent(entryOf(p), body, request),
+  },
 
   previewPublishAllLocales: {
     // What publishing every language would do, language by language, without
