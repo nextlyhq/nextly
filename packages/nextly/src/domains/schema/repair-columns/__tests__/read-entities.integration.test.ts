@@ -17,6 +17,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import { getSchemaEventsDdl } from "../../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { toCliError } from "../../../../cli/errors";
 import { readRepairEntities } from "../read-entities";
 
 const silent = { debug() {}, info() {}, warn() {}, error() {} };
@@ -90,13 +91,20 @@ describe.each(getConfiguredTestDialects())(
       await handle?.destroy();
     });
 
-    /** The error naming a snapshot file the run could not read, as the command prints it. */
-    const unreadable = (name: string) => ({
-      code: "CONFIGURATION_ERROR",
-      logMessage: expect.stringContaining(
-        `meta/${name}.snapshot.json`
-      ) as unknown,
-    });
+    /** The error the run stops on, as the command ends with it. */
+    async function stopped() {
+      const error: unknown = await read().then(
+        () => {
+          throw new Error("expected the run to stop");
+        },
+        (reason: unknown) => reason
+      );
+      const { code, what, why, next } = toCliError(error);
+      return { code, what, why, next };
+    }
+
+    const INVALID_NEXT =
+      "Restore it from version control; if a newer version of Nextly wrote it, upgrade `nextly` to that version. Then run `nextly repair-columns` again.";
 
     /**
      * Write a snapshot and, when `applied`, record its migration in the ledger. `content` is the
@@ -182,7 +190,14 @@ describe.each(getConfiguredTestDialects())(
     it("refuses to judge from an older record where an applied snapshot cannot be read", async () => {
       await snapshot("0001_first", [{ name: "price", type: "number" }], true);
       await snapshot("0002_broken", null, true, "{ not json");
-      await expect(read()).rejects.toMatchObject(unreadable("0002_broken"));
+      expect(await stopped()).toEqual({
+        code: "INVALID_SNAPSHOT",
+        what: "The snapshot file `meta/0002_broken.snapshot.json` is invalid.",
+        why: expect.stringMatching(
+          /^JSON parse failed: .+\. Its migration is applied, so what the database last had applied cannot be known\.$/s
+        ) as unknown,
+        next: INVALID_NEXT,
+      });
     });
 
     it("refuses to judge where the newest applied snapshot's entity record is malformed", async () => {
@@ -193,7 +208,109 @@ describe.each(getConfiguredTestDialects())(
         true,
         JSON.stringify({ version: 1, snapshot: { tables: [] }, entities: [] })
       );
-      await expect(read()).rejects.toMatchObject(unreadable("0002_malformed"));
+      expect(await stopped()).toEqual({
+        code: "INVALID_SNAPSHOT",
+        what: "The snapshot file `meta/0002_malformed.snapshot.json` is invalid.",
+        why: "It records its entities in a shape that cannot be read. Its migration is applied, so what the database last had applied cannot be known.",
+        next: INVALID_NEXT,
+      });
+    });
+
+    it("refuses to judge where the newest applied snapshot is not an object", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_list", null, true, "[]");
+      expect(await stopped()).toMatchObject({
+        code: "INVALID_SNAPSHOT",
+        what: "The snapshot file `meta/0002_list.snapshot.json` is invalid.",
+        why: expect.stringMatching(/^It is not a snapshot\. /) as unknown,
+      });
+    });
+
+    it("names the migration file an applied snapshot has lost, not the snapshot", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
+      rmSync(join(migrationsDir, "0002_second.sql"));
+      expect(await stopped()).toEqual({
+        code: "MISSING_MIGRATION",
+        what: "The snapshot `0002_second.snapshot.json` exists but no migration file of `0002_second` does.",
+        why: "The migration is applied, and a snapshot is read only with its migration file beside it, so what the database last had applied cannot be known.",
+        next: "Restore the migration's .sql file from version control, or, if it was removed on purpose, record that with `nextly migrate:resolve --removed <file>`, then run `nextly repair-columns` again.",
+      });
+    });
+
+    it("names the migration, not a file it never had, where it was a dialect's variant alone", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
+      // Its only file was this one; the base file never existed.
+      rmSync(join(migrationsDir, "0002_second.sql"));
+      writeFileSync(join(migrationsDir, `0002_second.${dialect}.sql`), "");
+      expect((await posts())?.applied?.source).toBe("snapshot");
+      rmSync(join(migrationsDir, `0002_second.${dialect}.sql`));
+      const { code, what, next } = await stopped();
+      expect(code).toBe("MISSING_MIGRATION");
+      expect(`${what} ${next}`).toContain("`0002_second`");
+      expect(`${what} ${next}`).not.toContain("0002_second.sql");
+    });
+
+    /** Record a migration's file removed on purpose, as `migrate:resolve --removed` does. */
+    async function removedOnPurpose(name: string) {
+      rmSync(join(migrationsDir, `${name}.sql`));
+      // A removal counts for the outcome recorded before it, to the millisecond (SQLite: second).
+      await new Promise(done => setTimeout(done, 1100));
+      const events = new SchemaEventsRepository(
+        adapter().getDrizzle(),
+        dialect
+      );
+      await events.recordRemoval({
+        filename: `${name}.sql`,
+        sha256: "a".repeat(64),
+      });
+    }
+
+    it("reads the snapshot of an applied migration whose file was removed on purpose", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
+      await removedOnPurpose("0002_second");
+      const entity = await posts();
+      expect(entity?.applied?.source).toBe("snapshot");
+      expect(entity?.applied?.fields.map(f => f.name)).toEqual(["summary"]);
+    });
+
+    it("goes on past a removed migration older than the newest, which it keeps reading", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
+      await removedOnPurpose("0001_first");
+      expect((await posts())?.applied?.fields.map(f => f.name)).toEqual([
+        "summary",
+      ]);
+    });
+
+    it("stops where a removed migration was applied again and its file is gone once more", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
+      await removedOnPurpose("0002_second");
+      // The removal is about the outcome it followed, not the one after it.
+      await new Promise(done => setTimeout(done, 1100));
+      const events = new SchemaEventsRepository(
+        adapter().getDrizzle(),
+        dialect
+      );
+      for (const row of await events.findFileApplies("0002_second.sql")) {
+        await events.markRolledBack(row.id);
+      }
+      await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
+      rmSync(join(migrationsDir, "0002_second.sql"));
+      expect((await stopped()).code).toBe("MISSING_MIGRATION");
+    });
+
+    it("stops on a removed migration's snapshot that cannot be parsed, naming the snapshot", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_broken", null, true, "{ not json");
+      await removedOnPurpose("0002_broken");
+      expect(await stopped()).toMatchObject({
+        code: "INVALID_SNAPSHOT",
+        what: "The snapshot file `meta/0002_broken.snapshot.json` is invalid.",
+      });
     });
 
     it("reads past an unreadable snapshot whose migration has not been applied", async () => {

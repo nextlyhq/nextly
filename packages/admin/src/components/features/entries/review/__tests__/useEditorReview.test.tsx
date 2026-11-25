@@ -161,6 +161,26 @@ function Editor({
   );
 }
 
+/**
+ * Markup with React's and Radix's generated ids taken out: they count up
+ * from one mount to the next, so two renders of the same header differ only
+ * there, and the property under test is everything else.
+ */
+function withoutIds(html: string): string {
+  return html.replace(/(radix-)?_r_[a-z0-9]+_/g, "<id>");
+}
+
+/**
+ * Whether the header's leading control is held by the model: drawn pressable,
+ * with a lock, and described by why, never disabled (`HeldPress`).
+ */
+function expectHeld(control: HTMLElement, reason: string): void {
+  expect(control).toBeEnabled();
+  expect(control).toHaveAttribute("data-held");
+  expect(control).toHaveAttribute("title", reason);
+  expect(control).toHaveAccessibleDescription(reason);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   held.slugs = new Set(["update-posts", "publish-posts"]);
@@ -171,14 +191,14 @@ describe("the editor's next step under a workflow", () => {
   it("draws today's header, byte for byte, where no workflow is attached", async () => {
     fetchSpy.mockResolvedValue({ attached: false });
     const today = render(<Editor withReview={false} />);
-    const todayHtml = today.getByTestId("header").innerHTML;
+    const todayHtml = withoutIds(today.getByTestId("header").innerHTML);
     today.unmount();
 
     render(<Editor />);
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
     // Settled: the answer is in, and still nothing of the review is drawn.
     await waitFor(() =>
-      expect(screen.getByTestId("header").innerHTML).toBe(todayHtml)
+      expect(withoutIds(screen.getByTestId("header").innerHTML)).toBe(todayHtml)
     );
   });
 
@@ -186,9 +206,10 @@ describe("the editor's next step under a workflow", () => {
     fetchSpy.mockReturnValue(new Promise(() => undefined));
     render(<Editor />);
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
-    const publish = screen.getByRole("button", { name: /^publish$/i });
-    expect(publish).toBeDisabled();
-    expect(publish).toHaveAttribute("title", "Checking the review…");
+    expectHeld(
+      screen.getByRole("button", { name: /^publish$/i }),
+      "Checking the review…"
+    );
   });
 
   it("offers Publish while the review state is read where the page knows no workflow is attached", async () => {
@@ -201,14 +222,12 @@ describe("the editor's next step under a workflow", () => {
   it("keeps Publish held, saying so, where the review state cannot be read", async () => {
     fetchSpy.mockRejectedValue(new Error("Service unavailable"));
     render(<Editor />);
-    const publish = await screen.findByRole("button", { name: /^publish$/i });
     await waitFor(() =>
-      expect(publish).toHaveAttribute(
-        "title",
+      expectHeld(
+        screen.getByRole("button", { name: /^publish$/i }),
         "The review state couldn't be read. Reload the page to try again."
       )
     );
-    expect(publish).toBeDisabled();
   });
 
   it("leads a writer in drafting with Submit for review, sent with what they saw", async () => {
@@ -235,8 +254,7 @@ describe("the editor's next step under a workflow", () => {
     const submit = await screen.findByRole("button", {
       name: "Submit for review",
     });
-    expect(submit).toBeDisabled();
-    expect(submit).toHaveAttribute("title", "Save your changes first.");
+    expectHeld(submit, "Save your changes first.");
   });
 
   it("holds every step while one is on its way, so a second click sends nothing", async () => {
@@ -249,19 +267,21 @@ describe("the editor's next step under a workflow", () => {
     );
     fetchSpy.mockResolvedValue(attached(part(inReview(true))));
     render(<Editor canEdit={false} />);
-    const approve = await screen.findByRole("button", { name: "Approve" });
-    await userEvent.click(approve);
-    await waitFor(() => expect(approve).toBeDisabled());
-    expect(approve).toHaveAttribute("title", "Taking the step…");
+    const approve = () => screen.getByRole("button", { name: "Approve" });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Approve" })
+    );
+    await waitFor(() => expectHeld(approve(), "Taking the step…"));
     expect(
-      screen.getByRole("button", { name: "Request changes" })
+      screen.getByRole("button", { name: "Request changes…" })
     ).toBeDisabled();
-    await userEvent.click(approve);
+    // Pressed while held, it opens its reason and sends nothing.
+    await userEvent.click(approve());
     expect(stepSpy).toHaveBeenCalledTimes(1);
 
     // Answered, the steps are offered again.
     answer({ message: "Step taken.", item: {} });
-    await waitFor(() => expect(approve).toBeEnabled());
+    await waitFor(() => expect(approve()).not.toHaveAttribute("data-held"));
   });
 
   it("leads a reviewer with Approve, and asks a comment before requesting changes", async () => {
@@ -272,8 +292,9 @@ describe("the editor's next step under a workflow", () => {
       await screen.findByRole("button", { name: "Approve" })
     ).toBeEnabled();
 
+    // Its word ends in an ellipsis: it asks for a comment first.
     await userEvent.click(
-      screen.getByRole("button", { name: "Request changes" })
+      screen.getByRole("button", { name: "Request changes…" })
     );
     const dialog = await screen.findByRole("dialog");
     const send = within(dialog).getByRole("button", {
@@ -300,11 +321,12 @@ describe("the editor's next step under a workflow", () => {
     held.slugs = new Set(["update-posts", "publish-posts"]);
     fetchSpy.mockResolvedValue(attached(part(inReview(false))));
     render(<Editor />);
-    const publish = await screen.findByRole("button", { name: /^publish$/i });
-    await waitFor(() => expect(publish).toBeDisabled());
-    expect(publish).toHaveAttribute(
-      "title",
-      "Needs approval: In review, waiting for Editors"
+    await screen.findByRole("button", { name: /^publish$/i });
+    await waitFor(() =>
+      expectHeld(
+        screen.getByRole("button", { name: /^publish$/i }),
+        "Needs approval: In review, waiting for Editors"
+      )
     );
   });
 
@@ -325,7 +347,7 @@ describe("the editor's next step under a workflow", () => {
     );
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Request changes" })
+      screen.queryByRole("button", { name: /^Request changes/ })
     ).toBeNull();
   });
 
@@ -360,11 +382,16 @@ describe("the editor's next step under a workflow", () => {
     );
     render(<Editor canEdit={false} />);
     const lead = await screen.findByRole("button", { name: "Send to legal" });
-    // The move leads, drawn as the primary control; Approve sits beside it.
+    // The move leads, drawn as the primary control; Approve is a row of its
+    // menu, never a second button beside it.
     expect(lead).toHaveAttribute("data-primary", "true");
-    expect(screen.getByRole("button", { name: "Approve" })).not.toHaveAttribute(
-      "data-primary"
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "More ways to publish" })
     );
+    expect(
+      await screen.findByRole("menuitem", { name: "Approve" })
+    ).toBeInTheDocument();
   });
 
   it("asks a comment before any step whose definition requires one, not only a request for changes", async () => {
@@ -386,8 +413,9 @@ describe("the editor's next step under a workflow", () => {
       )
     );
     render(<Editor />);
+    // Its word ends in an ellipsis: it asks for a comment first.
     await userEvent.click(
-      await screen.findByRole("button", { name: "Submit for review" })
+      await screen.findByRole("button", { name: "Submit for review…" })
     );
     const dialog = await screen.findByRole("dialog");
     const send = within(dialog).getByRole("button", {
@@ -408,6 +436,31 @@ describe("the editor's next step under a workflow", () => {
         })
       )
     );
+  });
+
+  it("keeps a label that already ends in three dots as it is, adding no second ellipsis", async () => {
+    fetchSpy.mockResolvedValue(
+      attached(
+        part({
+          steps: [
+            {
+              name: "submit",
+              label: "Send for review...",
+              kind: "submit",
+              to: "inReview",
+              mayTake: true,
+              primary: true,
+              commentRequired: true,
+            },
+          ],
+        })
+      )
+    );
+    render(<Editor />);
+    expect(
+      await screen.findByRole("button", { name: "Send for review..." })
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/\.\.\.…/)).toBeNull();
   });
 
   it("acts on the shared fields where the language on screen is live and they wait", async () => {

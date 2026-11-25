@@ -196,7 +196,9 @@ export async function liveStoredDocument(args: {
           args.tx,
           args.companion,
           String(args.row.id),
-          args.locale
+          args.locale,
+          // A repeater's or group's text is laid on the structure this row holds.
+          args.row
         )
       : {};
   const components = await readComponentSubtrees({

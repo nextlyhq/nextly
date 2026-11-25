@@ -6,8 +6,8 @@
  *
  * - The author reads the server's sentence as it is: it names the entity,
  *   says it was removed from code and gives both ways out. A hook that shows
- *   a toast of its own words instead ("Couldn't publish all languages.") or
- *   puts words in front of it hides that.
+ *   a toast of its own words instead, or puts words in front of it, hides
+ *   that.
  * - The entity's schema is read again. A screen opened before the removal
  *   holds a schema that says it may be edited; read again, it carries the mark
  *   and the screen turns read-only. The last two cases watch that happen.
@@ -24,9 +24,9 @@ const api = vi.hoisted(() => ({
   delete: vi.fn(),
   deleteByIDs: vi.fn(),
   updateByIDs: vi.fn(),
-  publishAllEntryLocales: vi.fn(),
-  publishAllSingleLocales: vi.fn(),
-  // The read of every language a publish of every language takes first.
+  publishEntryParts: vi.fn(),
+  publishSingleParts: vi.fn(),
+  // The read of every language a publish of chosen parts takes first.
   findByID: vi.fn(() => Promise.resolve({ id: "e1", _rev: "2" })),
   getDocument: vi.fn(() => Promise.resolve({ id: "s1", _rev: "2" })),
   updateDocument: vi.fn(),
@@ -49,7 +49,7 @@ vi.mock("@admin/services/entryApi", async importOriginal => {
       delete: api.delete,
       deleteByIDs: api.deleteByIDs,
       updateByIDs: api.updateByIDs,
-      publishAllLocales: api.publishAllEntryLocales,
+      publishParts: api.publishEntryParts,
       findByID: api.findByID,
     },
   };
@@ -62,7 +62,7 @@ vi.mock("@admin/services/singleApi", async importOriginal => {
     ...actual,
     singleApi: {
       ...actual.singleApi,
-      publishAllLocales: api.publishAllSingleLocales,
+      publishParts: api.publishSingleParts,
       getDocument: api.getDocument,
       updateDocument: api.updateDocument,
       getSchema: api.getSingleSchema,
@@ -118,8 +118,7 @@ import { useCreateEntry } from "../useCreateEntry";
 import { useDeleteEntry } from "../useDeleteEntry";
 import { useDiscardSingleWorkingDraft } from "../useDiscardSingleWorkingDraft";
 import { useDiscardWorkingDraft } from "../useDiscardWorkingDraft";
-import { usePublishAllLocales } from "../usePublishAllLocales";
-import { usePublishAllSingleLocales } from "../usePublishAllSingleLocales";
+import { usePublishParts } from "../usePublishParts";
 import {
   singleKeys,
   useSingleSchema,
@@ -227,13 +226,17 @@ const HOOKS: HookCase[] = [
     toasts: true,
   },
   {
-    name: "usePublishAllLocales",
+    name: "usePublishParts (an entry)",
     kind: "collection",
-    spy: api.publishAllEntryLocales,
+    spy: api.publishEntryParts,
     use: () =>
-      usePublishAllLocales({ collectionSlug: "posts" }) as MutationLike,
-    variables: "e1",
-    toasts: true,
+      usePublishParts({
+        target: { kind: "collection", slug: "posts", id: "e1" },
+        direction: "publish",
+      }) as MutationLike,
+    variables: { locales: ["en"] },
+    // The dialog shows the refusal beside the part it is about.
+    toasts: false,
   },
   {
     name: "useDiscardWorkingDraft",
@@ -255,11 +258,16 @@ const HOOKS: HookCase[] = [
     toasts: false,
   },
   {
-    name: "usePublishAllSingleLocales",
+    name: "usePublishParts (a Single)",
     kind: "single",
-    spy: api.publishAllSingleLocales,
-    use: () => usePublishAllSingleLocales({ slug: "home" }) as MutationLike,
-    toasts: true,
+    spy: api.publishSingleParts,
+    use: () =>
+      usePublishParts({
+        target: { kind: "single", slug: "home" },
+        direction: "publish",
+      }) as MutationLike,
+    variables: { locales: ["en"] },
+    toasts: false,
   },
   {
     name: "useDiscardSingleWorkingDraft",
@@ -357,22 +365,22 @@ describe("a screen opened before the removal", () => {
         removedFromCode: true,
         removedFromCodeState: { state: "not-dropped" },
       });
-    api.publishAllEntryLocales.mockRejectedValue(
-      refusal("collection", "posts")
-    );
+    api.update.mockRejectedValue(refusal("collection", "posts"));
     const client = makeClient();
 
     const { result } = renderHook(
       () => ({
         schema: useCollectionSchema("posts"),
-        publishAll: usePublishAllLocales({ collectionSlug: "posts" }),
+        save: useUpdateEntry({ collectionSlug: "posts", entryId: "e1" }),
       }),
       { wrapper: makeWrapper(client) }
     );
     await waitFor(() => expect(result.current.schema.data).toBeDefined());
     expect(result.current.schema.data?.removedFromCode).toBeUndefined();
 
-    await expect(result.current.publishAll.mutateAsync("e1")).rejects.toThrow();
+    await expect(
+      result.current.save.mutateAsync({ title: "Hello" })
+    ).rejects.toThrow();
 
     await waitFor(() =>
       expect(result.current.schema.data?.removedFromCode).toBe(true)

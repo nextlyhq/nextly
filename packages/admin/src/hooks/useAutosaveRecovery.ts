@@ -15,8 +15,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
-import { emptyThePoint } from "@admin/hooks/useDocumentAutosave";
+import {
+  documentRecordingKey,
+  emptyThePoint,
+} from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { holdRecordingsUntilAnswered } from "@admin/hooks/useSnapshotAutosave";
 import { canonicalJson } from "@admin/lib/canonical-json";
 import {
   forgetTabPreference,
@@ -185,6 +189,47 @@ function holdsNoValues(point: AutosaveDetail): boolean {
 }
 
 /**
+ * Whether a stored point holds work from an earlier visit that a recording
+ * would destroy: values, other than what the document already stores. A point
+ * in another language counts, since the author has one point per document
+ * whatever the language, and a recording in this one replaces it.
+ */
+function holdsEarlierWork(
+  point: AutosaveDetail | null | undefined,
+  stored: Parameters<typeof holdsStored>[1],
+  locale: string | null,
+  defaultLocale: string | null
+): boolean {
+  if (!point || holdsNoValues(point)) return false;
+  return !holdsStored(point, stored, locale, defaultLocale);
+}
+
+/**
+ * Hold this tab's recordings of the document while an earlier visit's point
+ * waits for its author's answer: see `holdRecordingsUntilAnswered`.
+ *
+ * Held from the moment the editor opens, before the read answers: an edit
+ * made in that moment would otherwise be recorded over the point it brings.
+ * Not where the read failed, which would hold every recording for good.
+ */
+function useHoldWhileUnanswered(
+  scope: VersionScope | null,
+  read: { answered: boolean; isError: boolean; isPending: boolean },
+  earlierWork: () => boolean
+): void {
+  const held =
+    scope !== null &&
+    !read.answered &&
+    !read.isError &&
+    (read.isPending || earlierWork());
+  const document = documentRecordingKey(scope);
+  useEffect(() => {
+    if (document === null || !held) return;
+    return holdRecordingsUntilAnswered(document);
+  }, [document, held]);
+}
+
+/**
  * Whether the form holds edits, as its subscription last said: read when an
  * answer is acted on, after a round trip, rather than at render.
  */
@@ -331,7 +376,9 @@ export interface UseAutosaveRecoveryResult {
    * window opened on its own (a tab duplicated from this one, or opened from
    * it, shares its session storage and keeps it put off), so an author never
    * discovers work gone because they closed an offer. What it ends is the same
-   * offer returning on every load of the editor.
+   * offer returning on every load of the editor. Nor do this editor's
+   * recordings replace the point afterwards: they wait until it is restored,
+   * discarded or saved over (see `holdRecordingsUntilAnswered`).
    */
   dismiss: () => void;
   /**
@@ -631,6 +678,10 @@ export function useAutosaveRecovery({
   // language name one language.
   const { defaultLocale } = useLocalization();
   const [dismissed, setDismissed] = useState(false);
+  // Whether the author has answered the point the editor opened with: taken
+  // it, discarded it, or saved over it. "Not now" is no answer: the point is
+  // kept, so this editor's recordings must not replace it.
+  const [answered, setAnswered] = useState(false);
   // Withdrawn once a save lands: see `savedCount`. Both answers belong to the
   // document they were given for: an editor that moves to another document
   // offers that one's recovery point, whatever was dismissed or saved before.
@@ -641,9 +692,12 @@ export function useAutosaveRecovery({
     setDocumentSeen(documentKey);
     setSavesSeen(savedCount);
     setDismissed(false);
+    setAnswered(false);
   } else if (savesSeen !== savedCount) {
     setSavesSeen(savedCount);
     setDismissed(true);
+    // A save deletes the point on the server: nothing is left to keep.
+    setAnswered(true);
   }
 
   const { data, isPending, isError } = useQuery({
@@ -665,6 +719,7 @@ export function useAutosaveRecovery({
 
   const holdsEdits = useFormHoldsEdits(form);
   const discard = useCallback(() => {
+    setAnswered(true);
     // Put off at once, as Not now is, so the offer goes in this tab whatever
     // the write below answers.
     dismiss();
@@ -709,14 +764,19 @@ export function useAutosaveRecovery({
     [dismissed, data, stored, locale, defaultLocale, isPutOff]
   );
 
+  // Taken, not put off: the form holds the work now, so nothing is offered,
+  // and the editor's recordings keep it from here.
+  const taken = useCallback((taking: boolean) => {
+    setDismissed(taking);
+    if (taking) setAnswered(true);
+  }, []);
   const { restore, restoreChecked, take } = useRestoreOffer({
     offer,
     point: data,
     scope,
     form,
     queryKey,
-    // Taken, not put off: the form holds the work now, so nothing is offered.
-    setDismissed,
+    setDismissed: taken,
     locale,
     defaultLocale: defaultLocale ?? null,
     onRestored,
@@ -727,8 +787,15 @@ export function useAutosaveRecovery({
   const queryClient = useQueryClient();
   const recheck = useCallback(() => {
     setDismissed(false);
+    // The point read again is this editor's own edits, just kept: its
+    // recordings go on keeping them.
+    setAnswered(true);
     void queryClient.invalidateQueries({ queryKey });
   }, [queryClient, queryKey]);
+
+  useHoldWhileUnanswered(scope, { answered, isError, isPending }, () =>
+    holdsEarlierWork(data, stored, locale, defaultLocale ?? null)
+  );
 
   return {
     offer,

@@ -446,4 +446,74 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
     },
     180_000
   );
+
+  it.runIf(dialect !== "sqlite")(
+    "asks no consent for a key into another schema or database, and names the rows a later removal reaches through it",
+    async () => {
+      // Another schema (PostgreSQL) or database (MySQL), holding a table that a
+      // delete of the app's accounts reaches.
+      const other = `${P}_other`;
+      const acct = `${P}_acct`;
+      const members = `${other}.members`;
+      const schema = dialect === "postgresql";
+      const [{ own }] = await adapter.executeQuery<{ own: string }>(
+        schema ? "SELECT current_schema() AS own" : "SELECT DATABASE() AS own"
+      );
+      file(
+        [
+          `CREATE TABLE ${acct} (id integer PRIMARY KEY)`,
+          `INSERT INTO ${acct} (id) VALUES (1)`,
+        ],
+        []
+      );
+      expect((await migrate()).applied).toBe(1);
+      await adapter.executeQuery(
+        schema ? `CREATE SCHEMA ${other}` : `CREATE DATABASE ${other}`
+      );
+      try {
+        await adapter.executeQuery(
+          `CREATE TABLE ${members} (id integer PRIMARY KEY, acct_id integer, FOREIGN KEY (acct_id) REFERENCES ${own}.${acct} (id) ON DELETE CASCADE)`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${members} (id, acct_id) VALUES (1, 1)`
+        );
+        file(
+          [
+            `ALTER TABLE ${posts} ADD COLUMN owner_id integer`,
+            `ALTER TABLE ${posts} ADD CONSTRAINT ${P}_owner FOREIGN KEY (owner_id) REFERENCES ${members} (id)`,
+          ],
+          []
+        );
+        expect((await migrate()).applied).toBe(1);
+        // With the key in place, a file that deletes nothing asks nothing either.
+        file([`ALTER TABLE ${posts} ADD COLUMN extra integer`], []);
+        expect((await migrate()).applied).toBe(1);
+
+        file(
+          [
+            `ALTER TABLE ${posts} ADD COLUMN member_id integer`,
+            `UPDATE ${posts} SET member_id = 1 WHERE id = 1`,
+            `ALTER TABLE ${posts} ADD CONSTRAINT ${P}_member FOREIGN KEY (member_id) REFERENCES ${members} (id) ON DELETE CASCADE`,
+            `DELETE FROM ${acct}`,
+          ],
+          []
+        );
+        const message = await refusedUnchanged(() => migrate());
+        expect(message).toContain(`- rows of ${posts}`);
+        expect(message).toContain(`- rows of ${members}`);
+        // Naming every table but the app's own posts does not cover them.
+        await refusedUnchanged(() => migrate(consentFor(acct)));
+        const all = resolveDataLossConsent({ flag: true, env: {} });
+        expect((await migrate(all)).applied).toBe(1);
+        expect((await databaseState()).tables[posts]).toBe(1);
+      } finally {
+        // A key across the two would keep either from being dropped.
+        await adapter.executeQuery(`DROP TABLE IF EXISTS ${posts}`);
+        await adapter.executeQuery(
+          schema ? `DROP SCHEMA ${other} CASCADE` : `DROP DATABASE ${other}`
+        );
+      }
+    },
+    180_000
+  );
 });

@@ -111,6 +111,14 @@ describe("the move of an earlier release's migration records (sqlite)", () => {
     return { moved, asked };
   }
 
+  // A run says whether it made the move itself, which a refusal after it names as applied; one
+  // that finds the records already moved, as behind another run, made none. Broken (the move read
+  // from the tables being gone afterwards), both runs claim it.
+  it("answers whether this run moved the records, and not where they were moved already", async () => {
+    expect(await move({ backupConfirmed: true }).moved).toBe(true);
+    expect(await move({ backupConfirmed: true }).moved).toBe(false);
+  });
+
   it("creates the events table, backfills file_apply rows, and drops the legacy table", async () => {
     await move({ backupConfirmed: true }).moved;
 
@@ -130,9 +138,7 @@ describe("the move of an earlier release's migration records (sqlite)", () => {
           .get() as { n: number }
       ).n;
     const before = count();
-    await expect(
-      move({ backupConfirmed: true }).moved
-    ).resolves.toBeUndefined();
+    await expect(move({ backupConfirmed: true }).moved).resolves.toBe(false);
     expect(count()).toBe(before);
   });
 
@@ -194,7 +200,7 @@ describe("the move of an earlier release's migration records (sqlite)", () => {
     // run has moved the records and dropped both tables.
     testDb.sqlite.exec("DROP TABLE nextly_migrations");
     const { moved, asked } = move({ interactive: false });
-    await expect(moved).resolves.toBeUndefined();
+    await expect(moved).resolves.toBe(false);
     expect(asked).toEqual([]);
   });
 
@@ -212,7 +218,7 @@ describe("the move of an earlier release's migration records (sqlite)", () => {
       return real(name);
     };
     const { moved, asked } = move({ interactive: false });
-    await expect(moved).resolves.toBeUndefined();
+    await expect(moved).resolves.toBe(false);
     expect(asked).toEqual([]);
   });
 

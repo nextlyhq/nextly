@@ -171,14 +171,21 @@ async function offered(): Promise<string[]> {
   const shown = within(bar)
     .getAllByRole("button")
     .map(button => button.textContent?.trim() ?? "");
-  const more = within(bar).queryByRole("button", { name: "More actions" });
-  if (more === null) return shown;
-  await userEvent.click(more);
-  const items = (await screen.findAllByRole("menuitem")).map(
-    item => item.textContent?.trim() ?? ""
-  );
-  await userEvent.keyboard("{Escape}");
-  return [...shown, ...items];
+  // The rows of both menus: the main button's (saving, the other ways to
+  // publish) and More.
+  const rows: string[] = [];
+  for (const name of ["More ways to publish", "More actions"]) {
+    const trigger = within(bar).queryByRole("button", { name });
+    if (trigger === null) continue;
+    await userEvent.click(trigger);
+    rows.push(
+      ...(await screen.findAllByRole("menuitem")).map(
+        item => item.textContent?.trim() ?? ""
+      )
+    );
+    await userEvent.keyboard("{Escape}");
+  }
+  return [...shown, ...rows];
 }
 
 beforeEach(() => {
@@ -270,7 +277,7 @@ describe("a person who may read and approve, but not edit", () => {
 
     const approve = await headerApprove();
     expect(approve).toBeEnabled();
-    expect(await offered()).toContain("Request changes");
+    expect(await offered()).toContain("Request changes…");
     await waitFor(() =>
       expect(
         screen.getByRole("region", { name: "Changes to review" })

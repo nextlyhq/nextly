@@ -57,6 +57,9 @@ export class DocumentLockService {
    * that this caller is waiting, and change nothing. It is answered only when
    * the document is held, it moves no claim, and the holder learns of it on the
    * heartbeat they were already making.
+   *
+   * `reclaimToken` takes back the caller's own lapsed claim, replacing only
+   * the claim it names: see `acquireDocumentLock`.
    */
   async acquire(
     ref: DocumentRef,
@@ -64,6 +67,7 @@ export class DocumentLockService {
     options?: {
       readonly takeover?: boolean;
       readonly requestAccess?: boolean;
+      readonly reclaimToken?: string;
     }
   ): Promise<AcquireDocumentLockOutcome> {
     return await acquireDocumentLock(this.adapter, ref, claimant, options);

@@ -85,16 +85,18 @@ test.describe("admin screens nest their placeholders validly", () => {
     const release = await hold(page, "**/admin/api/releases*");
     await gotoAdmin(page, `/collections/posts/${item.id}`);
 
-    // The Publishing section's placeholder is drawn: its words are for
-    // screen readers only, so it is found by its busy region.
-    const checking = page
-      .locator('[aria-busy="true"]')
-      .filter({ hasText: "Checking releases" });
-    await expect(checking).toHaveCount(1, { timeout: 30_000 });
+    // The panel is drawn while the releases are still being checked, with
+    // no Publishing section yet: it shows only once a schedule is known.
+    const panelDetails = page.getByRole("region", { name: "Details" });
+    const publishing = page.getByRole("region", { name: "Publishing" });
+    await expect(panelDetails).toBeVisible({ timeout: 30_000 });
+    await expect(publishing).toHaveCount(0);
     expect(await errors()).toEqual([]);
+    const answered = page.waitForResponse("**/admin/api/releases*");
     release();
-    await expect(checking).toHaveCount(0, { timeout: 30_000 });
-    await expect(page.getByText("Not scheduled.")).toBeVisible();
+    await answered;
+    // A post in no release still draws none, and nothing nests wrongly.
+    await expect(publishing).toHaveCount(0);
     expect(await errors()).toEqual([]);
   });
 
