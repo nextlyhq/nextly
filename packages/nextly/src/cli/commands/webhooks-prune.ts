@@ -26,6 +26,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { pruneWebhookData } from "../../domains/webhooks/prune";
+import { announceMode } from "../environment";
 import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
@@ -70,6 +71,9 @@ export async function runWebhooksPruneCommand(
     logger.info("Webhook retention is disabled (webhooks.retention = false).");
     return;
   }
+  // A pass reaches the database, so the run names it now, before it asks to
+  // delete from it (once a run: the connection below does not print it again).
+  announceMode();
 
   // A pass that deletes is consented to before the database is reached; a
   // dry run deletes nothing and needs none.

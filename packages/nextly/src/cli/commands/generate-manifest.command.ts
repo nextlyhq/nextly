@@ -40,6 +40,6 @@ export function registerGenerateManifestCommand(program: Command): void {
             (await import("./generate-manifest")).generateManifestAction
         )
       ),
-    startLine("Generating the block manifest...")
+    startLine("Generating the block manifest...", "no database")
   );
 }

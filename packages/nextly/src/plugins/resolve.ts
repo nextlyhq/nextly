@@ -1,4 +1,4 @@
-import { MUST_CHANGE_PASSWORD_CHALLENGE } from "../auth/pipeline/pending-token";
+import { MUST_CHANGE_PASSWORD_CHALLENGE } from "../auth/pipeline/must-change-password";
 import { collectPluginAuditKinds } from "../domains/audit/plugin-audit-kinds";
 import {
   assertModuleKeysFit,

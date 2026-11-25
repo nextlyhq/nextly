@@ -454,6 +454,7 @@ function DocumentBarActions({
   // wide screen, and the menu lists the same choices on a narrow one.
   const previewProps = previewPropsFor(props, () => onShareOpenChange(true));
   const viewsToOpenIn = useBarViewsToOpenIn(props);
+  const languagesShown = useLanguagesControlShown(props.languagesControl);
   return (
     <>
       {/* A button at every width, pressed while history is open: on a narrow
@@ -464,9 +465,10 @@ function DocumentBarActions({
           open={historyOpen}
           onOpen={onOpenHistory}
           iconOnly={folded}
+          besideLanguages={languagesShown}
         />
       ) : null}
-      <LanguagesPlace control={props.languagesControl} />
+      {languagesShown ? props.languagesControl : null}
       {versionActions ? (
         <VersionOnScreenActions
           versionActions={versionActions}
@@ -650,11 +652,14 @@ function HistoryButton({
   open,
   onOpen,
   iconOnly,
+  besideLanguages,
 }: {
   open: boolean;
   onOpen: () => void;
   /** Whether the bar is too narrow for its word, which it then only speaks. */
   iconOnly: boolean;
+  /** Whether the languages control sits beside it, which widens the cluster its word fits in. */
+  besideLanguages: boolean;
 }) {
   return (
     <Button
@@ -676,22 +681,24 @@ function HistoryButton({
       {iconOnly ? (
         <span className="sr-only">History</span>
       ) : (
-        <ToolbarLabel priority="secondary">History</ToolbarLabel>
+        <ToolbarLabel
+          priority={besideLanguages ? "cluster-with-languages" : "cluster"}
+        >
+          History
+        </ToolbarLabel>
       )}
     </Button>
   );
 }
 
 /**
- * Where the document's languages control sits: right after History, and only
- * on a site with two languages or more.
+ * Whether the document's languages control is drawn: there is one, and the site
+ * has two languages or more. It sits right after History, and History's word
+ * reads the same answer to know how wide its cluster is.
  */
-function LanguagesPlace({ control }: { control: React.ReactNode }) {
+function useLanguagesControlShown(control: React.ReactNode): boolean {
   const { locales } = useLocalization();
-  if (control === undefined || control === null || locales.length < 2) {
-    return null;
-  }
-  return <>{control}</>;
+  return control !== undefined && control !== null && locales.length >= 2;
 }
 
 type HostedActions = ReturnType<typeof useHostedDocumentActions>;

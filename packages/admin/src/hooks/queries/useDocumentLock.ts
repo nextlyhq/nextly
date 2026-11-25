@@ -103,6 +103,21 @@
  * renewal that does not answer by the next beat meets the deadline there as
  * before, whether that beat runs on time or late again.
  *
+ * ## A claim lost to silence asks again until it is answered
+ *
+ * 🔴 A claim reported lost was never refused: the editor only stopped being
+ * able to vouch for it, most often because the connection dropped or the
+ * computer slept past the deadline. So the beat goes on asking, with the
+ * token the claim had, on every beat and at once when the browser says it is
+ * online or the tab is shown again, with a claim that names the token it
+ * had. The server lets that claim replace only the claim it names, or none,
+ * in one transaction: refused by a live claim of anyone else's (the same
+ * person's other tab included, which a plain claim of theirs would take), it
+ * reports who holds it and waits for the person as any takeover does.
+ * Otherwise the claim comes back under a new token, so the release sent with
+ * the old one deletes nothing when it lands. Until then the claim stays lost,
+ * however the asks fail.
+ *
  * ## The beat also says whether the document changed
  *
  * Given the version the editor's copy started from, every claim and beat
@@ -371,6 +386,30 @@ export function useDocumentLock({
     // past its own deadline. The beat then waits for the person rather than
     // re-taking a claim they were just told they had lost.
     let surrendered = false;
+    // The token a claim lost to silence had, which the beat asks about again:
+    // see "A claim lost to silence asks again". Null once answered, and for a
+    // claim the server said someone else took.
+    let lapsed: string | null = null;
+    // The ask about `lapsed` holding its slot, so a wake-up and a beat in the
+    // same moment send one; null while none does. Counted, so an ask whose slot
+    // expired cannot free the slot of the one after it.
+    let lapsedAsk: number | null = null;
+    let lapsedAsks = 0;
+    // 🔴 Reclaims of `lapsed` still unanswered, whose slots may have expired.
+    // One of them may have won a new claim the server holds, so a refusal
+    // arriving meanwhile can be this editor's own new claim, not a
+    // colleague's: it waits in `deferredHolder` for them, at most a beat.
+    let reclaimsOut = 0;
+    let deferredHolder: DocumentLockHolder | null = null;
+    // The lapsed token whose reclaim may still answer after its refusal was
+    // reported: that late win may be this editor's own, and is taken once a
+    // renewal confirms it.
+    let adoptable: string | null = null;
+    // The reclaims sent by the time one was last refused, counted as
+    // `lapsedAsks` counts them: a win from one of those predates the refusal,
+    // which may be a colleague's takeover since, so it is confirmed before it
+    // is taken. A reclaim sent after it answers for the present.
+    let refusedThrough = 0;
     // Whether a colleague's claim has been reported since this editor last
     // held the document, and whether it has held it at all in this run. A
     // claim won after the first, and never the second, is a gain.
@@ -459,6 +498,11 @@ export function useDocumentLock({
       // very token may already be dead and the following plain claim would come
       // back `held`, losing the click for good.
       if (!repairNeeded) pending = null;
+      // Whatever claim was lost before is this one now.
+      lapsed = null;
+      deferredHolder = null;
+      adoptable = null;
+      refusedThrough = 0;
       // Winning the document ends the ask: nobody waits for what they hold. The
       // server clears its own mark on the same event, so neither side is left
       // telling somebody that this editor is queueing for its own claim.
@@ -643,9 +687,158 @@ export function useDocumentLock({
       // long after its own interface says it is not. Release is token-scoped, so
       // it deletes nothing when the claim really has moved on.
       if (token !== null) release(token);
+      // Kept to ask about again where nobody said the claim was taken.
+      lapsed = next.status === "lost" ? token : null;
       token = null;
       surrendered = true;
       setState(next);
+    };
+
+    /**
+     * Take back the claim lost to silence, if it is still this editor's or
+     * nobody's: see "A claim lost to silence asks again". A failure, or no
+     * answer within a beat, leaves it lost, to be asked again.
+     */
+    /** Report a refusal of the reclaim as the claim of whoever holds it. */
+    const reportReclaimRefused = (holder: DocumentLockHolder) => {
+      lapsed = null;
+      deferredHolder = null;
+      setState({ status: "taken-over", holder });
+    };
+
+    /**
+     * Whether a reclaim's win may be taken: the one asked about, or a late
+     * one after its refusal was reported, while nothing else (the person
+     * taking it back, a claim of the beat) has claimed since.
+     */
+    const mayTake = (asked: string) =>
+      inFlight === null &&
+      token === null &&
+      (lapsed === asked || (lapsed === null && adoptable === asked));
+
+    /**
+     * Take a reclaim's win that answered after a refusal, once a renewal says
+     * the server still holds it: the refusal may have been a colleague's
+     * takeover since, and installed unconfirmed the editor would save under a
+     * claim already replaced. Not confirmed, it is handed back (deleting
+     * nothing that replaced it), and a refusal waiting on it is reported.
+     */
+    const confirmLateWin = (
+      asked: string,
+      won: string,
+      changed: DocumentLockChange | undefined
+    ) => {
+      const sentAt = Date.now();
+      void protectedApi
+        .patch<MutationResponse<RenewDocumentLockOutcome>>(
+          "/document-lock",
+          withVersion({ ...ref, claimToken: won })
+        )
+        .then(({ item }) => {
+          if (!cancelled && item.status === "renewed" && mayTake(asked)) {
+            installAcquired(won, sentAt);
+            tell(changed, true);
+            return;
+          }
+          release(won);
+          if (cancelled || lapsed !== asked) return;
+          // Replaced by a live claim of someone else's: theirs, as told now.
+          if (
+            item.status !== "renewed" &&
+            item.holder !== undefined &&
+            item.holder.expiresInSeconds > 0
+          ) {
+            reportReclaimRefused(item.holder);
+            return;
+          }
+          // Gone with nobody holding it: the refusal waiting was that win's
+          // own claim, just handed back, so the next beat asks again.
+          deferredHolder = null;
+        })
+        .catch(() => {
+          // Unconfirmed: handed back. The refusal waiting may have been that
+          // win's own claim, so it is not reported; the claim stays lost and
+          // the next beat asks again.
+          release(won);
+          if (!cancelled && lapsed === asked) deferredHolder = null;
+        });
+    };
+
+    const askAboutLapsed = () => {
+      const asked = lapsed;
+      if (cancelled || asked === null || lapsedAsk !== null) return;
+      // A refusal waited a beat for an earlier reclaim that has not answered:
+      // it is reported now, and that reclaim's win is still taken if it comes.
+      if (deferredHolder !== null) {
+        reportReclaimRefused(deferredHolder);
+        return;
+      }
+      const seq = (lapsedAsks += 1);
+      lapsedAsk = seq;
+      reclaimsOut += 1;
+      adoptable = asked;
+      const freeSlot = () => {
+        if (lapsedAsk === seq) lapsedAsk = null;
+      };
+      // 🔴 Bounded as a claim's slot is: a request that never answers must
+      // not stop every later beat and wake-up from asking again. Its reply,
+      // if it comes, is still read under the fences below.
+      const slotExpiry = setTimeout(
+        freeSlot,
+        DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS
+      );
+      const sentAt = Date.now();
+      void sendClaim(
+        withVersion({
+          ...ref,
+          takeover: false,
+          requestAccess: false,
+          reclaimToken: asked,
+        })
+      )
+        .then(item => {
+          reclaimsOut -= 1;
+          if (item.status === "acquired") {
+            // Taken back. Otherwise the person took it back themselves, or
+            // the editor has gone: the claim is handed back, by its own
+            // token, which deletes nothing that replaced it.
+            if (cancelled || !mayTake(asked)) {
+              release(item.claimToken);
+              return;
+            }
+            if (seq <= refusedThrough) {
+              confirmLateWin(asked, item.claimToken, item.changed);
+              return;
+            }
+            installAcquired(item.claimToken, sentAt);
+            tell(item.changed, true);
+            return;
+          }
+          refusedThrough = lapsedAsks;
+          if (cancelled || lapsed !== asked) return;
+          // Refused while an earlier reclaim is out: perhaps by the claim
+          // that one won. It waits for it, at most a beat.
+          if (reclaimsOut > 0) {
+            deferredHolder = item.holder;
+            return;
+          }
+          reportReclaimRefused(item.holder);
+        })
+        .catch(() => {
+          reclaimsOut -= 1;
+          // Still unreachable, and still lost: the next beat, or the next
+          // wake-up, asks again. Never `unavailable`, which would let the
+          // editor save without a claim. A refusal waiting on this one is
+          // reported once nothing else can answer for it.
+          if (cancelled || lapsed !== asked) return;
+          if (reclaimsOut === 0 && deferredHolder !== null) {
+            reportReclaimRefused(deferredHolder);
+          }
+        })
+        .finally(() => {
+          clearTimeout(slotExpiry);
+          freeSlot();
+        });
     };
 
     takeOverRef.current = () => void acquire(true);
@@ -698,6 +891,14 @@ export function useDocumentLock({
     };
     window.addEventListener("pagehide", onLeave);
     window.addEventListener("pageshow", onReturn);
+    // Back online, or shown again after the computer slept: a claim lost to
+    // silence is asked about now, not a beat later.
+    const onWake = () => {
+      if (document.visibilityState === "hidden") return;
+      askAboutLapsed();
+    };
+    window.addEventListener("online", onWake);
+    document.addEventListener("visibilitychange", onWake);
 
     // When the last beat began, so the next one can tell it ran late.
     let lastBeatAt = Date.now();
@@ -738,8 +939,12 @@ export function useDocumentLock({
         return;
       }
 
-      // Displaced, or past the deadline. The person decides what happens next.
-      if (surrendered) return;
+      // Displaced, or past the deadline. The person decides what happens next,
+      // except for a claim lost to silence, which is asked about again.
+      if (surrendered) {
+        askAboutLapsed();
+        return;
+      }
 
       if (token === null) {
         // Nothing to confirm. Either a colleague holds it — and asking again is
@@ -824,6 +1029,8 @@ export function useDocumentLock({
       clearInterval(heartbeat);
       window.removeEventListener("pagehide", onLeave);
       window.removeEventListener("pageshow", onReturn);
+      window.removeEventListener("online", onWake);
+      document.removeEventListener("visibilitychange", onWake);
       if (token !== null) release(token);
     };
   }, [active, ref]);

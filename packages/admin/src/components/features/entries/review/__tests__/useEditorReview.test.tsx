@@ -438,6 +438,31 @@ describe("the editor's next step under a workflow", () => {
     );
   });
 
+  it("keeps a label that already ends in three dots as it is, adding no second ellipsis", async () => {
+    fetchSpy.mockResolvedValue(
+      attached(
+        part({
+          steps: [
+            {
+              name: "submit",
+              label: "Send for review...",
+              kind: "submit",
+              to: "inReview",
+              mayTake: true,
+              primary: true,
+              commentRequired: true,
+            },
+          ],
+        })
+      )
+    );
+    render(<Editor />);
+    expect(
+      await screen.findByRole("button", { name: "Send for review..." })
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/\.\.\.…/)).toBeNull();
+  });
+
   it("acts on the shared fields where the language on screen is live and they wait", async () => {
     fetchSpy.mockResolvedValue(
       attached(

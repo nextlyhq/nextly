@@ -52,6 +52,7 @@ import { useModalKeyboardHold } from "../../shell/modal-keyboard-hold";
 import { BUILDER_TOKENS_CLASS } from "../../shell-state";
 
 import type { ContentServices } from "./content-services";
+import { refusalWords, type PropRefusal } from "./prop-refusal";
 
 /** The words the full editor and the panel line say, in one place. */
 export const FULL_EDITOR_WORDS = {
@@ -63,8 +64,6 @@ export const FULL_EDITOR_WORDS = {
   unsaved: "Press Done to keep your changes, or Cancel to discard them.",
   held: "This passage is being edited on the canvas. Finish there first.",
   unsupported: "This passage can't be edited here.",
-  refused:
-    "This change could not be saved, perhaps because the page is at its size limit. Shorten it, or press Cancel to discard it.",
 } as const;
 
 /**
@@ -88,10 +87,10 @@ type Attached = Extract<
 /** Why the editor could not be used here, or why Done did not close. */
 type Note = "held" | "unsupported" | "refused" | "unsaved" | null;
 
-const NOTES: Record<Exclude<Note, null>, string> = {
+// A refused Done is worded by its reason (`refusalWords`), not here.
+const NOTES: Record<Exclude<Note, null | "refused">, string> = {
   held: FULL_EDITOR_WORDS.held,
   unsupported: FULL_EDITOR_WORDS.unsupported,
-  refused: FULL_EDITOR_WORDS.refused,
   unsaved: FULL_EDITOR_WORDS.unsaved,
 };
 
@@ -106,6 +105,11 @@ export interface RichTextFullEditorProps {
    */
   readonly onCommit: (value: unknown) => BlockDocument | null | void;
   readonly services: ContentServices | undefined;
+  /**
+   * Why a write was refused, asked once it is, so the dialog says the real
+   * reason; without it the dialog does not guess one.
+   */
+  readonly refusalOf?: ((value: unknown) => PropRefusal) | undefined;
   /** Closed, by Done or Cancel. */
   readonly onClose: () => void;
   /** Where the focus goes back to on closing: the button that opened it. */
@@ -117,6 +121,7 @@ export function RichTextFullEditor({
   label,
   value,
   onCommit,
+  refusalOf,
   services,
   onClose,
   returnFocus,
@@ -133,6 +138,10 @@ export function RichTextFullEditor({
   );
   const [ready, setReady] = React.useState<Attached | null>(null);
   const [note, setNote] = React.useState<Note>(null);
+  // Why Done's write was refused, said in place of the note's own words.
+  const [reason, setReason] = React.useState<PropRefusal | undefined>(
+    undefined
+  );
   // The passage and the services it opened with, read once by the effect
   // that attaches it: a later stored value does not re-open the editor over
   // the words being typed.
@@ -163,6 +172,7 @@ export function RichTextFullEditor({
       // Refused (a size cap, a lock that arrived): the words stay here, held
       // against anything else taking the editor, until shortened or let go.
       held.session.hold();
+      setReason(refusalOf?.(words));
       setNote("refused");
       return false;
     }
@@ -274,7 +284,7 @@ export function RichTextFullEditor({
         />
         {note === null ? null : (
           <p className="nx-rich-text-editor__note" role="status">
-            {NOTES[note]}
+            {note === "refused" ? refusalWords(reason, "Cancel") : NOTES[note]}
           </p>
         )}
         <DialogFooter>

@@ -5,10 +5,12 @@
  * translated document, its shared fields), the stage it stands in, who it
  * waits for, who it is assigned to, when it is due, and its last move.
  *
- * The steps are the header's main button, so the section draws none for the
- * parts the header moves (`partsOnScreen`); only a part the header does not
- * speak for (the shared fields waiting in another stage than the language)
- * offers its own steps here, so it can still be moved. A person who may
+ * The steps are the header's main button, so the section draws none the
+ * header offers: a step for the parts it moves together (`partsOnScreen`)
+ * that every one of them may take (`takeableOnEvery`). Any other step the
+ * person may take is offered here on its own part: the shared fields waiting
+ * in another stage than the language, or a part of the two moved together
+ * that only one of them lets this person take. A person who may
  * assign a part has one Assign… picker of people and roles.
  *
  * Reads the same review state the header does, under the same key, so the
@@ -35,7 +37,11 @@ import { leadingReviewStep } from "../EntryForm/document-actions";
 import { PanelSection } from "../EntryForm/panels/PanelSection";
 
 import { AssignPicker } from "./AssignPicker";
-import { partsOnScreen, waitingForWords } from "./review-words";
+import {
+  partsOnScreen,
+  takeableOnEvery,
+  waitingForWords,
+} from "./review-words";
 import { approves, useSharedApprovalHold } from "./shared-hold";
 import { StepRefusalNote } from "./StepRefusalNote";
 import { useStepTaker, type StepTaker } from "./useStepTaker";
@@ -80,9 +86,12 @@ export function ReviewSection({
   const titled = parts.length > 1;
   // The parts the header's main button moves, read by the same rule the
   // header uses, so no step is offered in both places.
-  const moved = new Set(
-    partsOnScreen(data, language).map(each => each.part ?? "")
-  );
+  const onScreen = partsOnScreen(data, language);
+  const moved = new Set(onScreen.map(each => each.part ?? ""));
+  // A step the header offers for the parts it moves together: only where
+  // every one of them may take it (`takeableOnEvery`, the header's own test).
+  const headerOffers = (step: ReviewStep): boolean =>
+    takeableOnEvery(step, onScreen);
   return (
     <PanelSection title="Review">
       <div className="space-y-4">
@@ -94,7 +103,9 @@ export function ReviewSection({
             taker={taker}
             hold={hold}
             approvalHeld={part.part === null ? sharedHeld : undefined}
-            offersSteps={!moved.has(part.part ?? "")}
+            offeredByHeader={
+              moved.has(part.part ?? "") ? headerOffers : offeredNowhere
+            }
             title={
               !titled
                 ? null
@@ -117,7 +128,7 @@ function PartBlock({
   taker,
   hold,
   approvalHeld,
-  offersSteps,
+  offeredByHeader,
   title,
 }: {
   document: ReleaseDocumentRef;
@@ -125,8 +136,8 @@ function PartBlock({
   taker: StepTaker;
   hold: string | undefined;
   approvalHeld: string | undefined;
-  /** Whether its steps are drawn here, for a part the header does not move. */
-  offersSteps: boolean;
+  /** Whether the header's main button offers `step` for this part already. */
+  offeredByHeader: (step: ReviewStep) => boolean;
   title: string | null;
 }): JSX.Element {
   return (
@@ -141,14 +152,13 @@ function PartBlock({
       ) : (
         <>
           <PartFacts part={part} />
-          {offersSteps ? (
-            <PartSteps
-              part={part}
-              taker={taker}
-              hold={hold}
-              approvalHeld={approvalHeld}
-            />
-          ) : null}
+          <PartSteps
+            part={part}
+            taker={taker}
+            hold={hold}
+            approvalHeld={approvalHeld}
+            offeredByHeader={offeredByHeader}
+          />
           <AssignControls document={document} part={part} />
         </>
       )}
@@ -201,19 +211,29 @@ function PartFacts({ part }: { part: PartReview }): JSX.Element {
   );
 }
 
+/** No step of the part is offered by the header: one it does not move. */
+function offeredNowhere(): boolean {
+  return false;
+}
+
 function PartSteps({
   part,
   taker,
   hold,
   approvalHeld,
+  offeredByHeader,
 }: {
   part: PartReview;
   taker: StepTaker;
   hold: string | undefined;
   approvalHeld: string | undefined;
+  offeredByHeader: (step: ReviewStep) => boolean;
 }): JSX.Element | null {
+  // The person's steps, less those the header's main button already offers
+  // for this part: nothing is offered twice, and nothing they may take is
+  // offered nowhere.
   const steps = part.steps
-    .filter(step => step.mayTake)
+    .filter(step => step.mayTake && !offeredByHeader(step))
     .sort((a, b) => Number(b.primary) - Number(a.primary));
   if (steps.length === 0) return null;
   const take = (step: ReviewStep) => {

@@ -315,6 +315,79 @@ describe("ReviewSection", () => {
     );
   });
 
+  it("searches the people beyond the first page by name, as they type", async () => {
+    // One page of people is not every one of them: the picker asks the same
+    // list for the name typed, rather than treating its first page as all.
+    held.slugs = new Set(["read-users"]);
+    usersSpy.mockImplementation(
+      async (params: { filters?: { search?: string } }) =>
+        params.filters?.search === "zara"
+          ? {
+              items: [
+                {
+                  id: "zara",
+                  name: "Zara Khan",
+                  email: "zara@x",
+                  roles: [{ id: "r-ed" }],
+                },
+              ],
+              meta: {},
+            }
+          : { items: [], meta: {} }
+    );
+    fetchSpy.mockResolvedValue(answer(part()));
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    await userEvent.click(
+      within(section).getByRole("button", { name: "Assign…" })
+    );
+    await userEvent.type(
+      await screen.findByRole("searchbox", { name: "Find a person" }),
+      "zara"
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Zara Khan" })
+    );
+    await waitFor(() =>
+      expect(assignSpy).toHaveBeenCalledWith([
+        expect.objectContaining({ assignee: { kind: "user", id: "zara" } }),
+      ])
+    );
+  });
+
+  it("offers no deactivated person, whom an assignment would be refused", async () => {
+    held.slugs = new Set(["read-users"]);
+    usersSpy.mockResolvedValue({
+      items: [
+        {
+          id: "sam",
+          name: "Sam Okafor",
+          email: "sam@x",
+          roles: [{ id: "r-ed" }],
+          isActive: true,
+        },
+        {
+          id: "old",
+          name: "Former Editor",
+          email: "old@x",
+          roles: [{ id: "r-ed" }],
+          isActive: false,
+        },
+      ],
+      meta: {},
+    });
+    fetchSpy.mockResolvedValue(answer(part()));
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    await waitFor(async () => {
+      expect(await openPicker(section)).toEqual([
+        "Me",
+        "Editors (the whole role)",
+        "Sam Okafor",
+      ]);
+    });
+  });
+
   it("lists no people for a person who may not list them", async () => {
     fetchSpy.mockResolvedValue(answer(part()));
     render(<ReviewSection document={post} />);
@@ -324,6 +397,8 @@ describe("ReviewSection", () => {
       "Editors (the whole role)",
     ]);
     expect(usersSpy).not.toHaveBeenCalled();
+    // Nor a search for them.
+    expect(screen.queryByRole("searchbox")).toBeNull();
   });
 
   it("draws no step for the parts the header's main button moves", async () => {
@@ -342,6 +417,44 @@ describe("ReviewSection", () => {
     expect(
       within(section).getAllByRole("button", { name: "Assign…" })
     ).toHaveLength(2);
+  });
+
+  it("keeps on the panel a step the header can't offer: only one of the parts moved together may take it", async () => {
+    // The language and the shared fields wait in one stage, but this person
+    // may approve only the language. The header offers a step only where
+    // every part it moves may take it, so it offers none: the panel must.
+    stepSpy.mockResolvedValue({ message: "Step taken.", item: {} });
+    const approve = (mayTake: boolean) => ({
+      name: "approve",
+      label: "Approve",
+      kind: "approve" as const,
+      to: "approved",
+      mayTake,
+      primary: true,
+      commentRequired: false,
+    });
+    fetchSpy.mockResolvedValue(
+      answer(
+        part({ part: "de", steps: [approve(true)] }),
+        part({ part: null, steps: [approve(false)] })
+      )
+    );
+    render(<ReviewSection document={post} locale="de" />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    const own = section.querySelector('[data-review-part="de"]') as HTMLElement;
+    await userEvent.click(within(own).getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(stepSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ step: "approve", parts: ["de"] })
+      )
+    );
+    // Nothing for the shared fields, which this person may not approve.
+    const shared = section.querySelector(
+      '[data-review-part=""]'
+    ) as HTMLElement;
+    expect(
+      within(shared).queryByRole("button", { name: "Approve" })
+    ).toBeNull();
   });
 
   it("shows the language on screen and the shared fields of a translated document", async () => {

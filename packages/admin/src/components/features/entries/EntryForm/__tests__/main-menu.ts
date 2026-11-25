@@ -9,8 +9,11 @@ import userEvent from "@testing-library/user-event";
 
 import { screen, within } from "@admin/__tests__/utils";
 
-/** What the main button's arrow is called. */
-export const MAIN_MENU = "More ways to publish";
+/**
+ * What the main button's arrow is called: the ways to publish where Publish
+ * or a workflow step leads, the document's actions where Save does.
+ */
+export const MAIN_MENU = /^More (ways to publish|document actions)$/;
 
 /** Opens the main button's menu and returns it. */
 export async function openMainMenu(): Promise<HTMLElement> {

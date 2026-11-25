@@ -20,7 +20,11 @@ import {
 import { workingDraftKey } from "../../../domains/versions/working-draft-key";
 import { NextlyError } from "../../../errors/nextly-error";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
-import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
+import {
+  NOTHING_CHANGED,
+  type UpgradeReport,
+  type UpgradeStepContext,
+} from "../upgrade-step";
 
 import {
   assertVersionHistoryReady,
@@ -134,7 +138,8 @@ async function slotsToKey(context: UpgradeStepContext): Promise<SlotToKey[]> {
       publicMessage:
         `More than one pending change was saved at the same moment for ${unresolved.join("; ")}, ` +
         "so which one to keep cannot be told. Delete all but one of them from nextly_versions (by " +
-        "the ids named), then run `nextly migrate` again. Nothing was changed.",
+        "the ids named), then run `nextly migrate` again. " +
+        NOTHING_CHANGED,
       logContext: { drafts: unresolved },
     });
   }

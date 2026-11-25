@@ -304,7 +304,20 @@ export function useFieldTarget({
   // of the document. A shared target's values are the style's own.
   const { nodeStyles, styles } = fieldStyles(target, editor, nodeId);
   const stored = readStyleValue(styles, address);
-  const [issue, setIssue] = React.useState<string | null>(null);
+  // Held as a new object each time it is said, so saying the same refusal
+  // again still draws, and `saidNow` below is reset by that draw.
+  const [said, showIssue] = React.useState<{ message: string | null }>({
+    message: null,
+  });
+  const issue = said.message;
+  // Whether a refusal was said since the field last drew: the one a write
+  // makes as it takes back its own typing, which moves `stored` in the same
+  // turn, and which the clearing below must not take away.
+  const saidNow = React.useRef(false);
+  const setIssue = React.useCallback((message: string | null) => {
+    saidNow.current = message !== null;
+    showIssue({ message });
+  }, []);
   /*
    * Whether the provenance caption is held back. It is revealed while the
    * field has focus, and typing a value leaves focus there, so after a commit
@@ -340,8 +353,14 @@ export function useFieldTarget({
   // or an edit applied from elsewhere: the remount key changes with the
   // SELECTION, and neither of those changes the selection.
   React.useEffect(() => {
-    setIssue(null);
+    if (saidNow.current) return;
+    showIssue(held => (held.message === null ? held : { message: null }));
   }, [stored]);
+  // Declared after the clearing, so it runs after it: a refusal said before
+  // this draw is no longer new.
+  React.useEffect(() => {
+    saidNow.current = false;
+  });
   const survive = useSurvivingReport();
   // The target and the editor as they are now, for a write that answers later.
   const current = React.useRef(target);

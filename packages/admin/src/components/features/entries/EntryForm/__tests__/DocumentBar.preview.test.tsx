@@ -65,8 +65,9 @@ function renderHeader(overrides: Record<string, unknown> = {}) {
  */
 async function previewMenu(): Promise<HTMLElement> {
   const trigger =
-    screen.queryByRole("button", { name: "More ways to publish" }) ??
-    screen.getByRole("button", { name: "More actions" });
+    screen.queryByRole("button", {
+      name: /^More (ways to publish|document actions)$/,
+    }) ?? screen.getByRole("button", { name: "More actions" });
   await userEvent.click(trigger);
   return screen.findByRole("menu");
 }
@@ -184,7 +185,9 @@ describe("DocumentBar preview choices", () => {
     renderHeader({ isLinkAvailable: false, shareDocument: undefined });
     expect(screen.queryByRole("button", { name: /preview/i })).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "More ways to publish" })
+      screen.queryByRole("button", {
+        name: /^More (ways to publish|document actions)$/,
+      })
     ).toBeNull();
   });
 });

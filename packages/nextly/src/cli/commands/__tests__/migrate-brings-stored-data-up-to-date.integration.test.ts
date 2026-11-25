@@ -85,9 +85,20 @@ vi.mock("../../utils/config-loader", async importOriginal => {
 const TABLE = "dc_msd_entries";
 const STEP = "hash passwords stored before this release";
 
-/** The site's collection, with or without the field its second migration adds. */
-function configWith(summary: boolean) {
+/**
+ * The site's collection, with or without the field its second migration adds, in the languages
+ * `locales` names (the first the default) where given.
+ */
+function configWith(summary: boolean, locales?: readonly string[]) {
   return defineConfig({
+    ...(locales === undefined
+      ? {}
+      : {
+          localization: {
+            locales: [...locales],
+            defaultLocale: locales[0] ?? "en",
+          },
+        }),
     collections: [
       defineCollection({
         slug: "msd-entries",
@@ -293,11 +304,14 @@ describe.each(getConfiguredTestDialects())(
       expect(toCliError(refusal).why).toContain("Nothing was changed");
     }, 240_000);
 
-    it("under --step, which is not checked beforehand, refuses once the last migration has applied, and says so", async () => {
+    // A `--step` that takes every waiting migration reaches the data steps as a run without it
+    // does, so it is asked about the backup before its schema changes too, and refused with them
+    // unapplied. Broken (every `--step` left unchecked), the migrations apply first.
+    it("under a --step that takes every waiting migration, refuses before they apply", async () => {
       await siteHoldingAPlainPassword("plain-pin");
 
-      // Two migrations are waiting (the column and the per-language table it joins), so this run
-      // applies the last and reaches the data steps.
+      // Two migrations are waiting (the column and the per-language table it joins), and this
+      // run's window takes both.
       const refusal = await migrate({ step: 2 }).then(
         () => undefined,
         (error: unknown) => error
@@ -306,14 +320,12 @@ describe.each(getConfiguredTestDialects())(
       expect(messageOf(refusal)).toContain(
         "`nextly migrate --backup-confirmed`"
       );
-      // The refusal carries that the migrations had applied by then, which
-      // its printed form says in place of "Nothing was changed".
       expect((refusal as NextlyError).logContext).toMatchObject({
         reason: "data-steps-backup-not-confirmed",
-        afterMigrations: true,
+        afterMigrations: false,
       });
-      expect(toCliError(refusal).why).toContain("stay applied");
-      expect(await summaryColumnExists()).toBe(true);
+      expect(toCliError(refusal).why).toContain("Nothing was changed");
+      expect(await summaryColumnExists()).toBe(false);
       expect(await storedPin()).toBe("plain-pin");
 
       // The run the refusal names finishes the work.
@@ -339,6 +351,97 @@ describe.each(getConfiguredTestDialects())(
       const again = await migrate();
       expect(await storedPin()).toBe(stored);
       expect(again.join("\n")).not.toContain(STEP);
+    }, 240_000);
+
+    /**
+     * A site in English and Portuguese whose entry keeps its Portuguese translation under the
+     * standard code and under the older one an earlier release wrote, one language kept twice,
+     * with a second migration captured and not yet applied. With `pin`, the entry also holds a
+     * password as an earlier release stored it: work for a step that runs before the codes'.
+     */
+    async function siteWithTwoSpellings(pin?: string): Promise<void> {
+      const LANGUAGES = ["en", "pt-BR"] as const;
+      setNonInteractive(true);
+      state.config = configWith(false, LANGUAGES);
+      await capture("entries");
+      await migrate();
+      const now =
+        dialect === "sqlite" ? String(Date.now()) : "CURRENT_TIMESTAMP";
+      const box =
+        pin === undefined
+          ? "NULL"
+          : `'${JSON.stringify({ label: "front door", pin })}'`;
+      await sql(
+        `INSERT INTO ${id(TABLE)} (${id("id")}, ${id("slug")}, ${id("box")}, ${id("created_at")}, ${id("updated_at")}) VALUES ('entry-1', 'first', ${box}, ${now}, ${now})`
+      );
+      for (const [locale, title] of [
+        ["pt-BR", "olá"],
+        ["pt_BR", "olá antes"],
+      ]) {
+        await sql(
+          `INSERT INTO ${id(`${TABLE}_locales`)} (${id("_parent")}, ${id("_locale")}, ${id("title")}) VALUES ('entry-1', '${locale}', '${title}')`
+        );
+      }
+      state.config = configWith(true, LANGUAGES);
+      await capture("summary");
+      expect(await summaryColumnExists()).toBe(false);
+    }
+
+    /** `nextly migrate --backup-confirmed`'s refusal, so the backup is not what refuses. */
+    async function confirmedRefusal(): Promise<unknown> {
+      return migrate({ backupConfirmed: true }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+    }
+
+    // A refusal of the stored data holds whatever the waiting migration changes, so it is made
+    // before that migration applies, and "Nothing was changed" is true of it. Broken, the count
+    // before the migrations swallows it as unreadable and the same refusal comes after them.
+    it("refuses one language stored under two spellings before the waiting migration applies", async () => {
+      await siteWithTwoSpellings();
+
+      const refusal = await confirmedRefusal();
+
+      expect(NextlyError.isCode(refusal, "NEXTLY_LANGUAGE_CODES_COLLIDE")).toBe(
+        true
+      );
+      expect(messageOf(refusal)).toContain("pt_BR");
+      expect(await summaryColumnExists()).toBe(false);
+    }, 240_000);
+
+    // The steps are counted past one with work, so a later step's refusal is made before the
+    // earlier step changes anything. Broken, the count stops at the passwords' step, the
+    // migration applies and the password is hashed, and only then is the run refused.
+    it("refuses the two spellings before anything changes, where an earlier step has work", async () => {
+      await siteWithTwoSpellings("plain-pin");
+      expect(await storedPin()).toBe("plain-pin");
+
+      const refusal = await confirmedRefusal();
+
+      expect(NextlyError.isCode(refusal, "NEXTLY_LANGUAGE_CODES_COLLIDE")).toBe(
+        true
+      );
+      expect(await summaryColumnExists()).toBe(false);
+      expect(await storedPin()).toBe("plain-pin");
+    }, 240_000);
+
+    // `--step` leaves the data steps to the run that finishes the migrations, unless its own
+    // window takes every pending one: that run reaches them, so it is asked before its schema
+    // changes as a run without `--step` is. Broken, its refusal comes after the migrations.
+    it("refuses the two spellings before the migrations a --step that takes them all applies", async () => {
+      await siteWithTwoSpellings();
+
+      // Two migrations are waiting (the column and the per-language table it joins).
+      const refusal = await migrate({ step: 2, backupConfirmed: true }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(NextlyError.isCode(refusal, "NEXTLY_LANGUAGE_CODES_COLLIDE")).toBe(
+        true
+      );
+      expect(await summaryColumnExists()).toBe(false);
     }, 240_000);
 
     it("lists the work in a dry run and changes nothing", async () => {

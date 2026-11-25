@@ -433,7 +433,7 @@ describe("VersionComparePage, its choices", () => {
 
       await waitFor(() =>
         expect(error).toHaveBeenCalledWith(
-          "Couldn't copy the link. Copy it from the address bar."
+          "Couldn't copy the link. Copy it from the box below."
         )
       );
     } finally {
@@ -441,6 +441,162 @@ describe("VersionComparePage, its choices", () => {
       if (original) Object.defineProperty(navigator, "clipboard", original);
       else Reflect.deleteProperty(navigator, "clipboard");
     }
+  });
+
+  it("shows the pinned link to copy by hand when the browser offers no clipboard", async () => {
+    baselineMock.mockReturnValue({
+      data: { from: 3, to: 5, baseline: { name: "last-viewed", versionNo: 3 } },
+      isLoading: false,
+      isError: false,
+    });
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    try {
+      renderPage({ from: "last-viewed" });
+      screen.getByRole("button", { name: "Copy link" }).click();
+
+      // The address bar still names the reader's own baseline; the link
+      // shown names the two versions drawn.
+      const field = await screen.findByRole("textbox", {
+        name: "Link to this comparison",
+      });
+      const shown = new URL((field as HTMLInputElement).value);
+      expect(shown.searchParams.get("from")).toBe("3");
+      expect(shown.searchParams.get("to")).toBe("5");
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("never leaves an earlier comparison's link in the copy box", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    try {
+      const { rerender } = renderPage({ from: 4, to: 5 });
+      screen.getByRole("button", { name: "Copy link" }).click();
+      await screen.findByRole("textbox", { name: "Link to this comparison" });
+
+      // Another pair on screen: the box named the one before, so it goes.
+      rerender(
+        <VersionComparePage
+          scope={scope}
+          documentHref="/admin/collections/posts/e1"
+          readOnlyHref="/admin/collections/posts"
+          from={3}
+          to={5}
+        />
+      );
+      expect(
+        screen.queryByRole("textbox", { name: "Link to this comparison" })
+      ).toBeNull();
+
+      // A copy that works says so, and no box stands beside it.
+      screen.getByRole("button", { name: "Copy link" }).click();
+      await screen.findByRole("textbox", { name: "Link to this comparison" });
+      const writeText = vi.fn(() => Promise.resolve());
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+      });
+      screen.getByRole("button", { name: "Copy link" }).click();
+      await waitFor(() => expect(writeText).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("textbox", { name: "Link to this comparison" })
+        ).toBeNull()
+      );
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("keeps the current comparison's copy box when an earlier copy succeeds late", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    let finishFirst: () => void = () => {};
+    const writeText = vi.fn(
+      () => new Promise<void>(resolve => (finishFirst = resolve))
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    try {
+      // Comparison A: a copy that has not answered yet.
+      const { rerender } = renderPage({ from: 4, to: 5 });
+      screen.getByRole("button", { name: "Copy link" }).click();
+      expect(writeText).toHaveBeenCalledTimes(1);
+
+      // Comparison B, where copying fails: B's link to copy by hand shows.
+      rerender(
+        <VersionComparePage
+          scope={scope}
+          documentHref="/admin/collections/posts/e1"
+          readOnlyHref="/admin/collections/posts"
+          from={3}
+          to={5}
+        />
+      );
+      Object.defineProperty(navigator, "clipboard", {
+        value: undefined,
+        configurable: true,
+      });
+      screen.getByRole("button", { name: "Copy link" }).click();
+      const box = await screen.findByRole("textbox", {
+        name: "Link to this comparison",
+      });
+      expect(
+        new URL((box as HTMLInputElement).value).searchParams.get("from")
+      ).toBe("3");
+
+      // A's copy succeeds at last: it copied A, so B's box stays.
+      finishFirst();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(
+        screen.getByRole("textbox", { name: "Link to this comparison" })
+      ).toBeInTheDocument();
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("offers older versions in the drawn comparison's language when the newer one is not loaded", () => {
+    // A shared link can name a version beyond the loaded page: the list has
+    // no record of it, but the comparison drawn says its language.
+    useVersionsMock.mockReturnValue({
+      data: {
+        pages: [
+          {
+            items: [
+              { ...row(9), locale: "fr" },
+              { ...row(8), locale: "de" },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      hasNextPage: true,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+    drawn.locale = "fr";
+
+    renderPage({ from: 19, to: 20 });
+
+    const older = screen.getByRole("combobox", { name: "Compare" });
+    const names = [...older.querySelectorAll("option")].map(o => o.textContent);
+    expect(names.some(n => n?.startsWith("Version 9"))).toBe(true);
+    expect(names.some(n => n?.startsWith("Version 8"))).toBe(false);
   });
 
   it("names the version it restores", () => {
