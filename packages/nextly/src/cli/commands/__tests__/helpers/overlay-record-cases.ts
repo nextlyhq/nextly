@@ -170,9 +170,9 @@ export function overlayRecordCases(
   loaded: Loaded,
   layout: string,
   /**
-   * Whether the suite runs on per-language storage. A baseline project is tried only there: on the
-   * earlier layout `db:sync` leaves the translated columns on the main table, so a baseline of it
-   * differs from the configuration by those columns, whatever a snapshot records of its overlays.
+   * Whether the suite runs on per-language storage. What `db:sync` makes is tried only there, a
+   * baseline of it too: on the earlier layout it leaves the translated columns on the main table, so
+   * it differs from the configuration by those columns, whatever a snapshot records of its overlays.
    */
   perLanguage: boolean
 ): void {
@@ -531,18 +531,23 @@ export function overlayRecordCases(
         const project = projectWith("translated");
         beforeEach(() => leftByAnEarlierRelease(), 120_000);
 
-        it("db:sync makes it, and it is recorded by migrate:create, with nothing left after", async () => {
-          synced = await openSyncTarget(dir, dialect, url);
-          await syncSchemaInOrder(
-            { config: project } as unknown as LoadConfigResult,
-            synced.cli,
-            { ...synced.options, cwd: dir },
-            { ...synced.context, cwd: dir }
-          );
-          expect(await translationColumns()).toContain("box");
-          await refusedByNone(project, true);
-          await writtenAndApplied(project);
-        }, 120_000);
+        // Not on the earlier layout, where `db:sync` puts the translated columns on the main table.
+        it.runIf(perLanguage)(
+          "db:sync makes it, and it is recorded by migrate:create, with nothing left after",
+          async () => {
+            synced = await openSyncTarget(dir, dialect, url);
+            await syncSchemaInOrder(
+              { config: project } as unknown as LoadConfigResult,
+              synced.cli,
+              { ...synced.options, cwd: dir },
+              { ...synced.context, cwd: dir }
+            );
+            expect(await translationColumns()).toContain("box");
+            await refusedByNone(project, true);
+            await writtenAndApplied(project);
+          },
+          120_000
+        );
 
         it("a production start that runs migrations makes it and says it is not recorded", async () => {
           const started = await productionStart({

@@ -585,7 +585,7 @@ export interface GenerateResult {
 }
 
 /** The table an operation acts on (for correlating metadata upserts). */
-function operationTableName(op: Operation): string {
+export function operationTableName(op: Operation): string {
   switch (op.type) {
     case "add_table":
       return op.table.name;
@@ -2521,6 +2521,11 @@ interface CompanionPlanEntry {
    */
   entity: I18nTransitionKind;
   /**
+   * Whether the file holds nothing but the columns a repeater's or group's text is kept in: added to
+   * a translations table, or the table of an entity whose only text per language is in there.
+   */
+  overlays?: true;
+  /**
    * A DISABLE's unique indexes on the restored columns, which it creates itself once the values
    * are back (`settingsAfterRestore`): the main migration's `add_index` for each is left out, as
    * its `add_column` is (`stripRelocatedDrops`).
@@ -2732,7 +2737,12 @@ function planCompanionMigrations(
             companionExisted: false,
           });
           if (plan.kind !== "none") {
-            entries.push({ spec: tableSpec, plan, entity: entityKind });
+            entries.push({
+              spec: tableSpec,
+              plan,
+              entity: entityKind,
+              overlays: true,
+            });
           }
         }
         continue;
@@ -4302,6 +4312,7 @@ function overlaysEntryFor(
       downSql: joinSql(planned.downSql, renames.down),
     },
     entity: kind,
+    ...(renamed.length === 0 ? { overlays: true as const } : {}),
   };
 }
 

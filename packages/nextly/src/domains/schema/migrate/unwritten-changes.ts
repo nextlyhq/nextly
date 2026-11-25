@@ -48,7 +48,10 @@ import {
   settingsChangesFor,
   type EntitySettingsChange,
 } from "../migrate-create/entity-settings";
-import type { MinimalConfigEntity } from "../migrate-create/generate";
+import {
+  type MinimalConfigEntity,
+  operationTableName,
+} from "../migrate-create/generate";
 import type { SnapshotFile } from "../migrate-create/snapshot-io";
 import {
   type BesideFile,
@@ -114,9 +117,9 @@ export interface UnwrittenChanges {
    */
   settingsNotRecorded?: boolean;
   /**
-   * The files `migrate:create` would write beside the main migration where the newest snapshot does
-   * not say what the translations tables hold (`recordsTranslationsTables`) and `nextly migrate`
-   * makes it (`madeByMigrate`): a notice, never a change.
+   * The files `migrate:create` would write beside the main migration that nothing declared since the
+   * newest snapshot asks for, and `nextly migrate` makes itself (`besideNotRecorded`): a notice, never
+   * a change.
    */
   besideNotRecorded?: readonly BesideFile[];
 }
@@ -190,15 +193,20 @@ export function compareWithNewestSnapshot(args: {
   readsDatabase?: boolean;
 }): UnwrittenChanges {
   const { entities, latest, pending } = args;
-  const recorded = recordsTranslationsTables(latest);
-  const notRecorded = recorded ? [] : pending.beside.filter(madeByMigrate);
+  const settings = settingsDifferences(entities, latest, args.recorded);
+  const notRecorded = besideNotRecorded({
+    pending,
+    latest,
+    entities,
+    settings,
+  });
   return {
     // With no file of the translations tables named, what one does to the main table is named
     // itself: the snapshot does record that table.
-    tables: recorded ? pending.tables : pending.diffed,
+    tables: recordsTranslationsTables(latest) ? pending.tables : pending.diffed,
     beside: pending.beside.filter(file => !notRecorded.includes(file)),
     ...(notRecorded.length === 0 ? {} : { besideNotRecorded: notRecorded }),
-    settings: settingsDifferences(entities, latest, args.recorded),
+    settings,
     // With no snapshot at all, a command that reads no database names the permissions the first
     // migration records, as `migrate:create` writes them; a database's first `nextly migrate`
     // records the declared ones itself, so for it they are no change.
@@ -212,6 +220,47 @@ export function compareWithNewestSnapshot(args: {
     noSnapshot: latest === null,
     perLanguageMoves: pending.perLanguageMoves,
   };
+}
+
+/** The list of `DeclaredEntities` each kind of entity's settings are recorded under. */
+const DECLARED_LIST = {
+  collection: "collections",
+  single: "singles",
+  fieldGroup: "components",
+} as const;
+
+/**
+ * The files beside the main migration that are no change of what the newest snapshot recorded, and
+ * that `nextly migrate` makes itself.
+ *
+ * - Over a snapshot that does not say what the translations tables hold: each it makes.
+ * - Over one that does: only what a repeater's or group's text is kept in, where nothing declared of
+ *   its entity changed, neither a setting nor its main table. A release that keeps such text apart
+ *   asks for it under an unchanged declaration, and `nextly migrate` makes it and records nothing.
+ *   Every other file comes of a change, and is one.
+ */
+function besideNotRecorded(args: {
+  pending: Pick<PendingChanges, "beside" | "diffed">;
+  latest: { data: SnapshotFile; template?: true } | null;
+  entities: DeclaredEntities;
+  settings: readonly EntitySettingsChange[];
+}): BesideFile[] {
+  const { pending, latest, entities } = args;
+  if (latest === null) return [];
+  if (!recordsTranslationsTables(latest)) {
+    return pending.beside.filter(madeByMigrate);
+  }
+  const changed = new Set([
+    ...pending.diffed.map(operationTableName),
+    ...args.settings.flatMap(change =>
+      entities[DECLARED_LIST[change.kind]]
+        .filter(entity => entity.slug === change.slug)
+        .map(entity => entity.tableName)
+    ),
+  ]);
+  return pending.beside.filter(
+    file => file.overlays === true && !changed.has(file.table)
+  );
 }
 
 /**

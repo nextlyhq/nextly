@@ -37,6 +37,10 @@ export interface BesideFile {
     | "per-language unique indexes"
     | "translations column types";
   table: string;
+  /** Holds only what a repeater's or group's text is kept in (`CompanionPlanEntry.overlays`). */
+  overlays?: true;
+  /** Turns the entity's translation off, its translations table dropped. */
+  removes?: true;
 }
 
 /** Everything a run of `migrate:create` would write a migration for. */
@@ -72,7 +76,14 @@ export function pendingChangesOf(planned: PlannedRun): PendingChanges {
     tables: planned.operations,
     diffed: planned.diffed,
     beside: [
-      ...beside("translations table", planned.companionPlans),
+      ...planned.companionPlans.map(
+        ({ spec, plan, overlays }): BesideFile => ({
+          kind: "translations table",
+          table: spec.mainTable,
+          ...(overlays === true ? { overlays } : {}),
+          ...(plan.kind === "disable" ? { removes: true } : {}),
+        })
+      ),
       ...beside(
         "fields leaving translation",
         planned.fieldLeavesPlans.map(({ plan }) => plan.shared)
@@ -129,7 +140,7 @@ function besideLine(file: BesideFile): string {
  */
 export function madeByMigrate(file: BesideFile): boolean {
   return (
-    file.kind === "translations table" ||
+    (file.kind === "translations table" && file.removes !== true) ||
     file.kind === "per-language unique indexes"
   );
 }
