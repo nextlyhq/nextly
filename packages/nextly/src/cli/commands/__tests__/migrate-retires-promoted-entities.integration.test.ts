@@ -589,8 +589,8 @@ describe.each(getConfiguredTestDialects())(
       return { adapter, url: deployed.url, ids };
     }
 
-    /** Nothing of the two is left but one `deleted` event for each document. */
-    async function expectRetired(
+    /** No table or row of the two is left, and each document has one `deleted` event. */
+    async function expectRowsRetired(
       adapter: DrizzleAdapter,
       ids: ReadonlyMap<string, string[]>,
       said = ""
@@ -604,6 +604,17 @@ describe.each(getConfiguredTestDialects())(
         expect(await deletionsOf(adapter, entity), said).toEqual(
           Object.fromEntries(ids.get(entity.slug)!.map(id => [id, 1]))
         );
+      }
+    }
+
+    /** And their permissions are orphaned. */
+    async function expectRetired(
+      adapter: DrizzleAdapter,
+      ids: ReadonlyMap<string, string[]>,
+      said = ""
+    ): Promise<void> {
+      await expectRowsRetired(adapter, ids, said);
+      for (const entity of [NOTES, HOME]) {
         const permissions = await permissionsOf(adapter, entity);
         expect(permissions.every(each => each.orphaned)).toBe(true);
       }
@@ -660,12 +671,30 @@ describe.each(getConfiguredTestDialects())(
       await expectRetired(adapter, ids);
     }, 300_000);
 
-    it.each(["its first drop", "one between", "its last drop"])(
-      "on MySQL, is finished by hand and recorded where the file stopped after %s",
-      async which => {
-        if (dialect !== "mysql") return;
+    /** Where a stopped file's drops stay: MySQL's always, others' outside a transaction. */
+    const STAYING =
+      dialect === "mysql"
+        ? ["in a transaction", "outside a transaction"]
+        : ["outside a transaction"];
+
+    it.each(
+      STAYING.flatMap(how =>
+        ["its first drop", "one between", "its last drop"].map(
+          which => [how, which] as const
+        )
+      )
+    )(
+      "run %s, is finished by hand and recorded where the file stopped after %s",
+      async (how, which) => {
         const { adapter, ids } = await promoted();
         const { name, tables } = await removalByHand(adapter);
+        if (how === "outside a transaction") {
+          const path = join(dir, "migrations", name);
+          writeFileSync(
+            path,
+            `-- nextly:no-transaction\n${readFileSync(path, "utf8")}`
+          );
+        }
         const ran =
           which === "its first drop"
             ? 1
@@ -698,21 +727,8 @@ describe.each(getConfiguredTestDialects())(
         ).toBeUndefined();
 
         expect(await migrate(config({}), CONSENT)).toBeUndefined();
-        // A document of a table an operator dropped by hand was captured only where the run had
-        // reached its drop: the run's own drops end each of theirs.
-        const dropped = new Set(tables.slice(0, ran));
-        for (const entity of [NOTES, HOME]) {
-          expect(await tablesOf(adapter, entity)).toEqual([]);
-          const left = await sharedRowsOf(adapter, dialect, entity);
-          for (const [kind, rows] of Object.entries(left)) {
-            expect(rows, `${entity.slug} ${kind}`).toEqual([]);
-          }
-          expect(await deletionsOf(adapter, entity)).toEqual(
-            dropped.has(entity.table)
-              ? Object.fromEntries(ids.get(entity.slug)!.map(id => [id, 1]))
-              : {}
-          );
-        }
+        // Each document once, whether the run dropped its table or the operator did.
+        await expectRowsRetired(adapter, ids, which);
       },
       300_000
     );

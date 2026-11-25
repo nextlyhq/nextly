@@ -339,6 +339,7 @@ export async function storeUnrecordableCapture(
         seq: 0,
         at: 0,
         final: true,
+        whole: true,
       },
     ],
     [`${prefix}0`, { ids, deletions: {} }],

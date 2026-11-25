@@ -1004,6 +1004,7 @@ async function runUnitStatements(
     // already changed by them, and a refusal now would undo none of them.
     if (from > 0) await bound?.beforeResume?.(checkpointDb);
     if (from === 0) await bound?.before?.(checkpointDb);
+    await retirement.begin(checkpointDb, from);
     for (const [offset, statement] of statements.slice(from).entries()) {
       const index = from + offset;
       // Asked before the statement, outside the failure below: refused here, nothing of it ran.
