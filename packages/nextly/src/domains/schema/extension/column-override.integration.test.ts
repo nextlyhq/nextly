@@ -260,6 +260,8 @@ describeEachDialect("the app's override of a generated column", dialect => {
     await compileAndPublishExtensionSchema({
       dialect,
       plugins: [],
+      // The table the site stores the group in, as every compile of a running site is handed it.
+      fieldGroupTables: new Map([["co_seo", SEO_TABLE]]),
       config: {
         ...entities(false),
         db: { schema: { extend: [overrides(5)] } },

@@ -338,6 +338,35 @@ describe("snapshot-io", () => {
       ).toThrow(/t\.snapshot\.json is invalid: expected fieldGroupStorage/);
     });
 
+    // What `migrate:create` starts from in a template's project: the same word, as any snapshot's.
+    it.each([
+      ["current", { version: 2, fieldGroupStorage: "current" }],
+      [undefined, { version: 1 }],
+    ] as const)(
+      "starts a template's first migration on the names its file says (%s)",
+      async (said, expected) => {
+        const root = await mkdtemp(join(tmpdir(), "nextly-template-"));
+        const metaDir = join(root, "meta");
+        await mkdir(metaDir, { recursive: true });
+        await writeFile(join(root, "0001_blog.sql"), "SELECT 1;");
+        await writeFile(
+          join(metaDir, "0001_blog.snapshot.json"),
+          JSON.stringify({
+            version: 1,
+            collections: [],
+            singles: [],
+            ...(said === undefined ? {} : { fieldGroupStorage: said }),
+          })
+        );
+        const latest = await loadLatestSnapshot(metaDir, () => ({
+          tables: [],
+        }));
+        expect(latest?.template).toBe(true);
+        expect(latest?.data).toMatchObject(expected);
+        expect(latest?.data.fieldGroupStorage).toBe(said);
+      }
+    );
+
     // A slug-derived legacy table beside them cannot be on the same names: no reading of the
     // snapshot plans against the tables the database holds, so it is refused.
     it("refuses an unmarked snapshot that holds field groups under both namings", () => {

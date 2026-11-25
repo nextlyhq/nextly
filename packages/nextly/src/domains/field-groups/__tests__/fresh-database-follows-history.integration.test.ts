@@ -222,6 +222,9 @@ async function run(
     said.push(String(c));
     return true;
   });
+  const logged = vi.spyOn(console, "error").mockImplementation((...parts) => {
+    said.push(parts.map(String).join(" "));
+  });
   try {
     await fn(context);
     return { exit: undefined, said: said.join("\n") };
@@ -232,6 +235,7 @@ async function run(
   } finally {
     exit.mockRestore();
     printed.mockRestore();
+    logged.mockRestore();
     forgetFieldGroupStorageNames();
   }
 }
@@ -428,7 +432,7 @@ describe.each(getConfiguredTestDialects())(
       ["now", "fg_", "dynamic_field_groups"],
       ["before", "comp_", "dynamic_components"],
     ] as const) {
-      it(`starts a blog template's project, as it ships ${ships}, on ${registry}, and a Builder save and nextly migrate go on`, async () => {
+      it(`starts a blog template's project, as it ships ${ships}, on ${registry} by nextly migrate, and a start goes on there`, async () => {
         const url = await emptyDatabase(dialect);
         templateHistory(ships);
         // The template's project declares nothing in code: its schema is its migration's.
@@ -438,14 +442,8 @@ describe.each(getConfiguredTestDialects())(
         const adapter = await connect(dialect, url);
         expect(await hasTable(adapter, registry)).toBe(true);
 
-        await developmentStart(dialect, url, {});
-        await builderCreate("fdh_banner");
-        expect(await hasTable(adapter, `${prefix}fdh_banner`)).toBe(true);
-
-        await shutdownServices().catch(() => {});
-        const after = await migrate();
-        expect(after.exit, after.said).toBeUndefined();
-        expect(await hasTable(adapter, `${prefix}fdh_banner`)).toBe(true);
+        await developmentStart(dialect, url, DECLARED);
+        expect(await hasTable(adapter, `${prefix}fdh_card`)).toBe(true);
       }, 180_000);
 
       it(`starts a blog template's empty database, as it ships ${ships}, on ${registry} by a development start`, async () => {

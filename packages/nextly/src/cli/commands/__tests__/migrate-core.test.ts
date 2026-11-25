@@ -11,6 +11,18 @@ import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-los
 import { CliError } from "../../errors";
 import { migrateCore, migrateExitCode } from "../migrate";
 
+// These databases hold nothing, so a run records a new site's field-group names: a write of the meta
+// service's, exercised against real databases in its own suites.
+vi.mock(
+  "../../../domains/field-groups/services/field-group-new-site",
+  async original => ({
+    ...(await original<
+      typeof import("../../../domains/field-groups/services/field-group-new-site")
+    >()),
+    recordNewSiteOnCurrentNames: vi.fn(async () => {}),
+  })
+);
+
 function deps(over: Record<string, unknown> = {}) {
   return {
     extensionSchema: undefined,
@@ -55,10 +67,6 @@ function deps(over: Record<string, unknown> = {}) {
   };
 }
 
-/** A database already set up: it holds its ledger, and none of the tables a run would retire. */
-const isLedger = (table: string) =>
-  Promise.resolve(table === "nextly_schema_events");
-
 describe("what migrateCore hands the core reconcile", () => {
   /*
    * OBSERVED on the real call rather than reconstructed. The retired-table
@@ -71,7 +79,7 @@ describe("what migrateCore hands the core reconcile", () => {
    */
   it("passes the operations the retired-table drop needs", async () => {
     const d = deps({
-      adapter: { tableExists: vi.fn(isLedger), executeQuery: vi.fn() },
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
     });
     await migrateCore(d as never);
 
@@ -87,7 +95,7 @@ describe("what migrateCore hands the core reconcile", () => {
     // loss of rows nothing can recreate, so this must not ride along with
     // `allowDestructive`.
     const off = deps({
-      adapter: { tableExists: vi.fn(isLedger), executeQuery: vi.fn() },
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
     });
     await migrateCore(off as never);
     const withoutFlag = (off.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
@@ -95,7 +103,7 @@ describe("what migrateCore hands the core reconcile", () => {
     expect(withoutFlag.allowDropNonEmptyRetired).toBeUndefined();
 
     const on = deps({
-      adapter: { tableExists: vi.fn(isLedger), executeQuery: vi.fn() },
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
       allowDropNonEmptyRetired: true,
     });
     await migrateCore(on as never);
@@ -109,7 +117,7 @@ describe("what migrateCore hands the core reconcile", () => {
     // drop returns before logging anything, so a caller that lost the flag
     // would drop nothing and say nothing.
     const off = deps({
-      adapter: { tableExists: vi.fn(isLedger), executeQuery: vi.fn() },
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
     });
     await migrateCore(off as never);
     const withoutFlag = (off.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
@@ -117,7 +125,7 @@ describe("what migrateCore hands the core reconcile", () => {
     expect(withoutFlag.dropRetiredAuthTables).toBeUndefined();
 
     const on = deps({
-      adapter: { tableExists: vi.fn(isLedger), executeQuery: vi.fn() },
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
       dropRetiredAuthTables: true,
     });
     await migrateCore(on as never);
@@ -527,7 +535,7 @@ describe("the extension schema migrateCore is handed", () => {
       // `listTables` answers the prefix check's "is there an owner
       // registry": none here, so nothing is recorded and nothing judged.
       adapter: {
-        tableExists: vi.fn(isLedger),
+        tableExists: vi.fn(),
         executeQuery: vi.fn(),
         listTables: vi.fn().mockResolvedValue([]),
       },
@@ -543,7 +551,7 @@ describe("element owner rows", () => {
     // it could strip one a pending drop still expects.
     const order: string[] = [];
     const d = deps({
-      adapter: { tableExists: vi.fn(isLedger), executeQuery: vi.fn() },
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
       runFileMigrationsFn: vi.fn(async () => {
         order.push("files");
         return 0;
