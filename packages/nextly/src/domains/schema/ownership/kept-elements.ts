@@ -581,7 +581,7 @@ export function describeKept(kept: readonly KeptElement[]): string {
   return [...byOwner]
     .map(
       ([owner, list]) =>
-        `kept what the plugin "${owner}" added, which is no longer configured (${list.join(", ")}); \`nextly plugins uninstall ${owner}\` removes it`
+        `kept what the plugin "${owner}" added, which is no longer configured (${list.join(", ")}); to remove it, add "${owner}" back to the configuration, uninstall it with \`nextly plugins uninstall ${owner}\`, then remove it from the configuration`
     )
     .join("; ");
 }
