@@ -336,12 +336,12 @@ describe.each(getConfiguredTestDialects())(
           outcome: null,
         });
 
-        const created = (await test.nextly.create({
+        const created = await test.nextly.create({
           collection: "tct_joins",
           locale: "en",
           data: { title: "A", slug: "a", meta: value },
-        })) as { item: { id: string } };
-        const { id } = created.item;
+        });
+        const id = String(created.item.id);
         const metaIn = async (locale: string) =>
           (
             (await test.nextly.findByID({
