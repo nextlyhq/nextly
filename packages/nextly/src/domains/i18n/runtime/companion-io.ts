@@ -743,6 +743,30 @@ export interface SharedStructureWritten {
   /** The structure written, as stored (JSON text allowed). */
   structure: unknown;
   shape: SharedStructureShape;
+  /**
+   * The structure the main row held before the write, where the writer read it
+   * (`withStructuresBefore`): a component instance whose type changed since then
+   * loses every language's text of it (`pruneOverlay`).
+   */
+  before?: unknown;
+}
+
+/**
+ * `written` with the structure each container held before the write, read off `stored` (the main
+ * row before it), under the field's name or its column as the row spells it. What lets a prune
+ * tell a component instance that changed type (`pruneOverlay`).
+ */
+export function withStructuresBefore(
+  written: readonly SharedStructureWritten[],
+  stored: Readonly<Record<string, unknown>> | undefined
+): SharedStructureWritten[] {
+  if (stored === undefined) return [...written];
+  return written.map(entry => ({
+    ...entry,
+    before: Object.hasOwn(stored, entry.field)
+      ? stored[entry.field]
+      : stored[entry.column],
+  }));
 }
 
 /**
@@ -832,9 +856,15 @@ export async function pruneOverlaysOfRemovedRows(
     companionTableName: string;
     parentId: string;
     written: readonly SharedStructureWritten[];
+    /**
+     * The languages whose overlay this write put down itself: theirs is the new structure's
+     * text already, so a changed component type takes nothing of it.
+     */
+    writtenLocales?: readonly string[];
   }
 ): Promise<void> {
   if (args.written.length === 0) return;
+  const fresh = new Set(args.writtenLocales ?? []);
   const table = args.companionTable as Record<string, unknown>;
   const projection: Record<string, unknown> = { _locale: table._locale };
   for (const { column } of args.written) projection[column] = table[column];
@@ -845,10 +875,16 @@ export async function pruneOverlaysOfRemovedRows(
     .where(eq(table._parent as never, args.parentId));
   for (const row of rows) {
     const changed: Record<string, unknown> = {};
-    for (const { column, structure, shape } of args.written) {
+    const isFresh = fresh.has(String(row._locale));
+    for (const { column, structure, shape, before } of args.written) {
       const stored = row[column];
       if (stored === null || stored === undefined) continue;
-      const pruned = pruneOverlay(stored, structure, shape);
+      const pruned = pruneOverlay(
+        stored,
+        structure,
+        shape,
+        isFresh ? undefined : before
+      );
       if (!pruned.changed) continue;
       const kept = storedOverlay(pruned.overlay);
       changed[column] = kept === null ? null : JSON.stringify(kept);

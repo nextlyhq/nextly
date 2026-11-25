@@ -77,6 +77,7 @@ import {
   type SharedStructureWritten,
   splitLocalizedWrite,
   upsertCompanionRow,
+  withStructuresBefore,
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
@@ -768,12 +769,17 @@ export class FieldGroupMutationService extends BaseService {
     overlays?: {
       /** The structures the write put on the instance's row. */
       written: readonly SharedStructureWritten[];
+      /** The instance's row before the write, which tells an instance inside that changed type. */
+      before?: Readonly<Record<string, unknown>>;
       /** The write's transaction; left out, the pool. */
       tx?: TransactionContext;
     }
   ): Promise<void> {
-    if (Object.keys(companionData).length > 0) {
-      const writeLocale = resolveRequestedLocale(this.localization!, locale);
+    const writeLocale =
+      Object.keys(companionData).length > 0
+        ? resolveRequestedLocale(this.localization!, locale)
+        : undefined;
+    if (writeLocale !== undefined) {
       await upsertCompanionRow(
         writeAdapter,
         schema.companionTableName,
@@ -796,7 +802,8 @@ export class FieldGroupMutationService extends BaseService {
           companionTable: schema.table,
           companionTableName: schema.companionTableName,
           parentId: instanceId,
-          written: overlays.written,
+          written: withStructuresBefore(overlays.written, overlays.before),
+          writtenLocales: writeLocale === undefined ? [] : [writeLocale],
         }
       );
     }
@@ -1314,7 +1321,7 @@ export class FieldGroupMutationService extends BaseService {
           companion,
           locale,
           this.adapter,
-          { written: sharedStructures }
+          { written: sharedStructures, before: existing[0] }
         );
       }
       // The field groups placed directly in it, as rows whose parent is this one.
@@ -1449,7 +1456,7 @@ export class FieldGroupMutationService extends BaseService {
           companion,
           locale,
           this.txWriteAdapter(tx),
-          { written: sharedStructures, tx }
+          { written: sharedStructures, before: existing[0], tx }
         );
       }
       // The field groups placed directly in it, as rows whose parent is this one.
@@ -2239,7 +2246,7 @@ export class FieldGroupMutationService extends BaseService {
    * Returns the row it was written as, which the field groups placed in it name as their parent.
    */
   private async writeInstanceRow(
-    store: Pick<TransactionContext, "insert" | "update">,
+    store: Pick<TransactionContext, "insert" | "update" | "selectOne">,
     // The transaction's companion writer; omitted, the pooled adapter writes the companion row.
     companionWriter:
       | ReturnType<FieldGroupMutationService["txWriteAdapter"]>
@@ -2265,6 +2272,16 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<{ id: string; tableName: string }> {
     const { existing, split, componentFields, order, componentType } = params;
     let written: { id: string; tableName: string };
+    // The structures the stored row holds before this write, of its containers: what a prune
+    // tells a component instance that changed type by. Read only for a row a container is
+    // written to.
+    const before =
+      existing && split.sharedStructures.length > 0
+        ? ((await store.selectOne<Record<string, unknown>>(existing.tableName, {
+            where: this.whereEq("id", existing.id),
+            columns: split.sharedStructures.map(written => written.column),
+          })) ?? undefined)
+        : undefined;
     if (existing) {
       const updateData = this.serializeComponentRow(
         split.main,
@@ -2304,6 +2321,7 @@ export class FieldGroupMutationService extends BaseService {
         companionWriter,
         {
           written: split.sharedStructures,
+          before,
           ...(params.tx ? { tx: params.tx } : {}),
         }
       );

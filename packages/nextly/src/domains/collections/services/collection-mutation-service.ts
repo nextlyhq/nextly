@@ -308,6 +308,7 @@ import {
   upsertCompanionRow,
   type CompanionSchema,
   type SharedStructureWritten,
+  withStructuresBefore,
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
@@ -15179,6 +15180,20 @@ export class CollectionMutationService extends BaseService {
             args.judge.holder
           )
         : undefined;
+    // The structures the main row holds before this write, of the containers
+    // it rewrites: what a prune tells a component instance that changed type
+    // by. Read only where the write puts a container's structure down.
+    const split = args.structuresFrom ?? args.translation;
+    const placed = (split?.sharedStructures ?? []).filter(written =>
+      Object.hasOwn(args.columns, written.column)
+    );
+    const structuresBefore =
+      placed.length > 0
+        ? await tx.selectOne<Record<string, unknown>>(args.tableName, {
+            where: this.whereEq("id", args.entryId),
+            columns: placed.map(written => written.column),
+          })
+        : undefined;
     await tx.update(
       args.tableName,
       args.columns,
@@ -15204,8 +15219,12 @@ export class CollectionMutationService extends BaseService {
     await this.pruneRemovedRowTranslations(
       tx,
       args.entryId,
-      args.structuresFrom ?? args.translation,
-      args.provenance?.collectionName
+      split,
+      args.provenance?.collectionName,
+      {
+        before: structuresBefore ?? undefined,
+        writtenLocale: args.translation?.writeLocale,
+      }
     );
     // The translation row as it was before this write, read by the claim:
     // for an overwrite, what it replaced.
@@ -15230,14 +15249,24 @@ export class CollectionMutationService extends BaseService {
         }
       | null
       | undefined,
-    collectionName: string | undefined
+    collectionName: string | undefined,
+    /**
+     * The main row before the write, which tells a component instance that
+     * changed type, and the language whose overlay the write put down itself.
+     */
+    context: {
+      before?: Record<string, unknown>;
+      writtenLocale?: string;
+    } = {}
   ): Promise<void> {
     if (!split?.sharedStructures?.length || !split.companionTable) return;
     await pruneOverlaysOfRemovedRows(tx, this.dialect, {
       companionTable: split.companionTable,
       companionTableName: split.companionTableName,
       parentId: entryId,
-      written: split.sharedStructures,
+      written: withStructuresBefore(split.sharedStructures, context.before),
+      writtenLocales:
+        context.writtenLocale === undefined ? [] : [context.writtenLocale],
     });
     if (collectionName === undefined || !(await this.provenanceRecorded(tx))) {
       return;
@@ -24473,7 +24502,11 @@ export class CollectionMutationService extends BaseService {
             tx,
             entryId,
             localizedUpdate,
-            params.collectionName
+            params.collectionName,
+            {
+              before: storedRow ?? existingEntry,
+              writtenLocale: localizedUpdate.writeLocale,
+            }
           );
           // Where the values came from, beside them on this transaction.
           await this.recordWrittenProvenance(tx, {

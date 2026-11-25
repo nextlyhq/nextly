@@ -25,6 +25,7 @@ import {
   type CompanionSchema,
   pruneOverlaysOfRemovedRows,
   type SharedStructureWritten,
+  withStructuresBefore,
 } from "../../i18n/runtime/companion-io";
 import {
   assembleStoredValue,
@@ -105,13 +106,18 @@ export async function dropRemovedRowsText(
     entryId: string;
     companion: Pick<CompanionSchema, "table" | "companionTableName">;
     written: SharedStructureWritten[];
+    /** The main row before the write, which tells a component instance that changed type. */
+    before?: Readonly<Record<string, unknown>>;
+    /** The languages whose overlay the write put down itself. */
+    writtenLocales?: readonly string[];
   }
 ): Promise<void> {
   await pruneOverlaysOfRemovedRows(tx, deps.adapter.dialect, {
     companionTable: args.companion.table,
     companionTableName: args.companion.companionTableName,
     parentId: args.entryId,
-    written: args.written,
+    written: withStructuresBefore(args.written, args.before),
+    writtenLocales: args.writtenLocales,
   });
   if (
     args.written.length === 0 ||

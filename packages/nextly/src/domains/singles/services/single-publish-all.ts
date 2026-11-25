@@ -2755,6 +2755,8 @@ export class SinglePublishAllService extends BaseService {
     // So the type tags the drafts record come off at every depth.
     const componentFields = await this.componentFieldsOn(tx, plan.fieldConfigs);
 
+    // The languages whose pending text this publish has written so far.
+    const promotedLocales: string[] = [];
     for (const draft of pending) {
       // The pending change carries no lifecycle of its own; the statuses this
       // publish writes are the ones that count.
@@ -2771,6 +2773,23 @@ export class SinglePublishAllService extends BaseService {
         componentFields
       );
       delete main.status;
+      // The structures the row holds before this change goes live, of the
+      // containers it rewrites: what tells a component instance that changed
+      // type. Read only where the change puts a container's structure down.
+      const placed = companion
+        ? sharedStructuresIn(main, companion.localizedFields)
+        : [];
+      const before =
+        placed.length > 0
+          ? ((await tx.selectOne<Record<string, unknown>>(
+              singleMeta.tableName,
+              {
+                where: this.whereEq("id", existingDoc.id),
+                columns: placed.map(written => written.column),
+              }
+            )) ?? undefined)
+          : undefined;
+      if (draft.locale) promotedLocales.push(draft.locale);
 
       if (Object.keys(main).length > 0) {
         await tx.update(
@@ -2790,7 +2809,11 @@ export class SinglePublishAllService extends BaseService {
           slug: singleMeta.slug,
           entryId: existingDoc.id,
           companion,
-          written: sharedStructuresIn(main, companion.localizedFields),
+          written: placed,
+          before,
+          // Every language this publish has put down so far keeps its text:
+          // it is the new structure's already.
+          writtenLocales: promotedLocales,
         });
       }
       if (

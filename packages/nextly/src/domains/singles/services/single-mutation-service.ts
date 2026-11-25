@@ -5470,6 +5470,10 @@ export class SingleMutationService extends BaseService {
               entryId: existingDoc.id,
               companion,
               written: sharedStructuresIn(mainPayload, shapedRefs),
+              // The row as it stood before this save: a component instance
+              // that changed type since loses its text in the other languages.
+              before: existingDoc,
+              writtenLocales: writeLocale === undefined ? [] : [writeLocale],
             });
           }
 
@@ -7675,7 +7679,15 @@ export class SingleMutationService extends BaseService {
       companion: translation,
       sharedStructures,
     } = translatedIn !== null && companion
-      ? splitLocalizedWrite(columns, companion.localizedFields)
+      ? splitLocalizedWrite(
+          columns,
+          // Split by the refs a save splits by: a container placing a component
+          // read with the component's fields, so its text goes to the
+          // language's overlay. A rewrite refuses a field holding a field group
+          // before this, so today nothing here places one, and the read costs
+          // nothing then (`withComponentShapes` returns the refs as they are).
+          await withComponentShapes(companion.localizedFields, tx.getDrizzle())
+        )
       : {
           main: columns,
           companion: {} as Record<string, unknown>,
@@ -7729,6 +7741,9 @@ export class SingleMutationService extends BaseService {
       entryId,
       companion,
       written: sharedStructures,
+      // The field's value as the rewrite found it, and the language it wrote.
+      before: { [field]: write.stored },
+      writtenLocales: [translatedIn],
     });
     // Where the rewritten value came from, as any live write records it.
     await recordSingleProvenance(this.provenanceDeps, tx, {

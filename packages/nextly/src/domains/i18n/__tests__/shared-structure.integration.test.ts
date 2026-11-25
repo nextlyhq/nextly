@@ -94,6 +94,33 @@ const GALLERIES = defineCollection({
   ],
 });
 
+/** Two components naming a translated field alike, offered together in each row of a repeater. */
+const ZONE_HERO = defineFieldGroup({
+  slug: "zhero",
+  fields: [text({ name: "title" })],
+});
+const ZONE_CTA = defineFieldGroup({
+  slug: "zcta",
+  fields: [text({ name: "title" }), number({ name: "weight" })],
+});
+const ZONES = defineCollection({
+  slug: "zones",
+  fields: [
+    text({ name: "title" }),
+    repeater({
+      name: "strips",
+      fields: [
+        number({ name: "position" }),
+        fieldGroup({
+          name: "blocks",
+          components: ["zhero", "zcta"],
+          repeatable: true,
+        }),
+      ],
+    }),
+  ],
+});
+
 /** A Single whose repeater holds a list of component instances in each row. */
 const BOARD = defineSingle({
   slug: "boardsite",
@@ -139,9 +166,9 @@ describeEachDialect("one structure across languages", dialect => {
   async function site(): Promise<TestNextly> {
     t = await createTestNextly({
       dialect,
-      collections: [ARTICLES, GALLERIES],
+      collections: [ARTICLES, GALLERIES, ZONES],
       singles: [NOTICE, BOARD],
-      fieldGroups: [PANEL_CARD],
+      fieldGroups: [PANEL_CARD, ZONE_HERO, ZONE_CTA],
       localization: LANGUAGES,
     });
     return t;
@@ -943,6 +970,79 @@ describeEachDialect("one structure across languages", dialect => {
         ).items.map(item => (item as { title: string }).title);
 
       expect(await order("es")).toEqual(await order("en"));
+    },
+    BOOT_TIMEOUT
+  );
+
+  // An instance that keeps its id but changes component type is another component: the earlier
+  // type's text goes from every other language, even for a field both types name alike, while the
+  // language that made the change keeps the text it wrote. Kept, Spanish would show the hero's
+  // title on the call to action.
+  it(
+    "drops an instance's text in the other languages when it changes type, keeping the writer's",
+    async () => {
+      const { nextly } = await site();
+      type Zone = {
+        strips: {
+          id: string;
+          blocks: { id: string; title?: string | null }[];
+        }[];
+      };
+      const readZone = async (id: string, locale: string) =>
+        (await nextly.findByID({ collection: "zones", id, locale })) as Zone;
+      const writeZone = (id: string, locale: string, data: unknown) =>
+        nextly.update({
+          collection: "zones",
+          id,
+          locale,
+          data: { strips: data, _overwrite: true },
+        });
+      const created = await nextly.create({
+        collection: "zones",
+        locale: "en",
+        data: {
+          title: "Zone",
+          strips: [
+            {
+              position: 1,
+              blocks: [{ _componentType: "zhero", title: "Hello" }],
+            },
+          ],
+        },
+      });
+      const id = (created.item as { id: string }).id;
+      const [row] = (await readZone(id, "en")).strips;
+      const instance = row!.blocks[0]!.id;
+      await writeZone(id, "es", [
+        {
+          id: row!.id,
+          position: 1,
+          blocks: [{ id: instance, _componentType: "zhero", title: "Hola" }],
+        },
+      ]);
+      // POPULATION CONTROL: Spanish reads its own hero title.
+      expect((await readZone(id, "es")).strips[0]!.blocks[0]!.title).toBe(
+        "Hola"
+      );
+
+      // English turns the hero into a call to action, keeping its id.
+      await writeZone(id, "en", [
+        {
+          id: row!.id,
+          position: 1,
+          blocks: [
+            { id: instance, _componentType: "zcta", title: "Buy", weight: 1 },
+          ],
+        },
+      ]);
+
+      expect((await readZone(id, "en")).strips[0]!.blocks[0]!.title).toBe(
+        "Buy"
+      );
+      // Spanish holds no text of the call to action yet: it falls back to English's.
+      expect((await readZone(id, "es")).strips[0]!.blocks[0]!.title).toBe(
+        "Buy"
+      );
     },
     BOOT_TIMEOUT
   );
