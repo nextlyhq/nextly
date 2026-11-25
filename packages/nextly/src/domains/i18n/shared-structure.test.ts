@@ -413,6 +413,70 @@ describe("a container saying it is not translated", () => {
       })
     ).toEqual({ kind: "group", texts: ["heading"], inner: {} });
   });
+
+  // A component placed under `localized: false`, on itself or on a container around it, is shared
+  // whole: it translates nothing, so a container holding nothing else keeps no overlay column.
+  // Read as placing a component anyway, it would get an empty overlay column, and the column would
+  // be guarded as though it held translations.
+  it("places no component that says it is not translated", () => {
+    const sharedCard = {
+      name: "slides",
+      type: "repeater",
+      fields: [
+        { name: "rank", type: "number" },
+        {
+          name: "card",
+          type: "component",
+          component: "card",
+          localized: false,
+        },
+      ],
+    };
+    const insideShared = {
+      name: "slides",
+      type: "repeater",
+      fields: [
+        {
+          name: "meta",
+          type: "group",
+          localized: false,
+          fields: [{ name: "card", type: "component", component: "card" }],
+        },
+      ],
+    };
+    expect(keepsTranslationsInside(sharedCard, true)).toBe(false);
+    expect(keepsTranslationsInside(insideShared, true)).toBe(false);
+    // The control: the same component, translated, is placed.
+    expect(
+      keepsTranslationsInside(
+        {
+          name: "slides",
+          type: "repeater",
+          fields: [{ name: "card", type: "component", component: "card" }],
+        },
+        true
+      )
+    ).toBe(true);
+  });
+
+  // A group with no name only lays fields out, but saying it is not translated it shares the fields
+  // it lays out, as the admin shows them: none of its text is any language's own.
+  it("translates nothing laid out by a group with no name that says it is not translated", () => {
+    expect(
+      sharedStructureShape({
+        name: "page",
+        type: "group",
+        fields: [
+          { name: "heading", type: "text" },
+          {
+            type: "group",
+            localized: false,
+            fields: [{ name: "code", type: "text" }],
+          },
+        ],
+      })
+    ).toEqual({ kind: "group", texts: ["heading"], inner: {} });
+  });
 });
 
 describe("rows keyed by an id their repeater declares", () => {

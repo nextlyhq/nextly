@@ -111,8 +111,12 @@ export function placesComponent(field: StructuredField): boolean {
   const open = new WeakSet<object>();
   const visit = (level: readonly StructuredField[]): boolean =>
     level.some(child => {
+      // The cutoff the shape is derived by (`childShape`): a field saying it is not translated,
+      // a component or a container around one among them, is shared whole and places nothing.
+      if (child.localized === false) return false;
       if (componentSlugsOf(child).length > 0) return true;
       if (!isStructureContainer(child) || open.has(child)) return false;
+      if (neverTranslatable(child)) return false;
       open.add(child);
       return visit(child.fields ?? []);
     });
@@ -196,8 +200,14 @@ function shapeOfLevel(
   const visit = (level: readonly StructuredField[]) => {
     for (const child of level) {
       if (!child.name) {
-        // A group with no name only lays fields out: they are values of this level.
-        if (child.type === "group" && child.fields && !open.has(child)) {
+        // A group with no name only lays fields out: they are values of this level. Saying it is
+        // not translated, it shares every field it lays out, as a named one would.
+        if (
+          child.type === "group" &&
+          child.fields &&
+          child.localized !== false &&
+          !open.has(child)
+        ) {
           open.add(child);
           visit(child.fields);
           open.delete(child);
