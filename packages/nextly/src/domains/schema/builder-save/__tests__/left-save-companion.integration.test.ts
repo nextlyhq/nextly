@@ -482,6 +482,48 @@ describe.each(LEFT_SAVE_SUITES)(
       300_000
     );
 
+    // A settings update writes its registry row last, after its push and the translations table's
+    // step: settled whole, the row is brought to all the save asked, its switches among it.
+    it.runIf(perLanguage)(
+      "a settings update that turned Draft/Published off, killed before its row was written, is settled with the row's switch off",
+      async () => {
+        const t = await boot({ translatable: true, status: true });
+        await killSave(
+          t,
+          point => point === "companion: before",
+          () =>
+            dispatchCollections(
+              {} as ServiceContainer,
+              "updateCollection",
+              { collectionName: slug },
+              { fields: [text("heading"), field("note")], status: false }
+            )
+        );
+
+        expect((await settle(t)).map(one => one.outcome)).toEqual(["all"]);
+
+        expect(await recordStands(t)).toBe(false);
+        const row = await t.adapter.selectOne<{ status?: unknown }>(
+          "dynamic_collections",
+          { where: { and: [{ column: "slug", op: "=", value: slug }] } }
+        );
+        expect.soft(Boolean(row?.status), "the row's switch").toBe(false);
+        // Nothing holds the collection now, so what the row says is what reads and writes meet.
+        for (const answer of await fromAnotherProcess([
+          { kind: "read", via: "rest" },
+          { kind: "read", via: "api" },
+          {
+            kind: "write",
+            via: "api",
+            data: { title: "A1", slug: "a1", note: "x" },
+          },
+        ])) {
+          expect.soft(answer.ok, JSON.stringify(answer)).toBe(true);
+        }
+      },
+      300_000
+    );
+
     // A later migration of the entity applied since: the column is that migration's to speak of.
     it.each(drops)(
       "a %s that drops %s is settled whole where a later migration of it applied since",
