@@ -15,6 +15,7 @@
  * @module domains/schema/pipeline/registered-collections
  */
 
+import { pluginCollectionSources } from "../migrate/plugin/plugin-collection-sources";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 
 import { DEMOTED_FROM_CODE } from "./demoted-from-code";
@@ -81,7 +82,7 @@ export function isHandedToBuilder(
  * table. A plugin's collection (`pluginSlugs`) is never left out: a plugin registers its own again
  * at every start, so no demote hands it over.
  */
-export function withoutHandedToBuilder<T extends { slug?: string | null }>(
+export function withoutHandedToBuilder<T>(
   configured: readonly T[],
   registered: readonly RegisteredCollectionRow[],
   pluginSlugs: Pick<ReadonlySet<string>, "has">
@@ -89,12 +90,97 @@ export function withoutHandedToBuilder<T extends { slug?: string | null }>(
   const handedOver = new Set(
     registered.filter(isHandedToBuilder).map(row => row.slug)
   );
-  return configured.filter(
-    entry =>
-      typeof entry.slug !== "string" ||
-      !handedOver.has(entry.slug) ||
-      pluginSlugs.has(entry.slug)
+  return configured.filter(entry => {
+    const slug = slugOf(entry);
+    return slug === undefined || !handedOver.has(slug) || pluginSlugs.has(slug);
+  });
+}
+
+/**
+ * A configured entry's slug, or undefined for one without a string slug. Read from an entry of any
+ * shape, since some configurations type their collections loosely (`readonly unknown[]`).
+ */
+function slugOf(entry: unknown): string | undefined {
+  return typeof entry === "object" &&
+    entry !== null &&
+    "slug" in entry &&
+    typeof entry.slug === "string"
+    ? entry.slug
+    : undefined;
+}
+
+/**
+ * `config` as code still owns it: its collections without those a demote handed to the Schema
+ * Builder (`withoutHandedToBuilder`), with a plugin's kept by the rule a start gives a collection
+ * its origin by (`pluginCollectionSources`), and every other part as it is.
+ *
+ * For the passes that read the configuration's entities themselves: the translations-table passes
+ * and the checks of new addresses and sibling fields. Each then ignores such an entry as the schema
+ * roads do, as if it had been removed: its `localized` setting provisions or restores no
+ * translations table the Builder's collection keeps, and a pair of fields added to it refuses
+ * nothing.
+ *
+ * Not for building a desired schema: there the configuration still has to name the collection, or
+ * the Builder's row merged in for its address would read as one removed from code. Those roads
+ * filter the collections themselves (`withoutHandedToBuilder`).
+ */
+export function configTheCodeOwns<
+  C extends {
+    collections?: readonly unknown[];
+    plugins?: Parameters<typeof pluginCollectionSources>[0];
+  },
+>(config: C, registered: readonly RegisteredCollectionRow[]): C {
+  if (config.collections === undefined) return config;
+  const collections = withoutHandedToBuilder(
+    config.collections,
+    registered,
+    pluginCollectionSources(config.plugins ?? [])
   );
+  // A copy with the collections replaced, typed as the configuration it was given (`C & ...`).
+  return collections.length === config.collections.length
+    ? config
+    : Object.assign({}, config, { collections });
+}
+
+/**
+ * `config` with each collection a demote handed to the Schema Builder described by its registry row
+ * instead of the code entry the schema syncs ignore (`withoutHandedToBuilder`): its table, fields,
+ * lifecycle and translation, its columns by the Builder's rules, and no compound index, which no
+ * row holds. A plugin's collection is never replaced.
+ *
+ * For compiling the extension schema, which reads entities from the configuration alone: a schema
+ * hook is then judged by the columns the collection's table has. Only an entry still in the
+ * configuration is replaced: a collection the Builder made, or one whose entry was removed, is not
+ * one a hook may extend.
+ */
+export function configWithRecordedHandOvers<
+  C extends {
+    collections?: readonly unknown[];
+    plugins?: Parameters<typeof pluginCollectionSources>[0];
+  },
+>(config: C, registered: readonly RegisteredCollectionRow[]): C {
+  const handedOver = new Map(
+    registered.filter(isHandedToBuilder).map(row => [row.slug, row])
+  );
+  if (config.collections === undefined || handedOver.size === 0) return config;
+  const plugins = pluginCollectionSources(config.plugins ?? []);
+  const collections = config.collections.map(entry => {
+    const slug = slugOf(entry);
+    const row =
+      slug === undefined || plugins.has(slug)
+        ? undefined
+        : handedOver.get(slug);
+    if (row?.tableName === undefined) return entry;
+    return {
+      slug,
+      dbName: row.tableName,
+      fields: row.fields ?? [],
+      status: row.status === true,
+      localized: row.localized === true,
+      builderOwned: true,
+    };
+  });
+  return Object.assign({}, config, { collections });
 }
 
 /**

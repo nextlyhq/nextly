@@ -21,17 +21,18 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
-import { NextlyError } from "../../errors";
+import { describeError, NextlyError } from "../../errors";
 import type { DryRunChange, DryRunPlan } from "../dry-run";
 
 import { confirmBackup } from "./backup-confirmation";
 import { dryRunRefusalOf } from "./migrate-create";
-import type {
-  UpgradeAdapter,
-  UpgradeReport,
-  UpgradeSite,
-  UpgradeStep,
-  UpgradeStepContext,
+import {
+  NOTHING_CHANGED,
+  type UpgradeAdapter,
+  type UpgradeReport,
+  type UpgradeSite,
+  type UpgradeStep,
+  type UpgradeStepContext,
 } from "./upgrade-step";
 
 /** What a run of the steps is handed by its command. */
@@ -39,6 +40,8 @@ export interface DataStepsDeps {
   adapter: UpgradeAdapter;
   /** The site's configuration, which the steps that bring content into its model judge by. */
   site?: UpgradeSite;
+  /** As `UpgradeStepContext.droppedAhead`: counted before the migrations, what they drop. */
+  droppedAhead?: ReadonlySet<string>;
   /** The command running them, as a refusal and the lock's holder name it: "nextly migrate". */
   command: string;
   /** The steps, in the order they run. */
@@ -57,6 +60,11 @@ export interface DataStepsDeps {
    * a refusal then says so, rather than that nothing was changed.
    */
   afterMigrations?: boolean;
+  /**
+   * The schema changes the command applied before the steps, as a refusal made after them names
+   * them: "the 2 migrations this run applied". Absent where it applied none.
+   */
+  schemaChanges?: string;
   /**
    * A precondition of the command's own, asked under the lock before any
    * step is counted or run: holding the lock is necessary for the steps and
@@ -78,7 +86,10 @@ export interface PendingDataStep {
 
 /** What each step is handed: the database, the site and the command's log. */
 function stepContext(
-  deps: Pick<DataStepsDeps, "adapter" | "log" | "warn" | "site">
+  deps: Pick<
+    DataStepsDeps,
+    "adapter" | "log" | "warn" | "site" | "droppedAhead"
+  >
 ): UpgradeStepContext {
   const { adapter } = deps;
   return {
@@ -86,6 +97,9 @@ function stepContext(
     db: adapter.getDrizzle(),
     dialect: adapter.getCapabilities().dialect,
     ...(deps.site === undefined ? {} : { site: deps.site }),
+    ...(deps.droppedAhead === undefined
+      ? {}
+      : { droppedAhead: deps.droppedAhead }),
     log: deps.log,
     warn: deps.warn,
   };
@@ -103,12 +117,76 @@ const named = ({ step, pending }: PendingDataStep) =>
  * read with that refusal.
  */
 export async function firstDataStepWithWork(
-  deps: Pick<DataStepsDeps, "adapter" | "steps" | "log" | "warn" | "site">
+  deps: Pick<
+    DataStepsDeps,
+    "adapter" | "steps" | "log" | "warn" | "site" | "droppedAhead"
+  >
 ): Promise<PendingDataStep | undefined> {
   const context = stepContext(deps);
   for (const step of deps.steps) {
     const pending = await step.pending(context);
     if (pending > 0) return { step, pending };
+  }
+  return undefined;
+}
+
+/**
+ * Which steps' counts mean something ahead of the run: a step's count is read from the database
+ * as it stands, so it holds only where no earlier step of its group (`UpgradeStep.group`) has work
+ * to do first, or a count that could not be read. `waits` says whether a step's count waits so;
+ * `hasWork` records a step's group as having work, or as unreadable, from then on.
+ */
+function countsAhead(steps: readonly UpgradeStep[]): {
+  waits: (step: UpgradeStep) => boolean;
+  /** The earlier step whose work `step`'s count waits for, if any. */
+  waitingOn: (step: UpgradeStep) => UpgradeStep | undefined;
+  hasWork: (step: UpgradeStep) => void;
+} {
+  const groupOf = (step: UpgradeStep) =>
+    step.group ?? `step ${String(steps.indexOf(step))}`;
+  // What a step's count reads (`UpgradeStep.reads`): by default its own group's repairs.
+  const readsOf = (step: UpgradeStep) => step.reads ?? [groupOf(step)];
+  // Each group with work, and the first of its steps that has it.
+  const withWork = new Map<string, UpgradeStep>();
+  const waitingOn = (step: UpgradeStep) =>
+    readsOf(step)
+      .map(group => withWork.get(group))
+      .find(earlier => earlier !== undefined);
+  return {
+    waits: step => waitingOn(step) !== undefined,
+    waitingOn,
+    hasWork: step => {
+      const group = groupOf(step);
+      if (!withWork.has(group)) withWork.set(group, step);
+    },
+  };
+}
+
+/**
+ * The refusal a step's count makes on the database as it stands, read-only and with no lock, as
+ * `refuses` tells a refusal from a count that cannot be read. Steps are counted past those with
+ * work, so a refusal later in the order is made before an earlier step changes anything; but only
+ * a step whose count holds ahead of the run (`countsAhead`): one whose group has earlier work
+ * reads what that work repairs, so it waits for the run. A count that fails for another reason
+ * refuses nothing, and the rest of its group waits too.
+ */
+export async function refusalOfSteps(
+  deps: Pick<
+    DataStepsDeps,
+    "adapter" | "steps" | "log" | "warn" | "site" | "droppedAhead"
+  >,
+  refuses: (error: unknown) => boolean
+): Promise<NextlyError | undefined> {
+  const context = stepContext(deps);
+  const ahead = countsAhead(deps.steps);
+  for (const step of deps.steps) {
+    if (ahead.waits(step)) continue;
+    try {
+      if ((await step.pending(context)) > 0) ahead.hasWork(step);
+    } catch (error) {
+      if (NextlyError.is(error) && refuses(error)) return error;
+      ahead.hasWork(step);
+    }
   }
   return undefined;
 }
@@ -196,7 +274,11 @@ export async function confirmDataStepsBackup(
 export async function runDataSteps(
   deps: DataStepsDeps
 ): Promise<{ title: string; changed: number }[]> {
-  const first = await firstDataStepWithWork(deps);
+  // The first count is a refusal's first chance too, after the command's schema changes where it
+  // made some: such a refusal says what had applied, as one made in the run does.
+  const first = await firstDataStepWithWork(deps).catch((error: unknown) => {
+    throw refusalAfterWork(error, deps, []);
+  });
   if (first === undefined) return [];
   await confirmDataStepsBackup(deps, first);
 
@@ -211,10 +293,14 @@ export async function runDataSteps(
       // run: a run this one waited behind may have done the work already,
       // and a step reads what the steps before it repaired.
       for (const step of deps.steps) {
-        if ((await step.pending(context)) === 0) continue;
-        const changed = await step.run(context);
-        deps.log(`${step.title}: ${String(changed)}`);
-        ran.push({ title: step.title, changed });
+        try {
+          if ((await step.pending(context)) === 0) continue;
+          const changed = await step.run(context);
+          deps.log(`${step.title}: ${String(changed)}`);
+          ran.push({ title: step.title, changed });
+        } catch (error) {
+          throw refusalAfterWork(error, deps, ran);
+        }
       }
     },
     {
@@ -227,6 +313,48 @@ export async function runDataSteps(
     }
   );
   return ran;
+}
+
+/**
+ * A step's refusal as the run makes it: as the step made it where nothing had applied before it,
+ * and otherwise with what had: the command's schema changes (`schemaChanges`) and the steps that
+ * ran before it, which stay applied. Each is a repair that is safe to keep, and the next run
+ * carries on from it, so the refusal says that, in place of "Nothing was changed", and that the
+ * cause it names is what to fix first. Anything that is not a step's refusal is left as it is.
+ */
+export function refusalAfterWork(
+  error: unknown,
+  deps: Pick<DataStepsDeps, "command" | "schemaChanges">,
+  ran: readonly { title: string; changed: number }[]
+): unknown {
+  if (!NextlyError.is(error) || dryRunRefusalOf(error) === undefined) {
+    return error;
+  }
+  const applied = [
+    ...(deps.schemaChanges === undefined ? [] : [deps.schemaChanges]),
+    ...ran.map(
+      ({ title, changed }) => `the step "${title}" (${String(changed)})`
+    ),
+  ];
+  if (applied.length === 0) return error;
+  const cause = error.publicMessage.endsWith(NOTHING_CHANGED)
+    ? error.publicMessage.slice(0, -NOTHING_CHANGED.length).trimEnd()
+    : error.publicMessage;
+  return new NextlyError({
+    code: error.code,
+    publicMessage:
+      `${cause} Before this refusal, ${applied.join(" and ")} had applied, and stay applied: ` +
+      `each is a repair that is safe to keep, and the next run carries on from it. Nothing else ` +
+      `was changed. Fix what is named above, then run \`${deps.command}\` again.`,
+    ...(error.publicData === undefined ? {} : { publicData: error.publicData }),
+    logContext: {
+      ...error.logContext,
+      appliedBefore: {
+        schemaChanges: deps.schemaChanges ?? null,
+        steps: ran.map(({ title }) => title),
+      },
+    },
+  });
 }
 
 /**
@@ -255,10 +383,15 @@ export async function previewDataSteps(
     | "log"
     | "warn"
     | "site"
+    | "droppedAhead"
   >
 ): Promise<DryRunPlan> {
-  const { withWork, refusal: countRefusal, report } =
-    await countForPreview(deps);
+  const {
+    withWork,
+    refusal: countRefusal,
+    report,
+    deferred,
+  } = await countForPreview(deps);
   const [first] = withWork;
   // A step whose count refused is the run's refusal, before any question.
   const outlook =
@@ -276,6 +409,7 @@ export async function previewDataSteps(
           ]
         : []),
       ...(outlook.note !== undefined ? [outlook.note] : []),
+      ...deferred,
     ],
     report,
   };
@@ -286,27 +420,52 @@ export async function previewDataSteps(
  * stops the counting there, as it stops the run, and is the refusal named.
  */
 async function countForPreview(
-  deps: Pick<DataStepsDeps, "adapter" | "steps" | "log" | "warn" | "site">
+  deps: Pick<
+    DataStepsDeps,
+    "adapter" | "steps" | "log" | "warn" | "site" | "droppedAhead"
+  >
 ): Promise<{
   withWork: PendingDataStep[];
   refusal?: string;
   report: UpgradeReport;
+  /** The refusals a step whose count waits for an earlier one's work may make once that runs. */
+  deferred: string[];
 }> {
   const context = stepContext(deps);
   const withWork: PendingDataStep[] = [];
   // What the steps that move content list of it, each step's lists in step order. Each is asked of
   // the database as it stands, as each count is, before any step runs.
   const report: UpgradeReport = { move: [], conflicts: [], check: [] };
+  const ahead = countsAhead(deps.steps);
+  const deferred: string[] = [];
   for (const step of deps.steps) {
     let pending: number;
     try {
       pending = await step.pending(context);
     } catch (error) {
+      // A step whose group has earlier work reads what that work repairs: its count waits for the
+      // run, and so does any refusal it makes now (`refusalOfSteps`), which is named as one the
+      // run may make once that work is done, after the schema changes.
+      const earlier = ahead.waitingOn(step);
+      if (earlier) {
+        // Named either way: a refusal as one the run may make, a count that could not be read as
+        // one the run takes once the earlier step has.
+        const refusal = dryRunRefusalOf(error);
+        deferred.push(
+          refusal !== undefined
+            ? `"${step.title}" may be refused once "${earlier.title}" has run, after the schema changes, which stay applied then: counted now, ${refusal}`
+            : `"${step.title}" could not be counted before "${earlier.title}" has run: ${describeError(error)}`
+        );
+        continue;
+      }
       const refusal = dryRunRefusalOf(error);
       if (refusal === undefined) throw error;
-      return { withWork, refusal, report };
+      return { withWork, refusal, report, deferred };
     }
-    if (pending > 0) withWork.push({ step, pending });
+    if (pending > 0) {
+      withWork.push({ step, pending });
+      ahead.hasWork(step);
+    }
     // Asked of every step that lists anything, with work or without: a step can have nothing to
     // change and still something an editor should check.
     if (step.report) {
@@ -316,7 +475,7 @@ async function countForPreview(
       report.check.push(...listed.check);
     }
   }
-  return { withWork, report };
+  return { withWork, report, deferred };
 }
 
 /**

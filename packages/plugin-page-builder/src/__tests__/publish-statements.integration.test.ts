@@ -88,11 +88,17 @@ type Route = "direct" | "rest";
  * - each working-draft lookup runs once per part, the shared one
  *   (`locale IS NULL`) and the language's: five more version reads
  *   ({@link VERSION_READS}), which one query could answer (a follow-up).
+ *
+ * On MySQL, three more (from 86/95) since an entry write holds its collection
+ * against a Builder save that deletes a field's values: the publish's write
+ * transaction takes the collection's named locks, reads its registry row for
+ * share and lets the named locks go (`holdEntityForWrite`), measured as
+ * exactly those three statements more on each route.
  */
 const PINS: Readonly<Record<TestDialect, Readonly<Record<Route, number>>>> = {
   sqlite: { direct: 78, rest: 87 },
   postgresql: { direct: 83, rest: 93 },
-  mysql: { direct: 86, rest: 95 },
+  mysql: { direct: 89, rest: 98 },
 };
 
 /**

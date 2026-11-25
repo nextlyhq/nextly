@@ -98,14 +98,18 @@ export const assignWorkflowParts = (
 export const fetchWaitingForMe = ({
   page,
   limit,
+  before,
 }: {
   page: number;
   limit: number;
+  /** The `meta.nextBefore` of the page before, to read on from it rather than by page number. */
+  before?: string;
 }): Promise<ListResponse<WaitingItem>> =>
   fetcher<ListResponse<WaitingItem>>(
     `/workflows/waiting?${new URLSearchParams({
       page: String(page),
       limit: String(limit),
+      ...(before === undefined ? {} : { before }),
     }).toString()}`,
     {},
     true

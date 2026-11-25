@@ -33,6 +33,7 @@ import {
   askRule,
   askRules,
   decide,
+  decideHolderPermission,
   decidePermission,
   judge,
   type AccessTarget,
@@ -1089,5 +1090,48 @@ describe("a rule that answers with a filter", () => {
         await decide(callers["user-with"], "read", postsAnswering(answer))
       ).toEqual({ allowed: false, reason: "rule-refused" });
     }
+  });
+});
+
+describe("the permission decision for a holder whose facts are in hand", () => {
+  // What a batch hands it: the actions a holder holds, by name.
+  const holder = (held: readonly string[], superAdmin = false) => ({
+    superAdmin,
+    holds: (action: string) => held.includes(action),
+  });
+
+  it("allows a super-admin, whatever they hold", () => {
+    expect(decideHolderPermission(holder([], true), "update", "posts")).toEqual(
+      {
+        allowed: true,
+      }
+    );
+  });
+
+  it("needs the permission itself otherwise", () => {
+    expect(
+      decideHolderPermission(holder(["update"]), "update", "posts")
+    ).toEqual({ allowed: true });
+    expect(decideHolderPermission(holder(["read"]), "update", "posts")).toEqual(
+      {
+        allowed: false,
+        reason: "no-permission",
+      }
+    );
+  });
+
+  it("answers a retired manage- permission by the plain four, each held", () => {
+    const four = ["read", "create", "update", "delete"];
+    expect(
+      decideHolderPermission(holder(four), "manage", "media").allowed
+    ).toBe(true);
+    // The retired one held itself, or three of the four, holds none of it.
+    expect(
+      decideHolderPermission(holder(["manage"]), "manage", "media").allowed
+    ).toBe(false);
+    expect(
+      decideHolderPermission(holder(four.slice(0, 3)), "manage", "media")
+        .allowed
+    ).toBe(false);
   });
 });

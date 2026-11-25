@@ -57,6 +57,7 @@ import {
   type ColumnAdded,
   type StatementRename,
 } from "./statement-targets";
+import { UNIQUE_REPEATS_ADVICE } from "./unique-repeats-advice";
 
 /** The values a refusal lists for each column; the rest are counted, and all of them logged. */
 export const LISTED_REPEATS = 20;
@@ -216,10 +217,6 @@ const LABELS: Record<RequiredColumnEntity["kind"], string> = {
   fieldGroup: "Field group",
   table: "Table",
 };
-
-/** What each column's line in the repeats refusal tells the reader to do. */
-export const UNIQUE_REPEATS_ADVICE =
-  "Give each entry its own value, or clear the repeats, then run `nextly migrate` again.";
 
 /** One column's line in a refusal: its first values, and how many more there are. */
 function repeatsMessage(column: UniqueColumnRepeats): string {

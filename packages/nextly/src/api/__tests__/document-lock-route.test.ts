@@ -303,6 +303,27 @@ describe("document lock route", () => {
     });
   });
 
+  it("forwards the token a claim takes back, and refuses one that is not a token", async () => {
+    // An editor whose claim lapsed while offline takes it back only from
+    // itself: the token names which claim may be replaced, so the same
+    // person's other tab, holding a claim of its own, is never displaced.
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+
+    await acquireLock(post({ ...ref, reclaimToken: "t0" }));
+    expect(service.acquire).toHaveBeenLastCalledWith(ref, expect.anything(), {
+      takeover: false,
+      requestAccess: false,
+      reclaimToken: "t0",
+    });
+
+    // Read as a plain claim it would displace that other tab, so a value
+    // that is not a token is refused before anything is claimed.
+    service.acquire.mockClear();
+    const refused = await acquireLock(post({ ...ref, reclaimToken: 7 }));
+    expect(refused.status).toBe(400);
+    expect(service.acquire).not.toHaveBeenCalled();
+  });
+
   it("hands the refused editor back the fact that its ask is on record", async () => {
     // A control that silently does nothing is worse than no control: the
     // interface can only confirm the ask if the answer carries it, and it must

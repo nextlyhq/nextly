@@ -11,6 +11,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import {
+  configTheCodeOwnsIn,
+  configWithRecordedHandOversIn,
+} from "../../di/load-dynamic-tables";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { dashboardPinsPresent } from "../../domains/dashboard/dashboard-pins";
@@ -177,9 +181,8 @@ export async function publishExtensionSchema(
   adapter: CLIDatabaseAdapter,
   context: CommandContext
 ): Promise<void> {
-  const { compileAndPublishExtensionSchema } = await import(
-    "../../domains/schema/extension/publish"
-  );
+  const { compileAndPublishExtensionSchema, declaresExtensionSchema } =
+    await import("../../domains/schema/extension/publish");
   const capabilities = (adapter as unknown as DrizzleAdapter).getCapabilities();
   // Each field group under its stored table, so a contribution to a group attaches to the table
   // it is in: `fg_<slug>` on a site whose field-group storage was migrated.
@@ -193,7 +196,18 @@ export async function publishExtensionSchema(
         }),
     dialect: capabilities.dialect,
     plugins: configResult.config.plugins ?? [],
-    config: configResult.config,
+    // A collection handed to the Schema Builder as its record has it, so a hook on its table is
+    // judged by the columns the push keeps, not by the code entry the push ignores.
+    // Read only where something declares a schema: with none, the compile reads no entity.
+    config: declaresExtensionSchema({
+      plugins: configResult.config.plugins ?? [],
+      config: configResult.config,
+    })
+      ? await configWithRecordedHandOversIn(
+          adapter as unknown as DrizzleAdapter,
+          configResult.config
+        )
+      : configResult.config,
     // The connected server's limits: a push that declares a check or
     // expression index the server cannot hold is refused before applying.
     server: capabilities,
@@ -1298,11 +1312,16 @@ export async function ensureLocalizedCompanions(
   // table is the one its registry row names: on a site whose field-group storage was migrated that
   // is `fg_<slug>`, which no slug rule derives, and a derived name would provision a translation
   // table beside a main table that is not there.
-  const [{ localizableConfigEntities }, fieldGroupTable] = await Promise.all([
-    import("../../domains/i18n/runtime/localizable-config-entities"),
-    storedFieldGroupTableOf(adapter, config),
-  ]);
-  const groups = localizableConfigEntities(config, fieldGroupTable);
+  // The entities are the configuration's as code still owns it (`configTheCodeOwnsIn`): a
+  // collection a demote handed to the Schema Builder keeps the translations table the Builder's
+  // collection has, so its code entry's `localized` setting provisions or restores nothing.
+  const [{ localizableConfigEntities }, fieldGroupTable, owned] =
+    await Promise.all([
+      import("../../domains/i18n/runtime/localizable-config-entities"),
+      storedFieldGroupTableOf(adapter, config),
+      configTheCodeOwnsIn(adapter as unknown as DrizzleAdapter, config),
+    ]);
+  const groups = localizableConfigEntities(owned, fieldGroupTable);
 
   const failures: string[] = [];
   for (const [kind, group, resolveTableName] of groups) {
@@ -1490,6 +1509,8 @@ export async function ensureLocalizedCompanions(
             kind,
             entity.slug
           ),
+          // A container's overlay column added now is seeded as the default language's text.
+          defaultLocale: transitions?.defaultLocale,
         },
         reportCompanionFailure(
           "update",

@@ -36,7 +36,7 @@ import { declaredFirstLine } from "../first-line";
 import { createProgram } from "../program";
 
 import { commandAt } from "./helpers/answer-only-invocations";
-import { runsAnAction } from "./helpers/first-line-invocations";
+import { hasAction } from "./helpers/first-line-invocations";
 // The same judges the start-up timing script loads, from the one module it loads them from.
 import {
   commandPathOf,
@@ -87,9 +87,12 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  // Next.js's types declare NODE_ENV read-only, yet its loader sets it, so it
+  // is put back like the others through the environment's plain record.
+  const env: Record<string, string | undefined> = process.env;
   for (const name of KEPT) {
-    if (kept[name] === undefined) delete process.env[name];
-    else process.env[name] = kept[name];
+    if (kept[name] === undefined) delete env[name];
+    else env[name] = kept[name];
   }
   rmSync(folder, { recursive: true, force: true });
 });
@@ -122,7 +125,7 @@ async function beforeTheAction(
 }
 
 const INVOCATIONS = firstLineInvocations(createProgram()).filter(args =>
-  runsAnAction(createProgram(), pathOf(args))
+  hasAction(commandAt(createProgram(), pathOf(args)))
 );
 
 /** The words of `args` that name the command, before its own arguments. */

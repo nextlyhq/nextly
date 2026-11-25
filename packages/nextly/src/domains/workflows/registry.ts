@@ -282,7 +282,16 @@ export function attachedWorkflowSummary(
   label: string;
   /** Its stages in order, by name and the label the code gives them: what a list filters by. */
   stages: { name: string; label: string }[];
-  steps: { name: string; label: string; kind: WorkflowStepKind }[];
+  /**
+   * Its steps by name, label and kind, and whether each needs a comment: a list taking one over
+   * several documents asks for that comment first, as the editor does.
+   */
+  steps: {
+    name: string;
+    label: string;
+    kind: WorkflowStepKind;
+    commentRequired: boolean;
+  }[];
 } | null {
   const attached = workflowAttachedTo(kind, slug);
   return attached === undefined
@@ -298,6 +307,7 @@ export function attachedWorkflowSummary(
           name: step.name,
           label: step.label,
           kind: step.kind,
+          commentRequired: step.commentRequired,
         })),
       };
 }

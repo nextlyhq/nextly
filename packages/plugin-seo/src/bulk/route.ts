@@ -332,8 +332,13 @@ export function seoWith(
   return { ...(isRecord(current) ? current : {}), ...values };
 }
 
-/** A stored value as it compares with one sent: an image by its id. */
+/**
+ * A stored value as it compares with one sent: an image by its id, and a blank text as none,
+ * since the group keeps one structure in every language and stores a blank text as no text, which
+ * reads back as `null`. A cleared title is then the value sent, not one a rule dropped.
+ */
 function storedForm(value: unknown): string {
+  if (typeof value === "string" && value.trim() === "") return "null";
   const id = idText(isRecord(value) ? value.id : value);
   return id ?? JSON.stringify(value ?? null);
 }

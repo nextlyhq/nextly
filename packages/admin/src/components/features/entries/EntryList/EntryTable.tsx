@@ -51,19 +51,25 @@ import {
   ListView,
   type ListColumnsControl,
 } from "@admin/components/ui/table/list-view";
-import { useLocalization } from "@admin/hooks/useLocalization";
 import { navigateTo } from "@admin/lib/navigation";
 import type { WayIn } from "@admin/lib/navigation/document-address";
 
 import { BulkActionBar } from "./BulkActionBar";
-import type { TranslationListFilter } from "./entryFilters";
 import {
   buildEntryColumns,
   getEntryTitleField,
+  listTitleMayBeAnotherLanguages,
   type CollectionForColumns,
+  type TitlesShownIn,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
+import { LanguageChipKey } from "./LanguageChips";
 import type { ListFilter } from "./plugin-filters";
+import {
+  chosenTitleLanguage,
+  TitleLanguageSelect,
+  type TitleLanguageChoice,
+} from "./TitleLanguageSelect";
 import type { DeclaredBulkAction } from "./useDeclaredBulkActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import {
@@ -172,11 +178,16 @@ export interface EntryTableProps {
   status?: string;
   /** Callback when status filter changes */
   onStatusChange?: (status: string) => void;
-  /** Active language filter (locale + translation state), or null. */
-  translationFilter?: TranslationListFilter | null;
-  /** Callback when the language filter changes. */
-  onTranslationFilterChange?: (filter: TranslationListFilter | null) => void;
-  /** The filters plugins offer this list (`contributes.admin.filters`). */
+  /**
+   * The "Titles in" control and the titles it chose, where the list offers it: a site with two
+   * languages or more and a collection whose content is per language.
+   */
+  titleLanguage?: TitleLanguageChoice;
+  /**
+   * The filters the toolbar offers beside the list's own: plugins'
+   * (`contributes.admin.filters`), the workflow's review filters and the
+   * language filter.
+   */
   pluginFilters?: readonly ListFilter[];
   /** The option each plugin filter has chosen, by filter name. */
   chosenPluginFilters?: ReadonlyMap<string, string>;
@@ -334,8 +345,7 @@ export const EntryTable: ForwardRefExoticComponent<
     onSelectionChange,
     status = "all",
     onStatusChange,
-    translationFilter = null,
-    onTranslationFilterChange,
+    titleLanguage,
     pluginFilters = [],
     chosenPluginFilters,
     onPluginFilterChange,
@@ -365,13 +375,27 @@ export const EntryTable: ForwardRefExoticComponent<
   // Columns
   // -------------------------------------------------------------------------
 
+  // The titles in the language the reader chose, where one other than the
+  // default is chosen and still configured.
+  const titlesIn = useMemo((): TitlesShownIn | undefined => {
+    const language = chosenTitleLanguage(titleLanguage);
+    if (!titleLanguage || !language) return undefined;
+    const { defaultLocale, languages, titles, defaultMayFallBack } =
+      titleLanguage;
+    const defaultLanguage = languages.find(each => each.code === defaultLocale);
+    return defaultLanguage
+      ? { language, defaultLanguage, titles, defaultMayFallBack }
+      : undefined;
+  }, [titleLanguage]);
+
   // The collection's own columns, which the column chooser offers and hides.
   const ownColumns = useMemo(
     () =>
       buildEntryColumns(collection, columnsControl?.isColumnVisible, {
         openInLocale: (entryId, locale) => onEdit(entryId, locale),
+        ...(titlesIn ? { titlesIn } : {}),
       }),
-    [collection, columnsControl, onEdit]
+    [collection, columnsControl, onEdit, titlesIn]
   );
   // Plugins' declared columns are drawn after them and always shown: they
   // arrive only once the reader is known, and the chooser's stored choice is
@@ -389,12 +413,14 @@ export const EntryTable: ForwardRefExoticComponent<
   // The workflow's moves over the selection, each refusal named by the row's title.
   const bulkMoves = useWorkflowBulkMoves({
     collection,
-    offered: offered.workflowMoves,
+    offered: offered.workflowMoveKinds,
     rows: entries,
     titleOf: (row, id) => {
       const title = row && titleField ? row[titleField] : undefined;
       return typeof title === "string" && title !== "" ? title : id;
     },
+    // A move answered clears the selection, as a bulk publish does.
+    onMoved: clear,
   });
 
   // A plugin's column decided by a read of its own (whether the collection
@@ -522,33 +548,37 @@ export const EntryTable: ForwardRefExoticComponent<
     !!onUpdatedFromChange ||
     !!onUpdatedToChange;
 
-  // The language filter is available on a localized collection when the app has
-  // localization configured (more than one language).
-  const {
-    enabled: localizationEnabled,
-    locales,
-    defaultLocale,
-  } = useLocalization();
-  const hasLanguageFilter =
-    localizationEnabled &&
-    collection.localized === true &&
-    !!onTranslationFilterChange &&
-    locales.length > 1;
-
   const hasAnyActiveFilters =
     status !== "all" ||
     !!createdFrom ||
     !!createdTo ||
     !!updatedFrom ||
     !!updatedTo ||
-    !!translationFilter ||
     (chosenPluginFilters?.size ?? 0) > 0;
 
   // Offered only where a choice can be acted on.
   const hasPluginFilters = pluginFilters.length > 0 && !!onPluginFilterChange;
 
   const showFilterDropdown =
-    hasStatusField || hasDateFilters || hasLanguageFilter || hasPluginFilters;
+    hasStatusField || hasDateFilters || hasPluginFilters;
+
+  // The key to the Languages column's chips, above the table while the column
+  // is shown. The chips and the key render nothing below two languages.
+  const showsLanguageKey =
+    collection.localized === true &&
+    (columnsControl?.isColumnVisible("translations") ?? true);
+  const titleLanguageFailed =
+    titlesIn !== undefined && titleLanguage?.failed === true;
+  // Where the titles are when those in the chosen language couldn't be read: the default
+  // language's only where no title on the page may be another language's.
+  const titlesUnreadNote =
+    titleLanguageFailed && titlesIn
+      ? `Titles in ${titlesIn.language.label} couldn't be read, so ${
+          entries.some(row => listTitleMayBeAnotherLanguages(row, titlesIn))
+            ? "each row shows its own title"
+            : `each title is shown in ${titlesIn.defaultLanguage.label}`
+        }.`
+      : undefined;
 
   const clearDateFilters = () => {
     onCreatedFromChange?.("");
@@ -580,6 +610,30 @@ export const EntryTable: ForwardRefExoticComponent<
           columnsControl && { ...columnsControl, columns: ownColumns }
         }
         hasActiveFilters={hasAnyActiveFilters}
+        inlineFilters={
+          titleLanguage ? (
+            <TitleLanguageSelect choice={titleLanguage} />
+          ) : undefined
+        }
+        slots={
+          showsLanguageKey || titleLanguageFailed
+            ? {
+                beforeTable: (
+                  <div className="space-y-2">
+                    {showsLanguageKey && <LanguageChipKey />}
+                    {titlesUnreadNote && (
+                      <p
+                        role="status"
+                        className="text-xs text-muted-foreground"
+                      >
+                        {titlesUnreadNote}
+                      </p>
+                    )}
+                  </div>
+                ),
+              }
+            : undefined
+        }
         filters={
           showFilterDropdown ? (
             <>
@@ -614,49 +668,12 @@ export const EntryTable: ForwardRefExoticComponent<
                 </>
               )}
 
-              {hasLanguageFilter && (
-                <>
-                  {hasStatusField && onStatusChange && (
-                    <DropdownMenuSeparator />
-                  )}
-                  <DropdownMenuLabel>Filter by Language</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  {locales
-                    .filter(l => l.code !== defaultLocale)
-                    .flatMap(l =>
-                      (["missing", "translated"] as const).map(state => {
-                        const active =
-                          translationFilter?.locale === l.code &&
-                          translationFilter?.state === state;
-                        return (
-                          <DropdownMenuCheckboxItem
-                            key={`${l.code}-${state}`}
-                            checked={active}
-                            onCheckedChange={() =>
-                              onTranslationFilterChange?.(
-                                active ? null : { locale: l.code, state }
-                              )
-                            }
-                          >
-                            {state === "missing"
-                              ? "Missing in"
-                              : "Translated in"}{" "}
-                            {l.label}
-                          </DropdownMenuCheckboxItem>
-                        );
-                      })
-                    )}
-                </>
-              )}
-
               {hasPluginFilters && (
                 <PluginFilterMenuSections
                   filters={pluginFilters}
                   chosen={chosenPluginFilters}
                   onChange={onPluginFilterChange}
-                  separateFirst={
-                    !!(hasStatusField && onStatusChange) || hasLanguageFilter
-                  }
+                  separateFirst={!!(hasStatusField && onStatusChange)}
                 />
               )}
 

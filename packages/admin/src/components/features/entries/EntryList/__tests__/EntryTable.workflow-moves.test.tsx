@@ -90,10 +90,13 @@ const FIRST_PAGE = [
   row("n2", "Second note", "review", 3),
 ];
 
-function table_(entries: ReturnType<typeof row>[]) {
+function table_(
+  entries: ReturnType<typeof row>[],
+  collection: CollectionForColumns = notes
+) {
   return (
     <EntryTable
-      collection={notes}
+      collection={collection}
       entries={entries}
       pagination={{ page: 0, limit: 10, total: 2, totalPages: 1 }}
       onPageChange={vi.fn()}
@@ -233,5 +236,79 @@ describe("EntryTable: the workflow's bulk moves", () => {
     ).toBeDisabled();
     expect(within(bar).getByRole("button", { name: "Assign…" })).toBeDisabled();
     expect(stepMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the selection once a move is answered, so no row is moved again as it was shown before", async () => {
+    canFor.mockImplementation(slug => slug === "update-notes");
+    stepMany.mockResolvedValue({
+      items: [{ id: "n1" }, { id: "n2" }],
+      errors: [],
+    });
+    const user = userEvent.setup();
+    renderTable();
+
+    await user.click(table().getByRole("checkbox", { name: "Select all" }));
+    await user.click(
+      within(screen.getByRole("region", { name: "Bulk actions" })).getByRole(
+        "button",
+        { name: "Submit for review" }
+      )
+    );
+
+    await screen.findByRole("status", { name: "Bulk move result" });
+    expect(
+      table().getByRole("checkbox", { name: "Select all" })
+    ).not.toBeChecked();
+    expect(
+      screen.queryByRole("region", { name: "Bulk actions" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("asks for the comment a submit step needs, and sends it with the move", async () => {
+    canFor.mockImplementation(slug => slug === "update-notes");
+    stepMany.mockResolvedValue({
+      items: [{ id: "n1" }, { id: "n2" }],
+      errors: [],
+    });
+    const commented: CollectionForColumns = {
+      ...notes,
+      workflow: {
+        slug: "review",
+        label: "Review",
+        steps: [
+          {
+            name: "submit",
+            label: "Submit for review",
+            kind: "submit",
+            commentRequired: true,
+          },
+          { name: "approve", label: "Approve", kind: "approve" },
+        ],
+      },
+    };
+    const user = userEvent.setup();
+    render(table_(FIRST_PAGE, commented));
+
+    await user.click(table().getByRole("checkbox", { name: "Select all" }));
+    await user.click(
+      within(screen.getByRole("region", { name: "Bulk actions" })).getByRole(
+        "button",
+        { name: "Submit for review" }
+      )
+    );
+    // Nothing is sent before the comment the step refuses to be taken without.
+    expect(stepMany).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole("dialog");
+    await user.type(
+      within(dialog).getByLabelText("Comment"),
+      "Ready for legal"
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Submit for review" })
+    );
+
+    expect(stepMany).toHaveBeenCalledWith(
+      expect.objectContaining({ step: "submit", comment: "Ready for legal" })
+    );
   });
 });

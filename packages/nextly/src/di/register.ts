@@ -144,6 +144,7 @@ import {
   holdRecordedAtStart,
   registryRows,
 } from "../domains/schema/pipeline/recorded-fields";
+import { configTheCodeOwns } from "../domains/schema/pipeline/registered-collections";
 import type {
   DesiredCollection,
   DesiredSchema,
@@ -376,6 +377,11 @@ import {
   type Container,
   type RestoredRegistrations,
 } from "./container";
+import {
+  compiledForNow,
+  compileForStart,
+  type StartSchema,
+} from "./development-start-hooks";
 import {
   takesDevelopmentStartHold,
   withDevelopmentStartSchemaLock,
@@ -1131,12 +1137,14 @@ async function registerServicesOnce(
   publishLedgerIfAt("before the schema reads", ledgerAt, adapter);
   await refuseUnmigratedDatabaseInBuildPhase(adapter);
 
-  const bootExtensionSchema = await prepareBootSchema(
+  const bootSchema = await prepareBootSchema(
     adapter,
     transformedConfig,
     transformedPlugins,
     resolvedLogger
   );
+
+  let bootExtensionSchema = bootSchema.schema;
 
   // Before the migrations and the hold below, and touching no database: the
   // schema lock writes its rows through the table resolver this sets.
@@ -1235,6 +1243,9 @@ async function registerServicesOnce(
     adapter,
     resolvedLogger,
     async () => {
+      // Before anything below reads it: a Schema Builder save the hold waited
+      // for may have changed the records the schema hooks were compiled by.
+      bootExtensionSchema = await bootSchema.now();
       const completeness = { complete: true };
       const registry = await initializeSchemaRegistry(
         adapter,
@@ -2034,7 +2045,11 @@ async function prepareBootSchema(
   transformedConfig: NextlyServiceConfig,
   transformedPlugins: PluginDefinition[],
   logger: Logger
-): Promise<ExtensionSchema | undefined> {
+): Promise<{
+  schema: ExtensionSchema | undefined;
+  /** The schema as it is now, published again if it is another (`compiledForNow`). */
+  now(): Promise<ExtensionSchema | undefined>;
+}> {
   // The dialect is read defensively because an adapter that cannot report one
   // is a boot that is going to fail regardless, and it must fail at the step
   // that actually needs a database rather than here. Only the CAPABILITY read
@@ -2051,7 +2066,9 @@ async function prepareBootSchema(
   // report one still fails at the step that needs a database rather than
   // here — which is also after the widget reset, the ordering that reset
   // relies on.
-  if (bootDialect === undefined) return undefined;
+  if (bootDialect === undefined) {
+    return { schema: undefined, now: () => Promise.resolve(undefined) };
+  }
 
   publishBootPostgresSchema(adapter, bootDialect, transformedConfig, logger);
   // Before first-run setup and the development push, either of which would
@@ -2081,7 +2098,7 @@ async function prepareBootSchema(
   })
     ? await declaredFieldGroupStorage(adapter, transformedConfig.fieldGroups)
     : undefined;
-  return compileAndPublishExtensionSchema({
+  const input = {
     ...(fieldGroups === undefined
       ? {}
       : {
@@ -2100,7 +2117,23 @@ async function prepareBootSchema(
     // before the push applies anything.
     server: adapter.getCapabilities(),
     logger,
-  });
+  };
+  // With a collection handed to the Schema Builder as its record has it, in development.
+  const publish = async (compiled: StartSchema): Promise<StartSchema> => {
+    await compileAndPublishExtensionSchema(input, () =>
+      Promise.resolve(compiled.schema)
+    );
+    return compiled;
+  };
+  let compiled = await publish(await compileForStart(adapter, input));
+  return {
+    schema: compiled.schema,
+    async now() {
+      const current = await compiledForNow(adapter, input, compiled);
+      if (current !== compiled) compiled = await publish(current);
+      return compiled.schema;
+    },
+  };
 }
 
 /**
@@ -2272,14 +2305,20 @@ async function reconcileBuilderTargets<T>(
   // The configuration's addresses, judged by the one address rule before the boot writes
   // anything. Only an address no registry row holds, and whose table does not exist yet, is new
   // and judged, against every address used; an existing entity keeps its address, whatever the
-  // rule now says of it.
-  await assertConfiguredAddresses(transformedConfig, builderEntities, table =>
+  // rule now says of it. A collection a demote handed to the Schema Builder is judged by its
+  // record alone: the code entry still in the configuration is ignored, as the schema roads ignore
+  // it (`configTheCodeOwns`), so an edit to it cannot stop the start.
+  const configuredByCode = configTheCodeOwns(
+    transformedConfig,
+    builderEntities.collections
+  );
+  await assertConfiguredAddresses(configuredByCode, builderEntities, table =>
     tableExistsAtStart(adapter, table)
   );
   // Their sibling fields, by the one sibling rule and as early: a pair an entity's registry row
   // does not hold is new and refused; one it holds keeps working.
   await assertConfiguredSiblingFields(
-    transformedConfig,
+    configuredByCode,
     builderEntities,
     table => adapter.tableExists(table)
   );

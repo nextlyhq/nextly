@@ -560,8 +560,8 @@ function conditionLiteral(
  * `subject` holds the moved field at the place the run moves it away from (`at`): its old place
  * for the UP, its new one for the DOWN. The run rewrites each entry's row, not a draft's
  * snapshot, which keeps the field where it was, so publishing that draft would drop its pending
- * change. A draft holding the key with a null is held too, as is one whose group on the way to it
- * holds a null: either may be a pending clear. The
+ * change. A draft holding a null at that place is held too, as is one whose group on the way to
+ * it holds a null: either may be a pending clear. The
  * Schema Builder's save reads the database it writes from (`refuseMovesUnderWorkingDrafts`); a
  * file written offline asks the database it runs on. The run stops on
  * `publish_or_discard_drafts_of_<field>` in `nextly_drafted_<field>`, and goes ahead once those

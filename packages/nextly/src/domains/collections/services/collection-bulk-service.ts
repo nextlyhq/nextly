@@ -2395,20 +2395,23 @@ export class CollectionBulkService extends BaseService {
     try {
       // Opened through `entryTransaction`, so the batch holds the collection once, before its first
       // item, against a Builder save deleting its values.
-      await this.mutationService.entryTransaction(params.collectionName, async tx => {
-        try {
-          await this.runDeleteBatch(
-            tx,
-            params,
-            ids,
-            { batchSize, stopOnError, skipHooks, rowGate },
-            state
-          );
-        } catch (innerError) {
-          callbackThrew = true;
-          throw innerError;
+      await this.mutationService.entryTransaction(
+        params.collectionName,
+        async tx => {
+          try {
+            await this.runDeleteBatch(
+              tx,
+              params,
+              ids,
+              { batchSize, stopOnError, skipHooks, rowGate },
+              state
+            );
+          } catch (innerError) {
+            callbackThrew = true;
+            throw innerError;
+          }
         }
-      });
+      );
       committed = true;
     } catch (error: unknown) {
       // The shared transaction rolled back — either stopOnError tripped on a

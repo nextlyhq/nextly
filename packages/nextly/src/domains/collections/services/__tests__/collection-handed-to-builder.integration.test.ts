@@ -21,6 +21,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { DEMOTED_FROM_CODE } from "../../../schema/pipeline/demoted-from-code";
 import { CollectionRegistryService } from "../collection-registry-service";
 import { configurationRegistryRows } from "../../../schema/migrate/first-run";
@@ -44,7 +45,8 @@ describe.each(getConfiguredTestDialects())(
       ]
     ) =>
       toCodeFirstCollectionConfig(
-        defineCollection({ slug, fields })
+        defineCollection({ slug, fields }),
+        "code"
       ) as Parameters<
         CollectionRegistryService["syncCodeFirstCollections"]
       >[0][number];
@@ -185,6 +187,85 @@ describe.each(getConfiguredTestDialects())(
         source: "plugin:@test/chb",
         locked: true,
       });
+    });
+
+    it("records a plugin's collection as the plugin's where an earlier sync recorded it as the app's own", async () => {
+      // What an earlier reload left: the plugin's collection created as `code`. The next sync
+      // declares the same fields, so nothing but the owner differs, and the owner is written.
+      const slug = "chb_mislabelled";
+      await registry.syncCodeFirstCollections([coded(slug)]);
+      expect(await owner(slug)).toEqual({ source: "code", locked: true });
+      const declared = { ...coded(slug), source: "plugin:@test/chb" as const };
+
+      expect(
+        (await registry.planCodeFirstCollections([declared])).updated
+      ).toContain(slug);
+      const synced = await registry.syncCodeFirstCollections([declared]);
+
+      expect(synced.updated).toContain(slug);
+      expect(await owner(slug)).toEqual({
+        source: "plugin:@test/chb",
+        locked: true,
+      });
+      // Written once: the next sync finds nothing to change.
+      expect(
+        (await registry.syncCodeFirstCollections([declared])).unchanged
+      ).toContain(slug);
+    });
+
+    it("gives a handed-over row to a plugin declaring a collection under its address", async () => {
+      // A plugin registers its collection at every start, whoever holds the address: it takes the
+      // row, locked, and the demote's mark goes, so the row is not taken for the Builder's again.
+      const slug = "chb_claimed";
+      await registry.syncCodeFirstCollections([coded(slug)]);
+      await registry.updateCollection(
+        slug,
+        { source: "ui", locked: false, configPath: DEMOTED_FROM_CODE },
+        { handOver: "builder" }
+      );
+
+      await registry.syncCodeFirstCollections([
+        { ...coded(slug), source: "plugin:@test/chb" },
+      ]);
+
+      const row = await registry.getCollectionBySlug(slug);
+      expect({
+        source: row?.source,
+        locked: Boolean(row?.locked),
+        configPath: row?.configPath ?? null,
+      }).toEqual({
+        source: "plugin:@test/chb",
+        locked: true,
+        configPath: null,
+      });
+    });
+
+    it("leaves a row made in the Schema Builder with its owner, whoever declares its address", async () => {
+      // No demote marked it, so neither the app's entry nor a plugin's takes it.
+      const slug = "chb_builder_keeps_owner";
+      await registry.syncCodeFirstCollections([coded(slug)]);
+      await registry.updateCollection(
+        slug,
+        { source: "ui", locked: false },
+        { handOver: "builder" }
+      );
+      // The hand-over marks the row; a row the Builder made has no mark. The registry's update
+      // takes no "no config path", so the mark is cleared on the row itself.
+      await handle.adapter.update(
+        "dynamic_collections",
+        { config_path: null },
+        { and: [{ column: "slug", op: "=", value: slug }] }
+      );
+      clearRegistryRowCache();
+      expect(
+        (await registry.getCollectionBySlug(slug))?.configPath ?? null
+      ).toBe(null);
+
+      await registry.syncCodeFirstCollections([
+        { ...coded(slug), source: "plugin:@test/chb" },
+      ]);
+
+      expect(await owner(slug)).toEqual({ source: "ui", locked: false });
     });
 
     it("a sync that still finds the collection in code leaves the Builder's row and says so once", async () => {

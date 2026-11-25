@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { DEMOTED_FROM_CODE } from "../demoted-from-code";
 import {
+  configTheCodeOwns,
+  configWithRecordedHandOvers,
   isHandedToBuilder,
   mergeRegisteredCollections,
   mergeRegisteredCollectionsSafely,
@@ -210,5 +212,91 @@ describe("a collection a demote handed to the Schema Builder", () => {
     ]);
     expect(merged.posts.builderOwned).toBe(true);
     expect(merged.posts.fields).toEqual([{ name: "subtitle", type: "text" }]);
+  });
+
+  it("is left out of the configuration code still owns, with every other part kept", () => {
+    const config = {
+      collections: coded,
+      singles: [{ slug: "home" }],
+      localization: { defaultLocale: "en" },
+    };
+    expect(configTheCodeOwns(config, [handedOver, madeInBuilder])).toEqual({
+      ...config,
+      collections: [{ slug: "pages" }, { slug: "tags" }],
+    });
+    // The caller's configuration is left as it was.
+    expect(config.collections).toEqual(coded);
+  });
+
+  it("stays in the configuration code owns where a plugin contributes the address", () => {
+    const config = {
+      collections: coded,
+      plugins: [
+        {
+          name: "@acme/blog",
+          contributes: { collections: [{ slug: "posts" }] },
+        },
+      ],
+    };
+    expect(configTheCodeOwns(config, [handedOver])).toBe(config);
+  });
+
+  it("is described by its record where a schema hook's tables are compiled, and only it", () => {
+    const config = {
+      collections: [
+        {
+          slug: "posts",
+          dbName: "old_posts",
+          fields: [{ name: "extra", type: "text" }],
+          indexes: [{ fields: ["extra"] }],
+          localized: true,
+        },
+        { slug: "pages" },
+      ],
+      singles: [{ slug: "home" }],
+    };
+    const record: RegisteredCollectionRow = {
+      ...handedOver,
+      fields: [{ name: "subtitle", type: "text" }],
+      status: true,
+    };
+    expect(
+      configWithRecordedHandOvers(config, [record, madeInBuilder])
+    ).toEqual({
+      ...config,
+      collections: [
+        {
+          slug: "posts",
+          dbName: "dc_posts",
+          fields: [{ name: "subtitle", type: "text" }],
+          status: true,
+          localized: false,
+          builderOwned: true,
+        },
+        { slug: "pages" },
+      ],
+    });
+    // The caller's configuration is left as it was, and returned where nothing was handed over.
+    expect(config.collections[0].dbName).toBe("old_posts");
+    expect(configWithRecordedHandOvers(config, [madeInBuilder])).toBe(config);
+  });
+
+  it("is not added there once its code entry is gone, nor replaced where a plugin contributes it", () => {
+    const without = { collections: [{ slug: "pages" }] };
+    expect(
+      configWithRecordedHandOvers(without, [handedOver]).collections
+    ).toEqual([{ slug: "pages" }]);
+    const contributed = {
+      collections: [{ slug: "posts", fields: [] }],
+      plugins: [
+        {
+          name: "@acme/blog",
+          contributes: { collections: [{ slug: "posts" }] },
+        },
+      ],
+    };
+    expect(
+      configWithRecordedHandOvers(contributed, [handedOver]).collections
+    ).toEqual(contributed.collections);
   });
 });

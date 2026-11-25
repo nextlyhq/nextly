@@ -11,9 +11,12 @@
  *
  * @module shared/lib/config-problems
  */
+import { fileSystemFields } from "../../collections/config/collection-files";
 import { crossEntityProblems } from "../../collections/config/cross-entity-problems";
+import { systemFieldsBeside } from "../../collections/config/declared-config";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { validateCollectionConfig } from "../../collections/config/validate-config";
+import { isVirtualField } from "../../collections/fields/virtual";
 import { fieldProducesColumn } from "../../domains/schema/field-rules";
 import {
   columnsDeclaredBy,
@@ -136,37 +139,81 @@ const AUTHORED_RULES: ReadonlySet<string> = new Set([
  * And the two questions the system fields raise beside them: whether another field takes a column
  * one of them holds, asked as `defineCollection` asks it before adding them
  * (`columnsDeclaredBy`). A field a plugin's setup adds by a system field's name does, and the
- * table could not be made, so it is reported. And whether a column-less field takes one's exact
- * name (`systemNameClashes`), so the two would share one document key.
+ * table could not be made, so it is reported. And whether a column-less field takes the exact
+ * name of a column or field Nextly keeps on the entity (`systemNameClashes`). That one is asked
+ * of every entity a `define*` function declared, whether or not it added a system field: an
+ * author's own text `slug` leaves none to add, and a setup may then take it away.
  */
-
 function entryProblems<
   P extends { path: string; code: string; message: string },
 >(
   entry: unknown,
   validate: (entry: unknown) => readonly P[],
-  systemFields: readonly object[]
+  judged: JudgedEntity
 ): Array<P | ColumnClash> {
   const fields = (entry as { fields?: unknown } | null)?.fields;
-  if (systemFields.length === 0 || !Array.isArray(fields)) {
-    return [...validate(entry)];
-  }
-  const { added, authored } = splitSystemFields(fields, systemFields);
+  if (!Array.isArray(fields)) return [...validate(entry)];
+  const { added, authored } = splitSystemFields(fields, judged.systemFields);
+  const clashes = systemNameClashes(entry, fields, { added, authored }, judged);
+  // Nothing set aside and nothing at fault: its validator's own answer, in its own order.
+  if (added.length === 0 && clashes.length === 0) return [...validate(entry)];
   // Each rule is asked of the fields it is about. The rules about the author's own declarations
   // (`AUTHORED_RULES`) of the fields the author declared; every other rule, which resolves a
   // field by its name (an index, the title field, the address field), of the entity as the
   // commands use it, system fields and all.
   return [
     ...validate(entry).filter(problem => !AUTHORED_RULES.has(problem.code)),
-    ...validate({ ...(entry as object), fields: authored }).filter(problem =>
-      AUTHORED_RULES.has(problem.code)
-    ),
+    ...authoredProblems(entry, authored, clashes, validate),
     ...systemColumnClashes(added, authored),
-    ...systemNameClashes(fields, added),
+    ...clashes.map(clash => clash.problem),
   ];
 }
 
-/** A field that takes a column, or the exact name, a system field holds. */
+/** What an entity's check reads beside the entity itself. */
+interface JudgedEntity {
+  /** The system fields its `define*` call added, none where none did. */
+  systemFields: readonly object[];
+  /**
+   * Whether its table keeps system columns, and its declaration is `define*`'s to judge: a
+   * collection or a Single one of them declared. A field group has no such column, and an entity
+   * written as a plain object, a Builder's definition among them, keeps its own checks.
+   */
+  keepsSystemColumns: boolean;
+  /** Whether it is such a collection, the one kind that holds files (`holdsFiles`). */
+  mayHoldFiles: boolean;
+  /** The entity as the app declared it, before any plugin's setup. */
+  declared: unknown;
+}
+
+/**
+ * The problems of the rules about the author's own declarations (`AUTHORED_RULES`). A field
+ * reported for a name Nextly keeps is left out of the one about names declared twice, so it gets
+ * one answer, the same whether or not a setup was handed a copy of the field it stands beside.
+ */
+function authoredProblems<P extends { code: string }>(
+  entry: unknown,
+  authored: readonly unknown[],
+  clashes: readonly NameClash[],
+  validate: (entry: unknown) => readonly P[]
+): P[] {
+  const problemsOf = (fields: readonly unknown[]) =>
+    validate({ ...(entry as object), fields }).filter(problem =>
+      AUTHORED_RULES.has(problem.code)
+    );
+  const problems = problemsOf(authored);
+  if (clashes.length === 0) return problems;
+  const reported = new Set(clashes.map(clash => clash.field));
+  return [
+    ...problems.filter(problem => problem.code !== "FIELD_NAME_DUPLICATE"),
+    // The fields as stored at the top level, so one a group with no name lays out is left out too;
+    // the rule reads the top level that way itself.
+    ...problemsOf(
+      fieldsStoredOnRow(authored).filter(field => !reported.has(field))
+    ).filter(problem => problem.code === "FIELD_NAME_DUPLICATE"),
+  ];
+}
+
+/** A problem a system column or field raises of a field beside it. */
 interface ColumnClash {
   path: string;
   code: string;
@@ -219,51 +266,152 @@ function systemColumnClashes(
   return clashes;
 }
 
+/** A field reported for a name Nextly keeps, and the problem reported of it. */
+interface NameClash {
+  field: unknown;
+  problem: ColumnClash;
+}
+
+/** The names of a collection of files' own fields, which no author's field replaces. */
+const FILE_FIELD_NAMES: ReadonlySet<string> = new Set(
+  fileSystemFields().map(field => field.name)
+);
+
 /**
- * Each author's field stored at the document's top level that takes the exact name of one of
- * `added` but stores no column of its own (a component, a field-group reference, a many-to-many,
- * a virtual field). `define*` adds a system field when no field holds its column, so it adds one
- * beside such a field, and the two would read and write one document key: a write offered to
- * both, a read answered by one. The Builder reserves these names outright; code-first keeps a
- * field of the name that takes the column (it replaces the system one), so only the column-less
- * ones are refused. A field that takes the column is `systemColumnClashes`' question.
+ * Each field at the document's top level that stores no column of its own (a component, a
+ * field-group reference, a many-to-many, a virtual field) and takes the exact name of a column or
+ * field Nextly keeps on the entity (`reservedNames`). What follows depends on the field
+ * (`systemNameReason`, `FILE_NAME_REASON`); in each case the two answer to one name. The Builder
+ * reserves `title` and `slug` outright; code-first keeps a field of the name that takes the column
+ * (it replaces the system one), so only the column-less ones are refused. A field that takes the
+ * column is `systemColumnClashes`' question.
  *
  * The fields at the top level are those `fieldsStoredOnRow` gives, the view `define*` decides by
  * (`columnsDeclaredBy`): the ones in `fields` and those a group with no name lays out beside
  * them. It passes by an entry that is not a field, which the validators report.
  */
 function systemNameClashes(
+  entry: unknown,
   fields: readonly unknown[],
-  added: readonly unknown[]
-): ColumnClash[] {
-  const systemNames = new Set(
-    added.map(field => (field as { name?: unknown }).name)
-  );
-  const system = new Set(added);
-  const clashes: ColumnClash[] = [];
+  split: { added: readonly unknown[]; authored: readonly unknown[] },
+  judged: JudgedEntity
+): NameClash[] {
+  if (!judged.keepsSystemColumns) return [];
+  const names = reservedNames(entry, split, judged);
+  const system = new Set(split.added);
+  const clashes: NameClash[] = [];
   for (const field of fieldsStoredOnRow(fields)) {
-    const name = sharedSystemName(field, systemNames, system);
+    const name = sharedSystemName(field, names, system);
     if (name === null) continue;
     clashes.push({
-      path: `${placeOf(fields, field)}.name`,
-      code: "FIELD_NAME_RESERVED",
-      message: `Field '${name}' stores no column of its own, so it cannot use the name '${name}': Nextly keeps its own text field '${name}' on every collection and Single, and the two would share one document key. Rename it, or declare '${name}' as a text field to replace Nextly's.`,
+      field,
+      problem: {
+        path: `${placeOf(fields, field)}.name`,
+        code: "FIELD_NAME_RESERVED",
+        message: nameClashMessage(name, field, entry, judged),
+      },
     });
   }
   return clashes;
 }
 
-/** The system name `field` takes without a column of its own, or null where it takes none. */
+/**
+ * The names `entry`'s fields may not take without a column of their own: `title` and `slug` where
+ * the table carries the system column, and a collection of files' own fields.
+ *
+ * Asked of the fields the plugins' setups left, the added ones that survived set aside, rather
+ * than of the fields `define*` added: the schema emits a system column wherever no field left
+ * holds it, so a setup that removes or rewrites the added field does not free its name.
+ */
+function reservedNames(
+  entry: unknown,
+  split: { added: readonly unknown[]; authored: readonly unknown[] },
+  judged: JudgedEntity
+): ReadonlySet<unknown> {
+  const names = new Set<unknown>(
+    [
+      ...split.added,
+      ...systemFieldsBeside(
+        split.authored as Parameters<typeof systemFieldsBeside>[0]
+      ),
+    ].map(field => (field as { name?: unknown }).name)
+  );
+  if (holdsFiles(entry, judged)) {
+    for (const name of FILE_FIELD_NAMES) names.add(name);
+  }
+  return names;
+}
+
+/** Whether `entry` is a collection whose entries are files; a Single's `files` key means nothing. */
+function holdsFiles(entry: unknown, judged: JudgedEntity): boolean {
+  return (
+    judged.mayHoldFiles && (entry as { files?: unknown }).files !== undefined
+  );
+}
+
+/** What is reported of `field`, which takes the kept `name` without a column of its own. */
+function nameClashMessage(
+  name: string,
+  field: unknown,
+  entry: unknown,
+  judged: JudgedEntity
+): string {
+  const ofFiles = holdsFiles(entry, judged) && FILE_FIELD_NAMES.has(name);
+  const why = ofFiles ? FILE_NAME_REASON : systemNameReason(name, field);
+  return `Field '${name}' stores no column of its own, so it cannot use the name '${name}': ${why} ${nameAdvice(name, ofFiles, judged.declared)}`;
+}
+
+/**
+ * What to do about it. Where a plugin's setup left the field this way, the app's own declaration
+ * holds no column-less field of the name, so its author would look for it in vain, may declare the
+ * text field already, and cannot rename one Nextly needs: the plugin is what to change. The
+ * setups' result names no plugin, so this cannot.
+ */
+function nameAdvice(name: string, ofFiles: boolean, declared: unknown): string {
+  if (!declaresColumnLess(name, declared)) {
+    return "A plugin's setup left the field this way; the app's own configuration does not hold it. Change or remove that plugin.";
+  }
+  return ofFiles
+    ? "Rename it."
+    : `Rename it, or declare '${name}' as a text field to replace Nextly's.`;
+}
+
+/** Whether `declared`, the app's own entity, holds a column-less field named `name`. */
+function declaresColumnLess(name: string, declared: unknown): boolean {
+  const fields = (declared as { fields?: unknown } | null)?.fields;
+  const own = Array.isArray(fields) ? fieldsStoredOnRow(fields) : [];
+  const names: ReadonlySet<unknown> = new Set([name]);
+  return own.some(field => sharedSystemName(field, names, NO_FIELDS) !== null);
+}
+
+const NO_FIELDS: ReadonlySet<unknown> = new Set();
+
+/** Why a file field's name is kept: each is where Nextly records one thing about a stored file. */
+const FILE_NAME_REASON =
+  "a collection of files keeps its own field of that name for each file, and an upload could not be recorded.";
+
+/**
+ * Why `title` or `slug` is kept. A virtual field's type is applied to the system column's value on
+ * a write (a date replaces the text it is given, or stops the write); any other column-less field
+ * takes the value the required column needs, and a read answers with it in the column's place.
+ */
+function systemNameReason(name: string, field: unknown): string {
+  return isVirtualField(field as Parameters<typeof isVirtualField>[0])
+    ? `the table keeps Nextly's own text column '${name}', and its type would be applied to that column's value.`
+    : `the table keeps Nextly's own required text column '${name}', so no entry could be created and a stored '${name}' would be hidden.`;
+}
+
+/** The kept name `field` takes without a column of its own, or null where it takes none. */
 function sharedSystemName(
   field: unknown,
-  systemNames: ReadonlySet<unknown>,
+  names: ReadonlySet<unknown>,
   system: ReadonlySet<unknown>
 ): string | null {
   if (typeof field !== "object" || field === null || system.has(field)) {
     return null;
   }
   const name = (field as { name?: unknown }).name;
-  if (typeof name !== "string" || !systemNames.has(name)) return null;
+  if (typeof name !== "string" || !names.has(name)) return null;
   return fieldProducesColumn(field) ? null : name;
 }
 
@@ -274,7 +422,7 @@ function sharedSystemName(
  */
 function placeOf(
   fields: readonly unknown[],
-  target: object,
+  target: unknown,
   at = "fields",
   entered: WeakSet<object> = new WeakSet()
 ): string {
@@ -421,11 +569,12 @@ export function configurationProblems(
       // The mark is on the entity the app declared; a setup's copy of it does not carry it.
       const record = defineRecordOf(declaredEntries[index]);
       const byDefine = record !== undefined;
-      for (const error of entryProblems(
-        entry,
-        validate,
-        record?.systemFields ?? []
-      )) {
+      for (const error of entryProblems(entry, validate, {
+        systemFields: record?.systemFields ?? [],
+        keepsSystemColumns: byDefine && kind !== "fieldGroups",
+        mayHoldFiles: byDefine && kind === "collections",
+        declared: declaredEntries[index],
+      })) {
         problems.push({
           ...error,
           path: within(kind, index, error.path),

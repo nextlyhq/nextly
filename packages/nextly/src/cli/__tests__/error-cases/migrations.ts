@@ -35,13 +35,17 @@ import {
 import { uniqueColumnRepeatsError } from "../../../domains/schema/migrate/unique-column-guard";
 import { parseSnapshotFile } from "../../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
-import { forkedHistoryError } from "../../../domains/schema/migrate/history-line";
+import {
+  forkedHistoryError,
+  placeStatedTwiceError,
+} from "../../../domains/schema/migrate/history-line";
 import {
   notWrittenError,
   writerHeldError,
   writerLostError,
 } from "../../../domains/schema/migrate-create/writer-hold";
 import { describeHolder } from "../../../domains/schema/pipeline/schema-lock";
+import { snapshotFolderUnreadableError } from "../../../domains/schema/repair-columns/stop-errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   appliedFilesMissing,
@@ -213,6 +217,29 @@ export const MIGRATION_CASES = {
       ],
       new Set(["20261020_120000_add_posts", "20261021_090000_add_tags"])
     ) as NextlyError,
+  // As `nextly repair-columns` stops on a snapshots folder its user may not list.
+  MIGRATION_SNAPSHOTS_UNREADABLE: () =>
+    snapshotFolderUnreadableError(
+      "/app/migrations/meta",
+      Object.assign(
+        new Error("EACCES: permission denied, scandir '/app/migrations/meta'"),
+        { code: "EACCES" }
+      )
+    ),
+  // As `nextly migrate` refuses a blank migration whose base file and MySQL variant state
+  // different places in the history.
+  MIGRATION_PLACE_STATED_TWICE: () =>
+    placeStatedTwiceError(
+      "20261021_090000_seed",
+      {
+        file: "20261021_090000_seed.sql",
+        placed: { parent: "20261020_120000_add_posts", merges: [] },
+      },
+      {
+        file: "20261021_090000_seed.mysql.sql",
+        placed: { parent: "20261019_080000_init", merges: [] },
+      }
+    ),
   // As a command that waited its whole wait for the migration files is refused.
   MIGRATIONS_WRITER_BUSY: () =>
     writerHeldError({

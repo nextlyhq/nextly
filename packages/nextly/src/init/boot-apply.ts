@@ -661,10 +661,10 @@ async function applyPendingMigrations(label: string): Promise<number> {
     });
     // Compiled from the same config the CLI compiles from; see
     // `MigrateCoreDeps.extensionSchema` for why it is passed, not read.
-    const { compileExtensionSchema } = await import(
-      "../domains/schema/extension/publish"
-    );
-    const extensionSchema = await compileExtensionSchema({
+    // A collection handed to the Schema Builder as its record has it, as this
+    // start's registration compiled its hooks.
+    const { compileForStart } = await import("../di/development-start-hooks");
+    const { schema: extensionSchema } = await compileForStart(drizzleAdapter, {
       dialect: drizzleAdapter.dialect,
       plugins: configResult.config.plugins ?? [],
       config: configResult.config,
