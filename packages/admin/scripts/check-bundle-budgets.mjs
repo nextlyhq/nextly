@@ -52,9 +52,10 @@ export const BUDGETS = {
   // since (the review workflow, version diffs, the entity dialog of the schema
   // builder, the written email editor, loaded only when a written email is
   // opened), so 1,430 by the same rule.
-  // Measured again at 1,433.6 KB on 2026-11-24: about 4.5 KB of it the email data panel, the
-  // Releases board and the comparison page since, about 4.0 KB changing a field's type in the
-  // schema builder. So 1,450 by the same rule.
+  // Measured again at 1,439.2 KB on 2026-11-25, 14.1 KB above the 1,425.1 KB of commit 41deb71cb9:
+  // about 4.2 KB of that is changing a field's type in the schema builder, about 9.9 KB the features
+  // merged since (sums of each one's chunks, not a build without the other). The 1,450 set here is not
+  // the 1% rule, which would give 1,460: the rule's margin is short by 3.6 KB.
   totalGzipKB: 1450,
   // The shared shell, measured at 140.3 KB gzipped on 2026-11-13 once the
   // root entry exported only what an application mounts (it was 331 KB), the
