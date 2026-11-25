@@ -36,5 +36,7 @@ A plugin's Singles and field groups, and the collections under its legacy `colle
 - A departed plugin's Single takes writes, as a departed plugin's collection does. Before, they were refused as to a Single removed from code.
 - **Data-loss consent:** a consent naming the main table of a plugin's Single or field group no longer covers its translation and junction tables. Name each, as for a plugin's collection.
 - **Types:** `source` on a Single and on a field group can be `plugin:<name>`, in the Direct API too, as a collection's can. An exhaustive `switch` on it gets a new case.
-- The lists of Singles and field groups in the admin name the plugin as the source. A plugin's Single is no longer among the site's own content types, as its collections are not.
-- A configuration reload keeps the translated columns of a Single and a field group outside the configuration in their translations tables. It added them to the main table.
+- The lists of Singles and field groups in the admin name the plugin as the source.
+- A plugin's Single stays among the site's content types, so its public address and its place in SEO are as they were. A collection under the legacy `collections` key leaves them, as one under `contributes` is not among them: its pages leave the SEO listing and the addresses they held are free.
+- A departed plugin's Single is still no page the page builder opens, so its former editors gain nothing.
+- **Also fixed, whoever owns the row:** a configuration reload added the translated columns of a field group or a Schema Builder Single that is not in the configuration to its main table. It leaves them in the translations table.
