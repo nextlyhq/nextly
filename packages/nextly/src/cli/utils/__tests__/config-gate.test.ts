@@ -775,3 +775,40 @@ describe("a Builder problem a load warns of, loaded again in the same process", 
     expect(warned).toHaveLength(3);
   });
 });
+
+describe("a Builder definition file a release saved with a repeater translatable as a whole", () => {
+  // `nextly migrate` converts it and takes the mark off, so the load it makes must not refuse it.
+  it("loads for a command that reads the entities", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "ui-schema.json"),
+      JSON.stringify({
+        collections: [
+          {
+            slug: "cases",
+            localized: true,
+            fields: [
+              {
+                name: "rows",
+                type: "repeater",
+                localized: true,
+                fields: [{ name: "inner", type: "text" }],
+              },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+
+    const loaded = await loadConfig({ cwd, missing: "refuse" });
+
+    expect(loaded.configPath).toBeDefined();
+  });
+});

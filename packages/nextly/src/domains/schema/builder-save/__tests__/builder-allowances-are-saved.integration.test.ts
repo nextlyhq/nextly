@@ -242,5 +242,28 @@ describe.each(getConfiguredTestDialects())(
         expect(reported()).toEqual([]);
       }
     );
+
+    // Saved as it is sent, and taken off by the upgrade (`nextly migrate`), which must be able to
+    // run over the file that holds it.
+    it.each(
+      ["collection", "Single", "field group"].flatMap(name =>
+        ["repeater", "group"].map(type => [name, type] as const)
+      )
+    )(
+      "take a %s's %s marked translatable as a whole, and the file is not refused for it",
+      async (name, type) => {
+        await boot();
+        const kind = kindOf(name);
+        const fields = [
+          text("heading"),
+          { name: "holder", type, localized: true, fields: [text("inner")] },
+        ];
+
+        await kind.create(fields);
+
+        expect(written(kind)).toEqual(fields);
+        expect(reported()).toEqual([]);
+      }
+    );
   }
 );

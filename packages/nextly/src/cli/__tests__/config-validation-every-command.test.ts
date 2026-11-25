@@ -228,6 +228,20 @@ describe("the commands the program registers", () => {
   });
 });
 
+/** How a run departs from refusing three problems, where it does. */
+function departuresOf(
+  name: string,
+  ran: { status: number | undefined; stderr: string }
+): string[] {
+  const refused =
+    ran.stderr.includes("CONFIG_INVALID") && ran.stderr.includes("3 problems");
+  const [said = ""] = ran.stderr.trim().split(String.fromCharCode(10));
+  return [
+    ...(ran.status === 1 ? [] : [`${name}: exit ${String(ran.status)}`]),
+    ...(refused ? [] : [`${name}: ${said}`]),
+  ];
+}
+
 describe("an invalid configuration, given to every command that loads it", () => {
   // Each dialect's own address; the server databases' answer nothing, so a command that connected
   // would be seen to, whichever it is.
@@ -251,15 +265,8 @@ describe("an invalid configuration, given to every command that loads it", () =>
       for (const args of [...READ_ENTITIES, ...LOAD_CONFIGURATION]) {
         const ran = await run(args);
         const name = args.join(" ");
-        const first = ran.stderr.trim().split("\n")[0] ?? "";
 
-        if (ran.status !== 1) wrong.push(`${name}: exit ${String(ran.status)}`);
-        if (
-          !ran.stderr.includes("CONFIG_INVALID") ||
-          !/3 problems/.test(ran.stderr)
-        ) {
-          wrong.push(`${name}: ${first}`);
-        }
+        wrong.push(...departuresOf(name, ran));
         reports.set(name, reportOf(ran.stderr));
         if (opened.times > 0) wrong.push(`${name}: opened a database`);
         opened.times = 0;

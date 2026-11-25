@@ -1197,3 +1197,32 @@ describe("an entity with no system field set aside and no name at fault", () => 
     );
   });
 });
+
+describe("a Builder container marked translatable as a whole", () => {
+  // The Builder saves the mark, and `nextly migrate` takes it off; the same field in the
+  // configuration is refused, as its author takes it off there.
+  it.each([
+    ["repeater", { fields: [{ name: "inner", type: "text" }] }],
+    ["group", { fields: [{ name: "inner", type: "text" }] }],
+    ["component", { component: "card" }],
+  ])("is not reported for a %s, at any depth", (type, rest) => {
+    const marked = { name: "holder", type, localized: true, ...rest };
+    const entity = {
+      slug: "posts",
+      fields: [
+        marked,
+        { name: "outer", type: "group", fields: [{ ...marked, name: "deep" }] },
+      ],
+    };
+
+    expect(
+      configurationProblems({ collections: [entity] }).map(each => each.code)
+    ).toContain("FIELD_STRUCTURE_NOT_TRANSLATABLE");
+    for (const list of ["collections", "singles", "components"]) {
+      expect(
+        builderDefinitionProblems({ [list]: [entity] }, {}, "ui-schema.json"),
+        list
+      ).toEqual([]);
+    }
+  });
+});

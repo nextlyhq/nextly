@@ -613,11 +613,14 @@ export function configurationProblems(
  * ask only of a new or changed address, as they know which are; one that already exists keeps
  * working. A slug that is missing or not a string is still reported: the Builder never writes one.
  * A field named by a SQL keyword (`select`, `order`) too: the Builder's field save takes one
- * (`applySchemaChanges`), though creating a collection with one is refused.
+ * (`applySchemaChanges`), though creating a collection with one is refused. And a repeater, group
+ * or field group marked translatable as a whole: the Builder saves the mark, and `nextly migrate`
+ * takes it off its definitions and keeps each language's values, so it must be able to run.
  */
 const BUILDER_ALLOWS: ReadonlySet<string> = new Set([
   "FIELDS_EMPTY",
   "FIELD_NAME_SQL_KEYWORD",
+  "FIELD_STRUCTURE_NOT_TRANSLATABLE",
   "SLUG_INVALID_FORMAT",
   "SLUG_TOO_LONG",
   "SLUG_RESERVED",
