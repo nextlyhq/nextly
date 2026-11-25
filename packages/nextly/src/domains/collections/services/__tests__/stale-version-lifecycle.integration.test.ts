@@ -474,12 +474,24 @@ describe.each(getConfiguredTestDialects())(
       ) => moveChosen(t, id, { direction: "publish", locales }, _rev);
 
       /** A save of one language's text, or of the shared note. */
-      const edit = (
+      const edit = async (
         t: TestNextly,
         id: string,
         locale: string,
         data: Record<string, unknown>
-      ) => update(t, PAGES, id, { ...data, _overwrite: true }, { locale });
+      ) => {
+        const before = await readRev(t, PAGES, id, locale);
+        const saved = await update(
+          t,
+          PAGES,
+          id,
+          { ...data, _overwrite: true },
+          { locale }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+        // A save that moved nothing would leave the test below nothing to tell apart.
+        expect(await readRev(t, PAGES, id, locale)).not.toBe(before);
+      };
 
       it("publishes a chosen language other than the default from it", async () => {
         const t = await boot(dialect);

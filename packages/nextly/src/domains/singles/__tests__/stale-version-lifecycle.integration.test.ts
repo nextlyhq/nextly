@@ -412,8 +412,20 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("publishing chosen languages", () => {
-      const editBanner = (t: TestNextly, locale: string, headline: string) =>
-        save(t, BANNER, locale, { headline, _overwrite: true });
+      const editBanner = async (
+        t: TestNextly,
+        locale: string,
+        headline: string
+      ) => {
+        const before = await readRev(t, BANNER, locale);
+        const saved = await save(t, BANNER, locale, {
+          headline,
+          _overwrite: true,
+        });
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+        // A save that moved nothing would leave the test below nothing to tell apart.
+        expect(await readRev(t, BANNER, locale)).not.toBe(before);
+      };
 
       it("publishes from a read of every language (`all`) though one not chosen was saved since", async () => {
         const t = await boot(dialect);
