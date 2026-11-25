@@ -507,6 +507,15 @@ describe("needsResolvedRoles", () => {
     ).toBe(true);
   });
 
+  it("resolves roles for reading a translated field's source, as for reading its document", () => {
+    expect(
+      _needsResolvedRolesForTest("collections", "getEntrySourceChange", "GET")
+    ).toBe(true);
+    expect(
+      _needsResolvedRolesForTest("singles", "getSingleSourceChange", "GET")
+    ).toBe(true);
+  });
+
   it("skips the lookup for reads that consume no roles", () => {
     // A permissions query on every one of these would be paid for nothing.
     expect(_needsResolvedRolesForTest("media", "listMedia", "GET")).toBe(false);
