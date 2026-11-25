@@ -951,8 +951,29 @@ export function buildCompanionTransitionStatements(
   // ENABLE — relocate the existing main columns into a seeded companion.
   if (!wasLocalized && isLocalized) {
     const localizedNew = newFields.filter(f => isFieldLocalized(f, true));
-    // Created empty beside the moved columns, never seeded: nothing on main is copied into one.
     const overlays = newFields.filter(keepsOverlay);
+    // A container already on the main table holds its text there: its default language's overlay
+    // is seeded from it once the column is added, as `migrate:create` seeds one
+    // (`buildOverlaySeedStatements`). Left empty, a first save in another language writes the
+    // structure without its text, and the default language's text would be gone.
+    const columnsBefore = new Set(
+      oldFields
+        .map(f => fieldToLocalizedColumnSpec(f, dialect, builtBy)?.name)
+        .filter((n): n is string => typeof n === "string")
+    );
+    const overlaySeed = buildOverlaySeedStatements(
+      {
+        dialect,
+        mainTable: tableName,
+        companionTable: `${tableName}_locales`,
+        defaultLocale,
+      },
+      overlays.flatMap(field => {
+        const col = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+        return col && columnsBefore.has(col.name) ? [col.name] : [];
+      }),
+      { status: status === true }
+    );
     const spec = deriveCompanionSpec({
       slug,
       kind,
@@ -971,24 +992,27 @@ export function buildCompanionTransitionStatements(
     // already on the companion as done, so the values move once and are not added twice.
     if (!spec || companionExists) {
       return {
-        statements: buildCompanionReconcileStatements({
-          slug,
-          kind,
-          tableName,
-          builtBy,
-          oldLocalized: [],
-          newLocalized: [...localizedNew, ...overlays],
-          dialect,
-          status,
-          companionExists,
-          joinedBefore: args.joinedBefore,
-          presentOnCompanion: args.presentOnCompanion,
-          // What the companion holds already, so a column the save's own file made (an overlay
-          // among them) is not added again.
-          ...(args.liveCompanionColumns === undefined
-            ? {}
-            : { liveCompanionColumns: args.liveCompanionColumns }),
-        }),
+        statements: [
+          ...buildCompanionReconcileStatements({
+            slug,
+            kind,
+            tableName,
+            builtBy,
+            oldLocalized: [],
+            newLocalized: [...localizedNew, ...overlays],
+            dialect,
+            status,
+            companionExists,
+            joinedBefore: args.joinedBefore,
+            presentOnCompanion: args.presentOnCompanion,
+            // What the companion holds already, so a column the save's own file made (an overlay
+            // among them) is not added again.
+            ...(args.liveCompanionColumns === undefined
+              ? {}
+              : { liveCompanionColumns: args.liveCompanionColumns }),
+          }),
+          ...overlaySeed,
+        ],
         needsArchive: false,
         companionDropped: false,
       };
@@ -999,15 +1023,10 @@ export function buildCompanionTransitionStatements(
     // a field named `subTitle` is stored as `sub_title`, a `component` field emits no column
     // at all, and a relationship stores under a different name, so matching raw field names
     // would seed from (and drop) columns main never had. A field added in this save has no
-    // old column and gets a companion column only.
-    const oldColumnNames = new Set(
-      oldFields
-        .map(f => fieldToLocalizedColumnSpec(f, dialect, builtBy)?.name)
-        .filter((n): n is string => typeof n === "string")
-    );
+    // old column and gets a companion column only (`columnsBefore`, above).
     spec.columnsOnMain = spec.columns
       .map(c => c.name)
-      .filter(n => oldColumnNames.has(n));
+      .filter(n => columnsBefore.has(n));
     return {
       statements: [
         ...buildLocalizationUpStatements(spec),
@@ -1019,6 +1038,7 @@ export function buildCompanionTransitionStatements(
               ]
             : [];
         }),
+        ...overlaySeed,
         // The companion is new, so every unique translated field's index is created.
         ...uniqueIndexDelta({ ...args, liveCompanionIndexes: [] }).creates,
       ],

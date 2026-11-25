@@ -89,6 +89,65 @@ beforeEach(() => {
 
 afterEach(() => sqlite.close());
 
+describe("buildCompanionTransitionStatements — enable, a container's text on main", () => {
+  // A repeater keeping one structure in every language: its structure stays on the main table and
+  // each language's text sits in its overlay column. Turned on, the default language's overlay is
+  // seeded from the value main holds, so a first save in another language, which writes the
+  // structure without its text, leaves the default language its own text.
+  const SLIDES = {
+    name: "slides",
+    type: "repeater" as const,
+    fields: [
+      { name: "caption", type: "text" as const },
+      { name: "rank", type: "number" as const },
+    ],
+  };
+  const STORED = JSON.stringify([{ id: "r1", caption: "Hello", rank: 1 }]);
+
+  beforeEach(() => {
+    sqlite.exec(`ALTER TABLE "single_hero" ADD COLUMN "slides" TEXT`);
+    sqlite
+      .prepare(`UPDATE "single_hero" SET "slides" = ? WHERE "id" = ?`)
+      .run(STORED, "h1");
+  });
+
+  it.each([
+    ["beside a translated field", [...FIELDS, SLIDES]],
+    [
+      "whose translations table holds overlays alone",
+      [{ name: "views", type: "number" as const }, SLIDES],
+    ],
+  ])(
+    "seeds the default language's overlay from the main table, %s",
+    (_, fields) => {
+      const plan = buildCompanionTransitionStatements({
+        builtBy: "codeFirst" as const,
+        slug: "hero",
+        kind: "collection" as const,
+        tableName: "single_hero",
+        dialect: "sqlite",
+        defaultLocale: "en",
+        ...NO_STATUS_HISTORY,
+        wasLocalized: false,
+        isLocalized: true,
+        oldFields: fields,
+        newFields: fields,
+        companionExists: false,
+      });
+      run(plan.statements);
+
+      const rows = sqlite
+        .prepare(
+          `SELECT "_parent", "_locale", "slides" FROM "single_hero_locales"`
+        )
+        .all();
+      expect(rows).toEqual([{ _parent: "h1", _locale: "en", slides: STORED }]);
+      // The structure stays on main.
+      expect(mainColumns()).toContain("slides");
+    }
+  );
+});
+
 describe("buildCompanionTransitionStatements — enable", () => {
   it("seeds the companion default locale from main, then drops the translatable column", () => {
     const plan = buildCompanionTransitionStatements({
