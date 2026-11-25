@@ -1,0 +1,38 @@
+---
+title: MIGRATION_LANGUAGE_DIFFERS
+description: "A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused and changed nothing."
+---
+
+## Cause
+
+A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused and changed nothing.
+
+A field whose values are kept per language can be made required while some entries have no value for it. The save then asks what to do with those entries: fill the field, or delete them. The answer is decided in the default language: an entry is one that has no value in it. The migration file's statements hold that language as it was when the file was written, and its header records it:
+
+```text
+-- Answers in: en
+```
+
+Where the project's default language is another one, the same statements settle other entries. A delete removes entries that are complete in the default language, and a fill writes another language's values. `nextly migrate` compares the two before any statement and refuses the file, naming both languages. It refuses a file that holds such an answer and records no language too, since nothing says which one it was decided in.
+
+The default language is the one `localization.defaultLocale` declares in the configuration. Without it, it is the one set in Settings, and `en` where no languages are set.
+
+## Fix
+
+Which one to use depends on whether an environment has applied the file:
+
+- **No environment has applied it.** Delete the file and its snapshot, and make the save again with the right default language. The new file records it.
+- **An environment has applied it, and it should settle the same entries here.** Make the language the file records the default here, run `nextly migrate`, then make the other language the default again.
+- **An environment has applied it, and it should settle the entries by this project's own default language.** Run the file's other statements by hand, fill or delete the entries with no value in your default language, and record the file with `nextly migrate:resolve --applied <migration>`.
+
+The dry run (`nextly migrate --dry-run`) names the files a run would refuse.
+
+## Example
+
+```text
+✗ A migration's answers are not recorded as decided in this project's default language, "es".
+  Why:  20261021_090000_require_body.sql: its answers are decided in "en", and this project's default language is "es".
+        Run here, its statements would settle other entries than the ones answered for. Nothing was changed.
+  Next: Where no environment has applied it, delete it and make the save again with "es" as the default language. Where one has, make "en" the default language here, run `nextly migrate`, then make "es" the default again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-language-differs  (MIGRATION_LANGUAGE_DIFFERS)
+```

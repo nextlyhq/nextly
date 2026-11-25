@@ -5,6 +5,10 @@
  */
 import { tableBusyError } from "../../../domains/schema/busy-table/report";
 import { assertNoLegacyBookkeeping } from "../../../domains/schema/events/legacy-detection";
+import {
+  answerLanguageError,
+  answerLanguageRefusal,
+} from "../../../domains/i18n/migration/answer-language";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
 import {
   judgeDataLoss,

@@ -35,6 +35,19 @@ export interface AnswerLanguageRefusal {
 
 const standard = (code: string) => standardLanguageCode(code) ?? code;
 
+/** The refusal of a file answered in another language than `runsIn`, or in none it records. */
+export function answerLanguageRefusal(
+  file: Pick<AnsweringFile, "name" | "answersIn">,
+  runsIn: string
+): AnswerLanguageRefusal {
+  const { name, answersIn } = file;
+  const message =
+    answersIn === undefined
+      ? `it fills or deletes entries by their default language's values, and records no language they are decided in; this project's default language is "${runsIn}".`
+      : `its answers are decided in "${answersIn}", and this project's default language is "${runsIn}".`;
+  return { file: `${name}.sql`, message, answersIn };
+}
+
 /**
  * Those of `files` whose answers are decided in another language than `defaultLanguage` gives, or
  * that record none. `defaultLanguage` is asked only where a file holds an answer.
@@ -53,28 +66,12 @@ export async function answerLanguageRefusals(
   const runsIn = standard(await defaultLanguage());
   return {
     runsIn,
-    refusals: answering.flatMap((file): AnswerLanguageRefusal[] => {
-      const { answersIn } = file;
-      const name = `${file.name}.sql`;
-      if (answersIn === undefined) {
-        return [
-          {
-            file: name,
-            answersIn,
-            message: `it fills or deletes entries by their default language's values, and records no language they are decided in; this project's default language is "${runsIn}".`,
-          },
-        ];
-      }
-      return standard(answersIn) === runsIn
-        ? []
-        : [
-            {
-              file: name,
-              answersIn,
-              message: `its answers are decided in "${answersIn}", and this project's default language is "${runsIn}".`,
-            },
-          ];
-    }),
+    refusals: answering
+      .filter(
+        ({ answersIn }) =>
+          answersIn === undefined || standard(answersIn) !== runsIn
+      )
+      .map(file => answerLanguageRefusal(file, runsIn)),
   };
 }
 
@@ -114,7 +111,7 @@ export function answerLanguageError(
   const what = `${one ? "A migration's" : `${refusals.length} migrations'`} answers are not recorded as decided in this project's default language, "${runsIn}".`;
   const why = [
     ...refusals.map(refusal => `${refusal.file}: ${refusal.message}`),
-    "Its statements would settle other entries here than the ones it was answered for. Nothing was changed.",
+    `Run here, ${one ? "its" : "their"} statements would settle other entries than the ones answered for. Nothing was changed.`,
   ].join("\n");
   const them = one ? "it" : "them";
   const again = `Where no environment has applied ${them}, delete ${them} and make the save again with "${runsIn}" as the default language.`;
