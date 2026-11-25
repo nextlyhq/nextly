@@ -52,14 +52,14 @@ export function pluginPageAddress(slug: string, path: string): string {
 }
 
 /**
- * A slug a plugin declares under `contributes.admin.views`, after the
- * plugin's rename map, read from the map's OWN keys: `constructor` is a legal
+ * A slug a plugin declares, of a view under `contributes.admin.views` or of a
+ * collection it contributes, after the plugin's rename map, read from the map's OWN keys: `constructor` is a legal
  * slug, and an inherited lookup answers it with a function the admin would
  * receive as no slug at all. Here, beside the plugin's own slug, so the
  * prebuilt admin page can read it without the boot checks' modules.
  */
 export function renamedSlug(
-  plugin: PluginDefinition,
+  plugin: Pick<PluginDefinition, "renameMap">,
   declared: string
 ): string {
   const renames = plugin.renameMap ?? {};

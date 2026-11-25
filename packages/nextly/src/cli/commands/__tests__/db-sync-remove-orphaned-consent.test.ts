@@ -168,7 +168,9 @@ vi.mock("../../../shared/lib/assert-plugin-field-declarations", () => ({
   assertPluginFieldDeclarations: () => {},
 }));
 vi.mock("../../../domains/schema/extension/publish", () => ({
+  // Nothing declares a schema hook here, so nothing is compiled.
   compileAndPublishExtensionSchema: async () => {},
+  declaresExtensionSchema: () => false,
 }));
 vi.mock("../../../domains/schema/services/schema-change-exclusion", () => ({
   withSchemaChangeExcluded: async (

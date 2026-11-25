@@ -23,6 +23,7 @@ import { createLogger } from "../../utils/logger";
 import {
   demoteCollection,
   demotedCollectionIn,
+  previewDemotion,
   type DemotedCollection,
 } from "../db-sync-demote";
 import { promotedCollection } from "../db-sync-promote-collection";
@@ -38,7 +39,7 @@ async function demoted(
   collection: DemotedCollection,
   existing: DynamicCollectionRecord | null = null,
   /** The dialect of the database the demote runs on, as its adapter states it. */
-  dialect?: "postgresql" | "mysql" | "sqlite"
+  dialect: "postgresql" | "mysql" | "sqlite" = "sqlite"
 ) {
   const registered: DynamicCollectionInsert[] = [];
   const updated: Partial<DynamicCollectionInsert>[] = [];
@@ -64,7 +65,7 @@ async function demoted(
     collection,
     logger: createLogger({ quiet: true }),
     registry,
-    adapter: (dialect === undefined ? {} : { dialect }) as never,
+    adapter: { dialect } as never,
     confirm: async code => {
       shown = code;
       return true;
@@ -260,8 +261,8 @@ describe("a demoted collection's record", () => {
     async (_what, options) => {
       const collection = coded(options);
       const record = asRecord(await registeredFor(collection));
-      expect(toCodeFirstCollectionConfig(promotedFrom(record))).toEqual(
-        toCodeFirstCollectionConfig(collection)
+      expect(toCodeFirstCollectionConfig(promotedFrom(record), "code")).toEqual(
+        toCodeFirstCollectionConfig(collection, "code")
       );
     }
   );
@@ -294,7 +295,7 @@ describe("a demoted collection's code-only options", () => {
     const { shown } = await demoted(
       coded({
         hooks: { beforeCreate: [() => undefined] },
-        indexes: [{ fields: ["body"], unique: true }],
+        indexes: [{ fields: ["body", "createdAt"] }],
       })
     );
     expect(shown).toContain("hooks.");
@@ -306,12 +307,15 @@ describe("a demoted collection's code-only options", () => {
     const { shown } = await demoted(
       coded({
         hooks: { beforeCreate: [() => undefined] },
-        indexes: [{ fields: ["body"], unique: true }],
+        indexes: [{ fields: ["body", "createdAt"] }],
       })
     );
     expect(shown).toContain(
       "Its compound indexes are dropped at the next schema sync"
     );
+    // A Schema Builder save applies every Builder collection, so one of another collection drops
+    // them too.
+    expect(shown).toContain("a Schema Builder save, of another collection too");
     expect(shown).not.toContain("indexes.");
   });
 
@@ -323,6 +327,116 @@ describe("a demoted collection's code-only options", () => {
     expect((await demoted(coded({ indexes: [] }))).shown).not.toContain(
       "compound indexes"
     );
+  });
+});
+
+describe("a demote that would lose a unique index", () => {
+  const FIELDS_WITH_TENANT = [
+    { name: "tenant", type: "text" as const, localized: false },
+    { name: "code", type: "text" as const, localized: false },
+  ];
+  const unique = (options: Record<string, unknown> = {}) =>
+    coded({
+      fields: FIELDS_WITH_TENANT,
+      indexes: [
+        { fields: ["tenant", "code"], unique: true },
+        { fields: ["tenant", "createdAt"] },
+      ],
+      ...options,
+    });
+
+  it.each(["sqlite", "postgresql", "mysql"] as const)(
+    "is refused before anything is asked or written, naming the index (%s)",
+    async dialect => {
+      const written: unknown[] = [];
+      const confirm = vi.fn(async () => true);
+      await expect(
+        demoteCollection({
+          collection: unique(),
+          logger: createLogger({ quiet: true }),
+          registry: {
+            getCollectionBySlug: async () => null,
+            registerCollection: async (data: unknown) => written.push(data),
+          } as unknown as CollectionRegistryService,
+          adapter: { dialect } as never,
+          confirm,
+        })
+      ).rejects.toMatchObject({
+        code: "DEMOTE_LOSES_UNIQUE_INDEX",
+        what: expect.stringContaining("tenant, code"),
+      });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(written).toEqual([]);
+    }
+  );
+
+  it("is refused by a dry run before a storage migration is asked about, as the demote is", async () => {
+    // `--dry-run` names the refusal the real run ends on, so it asks in the same order.
+    const order: string[] = [];
+    const refusal = await previewDemotion({
+      collection: unique(),
+      registry: {
+        getCollectionBySlug: async () => null,
+        assertRegistrable: async () => order.push("registrable"),
+      } as unknown as CollectionRegistryService,
+      adapter: {
+        dialect: "sqlite",
+        tableExists: async () => {
+          order.push("migration in flight");
+          return false;
+        },
+      } as never,
+      logger: createLogger({ quiet: true }),
+    });
+    expect(refusal.refusals?.[0]).toContain("tenant, code");
+    expect(order).toEqual([]);
+  });
+
+  it("names every one it would lose, and no index that is not unique", async () => {
+    const refused = await demoted(
+      unique({
+        indexes: [
+          { fields: ["tenant", "code"], unique: true },
+          { fields: ["code", "createdAt"], unique: true },
+          { fields: ["tenant", "createdAt"] },
+        ],
+      })
+    ).catch((error: unknown) => error);
+    const { what } = refused as { what: string };
+    expect(what).toContain("tenant, code");
+    expect(what).toContain("code, createdAt");
+    expect(what).not.toContain("tenant, createdAt");
+  });
+
+  it("is not refused over one the Schema Builder keeps as the field's own", async () => {
+    // `unique: true` on the field declares the same index, which the record holds.
+    const { registered } = await demoted(
+      coded({
+        fields: [
+          { name: "code", type: "text", localized: false, unique: true },
+        ],
+        indexes: [{ fields: ["code"], unique: true }],
+      })
+    );
+    expect(registered).toHaveLength(1);
+  });
+
+  it("is not refused over an index that is not unique", async () => {
+    const { registered, shown } = await demoted(
+      unique({ indexes: [{ fields: ["tenant", "createdAt"] }] })
+    );
+    expect(registered).toHaveLength(1);
+    expect(shown).toContain("compound indexes");
+  });
+
+  it("is not refused again for a collection already handed to the Schema Builder", async () => {
+    // Its syncs already leave the entry out, so this demote loses nothing more.
+    const record = {
+      ...asRecord(await registeredFor(unique({ indexes: undefined }))),
+      configPath: "demoted-from-code",
+    };
+    const { updated } = await demoted(unique(), record);
+    expect(updated).toHaveLength(1);
   });
 });
 

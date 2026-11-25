@@ -138,6 +138,7 @@ export { nextlyExternalIdentitiesMysql as nextlyExternalIdentities } from "../ex
 export { nextlyVersionViewsMysql as nextlyVersionViews } from "../version-views/mysql";
 export { nextlyReviewStatesMysql as nextlyReviewStates } from "../review-states/mysql";
 export { nextlyTranslationProvenanceMysql as nextlyTranslationProvenance } from "../translation-provenance/mysql";
+export { nextlyTranslationSourcesMysql as nextlyTranslationSources } from "../translation-sources/mysql";
 export { nextlyWorkflowSettingsMysql as nextlyWorkflowSettings } from "../workflow-settings/mysql";
 export { nextlyScheduleWindowsMysql as nextlyScheduleWindows } from "../schedule-windows/mysql";
 // The record of content events; in the bundle so freshPushSchema creates the

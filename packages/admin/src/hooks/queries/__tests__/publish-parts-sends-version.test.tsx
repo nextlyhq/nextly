@@ -1,10 +1,11 @@
 /**
- * Publishing every language sends the version of every language.
+ * A publish of chosen parts sends the version of every language.
  *
- * A publish of every language is judged on the document's own row and each
- * language's: the version it sends must name them all, which only a read of
- * every language gives. The editor reads one language, so the publish reads
- * every language first and sends that read's version.
+ * It is judged on the document's own row and each language's: the version it
+ * sends must name them all, which only a read of every language gives. The
+ * editor reads one language, so the publish reads every language first and
+ * sends that read's version, and compares the language on screen with what
+ * the editor opened.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
@@ -13,9 +14,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
   findByID: vi.fn(),
-  publishAllEntryLocales: vi.fn(),
+  publishEntryParts: vi.fn(),
   getDocument: vi.fn(),
-  publishAllSingleLocales: vi.fn(),
+  publishSingleParts: vi.fn(),
 }));
 
 vi.mock("@admin/services/entryApi", async importOriginal => {
@@ -26,7 +27,7 @@ vi.mock("@admin/services/entryApi", async importOriginal => {
     entryApi: {
       ...actual.entryApi,
       findByID: api.findByID,
-      publishAllLocales: api.publishAllEntryLocales,
+      publishParts: api.publishEntryParts,
     },
   };
 });
@@ -38,21 +39,17 @@ vi.mock("@admin/services/singleApi", async importOriginal => {
     singleApi: {
       ...actual.singleApi,
       getDocument: api.getDocument,
-      publishAllLocales: api.publishAllSingleLocales,
+      publishParts: api.publishSingleParts,
     },
   };
 });
-vi.mock("@admin/hooks/useLocalization", () => ({
-  useLocalization: () => ({ locales: [] }),
-}));
-vi.mock("@admin/components/ui", () => ({
-  toast: { success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
-}));
 
-import { OVERWRITE_EVERY_LANGUAGE } from "@admin/lib/document-version";
+import {
+  OVERWRITE_EVERY_LANGUAGE,
+  type ShownCopy,
+} from "@admin/lib/document-version";
 
-import { usePublishAllLocales } from "../usePublishAllLocales";
-import { usePublishAllSingleLocales } from "../usePublishAllSingleLocales";
+import { usePublishParts, type PartsTarget } from "../usePublishParts";
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({
@@ -61,30 +58,49 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
+/** Publishes Spanish, from an editor showing `copy` where one is given. */
+function publishSpanish(target: PartsTarget, copy?: ShownCopy) {
+  const { result } = renderHook(
+    () =>
+      usePublishParts({
+        target,
+        direction: "publish",
+        ...(copy === undefined ? {} : { shown: () => copy }),
+      }),
+    { wrapper }
+  );
+  return result.current.mutateAsync({ locales: ["es"] });
+}
+
+const ENTRY: PartsTarget = { kind: "collection", slug: "posts", id: "e1" };
+const SINGLE: PartsTarget = { kind: "single", slug: "settings" };
+const ENGLISH_COPY: ShownCopy = {
+  version: "7.en:3",
+  locale: "en",
+  draft: true,
+};
+
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
 });
 
-describe("publishing every language", () => {
+describe("publishing chosen parts", () => {
   it("of an entry sends the version a read of every language gives", async () => {
     api.findByID.mockResolvedValue({ id: "e1", _rev: "7.en:2,es:3" });
-    api.publishAllEntryLocales.mockResolvedValue({ id: "e1" });
-    const { result } = renderHook(
-      () => usePublishAllLocales({ collectionSlug: "posts", silent: true }),
-      { wrapper }
-    );
+    api.publishEntryParts.mockResolvedValue({ id: "e1" });
 
-    await result.current.mutateAsync("e1");
+    await publishSpanish(ENTRY);
 
     expect(api.findByID).toHaveBeenCalledWith(
       "posts",
       "e1",
       expect.objectContaining({ locale: "all" })
     );
-    expect(api.publishAllEntryLocales).toHaveBeenCalledWith(
+    expect(api.publishEntryParts).toHaveBeenCalledWith(
       "posts",
       "e1",
-      "7.en:2,es:3"
+      "publish",
+      { locales: ["es"], version: "7.en:2,es:3" }
     );
   });
 
@@ -95,28 +111,20 @@ describe("publishing every language", () => {
           ? { id: "e1", _rev: "7.en:3,es:2" }
           : { id: "e1", _rev: "7.en:3" }
     );
-    api.publishAllEntryLocales.mockResolvedValue({ id: "e1" });
-    const { result } = renderHook(
-      () =>
-        usePublishAllLocales({
-          collectionSlug: "posts",
-          silent: true,
-          shown: () => ({ version: "7.en:3", locale: "en", draft: true }),
-        }),
-      { wrapper }
-    );
+    api.publishEntryParts.mockResolvedValue({ id: "e1" });
 
-    await result.current.mutateAsync("e1");
+    await publishSpanish(ENTRY, ENGLISH_COPY);
 
     expect(api.findByID).toHaveBeenCalledWith(
       "posts",
       "e1",
       expect.objectContaining({ locale: "en", draft: true })
     );
-    expect(api.publishAllEntryLocales).toHaveBeenCalledWith(
+    expect(api.publishEntryParts).toHaveBeenCalledWith(
       "posts",
       "e1",
-      "7.en:3,es:2"
+      "publish",
+      { locales: ["es"], version: "7.en:3,es:2" }
     );
   });
 
@@ -136,18 +144,11 @@ describe("publishing every language", () => {
         return read;
       }
     );
-    const { result } = renderHook(
-      () =>
-        usePublishAllLocales({
-          collectionSlug: "posts",
-          silent: true,
-          shown: () => ({ version: "7.en:3", locale: "en", draft: true }),
-        }),
-      { wrapper }
-    );
 
-    await expect(result.current.mutateAsync("e1")).rejects.toThrow();
-    expect(api.publishAllEntryLocales).not.toHaveBeenCalled();
+    await expect(publishSpanish(ENTRY, ENGLISH_COPY)).rejects.toThrow(
+      /changed since you opened it/
+    );
+    expect(api.publishEntryParts).not.toHaveBeenCalled();
   });
 
   it("of a Single from its editor, is refused when the language on screen changed since", async () => {
@@ -157,23 +158,16 @@ describe("publishing every language", () => {
           ? { id: "s1", _rev: "5.en:2,es:1" }
           : { id: "s1", _rev: "5.en:2" }
     );
-    const { result } = renderHook(
-      () =>
-        usePublishAllSingleLocales({
-          slug: "settings",
-          silent: true,
-          shown: () => ({ version: "4.en:1", locale: "en", draft: false }),
-        }),
-      { wrapper }
-    );
 
-    await expect(result.current.mutateAsync()).rejects.toThrow();
-    expect(api.publishAllSingleLocales).not.toHaveBeenCalled();
+    await expect(
+      publishSpanish(SINGLE, { version: "4.en:1", locale: "en", draft: false })
+    ).rejects.toThrow(/changed since you opened it/);
+    expect(api.publishSingleParts).not.toHaveBeenCalled();
   });
 
   it("chooses to overwrite for a caller refused the read of every language", async () => {
-    // A role may publish every language yet read only some of them: the read
-    // is refused, so the publish can carry no version of every language, and
+    // A role may publish yet read only some of the languages: the read is
+    // refused, so the publish can carry no version of every language, and
     // says instead that it is made over whatever each holds.
     api.findByID.mockImplementation(
       async (_slug: string, _id: string, options: { locale?: string }) => {
@@ -186,43 +180,31 @@ describe("publishing every language", () => {
         return { id: "e1", _rev: "7.en:3" };
       }
     );
-    api.publishAllEntryLocales.mockResolvedValue({ id: "e1" });
-    const { result } = renderHook(
-      () =>
-        usePublishAllLocales({
-          collectionSlug: "posts",
-          silent: true,
-          shown: () => ({ version: "7.en:3", locale: "en", draft: true }),
-        }),
-      { wrapper }
-    );
+    api.publishEntryParts.mockResolvedValue({ id: "e1" });
 
-    await result.current.mutateAsync("e1");
+    await publishSpanish(ENTRY, ENGLISH_COPY);
 
-    expect(api.publishAllEntryLocales).toHaveBeenCalledWith(
+    expect(api.publishEntryParts).toHaveBeenCalledWith(
       "posts",
       "e1",
-      OVERWRITE_EVERY_LANGUAGE
+      "publish",
+      { locales: ["es"], version: OVERWRITE_EVERY_LANGUAGE }
     );
   });
 
   it("of a Single sends the version a read of every language gives", async () => {
     api.getDocument.mockResolvedValue({ id: "s1", _rev: "4.en:1,es:1" });
-    api.publishAllSingleLocales.mockResolvedValue({ id: "s1" });
-    const { result } = renderHook(
-      () => usePublishAllSingleLocales({ slug: "settings", silent: true }),
-      { wrapper }
-    );
+    api.publishSingleParts.mockResolvedValue({ id: "s1" });
 
-    await result.current.mutateAsync();
+    await publishSpanish(SINGLE);
 
     expect(api.getDocument).toHaveBeenCalledWith(
       "settings",
       expect.objectContaining({ locale: "all" })
     );
-    expect(api.publishAllSingleLocales).toHaveBeenCalledWith(
-      "settings",
-      "4.en:1,es:1"
-    );
+    expect(api.publishSingleParts).toHaveBeenCalledWith("settings", "publish", {
+      locales: ["es"],
+      version: "4.en:1,es:1",
+    });
   });
 });

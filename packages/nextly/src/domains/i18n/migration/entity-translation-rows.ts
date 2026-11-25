@@ -27,6 +27,10 @@ import {
   TRANSLATION_PROVENANCE_TABLE,
   translationProvenanceTables,
 } from "../../../schemas/translation-provenance";
+import {
+  TRANSLATION_SOURCES_TABLE,
+  translationSourcesTables,
+} from "../../../schemas/translation-sources";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 
 import { labelLegacyArchiveRows } from "./label-legacy-archive-rows";
@@ -64,13 +68,15 @@ export interface RemovedTranslationRows {
    * or for a field group, which keeps none).
    */
   provenanceRowsPurged: number;
+  /** The source text its translations were made from, removed as its provenance is. */
+  sourceRowsPurged: number;
   /** Its translation transition record, removed: 1, or 0 where it had none. */
   transitionRecordsPurged: number;
 }
 
 /**
- * Remove `kind` `slug`'s archive rows, its translation transition record and its provenance
- * records, in that order. Scoped by kind as well as slug throughout: a collection, a Single and a
+ * Remove `kind` `slug`'s archive rows, its translation transition record, its provenance records
+ * and the source text kept beside them, in that order. Scoped by kind as well as slug throughout: a collection, a Single and a
  * field group may share a slug, and the shared tables hold every entity's rows.
  */
 export async function removeEntityTranslationRows(args: {
@@ -147,5 +153,40 @@ export async function removeEntityTranslationRows(args: {
     provenanceRowsPurged = affectedRowCount(result, adapter.dialect);
   }
 
-  return { archiveRowsPurged, provenanceRowsPurged, transitionRecordsPurged };
+  return {
+    archiveRowsPurged,
+    provenanceRowsPurged,
+    sourceRowsPurged: await removeEntitySources(adapter, kind, slug),
+    transitionRecordsPurged,
+  };
+}
+
+/**
+ * Remove the source text kept for `kind` `slug`'s translations, and answer how many rows went: a
+ * later entity of the same kind and slug would otherwise hold a predecessor's content.
+ */
+async function removeEntitySources(
+  adapter: Pick<
+    TranslationRowsAdapter,
+    "dialect" | "tableExists" | "getDrizzle"
+  >,
+  kind: I18nTransitionKind,
+  slug: string
+): Promise<number> {
+  // A field group keeps no provenance, and so no source text.
+  if (kind !== "collection" && kind !== "single") return 0;
+  if (!(await adapter.tableExists(TRANSLATION_SOURCES_TABLE))) return 0;
+  const { nextlyTranslationSources } = translationSourcesTables(
+    adapter.dialect
+  );
+  const result = await adapter
+    .getDrizzle<RowDeleteCapableDb>()
+    .delete(nextlyTranslationSources)
+    .where(
+      and(
+        eq(nextlyTranslationSources.scopeKind, kind),
+        eq(nextlyTranslationSources.scopeSlug, slug)
+      )
+    );
+  return affectedRowCount(result, adapter.dialect);
 }

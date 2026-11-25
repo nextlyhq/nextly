@@ -15,6 +15,8 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { exitStopped, stopWithCommand } from "../../utils/stop-with-command";
+
 export type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
 
 /** Each lockfile and the manager that keeps it. */
@@ -202,16 +204,22 @@ const STDOUT_LIMIT = 16 * 1024 * 1024;
 
 /**
  * Runs `manager <args>` in `cwd` and waits for it to end, keeping the end of
- * what it printed. Stopped through `signal`, the child is ended and its end
- * is still waited for, so nothing it was doing goes on after this returns.
+ * what it printed. A command stopped while it runs stops it, with all it
+ * started, and then ends (`exitStopped`): `onStopped` puts back what the run
+ * may have changed and says what was done, and this never returns.
  */
 export function runManager(
   manager: PackageManager,
   args: readonly string[],
   cwd: string,
-  options: { signal?: AbortSignal } = {}
+  {
+    onStopped = () => "nothing was changed.",
+  }: { onStopped?: () => string } = {}
 ): Promise<ManagerRun> {
-  return new Promise(settle => {
+  return new Promise((settle, fail) => {
+    // In a process group of its own where there are such, so that stopping
+    // it stops the scripts and downloads it started with it.
+    const group = process.platform !== "win32";
     // Through a shell on Windows, where each manager is a `.cmd` shim.
     // It is given no input: a manager or a script waiting for some reads
     // the end of it at once, rather than waiting on a run nobody can answer.
@@ -219,10 +227,9 @@ export function runManager(
       cwd,
       shell: process.platform === "win32",
       stdio: ["ignore", "pipe", "pipe"],
-      // In a process group of its own where there are such, so that stopping
-      // it stops the scripts and downloads it started with it.
-      detached: process.platform !== "win32",
+      detached: group,
     });
+    const watched = stopWithCommand(child, { name: manager, group });
     let stdout = "";
     let output = "";
     const keep = (chunk: string) => {
@@ -233,27 +240,17 @@ export function runManager(
       keep(chunk);
     });
     child.stderr.setEncoding("utf8").on("data", keep);
-    const stop = () => {
-      try {
-        // The whole group: the manager and everything it started.
-        if (process.platform !== "win32" && child.pid !== undefined) {
-          process.kill(-child.pid, "SIGTERM");
-          return;
-        }
-      } catch {
-        // The group is gone already; the child itself is asked below.
-      }
-      child.kill("SIGTERM");
+    const finish = async (status: number | null): Promise<void> => {
+      if (await watched.ended()) await exitStopped(onStopped);
+      settle({ status, stdout, output });
     };
-    options.signal?.addEventListener("abort", stop, { once: true });
     child.on("error", error => {
       keep(`${manager} could not be started: ${error.message}`);
       // A child that never started has no end to wait for.
-      if (child.pid === undefined) settle({ status: null, stdout, output });
+      if (child.pid === undefined) finish(null).catch(fail);
     });
     child.on("close", status => {
-      options.signal?.removeEventListener("abort", stop);
-      settle({ status, stdout, output });
+      finish(status).catch(fail);
     });
   });
 }
