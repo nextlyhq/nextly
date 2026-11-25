@@ -10,6 +10,7 @@ import {
 import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import { recordPluginSchemaVersionFromLedger } from "../../../domains/schema/migrate/plugin/plugin-schema-version";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
+import { ownerRowsToRecord } from "../../../domains/schema/ownership/kept-elements";
 import type { OwnerRecord } from "../../../domains/schema/ownership/owner-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import { createLogger } from "../../utils/logger";
@@ -1388,6 +1389,65 @@ describe("plugin schema version after a rollback", () => {
       },
     });
     expect(owners.map(o => o.schemaVersion)).toEqual([null]);
+  });
+
+  it("leaves what the app's migrations carry for the plugin without a version, and moves the rows its own modules carry", async () => {
+    // As a push records them: a column on a collection's table, which the app's migrations carry,
+    // and an index on another plugin's table, which the plugin's own modules carry.
+    const contributed = ownerRowsToRecord(
+      [
+        {
+          table: "dc_posts",
+          elementKind: "column",
+          elementName: "auth_stamp",
+          owner: { kind: "plugin", id: "auth" },
+        },
+        {
+          table: "core__links",
+          elementKind: "index",
+          elementName: "auth_links_idx",
+          owner: { kind: "plugin", id: "auth" },
+        },
+      ],
+      new Set(["core__links"]),
+      []
+    );
+    expect(contributed.map(each => each.migratedBy)).toEqual([
+      "app",
+      "plugin:auth",
+    ]);
+    const owners = new Map(
+      [ownerRow, ...contributed].map(each => [
+        `${each.tableName} ${each.elementName ?? ""}`,
+        each,
+      ])
+    );
+    await recordPluginSchemaVersionFromLedger({
+      plugin: "auth",
+      migrations,
+      listFileApplies: async () => [
+        row("plugin:auth/001_init", "applied", 1000),
+      ],
+      owners: {
+        read: async () => [...owners.values()],
+        upsert: async rows => {
+          for (const each of rows) {
+            owners.set(`${each.tableName} ${each.elementName ?? ""}`, each);
+          }
+        },
+      },
+    });
+    expect(
+      [...owners.values()].map(each => [
+        each.tableName,
+        each.elementName ?? "",
+        each.schemaVersion,
+      ])
+    ).toEqual([
+      ["auth__identities", "", 1],
+      ["dc_posts", "auth_stamp", null],
+      ["core__links", "auth_links_idx", 1],
+    ]);
   });
 });
 

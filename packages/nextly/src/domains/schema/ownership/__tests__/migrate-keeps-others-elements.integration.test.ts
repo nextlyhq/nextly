@@ -39,6 +39,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../../../__tests__/helpers/fresh-database";
 import { perLanguageStorageSuite } from "../../../../__tests__/storage-layout";
+import { runDbSync } from "../../../../cli/commands/db-sync";
 import { runMigrate } from "../../../../cli/commands/migrate";
 import { runMigrateCreate } from "../../../../cli/commands/migrate-create";
 import type { CommandContext } from "../../../../cli/program";
@@ -1210,6 +1211,31 @@ describe.each(getConfiguredTestDialects())(
       const before = await writtenAt(url);
       wentThrough(await migrate(extendedWith(contributing())));
       expect(await writtenAt(url)).toEqual(before);
+    });
+
+    it("a push after nextly migrate adds no row and changes none", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      wentThrough(
+        await migrateCreate("add_posts", extendedWith(contributing()))
+      );
+      wentThrough(await migrate(extendedWith(contributing())));
+      const rows = await pluginRows(url);
+      const written = await writtenAt(url);
+      expect(rows).toHaveLength(6);
+
+      // As `nextly db:sync` pushes the same configuration.
+      vi.stubEnv("NODE_ENV", "development");
+      tick();
+      const { context, said } = command();
+      state.config = extendedWith(contributing());
+      const code = await run(said, () =>
+        runDbSync({ cwd: state.dir, autoSync: true } as never, context)
+      );
+      expect(code, said.join("\n")).toBe(undefined);
+
+      expect(await pluginRows(url)).toEqual(rows);
+      expect(await writtenAt(url)).toEqual(written);
     });
 
     it("nextly migrate keeps the row of a declared column no file has made yet, and of what a removed plugin left; it drops the row of what is in neither", async () => {
