@@ -46,7 +46,12 @@ import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import { readForeignKeyTargets } from "../pipeline/live-table-facts";
 import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 
-import { droppedEntities, RECORDED_KINDS } from "./registry-history";
+import {
+  droppedEntities,
+  noSlugs,
+  RECORDED_KINDS,
+  type SlugsByKind,
+} from "./registry-history";
 import { endsTheRun, reachStopPoint } from "./stop-points";
 
 /** One dropped entity whose leftovers may remain, with every table it was recorded with. */
@@ -371,6 +376,30 @@ export async function droppedRegistryRowStands(args: {
     }
   }
   return false;
+}
+
+/**
+ * The collections and Singles an applied migration dropped whose slug no collection or Single is
+ * registered under, the two sharing the permissions of a slug. One that cannot be read counts as
+ * registered.
+ */
+export async function droppedAndUnregistered(args: {
+  adapter: DrizzleAdapter;
+  chain: readonly EntitySettingsRecord[];
+}): Promise<SlugsByKind> {
+  const dropped = droppedEntities(args.chain);
+  const gone = noSlugs();
+  for (const kind of ["collection", "single"] as const) {
+    for (const slug of dropped[kind]) {
+      if (isReservedResourceSlug(slug)) continue;
+      if (await registryHolds(args.adapter, "collection", "slug", slug)) {
+        continue;
+      }
+      if (await registryHolds(args.adapter, "single", "slug", slug)) continue;
+      gone[kind].add(slug);
+    }
+  }
+  return gone;
 }
 
 /**

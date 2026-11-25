@@ -11,7 +11,11 @@ import type {
   PermissionRecord,
 } from "../../migrate-create/declared-permissions";
 import type { EntitySettingsRecord } from "../../migrate-create/entity-settings";
-import { orphanScopeOf } from "../permission-orphans";
+import {
+  keepingUnrecordedPlugins,
+  leftoverOrphanScopeOf,
+  orphanScopeOf,
+} from "../permission-orphans";
 
 const ENTITIES: EntitySettingsRecord = {
   collections: {},
@@ -44,6 +48,93 @@ function record(parts: Partial<PermissionRecord>): PermissionRecord {
 const snapshot = (permissions?: PermissionRecord) => ({
   entities: ENTITIES,
   ...(permissions === undefined ? {} : { permissions }),
+});
+
+describe("leftoverOrphanScopeOf", () => {
+  const gone = {
+    collection: new Set(["posts"]),
+    single: new Set<string>(),
+  };
+  const posts = owned(
+    ["read", "posts"],
+    ["update", "posts"],
+    ["publish", "posts"]
+  );
+
+  it("names what any applied record declares for an entity that is gone, and speaks for no owner", () => {
+    const scope = leftoverOrphanScopeOf(
+      [
+        record({
+          collections: { posts, pages: owned(["read", "pages"]) },
+          singles: { posts: owned(["update", "posts"]) },
+        }),
+        undefined,
+        record({ plugins: { forms: owned(["sync", "forms"]) } }),
+      ],
+      gone
+    );
+
+    expect(scope).toEqual({
+      declared: [],
+      declaredByPlugin: new Map(),
+      owners: new Set(),
+      plugins: new Set(["forms"]),
+      retired: [
+        { action: "read", resource: "posts" },
+        { action: "update", resource: "posts" },
+        { action: "publish", resource: "posts" },
+      ],
+    });
+  });
+
+  it.each([
+    ["a Single", { singles: { posts: owned(["read", "posts"]) } }],
+    ["a plugin", { plugins: { flow: owned(["read", "posts"]) } }],
+    ["the app", { app: owned(["read", "posts"]) }],
+  ])("leaves what the newest declares for %s", (_whose, newest) => {
+    const scope = leftoverOrphanScopeOf(
+      [record({ collections: { posts } }), record(newest)],
+      gone
+    );
+
+    expect(scope?.retired).toEqual([
+      { action: "update", resource: "posts" },
+      { action: "publish", resource: "posts" },
+    ]);
+  });
+
+  it("is kept from what a plugin the newest does not record declares", () => {
+    const scope = leftoverOrphanScopeOf(
+      [record({ collections: { posts } }), record({})],
+      gone
+    );
+    const flow = {
+      name: "flow",
+      contributes: { permissions: [{ action: "publish", resource: "posts" }] },
+    };
+
+    const { kept } = keepingUnrecordedPlugins(scope!, {
+      plugins: [flow as never],
+    });
+
+    expect(kept).toEqual([
+      expect.objectContaining({ action: "publish", resource: "posts" }),
+    ]);
+  });
+
+  it("is none where nothing is gone, or the newest says nothing of permissions", () => {
+    const nothing = {
+      collection: new Set<string>(),
+      single: new Set<string>(),
+    };
+    const before = record({ collections: { posts } });
+
+    expect(
+      leftoverOrphanScopeOf([before, record({})], nothing)
+    ).toBeUndefined();
+    expect(leftoverOrphanScopeOf([before, undefined], gone)).toBeUndefined();
+    expect(leftoverOrphanScopeOf([], gone)).toBeUndefined();
+  });
 });
 
 describe("orphanScopeOf", () => {

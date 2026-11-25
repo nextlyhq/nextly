@@ -778,6 +778,7 @@ describeEachDialect("a removal in code, its process killed", dialect => {
   }
 
   it.each([
+    "permissions not marked yet",
     "recorded applied",
     "files recorded",
     "registry written",
@@ -786,8 +787,9 @@ describeEachDialect("a removal in code, its process killed", dialect => {
     "is finished by the next process where one was killed at: %s",
     async point => {
       await removalWritten(dialect);
-      const at =
-        point === "recorded applied" ? `${removal()}: ${point}` : point;
+      const at = /applied|marked/.test(point)
+        ? `${removal()}: ${point}`
+        : point;
 
       const killed = await migrateProcess(at);
 
@@ -802,6 +804,7 @@ describeEachDialect("a removal in code, its process killed", dialect => {
       expect(finished.status, finished.said).toBe(0);
       expect(await deletions(), finished.said).toEqual(EACH_ONCE);
       expect(await captures(), finished.said).toBe(0);
+      expect(await orphanedPermissions(), finished.said).not.toContain(false);
     },
     3 * PROCESS_TIMEOUT
   );

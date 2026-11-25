@@ -82,6 +82,7 @@ import {
 import { outstandingEntityChanges } from "./applied-entity-changes";
 import {
   droppedRegistryRowStands,
+  droppedAndUnregistered,
   everyEntityRegistered,
   removeDroppedEntityLeftovers,
 } from "./dropped-entity-leftovers";
@@ -92,6 +93,10 @@ import {
   readPendingEntities,
   type PendingEntities,
 } from "./pending-entities";
+import {
+  leftoverOrphanScopeOf,
+  type MigrationOrphanScope,
+} from "./permission-orphans";
 import { anySlugs, droppedEntities } from "./registry-history";
 import { readRegistrySource, type RegistrySource } from "./registry-source";
 import { writeRegistryFromSource } from "./registry-writer";
@@ -770,6 +775,46 @@ export async function finishOwedRetirements(
     await underLock(async () => {
       await leftoversOfDroppedEntities(deps);
     });
+  }
+}
+
+/**
+ * What a run marks orphaned of the permissions earlier removals left unmarked
+ * (`leftoverOrphanScopeOf`), and the newest applied migration, whose snapshot
+ * no longer declares them; undefined where no applied migration dropped an
+ * entity that is gone. One that cannot be read is said, and left to the next run.
+ */
+export async function leftoverPermissionsOf(
+  deps: RetirementDeps & Pick<ReconcileMetadataDeps, "migrationsDir">
+): Promise<{ scope: MigrationOrphanScope; migration: string } | undefined> {
+  try {
+    const events = new SchemaEventsRepository(
+      retirementRunOf(deps).db,
+      deps.dialect
+    );
+    const source = await readRegistrySource({
+      migrationsDir: deps.migrationsDir,
+      isApplied: filename => events.isFileApplied(filename),
+    });
+    if (source.kind !== "snapshot") return undefined;
+    const scope = leftoverOrphanScopeOf(
+      source.permissions ?? [],
+      await droppedAndUnregistered({
+        adapter: deps.adapter,
+        chain: source.chain ?? [source.entities],
+      })
+    );
+    return scope === undefined
+      ? undefined
+      : { scope, migration: source.file.replace(/\.snapshot\.json$/, "") };
+  } catch (error) {
+    if (endsTheRun(error)) throw error;
+    deps.logger.warn(
+      `Could not read which permissions deleted entities left: ${
+        error instanceof Error ? error.message : String(error)
+      }. The next \`nextly migrate\` tries again.`
+    );
+    return undefined;
   }
 }
 

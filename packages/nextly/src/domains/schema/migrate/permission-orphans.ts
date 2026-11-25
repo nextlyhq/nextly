@@ -17,7 +17,9 @@
  * has no snapshot of its own to say. A plugin neither knows of (a migration
  * written before the plugin joined the build) keeps its permissions. An
  * entity's built-in permissions have no owner: those of a collection or Single
- * the snapshot before it declares and it does not are orphaned by name. Core's
+ * the snapshot before it declares and it does not are orphaned by name; one a
+ * run could not mark as the file applied (recorded applied by hand, or stopped
+ * before it did) is marked by a later run (`leftoverOrphanScopeOf`). Core's
  * own permissions are in no snapshot, so no migration orphans one. A snapshot without the registry metadata, or written before
  * permissions were recorded, says nothing about permissions and orphans
  * nothing.
@@ -37,6 +39,7 @@ import {
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
 
+import type { SlugsByKind } from "./registry-history";
 import type { RegistryRecord } from "./registry-record";
 
 /** What one applied migration orphans and clears, for `markOrphanedPermissions`. */
@@ -124,6 +127,43 @@ function retiredEntitiesPermissions(
         }))
       )
   );
+}
+
+/**
+ * The scope of what earlier migrations' removals left unmarked: by name, every
+ * permission a record of `records` (the applied snapshots', oldest first)
+ * declares for an entity in `gone`, unless the newest still declares it,
+ * whoever for. It speaks for no owner and clears no mark. Undefined where
+ * there is none, or where the newest says nothing about permissions.
+ */
+export function leftoverOrphanScopeOf(
+  records: readonly (PermissionRecord | undefined)[],
+  gone: Pick<SlugsByKind, "collection" | "single">
+): MigrationOrphanScope | undefined {
+  const newest = records.at(-1);
+  if (newest === undefined) return undefined;
+  const keyOf = (p: { action: string; resource: string }) =>
+    `${p.action.toLowerCase()}|${p.resource.toLowerCase()}`;
+  const declared = new Set(everyPermission(newest).map(keyOf));
+  const recorded = records.flatMap(record =>
+    record === undefined
+      ? []
+      : [
+          ...[...gone.collection].map(slug => record.collections[slug] ?? {}),
+          ...[...gone.single].map(slug => record.singles[slug] ?? {}),
+        ]
+  );
+  const left = recorded
+    .flatMap(owned => Object.values(owned))
+    .filter(each => !declared.has(keyOf(each)));
+  if (left.length === 0) return undefined;
+  return {
+    declared: [],
+    declaredByPlugin: new Map(),
+    owners: new Set(),
+    plugins: new Set(Object.keys(newest.plugins)),
+    retired: left.map(({ action, resource }) => ({ action, resource })),
+  };
 }
 
 /** What a record declares for each plugin it records. */

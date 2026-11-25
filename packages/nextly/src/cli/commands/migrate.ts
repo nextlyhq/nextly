@@ -189,6 +189,7 @@ import {
   asServiceLogger,
   deletionEventsOfRetiredDocuments,
   finishOwedRetirements,
+  leftoverPermissionsOf,
   keptDespiteItsDrop,
   reconcileMigrationMetadata,
   settleRetiredDocumentEvents,
@@ -2782,6 +2783,18 @@ async function finishRetirements(deps: MigrateCoreDeps): Promise<void> {
 }
 
 /**
+ * Marks orphaned the permissions a removal applied in an earlier run left unmarked
+ * (`leftoverPermissionsOf`): its file was recorded applied by hand, or its run stopped first.
+ */
+async function markLeftoverPermissions(deps: MigrateCoreDeps): Promise<void> {
+  if (deps.markOrphanedPermissions === undefined) return;
+  const left = await leftoverPermissionsOf(metadataArgsOf(deps, []));
+  if (left === undefined) return;
+  await assertSchemaLockHeld();
+  await deps.markOrphanedPermissions(left.scope, left.migration);
+}
+
+/**
  * Phase 3's arguments: the registry rows the applied migrations record, and what deleted entities
  * left, for `deps`' run, with the translations tables its judgement covered (`judgedLeftovers`).
  */
@@ -3258,6 +3271,7 @@ export async function migrateCore(
    * over a recorded file and nothing of it may be left for one.
    */
   const afterApplied = async (applied: AppliedAppMigration): Promise<void> => {
+    await reachStopPoint(`${applied.name}.sql: permissions not marked yet`);
     await markOrphans?.(applied);
     await reachStopPoint(`${applied.name}.sql: recorded applied`);
   };
@@ -3597,6 +3611,10 @@ export async function migrateCore(
       // is taken at the point the run ends at, and a migration still pending
       // without the metadata could not apply after it.
       await firstRun.recordMetadata();
+
+      // After Phase 3, which removes a dropped entity's registry row, and before Phase 4, which
+      // makes live what the configuration declares.
+      await markLeftoverPermissions(deps);
 
       // Each inline UNIQUE an earlier release gave a one-to-one no field makes unique any more goes
       // (`letGoOfEarlierInlineUniquesAfterFiles`). After Phase 3: a Builder row its own database left

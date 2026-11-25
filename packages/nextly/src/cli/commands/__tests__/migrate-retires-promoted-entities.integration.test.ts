@@ -617,8 +617,8 @@ describe.each(getConfiguredTestDialects())(
       return { adapter, url: deployed.url, ids };
     }
 
-    /** No table or row of the two is left, and each document has one `deleted` event. */
-    async function expectRowsRetired(
+    /** No table or row of the two is left, each document has one `deleted` event, and their permissions are orphaned. */
+    async function expectRetired(
       adapter: DrizzleAdapter,
       ids: ReadonlyMap<string, string[]>,
       said = ""
@@ -632,19 +632,12 @@ describe.each(getConfiguredTestDialects())(
         expect(await deletionsOf(adapter, entity), said).toEqual(
           Object.fromEntries(ids.get(entity.slug)!.map(id => [id, 1]))
         );
-      }
-    }
-
-    /** And their permissions are orphaned. */
-    async function expectRetired(
-      adapter: DrizzleAdapter,
-      ids: ReadonlyMap<string, string[]>,
-      said = ""
-    ): Promise<void> {
-      await expectRowsRetired(adapter, ids, said);
-      for (const entity of [NOTES, HOME]) {
         const permissions = await permissionsOf(adapter, entity);
-        expect(permissions.every(each => each.orphaned)).toBe(true);
+        expect(permissions.length, entity.slug).toBeGreaterThan(0);
+        expect(
+          permissions.every(each => each.orphaned),
+          `${entity.slug} ${said}`
+        ).toBe(true);
       }
     }
 
@@ -857,10 +850,56 @@ describe.each(getConfiguredTestDialects())(
 
         expect(await migrate(config({}), CONSENT)).toBeUndefined();
         // Each document once, whether the run dropped its table or the operator did.
-        await expectRowsRetired(adapter, ids, which);
+        await expectRetired(adapter, ids, which);
       },
       300_000
     );
+
+    it("keeps the permissions of one made again in the Builder live, once a run marked what the removal left", async () => {
+      const { adapter, url } = await promoted();
+      const { name, tables } = await removalByHand(adapter);
+      for (const table of tables) {
+        await adapter.executeQuery(`DROP TABLE ${table}`);
+      }
+      expect(
+        await command(config({}), context =>
+          runMigrateResolve(
+            { cwd: dir, applied: name } as Parameters<
+              typeof runMigrateResolve
+            >[0],
+            context
+          )
+        )
+      ).toBeUndefined();
+
+      const orphaned = async (entity: Entity) =>
+        (await permissionsOf(adapter, entity)).map(each => each.orphaned);
+      expect(await migrate(config({}), CONSENT)).toBeUndefined();
+      expect(await orphaned(NOTES)).not.toContain(false);
+
+      await start(dialect, { adapter, url });
+      vi.stubEnv("NODE_ENV", "development");
+      try {
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: NOTES.slug,
+            label: NOTES.slug,
+            fields: [text({ name: "body" })],
+          }
+        );
+      } finally {
+        vi.stubEnv("NODE_ENV", "test");
+      }
+      expect(await orphaned(NOTES)).not.toContain(true);
+      expect(await migrate(config({}), CONSENT)).toBeUndefined();
+
+      expect(await orphaned(NOTES)).not.toContain(true);
+      // The Single, which stays gone, is the control.
+      expect(await orphaned(HOME)).not.toContain(false);
+    }, 300_000);
 
     it.each([
       "removed registryRow",
