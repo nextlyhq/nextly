@@ -34,7 +34,11 @@ import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher"
 import { clearRegistryRowCache } from "../../../domains/dynamic-collections/services/collection-row-cache";
 import { ensureI18nArchive } from "../../../domains/i18n/migration/ensure-archive";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
-import { withStopPoints } from "../../../domains/schema/migrate/stop-points";
+import {
+  KILL_AT_VARIABLE,
+  KILLED_AT,
+  withStopPoints,
+} from "../../../domains/schema/migrate/stop-points";
 import { resolveComponentTableName } from "../../../domains/schema/utils/resolve-table-name";
 import {
   createTestNextly,
@@ -44,10 +48,15 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import { _resetEnvCache } from "../../../shared/lib/env";
+import {
+  NEXTLY_RUN_TIMEOUT,
+  runNextly,
+} from "../../__tests__/helpers/run-nextly";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
+import { runMigrateResolve } from "../migrate-resolve";
 
 /** The configuration the commands load. */
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -524,6 +533,7 @@ describe.each(getConfiguredTestDialects())(
      */
     async function promoted(): Promise<{
       adapter: DrizzleAdapter;
+      url: string;
       ids: Map<string, string[]>;
     }> {
       const own = await openDatabase(dialect, "builder");
@@ -576,11 +586,191 @@ describe.each(getConfiguredTestDialects())(
           rows.map(row => (JSON.parse(row) as { id: string }).id)
         );
       }
-      return { adapter, ids };
+      return { adapter, url: deployed.url, ids };
     }
 
+    /** Nothing of the two is left but one `deleted` event for each document. */
+    async function expectRetired(
+      adapter: DrizzleAdapter,
+      ids: ReadonlyMap<string, string[]>,
+      said = ""
+    ): Promise<void> {
+      for (const entity of [NOTES, HOME]) {
+        expect(await tablesOf(adapter, entity), said).toEqual([]);
+        const left = await sharedRowsOf(adapter, dialect, entity);
+        for (const [kind, rows] of Object.entries(left)) {
+          expect(rows, `${entity.slug} ${kind} ${said}`).toEqual([]);
+        }
+        expect(await deletionsOf(adapter, entity), said).toEqual(
+          Object.fromEntries(ids.get(entity.slug)!.map(id => [id, 1]))
+        );
+        const permissions = await permissionsOf(adapter, entity);
+        expect(permissions.every(each => each.orphaned)).toBe(true);
+      }
+    }
+
+    /** The removal written, its drops by hand: its file's name, and the tables it drops, in order. */
+    async function removalByHand(
+      adapter: DrizzleAdapter
+    ): Promise<{ name: string; tables: string[] }> {
+      expect(await migrateCreate(config({}), "retire")).toBeUndefined();
+      const tables = await dropEveryTableByHand(adapter);
+      const name = readdirSync(join(dir, "migrations")).find(file =>
+        file.endsWith("_retire.sql")
+      );
+      return { name: name!, tables };
+    }
+
+    const CONSENT = `${NOTES.table},${HOME.table}`;
+
+    /** `nextly migrate`, stopped at `point`. */
+    const stoppedAt = (point: string) =>
+      withStopPoints(
+        each => {
+          if (each === point) throw new Error(`stopped at ${point}`);
+        },
+        () => migrate(config({}), CONSENT)
+      );
+
+    it("removes nothing when it stops before the first drop, or after any, where the file rolls back", async () => {
+      // MySQL keeps each drop as it runs: resolved below.
+      if (dialect === "mysql") return;
+      const { adapter, ids } = await promoted();
+      const { name, tables } = await removalByHand(adapter);
+      const before = await Promise.all(
+        [NOTES, HOME].map(entity => ownRowsOf(adapter, dialect, entity))
+      );
+      expect(tables.length).toBeGreaterThanOrEqual(6);
+
+      for (const at of [
+        "before statement 1",
+        ...tables.map((_table, n) => `after statement ${n + 1}`),
+      ]) {
+        expect(await stoppedAt(`${name}: ${at}`), at).toMatch(/stopped/);
+        expect(
+          await Promise.all(
+            [NOTES, HOME].map(entity => ownRowsOf(adapter, dialect, entity))
+          ),
+          at
+        ).toEqual(before);
+        expect(await deletionsOf(adapter, NOTES), at).toEqual({});
+      }
+
+      expect(await migrate(config({}), CONSENT)).toBeUndefined();
+      await expectRetired(adapter, ids);
+    }, 300_000);
+
+    it.each(["its first drop", "one between", "its last drop"])(
+      "on MySQL, is finished by hand and recorded where the file stopped after %s",
+      async which => {
+        if (dialect !== "mysql") return;
+        const { adapter, ids } = await promoted();
+        const { name, tables } = await removalByHand(adapter);
+        const ran =
+          which === "its first drop"
+            ? 1
+            : which === "one between"
+              ? tables.length - 1
+              : tables.length;
+
+        expect(await stoppedAt(`${name}: after statement ${ran}`)).toMatch(
+          /stopped/
+        );
+        const refused = await migrate(config({}), CONSENT);
+        expect(refused, "applied").toBeDefined();
+        for (const [n, table] of tables.entries()) {
+          expect(refused).toContain(
+            `statement ${n + 1} (DROP TABLE ${table}) is ${n < ran ? "done" : "not done"}`
+          );
+        }
+        for (const table of tables.slice(ran)) {
+          await adapter.executeQuery(`DROP TABLE ${table}`);
+        }
+        expect(
+          await command(config({}), context =>
+            runMigrateResolve(
+              { cwd: dir, applied: name } as Parameters<
+                typeof runMigrateResolve
+              >[0],
+              context
+            )
+          )
+        ).toBeUndefined();
+
+        expect(await migrate(config({}), CONSENT)).toBeUndefined();
+        // A document of a table an operator dropped by hand was captured only where the run had
+        // reached its drop: the run's own drops end each of theirs.
+        const dropped = new Set(tables.slice(0, ran));
+        for (const entity of [NOTES, HOME]) {
+          expect(await tablesOf(adapter, entity)).toEqual([]);
+          const left = await sharedRowsOf(adapter, dialect, entity);
+          for (const [kind, rows] of Object.entries(left)) {
+            expect(rows, `${entity.slug} ${kind}`).toEqual([]);
+          }
+          expect(await deletionsOf(adapter, entity)).toEqual(
+            dropped.has(entity.table)
+              ? Object.fromEntries(ids.get(entity.slug)!.map(id => [id, 1]))
+              : {}
+          );
+        }
+      },
+      300_000
+    );
+
+    it.each([
+      "removed registryRow",
+      "removed fieldGroupValues",
+      "removed translationRows",
+      "removed leftovers",
+    ])(
+      "is finished by the next process where one was killed at: %s",
+      async at => {
+        const { adapter, url, ids } = await promoted();
+        await removalByHand(adapter);
+        writeFileSync(
+          join(dir, "nextly.config.ts"),
+          `export default ${JSON.stringify({
+            collections: [],
+            localization: LOCALIZATION,
+            db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION },
+          })};\n`
+        );
+        const run = async (killAt?: string) => {
+          const ran = await runNextly(
+            [
+              "migrate",
+              `--accept-data-loss=${CONSENT}`,
+              "--non-interactive",
+              // A killed run leaves its lock until it lapses; nothing else is running here.
+              "--force-unlock",
+            ],
+            dir,
+            {
+              DATABASE_URL: url,
+              DB_DIALECT: dialect,
+              NODE_ENV: "test",
+              [KILL_AT_VARIABLE]: killAt,
+            },
+            2.5 * NEXTLY_RUN_TIMEOUT
+          );
+          return { status: ran.status, said: `${ran.stdout}\n${ran.stderr}` };
+        };
+        const point = `collection ${NOTES.slug}: ${at}`;
+
+        const killed = await run(point);
+        expect(killed.said).toContain(`${KILLED_AT}${point}`);
+
+        const finished = await run();
+        expect(finished.status, finished.said).toBe(0);
+        await expectRetired(adapter, ids, finished.said);
+      },
+      7 * NEXTLY_RUN_TIMEOUT
+    );
+
     /** The removal's file, its drops written by hand: every table of the two, what holds a key to another first. */
-    async function dropEveryTableByHand(adapter: DrizzleAdapter) {
+    async function dropEveryTableByHand(
+      adapter: DrizzleAdapter
+    ): Promise<string[]> {
       const file = readdirSync(join(dir, "migrations")).find(name =>
         name.endsWith("_retire.sql")
       );
@@ -591,14 +781,16 @@ describe.each(getConfiguredTestDialects())(
         ...(await tablesOf(adapter, HOME)),
       ];
       const mains = [NOTES.table, HOME.table];
-      const drops = [
+      const ordered = [
         ...tables.filter(table => !mains.includes(table)),
         ...mains,
-      ].map(table => `DROP TABLE ${table};`);
+      ];
+      const drops = ordered.map(table => `DROP TABLE ${table};`);
       writeFileSync(
         path,
         `${sql.slice(0, sql.indexOf("-- UP"))}-- UP\n${drops.join("\n")}\n\n${sql.slice(sql.indexOf("-- DOWN"))}`
       );
+      return ordered;
     }
 
     it.each([
@@ -637,17 +829,7 @@ describe.each(getConfiguredTestDialects())(
         // Nothing is pending, and no drop runs again.
         expect(await migrate(config({}), consent)).toBeUndefined();
 
-        for (const entity of [NOTES, HOME]) {
-          const left = await sharedRowsOf(adapter, dialect, entity);
-          for (const [kind, rows] of Object.entries(left)) {
-            expect(rows, `${entity.slug} ${kind}`).toEqual([]);
-          }
-          expect(await deletionsOf(adapter, entity)).toEqual(
-            Object.fromEntries(ids.get(entity.slug)!.map(id => [id, 1]))
-          );
-          const permissions = await permissionsOf(adapter, entity);
-          expect(permissions.every(each => each.orphaned)).toBe(true);
-        }
+        await expectRetired(adapter, ids);
         expect(await sharedRowsOf(adapter, dialect, OTHER)).toEqual(other);
       },
       300_000

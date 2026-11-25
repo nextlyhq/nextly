@@ -196,6 +196,10 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
       const refused = await migrate(gone);
       expect(refused, "applied").toBeDefined();
       expect(refused).toContain(removal());
+      // Each statement of it, as done or not done.
+      expect(refused).toMatch(
+        /statement 1 \(DROP TABLE [`"]dc_gt_posts[`"]( CASCADE)?\) is done; statement 2 \(.*?\) is not done/
+      );
       expect(await captures()).toBe(stored);
       expect(await deletions()).toEqual({});
 
@@ -236,6 +240,28 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
       expect(await captures()).toBe(0);
     }
   );
+
+  it("is refused where it was edited to keep a table that is already gone, until it is recorded applied", async () => {
+    const gone = await removalWritten(dialect);
+    await project.adapter.executeQuery(
+      `DROP TABLE ${POSTS}${dialect === "postgresql" ? " CASCADE" : ""}`
+    );
+    const others = statementsOf("upSql").slice(1);
+    edited("remove", sql => sql.replace(DROP, ""));
+
+    // The table's absence is refused first, by its name, as any applied migration's is.
+    const refused = await migrate(gone);
+    expect(refused, "applied").toMatch(/DATABASE_BEHIND_MIGRATIONS/);
+    expect(refused).toContain(POSTS);
+
+    for (const statement of others) {
+      await project.adapter.executeQuery(statement);
+    }
+    expect(await resolved(gone, { applied: removal() })).toBeUndefined();
+    expect(await migrate(gone)).toBeUndefined();
+    // Nothing named its documents before they went.
+    expect(await deletions()).toEqual({});
+  });
 
   it("ends each document once where the file runs outside a transaction", async () => {
     const gone = await removalWritten(dialect);

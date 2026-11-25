@@ -33,6 +33,7 @@ import { createAdapter } from "../../../../database/factory";
 import { clearServices } from "../../../../di/register";
 import { setNonInteractive } from "../../../../domains/schema/migrate/can-prompt";
 import { introspectLiveSnapshot } from "../../../../domains/schema/pipeline/diff/introspect-live";
+import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import {
   createTestNextly,
   type TestDialect,
@@ -54,8 +55,11 @@ export const appConfig = (shape: {
   /** The table `posts` is kept in, where it is not its own. */
   dbName?: string;
   pagesNamePosts: boolean;
+  /** The plugins the app installs; none by default. */
+  plugins?: PluginDefinition[];
 }) =>
   defineConfig({
+    ...(shape.plugins === undefined ? {} : { plugins: shape.plugins }),
     collections: [
       ...(shape.posts === "removed"
         ? []

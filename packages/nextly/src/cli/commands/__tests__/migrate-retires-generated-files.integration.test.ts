@@ -16,11 +16,14 @@ import { join } from "node:path";
 
 import { expect, it, vi } from "vitest";
 
+import { col } from "../../../domains/schema/extension/dsl";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
+import { definePlugin } from "../../../plugins/plugin-context";
 import type { TestDialect } from "../../../plugins/test-nextly";
 
 import {
   appConfig,
+  boot,
   deletions,
   DROP,
   edited,
@@ -321,6 +324,48 @@ describeEachDialect("what generated migrations retire", dialect => {
     expect(await stands(POSTS)).toBe(true);
     expect(await deletions()).toEqual({});
     expect(unrecorded(said)).toEqual([]);
+  });
+
+  it("applies a drop with no snapshot of a collection carrying a plugin's column, as it did before", async () => {
+    const contributor = definePlugin({
+      name: "@test/contributor",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      contributes: {
+        schema: {
+          extend: [
+            ({ schema }) => {
+              schema.extendTable(POSTS, {
+                columns: { searchKey: col.shortText({ nullable: true }) },
+                indexes: [{ columns: ["searchKey"] }],
+              });
+            },
+          ],
+        },
+      },
+    });
+    await boot(dialect);
+    const config = appConfig({
+      posts: "required",
+      pagesNamePosts: false,
+      plugins: [contributor],
+    });
+    expect((await migrateCreate(config, "start")).refused).toBeUndefined();
+    expect(await migrate(config)).toBeUndefined();
+    const quoted = dialect === "mysql" ? `\`${POSTS}\`` : `"${POSTS}"`;
+    writeFileSync(
+      join(
+        project.dir,
+        "migrations",
+        "20261113_130000_000_dropped_by_hand.sql"
+      ),
+      `-- Migration: dropped_by_hand\n\n-- UP\nDROP TABLE ${quoted}${dialect === "postgresql" ? " CASCADE" : ""};\n\n-- DOWN\n`
+    );
+
+    expect(await migrate(config)).toBeUndefined();
+
+    expect(await stands(POSTS)).toBe(false);
+    expect(await deletions()).toEqual({});
   });
 
   it("applies a drop with no snapshot of a collection another still names, as it did before", async () => {
