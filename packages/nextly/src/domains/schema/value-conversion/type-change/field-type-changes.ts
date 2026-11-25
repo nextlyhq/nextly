@@ -752,6 +752,15 @@ function refusalOf(
 }
 
 /**
+ * Why a change of a field kept per language is refused where its translations column would keep its
+ * old type (`changesTranslationsColumn`), in the save's words: the Schema Builder's type picker
+ * shows the same sentence for a type it offers as unavailable, so the two cannot say different
+ * things.
+ */
+export const TRANSLATIONS_COLUMN_KEEPS_ITS_TYPE =
+  "It is kept per language, in a translations table whose column a type change does not convert, so the change can't be deployed yet.";
+
+/**
  * Why a refused change can't go ahead as it stands, beyond its values' own reasons: its translations
  * column, its entity leaving translation, and a value the deploying cast would not clear or rewrite.
  */
@@ -762,11 +771,7 @@ function refusalReasons(of: {
   rewritten: boolean;
 }): string[] {
   const why: string[] = [];
-  if (of.translated) {
-    why.push(
-      "It is kept per language, in a translations table whose column a type change does not convert, so the change can't be deployed yet."
-    );
-  }
+  if (of.translated) why.push(TRANSLATIONS_COLUMN_KEEPS_ITS_TYPE);
   if (of.leaving) {
     why.push(
       "Its entity stops being translated in the same save, which moves each language's value out of the translations table as it is stored: turn off translation and save first, then change the field's type."
