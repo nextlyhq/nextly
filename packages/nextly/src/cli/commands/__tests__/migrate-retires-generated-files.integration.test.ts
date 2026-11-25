@@ -26,6 +26,7 @@ import {
   edited,
   migrate,
   migrateCreate,
+  orphanedPermissions,
   pathOf,
   POSTS,
   project,
@@ -129,13 +130,7 @@ describeEachDialect("what generated migrations retire", dialect => {
       { where: { and: [{ column: "slug", op: "=", value: "gt_posts" }] } }
     );
     expect(rows.map(row => row.tableName)).toEqual(["dc_gt_moved"]);
-    const permissions = await project.adapter.select<{
-      resource: string;
-      orphanedAt: unknown;
-    }>("permissions", {});
-    const own = permissions.filter(each => each.resource === "gt_posts");
-    expect(own.length).toBeGreaterThan(0);
-    expect(own.every(each => each.orphanedAt === null)).toBe(true);
+    expect(await orphanedPermissions()).not.toContain(true);
     expect(await deletions()).toEqual({});
   });
 

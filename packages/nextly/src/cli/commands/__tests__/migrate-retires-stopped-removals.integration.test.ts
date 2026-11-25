@@ -8,8 +8,8 @@
  * `migrate:resolve`. Once the file is recorded applied, the next run finishes, with nothing pending.
  * `migrate:down` ends the documents of what its DOWN drops the same way.
  */
-import { readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 
 import { expect, it, vi } from "vitest";
 
@@ -17,9 +17,17 @@ import { createAdapter } from "../../../database/factory";
 import { retirementCheckpoint } from "../../../domains/schema/migrate/retired-documents";
 import { splitSqlStatements } from "../../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
-import { withStopPoints } from "../../../domains/schema/migrate/stop-points";
+import {
+  KILL_AT_VARIABLE,
+  KILLED_AT,
+  withStopPoints,
+} from "../../../domains/schema/migrate/stop-points";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import type { TestDialect } from "../../../plugins/test-nextly";
+import {
+  NEXTLY_RUN_TIMEOUT,
+  runNextly,
+} from "../../__tests__/helpers/run-nextly";
 import { runMigrateDown } from "../migrate-down";
 import { runMigrateResolve } from "../migrate-resolve";
 
@@ -35,6 +43,7 @@ import {
   insertPost,
   migrate,
   migrateCreate,
+  orphanedPermissions,
   pathOf,
   POSTS,
   postDeleted,
@@ -392,6 +401,7 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
     // Refused: no migration records it declared again. The retirement is finished first.
     expect(await migrate(again)).toBeDefined();
     expect(await deletions()).toEqual(EACH_ONCE);
+    expect(await orphanedPermissions()).not.toContain(false);
 
     expect((await migrateCreate(again, "again")).refused).toBeUndefined();
     expect(await migrate(again)).toBeUndefined();
@@ -403,6 +413,8 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
       )
     ).toEqual([]);
     expect(await deletions()).toEqual(EACH_ONCE);
+    // Declared again, its permissions are live again.
+    expect(await orphanedPermissions()).not.toContain(true);
   });
 
   it("writes nothing before it refuses a configuration with nothing left to finish", async () => {
@@ -501,7 +513,7 @@ describeEachDialect("a collection migrate:down drops", dialect => {
     expect(await stands(POSTS)).toBe(refused !== undefined);
   });
 
-  it("is refused by name, before any statement, where its file was edited to keep the table", async () => {
+  it("is refused, as it was, where its applied file was edited to keep the table", async () => {
     const config = await added();
     edited("add", sql => sql.replace(DROP, ""));
 
@@ -598,4 +610,90 @@ describeEachDialect("captures that cannot be recorded", dialect => {
     expect(await stands(POSTS)).toBe(true);
     expect(await deletions()).toEqual({ p1: 1 });
   });
+});
+
+describeEachDialect("a removal in code, its process killed", dialect => {
+  /** How long one process may take: each compiles the CLI, on a machine other runs share. */
+  const PROCESS_TIMEOUT = 2.5 * NEXTLY_RUN_TIMEOUT;
+
+  /** `nextly migrate` as a real process, killing itself at `killAt` where one is named. */
+  async function migrateProcess(killAt?: string) {
+    const { collections } = appConfig(GONE) as { collections: unknown };
+    writeFileSync(
+      join(project.dir, "nextly.config.ts"),
+      `export default ${JSON.stringify({ collections, db: { migrationsDir: "./migrations" } })};\n`
+    );
+    const ran = await runNextly(
+      [
+        "migrate",
+        "--accept-data-loss",
+        "--non-interactive",
+        // A killed run leaves its lock until it lapses; with nothing else running, the next clears it.
+        "--force-unlock",
+      ],
+      project.dir,
+      {
+        DATABASE_URL: process.env.DATABASE_URL,
+        DB_DIALECT: dialect,
+        NODE_ENV: "test",
+        [KILL_AT_VARIABLE]: killAt,
+      },
+      PROCESS_TIMEOUT
+    );
+    return { status: ran.status, said: `${ran.stdout}\n${ran.stderr}` };
+  }
+
+  it(
+    "is finished by the next process, wherever it was killed once the file was recorded",
+    async () => {
+      await removalWritten(dialect);
+      for (const at of [
+        `${removal()}: recorded applied`,
+        "files recorded",
+        "registry written",
+        "collection gt_posts: recorded deletion events",
+      ]) {
+        const killed = await migrateProcess(at);
+        expect(killed.status, killed.said).not.toBe(0);
+        expect(killed.said).toContain(`${KILLED_AT}${at}`);
+        expect(await stands(POSTS), at).toBe(false);
+        expect(await deletions(), at).toEqual({});
+        expect(await captures(), at).toBeGreaterThan(0);
+      }
+
+      const finished = await migrateProcess();
+
+      expect(finished.status, finished.said).toBe(0);
+      expect(await deletions(), finished.said).toEqual(EACH_ONCE);
+      expect(await captures(), finished.said).toBe(0);
+    },
+    6 * PROCESS_TIMEOUT
+  );
+
+  it(
+    "removes nothing when killed inside the file, and ends each document once when it applies",
+    async () => {
+      // MySQL keeps each drop as it runs: resolved in the suite above.
+      if (dialect === "mysql") return;
+      await removalWritten(dialect);
+      for (const at of [
+        `${removal()}: before statement 1`,
+        "collection gt_posts: captured",
+        `${removal()}: after statement 1`,
+      ]) {
+        const killed = await migrateProcess(at);
+        expect(killed.said).toContain(`${KILLED_AT}${at}`);
+        expect(await stands(POSTS), at).toBe(true);
+        expect(await deletions(), at).toEqual({});
+        expect(await captures(), at).toBe(0);
+      }
+
+      const finished = await migrateProcess();
+
+      expect(finished.status, finished.said).toBe(0);
+      expect(await stands(POSTS), finished.said).toBe(false);
+      expect(await deletions(), finished.said).toEqual(EACH_ONCE);
+    },
+    5 * PROCESS_TIMEOUT
+  );
 });

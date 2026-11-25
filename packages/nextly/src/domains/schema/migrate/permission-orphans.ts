@@ -15,9 +15,10 @@
  * whose permissions the point before it held: the snapshot before it, or the
  * registry baseline where the point before it is the registry record's and
  * has no snapshot of its own to say. A plugin neither knows of (a migration
- * written before the plugin joined the build) keeps its permissions. Core's
- * own permissions are in no snapshot and have no owner, so no migration
- * orphans one. A snapshot without the registry metadata, or written before
+ * written before the plugin joined the build) keeps its permissions. An
+ * entity's built-in permissions have no owner: those of a collection or Single
+ * the snapshot before it declares and it does not are orphaned by name. Core's
+ * own permissions are in no snapshot, so no migration orphans one. A snapshot without the registry metadata, or written before
  * permissions were recorded, says nothing about permissions and orphans
  * nothing.
  *
@@ -108,6 +109,23 @@ export function declarationsOf(
   };
 }
 
+/** The permissions of each collection and Single `then` records and `now` does not. */
+function retiredEntitiesPermissions(
+  then: PermissionRecord,
+  now: PermissionRecord
+): { action: string; resource: string }[] {
+  return (["collections", "singles"] as const).flatMap(kind =>
+    Object.entries(then[kind])
+      .filter(([slug]) => !Object.hasOwn(now[kind], slug))
+      .flatMap(([, owned]) =>
+        Object.values(owned).map(({ action, resource }) => ({
+          action,
+          resource,
+        }))
+      )
+  );
+}
+
 /** What a record declares for each plugin it records. */
 function eachPluginsPermissions(
   record: PermissionRecord
@@ -154,6 +172,7 @@ export function orphanScopeOf(args: {
       declaredByPlugin: eachPluginsPermissions(now),
       owners,
       plugins,
+      retired: retiredEntitiesPermissions(then, now),
     };
   }
   const baseline =

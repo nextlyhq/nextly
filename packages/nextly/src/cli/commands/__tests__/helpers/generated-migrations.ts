@@ -285,6 +285,17 @@ export async function deletions(): Promise<Record<string, number>> {
   return counts;
 }
 
+/** Whether each of `gt_posts`' permissions is orphaned; it has some. */
+export async function orphanedPermissions(): Promise<boolean[]> {
+  const rows = await instance!.adapter.select<{
+    resource: string;
+    orphanedAt: unknown;
+  }>("permissions", {});
+  const own = rows.filter(row => row.resource === "gt_posts");
+  expect(own.length, "permissions of gt_posts").toBeGreaterThan(0);
+  return own.map(row => row.orphanedAt !== null);
+}
+
 /** A `deleted` event of `posts`' document `id`, as an ordinary delete records one. */
 export async function postDeleted(id: string): Promise<void> {
   await instance!.adapter.insert("nextly_content_events", {

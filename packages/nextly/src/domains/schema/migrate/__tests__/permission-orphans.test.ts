@@ -47,6 +47,43 @@ const snapshot = (permissions?: PermissionRecord) => ({
 });
 
 describe("orphanScopeOf", () => {
+  it("names the permissions of each collection and Single the point before declares and it does not", () => {
+    const before = snapshot(
+      record({
+        app: owned(["audit", "reports"]),
+        collections: {
+          posts: owned(["read", "posts"]),
+          pages: owned(["read", "pages"]),
+        },
+        singles: { site: owned(["update", "site"]) },
+      })
+    );
+    const scope = orphanScopeOf({
+      snapshot: snapshot(
+        record({ collections: { pages: owned(["read", "pages"]) } })
+      ),
+      before,
+      previous: null,
+      record: undefined,
+    });
+
+    expect(scope?.retired).toEqual([
+      { action: "read", resource: "posts" },
+      { action: "update", resource: "site" },
+    ]);
+  });
+
+  it("names none where the point before it says nothing", () => {
+    const scope = orphanScopeOf({
+      snapshot: snapshot(record({})),
+      before: snapshot(),
+      previous: null,
+      record: undefined,
+    });
+
+    expect(scope?.retired ?? []).toEqual([]);
+  });
+
   it("declares every permission the snapshot records, whoever owns it", () => {
     const scope = orphanScopeOf({
       snapshot: snapshot(

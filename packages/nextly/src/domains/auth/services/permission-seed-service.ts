@@ -69,6 +69,11 @@ export interface OrphanMarkScope {
    * owner key alone cannot tell the plugin's rows from the app's.
    */
   kept?: readonly { action: string; resource: string }[];
+  /**
+   * The permissions of the collections and Singles the point before declared and this one does not:
+   * an entity's built-in permissions have no owner, so they are named one by one.
+   */
+  retired?: readonly { action: string; resource: string }[];
 }
 
 /** A permission row as the orphan pass reads it, and as a rollback's undo of its marks is judged. */
@@ -120,10 +125,11 @@ function ownersSpokenFor(
 /**
  * The orphan mark the pass gives `row`: true to mark it, false to clear it, or
  * undefined to leave it as it is. A row with no owner is core's or an
- * entity's, and one another owner declares (`kept`) is not the pass's. A mark
- * is set only for an owner the declaration speaks for; one it does not speak
- * for may have added the permission outside it. A permission it declares is
- * live whoever is recorded as its owner, so its mark is cleared.
+ * entity's: it is marked only where it is a retired entity's (`retired`). One
+ * another owner declares (`kept`) is not the pass's. A mark is set only for an
+ * owner the declaration speaks for; one it does not speak for may have added
+ * the permission outside it. A permission it declares is live whoever is
+ * recorded as its owner, so its mark is cleared.
  */
 function orphanMarkFor(
   row: OrphanPassRow,
@@ -131,15 +137,18 @@ function orphanMarkFor(
     declared: ReadonlySet<string>;
     kept: ReadonlySet<string>;
     spokenFor: ReadonlySet<string>;
+    retired: ReadonlySet<string>;
   }
 ): boolean | undefined {
-  if (!row.owner) return undefined;
   const key = orphanPassKey(row);
   if (judged.kept.has(key)) return undefined;
   const isDeclared = judged.declared.has(key);
   if (isDeclared === (row.orphanedAt === null)) return undefined;
-  if (!isDeclared && !judged.spokenFor.has(row.owner)) return undefined;
-  return !isDeclared;
+  if (isDeclared) return false;
+  const marked = row.owner
+    ? judged.spokenFor.has(row.owner)
+    : judged.retired.has(key);
+  return marked ? true : undefined;
 }
 
 /**
@@ -1175,11 +1184,11 @@ export class PermissionSeedService extends BaseService {
    * says so, naming them). `cleanupOrphanedPermissions` retires a marked
    * permission later, on purpose.
    *
-   * Only permissions with an `owner` are considered: core's own and an
-   * entity's built-in ones have none, and their lifecycle follows the release
-   * and the entity. A permission whose owner `scope` does not speak for keeps
-   * its state, as one a plugin's install added that no snapshot has recorded
-   * yet does.
+   * A permission without an `owner` is core's own, which follows the release,
+   * or an entity's built-in one, which follows the entity: it is marked only
+   * where `scope` names it as a retired entity's. A permission whose owner
+   * `scope` does not speak for keeps its state, as one a plugin's install added
+   * that no snapshot has recorded yet does.
    *
    * @param declared - Every permission the declaration names, whoever owns it.
    * @param scope - The owners it speaks for: by name, and each owner of a
@@ -1212,10 +1221,11 @@ export class PermissionSeedService extends BaseService {
         declared: declaredKeys,
         kept: keptKeys,
         spokenFor: ownersSpokenFor(rows, scope),
+        retired: new Set((scope.retired ?? []).map(orphanPassKey)),
       };
       for (const row of rows) {
         const orphaned = orphanMarkFor(row, judged);
-        if (orphaned === undefined || row.owner === null) continue;
+        if (orphaned === undefined) continue;
 
         result.total++;
         await this.writeOrphanMark(row, orphaned);
