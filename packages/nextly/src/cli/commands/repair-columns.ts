@@ -62,6 +62,7 @@ import {
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
+import type { DeclaredNames } from "../utils/migration-discovery";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
 export interface RepairColumnsOptions {
@@ -177,14 +178,12 @@ async function report(
     { dryRunReport },
     { applyRepairs },
     { compileExtensionSchema },
-    { declaredNamesOf },
     { assertAppliedFilesPresent },
   ] = await Promise.all([
     import("../../domains/schema/repair-columns/read-entities"),
     import("../../domains/schema/repair-columns/run-report"),
     import("../../domains/schema/repair-columns/apply"),
     import("../../domains/schema/extension/publish"),
-    import("../../domains/schema/migrate/resolved-schema"),
     import("./migrate"),
   ]);
 
@@ -215,22 +214,16 @@ async function report(
     // A checkout older than the database holds no snapshot of what was last applied, so it is
     // refused as `nextly migrate` refuses it. The declared names tell an old Schema Builder file,
     // as they do there.
-    const checkHistory = async () => {
-      const declared = await declaredNamesOf({
-        projectRoot,
-        config,
-        ...(deferredExtends !== undefined ? { deferredExtends } : {}),
-      });
-      await assertAppliedFilesPresent({
+    const checkHistory = (declared: DeclaredNames) =>
+      assertAppliedFilesPresent({
         adapter,
         db: adapter.getDrizzle(),
         dialect,
         migrationsDir,
         logger,
-        ...(declared !== undefined ? { declared } : {}),
+        declared,
         command: "nextly repair-columns",
       });
-    };
     const readEntities = (waits: TableWaits | undefined) =>
       readRepairEntities({
         ...(overrides !== undefined ? { overrides } : {}),

@@ -77,7 +77,14 @@ import { createContext } from "../../context";
 import { repairColumnsAction } from "../repair-columns";
 
 const TABLE = "dc_rnaposts";
-const FILES = ["0001_first.sql", "0002_second.sql", "0003_third.sql"];
+const FILES = [
+  "0001_first.sql",
+  "0002_second.sql",
+  "0002_second-fix.sql",
+  "0003_third.sql",
+  "20261101_120000_000_posts.sql",
+  "get_started_only.sql",
+];
 const TITLE = f({ name: "title", type: "text" });
 const AUTHOR = { name: "author", type: "relationship", relationTo: "users" };
 /** As 0001 declared them. */
@@ -156,7 +163,8 @@ describe.each(getConfiguredTestDialects())(
     async function migration(
       name: string,
       recorded: { fields: unknown[]; tables: unknown[] } | null,
-      sql = ""
+      sql = "",
+      applied = true
     ) {
       writeFileSync(path(`${name}.sql`), sql);
       if (recorded !== null) {
@@ -179,6 +187,7 @@ describe.each(getConfiguredTestDialects())(
           })
         );
       }
+      if (!applied) return;
       const filename = `${name}.sql`;
       const id = await events().recordStart({
         eventType: "file_apply",
@@ -186,6 +195,13 @@ describe.each(getConfiguredTestDialects())(
         filename,
       });
       await events().markApplied(id, { uniqueFilename: filename });
+    }
+
+    /** Write a migration whose snapshot records `fields`, with the table's columns as they stand. */
+    async function recordedAs(name: string, fields: unknown[]) {
+      const { tables } = await tools.definition(TABLE);
+      const known = (await events().findFileApplies(`${name}.sql`)).length > 0;
+      await migration(name, { fields, tables }, "", !known);
     }
 
     /** Run the command under `--json`, and return its document and exit code. */
@@ -339,7 +355,7 @@ describe.each(getConfiguredTestDialects())(
           "The applied migration `0002_second` has no snapshot in `meta/`.",
         cause:
           "It is newer than `0001_first`, whose snapshot is the newest applied one there is, so what the database last had applied cannot be known.",
-        next: `Restore \`meta/0002_second.snapshot.json\` from version control. For SQL you wrote yourself, which has none, add the line \`${BLANK.trim()}\` to the file's header, then accept the edit with \`nextly migrate:resolve --applied <migration> --skip-verify\`. Then run \`nextly repair-columns\` again.`,
+        next: `Restore \`meta/0002_second.snapshot.json\` from version control. For SQL you wrote yourself, which has none, put its file back if it was removed and add the line \`${BLANK.trim()}\` to its header, above \`-- UP\`, then accept the edit with \`nextly migrate:resolve --applied '0002_second' --skip-verify\`. Then run \`nextly repair-columns\` again.`,
       });
     });
 
@@ -369,7 +385,7 @@ describe.each(getConfiguredTestDialects())(
       await expectUntouched();
     });
 
-    it.each(["sql", "variant"])(
+    it.each(["sql", "variant", "another dialect's variant"])(
       "goes on past a newer localization migration, which has no snapshot (%s)",
       async file => {
         await migration(
@@ -377,12 +393,47 @@ describe.each(getConfiguredTestDialects())(
           null,
           `${LOCALIZATION_MIGRATION_MARKER} companion (create) (i18n)\n`
         );
-        if (file === "variant") {
-          renameSync(path("0003_third.sql"), path(`0003_third.${dialect}.sql`));
+        const variantOf: Record<string, string> = {
+          variant: dialect,
+          "another dialect's variant":
+            dialect === "sqlite" ? "postgresql" : "sqlite",
+        };
+        if (file in variantOf) {
+          renameSync(
+            path("0003_third.sql"),
+            path(`0003_third.${variantOf[file]}.sql`)
+          );
         }
         await expectUntouched();
       }
     );
+
+    it("says to put back a blank migration's file that was removed on purpose", async () => {
+      await migration("0003_third", null, BLANK);
+      rmSync(path("0003_third.sql"));
+      await events().recordRemoval({
+        filename: "0003_third.sql",
+        sha256: "a".repeat(64),
+      });
+      const error = await expectStopped("MISSING_SNAPSHOT");
+      expect(error.next).toContain("put its file back if it was removed");
+      writeFileSync(path("0003_third.sql"), BLANK);
+      await expectUntouched();
+    });
+
+    it("goes on past a hand-named migration, which predates the timestamped ones", async () => {
+      // Run order alone would rank it newest, as a letter sorts after a digit.
+      await migration("get_started_only", null);
+      await recordedAs("20261101_120000_000_posts", SECOND);
+      await expectUntouched();
+    });
+
+    it("reads the newer of two names one of which extends the other", async () => {
+      rmSync(path("meta", "0002_second.snapshot.json"));
+      await recordedAs("0002_second", FIRST);
+      await recordedAs("0002_second-fix", SECOND);
+      await expectUntouched();
+    });
 
     it("goes on past a newer migration without a snapshot that is not applied", async () => {
       writeFileSync(path("0003_third.sql"), "");

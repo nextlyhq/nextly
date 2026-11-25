@@ -9,6 +9,7 @@
  * @module domains/schema/repair-columns/stop-errors
  */
 import { NextlyError } from "../../../errors";
+import { shellQuote } from "../migrate/drift-error";
 import { BLANK_FILE_LINE } from "../migrate/history-line-names";
 
 import {
@@ -210,7 +211,7 @@ export function appliedSnapshotsMissingError(
     {
       what: `The applied ${one ? "migration" : "migrations"} ${listed(migrations.map(name => `\`${name}\``))} ${one ? "has" : "have"} no snapshot in \`meta/\`.`,
       why: `${one ? "It is" : "They are"} newer than \`${newest}\`, whose snapshot is the newest applied one there is, ${UNKNOWN_APPLIED}`,
-      next: `Restore ${snapshots} from version control. For SQL you wrote yourself, which has none, add the line \`${BLANK_FILE_LINE}\` to the file's header, then accept the edit with \`nextly migrate:resolve --applied <migration> --skip-verify\`. Then run \`nextly repair-columns\` again.`,
+      next: `Restore ${snapshots} from version control. For SQL you wrote yourself, which has none, put its file back if it was removed and add the line \`${BLANK_FILE_LINE}\` to its header, above \`-- UP\`, then accept the edit with \`nextly migrate:resolve --applied ${one ? shellQuote(migrations[0]) : "<migration>"} --skip-verify\`. Then run \`nextly repair-columns\` again.`,
     },
     { migrations, newest }
   );

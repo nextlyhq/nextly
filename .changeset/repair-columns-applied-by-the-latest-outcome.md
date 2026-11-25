@@ -30,3 +30,8 @@
 ---
 
 `nextly repair-columns` takes a migration as applied from its latest outcome, as `nextly migrate` does. An attempt recorded after it that failed, stopped or was cleared made the command judge columns by the migration before it, and `--apply` converted correct columns back.
+
+`nextly repair-columns` converts nothing from an older snapshot while a newer migration is applied. It stops, with exit code 1, its dry run included, in two cases it went on in before:
+
+- The checkout lacks a migration the database has applied (`MIGRATION_MISSING`). Pull the missing migration. If its file was removed on purpose, record that with `nextly migrate:resolve --removed <file>`.
+- An applied migration newer than the newest applied snapshot has no snapshot (`MISSING_SNAPSHOT`). Restore the snapshot from version control. A blank migration and a localization migration do not stop it.

@@ -17,6 +17,7 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { DeclaredNames } from "../../../cli/utils/migration-discovery";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 import type { Logger } from "../../../shared/types";
@@ -34,11 +35,10 @@ import {
   type SchemaEventRow,
 } from "../events/schema-events-repository";
 import { blankMigrationNames } from "../migrate/history-line";
-import { compareMigrationBaseNames } from "../migrate/migration-order";
+import { compareMigrationRecency } from "../migrate/migration-order";
 import { readOldBuilderLedger } from "../migrate/old-builder-ledger";
 import {
   DEFAULT_TABLE_NAME_RESOLVERS,
-  declaredNamesOf,
   resolveDeclaredSchema,
 } from "../migrate/resolved-schema";
 import {
@@ -188,6 +188,13 @@ function codeFirstEntities(
   ];
 }
 
+/** The configured side: its entities, whether a manifest is checked out, and the names declared. */
+interface Configuration {
+  entities: ConfiguredEntity[];
+  hasManifest: boolean;
+  declared: DeclaredNames;
+}
+
 /** Where the manifest lists each kind of entity. */
 const MANIFEST_LISTS = {
   collection: "collections",
@@ -212,7 +219,7 @@ const MANIFEST_LISTS = {
 async function builderEntities(
   args: ConfigurationArgs,
   ownerOf: (kind: RecordedKind, slug: string) => string | undefined
-): Promise<{ entities: ConfiguredEntity[]; hasManifest: boolean }> {
+): Promise<Configuration> {
   const { manifest, exists } = await readUiSchema({
     projectRoot: args.projectRoot,
     uiSchemaFile: args.config.db.uiSchemaFile,
@@ -246,7 +253,14 @@ async function builderEntities(
         ...(plugin !== undefined ? { plugin } : {}),
       };
     });
-  return { entities, hasManifest: exists };
+  return {
+    entities,
+    hasManifest: exists,
+    declared: {
+      junctions: declared.junctionsByEntity,
+      tables: declared.declaredTables,
+    },
+  };
 }
 
 /** What the configured side is read from. */
@@ -264,14 +278,14 @@ interface ConfigurationArgs {
  */
 async function configuredEntities(
   args: ConfigurationArgs
-): Promise<{ entities: ConfiguredEntity[]; hasManifest: boolean }> {
+): Promise<Configuration> {
   const owners = pluginOwners(args.config.plugins);
   const ownerOf = (kind: RecordedKind, slug: string) =>
     owners.get(entityKey(kind, slug));
   const builder = await builderEntities(args, ownerOf);
   return {
+    ...builder,
     entities: [...codeFirstEntities(args.config, ownerOf), ...builder.entities],
-    hasManifest: builder.hasManifest,
   };
 }
 
@@ -609,7 +623,7 @@ function newestAppliedRecord(
 ):
   | { file: string; record: EntitySettingsRecord; snapshot: object }
   | undefined {
-  // Lexicographic order is migration order, so the newest is the last one that qualifies.
+  // Ordered by recency, so the newest is the last one that qualifies.
   for (const { file, snapshot, applied } of [...loaded].reverse()) {
     if (!applied) continue;
     const parsed: unknown = snapshot;
@@ -634,19 +648,32 @@ function newestAppliedRecord(
 }
 
 /** What the snapshots are read from, and the app's history check made among the reads. */
-interface SnapshotArgs extends ConfigurationArgs {
+interface SnapshotArgs {
   adapter: DrizzleAdapter;
   dialect: SupportedDialect;
   migrationsDir: string;
-  checkHistory?: () => Promise<void>;
+  /** What the configuration and the manifest declare, of the one read of them. */
+  declared: () => Promise<DeclaredNames>;
+  checkHistory?: (declared: DeclaredNames) => Promise<void>;
 }
 
-/** Whether a migration's file, the base or this dialect's variant, is a localization migration's. */
+/** Every dialect a migration's file can be a variant for. */
+const VARIANT_DIALECTS: readonly SupportedDialect[] = [
+  "sqlite",
+  "postgresql",
+  "mysql",
+];
+
+/**
+ * Whether any of a migration's files is a localization migration's, its variants included: one for
+ * another dialect stands in where this dialect has no file of its own.
+ */
 async function isLocalizationMigration(
-  { migrationsDir, dialect }: Pick<SnapshotArgs, "migrationsDir" | "dialect">,
+  migrationsDir: string,
   name: string
 ): Promise<boolean> {
-  for (const file of [`${name}.sql`, `${name}.${dialect}.sql`]) {
+  const variants = VARIANT_DIALECTS.map(dialect => `${name}.${dialect}.sql`);
+  for (const file of [`${name}.sql`, ...variants]) {
     try {
       const sql = await readFile(resolve(migrationsDir, file), "utf-8");
       if (sql.includes(LOCALIZATION_MIGRATION_MARKER)) return true;
@@ -677,20 +704,16 @@ async function assertNewestHasSnapshot(
   const without = [...read.applied]
     .filter(
       name =>
-        compareMigrationBaseNames(name, newest) > 0 && !withSnapshot.has(name)
+        compareMigrationRecency(name, newest) > 0 && !withSnapshot.has(name)
     )
-    .sort(compareMigrationBaseNames);
+    .sort(compareMigrationRecency);
   if (without.length === 0) return;
   const { migrationsDir, dialect } = args;
-  const declared = await declaredNamesOf(args);
+  const declared = await args.declared();
   const [blank, { ignoredRows }] = await Promise.all([
     blankMigrationNames(migrationsDir, withSnapshot),
     readOldBuilderLedger(
-      {
-        migrationsDir,
-        dialect,
-        ...(declared !== undefined ? { declared } : {}),
-      },
+      { migrationsDir, dialect, declared },
       read.events,
       read.rows
     ),
@@ -698,7 +721,7 @@ async function assertNewestHasSnapshot(
   const missing: string[] = [];
   for (const name of without) {
     if (blank.has(name) || ignoredRows.has(ledgerFilename(name))) continue;
-    if (await isLocalizationMigration(args, name)) continue;
+    if (await isLocalizationMigration(migrationsDir, name)) continue;
     missing.push(name);
   }
   if (missing.length > 0) throw appliedSnapshotsMissingError(missing, newest);
@@ -737,12 +760,14 @@ async function snapshotEntities(args: SnapshotArgs): Promise<SnapshotEntity[]> {
   const loaded = [
     ...withFile,
     ...(await removedSnapshots(metaDir, unread, removed)),
-  ].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+  ].sort((a, b) =>
+    compareMigrationRecency(migrationOf(a.file), migrationOf(b.file))
+  );
   await assertAppliedSnapshotsRead(metaDir, listed, loaded, applied);
   const newest = newestAppliedRecord(loaded);
   // Asked here, so a snapshot that is there is judged as what it is first, and every migration
   // judged below is one the folder holds or whose removal is recorded.
-  await args.checkHistory?.();
+  await args.checkHistory?.(await args.declared());
   if (newest === undefined) return [];
   await assertNewestHasSnapshot(args, {
     events,
@@ -824,21 +849,27 @@ export async function readRepairEntities(args: {
   overrides?: RepairOverrides;
   /**
    * Refuses where the folder lacks an app migration the database has applied, whose snapshot is
-   * the definition last applied: the app's history check, which the caller has.
+   * the definition last applied: the app's history check, which the caller has. It is handed the
+   * names the configuration and the manifest declare, which tell an old Schema Builder file.
    */
-  checkHistory?: () => Promise<void>;
+  checkHistory?: (declared: DeclaredNames) => Promise<void>;
 }): Promise<RepairEntity[]> {
   const { adapter, dialect, logger } = args;
   const codeFields = args.config.users?.fields ?? [];
   // Independent reads, so none waits on another.
+  // Read once: the entities compared and the names the checks are made with are of one read.
+  const configuration = configuredEntities(args);
   const fromDatabase = () =>
     Promise.all([
       registryEntities(adapter, logger),
-      snapshotEntities(args),
+      snapshotEntities({
+        ...args,
+        declared: async () => (await configuration).declared,
+      }),
       userFieldSources(adapter, dialect, logger, codeFields),
     ]);
   const [{ entities: configured, hasManifest }, read] = await Promise.all([
-    configuredEntities(args),
+    configuration,
     args.waits === undefined || dialect !== "sqlite"
       ? fromDatabase().then(value => ({ kind: "done" as const, value }))
       : // SQLite's tries are the whole database's, whichever table names them.
