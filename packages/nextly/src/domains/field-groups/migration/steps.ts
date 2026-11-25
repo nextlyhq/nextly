@@ -18,6 +18,7 @@ import { sql } from "drizzle-orm";
 import { NextlyError } from "../../../errors/nextly-error";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { generateSQL } from "../../schema/pipeline/sql-templates";
+import { countRegistryWriteOn } from "../../schema/schema-version";
 import {
   indexCatalog,
   resolveCatalogName,
@@ -348,6 +349,9 @@ function renameStep(
               SET ${sql.identifier(REGISTRY_TABLE_NAME_COLUMN)} = ${entry.to}
               WHERE ${sql.identifier(REGISTRY_TABLE_NAME_COLUMN)} = ${entry.from}`
         );
+        // Counted as any registry write is, in this transaction: a server keeps the row it read
+        // until the stored count moves, and would go on addressing the table by the name it had.
+        await countRegistryWriteOn(ctx, session.dialect);
         // Written past the registry service, so a component row cached with the old table name
         // is cleared here.
         clearRegistryRowCache();
