@@ -25,6 +25,14 @@ import { SHARED_PATH, type PartsChoice } from "./publish-parts-choice";
 /** The code the publish gate refuses a part with while it holds no current approval. */
 export const NOT_APPROVED = "NOT_APPROVED";
 
+/** Whether a refusal is for want of approval and nothing else. */
+export function refusedForApprovalAlone(refusal: unknown): boolean {
+  const issues = validationIssues(refusal);
+  return (
+    issues.length > 0 && issues.every(issue => issue.code === NOT_APPROVED)
+  );
+}
+
 /** One thing that holds Publish, and how it is resolved. */
 export interface ReadyProblem {
   /** Unique within the list. */

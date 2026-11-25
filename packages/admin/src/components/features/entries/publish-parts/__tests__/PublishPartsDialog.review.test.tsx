@@ -329,7 +329,7 @@ describe("Publish without review", () => {
     open(review([IN_REVIEW_ES], true));
     await screen.findByText(FIRST_TIME_IN_SPANISH);
 
-    await user.click(
+    await pressConfirm(
       screen.getByRole("button", { name: "Publish without review…" })
     );
     const send = screen.getByRole("button", { name: "Publish without review" });
@@ -362,7 +362,7 @@ describe("Publish without review", () => {
     });
     open(review([IN_REVIEW_ES, english], true));
     await screen.findByText(FIRST_TIME_IN_SPANISH);
-    await user.click(
+    await pressConfirm(
       screen.getByRole("button", { name: "Publish without review…" })
     );
     await user.type(
@@ -373,7 +373,7 @@ describe("Publish without review", () => {
     await user.click(screen.getByRole("checkbox", { name: "Spanish" }));
     await user.click(screen.getByRole("checkbox", { name: "English" }));
     await waitFor(() => expect(screen.queryByText(CHECKING)).toBeNull());
-    await user.click(
+    await pressConfirm(
       screen.getByRole("button", { name: "Publish without review" })
     );
 
@@ -382,7 +382,7 @@ describe("Publish without review", () => {
     expect(moves()[0]).not.toHaveProperty("withoutReview");
   });
 
-  it("goes back to the parts, sending nothing, where the parts chosen since are not described yet", async () => {
+  it("waits for the description of the parts chosen since, then publishes them as usual", async () => {
     const user = userEvent.setup();
     const english = part({
       part: "en",
@@ -404,8 +404,7 @@ describe("Publish without review", () => {
         })
     );
     open(review([IN_REVIEW_ES, english], true));
-    await screen.findByText(FIRST_TIME_IN_SPANISH);
-    await user.click(
+    await pressConfirm(
       await screen.findByRole("button", { name: "Publish without review…" })
     );
     await user.type(
@@ -414,19 +413,60 @@ describe("Publish without review", () => {
     );
     await user.click(screen.getByRole("checkbox", { name: "Spanish" }));
     await user.click(screen.getByRole("checkbox", { name: "English" }));
-    await user.click(
-      screen.getByRole("button", { name: "Publish without review" })
-    );
-
-    const publish = await screen.findByRole("button", {
-      name: "Publish selected",
-    });
-    expect(publish).toBeDisabled();
+    const send = screen.getByRole("button", { name: "Publish without review" });
+    expect(send).toBeDisabled();
+    await user.click(send);
     expect(moves()).toEqual([]);
 
     describeEnglish();
-    await pressConfirm(publish);
+    await pressConfirm(send);
     await waitFor(() => expect(moves()).toHaveLength(1));
+    expect(moves()[0]).not.toHaveProperty("withoutReview");
+  });
+
+  it("waits for the server to describe the parts before it is offered for them", async () => {
+    let describeParts: () => void = () => undefined;
+    api.publishParts.mockImplementation(
+      (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
+        new Promise(resolve => {
+          const answer = () => resolve(describing(choice));
+          if (choice.locales === "all") answer();
+          else describeParts = answer;
+        })
+    );
+    open(review([IN_REVIEW_ES], true));
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
+    const past = screen.getByRole("button", {
+      name: "Publish without review…",
+    });
+    expect(past).toBeDisabled();
+
+    describeParts();
+    await waitFor(() => expect(past).toBeEnabled());
+  });
+
+  it.each([
+    ["does not answer", new Error("Network down.")],
+    [
+      "refuses them for another reason as well",
+      refusal([
+        { path: "es", code: "NOT_APPROVED", message: "Not approved." },
+        { path: "title", code: "REQUIRED", message: "This field is required." },
+      ]),
+    ],
+  ])("is held where the server %s", async (_how, error) => {
+    api.publishParts.mockImplementation(
+      (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
+        choice.locales === "all"
+          ? Promise.resolve(describing(choice))
+          : Promise.reject(error)
+    );
+    open(review([IN_REVIEW_ES], true));
+    const past = await screen.findByRole("button", {
+      name: "Publish without review…",
+    });
+    await waitFor(() => expect(screen.queryByText(CHECKING)).toBeNull());
+    expect(past).toBeDisabled();
   });
 
   it("stays usable while the description is refused for want of approval, which it goes past", async () => {
@@ -446,14 +486,14 @@ describe("Publish without review", () => {
       screen.getByRole("button", { name: "Publish selected" })
     ).toBeDisabled();
 
-    await user.click(
+    await pressConfirm(
       screen.getByRole("button", { name: "Publish without review…" })
     );
     await user.type(
       screen.getByRole("textbox", { name: "Reason" }),
       "Legal deadline today."
     );
-    await user.click(
+    await pressConfirm(
       screen.getByRole("button", { name: "Publish without review" })
     );
 
@@ -511,14 +551,14 @@ describe("Publish without review", () => {
     );
     open(review([IN_REVIEW_ES], true));
     await screen.findByText(FIRST_TIME_IN_SPANISH);
-    await user.click(
+    await pressConfirm(
       screen.getByRole("button", { name: "Publish without review…" })
     );
     await user.type(
       screen.getByRole("textbox", { name: "Reason" }),
       "Legal deadline today."
     );
-    await user.click(
+    await pressConfirm(
       screen.getByRole("button", { name: "Publish without review" })
     );
 
@@ -579,14 +619,14 @@ describe("the shared fields a first publish takes", () => {
     );
     open(review([APPROVED_ES, DRAFTED_SHARED], true));
 
-    await user.click(
+    await pressConfirm(
       await screen.findByRole("button", { name: "Publish without review…" })
     );
     await user.type(
       screen.getByRole("textbox", { name: "Reason" }),
       "Legal deadline today."
     );
-    await user.click(
+    await pressConfirm(
       screen.getByRole("button", { name: "Publish without review" })
     );
 
@@ -629,5 +669,54 @@ describe("the shared fields a first publish takes", () => {
       ).toBeEnabled()
     );
     expect(screen.queryByText(SHARED_PROBLEM)).toBeNull();
+  });
+});
+
+describe("a refused publish", () => {
+  const approved = (name: string) =>
+    part({
+      part: name,
+      stage: "approved",
+      stageLabel: "Approved",
+      publishable: true,
+      steps: [],
+    });
+  const PROBLEM = "title: This field is required.";
+
+  it("holds the parts it was of, and no others", async () => {
+    const user = userEvent.setup();
+    const missing = refusal([
+      { path: "title", code: "REQUIRED", message: "This field is required." },
+    ]);
+    api.publishParts.mockImplementation(
+      (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
+        choice.describe !== true && String(choice.locales) === "es"
+          ? Promise.reject(missing)
+          : Promise.resolve(describing(choice))
+    );
+    open(review([approved("es"), approved("en"), APPROVED_SHARED]));
+    const publish = screen.getByRole("button", { name: "Publish selected" });
+    await pressConfirm(publish);
+    await screen.findByText(PROBLEM);
+    expect(publish).toBeDisabled();
+
+    // Another part: the refusal was not of it.
+    await user.click(screen.getByRole("checkbox", { name: "Spanish" }));
+    await user.click(screen.getByRole("checkbox", { name: "English" }));
+    await waitFor(() => expect(publish).toBeEnabled());
+    expect(screen.queryByText(PROBLEM)).toBeNull();
+
+    // The same part again: it is still the one refused.
+    await user.click(screen.getByRole("checkbox", { name: "English" }));
+    await user.click(screen.getByRole("checkbox", { name: "Spanish" }));
+    expect(await screen.findByText(PROBLEM)).toBeInTheDocument();
+    expect(publish).toBeDisabled();
+
+    await user.click(screen.getByRole("checkbox", { name: "Spanish" }));
+    await user.click(screen.getByRole("checkbox", { name: "English" }));
+    await pressConfirm(publish);
+    await waitFor(() =>
+      expect(moves().map(move => move.locales)).toEqual([["es"], ["en"]])
+    );
   });
 });

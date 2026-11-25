@@ -69,12 +69,17 @@ import {
   choosesAnything,
   partsOutcomeSentence,
   refusalsByPart,
+  sameParts,
   sharedSentence,
   SHARED_PATH,
   withLanguage,
   type PartsChoice,
 } from "./publish-parts-choice";
-import { readyProblems, type ReadyProblem } from "./ready-to-publish";
+import {
+  readyProblems,
+  refusedForApprovalAlone,
+  type ReadyProblem,
+} from "./ready-to-publish";
 import { ReadyToPublish, WithoutReviewReason } from "./ReadyToPublish";
 import { usePredictedOutOfDate } from "./usePredictedOutOfDate";
 
@@ -213,6 +218,11 @@ interface DescribedParts {
   checking: boolean;
   /** The server has described the request as it stands: neither asking, refused nor failed. */
   described: boolean;
+  /**
+   * The server has described the request, or refused it for want of approval alone, which
+   * publishing without review goes past.
+   */
+  describedPastReview: boolean;
   /** Why the server refuses the request, if it does. */
   error: Error | null;
 }
@@ -277,6 +287,7 @@ function useDescribedParts({
     enabled: open && !settling,
   });
   if (!editsShared && needsShared(description.error)) setEditsShared(true);
+  const answered = !settling && !beingAsked(description);
   return {
     request,
     chosenAnswer: answerOf(description),
@@ -284,7 +295,10 @@ function useDescribedParts({
     sharedPending: known.sharedPending,
     settling,
     checking: settling || description.isFetching,
-    described: !settling && !beingAsked(description) && !description.isError,
+    described: answered && !description.isError,
+    describedPastReview:
+      answered &&
+      (!description.isError || refusedForApprovalAlone(description.error)),
     error: description.error,
   };
 }
@@ -379,7 +393,10 @@ function useDrawnParts({
   });
 }
 
-/** Publishing or unpublishing the request, and telling whoever asked to be told. */
+/**
+ * Publishing or unpublishing the request, and telling whoever asked to be told. A refusal is of
+ * the parts chosen when it was made: chosen otherwise, they are not refused until they are sent.
+ */
 function usePartsMove({
   target,
   direction,
@@ -389,6 +406,7 @@ function usePartsMove({
   onPublished,
   onOpenChange,
   onRefused,
+  choice,
   request,
 }: Pick<
   PublishPartsDialogProps,
@@ -399,12 +417,19 @@ function usePartsMove({
   | "onDone"
   | "onPublished"
   | "onOpenChange"
-> & { onRefused: () => void; request: PartsChoice }): {
+> & {
+  onRefused: () => void;
+  /** The parts as the person chose them. */
+  choice: PartsChoice;
+  /** What is sent: the choice, less what is not offered. */
+  request: PartsChoice;
+}): {
   confirm: (withoutReview?: string) => Promise<void>;
   pending: boolean;
   error: Error | null;
 } {
   const move = usePublishParts({ target, direction, shown });
+  const [refusedChoice, setRefusedChoice] = useState<PartsChoice | null>(null);
   const confirm = async (withoutReview?: string): Promise<void> => {
     try {
       const done = await move.mutateAsync({
@@ -434,10 +459,17 @@ function usePartsMove({
       onOpenChange(false);
     } catch {
       // Shown in the dialog beside the parts it names; the dialog stays open, back on the parts.
+      setRefusedChoice(choice);
       onRefused();
     }
   };
-  return { confirm, pending: move.isPending, error: move.error };
+  const ofThisChoice =
+    refusedChoice !== null && sameParts(refusedChoice, choice);
+  return {
+    confirm,
+    pending: move.isPending,
+    error: ofThisChoice ? move.error : null,
+  };
 }
 
 /** What holds Publish where a workflow governs the document, each with its fix. */
@@ -514,6 +546,7 @@ export function PublishPartsDialog(
   const { rows, facts } = useDrawnParts({ ...props, choice, parts });
   const move = usePartsMove({
     ...props,
+    choice,
     request,
     onRefused: () => setReason(null),
   });
@@ -533,9 +566,10 @@ export function PublishPartsDialog(
   // Something to send, not on its way already, and no part of it about to be found not offered.
   const ready = choosesAnything(request) && !move.pending && !parts.settling;
   // An ordinary move waits for the server's description of exactly what it sends, and for whatever
-  // "Ready to publish?" lists. Publishing without review goes past a description refused for want
-  // of approval, so only `ready` holds it.
+  // "Ready to publish?" lists. Publishing without review waits for it too, and goes past one
+  // refused for want of approval.
   const held = !parts.described || problems.length > 0;
+  const readyPastReview = ready && parts.describedPastReview;
 
   // Asked again of the parts chosen now: a selection changed while the reason was written may no
   // longer need the bypass, and then it is left and the publish made as usual, never sent past a
@@ -602,7 +636,7 @@ export function PublishPartsDialog(
 
         {reason !== null ? (
           <ReasonFooter
-            ready={ready && reason.trim() !== ""}
+            ready={readyPastReview && reason.trim() !== ""}
             pending={move.pending}
             onBack={() => setReason(null)}
             onConfirm={() => void confirmWithoutReview(reason.trim())}
@@ -612,6 +646,7 @@ export function PublishPartsDialog(
             label={confirmLabelOf(direction, translated)}
             destructive={direction === "unpublish"}
             ready={ready}
+            readyPastReview={readyPastReview}
             held={held}
             pending={move.pending}
             onCancel={() => onOpenChange(false)}
@@ -799,6 +834,7 @@ function ChoiceFooter({
   label,
   destructive,
   ready,
+  readyPastReview,
   held,
   pending,
   onCancel,
@@ -808,6 +844,8 @@ function ChoiceFooter({
   label: string;
   destructive: boolean;
   ready: boolean;
+  /** Publishing without review may go ahead. */
+  readyPastReview: boolean;
   /** The move is not described yet, or something "Ready to publish?" lists holds it. */
   held: boolean;
   pending: boolean;
@@ -824,7 +862,7 @@ function ChoiceFooter({
         <Button
           type="button"
           variant="outline"
-          disabled={!ready}
+          disabled={!readyPastReview}
           onClick={onWithoutReview}
         >
           Publish without review…
