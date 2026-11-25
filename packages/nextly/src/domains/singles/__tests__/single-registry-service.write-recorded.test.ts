@@ -409,6 +409,22 @@ describe("who owns a Single's row", () => {
     expect(ctx.adapter.update).not.toHaveBeenCalled();
   });
 
+  it("moves even where the rest of the update is refused", async () => {
+    storedRow(ctx, dbRow({ source: "code" }));
+    ctx.adapter.select.mockResolvedValue([dbRow({ source: "code" })]);
+    // The owner's write lands; the one of the changed label does not.
+    ctx.adapter.update
+      .mockResolvedValueOnce([dbRow({ source: PLUGIN })])
+      .mockRejectedValueOnce(new Error("already exists"));
+
+    await ctx.service.syncCodeFirstSingles([
+      declared({ source: PLUGIN, label: "Another label" }),
+    ]);
+
+    expect(written()).toMatchObject({ source: PLUGIN, locked: 1 });
+    expect(written()).not.toHaveProperty("label");
+  });
+
   it("is not written where the declaration already owns it", async () => {
     storedRow(ctx, dbRow({ source: PLUGIN }));
     ctx.adapter.select.mockResolvedValue([dbRow({ source: PLUGIN })]);

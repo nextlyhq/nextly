@@ -52,6 +52,9 @@ import {
 } from "../../../domains/public-addresses/public-address";
 import { introspectLiveColumns } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
+import { pluginEntitySources } from "../../../domains/schema/migrate/plugin/plugin-collection-sources";
+import { writeRegistryFromSource } from "../../../domains/schema/migrate/registry-writer";
+import { calculateSchemaHash } from "../../../domains/schema/services/schema-hash";
 import { SingleRegistryService } from "../../../domains/singles/services/single-registry-service";
 import { reloadNextlyConfig } from "../../../init/reload-config";
 import {
@@ -71,6 +74,7 @@ import type { CLIDatabaseAdapter } from "../../utils/adapter";
 import type { LoadConfigResult } from "../../utils/config-loader";
 import { createLogger } from "../../utils/logger";
 import { runDbSync } from "../db-sync";
+import { demoteCollection, demotedCollectionIn } from "../db-sync-demote";
 import { openCollectionRegistry } from "../db-sync-registry";
 import { collectOrphanDeletions } from "../dev-build";
 import { createDebouncedSync } from "../dev-watcher";
@@ -723,5 +727,122 @@ for (const dialect of getConfiguredTestDialects()) {
       });
       expect(await adapter.tableExists(EVENTS_TABLE)).toBe(true);
     }, 240_000);
+
+    it("records the owners even where the run's schema changes are refused", async () => {
+      await dbSync(withPlugin());
+      await recordedAsTheApps();
+      await adapter.executeQuery(
+        `INSERT INTO dc_pks_notes (id, title, slug, body) VALUES ('n1', 'a', 'a', 'kept')`
+      );
+
+      // A field with values leaves, which needs a consent nobody can give here.
+      await expect(
+        dbSync({
+          ...withPlugin(),
+          collections: [
+            defineCollection({
+              slug: NOTES.slug,
+              fields: [text({ name: "other", required: true })],
+            }),
+            EVENTS,
+          ],
+        })
+      ).rejects.toThrow(/confirmation/);
+
+      expect(await owners()).toMatchObject({
+        [SETTINGS.slug]: PLUGIN_SOURCE,
+        [HERO.slug]: PLUGIN_SOURCE,
+      });
+      expect((await orphanTables(withoutPlugin())).sort()).toEqual(
+        [APP_GROUP_TABLE, APP_SINGLE_TABLE].sort()
+      );
+    }, 240_000);
+
+    describe("a collection under a plugin's legacy `collections` key, handed to the Schema Builder", () => {
+      const legacy = {
+        name: PLUGIN,
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        collections: [EVENTS],
+      };
+      const config = () =>
+        defineConfig({
+          collections: [NOTES, EVENTS],
+          plugins: [legacy] as never,
+        });
+      const collections = () =>
+        new CollectionRegistryService(adapter, quiet as never);
+      const demote = () =>
+        demoteCollection({
+          collection: EVENTS as never,
+          logger: createLogger({ quiet: true }),
+          registry: collections(),
+          adapter,
+          confirm: async () => true,
+        });
+      async function builderAddsAField(): Promise<void> {
+        const held = await collections().getCollectionBySlug(EVENTS.slug);
+        const fields = [
+          ...(held?.fields ?? []),
+          { name: "subtitle", type: "text" },
+        ] as never;
+        await collections().updateCollection(EVENTS.slug, {
+          fields,
+          schemaHash: calculateSchemaHash(fields),
+        });
+      }
+      async function staysTheBuilders(): Promise<void> {
+        const held = await collections().getCollectionBySlug(EVENTS.slug);
+        expect(held).toMatchObject({ source: "ui", locked: false });
+        expect((held?.fields ?? []).map(field => field.name)).toContain(
+          "subtitle"
+        );
+      }
+
+      it("stays the Builder's, with what the Builder added, on a sync and a reload", async () => {
+        // As an earlier release left it: recorded as the app's, then demoted.
+        await dbSync(defineConfig({ collections: [NOTES, EVENTS] }));
+        await demote();
+        await builderAddsAField();
+
+        await dbSync(config());
+        await staysTheBuilders();
+        await reload(config());
+        await staysTheBuilders();
+      }, 240_000);
+
+      it("is still one a demote may hand over, once it is recorded as the plugin's", async () => {
+        await dbSync(config());
+        expect((await owners())[EVENTS.slug]).toBe(PLUGIN_SOURCE);
+
+        expect(
+          demotedCollectionIn(EVENTS.slug, config() as never)
+        ).toMatchObject({ slug: EVENTS.slug });
+        await demote();
+        await builderAddsAField();
+        await dbSync(config());
+        await staysTheBuilders();
+      }, 240_000);
+
+      it("is left to the Builder by migrate's registry write", async () => {
+        await dbSync(defineConfig({ collections: [NOTES, EVENTS] }));
+        await demote();
+        await builderAddsAField();
+
+        await writeRegistryFromSource(
+          {
+            kind: "snapshot",
+            file: "0001_after_the_demote.sql",
+            entities: configurationRegistryRows({ collections: [EVENTS] }),
+          },
+          {
+            adapter,
+            logger: quiet as never,
+            entitySources: pluginEntitySources([legacy] as never),
+          }
+        );
+        await staysTheBuilders();
+      }, 240_000);
+    });
   });
 }
