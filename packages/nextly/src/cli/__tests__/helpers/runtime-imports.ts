@@ -5,7 +5,7 @@
  * neither counts.
  */
 import { isBuiltin } from "node:module";
-import { relative, resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { build, type Metafile } from "esbuild";
@@ -39,7 +39,15 @@ export async function runtimeImportsOf(entry: string): Promise<RuntimeImports> {
     packages: "external",
     outdir: resolve(SOURCE, "unwritten"),
   });
-  return walk(metafile, relative(SOURCE, resolve(SOURCE, entry)));
+  return walk(metafile, inputName(relative(SOURCE, resolve(SOURCE, entry))));
+}
+
+/**
+ * `path` as esbuild names an input: with forward slashes on every platform,
+ * Windows among them, whose own separator is a backslash.
+ */
+export function inputName(path: string, separator: string = sep): string {
+  return path.split(separator).join("/");
 }
 
 /** The modules and packages `entry` reaches in `metafile` through static imports. */
