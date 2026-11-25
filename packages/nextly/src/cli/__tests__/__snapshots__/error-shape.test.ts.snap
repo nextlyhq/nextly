@@ -840,6 +840,13 @@ exports[`each code, as a command ends with it > DEMOTE_COLLECTION_NOT_FOUND 1`] 
   Docs: https://nextlyhq.com/docs/cli/errors/demote-collection-not-found  (DEMOTE_COLLECTION_NOT_FOUND)"
 `;
 
+exports[`each code, as a command ends with it > DEMOTE_LOSES_UNIQUE_INDEX 1`] = `
+"✗ Collection 'posts' was not demoted: it would lose its unique index on (tenant, code).
+  Why:  The Schema Builder cannot hold an index declared in \`indexes\`. The next schema sync would drop it, and entries that repeat those values would be accepted from then on, unless another unique field refuses them.
+  Next: Keep 'posts' in code, or give the rule up first: take it out of \`indexes\` in \`nextly.config.ts\` (an index on one field can be \`unique: true\` on that field instead), then demote.
+  Docs: https://nextlyhq.com/docs/cli/errors/demote-loses-unique-index  (DEMOTE_LOSES_UNIQUE_INDEX)"
+`;
+
 exports[`each code, as a command ends with it > DEMOTE_PLUGIN_COLLECTION 1`] = `
 "✗ Collection 'posts' is contributed by the plugin '@acme/forms', so it cannot be demoted.
   Why:  \`--demote\` hands a collection the app's own \`nextly.config.ts\` defines to the Schema Builder. A plugin registers its collections again at every start, so a plugin's collection stays the plugin's.
