@@ -85,10 +85,15 @@ them as changes: they alone do not fail `migrate:check`. The next migration `mig
 writes records them, and from then on a change to them is reported like any other.
 
 Such a snapshot, and the one `nextly migrate:baseline` writes, does not say what a translations table
-holds either: its unique indexes, and the column a repeater's or group's translated text is kept in.
-The files `migrate:create` would write for them are named in a notice ("Translations tables not
-recorded yet in a migration") by `nextly migrate:check`, `nextly migrate` and a production start that
-runs migrations, and none of them is refused. A change to the main table still is.
+holds either: its columns, and its unique indexes. What `nextly migrate` would make there is named in
+a notice ("Translations tables not recorded yet in a migration") by `nextly migrate:check`,
+`nextly migrate` and a production start that runs migrations, and none of it is refused. A change to
+the main table still is.
+
+The notice is given over any later snapshot too for the column a repeater's or group's translated text
+is kept in, where a release that keeps it there asks for it and nothing you declared of that
+collection, Single or field group has changed. `nextly migrate` makes it. Where something did change,
+it is reported with that change, like any other.
 
 ### A migration that deletes data
 
