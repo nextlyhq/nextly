@@ -513,9 +513,9 @@ describe.each(LOCK_DIALECTS)(
       const named = `${posts},${home}`;
       const message = await refusedUnchanged(() => migrate(consentFor(named)));
       // The main table is named, so it is no part of the refusal; what it owns must be named too.
-      expect(message).toContain(`table ${home}_locales (1 row)`);
-      expect(message).toContain(`table ${home}_links (1 row)`);
-      expect(message).not.toContain(`table ${home} (1 row)`);
+      expect(message).toContain(`table ${home}_locales\n`);
+      expect(message).toContain(`table ${home}_links\n`);
+      expect(message).not.toContain(`table ${home}\n`);
 
       await migrate(consentFor(`${named},${home}_locales,${home}_links`));
       const after = await databaseState();

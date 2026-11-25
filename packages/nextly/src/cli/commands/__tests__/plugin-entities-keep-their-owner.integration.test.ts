@@ -506,7 +506,7 @@ for (const dialect of getConfiguredTestDialects()) {
           const write = (slug: string) =>
             nextly.updateSingle({
               slug: slug as never,
-              data: { brand: "Changed" } as never,
+              data: { brand: "Changed", _overwrite: true } as never,
             });
           await write(SETTINGS.slug);
           expect(
