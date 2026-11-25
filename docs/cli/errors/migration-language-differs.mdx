@@ -15,6 +15,10 @@ A field whose values are kept per language can be made required while some entri
 
 Where the project's default language is another one, the same statements settle other entries. A delete removes entries that are complete in the default language, and a fill writes another language's values. `nextly migrate` compares the two before any statement and refuses the file, naming both languages. It refuses a file that holds such an answer and records no language too, since nothing says which one it was decided in.
 
+A file whose answer has nothing to settle in the database is not refused. The language decides nothing where there are no entries: in a new database, or where the entity's table and its translations table are missing or empty before the run. A table that another statement of the run renames into place counts as holding entries when it stands under its earlier name, and so does one that cannot be read.
+
+Rows the run itself adds are not seen. If a pending migration written by hand puts rows in the table before the file that answers, in the same run, the file is not refused for those rows. Check such a run by hand.
+
 The default language is the one `localization.defaultLocale` declares in the configuration. Without it, it is the one set in Settings, and `en` where no languages are set.
 
 ## Fix

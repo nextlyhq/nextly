@@ -192,23 +192,44 @@ function perLanguageStatements(
 
 /** One identifier, quoted as any of the dialects quotes it. */
 const QUOTED = '["`][^"`]+["`]';
+/** The same, its name captured: a table. */
+const TABLE = '["`]([^"`]+)["`]';
 
 /**
- * The first statements of `perLanguageStatements`, a delete's and a fill's, as a file holds them:
- * what a file that settles a field kept per language is known by, whatever its header says.
+ * The statements of `perLanguageStatements` as a file holds them, each with the tables it names: a
+ * delete's (the entity's and its translations table), and a fill's two (the translations table
+ * alone, then with the entity's). What a file that settles a field kept per language is known by,
+ * whatever its header says.
  */
-const SETTLES_PER_LANGUAGE = [
-  new RegExp(
-    `DELETE FROM ${QUOTED} WHERE ["\`]id["\`] NOT IN \\(SELECT DISTINCT ["\`]_parent["\`] FROM ${QUOTED} WHERE ["\`]_locale["\`] = '`
+const SETTLES = {
+  delete: new RegExp(
+    `DELETE FROM ${TABLE} WHERE ["\`]id["\`] NOT IN \\(SELECT DISTINCT ["\`]_parent["\`] FROM ${TABLE} WHERE ["\`]_locale["\`] = '`
   ),
-  new RegExp(
-    `UPDATE ${QUOTED} SET [\\s\\S]*, ["\`]_updated_at["\`] = [\\s\\S]* WHERE ["\`]_locale["\`] = '(?:[^']|'')*' AND ${QUOTED} IS NULL`
+  fill: new RegExp(
+    `UPDATE ${TABLE} SET [\\s\\S]*, ["\`]_updated_at["\`] = [\\s\\S]* WHERE ["\`]_locale["\`] = '(?:[^']|'')*' AND ${QUOTED} IS NULL`
   ),
-];
+  add: new RegExp(
+    `INSERT INTO ${TABLE} \\(["\`]_parent["\`], ["\`]_locale["\`], ["\`]_updated_at["\`], ${QUOTED}\\) SELECT ["\`]id["\`], [\\s\\S]* FROM ${TABLE} WHERE ["\`]id["\`] NOT IN \\(SELECT ["\`]_parent["\`] FROM \\(SELECT DISTINCT `
+  ),
+};
 
-/** Whether `statement` is one that settles a field kept per language (`perLanguageStatements`). */
-export function settlesPerLanguage(statement: string): boolean {
-  return SETTLES_PER_LANGUAGE.some(shape => shape.test(statement));
+/** The tables one settling statement names: the translations table, and the entity's where it does. */
+export interface SettledTables {
+  companion: string;
+  main: string | undefined;
+}
+
+/**
+ * The tables `statement` names where it is one that settles a field kept per language
+ * (`perLanguageStatements`); undefined for any other.
+ */
+export function settledTablesOf(statement: string): SettledTables | undefined {
+  const deletes = SETTLES.delete.exec(statement);
+  if (deletes !== null) return { main: deletes[1], companion: deletes[2] };
+  const adds = SETTLES.add.exec(statement);
+  if (adds !== null) return { main: adds[2], companion: adds[1] };
+  const fills = SETTLES.fill.exec(statement);
+  return fills === null ? undefined : { main: undefined, companion: fills[1] };
 }
 
 /** `value` as the JSON text a JSON column stores; refused where it has none. */

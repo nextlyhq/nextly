@@ -5,16 +5,17 @@
  * default language, and its statements hold that language as it was when the file was written.
  * Where the database's default is another one, the same statements settle other rows: a delete
  * removes entries complete in this default, a fill writes another language's rows. So a run refuses
- * such a file, naming both languages, and one that holds an answer and records no language.
+ * such a file, naming both languages, and one that holds an answer and records no language; where
+ * the answer has no entry to settle (`answered-entries`), the file runs whatever its language.
  *
  * @module domains/i18n/migration/answer-language
  */
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-
 import { NextlyError } from "../../../errors/nextly-error";
 import { splitSqlStatements } from "../../schema/migrate/split-sql";
-import { settlesPerLanguage } from "../../schema/pipeline/sql-templates/resolution-statements";
+import { settledTablesOf } from "../../schema/pipeline/sql-templates/resolution-statements";
 import { standardLanguageCode } from "../config/standard-code";
+
+import { type AnswerRun, mayHaveEntriesToSettle } from "./answered-entries";
 
 /** A migration file as this judges it. */
 interface AnsweringFile {
@@ -50,29 +51,33 @@ export function answerLanguageRefusal(
 
 /**
  * Those of `files` whose answers are decided in another language than `defaultLanguage` gives, or
- * that record none. `defaultLanguage` is asked only where a file holds an answer.
+ * that record none, and may have an entry to settle in the database `run` starts from.
+ * `defaultLanguage` is asked only where a file holds an answer, and the entries only where its
+ * language differs.
  */
 export async function answerLanguageRefusals(
   files: readonly AnsweringFile[],
-  dialect: SupportedDialect,
+  run: AnswerRun,
   defaultLanguage: () => Promise<string>
 ): Promise<{ refusals: AnswerLanguageRefusal[]; runsIn: string | undefined }> {
   const answering = files.filter(
     file =>
       file.answersIn !== undefined ||
-      splitSqlStatements(file.upSql, dialect, file).some(settlesPerLanguage)
+      splitSqlStatements(file.upSql, run.dialect, file).some(
+        statement => settledTablesOf(statement) !== undefined
+      )
   );
   if (answering.length === 0) return { refusals: [], runsIn: undefined };
   const runsIn = standard(await defaultLanguage());
-  return {
-    runsIn,
-    refusals: answering
-      .filter(
-        ({ answersIn }) =>
-          answersIn === undefined || standard(answersIn) !== runsIn
-      )
-      .map(file => answerLanguageRefusal(file, runsIn)),
-  };
+  const refusals: AnswerLanguageRefusal[] = [];
+  for (const file of answering) {
+    const { answersIn } = file;
+    if (answersIn !== undefined && standard(answersIn) === runsIn) continue;
+    if (await mayHaveEntriesToSettle(file, run)) {
+      refusals.push(answerLanguageRefusal(file, runsIn));
+    }
+  }
+  return { runsIn, refusals };
 }
 
 /**
@@ -83,12 +88,12 @@ export async function answerLanguageRefusals(
  */
 export async function refuseAnswersInAnotherLanguage(
   files: readonly AnsweringFile[],
-  dialect: SupportedDialect,
+  run: AnswerRun,
   defaultLanguage: () => Promise<string>
 ): Promise<void> {
   const { refusals, runsIn } = await answerLanguageRefusals(
     files,
-    dialect,
+    run,
     defaultLanguage
   );
   if (refusals.length === 0 || runsIn === undefined) return;

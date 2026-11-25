@@ -1778,7 +1778,15 @@ export async function previewMigrate(args: {
   // The files a real run refuses for the language their answers are decided in.
   const { refusals: languageRefusals } = await answerLanguageRefusals(
     pendingFiles,
-    dialect,
+    {
+      units: [
+        ...moduleRuns,
+        ...pendingFiles.map(file => fileUnit(file, dialect)),
+      ],
+      adapter: adapter as unknown as DrizzleAdapter,
+      db,
+      dialect,
+    },
     () => defaultLanguageOf({ adapter, defaultLanguage: args.defaultLanguage })
   );
   for (const { file, message } of languageRefusals) {
@@ -3987,10 +3995,23 @@ async function judgeFileDeletions(
   );
   // A file whose answers are decided in another language than this database's default settles other
   // rows than the ones they were given for, so it is refused here too, before any statement and
-  // before anyone is asked to consent to what it deletes (`refuseAnswersInAnotherLanguage`).
+  // before anyone is asked to consent to what it deletes (`refuseAnswersInAnotherLanguage`). One
+  // with no entry to settle here is not.
   await refuseAnswersInAnotherLanguage(
     appFilesInStep(listed, appStepAfter(deps.step, modules.length)),
-    deps.dialect,
+    {
+      units: [
+        ...modules,
+        ...appFileUnits(
+          listed,
+          appStepAfter(deps.step, modules.length),
+          deps.dialect
+        ),
+      ],
+      adapter: deps.adapter as unknown as DrizzleAdapter,
+      db: deps.db,
+      dialect: deps.dialect,
+    },
     () => defaultLanguageOf(deps)
   );
   const units = [...modules, ...fileUnits];
