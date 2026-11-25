@@ -53,13 +53,15 @@ Conditional visibility supports type-aware operators (`equals`, `notEquals`, `co
 
 **Change type…** is in a field's settings and in its row menu. It opens the field picker on the field. A field you have not saved yet can become any type the Builder offers. A group or repeater that holds fields can become only the other, which keeps them.
 
-For a saved field, the picker marks each type by what the change does to the saved values: keeps every value, converts the values, or may lose some. A type the save would refuse whatever the values hold is shown as unavailable, with the reason. The save then checks every stored value, and refuses a change that would lose or cut one, naming the field.
+For a saved field, the picker marks each type by what the change does to the saved values: keeps every value, converts the values, or may lose some. A type the save would refuse whatever the values hold is shown as unavailable, with the reason. The save then checks the stored values, and refuses a change that would lose or cut one, naming the field. Inside a group or repeater it does not check the text kept in each language, and it does not rewrite values yet: a change that would have to rewrite one, such as a number becoming text, is refused there, even where the picker says it converts.
 
 The field keeps its name, label and help text, where and when it shows, Unique, Index, and the settings the new type also has. Its default value is dropped.
 
 **Localized** is kept where you have set it. A field you never set it on follows its type (see [Choose what gets translated](/docs/localization#choose-what-gets-translated)), so a text that becomes a number stops being translated. On a saved translated field that change is unavailable until you turn Localized off on the field and save. A field not saved yet that becomes a group or repeater does not take Localized with it: those have one structure in every language, and the fields inside choose what is translated.
 
 Text inside a group or repeater is translated beside its structure (see [Repeaters, groups and components keep one structure](/docs/localization#repeaters-groups-and-components-keep-one-structure)), and two changes of it are unavailable. A type that stops translating the text would hide it in every language, and each language's text would then be dropped the next time the group or repeater is saved in that language. A type that keeps it translated and does not keep every value can't be checked there yet. Add a new field beside it instead.
+
+The reverse is unavailable too: a value every language shares inside a group or repeater, such as a select or a date, becoming a type that is translated there. The next time the group or repeater is saved in one language, that language would take the value and the others would lose it. Turn Localized off on the field and save, then change its type: the value stays shared.
 
 ### Settings dialog
 
