@@ -75,6 +75,12 @@ type AnsweredSave =
       settled: "summary";
     }
   | {
+      name: "added beside a container";
+      fields: Record<string, unknown>[];
+      answers: Record<string, unknown>;
+      settled: "summary";
+    }
+  | {
       name: "renamed";
       fields: Record<string, unknown>[];
       answers: Record<string, unknown>;
@@ -329,6 +335,32 @@ export function settleAnswerCases(args: {
             ],
           },
         },
+        // The container keeps its text inside, so the save's translations table takes a column for
+        // it too, in a file of its own after the one that adds the text field's.
+        {
+          name: "added beside a container",
+          settled: "summary",
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "note", type: "text" },
+            {
+              name: "slides",
+              type: "repeater",
+              fields: [{ name: "caption", type: "text" }],
+            },
+            { name: "summary", type: "text", required: true },
+          ],
+          answers: {
+            ...(translated ? { localized: true } : {}),
+            eventResolutions: [
+              {
+                kind: "provide_default",
+                eventId: `add_required_field_no_default:${MAIN}.summary`,
+                value: "summed",
+              },
+            ],
+          },
+        },
         {
           name: "renamed",
           settled: "remark",
@@ -486,7 +518,7 @@ export function settleAnswerCases(args: {
       for (const translated of translations) {
         for (const answered of savesFor(translated)) {
           const kind = translated ? "a translated" : "an untranslated";
-          const filling = answered.name === "added";
+          const filling = answered.name !== "renamed";
 
           it(`passes ${kind} collection's file that ${filling ? "fills" : "deletes"} through migrate:check, a second database and a second run (${answered.name})`, async () => {
             const { before, after, later } = await built(translated, answered);
@@ -550,6 +582,36 @@ export function settleAnswerCases(args: {
               expected
             );
           }, 240_000);
+
+          if (answered.name === "added beside a container") {
+            it(`fills ${kind} collection's field in the last translations-table file of a save that adds a container beside it`, async () => {
+              const { before, after } = await built(translated, answered);
+              const written = files(after).filter(
+                name => !files(before).includes(name)
+              );
+              const touching = (text: RegExp) =>
+                written.filter(name => text.test(runs(after, name)));
+              const companion = `${COMPANION}[^;]*`;
+              const summaryAdded = touching(
+                new RegExp(`${companion}ADD (COLUMN )?.summary.`)
+              );
+              const overlayAdded = touching(
+                new RegExp(`${companion}ADD (COLUMN )?.slides.`)
+              );
+              const filled = touching(
+                /UPDATE .dc_posts_locales. SET .summary./
+              );
+
+              // One file each, and the fill after both: its column is there by then.
+              expect(summaryAdded).toHaveLength(1);
+              expect(overlayAdded).toHaveLength(1);
+              expect(filled).toEqual([written.at(-1)]);
+              expect(written.indexOf(filled[0]!)).toBeGreaterThanOrEqual(
+                written.indexOf(summaryAdded[0]!)
+              );
+              expect(filled).toEqual(overlayAdded);
+            }, 240_000);
+          }
 
           if (filling) continue;
 

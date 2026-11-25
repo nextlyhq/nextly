@@ -3115,10 +3115,10 @@ function companionRenameStatements(
  * (`refusalsForTranslatedFieldRenamedAndReshaped`).
  *
  * In a translated entity, a container keeping its text inside is a candidate the same way, by its
- * overlay column (`overlayColumns`), paired only with another container's: renamed, its structure column on the
- * main table follows the main-table rename, and its overlay keeps every language's text under the
- * new name rather than leaving it in a column no read names. An overlay holds JSON on either side,
- * so it is never refused as reshaped.
+ * overlay column (`overlayColumns`), paired only with another container's: renamed, its structure
+ * column on the main table follows the main-table rename, and its overlay keeps every language's
+ * text under the new name rather than leaving it in a column no read names. An overlay holds JSON
+ * on either side, so it is never refused as reshaped.
  */
 async function companionRenameDecisions(
   entities: readonly TaggedConfigEntity[],
