@@ -222,14 +222,17 @@ describe("opensIn", () => {
 
   it("changes no schema hash, so no migration is asked for", () => {
     const declared = (opensIn?: string) =>
-      toCodeFirstCollectionConfig({
-        slug: "notes",
-        fields: [
-          { name: "title", type: "text" },
-          { name: "sections", type: "json" },
-        ] as FieldConfig[],
-        admin: opensIn === undefined ? {} : { opensIn },
-      });
+      toCodeFirstCollectionConfig(
+        {
+          slug: "notes",
+          fields: [
+            { name: "title", type: "text" },
+            { name: "sections", type: "json" },
+          ] as FieldConfig[],
+          admin: opensIn === undefined ? {} : { opensIn },
+        },
+        "code"
+      );
     const hashOf = (opensIn?: string) =>
       calculateSchemaHash(declared(opensIn).fields);
     expect(hashOf("builder")).toBe(hashOf(undefined));
