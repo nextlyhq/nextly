@@ -90,20 +90,33 @@ function asCompared(fields: unknown): unknown {
 /** One field of `asCompared`. */
 function fieldAsCompared(field: unknown): unknown {
   if (field === null || typeof field !== "object") return field;
-  const copy: Record<string, unknown> = { ...field };
-  const fieldGroup = isFieldGroupFieldType(copy.type);
-  if (fieldGroup) for (const key of DERIVED) delete copy[key];
-  if (fieldGroup || isBuiltInFieldType(String(copy.type))) {
-    for (const key of saysNothing(copy)) delete copy[key];
-    if (Array.isArray(copy.options)) copy.options = withoutIds(copy.options);
-  }
+  const record = field as Record<string, unknown>;
+  const copy = isBuiltIn(record) ? withoutSpelling(record) : { ...record };
   if (Array.isArray(copy.fields)) copy.fields = asCompared(copy.fields);
   return copy;
 }
 
-/** The keys of a built-in field that add nothing to its definition (`asCompared`). */
+/** Whether a field is of a type of Nextly's own, not one a plugin contributes. */
+function isBuiltIn(field: Record<string, unknown>): boolean {
+  return (
+    isFieldGroupFieldType(field.type) || isBuiltInFieldType(String(field.type))
+  );
+}
+
+/** A built-in field without what adds nothing to its definition (`asCompared`). */
+function withoutSpelling(
+  field: Record<string, unknown>
+): Record<string, unknown> {
+  const copy = { ...field };
+  for (const key of saysNothing(copy)) delete copy[key];
+  if (Array.isArray(copy.options)) copy.options = withoutIds(copy.options);
+  return copy;
+}
+
+/** The keys of a built-in field that add nothing to its definition. */
 function saysNothing(field: Record<string, unknown>): string[] {
   return [
+    ...(isFieldGroupFieldType(field.type) ? DERIVED : []),
     ...OFF_UNLESS_SET.filter(key => field[key] === false),
     ...(field.label === field.name ? ["label"] : []),
   ];
