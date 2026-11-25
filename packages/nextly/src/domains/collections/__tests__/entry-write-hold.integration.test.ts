@@ -655,7 +655,8 @@ describe.each(getConfiguredTestDialects())(
     // Where values are kept per language, a repeater's or group's text inside goes to the language's
     // own row and the rest of it to the entry's. A save that shares a field inside, or translates
     // one, leaves the container its name and its columns and splits its value otherwise: a write
-    // prepared before it would put that text where no read looks. Refused as any field stored
+    // prepared before it would put that text where no read looks. So does one that shares, or
+    // translates, every field a group with no name lays out inside it. Refused as any field stored
     // differently is; a label inside changes nothing of the split, and where no value is kept per
     // language there is none.
     it.each([
@@ -704,11 +705,41 @@ describe.each(getConfiguredTestDialects())(
             ],
           },
         };
-        // Shared, then translated again: each way splits the value otherwise.
-        await saveDefinition(t, withSlides({}));
-        for (const caption of [{ localized: false }, {}]) {
+        const withLaidOut =
+          (group: Record<string, unknown>) =>
+          (fields: Array<{ name: string } & Record<string, unknown>>) => [
+            ...fields.filter(field => field.name !== "slides"),
+            {
+              name: "slides",
+              type: "repeater",
+              fields: [
+                {
+                  type: "group",
+                  ...group,
+                  fields: [{ name: "caption", type: "text" }],
+                },
+                { name: "credit", type: "text" },
+              ],
+            },
+          ];
+        // Shared, then translated again: each way splits the value otherwise. The group's own flag
+        // follows the field's.
+        const saves = [
+          { begins: withSlides({}) },
+          { becomes: withSlides({ localized: false }) },
+          { becomes: withSlides({}) },
+          { begins: withLaidOut({}) },
+          { becomes: withLaidOut({ localized: false }) },
+          { becomes: withLaidOut({}) },
+          { begins: withSlides({}) },
+        ];
+        for (const { begins, becomes } of saves) {
+          if (becomes === undefined) {
+            await saveDefinition(t, begins);
+            continue;
+          }
           const made = await madeNow();
-          await saveDefinition(t, withSlides(caption));
+          await saveDefinition(t, becomes);
           if (!translated) {
             for (const loaded of Object.values(made)) {
               await expect(heldFor(t, loaded)).resolves.toBeUndefined();
