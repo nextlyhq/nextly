@@ -418,6 +418,16 @@ describe("saving the text inside a container", () => {
       slides: [row("c", "Tres", 3), row("b", null, 2)],
       _rev: "8.es:3",
     };
+    // From the save on, the document is not read again: what the form shows is
+    // what the save left in it.
+    api.update.mockImplementation(
+      (_s: string, _i: string, payload: Record<string, unknown>) => {
+        api.findByID.mockImplementation(() => new Promise(() => undefined));
+        return Promise.resolve({
+          item: { ...stored, ...payload, _rev: "9.es:4" },
+        });
+      }
+    );
     await user.click(save());
     await user.click(
       await screen.findByRole("button", { name: "Save anyway" })
@@ -431,7 +441,9 @@ describe("saving the text inside a container", () => {
       slides: [row("c", "Tres", 3), row("b", "Dos", 2)],
       _overwrite: true,
     });
-    expect(await control("Slide 1, Caption")).toHaveValue("Tres");
+    await waitFor(async () =>
+      expect(await control("Slide 1, Caption")).toHaveValue("Tres")
+    );
     expect(await control("Slide 2, Caption")).toHaveValue("Dos");
   });
 });
