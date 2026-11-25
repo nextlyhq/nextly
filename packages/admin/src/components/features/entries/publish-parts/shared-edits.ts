@@ -6,7 +6,7 @@
  * Compared by value with what the form started from, as the form's own unsaved state is, rather
  * than by which fields were touched: work a field holds apart from the form reaches its values
  * only as a press readies it. A field is shared or translated as a whole, as the server stores
- * it: a group or a repeater that is not translated is shared with everything in it.
+ * it: a named group or a repeater that is not translated is shared with everything in it.
  *
  * @experimental Until publishing per language is complete.
  *
@@ -28,6 +28,7 @@ interface EditedField {
  * than the form started from.
  */
 export function editsSharedFields(args: {
+  /** The fields that hold a value of their own, those inside nameless layouts among them. */
   fields: readonly EditedField[];
   translated: readonly string[];
   startedFrom: FormValues;

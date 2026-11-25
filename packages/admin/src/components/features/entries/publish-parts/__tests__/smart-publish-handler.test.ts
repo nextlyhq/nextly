@@ -1,9 +1,10 @@
 /**
  * What an editor's Publish stores and publishes through. The plausible broken versions: the save
  * before the choice publishes (a live document re-asserted as published), takes a live language
- * down (saved as a draft), or is offered where every save goes live; and a page with no smart
- * Publish losing its Publish.
+ * down (saved as a draft), or is offered where every save goes live; an edit to a shared field
+ * inside a nameless layout going unseen; and a page with no smart Publish losing its Publish.
  */
+import type { FieldConfig } from "nextly/config";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -13,6 +14,12 @@ import {
 import type { SmartPublishHost } from "../useSmartPublish";
 
 const STORED = { ok: true as const, item: { id: "post-1" } };
+
+/** A translated title and a price every language shares. */
+const FIELDS: FieldConfig[] = [
+  { type: "text", name: "title", localized: true },
+  { type: "number", name: "price" },
+];
 
 /** A form that started from a title and a price, and holds `current` now. */
 function formHolding(current: Record<string, unknown>) {
@@ -29,10 +36,7 @@ function editor(over: Partial<SmartPublishEditor> = {}) {
     draftsEnabled: true,
     unsaved: () => true,
     form: formHolding({ title: "Hello", price: 10 }),
-    fields: [
-      { type: "text", name: "title", localized: true },
-      { type: "number", name: "price" },
-    ],
+    fields: FIELDS,
     localized: true,
     ...over,
   };
@@ -90,6 +94,61 @@ describe("the editor's Publish, handed to the document's actions", () => {
 
     expect(host.sharedEdited()).toBe(false);
     values.price = 12;
+    expect(host.sharedEdited()).toBe(true);
+  });
+
+  it("says so for a shared field inside nameless layouts, and not for a translated one beside it", async () => {
+    const values: Record<string, unknown> = {
+      title: "Hello",
+      price: 10,
+      subtitle: "Hi",
+      stock: 4,
+    };
+    const host = await hostGiven(
+      editor({
+        form: {
+          getValues: () => values,
+          formState: { defaultValues: { ...values } },
+        },
+        fields: [
+          { type: "text", name: "title" },
+          {
+            type: "group",
+            fields: [
+              { type: "text", name: "subtitle" },
+              { type: "group", fields: [{ type: "number", name: "stock" }] },
+            ],
+          },
+        ],
+      })
+    );
+
+    values.subtitle = "Hi again";
+    expect(host.sharedEdited()).toBe(false);
+    values.stock = 5;
+    expect(host.sharedEdited()).toBe(true);
+  });
+
+  it("takes a named group as one value, whatever is translated inside it", async () => {
+    const values: Record<string, unknown> = { seo: { heading: "Hello" } };
+    const host = await hostGiven(
+      editor({
+        form: {
+          getValues: () => values,
+          formState: { defaultValues: { seo: { heading: "Hello" } } },
+        },
+        fields: [
+          {
+            type: "group",
+            name: "seo",
+            fields: [{ type: "text", name: "heading" }],
+          },
+        ],
+      })
+    );
+
+    expect(host.sharedEdited()).toBe(false);
+    values.seo = { heading: "Hello again" };
     expect(host.sharedEdited()).toBe(true);
   });
 
