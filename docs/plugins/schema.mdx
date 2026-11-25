@@ -343,7 +343,7 @@ with raw SQL through `ctx.db.raw`) matters: it's what lets uninstall be clean an
 
 A departed plugin's Singles and field groups stay too: `nextly db:sync`, with
 `--remove-orphaned` as well, keeps them and names each with its plugin. `prune` takes
-collections only.
+collections only. Such a Single is read as before and takes no writes until the plugin is back.
 
 On a site that keeps migration files, remove all of them with a migration instead:
 `nextly migrate:create` writes the one that drops what left your config, and `nextly migrate`

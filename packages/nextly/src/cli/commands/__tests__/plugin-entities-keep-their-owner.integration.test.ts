@@ -75,7 +75,11 @@ import type { CLIDatabaseAdapter } from "../../utils/adapter";
 import type { LoadConfigResult } from "../../utils/config-loader";
 import { createLogger } from "../../utils/logger";
 import { runDbSync } from "../db-sync";
-import { demoteCollection, demotedCollectionIn } from "../db-sync-demote";
+import {
+  demoteCollection,
+  demotedCollectionIn,
+  previewDemotion,
+} from "../db-sync-demote";
 import { openCollectionRegistry } from "../db-sync-registry";
 import { collectOrphanDeletions } from "../dev-build";
 import { createDebouncedSync } from "../dev-watcher";
@@ -819,6 +823,15 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(
           demotedCollectionIn(EVENTS.slug, config() as never)
         ).toMatchObject({ slug: EVENTS.slug });
+        // The dry run answers as the real one does.
+        expect(
+          await previewDemotion({
+            collection: EVENTS as never,
+            registry: collections(),
+            adapter,
+            logger: createLogger({ quiet: true }),
+          })
+        ).not.toHaveProperty("refusals");
         await demote();
         await builderAddsAField();
         await dbSync(config());

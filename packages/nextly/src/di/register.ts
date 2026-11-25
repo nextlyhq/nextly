@@ -319,10 +319,7 @@ import {
 } from "../runtime/cache/ledger-wiring";
 import { ensureSupportedFrameworkVersions } from "../runtime/framework-versions";
 import { setMigrationLogRoot } from "../runtime/notifications/production";
-import type {
-  CollectionSource,
-  FieldDefinition,
-} from "../schemas/dynamic-collections";
+import type { FieldDefinition } from "../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type {
   CollectionRegistryService,
