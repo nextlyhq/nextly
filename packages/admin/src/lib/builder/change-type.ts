@@ -132,6 +132,9 @@ function keptValidation(
  * (Unique, Index, Localized), and of the rest only what `fits` says the new type shows. A default
  * is not kept, since one written for the old type need not be a value of the new one. A group
  * becoming repeating rows, or the reverse, keeps the fields it holds.
+ *
+ * Localized is kept as it is set. A field it was never set on is translated or not by its type's own
+ * default (`fieldLocalized`), so such a field's switch reads the new type's default after the change.
  */
 export function withTypeChanged(
   field: BuilderField,
