@@ -17,7 +17,10 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type { DeclaredNames } from "../../../cli/utils/migration-discovery";
+import {
+  readableMigrationFiles,
+  type DeclaredNames,
+} from "../../../cli/utils/migration-discovery";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 import type { Logger } from "../../../shared/types";
@@ -657,31 +660,20 @@ interface SnapshotArgs {
   checkHistory?: (declared: DeclaredNames) => Promise<void>;
 }
 
-/** Every dialect a migration's file can be a variant for. */
-const VARIANT_DIALECTS: readonly SupportedDialect[] = [
-  "sqlite",
-  "postgresql",
-  "mysql",
-];
-
 /**
- * Whether any of a migration's files is a localization migration's, its variants included: one for
- * another dialect stands in where this dialect has no file of its own.
+ * The localization migrations of the folder, by name, as the file this dialect runs says: another
+ * dialect's variant says nothing of it.
  */
-async function isLocalizationMigration(
-  migrationsDir: string,
-  name: string
-): Promise<boolean> {
-  const variants = VARIANT_DIALECTS.map(dialect => `${name}.${dialect}.sql`);
-  for (const file of [`${name}.sql`, ...variants]) {
-    try {
-      const sql = await readFile(resolve(migrationsDir, file), "utf-8");
-      if (sql.includes(LOCALIZATION_MIGRATION_MARKER)) return true;
-    } catch (error) {
-      if ((error as { code?: unknown }).code !== "ENOENT") throw error;
-    }
-  }
-  return false;
+async function localizationMigrations(
+  { migrationsDir, dialect }: Pick<SnapshotArgs, "migrationsDir" | "dialect">,
+  declared: DeclaredNames
+): Promise<ReadonlySet<string>> {
+  const files = await readableMigrationFiles(migrationsDir, dialect, declared);
+  return new Set(
+    files
+      .filter(file => file.content.includes(LOCALIZATION_MIGRATION_MARKER))
+      .map(file => file.baseName)
+  );
 }
 
 /**
@@ -710,7 +702,7 @@ async function assertNewestHasSnapshot(
   if (without.length === 0) return;
   const { migrationsDir, dialect } = args;
   const declared = await args.declared();
-  const [blank, { ignoredRows }] = await Promise.all([
+  const [blank, oldBuilder] = await Promise.all([
     blankMigrationNames(migrationsDir, withSnapshot),
     readOldBuilderLedger(
       { migrationsDir, dialect, declared },
@@ -718,12 +710,16 @@ async function assertNewestHasSnapshot(
       read.rows
     ),
   ]);
-  const missing: string[] = [];
-  for (const name of without) {
-    if (blank.has(name) || ignoredRows.has(ledgerFilename(name))) continue;
-    if (await isLocalizationMigration(migrationsDir, name)) continue;
-    missing.push(name);
-  }
+  const localization = await localizationMigrations(args, {
+    ...declared,
+    ...(oldBuilder.marked !== undefined ? { marks: oldBuilder.marked } : {}),
+  });
+  const missing = without.filter(
+    name =>
+      !blank.has(name) &&
+      !localization.has(name) &&
+      !oldBuilder.ignoredRows.has(ledgerFilename(name))
+  );
   if (missing.length > 0) throw appliedSnapshotsMissingError(missing, newest);
 }
 

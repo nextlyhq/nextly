@@ -6,13 +6,7 @@
  * as 0002 left it, and each case then changes one thing. A column `--apply` would convert back
  * stands for both ends: `author` became required in 0002, and `links` became text.
  */
-import {
-  mkdirSync,
-  mkdtempSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -385,26 +379,39 @@ describe.each(getConfiguredTestDialects())(
       await expectUntouched();
     });
 
-    it.each(["sql", "variant", "another dialect's variant"])(
-      "goes on past a newer localization migration, which has no snapshot (%s)",
-      async file => {
-        await migration(
-          "0003_third",
-          null,
-          `${LOCALIZATION_MIGRATION_MARKER} companion (create) (i18n)\n`
-        );
-        const variantOf: Record<string, string> = {
-          variant: dialect,
-          "another dialect's variant":
-            dialect === "sqlite" ? "postgresql" : "sqlite",
-        };
-        if (file in variantOf) {
-          renameSync(
-            path("0003_third.sql"),
-            path(`0003_third.${variantOf[file]}.sql`)
-          );
-        }
+    const LOCALIZATION = `${LOCALIZATION_MIGRATION_MARKER} companion (create) (i18n)\n`;
+    const other = dialect === "sqlite" ? "postgresql" : "sqlite";
+
+    /** An applied 0003 with no snapshot, as the files given, by the part of the name after it. */
+    async function third(files: Record<string, string>) {
+      await migration("0003_third", null);
+      rmSync(path("0003_third.sql"));
+      for (const [suffix, sql] of Object.entries(files)) {
+        writeFileSync(path(`0003_third${suffix}.sql`), sql);
+      }
+    }
+
+    it.each([
+      ["its base file", { "": LOCALIZATION }],
+      ["this dialect's variant", { "": "", [`.${dialect}`]: LOCALIZATION }],
+      // With no file of its own and no base file, the dialect runs the variant there is.
+      ["the only file there is", { [`.${other}`]: LOCALIZATION }],
+    ])(
+      "goes on past a newer localization migration, as %s says it is one",
+      async (_file, files) => {
+        await third(files as Record<string, string>);
         await expectUntouched();
+      }
+    );
+
+    it.each([
+      ["base file", { "": "", [`.${other}`]: LOCALIZATION }],
+      ["variant", { [`.${dialect}`]: "", [`.${other}`]: LOCALIZATION }],
+    ])(
+      "stops where this dialect runs an ordinary %s and another's is a localization migration's",
+      async (_file, files) => {
+        await third(files as Record<string, string>);
+        await expectStopped("MISSING_SNAPSHOT");
       }
     );
 
