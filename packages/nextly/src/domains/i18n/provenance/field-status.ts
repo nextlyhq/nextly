@@ -8,7 +8,8 @@
  * answer the translation overview shows, and the language-level answer the overview's `stale` and
  * the list filter (the worklist's "stale" tab) give. A language with values recorded is judged by
  * them alone; one with none recorded (written before origins were recorded) by the language-level
- * stamp, as before.
+ * stamp, as before. A container whose texts have records of their own is judged by those: its own
+ * record is of the whole value, which a row moved or a shared value changed is a change of.
  *
  * @experimental Until per-field provenance is complete.
  *
@@ -26,6 +27,9 @@ import {
 } from "../../../schemas/translation-provenance";
 import { toSnakeCase } from "../../schema/services/field-column-descriptor";
 import { nonBlankColumnSql } from "../non-blank-sql";
+import { isTextPath, TEXT_PATH_PATTERN } from "../pipeline/unit-address";
+
+import { fieldOfPath } from "./source-text";
 
 /** Where one field's value in one language came from, and whether its source moved since. */
 export interface FieldProvenance {
@@ -36,9 +40,15 @@ export interface FieldProvenance {
   sourceLocale?: string;
   /**
    * Whether the source's value changed after this one was made from it. Absent where that cannot
-   * be told: the source has no recorded value, or the origin is unknown.
+   * be told: the source has no recorded value, or the origin is unknown. For a container whose
+   * `texts` are recorded, whether any of those is; absent where none is known to be and one can't
+   * be told.
    */
   outOfDate?: boolean;
+  /**
+   * Where each text inside a repeater or group came from, by its path, where those are recorded.
+   */
+  texts?: Record<string, FieldProvenance>;
 }
 
 /** The collection or Single whose documents a read is about. */
@@ -82,6 +92,7 @@ const RECORDED = sql.identifier("nx_provenance_recorded");
 const UNKNOWN = sql.identifier("nx_provenance_unknown");
 const COVERED = sql.identifier("nx_provenance_covered");
 const CLAIMED = sql.identifier("nx_provenance_claimed");
+const TEXT = sql.identifier("nx_provenance_text");
 
 /** One column of a row of the provenance table, under `alias`. */
 function column(alias: Alias, name: string): SQL {
@@ -111,6 +122,37 @@ function sourceValueComparedSql(
   )`;
 }
 
+/**
+ * A text's own record, saying where it came from: one that only keeps its fingerprint, for what was
+ * made from it before the text had a record, says nothing of it, and its container's record does.
+ */
+function textRecordSql(alias: Alias): SQL {
+  return sql`(${column(alias, "field_path")} LIKE ${TEXT_PATH_PATTERN}
+    AND (${column(alias, "origin")} <> ${"unknown"}
+    OR ${column(alias, "source_locale")} IS NOT NULL))`;
+}
+
+/**
+ * Whether `alias` is the record of a container whose texts have records of their own in its language
+ * and part: they say what it says of them. Their paths begin with its field and the separator, which
+ * is compared by its place and not as a pattern, since a field's name may hold `_`.
+ */
+function readByItsTextsSql(alias: Alias): SQL {
+  const path = column(alias, "field_path");
+  const text = column(TEXT, "field_path");
+  return sql`EXISTS (
+    SELECT 1 FROM ${PROVENANCE} ${TEXT}
+    WHERE ${column(TEXT, "scope_kind")} = ${column(alias, "scope_kind")}
+    AND ${column(TEXT, "scope_slug")} = ${column(alias, "scope_slug")}
+    AND ${column(TEXT, "entry_id")} = ${column(alias, "entry_id")}
+    AND ${column(TEXT, "locale")} = ${column(alias, "locale")}
+    AND ${column(TEXT, "part_state")} = ${column(alias, "part_state")}
+    AND SUBSTR(${text}, 1, LENGTH(${path})) = ${path}
+    AND SUBSTR(${text}, LENGTH(${path}) + 1, 1) = ${TRANSLATION_PROVENANCE_ROW_SEPARATOR}
+    AND ${textRecordSql(TEXT)}
+  )`;
+}
+
 /** The live rows of one document's language, under `alias`. */
 function liveRowsOfSql(
   alias: Alias,
@@ -128,11 +170,14 @@ function liveRowsOfSql(
 /**
  * A row whose source cannot be compared: made from another language (not written originally),
  * but its source's value then or now has no recorded fingerprint, as when the source was written
- * before origins were recorded. A row's own record in a structure per language is not a field's.
+ * before origins were recorded. A text's is judged as a field's; a row's own record in a structure
+ * per language is neither, and a container's is its texts' where those have their own.
  */
 function sourceUnknownSql(alias: Alias): SQL {
   return sql`${column(alias, "origin")} <> ${"original"}
-    AND ${column(alias, "field_path")} NOT LIKE ${`%${TRANSLATION_PROVENANCE_ROW_SEPARATOR}%`}
+    AND (${column(alias, "field_path")} NOT LIKE ${`%${TRANSLATION_PROVENANCE_ROW_SEPARATOR}%`}
+    OR ${textRecordSql(alias)})
+    AND NOT ${readByItsTextsSql(alias)}
     AND NOT ${sourceValueComparedSql(alias, "differs")}
     AND NOT ${sourceValueComparedSql(alias, "matches")}`;
 }
@@ -205,6 +250,7 @@ export function languageOutOfDateSql(args: {
     SELECT 1 FROM ${PROVENANCE} ${TARGET}
     WHERE ${liveRowsOfSql(TARGET, scope, entryId, locale)}
     AND ${sourceValueComparedSql(TARGET, "differs")}
+    AND NOT ${readByItsTextsSql(TARGET)}
   ) OR (${args.byStamp} AND (NOT EXISTS (
     SELECT 1 FROM ${PROVENANCE} ${RECORDED}
     WHERE ${liveRowsOfSql(RECORDED, scope, entryId, locale)}
@@ -231,7 +277,8 @@ export function documentLanguageKey(entryId: string, locale: string): string {
 
 /**
  * Each document's fields' provenance, by language, for `entryIds` of one collection or Single:
- * one read of the live rows, each field's answer from {@link sourceValueComparedSql}.
+ * one read of the live rows, each field's answer from {@link sourceValueComparedSql}, and each
+ * text's beside its own field's.
  */
 export async function fieldProvenanceOf(
   db: ProvenanceSelectDb,
@@ -266,17 +313,46 @@ export async function fieldProvenanceOf(
         eq(table.partState as never, "live")
       )
     );
+  const textRows: Record<string, unknown>[] = [];
   for (const row of rows) {
-    // A row's own record, in a field with a structure per language, is not a field's.
-    if (String(row.fieldPath).includes(TRANSLATION_PROVENANCE_ROW_SEPARATOR)) {
+    const path = String(row.fieldPath);
+    if (path.includes(TRANSLATION_PROVENANCE_ROW_SEPARATOR)) {
+      // A row's own record, in a field with a structure per language, is not a field's.
+      if (isTextPath(path) && saysWhereFrom(row)) textRows.push(row);
       continue;
     }
     const key = documentLanguageKey(String(row.entryId), String(row.locale));
     const fields = out.get(key) ?? {};
-    fields[String(row.fieldPath)] = fieldStatusOf(row);
+    fields[path] = fieldStatusOf(row);
     out.set(key, fields);
   }
+  for (const row of textRows) {
+    const key = documentLanguageKey(String(row.entryId), String(row.locale));
+    const path = String(row.fieldPath);
+    const fields = out.get(key) ?? {};
+    const field = fieldOfPath(path);
+    // Never an entry of its own: each is a field's.
+    if (!Object.hasOwn(fields, field)) continue;
+    (fields[field].texts ??= {})[path] = fieldStatusOf(row);
+  }
+  for (const fields of out.values()) {
+    for (const field of Object.values(fields)) rollUpTexts(field);
+  }
   return out;
+}
+
+/** Whether a text's record says where it came from, as {@link textRecordSql} asks. */
+function saysWhereFrom(row: Record<string, unknown>): boolean {
+  return row.origin !== "unknown" || typeof row.sourceLocale === "string";
+}
+
+/** Gives a container the answer of its texts, where they have records. */
+function rollUpTexts(field: FieldProvenance): void {
+  if (field.texts === undefined) return;
+  const answers = Object.values(field.texts).map(text => text.outOfDate);
+  delete field.outOfDate;
+  if (answers.includes(true)) field.outOfDate = true;
+  else if (answers.every(answer => answer === false)) field.outOfDate = false;
 }
 
 /** One row's answer, as {@link FieldProvenance} says. Drivers give the comparisons as 0/1. */

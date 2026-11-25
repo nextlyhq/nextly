@@ -701,7 +701,7 @@ describe.each(getConfiguredTestDialects())(
       const rowOrigins = async (locale: string) =>
         Object.fromEntries(
           ((await rowsOf(id, menus))[locale] ?? [])
-            .filter(row => row.fieldPath.startsWith("items#"))
+            .filter(row => /^items#[^.]+$/.test(row.fieldPath))
             .map(row => [row.fieldPath, [row.origin, row.originRowId]])
         );
 
@@ -803,7 +803,7 @@ describe.each(getConfiguredTestDialects())(
           (await rowsOf(menu.item.id, { kind: "collection", slug: "menus" }))
             .es ?? []
         ).map(row => row.fieldPath)
-      ).toEqual(["items"]);
+      ).toEqual(["items", "items#constructor.label"]);
     });
     it("refuses a copy from a language that isn't configured, or into the language it copies", async () => {
       // A copy names the language it came from. One the site doesn't have, or the language being
@@ -986,7 +986,13 @@ describe.each(getConfiguredTestDialects())(
           .filter(row => row.partState === "live")
           .map(row => row.fieldPath)
           .sort();
-      expect(await livePaths()).toEqual(["tracks", "tracks#a", "tracks#b"]);
+      expect(await livePaths()).toEqual([
+        "tracks",
+        "tracks#a",
+        "tracks#a.label",
+        "tracks#b",
+        "tracks#b.label",
+      ]);
 
       // b removed in English, published: the one structure loses it in every language.
       const removed = await save(
@@ -997,7 +1003,11 @@ describe.each(getConfiguredTestDialects())(
         "playlists"
       );
       expect(removed, JSON.stringify(removed)).toMatchObject({ success: true });
-      expect(await livePaths()).toEqual(["tracks", "tracks#a"]);
+      expect(await livePaths()).toEqual([
+        "tracks",
+        "tracks#a",
+        "tracks#a.label",
+      ]);
     });
     it("records a value a publish gives over its held draft's", async () => {
       // A Single's held draft goes live with a publish that gives a field a value of its own: the

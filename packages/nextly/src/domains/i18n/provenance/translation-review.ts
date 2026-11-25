@@ -298,7 +298,7 @@ export async function reviewField(
     new Map([[review.fieldPath, { sourceLocale, fingerprint: source }]]),
     now
   );
-  await pruneSources(db, review.document, [review.fieldPath]);
+  await pruneSources(sources, review.document, [review.fieldPath]);
 }
 
 /**

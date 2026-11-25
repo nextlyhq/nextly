@@ -13,7 +13,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, inArray } from "drizzle-orm";
 
-import type { ProvenanceScopeKind } from "../../../schemas/translation-provenance";
+import {
+  TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH,
+  type ProvenanceScopeKind,
+} from "../../../schemas/translation-provenance";
 import {
   TRANSLATION_SOURCES_TABLE,
   translationSourcesTables,
@@ -121,6 +124,7 @@ export async function removeFieldSources(
 /**
  * Moves `scope`'s kept text of a renamed field to its new name. Text an earlier field left under
  * that name goes first: it is another field's content, and would stand in the moved rows' place.
+ * Text whose new path would not fit the column goes, as the record that names it does.
  */
 export async function renameFieldSources(
   adapter: SourcesAdapter,
@@ -142,16 +146,17 @@ export async function renameFieldSources(
   );
   const db = adapter.getDrizzle<SourcesDb>();
   for (const path of moving) {
-    await db
-      .update(table)
-      .set({ fieldPath: `${rename.to}${path.slice(rename.from.length)}` })
-      .where(
-        and(
-          eq(table.scopeKind, scope.scopeKind),
-          eq(table.scopeSlug, scope.scopeSlug),
-          eq(table.fieldPath, path)
-        )
-      );
+    const moved = `${rename.to}${path.slice(rename.from.length)}`;
+    const rows = and(
+      eq(table.scopeKind, scope.scopeKind),
+      eq(table.scopeSlug, scope.scopeSlug),
+      eq(table.fieldPath, path)
+    );
+    if (moved.length > TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH) {
+      await db.delete(table).where(rows);
+    } else {
+      await db.update(table).set({ fieldPath: moved }).where(rows);
+    }
   }
 }
 

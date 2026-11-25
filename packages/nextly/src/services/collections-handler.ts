@@ -21,6 +21,7 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../domains/i18n/localization-source";
+import type { SuggestionAcceptance } from "../domains/i18n/pipeline/acceptance";
 import { releaseVisibilityFor } from "../domains/releases/release-visibility";
 import { MetaRetentionGate } from "../domains/retention/gate";
 import {
@@ -1210,6 +1211,12 @@ export class CollectionsHandler {
        */
       restoredFrom?: FieldSources;
       /**
+       * The suggestion this write accepts (see `pipeline/acceptance`).
+       *
+       * @internal
+       */
+      acceptance?: SuggestionAcceptance;
+      /**
        * Set when this write restores a version: held as the working draft, and
        * refused where the document cannot hold one rather than written live.
        */
@@ -1239,6 +1246,9 @@ export class CollectionsHandler {
         // Named for the same reason: dropped, a restore's fields would record
         // no source.
         restoredFrom: params.restoredFrom,
+        // Named for the same reason: dropped, an accepted suggestion would be
+        // recorded as typed, and stay open.
+        acceptance: params.acceptance,
         // Named for the same reason: dropped, a restore could write live.
         requireHeldDraft: params.requireHeldDraft,
         // The API-key scope gates the publish transition; naming it explicitly

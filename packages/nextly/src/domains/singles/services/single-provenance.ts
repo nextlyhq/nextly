@@ -14,21 +14,32 @@ import {
   transactionTableProbe,
   type DashboardLogger,
 } from "../../dashboard/table-presence";
+import {
+  forgetRemovedRowsSuggestions,
+  translationSuggestionsPresent,
+} from "../../i18n/pipeline/suggestion-rows";
 import type { ProvenanceClaims } from "../../i18n/provenance/provenance-claims";
 import {
   copySourceRevisions,
+  forgetRemovedRowsProvenance,
   recordWrittenValues,
   translationProvenancePresent,
 } from "../../i18n/provenance/record-provenance";
 import {
   sourceReaderOf,
   translationSourcesPresent,
+  type SourcePruning,
   type TranslatedColumn,
   type WriteSources,
 } from "../../i18n/provenance/source-text";
+import type { SharedStructureWritten } from "../../i18n/runtime/companion-io";
 import { cachedCompanionReadiness } from "../../i18n/runtime/companion-readiness";
-import { assembleStoredValue } from "../../i18n/shared-structure";
+import {
+  assembleStoredValue,
+  type SharedStructureShape,
+} from "../../i18n/shared-structure";
 import type { SelectsRows } from "../../versions/document-revision";
+import { VersionsRepository } from "../../versions/versions-repository";
 
 /** What recording needs of the service writing. */
 export interface SingleProvenanceDeps {
@@ -51,7 +62,7 @@ export interface SingleProvenanceWrite {
   /**
    * The structures the same write put on the main row, keyed by column, which a container's
    * overlay in `values` is the language's text of. Absent, a container's overlay is recorded as
-   * it is.
+   * it is, and no text inside it.
    */
   structures?: Readonly<Record<string, unknown>>;
   /**
@@ -92,7 +103,7 @@ export function singleProvenanceRecorded(
  * Whether the source text translations are made from is kept on `tx`: the table is there, asked
  * as {@link singleProvenanceRecorded} asks for its own.
  */
-export function singleSourceTextKept(
+function singleSourceTextKept(
   deps: Pick<SingleProvenanceDeps, "adapter" | "logger">,
   tx: TransactionContext
 ): Promise<boolean> {
@@ -100,6 +111,58 @@ export function singleSourceTextKept(
     deps.adapter,
     deps.logger,
     transactionTableProbe(deps.adapter, tx)
+  );
+}
+
+/** Whether suggestions, which name the text too, are kept on `tx`, asked as its table is. */
+function singleSuggestionsKept(
+  deps: Pick<SingleProvenanceDeps, "adapter" | "logger">,
+  tx: TransactionContext
+): Promise<boolean> {
+  return translationSuggestionsPresent(
+    deps.adapter,
+    deps.logger,
+    transactionTableProbe(deps.adapter, tx)
+  );
+}
+
+/** What source text nothing names any more is removed through on `tx`. */
+export async function singleSourcePruning(
+  deps: Pick<SingleProvenanceDeps, "adapter" | "logger">,
+  tx: TransactionContext
+): Promise<SourcePruning | undefined> {
+  return (await singleSourceTextKept(deps, tx))
+    ? { db: tx, suggestionsKept: await singleSuggestionsKept(deps, tx) }
+    : undefined;
+}
+
+/**
+ * Forgets, in every language, the suggestions for and the record of each row a Single's write
+ * removed from the structures it put on the main row, on its transaction.
+ */
+export async function forgetRemovedSingleRows(
+  deps: Pick<SingleProvenanceDeps, "adapter" | "logger">,
+  tx: TransactionContext,
+  single: { slug: string; entryId: string },
+  written: readonly SharedStructureWritten[]
+): Promise<void> {
+  if (written.length === 0) return;
+  const document = {
+    scopeKind: "single" as const,
+    scopeSlug: single.slug,
+    entryId: single.entryId,
+  };
+  if (await singleSuggestionsKept(deps, tx)) {
+    await forgetRemovedRowsSuggestions(tx, document, written, () =>
+      new VersionsRepository(tx).findAllWorkingDrafts(document)
+    );
+  }
+  if (!(await singleProvenanceRecorded(deps, tx))) return;
+  await forgetRemovedRowsProvenance(
+    tx,
+    document,
+    written,
+    await singleSourcePruning(deps, tx)
   );
 }
 
@@ -122,6 +185,7 @@ async function singleWriteSources(
   return {
     db: tx,
     kept: await singleSourceTextKept(deps, tx),
+    suggestionsKept: await singleSuggestionsKept(deps, tx),
     read: sourceReaderOf({
       db: tx.getDrizzle(),
       companion: {
@@ -153,22 +217,26 @@ export async function recordSingleProvenance(
     write.localizedFields.map(field => [field.column, field])
   );
   const values: Record<string, unknown> = {};
+  const shapes = new Map<string, SharedStructureShape>();
   for (const [column, value] of Object.entries(write.values)) {
     const field = fieldOf.get(column);
     if (field === undefined) continue;
     // A container with one structure is recorded as written, its structure with this language's
     // text on it, as a collection's write records it: its rows are what each row's record names.
     const structures = write.structures;
-    values[field.name] =
-      field.sharedStructure !== undefined &&
-      structures !== undefined &&
-      Object.hasOwn(structures, column)
-        ? assembleStoredValue(
-            structures[column],
-            value === null || value === undefined ? [] : [value],
-            field.sharedStructure
-          )
-        : value;
+    const key = [column, field.name].find(
+      name => structures !== undefined && Object.hasOwn(structures, name)
+    );
+    if (field.sharedStructure === undefined || key === undefined) {
+      values[field.name] = value;
+      continue;
+    }
+    shapes.set(field.name, field.sharedStructure);
+    values[field.name] = assembleStoredValue(
+      structures?.[key],
+      value === null || value === undefined ? [] : [value],
+      field.sharedStructure
+    );
   }
   await recordWrittenValues(tx, {
     scopeKind: "single",
@@ -177,6 +245,7 @@ export async function recordSingleProvenance(
     locale: write.locale,
     partState: write.partState ?? "live",
     values,
+    shapes,
     // Each language's counter as it stands, for a copy to be judged against the version of its
     // source it says it read.
     languageRevisions: await copySourceRevisions(tx.getDrizzle<SelectsRows>(), {

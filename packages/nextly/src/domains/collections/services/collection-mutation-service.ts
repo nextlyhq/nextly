@@ -279,6 +279,12 @@ import {
 import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import { publishesPerLanguage } from "../../i18n/per-language-storage";
+import type { SuggestionAcceptance } from "../../i18n/pipeline/acceptance";
+import {
+  forgetDocumentSuggestions,
+  forgetRemovedRowsSuggestions,
+  translationSuggestionsPresent,
+} from "../../i18n/pipeline/suggestion-rows";
 import {
   assertClaimsAllowed,
   assertCopySources,
@@ -297,8 +303,13 @@ import {
   forgetDocumentSources,
   sourceReaderOf,
   translationSourcesPresent,
+  type SourcePruning,
   type WriteSources,
 } from "../../i18n/provenance/source-text";
+import {
+  assertSourcesEligible,
+  refuseTranslatedCreate,
+} from "../../i18n/provenance/translated-sources";
 import {
   configuredLocale,
   isValidLocale,
@@ -325,7 +336,10 @@ import {
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { withComponentShapes } from "../../i18n/runtime/component-shapes";
-import { sameSharedStructure } from "../../i18n/shared-structure";
+import {
+  sameSharedStructure,
+  type SharedStructureShape,
+} from "../../i18n/shared-structure";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import {
@@ -2199,6 +2213,14 @@ type UpdateEntryParams = {
    * @experimental
    */
   restoredFrom?: FieldSources;
+  /**
+   * The suggestion this write accepts, as server code states it: recorded over
+   * what the body claims, and taken out in the write's own transaction. No
+   * client can state one.
+   *
+   * @internal
+   */
+  acceptance?: SuggestionAcceptance;
   /**
    * Set when this write restores a recorded save of a working draft: its
    * content was never live, so on a published document it must be held as
@@ -6734,7 +6756,7 @@ export class CollectionMutationService extends BaseService {
           await discardDraftProvenance(
             tx,
             { ...discardedRef, locale: draftLocale },
-            (await this.sourceTextKept(tx)) ? tx : undefined
+            await this.sourcePruning(tx)
           );
         }
         // The discarded part has nothing unpublished left to review: its
@@ -9142,7 +9164,8 @@ export class CollectionMutationService extends BaseService {
     const provenance = this.provenanceOf(
       body,
       actorForWrite(params.actor, params.user),
-      params.locale
+      params.locale,
+      true
     );
     if ("refused" in provenance) return provenance.refused;
     // A version sent with the body is the server's to decide; see updateEntry.
@@ -15255,9 +15278,10 @@ export class CollectionMutationService extends BaseService {
   /**
    * Prune every language's overlay against the shared structures a write
    * put on the main row (`pruneOverlaysOfRemovedRows`), and forget every
-   * language's record of the rows it removed (`forgetRemovedRowsProvenance`)
-   * where `collectionName` names whose records they are. Nothing to do for a
-   * write that carried none.
+   * language's suggestions for and record of the rows it removed
+   * (`forgetRemovedRowsSuggestions`, `forgetRemovedRowsProvenance`) where
+   * `collectionName` names whose they are. Nothing to do for a write that
+   * carried none.
    */
   private async pruneRemovedRowTranslations(
     tx: TransactionContext,
@@ -15279,17 +15303,26 @@ export class CollectionMutationService extends BaseService {
       parentId: entryId,
       written: split.sharedStructures,
     });
-    if (collectionName === undefined || !(await this.provenanceRecorded(tx))) {
-      return;
+    if (collectionName === undefined) return;
+    const document = {
+      scopeKind: "collection" as const,
+      scopeSlug: collectionName,
+      entryId,
+    };
+    if (await this.suggestionsKept(tx)) {
+      await forgetRemovedRowsSuggestions(
+        tx,
+        document,
+        split.sharedStructures,
+        () => new VersionsRepository(tx).findAllWorkingDrafts(document)
+      );
     }
+    if (!(await this.provenanceRecorded(tx))) return;
     await forgetRemovedRowsProvenance(
       tx,
-      { scopeKind: "collection", scopeSlug: collectionName, entryId },
-      split.sharedStructures.map(written => ({
-        field: written.field,
-        structure: written.structure,
-        kind: written.shape.kind,
-      }))
+      document,
+      split.sharedStructures,
+      await this.sourcePruning(tx)
     );
   }
 
@@ -15309,6 +15342,8 @@ export class CollectionMutationService extends BaseService {
         jsonFields?: readonly string[];
         /** The translation table the values are written to. */
         companionTableName?: string;
+        /** The containers among the values, each with its shape. */
+        sharedStructures?: readonly SharedStructureWritten[];
       } | null;
       savedBy: RequestActor;
       provenance?: {
@@ -15329,11 +15364,17 @@ export class CollectionMutationService extends BaseService {
       entryId: args.entryId,
       locale: translation.writeLocale,
     };
+    const shapes = new Map(
+      translation.sharedStructures?.map(
+        ({ field, shape }) => [field, shape] as const
+      )
+    );
     await recordWrittenValues(tx, {
       ...document,
       partState: provenance.partState ?? "live",
       values: translation.localizedFieldValues ?? {},
       jsonFields: new Set(translation.jsonFields ?? []),
+      shapes,
       // Each language's counter as it stands, for a copy to be judged against the version of its
       // source it says it read.
       languageRevisions: await copySourceRevisions(
@@ -15353,7 +15394,8 @@ export class CollectionMutationService extends BaseService {
         tx,
         provenance.collectionName,
         args.entryId,
-        translation.writeLocale
+        translation.writeLocale,
+        shapes
       ),
     });
   }
@@ -16896,6 +16938,24 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
+  /** Whether suggestions, which name that text too, are kept on `tx`. */
+  private suggestionsKept(tx: TransactionContext): Promise<boolean> {
+    return translationSuggestionsPresent(
+      this.adapter,
+      this.logger,
+      transactionTableProbe(this.adapter, tx)
+    );
+  }
+
+  /** What source text nothing names any more is removed through on `tx`. */
+  private async sourcePruning(
+    tx: TransactionContext
+  ): Promise<SourcePruning | undefined> {
+    return (await this.sourceTextKept(tx))
+      ? { db: tx, suggestionsKept: await this.suggestionsKept(tx) }
+      : undefined;
+  }
+
   /**
    * Where a write of entry `entryId` in `locale` reads the values its
    * translations are made from, and keeps them, on its transaction. None for
@@ -16905,7 +16965,9 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     collectionName: string,
     entryId: string,
-    locale: string
+    locale: string,
+    /** The shapes of the containers written, their components read. */
+    shapes: ReadonlyMap<string, SharedStructureShape>
   ): Promise<WriteSources | undefined> {
     if (!this.localization || locale === this.localization.defaultLocale) {
       return undefined;
@@ -16919,6 +16981,7 @@ export class CollectionMutationService extends BaseService {
     return {
       db: tx,
       kept: await this.sourceTextKept(tx),
+      suggestionsKept: await this.suggestionsKept(tx),
       read: sourceReaderOf({
         db,
         companion,
@@ -16929,6 +16992,7 @@ export class CollectionMutationService extends BaseService {
           companion.companionTableName
         ),
         entryId,
+        shapes,
       }),
     };
   }
@@ -16936,7 +17000,7 @@ export class CollectionMutationService extends BaseService {
   /**
    * Remove what is recorded about a deleted entry's translations, in every
    * language and part, on the delete's transaction: where each value came
-   * from, and the source text it was made from.
+   * from, the source text it was made from, and each translation suggested.
    */
   private async forgetTranslationRecords(
     tx: TransactionContext,
@@ -16954,6 +17018,11 @@ export class CollectionMutationService extends BaseService {
     if (await this.sourceTextKept(tx)) {
       await forgetDocumentSources(tx, document);
     }
+    await forgetDocumentSuggestions(
+      { adapter: this.adapter, logger: this.logger },
+      tx,
+      document
+    );
   }
 
   /**
@@ -16965,7 +17034,9 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     savedBy: RequestActor,
     /** The language the write is in, as the caller named it. */
-    locale: string | undefined
+    locale: string | undefined,
+    /** Whether the write creates the entry. */
+    creates = false
   ):
     | { claims: ProvenanceClaims | undefined }
     | { refused: CollectionServiceResult } {
@@ -16981,6 +17052,13 @@ export class CollectionMutationService extends BaseService {
             ? null
             : (locale ?? this.localization?.defaultLocale ?? null),
       });
+      if (creates) {
+        refuseTranslatedCreate({
+          claims,
+          locale,
+          defaultLocale: this.localization?.defaultLocale,
+        });
+      }
       return { claims };
     } catch (error) {
       return {
@@ -17317,7 +17395,10 @@ export class CollectionMutationService extends BaseService {
       rawParams.locale
     );
     if ("refused" in provenance) return provenance.refused;
-    const provenanceClaims = provenance.claims;
+    // An accepted suggestion's claims are server code's own, over the body's.
+    const provenanceClaims = rawParams.acceptance
+      ? { ...provenance.claims, ...rawParams.acceptance.claims }
+      : provenance.claims;
     // The version a client sends back with what it read is the server's to
     // decide, so it is dropped before any hook or gate reads the body.
     body = withoutDocumentVersionKeys({ ...body });
@@ -17649,6 +17730,19 @@ export class CollectionMutationService extends BaseService {
       // in the database. The keys a read adds are taken off, so a document sent back as it was
       // read still saves.
       body = writableBodyOf(body, "collection", fields, tableName);
+      // A language the body says a value was translated from must be one it may be, as the caller
+      // may know of it: asked once they may update the entry, and before any hook.
+      await assertSourcesEligible({
+        claims: provenance.claims,
+        locale: params.locale,
+        defaultLocale: this.localization?.defaultLocale,
+        document: {
+          kind: "collection",
+          slug: params.collectionName,
+          id: params.entryId,
+        },
+        caller: params,
+      });
       // A save that names a status changes what readers see, so the publish gate is asked of it
       // as a publish of chosen parts is: its early answer here, before any hook runs, and its
       // verdict under the row lock below.
@@ -20173,6 +20267,11 @@ export class CollectionMutationService extends BaseService {
             user: params.user,
             context: sharedContext,
           });
+          // What an accepted suggestion does beside the save, on each attempt
+          // too; not for an entry found gone, where nothing was written.
+          if (writtenDocument !== undefined) {
+            await params.acceptance?.onWritten(tx);
+          }
           // After the in-transaction phase, whose writes go through this `tx`
           // too, so the after-hooks see what the transaction commits.
           writtenTranslation = workingDraftDocument

@@ -12,8 +12,8 @@
  * does not read back as it was written (a date on a database keeping whole seconds) is left out,
  * so what is kept can be missing and is never the wrong text.
  *
- * A repeater's or group's text is each language's overlay of one structure, so its source is no
- * one column's value and is not kept.
+ * A repeater's or group's text is each language's overlay of one structure, so the field's source
+ * is no one column's value and is not kept: each text inside is, by its own path.
  *
  * @experimental Until per-field provenance is complete.
  *
@@ -37,6 +37,8 @@ import {
   TRANSLATION_SOURCES_TABLE,
   type KeptSource,
 } from "../../../schemas/translation-sources";
+import { TRANSLATION_SUGGESTIONS_TABLE } from "../../../schemas/translation-suggestions";
+import { parsedValue } from "../../../shared/lib/json-column-value";
 import {
   tablePresence,
   type DashboardLogger,
@@ -44,7 +46,10 @@ import {
 } from "../../dashboard/table-presence";
 import { isBlank } from "../blank-value";
 import type { LocalizedFieldRef } from "../companion-join";
+import { overlayTexts } from "../pipeline/document-texts";
+import { parseUnitAddress, unitProvenancePath } from "../pipeline/unit-address";
 import type { CompanionReadiness } from "../runtime/companion-readiness";
+import type { SharedStructureShape } from "../shared-structure";
 
 import { valueFingerprint, writtenValueOf } from "./value-fingerprint";
 
@@ -69,7 +74,7 @@ export interface SourceDocument {
   entryId: string;
 }
 
-/** A field's value as a language's own row stores it. */
+/** A field's value, or one text's inside it, as a language's own row stores it. */
 export interface StoredSourceValue {
   /** The value as it was written (`writtenValueOf`), an empty one as it is. */
   value: unknown;
@@ -82,7 +87,7 @@ export interface StoredSourceValue {
   readsBack: boolean;
 }
 
-/** A language's stored values, by field; see {@link sourceReaderOf}. */
+/** A language's stored values, by field or text path; see {@link sourceReaderOf}. */
 export type SourceReader = (
   locale: string
 ) => Promise<ReadonlyMap<string, StoredSourceValue>>;
@@ -95,6 +100,8 @@ export interface WriteSources {
   read: SourceReader;
   /** Whether the table that keeps the text is there ({@link translationSourcesPresent}). */
   kept: boolean;
+  /** Whether the table that keeps suggestions, which name the text too, is there. */
+  suggestionsKept: boolean;
 }
 
 /** The source one translated field's record names: its language, and its value's fingerprint. */
@@ -148,9 +155,9 @@ interface SelectsStoredRows {
 
 /**
  * Reads a language's own stored values of one document, each language once, through `db`: a
- * transaction's handle, so a source is read as the write sees it. Only a field whose value a
- * translation row stores whole is read: a container's column there holds an overlay of its
- * structure. Empty where the translation table is not there to read.
+ * transaction's handle, so a source is read as the write sees it. A field whose value a translation
+ * row stores whole is read by its name, and each text inside a container, whose column there holds
+ * an overlay of its structure, by its path. Empty where the translation table is not there to read.
  */
 export function sourceReaderOf(args: {
   db: unknown;
@@ -161,11 +168,12 @@ export function sourceReaderOf(args: {
   };
   readiness: CompanionReadiness | undefined;
   entryId: string | number;
+  /** Containers' shapes, over the fields' own: those read with their components. */
+  shapes?: ReadonlyMap<string, SharedStructureShape>;
 }): SourceReader {
   const table = args.companion.table as Record<string, unknown>;
   const fields = args.companion.localizedFields.filter(
-    field =>
-      field.sharedStructure === undefined && table[field.column] !== undefined
+    field => table[field.column] !== undefined
   );
   const read = async (
     locale: string
@@ -186,14 +194,14 @@ export function sourceReaderOf(args: {
       );
     if (row === undefined) return new Map();
     return new Map(
-      fields.map(field => [
-        field.name,
-        storedSourceValue(
+      fields.flatMap(field =>
+        storedSourceValues(
+          field,
           row[field.column],
-          field.json === true,
-          table[field.column]
-        ),
-      ])
+          table[field.column],
+          args.shapes?.get(field.name) ?? field.sharedStructure
+        )
+      )
     );
   };
   const byLocale = new Map<
@@ -208,6 +216,25 @@ export function sourceReaderOf(args: {
     }
     return values;
   };
+}
+
+/** What one column holds: the field's value, or each text of a container's, by its path. */
+function storedSourceValues(
+  field: TranslatedColumn,
+  stored: unknown,
+  column: unknown,
+  shape: SharedStructureShape | undefined
+): [string, StoredSourceValue][] {
+  if (shape === undefined) {
+    return [
+      [field.name, storedSourceValue(stored, field.json === true, column)],
+    ];
+  }
+  return overlayTexts(field.name, stored, shape).map(([address, value]) => [
+    unitProvenancePath(address),
+    // Kept inside JSON, so it reads back as it was written.
+    { value, fingerprint: valueFingerprint(value), readsBack: true },
+  ]);
 }
 
 /** One column's value as {@link StoredSourceValue} says. */
@@ -343,12 +370,63 @@ export async function keepSources(
   }
 }
 
+/** What text nothing names any more is found and removed through. */
+export interface SourcePruning extends Pick<WriteSources, "suggestionsKept"> {
+  /** The transaction of what stopped naming it. */
+  db: Pick<SourceTextDb, "select" | "delete">;
+}
+
+/** The versions of their source that the document's records name, as keys. */
+async function versionsRecorded(
+  db: Pick<SourceTextDb, "select">,
+  document: SourceDocument,
+  fields: readonly string[]
+): Promise<string[]> {
+  const rows = await db.select<{
+    sourceLocale: string | null;
+    fieldPath: string;
+    sourceFingerprint: string | null;
+  }>(TRANSLATION_PROVENANCE_TABLE, {
+    columns: ["sourceLocale", "fieldPath", "sourceFingerprint"],
+    where: documentWhere(document, fields),
+  });
+  return rows.map(row =>
+    versionKey({ ...row, fingerprint: row.sourceFingerprint })
+  );
+}
+
+/** The versions the document's suggestions name, as keys: each names its own text's. */
+async function versionsSuggestedFrom(
+  db: Pick<SourceTextDb, "select">,
+  document: SourceDocument,
+  paths: readonly string[]
+): Promise<string[]> {
+  const rows = await db.select<{
+    sourceLocale: string;
+    unitAddress: unknown;
+    sourceFingerprint: string;
+  }>(TRANSLATION_SUGGESTIONS_TABLE, {
+    columns: ["sourceLocale", "unitAddress", "sourceFingerprint"],
+    where: documentWhere(document, [...new Set(paths.map(fieldOfPath))]),
+  });
+  return rows.flatMap(({ sourceLocale, unitAddress, sourceFingerprint }) => {
+    const address = parseUnitAddress(parsedValue(unitAddress));
+    if (address === null) return [];
+    const fieldPath = unitProvenancePath(address);
+    return [
+      versionKey({ sourceLocale, fieldPath, fingerprint: sourceFingerprint }),
+    ];
+  });
+}
+
 /**
- * Removes each version of the source text of `fields` that no record of the document names as its
- * source any more, in any language, live or held, on the write's own transaction.
+ * Removes each version of the source text of `fields` (fields, and texts inside them by their
+ * paths) that nothing of the document names as its source any more, in any language, on the write's
+ * own transaction: no record, live or held, and, where suggestions are kept (`suggestionsKept`),
+ * none of those, which are still to be accepted.
  */
 export async function pruneSources(
-  db: Pick<SourceTextDb, "select" | "delete">,
+  { db, suggestionsKept }: SourcePruning,
   document: SourceDocument,
   fields: readonly string[]
 ): Promise<void> {
@@ -363,18 +441,12 @@ export async function pruneSources(
     where: documentWhere(document, fields),
   });
   if (kept.length === 0) return;
-  const named = new Set(
-    (
-      await db.select<{
-        sourceLocale: string | null;
-        fieldPath: string;
-        sourceFingerprint: string | null;
-      }>(TRANSLATION_PROVENANCE_TABLE, {
-        columns: ["sourceLocale", "fieldPath", "sourceFingerprint"],
-        where: documentWhere(document, fields),
-      })
-    ).map(row => versionKey({ ...row, fingerprint: row.sourceFingerprint }))
-  );
+  const named = new Set([
+    ...(await versionsRecorded(db, document, fields)),
+    ...(suggestionsKept
+      ? await versionsSuggestedFrom(db, document, fields)
+      : []),
+  ]);
   const unnamed = kept
     .filter(version => !named.has(versionKey(version)))
     .map(version => version.id);
@@ -421,7 +493,7 @@ export async function forgetDocumentSources(
   await db.delete(TRANSLATION_SOURCES_TABLE, documentWhere(document));
 }
 
-/** The field a record's path is of: itself, or the field a row's own record is in. */
+/** The field a record's path is of: itself, or the field a row's or a text's record is in. */
 export function fieldOfPath(path: string): string {
   return path.split(TRANSLATION_PROVENANCE_ROW_SEPARATOR)[0];
 }
