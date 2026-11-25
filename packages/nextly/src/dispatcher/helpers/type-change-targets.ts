@@ -78,6 +78,8 @@ export type TypeChangeBlock =
   | "translations-column"
   /** Text its containers keep per language, beside one structure, would stop being translated. */
   | "leaves-translation-inside"
+  /** A value every language shares in its containers would become each language's own there. */
+  | "joins-translation-inside"
   /** It would stay translated there, its values not all kept, which the save does not judge yet. */
   | "unjudged-inside";
 
@@ -286,23 +288,35 @@ function saveMayRefuse(from: FieldDefinition, to: FieldDefinition): boolean {
   );
 }
 
-/** Whether the field is text its containers keep per language, on an entity stored so. */
-function keptPerLanguageInside(args: {
-  inJson?: boolean;
-  translatedInside?: boolean;
-  layout?: TranslationLayout;
-}): boolean {
+/**
+ * Whether a field standing where the judged one does is text its containers keep per language, beside
+ * the one structure every language shares (`translatedInsideContainers`).
+ */
+type TranslatedInside = (field: FieldDefinition) => boolean;
+
+/** Whether `field` is text its containers keep per language, on an entity stored so. */
+function keptPerLanguageInside(
+  args: {
+    inJson?: boolean;
+    translatedInside?: TranslatedInside;
+    layout?: TranslationLayout;
+  },
+  field: FieldDefinition
+): boolean {
   return (
     args.layout?.perLanguage === true &&
     args.inJson === true &&
-    args.translatedInside === true
+    args.translatedInside?.(field) === true
   );
 }
 
 /**
  * Why a translation rule blocks changing the field into `candidate`, on an entity stored per language:
  * on its own row or column, the save's own (`translationRefusal`); inside a container, where the field
- * is text kept per language there and the candidate would no longer be. Null where none does.
+ * is text kept per language there and the candidate would not be, or the reverse: the container's values
+ * are moved between its structure and each language's text by no save, so a value that stops being text
+ * there is left behind in every language, and one that becomes it is taken from the others by the first
+ * language to save the container. Null where none does.
  */
 function refusalByTranslation(
   args: {
@@ -310,16 +324,19 @@ function refusalByTranslation(
     dialect: SupportedDialect;
     builtBy: ColumnOrigin;
     inJson?: boolean;
-    translatedInside?: boolean;
+    translatedInside?: TranslatedInside;
     layout?: TranslationLayout;
   },
   candidate: FieldDefinition
 ): { blocked: TypeChangeBlock; refusal: TypeChangeRefusalWords | null } | null {
   if (args.layout?.perLanguage !== true) return null;
   if (args.inJson === true) {
-    return keptPerLanguageInside(args) && !isFieldLocalized(candidate, true)
-      ? { blocked: "leaves-translation-inside", refusal: null }
-      : null;
+    const was = keptPerLanguageInside(args, args.field);
+    if (was === keptPerLanguageInside(args, candidate)) return null;
+    return {
+      blocked: was ? "leaves-translation-inside" : "joins-translation-inside",
+      refusal: null,
+    };
   }
   return translationRefusal({
     from: args.field,
@@ -336,9 +353,9 @@ function refusalByTranslation(
  * values are kept, as the save that would make the change reads them; `inJson`, that they are held
  * inside a named group's or a repeater's JSON value, as the save judges such a field. `layout`, where
  * the entity keeps its translated values. A field held in a container's JSON has no translations column
- * of its own, so the rules of one are not asked of it: `translatedInside` says it is text its containers
- * keep per language beside their structure (`translatedInsideContainers`), which a change that stops
- * translating it would leave behind in every language.
+ * of its own, so the rules of one are not asked of it: `translatedInside` says whether it is text its
+ * containers keep per language beside their structure, as saved and as a change would make it
+ * (`translatedInsideContainers`), and a change of one into the other is not open.
  */
 export function typeChangeTargets(args: {
   field: FieldDefinition;
@@ -347,7 +364,7 @@ export function typeChangeTargets(args: {
   builtBy: ColumnOrigin;
   componentRow?: boolean;
   inJson?: boolean;
-  translatedInside?: boolean;
+  translatedInside?: TranslatedInside;
   layout?: TranslationLayout;
 }): TypeChangeTarget[] {
   const at = args.componentRow === true ? { componentRow: true } : {};
@@ -376,7 +393,7 @@ export function typeChangeTargets(args: {
         : pairOutcome(from, to);
       // Text kept per language beside a container's structure is not among the values the save judges,
       // so until it is, a change there is open only where every value is kept.
-      return keptPerLanguageInside(args) && outcome !== "keeps"
+      return keptPerLanguageInside(args, args.field) && outcome !== "keeps"
         ? { type, blocked: "unjudged-inside", refusal: null, outcome: null }
         : { type, blocked: null, refusal: null, outcome };
     });
@@ -485,19 +502,40 @@ function fieldAt(
   return fieldAt(found.fields ?? [], rest, true);
 }
 
+/** `fields` with `field` standing at `path`, found by name through groups and repeaters as `fieldAt` does. */
+function withFieldAt(
+  fields: readonly FieldDefinition[],
+  path: readonly string[],
+  field: FieldDefinition
+): FieldDefinition[] {
+  const [name, ...rest] = path;
+  return fields.map(each => {
+    if (each.type === "group" && !each.name) {
+      return { ...each, fields: withFieldAt(each.fields ?? [], path, field) };
+    }
+    if (each.name !== name) return each;
+    return rest.length === 0
+      ? field
+      : { ...each, fields: withFieldAt(each.fields ?? [], rest, field) };
+  });
+}
+
 /**
- * Whether the field at `path` among `fields` is text its containers keep per language, beside the one
- * structure every language shares: asked of the shape the storage itself splits the outermost container
+ * Whether `field`, standing at `path` among `fields`, is text its containers keep per language, beside the
+ * one structure every language shares: asked of the shape the storage itself splits the outermost container
  * by (`sharedStructureShape`), so the two never disagree on what is kept there. Whatever the entity's own
  * switch says: each installation keeps its text per language.
  */
 function translatedInsideContainers(
   fields: readonly FieldDefinition[],
-  path: readonly string[]
+  path: readonly string[],
+  field: FieldDefinition
 ): boolean {
   const [outermost, ...rest] = path;
   const held = rest.at(-1);
-  const container = onLevel(fields).find(field => field.name === outermost);
+  const container = onLevel(withFieldAt(fields, path, field)).find(
+    each => each.name === outermost
+  );
   if (container === undefined || held === undefined) return false;
   const shape = rest
     .slice(0, -1)
@@ -550,7 +588,8 @@ export function respondTypeChangeTargets(args: {
   const items = typeChangeTargets({
     field: found.field,
     inJson: found.inJson,
-    translatedInside: translatedInsideContainers(args.fields, request.field),
+    translatedInside: field =>
+      translatedInsideContainers(args.fields, request.field, field),
     candidates:
       request.candidates ??
       FIELD_TYPE_CATALOG.map(entry => ({ type: entry.type })),
