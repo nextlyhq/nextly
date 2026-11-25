@@ -34,6 +34,7 @@ import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher"
 import { clearRegistryRowCache } from "../../../domains/dynamic-collections/services/collection-row-cache";
 import { ensureI18nArchive } from "../../../domains/i18n/migration/ensure-archive";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
+import { withStopPoints } from "../../../domains/schema/migrate/stop-points";
 import { resolveComponentTableName } from "../../../domains/schema/utils/resolve-table-name";
 import {
   createTestNextly,
@@ -578,6 +579,80 @@ describe.each(getConfiguredTestDialects())(
       return { adapter, ids };
     }
 
+    /** The removal's file, its drops written by hand: every table of the two, what holds a key to another first. */
+    async function dropEveryTableByHand(adapter: DrizzleAdapter) {
+      const file = readdirSync(join(dir, "migrations")).find(name =>
+        name.endsWith("_retire.sql")
+      );
+      const path = join(dir, "migrations", file!);
+      const sql = readFileSync(path, "utf8");
+      const tables = [
+        ...(await tablesOf(adapter, NOTES)),
+        ...(await tablesOf(adapter, HOME)),
+      ];
+      const mains = [NOTES.table, HOME.table];
+      const drops = [
+        ...tables.filter(table => !mains.includes(table)),
+        ...mains,
+      ].map(table => `DROP TABLE ${table};`);
+      writeFileSync(
+        path,
+        `${sql.slice(0, sql.indexOf("-- UP"))}-- UP\n${drops.join("\n")}\n\n${sql.slice(sql.indexOf("-- DOWN"))}`
+      );
+    }
+
+    it.each([
+      "recorded applied",
+      "files recorded",
+      "removed registryRow",
+      "registry written",
+      "recorded deletion events",
+      "removed fieldGroupValues",
+      "removed translationRows",
+      "removed leftovers",
+    ])(
+      "is finished by the next run where one stopped at: %s",
+      async at => {
+        const { adapter, ids } = await promoted();
+        const other = await sharedRowsOf(adapter, dialect, OTHER);
+        expect(await migrateCreate(config({}), "retire")).toBeUndefined();
+        await dropEveryTableByHand(adapter);
+        const consent = `${NOTES.table},${HOME.table}`;
+
+        let reached = 0;
+        const stopped = await withStopPoints(
+          point => {
+            if (point !== at && !point.endsWith(`: ${at}`)) return;
+            reached += 1;
+            throw new Error(`stopped at ${at}`);
+          },
+          () => migrate(config({}), consent)
+        );
+        expect(reached, at).toBe(1);
+        expect(stopped, "finished").toBeDefined();
+        for (const entity of [NOTES, HOME]) {
+          expect(await tablesOf(adapter, entity)).toEqual([]);
+        }
+
+        // Nothing is pending, and no drop runs again.
+        expect(await migrate(config({}), consent)).toBeUndefined();
+
+        for (const entity of [NOTES, HOME]) {
+          const left = await sharedRowsOf(adapter, dialect, entity);
+          for (const [kind, rows] of Object.entries(left)) {
+            expect(rows, `${entity.slug} ${kind}`).toEqual([]);
+          }
+          expect(await deletionsOf(adapter, entity)).toEqual(
+            Object.fromEntries(ids.get(entity.slug)!.map(id => [id, 1]))
+          );
+          const permissions = await permissionsOf(adapter, entity);
+          expect(permissions.every(each => each.orphaned)).toBe(true);
+        }
+        expect(await sharedRowsOf(adapter, dialect, OTHER)).toEqual(other);
+      },
+      300_000
+    );
+
     it.each(["as it was written", "its drops written again by hand"])(
       "goes with everything it owns, and nothing of another's, the file %s",
       async how => {
@@ -622,22 +697,7 @@ describe.each(getConfiguredTestDialects())(
         );
         const path = join(dir, "migrations", file!);
         const sql = readFileSync(path, "utf8");
-        if (how !== "as it was written") {
-          // Every table of the two, what holds a key to another first.
-          const tables = [
-            ...(await tablesOf(adapter, NOTES)),
-            ...(await tablesOf(adapter, HOME)),
-          ];
-          const mains = [NOTES.table, HOME.table];
-          const drops = [
-            ...tables.filter(table => !mains.includes(table)),
-            ...mains,
-          ].map(table => `DROP TABLE ${table};`);
-          writeFileSync(
-            path,
-            `${sql.slice(0, sql.indexOf("-- UP"))}-- UP\n${drops.join("\n")}\n\n${sql.slice(sql.indexOf("-- DOWN"))}`
-          );
-        }
+        if (how !== "as it was written") await dropEveryTableByHand(adapter);
 
         expect(
           await migrate(config({}), `${NOTES.table},${HOME.table}`),

@@ -232,14 +232,15 @@ export async function migrate(
 /** The statement storing `ids` in `posts`, its other required columns filled by their types. */
 export async function insertingPosts(
   dialect: TestDialect,
-  ids: readonly string[]
+  ids: readonly string[],
+  table = POSTS
 ): Promise<string> {
   const q = (name: string) =>
     dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
   const { tables } = await introspectLiveSnapshot(
     instance!.adapter.getDrizzle(),
     dialect,
-    [POSTS]
+    [table]
   );
   const columns = tables[0].columns.filter(
     column => !column.nullable && column.default === undefined
@@ -254,7 +255,7 @@ export async function insertingPosts(
     `(${columns
       .map(c => (c.name === "id" ? `'${id}'` : literal(id, c.type)))
       .join(", ")})`;
-  return `INSERT INTO ${q(POSTS)} (${columns.map(c => q(c.name)).join(", ")}) VALUES ${ids.map(row).join(", ")}`;
+  return `INSERT INTO ${q(table)} (${columns.map(c => q(c.name)).join(", ")}) VALUES ${ids.map(row).join(", ")}`;
 }
 
 /** One row in `posts`. */

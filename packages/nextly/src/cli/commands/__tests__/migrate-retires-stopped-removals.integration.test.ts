@@ -156,65 +156,86 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
     expect(await captures()).toBe(0);
   });
 
-  it("on MySQL, ends each document once where the stopped file is resolved as applied", async () => {
-    if (dialect !== "mysql") return;
+  /** The statements of the removal's `section`, as the runner reads them. */
+  const statementsOf = (section: "upSql" | "downSql") =>
+    splitSqlStatements(
+      parseSqlSections(readFileSync(pathOf("remove"), "utf8"))[section],
+      dialect
+    );
+
+  /** Where a stopped file's statements stay: MySQL's always, others' outside a transaction. */
+  const STAYING =
+    dialect === "mysql"
+      ? ["in a transaction", "outside a transaction"]
+      : ["outside a transaction"];
+
+  /** The removal written, its file run `how`, stopped once its drop has run; what the run then holds. */
+  async function stoppedAfterItsDrop(how: string): Promise<{
+    gone: unknown;
+    stored: number;
+  }> {
     const gone = await removalWritten(dialect);
+    if (how === "outside a transaction") edited("remove", outsideTransaction);
     expect(
       await stoppedAt(
         gone,
         point => point === `${removal()}: after statement 1`
       )
     ).toMatch(/stopped/);
-    // The drop ran and its ids are stored; the next run refuses and forgets none of them.
     expect(await stands(POSTS)).toBe(false);
     const stored = await captures();
     expect(stored).toBeGreaterThan(0);
-    expect(await migrate(gone)).toBeDefined();
-    expect(await captures()).toBe(stored);
-    expect(await deletions()).toEqual({});
+    return { gone, stored };
+  }
 
-    // Its other statements finished by hand, as the refusal asks.
-    for (const statement of splitSqlStatements(
-      parseSqlSections(readFileSync(pathOf("remove"), "utf8")).upSql,
-      dialect
-    ).slice(1)) {
-      await project.adapter.executeQuery(statement);
+  it.each(STAYING)(
+    "ends each document once where a file stopped after its drop, run %s, is resolved as applied",
+    async how => {
+      const { gone, stored } = await stoppedAfterItsDrop(how);
+      // The next run refuses, naming the file, runs nothing again, and forgets none of the ids.
+      const refused = await migrate(gone);
+      expect(refused, "applied").toBeDefined();
+      expect(refused).toContain(removal());
+      expect(await captures()).toBe(stored);
+      expect(await deletions()).toEqual({});
+
+      // Its other statements finished by hand, as the refusal asks.
+      for (const statement of statementsOf("upSql").slice(1)) {
+        await project.adapter.executeQuery(statement);
+      }
+      expect(await resolved(gone, { applied: removal() })).toBeUndefined();
+      expect(await migrate(gone)).toBeUndefined();
+
+      expect(await deletions()).toEqual(EACH_ONCE);
+      expect(await captures()).toBe(0);
     }
-    expect(await resolved(gone, { applied: removal() })).toBeUndefined();
-    expect(await migrate(gone)).toBeUndefined();
+  );
 
-    expect(await deletions()).toEqual(EACH_ONCE);
-    expect(await captures()).toBe(0);
-  });
+  it.each(STAYING)(
+    "ends nothing where a file stopped after its drop, run %s, is undone by hand and resolved as rolled back, until it applies",
+    async how => {
+      const { gone } = await stoppedAfterItsDrop(how);
+      // The drop undone: the table as the file's own DOWN makes it, with the rows it had.
+      for (const statement of statementsOf("downSql").filter(each =>
+        each.includes(POSTS)
+      )) {
+        await project.adapter.executeQuery(statement);
+      }
+      await insertPost(dialect, "p1");
+      await insertPost(dialect, "p2");
+      expect(
+        await resolved(gone, { failedCleanup: removal() })
+      ).toBeUndefined();
+      expect(await stands(POSTS)).toBe(true);
+      expect(await deletions()).toEqual({});
 
-  it("on MySQL, ends nothing where the drop is undone and the file resolved as rolled back, until it applies", async () => {
-    if (dialect !== "mysql") return;
-    const gone = await removalWritten(dialect);
-    await project.adapter.executeQuery(
-      `CREATE TABLE gt_aside LIKE \`${POSTS}\``
-    );
-    await project.adapter.executeQuery(
-      `INSERT INTO gt_aside SELECT * FROM \`${POSTS}\``
-    );
-    expect(
-      await stoppedAt(
-        gone,
-        point => point === `${removal()}: after statement 1`
-      )
-    ).toMatch(/stopped/);
-    await project.adapter.executeQuery(
-      `ALTER TABLE gt_aside RENAME TO \`${POSTS}\``
-    );
-    expect(await resolved(gone, { failedCleanup: removal() })).toBeUndefined();
-    expect(await stands(POSTS)).toBe(true);
-    expect(await deletions()).toEqual({});
+      expect(await migrate(gone)).toBeUndefined();
 
-    expect(await migrate(gone)).toBeUndefined();
-
-    expect(await stands(POSTS)).toBe(false);
-    expect(await deletions()).toEqual(EACH_ONCE);
-    expect(await captures()).toBe(0);
-  });
+      expect(await stands(POSTS)).toBe(false);
+      expect(await deletions()).toEqual(EACH_ONCE);
+      expect(await captures()).toBe(0);
+    }
+  );
 
   it("ends each document once where the file runs outside a transaction", async () => {
     const gone = await removalWritten(dialect);
@@ -612,6 +633,79 @@ describeEachDialect("captures that cannot be recorded", dialect => {
   });
 });
 
+describeEachDialect(
+  "a collection kept in a table spelled in capitals",
+  dialect => {
+    const UPPER = "dc_Gt_Upper";
+    const quoted = dialect === "mysql" ? `\`${UPPER}\`` : `"${UPPER}"`;
+
+    /** Its removal written, two posts stored. */
+    async function removalOfUpper(): Promise<unknown> {
+      await boot(dialect);
+      const config = appConfig({
+        posts: "required",
+        pagesNamePosts: false,
+        dbName: UPPER,
+      });
+      expect((await migrateCreate(config, "start")).refused).toBeUndefined();
+      expect(await migrate(config)).toBeUndefined();
+      await project.adapter.executeQuery(
+        await insertingPosts(dialect, ["p1", "p2"], UPPER)
+      );
+      const gone = appConfig(GONE);
+      const { sql, refused } = await migrateCreate(gone, "remove");
+      expect(refused).toBeUndefined();
+      expect(sql).toContain(quoted);
+      return gone;
+    }
+
+    it("ends each of its documents once", async () => {
+      const gone = await removalOfUpper();
+
+      expect(await migrate(gone)).toBeUndefined();
+
+      expect(await deletions()).toEqual(EACH_ONCE);
+      expect(await captures()).toBe(0);
+    });
+
+    it("on PostgreSQL, is not taken for a table of the same name in lower case", async () => {
+      if (dialect !== "postgresql") return;
+      const gone = await removalOfUpper();
+      await project.adapter.executeQuery(
+        `CREATE TABLE ${UPPER.toLowerCase()} (id varchar(36) PRIMARY KEY)`
+      );
+      await project.adapter.executeQuery(
+        `INSERT INTO ${UPPER.toLowerCase()} VALUES ('other')`
+      );
+
+      expect(await migrate(gone)).toBeUndefined();
+
+      expect(await deletions()).toEqual(EACH_ONCE);
+      expect(await stands(UPPER.toLowerCase())).toBe(true);
+      expect(await captures()).toBe(0);
+    });
+
+    it("on PostgreSQL, ends nothing, and says so, where the file was edited to drop the lower-case one", async () => {
+      if (dialect !== "postgresql") return;
+      const gone = await removalOfUpper();
+      await project.adapter.executeQuery(
+        `CREATE TABLE ${UPPER.toLowerCase()} (id varchar(36) PRIMARY KEY)`
+      );
+      edited("remove", sql =>
+        sql.replace(`DROP TABLE ${quoted} CASCADE`, `DROP TABLE ${UPPER}`)
+      );
+      const said: string[] = [];
+
+      await migrate(gone, said);
+
+      expect(await stands(UPPER)).toBe(true);
+      expect(await deletions()).toEqual({});
+      expect(await captures()).toBe(0);
+      expect(said.filter(line => /still there/.test(line))).toHaveLength(1);
+    });
+  }
+);
+
 describeEachDialect("a removal in code, its process killed", dialect => {
   /** How long one process may take: each compiles the CLI, on a machine other runs share. */
   const PROCESS_TIMEOUT = 2.5 * NEXTLY_RUN_TIMEOUT;
@@ -643,23 +737,25 @@ describeEachDialect("a removal in code, its process killed", dialect => {
     return { status: ran.status, said: `${ran.stdout}\n${ran.stderr}` };
   }
 
-  it(
-    "is finished by the next process, wherever it was killed once the file was recorded",
-    async () => {
+  it.each([
+    "recorded applied",
+    "files recorded",
+    "registry written",
+    "collection gt_posts: recorded deletion events",
+  ])(
+    "is finished by the next process where one was killed at: %s",
+    async point => {
       await removalWritten(dialect);
-      for (const at of [
-        `${removal()}: recorded applied`,
-        "files recorded",
-        "registry written",
-        "collection gt_posts: recorded deletion events",
-      ]) {
-        const killed = await migrateProcess(at);
-        expect(killed.status, killed.said).not.toBe(0);
-        expect(killed.said).toContain(`${KILLED_AT}${at}`);
-        expect(await stands(POSTS), at).toBe(false);
-        expect(await deletions(), at).toEqual({});
-        expect(await captures(), at).toBeGreaterThan(0);
-      }
+      const at =
+        point === "recorded applied" ? `${removal()}: ${point}` : point;
+
+      const killed = await migrateProcess(at);
+
+      expect(killed.status, killed.said).not.toBe(0);
+      expect(killed.said).toContain(`${KILLED_AT}${at}`);
+      expect(await stands(POSTS)).toBe(false);
+      expect(await deletions()).toEqual({});
+      expect(await captures()).toBeGreaterThan(0);
 
       const finished = await migrateProcess();
 
@@ -667,7 +763,7 @@ describeEachDialect("a removal in code, its process killed", dialect => {
       expect(await deletions(), finished.said).toEqual(EACH_ONCE);
       expect(await captures(), finished.said).toBe(0);
     },
-    6 * PROCESS_TIMEOUT
+    3 * PROCESS_TIMEOUT
   );
 
   it(
