@@ -326,7 +326,7 @@ describeEachDialect("what generated migrations retire", dialect => {
     expect(unrecorded(said)).toEqual([]);
   });
 
-  it("applies a drop with no snapshot of a collection carrying a plugin's column, as it did before", async () => {
+  it("refuses, as for any change of its tables, a drop with no snapshot of a collection carrying a plugin's column", async () => {
     const contributor = definePlugin({
       name: "@test/contributor",
       version: "1.0.0",
@@ -362,9 +362,11 @@ describeEachDialect("what generated migrations retire", dialect => {
       `-- Migration: dropped_by_hand\n\n-- UP\nDROP TABLE ${quoted}${dialect === "postgresql" ? " CASCADE" : ""};\n\n-- DOWN\n`
     );
 
-    expect(await migrate(config)).toBeUndefined();
+    const refused = await migrate(config);
 
-    expect(await stands(POSTS)).toBe(false);
+    expect(refused, "applied").toMatch(/FOREIGN_ELEMENT_REMOVED/);
+    expect(refused).toContain("search_key");
+    expect(await stands(POSTS)).toBe(true);
     expect(await deletions()).toEqual({});
   });
 
