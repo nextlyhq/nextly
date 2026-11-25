@@ -17,6 +17,7 @@ import {
   pushMayDropTable,
   tablesDroppedBy,
 } from "../drop-guard";
+import { ownerRowsToRecord } from "../kept-elements";
 import type { OwnerRecord } from "../owner-registry";
 
 function owner(migratedBy: string): OwnerRecord {
@@ -82,6 +83,48 @@ describe("assertNoForeignDrops", () => {
       })
     ).toThrow(/different owner/i);
   });
+
+  it.each(dialects)(
+    "judges a plugin's column on a collection's table as the app's migrations carry it, recorded or not, on %s",
+    dialect => {
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const statements = [
+        `ALTER TABLE ${q("dc_posts")} DROP COLUMN ${q("auth_stamp")}`,
+      ];
+      const recorded = ownerRowsToRecord(
+        [
+          {
+            table: "dc_posts",
+            elementKind: "column",
+            elementName: "auth_stamp",
+            owner: { kind: "plugin", id: "auth" },
+          },
+        ],
+        new Set(),
+        []
+      );
+      const judge = (
+        stream: "app" | "plugin:auth",
+        elementOwners: readonly OwnerRecord[]
+      ) =>
+        assertNoForeignDrops({
+          statements,
+          stream,
+          owners,
+          elementOwners,
+          dialect,
+          source: "0008_drop_stamp",
+        });
+      for (const rows of [[], recorded]) {
+        expect(() => judge("app", rows)).not.toThrow();
+        // The plugin's own module does not carry it, so it may not drop it.
+        expect(() => judge("plugin:auth", rows)).toThrow(
+          /different owner|no owner record/i
+        );
+      }
+    }
+  );
 
   it("allows the owning plugin's own drop", () => {
     expect(() =>
