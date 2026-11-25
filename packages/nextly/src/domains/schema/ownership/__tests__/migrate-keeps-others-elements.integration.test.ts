@@ -1287,6 +1287,29 @@ describe.each(getConfiguredTestDialects())(
       expect((await shapeOf(url, TABLE)).indexes).toContain(DECLARED_INDEX);
     });
 
+    it("nextly migrate refuses a file, written where no database was read, that drops a removed plugin's index with the field it stands on, changing nothing", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      wentThrough(await migrateCreate("add_posts", pluggedWith(true, true)));
+      wentThrough(await migrate(pluggedWith(true, true)));
+      const before = await shapeOf(url, TABLE);
+      // The control: the index is there, made by the app's migration alone.
+      expect(before.indexes).toContain(DECLARED_INDEX);
+
+      use(absentDatabase());
+      wentThrough(
+        await migrateCreate("remove_code", pluggedWith(false, false))
+      );
+      use(url);
+      const ran = await migrate(pluggedWith(false, false));
+
+      expect(ran.code, ran.said).toBe(1);
+      for (const part of ["code", PLUGIN, DECLARED_INDEX, TABLE]) {
+        expect(ran.said).toContain(part);
+      }
+      expect(await shapeOf(url, TABLE)).toEqual(before);
+    });
+
     it("migrate:create writes the file and says it was not checked where no database is there", async () => {
       use(absentDatabase());
       wentThrough(await migrateCreate("add_posts", configWith(true)));
