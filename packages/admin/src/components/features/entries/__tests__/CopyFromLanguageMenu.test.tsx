@@ -264,4 +264,58 @@ describe("CopyFromLanguageMenu", () => {
       body: { origin: "copy", sourceLocale: "en" },
     });
   });
+
+  // The text inside a repeater's rows is copied onto this language's rows; the save must say so,
+  // or the server records those rows' text as this editor's own translation, never out of date.
+  it("records the text it copied inside a repeater's rows as copied too", async () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    fetchSourceValues.mockResolvedValue({
+      title: "Hello",
+      slides: [{ id: "r1", caption: "first", rank: 9 }],
+    });
+    render(
+      <Harness
+        ctx={{
+          ...CTX,
+          textContainers: [
+            {
+              type: "repeater",
+              name: "slides",
+              fields: [
+                { type: "text", name: "caption" },
+                { type: "number", name: "rank" },
+              ],
+            },
+          ],
+        }}
+        defaults={{
+          title: "",
+          body: "",
+          slides: [{ id: "r1", caption: "", rank: 1 }],
+        }}
+      />
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: /replace from… another language, into german/i,
+      })
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "English" })
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Copy from English$/ })
+    );
+
+    await waitFor(() => {
+      expect(seenValues.slides).toEqual([
+        { id: "r1", caption: "first", rank: 1 },
+      ]);
+    });
+    expect(copiedValuesFor(seenControl).beginSave(seenValues).claims).toEqual({
+      title: { origin: "copy", sourceLocale: "en" },
+      slides: { origin: "copy", sourceLocale: "en" },
+    });
+  });
 });

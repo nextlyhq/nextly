@@ -160,9 +160,10 @@ export function useCopyFromLanguage(): CopyFromLanguage {
       // Noted, so the save says these were copied from that language
       // rather than written by the person.
       // With the version of the source the read gave, so the server can tell a copy of the source
-      // as it stands from one of a source that has moved since.
+      // as it stands from one of a source that has moved since. A container's copied text inside
+      // its rows is claimed too, so its rows' text is recorded as copied, row by row.
       copiedValuesFor(form.control).record(
-        patch,
+        { ...patch, ...containerPatch },
         pending,
         typeof source._rev === "string" ? source._rev : undefined
       );

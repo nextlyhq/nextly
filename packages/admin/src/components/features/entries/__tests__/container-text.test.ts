@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   holdsTranslatedText,
   sourceValueAt,
+  textContainersOf,
   withTextFrom,
 } from "../container-text";
 
@@ -58,6 +59,19 @@ describe("holdsTranslatedText", () => {
     expect(holdsTranslatedText({ type: "text", name: "title" }, true)).toBe(
       false
     );
+  });
+});
+
+describe("textContainersOf", () => {
+  // A group with no name only lays fields out: a container inside it is a top-level field of the
+  // document, as storage and the form address it. Kept as the wrapper instead, it is skipped for
+  // having no name, and copying the document from another language leaves its text behind.
+  it("finds a container laid out by a group with no name, never the group itself", () => {
+    const title = { type: "text", name: "title" };
+    const layout = { type: "group", fields: [SLIDES, title] };
+    expect(textContainersOf([layout, title], true)).toEqual([SLIDES]);
+    // The control: a container at the top level is found as it is.
+    expect(textContainersOf([SLIDES, title], true)).toEqual([SLIDES]);
   });
 });
 

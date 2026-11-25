@@ -16,6 +16,8 @@ import {
   readFieldGroupType,
 } from "nextly/field-group-type";
 
+import { addressableFieldsWithin } from "@admin/lib/plugins/document-view-registry";
+
 /** What these read of a field: a component field as the API enriches it, with its fields. */
 interface FieldShape {
   type?: string;
@@ -83,6 +85,21 @@ export function holdsTranslatedText(
   // language, as storage keeps it.
   if (!isContainer(shape) || shape.localized === false) return false;
   return levelHoldsText(childrenOf(shape), documentLocalized, new Set());
+}
+
+/**
+ * The containers among the fields a document addresses at its top level whose rows hold
+ * translated text ({@link holdsTranslatedText}), for copying a whole document from another
+ * language. A group with no name only lays fields out, so the containers inside it are read, as
+ * storage and the form address them (`addressableFieldsWithin`), never the group itself.
+ */
+export function textContainersOf<F extends object>(
+  fields: readonly F[],
+  documentLocalized: boolean
+): F[] {
+  return addressableFieldsWithin(fields)
+    .map(({ field }) => field)
+    .filter(field => holdsTranslatedText(field, documentLocalized));
 }
 
 /**
