@@ -1006,7 +1006,10 @@ function heldAsContainerText(
   const leaf = inside.at(-1);
   if (shape === null || leaf === undefined) return false;
   for (const step of inside.slice(0, -1)) {
-    shape = shape.inner[step.name] ?? null;
+    // Own entries only: a container named like an object's built-ins (`constructor`) is no shape.
+    shape = Object.hasOwn(shape.inner, step.name)
+      ? (shape.inner[step.name] ?? null)
+      : null;
     if (shape === null) return false;
   }
   return shape.texts.includes(leaf.name);

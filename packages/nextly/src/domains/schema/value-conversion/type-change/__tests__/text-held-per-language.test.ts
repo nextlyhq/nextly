@@ -82,6 +82,20 @@ describe("textHeldPerLanguageRefusals", () => {
     ).toEqual([]);
   });
 
+  // A shape lists its containers by name in a plain object, which answers a built-in's name
+  // (`constructor`) with something that is no shape: such a group is read by its own entry alone.
+  it("refuses nothing for a text a container named like a built-in marks shared", () => {
+    const inner = (type: string) => ({
+      name: "constructor",
+      type: "group",
+      localized: false,
+      fields: [{ name: "code", type }],
+    });
+    expect(
+      refusalsOf([group([inner("text")])], [group([inner("number")])], true)
+    ).toEqual([]);
+  });
+
   it("refuses nothing for a row's own declared id", () => {
     const rows = (type: string) =>
       f({

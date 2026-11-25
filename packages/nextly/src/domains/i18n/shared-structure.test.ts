@@ -17,6 +17,7 @@ import {
   assembleSharedStructure,
   componentFieldsChangingTranslation,
   componentStructureShape,
+  fieldsTurningTranslatedInside,
   holdsUnkeyedText,
   keepsTranslationsInside,
   pruneOverlay,
@@ -783,6 +784,57 @@ describe("componentFieldsChangingTranslation", () => {
     ).toEqual([]);
     expect(
       componentFieldsChangingTranslation("card", CARD, [CARD[1]!, CARD[2]!])
+    ).toEqual([]);
+  });
+});
+
+describe("fieldsTurningTranslatedInside", () => {
+  // A repeater kept in both shapes, translating its caption either way, with a group inside it.
+  const slidesWith = (details: Record<string, unknown>) => [
+    {
+      name: "slides",
+      type: "repeater",
+      fields: [{ name: "caption", type: "text" }, details],
+    },
+  ];
+
+  it("names a field shared before that the change translates", () => {
+    expect(
+      fieldsTurningTranslatedInside(
+        slidesWith({ name: "label", type: "text", localized: false }),
+        slidesWith({ name: "label", type: "text" })
+      )
+    ).toEqual(["slides.label"]);
+  });
+
+  // The group inside was shared whole before, so it had no shape of its own: its label, every
+  // language's, sits on the structure and would be read as one language's text.
+  it("names a field inside a group shared whole before, which the change translates", () => {
+    expect(
+      fieldsTurningTranslatedInside(
+        slidesWith({
+          name: "details",
+          type: "group",
+          localized: false,
+          fields: [{ name: "label", type: "text" }],
+        }),
+        slidesWith({
+          name: "details",
+          type: "group",
+          fields: [{ name: "label", type: "text" }],
+        })
+      )
+    ).toEqual(["slides.details.label"]);
+  });
+
+  it("names nothing where the group inside translated its label before", () => {
+    const details = {
+      name: "details",
+      type: "group",
+      fields: [{ name: "label", type: "text" }],
+    };
+    expect(
+      fieldsTurningTranslatedInside(slidesWith(details), slidesWith(details))
     ).toEqual([]);
   });
 });

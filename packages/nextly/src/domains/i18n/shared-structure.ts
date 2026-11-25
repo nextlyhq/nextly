@@ -304,8 +304,10 @@ export function componentFieldsChangingTranslation(
  * where they were shared, by path (`slides.rank`): each field kept by name in a container kept by
  * name, of the same kind, that already kept its text per language before the change. Its value
  * stored on the structure, every language's, would be read as one language's text from then on.
- * A field added holds no stored value yet; a container that starts keeping text has its overlay
- * seeded from the structure, so neither is named.
+ * A container inside one kept, shared whole before, is read as having kept no text, so each text
+ * the change translates inside it is named too (`slides.details.label`). A field added holds no
+ * stored value yet; an entity's container that starts keeping text has its overlay seeded from the
+ * structure, so neither is named.
  */
 export function fieldsTurningTranslatedInside(
   before: readonly StructuredField[],
@@ -338,16 +340,22 @@ export function fieldsTurningTranslatedInside(
     for (const [name, field] of named(fieldsAfter)) {
       const prior = earlier.get(name);
       if (prior === undefined) continue;
-      const nestedWas = was.inner[name];
-      const nestedNow = now.inner[name];
+      // Own entries only: a field named like an object's built-ins (`constructor`) is no shape.
+      const nestedWas = Object.hasOwn(was.inner, name)
+        ? was.inner[name]
+        : undefined;
+      const nestedNow = Object.hasOwn(now.inner, name)
+        ? now.inner[name]
+        : undefined;
       if (
         isStructureContainer(field) &&
         prior.type === field.type &&
-        nestedWas !== undefined &&
         nestedNow !== undefined
       ) {
+        // A container inside with no shape before was shared whole (`localized: false`, or it held
+        // nothing translatable): it kept no text per language, so every text inside it now is new.
         walk(
-          nestedWas,
+          nestedWas ?? { kind: nestedNow.kind, texts: [], inner: {} },
           nestedNow,
           prior.fields,
           field.fields,
