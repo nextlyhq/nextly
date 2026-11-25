@@ -4,10 +4,11 @@
 
 import { describe, expect, it } from "vitest";
 
+import { withStoredTable } from "../../field-groups/services/field-group-stored-tables";
+
 import {
   chooseRestoreEntity,
   resolveEntityTables,
-  withStoredTable,
 } from "./resolve-entity-table";
 
 /** The one entity a slug names, for the cases below where it names one. */

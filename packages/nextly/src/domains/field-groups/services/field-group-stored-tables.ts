@@ -16,6 +16,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import type { ResolvedEntityTable } from "../../i18n/migration/resolve-entity-table";
 import { readIdentifierCaseRules } from "../../schema/utils/read-identifier-case";
 import {
   indexCatalog,
@@ -250,4 +251,25 @@ export function fieldGroupRegistryUnreadable(
       "known. Nothing was changed. Retry once the database answers.",
     logContext: { reason },
   });
+}
+
+/**
+ * `entity` with a field group's tables as the database stores them: the table its registry row
+ * names (`stored`, slug to table), which is `fg_<slug>` once the site's field groups moved to the
+ * current names, and which no configuration rule derives. A collection, a Single, or a field group
+ * the registry does not hold keeps the tables its configuration names.
+ *
+ * Refused for a field group where the registry is there but could not be read: the configuration's
+ * name is the legacy one, and a stale legacy table under it would take the values instead.
+ */
+export function withStoredTable(
+  entity: ResolvedEntityTable,
+  slug: string,
+  stored: Pick<StoredFieldGroupTables, "tables" | "usable" | "reason">
+): ResolvedEntityTable {
+  if (entity.kind !== "fieldGroup") return entity;
+  if (!stored.usable) throw fieldGroupRegistryUnreadable(stored.reason);
+  const tableName = stored.tables.get(slug);
+  if (tableName === undefined) return entity;
+  return { ...entity, tableName, companionTableName: `${tableName}_locales` };
 }

@@ -26,6 +26,7 @@ import type { Command } from "commander";
 
 import {
   readStoredFieldGroupTables,
+  withStoredTable,
   type RegistryReadAdapter,
 } from "../../domains/field-groups/services/field-group-stored-tables";
 import {
@@ -33,7 +34,6 @@ import {
   KIND_NAMES,
   kindOption,
   resolveEntityTables,
-  withStoredTable,
   type ResolvedEntityTable,
 } from "../../domains/i18n/migration/resolve-entity-table";
 import {
