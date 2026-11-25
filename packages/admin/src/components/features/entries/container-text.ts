@@ -177,8 +177,9 @@ function fieldTextFrom(
 
 /**
  * A component's value inside a row, with the text its fields translate taken from `source`: each
- * instance from the source instance with the same id (a list), or the one instance where it is
- * the same one (a single: `sameInstance`), read by the fields of the component it is.
+ * instance from the source instance with the same id (a list) or the one instance (a single),
+ * only where it is the same one (`sameInstance`: an instance that changed type is another
+ * component), read by the fields of the component it is.
  */
 function componentTextFrom(
   current: unknown,
@@ -201,7 +202,9 @@ function componentTextFrom(
     return current.map((instance, index) => {
       const key = keys[index];
       const from = key === undefined ? undefined : byKey.get(key);
-      return isRecord(instance) && from ? onto(instance, from) : instance;
+      return isRecord(instance) && from && sameInstance(instance, from)
+        ? onto(instance, from)
+        : instance;
     });
   }
   return isRecord(current) && isRecord(source) && sameInstance(current, source)
@@ -288,8 +291,9 @@ export function sourceValueAt(
 
 /**
  * The row of `rows` (the source's list) that the form's row at `index` of `formRows` is: the one
- * under its key ({@link rowKeys}). `undefined` where `rows` is no list, or the form's row has no
- * key.
+ * under its key ({@link rowKeys}), and the same instance (`sameInstance`: a component instance
+ * that changed type is another one). `undefined` where `rows` is no list, the form's row has no
+ * key, or the source's row under it is another component.
  */
 function sourceRowFor(
   rows: unknown,
@@ -298,7 +302,12 @@ function sourceRowFor(
 ): unknown {
   if (!Array.isArray(rows)) return undefined;
   const key = rowKeys(formRows)[index];
-  return key === undefined ? undefined : keyedRows(rows).get(key);
+  if (key === undefined) return undefined;
+  const row = keyedRows(rows).get(key);
+  const formRow = formRows[index];
+  return row && isRecord(formRow) && sameInstance(formRow, row)
+    ? row
+    : undefined;
 }
 
 /**

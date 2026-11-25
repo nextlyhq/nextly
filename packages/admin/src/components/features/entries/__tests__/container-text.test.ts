@@ -215,6 +215,52 @@ describe("a component inside a container's rows", () => {
       )
     ).toEqual({ lead: { _componentType: "hero", title: "Hello" } });
   });
+
+  // A list offering several types: an instance that kept its id but changed type here is another
+  // component, so it takes nothing from the source's instance of the earlier type, even where both
+  // types name a translated field alike.
+  const ZONE = {
+    type: "group",
+    name: "zone",
+    fields: [
+      {
+        type: "component",
+        name: "blocks",
+        repeatable: true,
+        componentSchemas: {
+          hero: { fields: [{ type: "text", name: "title" }] },
+          cta: { fields: [{ type: "text", name: "title" }] },
+        },
+      },
+    ],
+  };
+
+  it("copies a list instance's text only from the source instance of the same type", () => {
+    const source = {
+      blocks: [
+        { id: "b1", _componentType: "hero", title: "Hello" },
+        { id: "b2", _componentType: "cta", title: "Buy" },
+      ],
+    };
+    expect(
+      withTextFrom(
+        {
+          blocks: [
+            { id: "b1", _componentType: "cta", title: "" },
+            { id: "b2", _componentType: "cta", title: "" },
+          ],
+        },
+        source,
+        ZONE,
+        true
+      )
+    ).toEqual({
+      blocks: [
+        { id: "b1", _componentType: "cta", title: "" },
+        { id: "b2", _componentType: "cta", title: "Buy" },
+      ],
+    });
+  });
 });
 
 describe("sourceValueAt", () => {
@@ -269,6 +315,29 @@ describe("sourceValueAt", () => {
     expect(
       sourceValueAt(source, { slides: [{ id: "new" }] }, "slides.0.caption")
     ).toBeUndefined();
+  });
+
+  // An instance that kept its id but changed type is another component: the source's instance of
+  // the earlier type is not its source, even for a field both types name alike.
+  it("reads no source text for an instance whose component type differs from the source's", () => {
+    const blocks = {
+      blocks: [{ id: "b1", _componentType: "hero", title: "Hello" }],
+    };
+    expect(
+      sourceValueAt(
+        blocks,
+        { blocks: [{ id: "b1", _componentType: "cta" }] },
+        "blocks.0.title"
+      )
+    ).toBeUndefined();
+    // The control: the same type reads its source text.
+    expect(
+      sourceValueAt(
+        blocks,
+        { blocks: [{ id: "b1", _componentType: "hero" }] },
+        "blocks.0.title"
+      )
+    ).toBe("Hello");
   });
 });
 
