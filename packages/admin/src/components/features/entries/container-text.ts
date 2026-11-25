@@ -91,15 +91,26 @@ export function holdsTranslatedText(
  * The containers among the fields a document addresses at its top level whose rows hold
  * translated text ({@link holdsTranslatedText}), for copying a whole document from another
  * language. A group with no name only lays fields out, so the containers inside it are read, as
- * storage and the form address them (`addressableFieldsWithin`), never the group itself.
+ * storage and the form address them (`addressableFieldsWithin`), never the group itself, and
+ * none inside one saying it is not translated.
  */
 export function textContainersOf<F extends object>(
   fields: readonly F[],
   documentLocalized: boolean
 ): F[] {
-  return addressableFieldsWithin(fields)
-    .map(({ field }) => field)
-    .filter(field => holdsTranslatedText(field, documentLocalized));
+  return (
+    addressableFieldsWithin(fields)
+      // A group with no name saying it is not translated shares every field it lays out, a
+      // container among them, as storage keeps them.
+      .filter(
+        ({ within }) =>
+          !within.some(
+            wrapper => (wrapper as { localized?: unknown }).localized === false
+          )
+      )
+      .map(({ field }) => field)
+      .filter(field => holdsTranslatedText(field, documentLocalized))
+  );
 }
 
 /**

@@ -73,6 +73,14 @@ describe("textContainersOf", () => {
     // The control: a container at the top level is found as it is.
     expect(textContainersOf([SLIDES, title], true)).toEqual([SLIDES]);
   });
+
+  // A group with no name saying it is not translated shares every field it lays out, as storage
+  // keeps them: a container inside it holds no language's text, so copying from another language
+  // leaves it alone.
+  it("finds no container laid out by a group with no name that says it is not translated", () => {
+    const shared = { type: "group", localized: false, fields: [SLIDES] };
+    expect(textContainersOf([shared], true)).toEqual([]);
+  });
 });
 
 describe("withTextFrom", () => {
