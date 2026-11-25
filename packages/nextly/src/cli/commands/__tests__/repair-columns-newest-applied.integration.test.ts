@@ -6,7 +6,13 @@
  * as 0002 left it, and each case then changes one thing. A column `--apply` would convert back
  * stands for both ends: `author` became required in 0002, and `links` became text.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -53,6 +59,8 @@ vi.mock("../../utils/registry-resolver", () => ({
   installRegistryResolver: () => {},
 }));
 
+import { DynamicCollectionService } from "../../../domains/dynamic-collections/services/dynamic-collection-service";
+import { LOCALIZATION_MIGRATION_MARKER } from "../../../domains/i18n/migration/write-migration-file";
 import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import {
@@ -318,6 +326,92 @@ describe.each(getConfiguredTestDialects())(
       });
       await events().supersede({ supersededEventIds: retired, byEventId: id });
       rmSync(path("0003_third.sql"));
+      await expectUntouched();
+    });
+
+    const BLANK = "-- This is a blank migration file for custom SQL.\n";
+
+    it("stops where the newest applied migration has lost its snapshot", async () => {
+      rmSync(path("meta", "0002_second.snapshot.json"));
+      const error = await expectStopped("MISSING_SNAPSHOT");
+      expect(error).toMatchObject({
+        message:
+          "The applied migration `0002_second` has no snapshot in `meta/`.",
+        cause:
+          "It is newer than `0001_first`, whose snapshot is the newest applied one there is, so what the database last had applied cannot be known.",
+        next: `Restore \`meta/0002_second.snapshot.json\` from version control. For SQL you wrote yourself, which has none, add the line \`${BLANK.trim()}\` to the file's header, then accept the edit with \`nextly migrate:resolve --applied <migration> --skip-verify\`. Then run \`nextly repair-columns\` again.`,
+      });
+    });
+
+    it("names every newer applied migration without a snapshot", async () => {
+      rmSync(path("meta", "0002_second.snapshot.json"));
+      await migration("0003_third", null);
+      const error = await expectStopped("MISSING_SNAPSHOT");
+      expect(error.message).toBe(
+        "The applied migrations `0002_second` and `0003_third` have no snapshot in `meta/`."
+      );
+      expect(error.next).toContain(
+        "Restore `meta/0002_second.snapshot.json` and `meta/0003_third.snapshot.json` from version control."
+      );
+    });
+
+    it("stops where the migration was removed on purpose and its snapshot is gone too", async () => {
+      notCheckedOut("0002_second");
+      await events().recordRemoval({
+        filename: "0002_second.sql",
+        sha256: "a".repeat(64),
+      });
+      await expectStopped("MISSING_SNAPSHOT");
+    });
+
+    it("goes on past a newer blank migration, which has no snapshot", async () => {
+      await migration("0003_third", null, BLANK);
+      await expectUntouched();
+    });
+
+    it.each(["sql", "variant"])(
+      "goes on past a newer localization migration, which has no snapshot (%s)",
+      async file => {
+        await migration(
+          "0003_third",
+          null,
+          `${LOCALIZATION_MIGRATION_MARKER} companion (create) (i18n)\n`
+        );
+        if (file === "variant") {
+          renameSync(path("0003_third.sql"), path(`0003_third.${dialect}.sql`));
+        }
+        await expectUntouched();
+      }
+    );
+
+    it("goes on past a newer migration without a snapshot that is not applied", async () => {
+      writeFileSync(path("0003_third.sql"), "");
+      await expectUntouched();
+    });
+
+    it("goes on past an older migration from before snapshots were written", async () => {
+      rmSync(path("meta", "0001_first.snapshot.json"));
+      await expectUntouched();
+    });
+
+    it("goes on past an earlier Schema Builder's file, which is no app migration", async () => {
+      // Its rows stay in the ledger, and no check counts them.
+      const artifacts = (await new DynamicCollectionService(
+        handle.adapter as unknown as DrizzleAdapter,
+        { debug() {}, info() {}, warn() {}, error() {} }
+      ).generateCollection({
+        name: "rnaold",
+        fields: [{ name: "title", type: "text" }],
+      } as never)) as unknown as {
+        migrationSQL: string;
+        migrationFileName: string;
+      };
+      await migration(
+        artifacts.migrationFileName.replace(/\.sql$/, ""),
+        null,
+        artifacts.migrationSQL
+      );
+      FILES.push(artifacts.migrationFileName);
       await expectUntouched();
     });
   }
