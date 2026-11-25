@@ -111,7 +111,8 @@ describe.each(getConfiguredTestDialects())(
             {
               name: "meta",
               type: "group",
-              fields: [{ name: "rating", type: "number" }],
+              // Shared, and so after its change too: its pair's rule alone answers.
+              fields: [{ name: "rating", type: "number", localized: false }],
             },
           ],
         } as never,
