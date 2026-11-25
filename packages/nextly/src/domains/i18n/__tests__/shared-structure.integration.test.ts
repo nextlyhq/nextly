@@ -908,6 +908,45 @@ describeEachDialect("one structure across languages", dialect => {
     BOOT_TIMEOUT
   );
 
+  // A sort on a repeater orders by its structure, the same in every language. Ordered by a
+  // language's text instead, two documents whose captions run opposite ways in English and Spanish
+  // come back in opposite orders in the two languages. Each row keeps the same id in both
+  // documents, so the text alone tells their overlays apart.
+  it(
+    "sorts on a repeater by its structure, in the same order in every language",
+    async () => {
+      const { nextly } = await site();
+      const article = async (rank: number, en: string, es: string) => {
+        const created = await nextly.create({
+          collection: "articles",
+          locale: "en",
+          data: {
+            title: `T${rank}`,
+            slides: [{ id: "r1", caption: en, rank }],
+          },
+        });
+        const id = (created.item as { id: string }).id;
+        await write(nextly, id, "es", {
+          slides: [{ id: "r1", caption: es, rank }],
+        });
+        return id;
+      };
+      await article(1, "b", "a");
+      await article(2, "a", "b");
+      const order = async (locale: string) =>
+        (
+          await nextly.find({
+            collection: "articles",
+            locale,
+            sort: ["slides"],
+          })
+        ).items.map(item => (item as { title: string }).title);
+
+      expect(await order("es")).toEqual(await order("en"));
+    },
+    BOOT_TIMEOUT
+  );
+
   /** The paths of one document's live provenance records in `locale`, sorted. */
   async function livePaths(
     scope: { kind: string; slug: string; id: string },
