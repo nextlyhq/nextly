@@ -252,11 +252,82 @@ describe.each(getConfiguredTestDialects())(
       expect(`${what} ${next}`).not.toContain("0002_second.sql");
     });
 
+    /** The records an attempt at an applied migration's file leaves after its applied one. */
+    const LATER_RECORDS: Record<string, (name: string) => Promise<void>> = {
+      "an attempt that failed": async name => {
+        const events = new SchemaEventsRepository(
+          adapter().getDrizzle(),
+          dialect
+        );
+        await events.markFailed(await startAgain(name), {
+          errorMessage: "column already exists",
+        });
+      },
+      "an attempt that recorded no outcome": async name => {
+        await startAgain(name);
+      },
+      "an attempt cleared by --failed-cleanup": async name => {
+        const events = new SchemaEventsRepository(
+          adapter().getDrizzle(),
+          dialect
+        );
+        const id = await startAgain(name);
+        await events.markFailed(id, { errorMessage: "column already exists" });
+        await events.markRolledBack(id);
+      },
+    };
+
+    /** Start an attempt at a file the ledger already records applied. */
+    const startAgain = (name: string) =>
+      new SchemaEventsRepository(adapter().getDrizzle(), dialect).recordStart({
+        eventType: "file_apply",
+        source: "cli-migrate",
+        filename: `${name}.sql`,
+      });
+
+    it.each(Object.keys(LATER_RECORDS))(
+      "reads an applied migration's snapshot past %s",
+      async record => {
+        await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+        await snapshot(
+          "0002_second",
+          [{ name: "summary", type: "text" }],
+          true
+        );
+        await LATER_RECORDS[record]("0002_second");
+        expect((await posts())?.applied?.fields.map(f => f.name)).toEqual([
+          "summary",
+        ]);
+      }
+    );
+
+    it("reads the older snapshot once the newer migration is rolled back", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
+      const events = new SchemaEventsRepository(
+        adapter().getDrizzle(),
+        dialect
+      );
+      const retired = (await events.findFileApplies("0002_second.sql")).map(
+        row => row.id
+      );
+      const id = await events.insertEvent({
+        eventType: "file_apply",
+        status: "rolled_back",
+        source: "cli-migrate",
+        filename: "0002_second.sql",
+        endedAt: new Date(),
+        supersededEventIds: retired,
+      });
+      await events.supersede({ supersededEventIds: retired, byEventId: id });
+      expect((await posts())?.applied?.fields.map(f => f.name)).toEqual([
+        "price",
+      ]);
+    });
+
     /** Record a migration's file removed on purpose, as `migrate:resolve --removed` does. */
     async function removedOnPurpose(name: string) {
       rmSync(join(migrationsDir, `${name}.sql`));
-      // A removal counts for the outcome recorded before it, to the millisecond (SQLite: second).
-      await new Promise(done => setTimeout(done, 1100));
       const events = new SchemaEventsRepository(
         adapter().getDrizzle(),
         dialect
@@ -290,7 +361,6 @@ describe.each(getConfiguredTestDialects())(
       await snapshot("0002_second", [{ name: "summary", type: "text" }], true);
       await removedOnPurpose("0002_second");
       // The removal is about the outcome it followed, not the one after it.
-      await new Promise(done => setTimeout(done, 1100));
       const events = new SchemaEventsRepository(
         adapter().getDrizzle(),
         dialect

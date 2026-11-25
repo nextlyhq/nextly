@@ -22,6 +22,7 @@ import {
   SYSTEM_READ_POLICY,
   SYSTEM_WRITE_POLICY,
 } from "../domains/auth/system-write-policy";
+import { withFieldGroupCopiesJudged } from "../domains/field-groups/field-group-fields-read-only";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -170,17 +171,23 @@ export const PATCH = withErrorHandler(
     // The service owns the physical change and the row write together, so every transport that
     // edits a field group now performs the whole operation.
     const metadata = await getFieldGroupMetadataService();
-    const { record } = await metadata.updateFieldGroup({
-      slug,
-      label: expect(body, "label", "string"),
-      description: expect(body, "description", "string"),
-      admin: expect(body, "admin", "object"),
-      // Already validated in shape by `assertValidFieldsPayload` above, which is the same check the
-      // ui-schema mirror applies; the cast carries that result across the untyped body boundary.
-      fields: body.fields as FieldDefinition[] | undefined,
-      localized: expect(body, "localized", "boolean"),
-      source: "ui",
-    });
+    // Another field group's fields are changed only in its own editor: the service judges the save's
+    // copies under its schema lock.
+    const { record } = await withFieldGroupCopiesJudged(
+      getService("fieldGroupRegistryService"),
+      () =>
+        metadata.updateFieldGroup({
+          slug,
+          label: expect(body, "label", "string"),
+          description: expect(body, "description", "string"),
+          admin: expect(body, "admin", "object"),
+          // Already validated in shape by `assertValidFieldsPayload` above, which is the same check the
+          // ui-schema mirror applies; the cast carries that result across the untyped body boundary.
+          fields: body.fields as FieldDefinition[] | undefined,
+          localized: expect(body, "localized", "boolean"),
+          source: "ui",
+        })
+    );
 
     return respondMutation("Field group updated.", record);
   }

@@ -8,7 +8,8 @@
  * - out of a group: the copy and the clearing of the key run last, after the file adds the column;
  * - from one group to another: copied and cleared first, neither column changing.
  *
- * The file's way down undoes each the same way round. A move into a group the same save creates,
+ * The file's way down undoes each the same way round. Whatever the moves, the stops of every one of
+ * them run before any of them writes, each way. A move into a group the same save creates,
  * or out of one it deletes, has no place in the file between the group's column and the field's,
  * and is refused; saved as two changes, each keeps the values.
  *
@@ -21,6 +22,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { getPrebuiltHook } from "../../../hooks/prebuilt";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { asRowBackedRelationFields } from "../../field-groups/services/field-group-utils";
+import { builderColumnIsUnique } from "../field-rules";
 import {
   classifyFieldKind,
   fieldProducesColumn,
@@ -35,6 +37,7 @@ import {
   checkMove,
   placeOf,
   type FieldMoveRequest,
+  type MoveEntity,
   type PlannedMove,
   type StoragePlace,
 } from "./check-move";
@@ -44,14 +47,23 @@ import {
   mediaUsePathStatement,
   missingValuesStop,
   moveDataStatements,
+  repeatedValuesStop,
   type MoveColumn,
 } from "./move-statements";
 
-/** Statements for the start and the end of one direction of a migration file. */
+/**
+ * Statements for one direction of a migration file: each move's stops, which lead the file ahead of
+ * every move's writes, whichever entity's, so a run one of them stops has changed nothing; the
+ * writes at its start, and the ones at its end.
+ */
 interface Placed {
+  stops: string[];
   first: string[];
   last: string[];
 }
+
+/** Nothing for one direction of a migration file. */
+const nothingPlaced = (): Placed => ({ stops: [], first: [], last: [] });
 
 /** A save's moves as its migration file carries them. */
 export interface EntityMoves {
@@ -70,6 +82,8 @@ export interface EntityMoves {
     field: string;
     /** Whether the field is required, so every entry needs a value to move. */
     required: boolean;
+    /** Whether the column is unique, so no two entries may hold one value to move. */
+    unique: boolean;
     /** The column's kind, which says what a value from the group must be to be read into it. */
     kind: MoveColumn["kind"];
     /** The column's SQL type and a decimal's digits, which bound what it keeps (`keptValuesOf`). */
@@ -114,26 +128,32 @@ function placed(
     up: [...forth.copy, ...forth.clearSource, ...beside.up],
     down: [...back.copy, ...back.clearSource, ...beside.undo, ...beside.down],
   };
-  // Each way's stop on a value the copy would not keep runs first, before the file changes
-  // anything: on MySQL, whose schema changes stand as they run, a later stop would leave them.
   if (move.from.kind === "column") {
     // Into a group: copied before the column is dropped; back after the way down adds it again.
     return {
-      up: { first: [...forth.stop, ...way.up], last: [] },
-      down: { first: [...back.stop, ...beside.downFirst], last: way.down },
+      up: { stops: forth.stop, first: way.up, last: [] },
+      down: {
+        stops: [...back.stop, ...beside.downStops],
+        first: [],
+        last: way.down,
+      },
     };
   }
   if (move.to.kind === "column") {
     // Out of a group: copied after the column is added; back before the way down drops it.
     return {
-      up: { first: [...forth.stop, ...beside.first], last: way.up },
-      down: { first: [...back.stop, ...way.down], last: [] },
+      up: {
+        stops: [...forth.stop, ...beside.stops],
+        first: [],
+        last: way.up,
+      },
+      down: { stops: back.stop, first: way.down, last: [] },
     };
   }
   // Between two groups, whose columns stand throughout.
   return {
-    up: { first: way.up, last: [] },
-    down: { first: way.down, last: [] },
+    up: { stops: [], first: way.up, last: [] },
+    down: { stops: [], first: way.down, last: [] },
   };
 }
 
@@ -146,10 +166,10 @@ interface Beside {
   up: string[];
   down: string[];
   undo: string[];
-  /** Stops run first on the way up: a required field's entries without a value. */
-  first: string[];
-  /** The same stop on the way back, where the column it restores is required. */
-  downFirst: string[];
+  /** Stops on the way up: a required field's entries without a value, a unique one's repeats. */
+  stops: string[];
+  /** The first of them on the way back, where the column it restores is required. */
+  downStops: string[];
 }
 
 function besideOf(
@@ -165,17 +185,22 @@ function besideOf(
   const uses = args.mediaUses;
   const { from, to } = move;
   // A field required where it moves out to needs a value on every entry of the database the file
-  // runs on, unless the save fills the column first.
-  const first =
-    from.kind === "json" &&
-    to.kind === "column" &&
-    (move.field as { required?: unknown }).required === true &&
-    !(args.filledColumns ?? []).includes(to.column)
-      ? missingValuesStop(target, from, to.column)
+  // runs on, unless the save fills the column first; one unique there needs no value held twice.
+  const stops =
+    from.kind === "json" && to.kind === "column"
+      ? [
+          ...((move.field as { required?: unknown }).required === true &&
+          !(args.filledColumns ?? []).includes(to.column)
+            ? missingValuesStop(target, from, to.column)
+            : []),
+          ...(builderColumnIsUnique(move.field)
+            ? repeatedValuesStop(target, from, to.column)
+            : []),
+        ]
       : [];
   // The way back restores the definition before the save: its column is required again where
   // the field was, and the group is nullable where it was, whatever this save made of either.
-  const downFirst =
+  const downStops =
     from.kind === "column" &&
     to.kind === "json" &&
     rowFieldIsRequired(args.before, from.column)
@@ -197,8 +222,8 @@ function besideOf(
       ? [mediaUsePathStatement(target.dialect, uses, request.to, request.from)]
       : [],
     undo,
-    first,
-    downFirst,
+    stops,
+    downStops,
   };
 }
 
@@ -663,11 +688,16 @@ export function planEntityMoves(given: {
   mediaUses?: { kind: "collection" | "single"; slug: string };
   /** The columns the save fills before its copies (a `fill` answer), which need no stop. */
   filledColumns?: readonly string[];
+  /**
+   * Who uses each field group, by slug, so a move into or out of one is refused naming them
+   * (`checkMove`). Absent, the refusal names the field group alone.
+   */
+  fieldGroupUsers?: MoveEntity["fieldGroupUsers"];
 }): EntityMoves {
   const args = asStoredByRow(given);
   const result: EntityMoves = {
-    up: { first: [], last: [] },
-    down: { first: [], last: [] },
+    up: nothingPlaced(),
+    down: nothingPlaced(),
     movedColumns: [],
     refilledColumns: [],
   };
@@ -703,6 +733,7 @@ export function planEntityMoves(given: {
       besideOf(move, request, target, args)
     );
     for (const way of ["up", "down"] as const) {
+      result[way].stops.push(...statements[way].stops);
       result[way].first.push(...statements[way].first);
       result[way].last.push(...statements[way].last);
     }
@@ -745,6 +776,9 @@ function checkedMove(
   refuseUnmatched(args.before, args.after, request);
   const checked = checkMove(args.before, args.after, request, {
     localized: args.localized,
+    ...(args.fieldGroupUsers === undefined
+      ? {}
+      : { fieldGroupUsers: args.fieldGroupUsers }),
   });
   if (!checked.ok) throw refused(request, checked.message);
   const { move } = checked;
@@ -859,6 +893,7 @@ function recordColumns(
       column: to.column,
       field: request.to.join("."),
       required: (move.field as { required?: unknown }).required === true,
+      unique: builderColumnIsUnique(move.field),
       kind: target.kind,
       columnType: target.columnType,
       ...(target.precision === undefined

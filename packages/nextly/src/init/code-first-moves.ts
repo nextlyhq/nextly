@@ -13,6 +13,7 @@
  *
  * @module init/code-first-moves
  */
+import { definitionRefusal } from "../domains/schema/field-moves/check-move";
 import { moveCandidates } from "../domains/schema/field-moves/move-candidates";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 
@@ -45,6 +46,18 @@ export function movesHeldBack(
         reasons: moves.map(({ from, to }) => {
           const was = from.join(".");
           const now = to.join(".");
+          // A move that can never be made as it is (a field kept unique into a group) is told so,
+          // in the words the Schema Builder and migrate:create refuse it in: told instead to run
+          // migrate:create, it would be refused there. What the push cannot answer, such as who
+          // uses a field group, keeps its own words.
+          const refused = definitionRefusal(
+            entity.recordedFields as FieldDefinition[],
+            entity.fields as FieldDefinition[],
+            { from, to }
+          );
+          if (refused !== undefined) {
+            return `${refused} The change was not applied.`;
+          }
           // Onto the row, into a group, or between groups, whose JSON alone changes.
           const lost =
             to.length === 1
