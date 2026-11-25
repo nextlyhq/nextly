@@ -44,6 +44,7 @@ import {
 } from "../../domains/schema/busy-table/bounds";
 import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
 import type { Deletion } from "../../domains/schema/migrate/data-loss-consent";
+import { pluginEntitySources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
 import { refuseFieldGroupSwitches } from "../../domains/schema/pipeline/companion-shape-switches";
 import { registryRows } from "../../domains/schema/pipeline/recorded-fields";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -95,6 +96,7 @@ import {
   performSinglesAutoSync,
   performSinglesReconcile,
 } from "./dev-server";
+import { reportKeptPluginEntities } from "./kept-plugin-entities";
 
 // ============================================================================
 // Orphan Record Type
@@ -260,12 +262,12 @@ export async function syncCollections(
   // What each collection's registry row records before the sync below replaces it, for the apply
   // that follows: on SQLite a relationship switched between one related entry and many is told by
   // nothing else.
+  const collectionRegistry = new CollectionRegistryService(
+    adapter as unknown as DrizzleAdapter,
+    serviceLogger
+  );
   const recordedCollections = await registryRows(
-    () =>
-      new CollectionRegistryService(
-        adapter as unknown as DrizzleAdapter,
-        serviceLogger
-      ).getAllCollections(),
+    () => collectionRegistry.getAllCollections(),
     {
       kind: "collections",
       tableExists: name =>
@@ -289,6 +291,13 @@ export async function syncCollections(
     logger.error("Sync failed while registering collections.");
     throw error;
   }
+
+  reportKeptPluginEntities(
+    "collection",
+    await collectionRegistry.getAllCollections(),
+    config.collections,
+    logger
+  );
 
   // Display sync results
   displaySyncResults(result, options, context);
@@ -353,10 +362,14 @@ export async function syncSingles(
     serviceLogger
   );
 
+  // Each Single's origin, by the rule a start and a reload give it.
+  const sources = pluginEntitySources(config.plugins ?? []).singles;
+
   // Transform SingleConfig[] to CodeFirstSingleConfig[]
   const codeFirstConfigs: CodeFirstSingleConfig[] = config.singles.map(
     single => ({
       slug: single.slug,
+      source: sources.get(single.slug) ?? "code",
       label: single.label?.singular ?? toTitleCase(single.slug),
       fields: single.fields,
       description: single.description,
@@ -406,6 +419,13 @@ export async function syncSingles(
       );
     }
   }
+
+  reportKeptPluginEntities(
+    "single",
+    await singleRegistry.getAllSingles(),
+    config.singles,
+    logger
+  );
 
   // Display sync results
   displaySinglesSyncResults(result, options, context);
@@ -473,10 +493,14 @@ export async function syncComponents(
     serviceLogger
   );
 
+  // Each field group's origin, by the rule a start and a reload give it.
+  const sources = pluginEntitySources(config.plugins ?? []).fieldGroups;
+
   // Transform FieldGroupConfig[] to CodeFirstComponentConfig[]
   const codeFirstConfigs: CodeFirstComponentConfig[] = config.fieldGroups.map(
     component => ({
       slug: component.slug,
+      source: sources.get(component.slug) ?? "code",
       label: component.label?.singular ?? toTitleCase(component.slug),
       fields: component.fields,
       description: component.description,
@@ -536,6 +560,13 @@ export async function syncComponents(
       );
     }
   }
+
+  reportKeptPluginEntities(
+    "component",
+    await componentRegistry.getAllComponents(),
+    config.fieldGroups,
+    logger
+  );
 
   // Display sync results
   displayComponentsSyncResults(result, options, context);

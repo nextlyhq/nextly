@@ -134,7 +134,10 @@ import {
   registerFieldType,
   withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
-import { pluginCollectionSources } from "../domains/schema/migrate/plugin/plugin-collection-sources";
+import {
+  pluginCollectionSources,
+  pluginEntitySources,
+} from "../domains/schema/migrate/plugin/plugin-collection-sources";
 import type { ConsentRefusal } from "../domains/schema/ownership/schema-version-check";
 import {
   listTablesAtStart,
@@ -4558,6 +4561,9 @@ async function reportStartRowsBehindBuild(
         import("./registry-rows-behind-build"),
         import("../domains/singles/services/single-registry-service"),
       ]);
+    const singleSources = pluginEntitySources(
+      transformedConfig.plugins ?? []
+    ).singles;
     await reportRowsBehindBuild(
       registry,
       [
@@ -4567,7 +4573,10 @@ async function reportStartRowsBehindBuild(
           fields: config.fields,
         })),
         ...(transformedConfig.singles ?? []).map(single => {
-          const config = toCodeFirstSingleConfig(single);
+          const config = toCodeFirstSingleConfig(
+            single,
+            singleSources.get(single.slug) ?? "code"
+          );
           return {
             kind: "single" as const,
             slug: config.slug,
@@ -4972,8 +4981,17 @@ async function syncCodeFirstComponents(
   const { toCodeFirstComponentConfig } = await import(
     "../domains/field-groups/services/field-group-registry-service"
   );
+  // Each field group carries its origin, as each collection does (`codeFirstCollectionConfigs`).
+  const componentSources = pluginEntitySources(
+    transformedConfig.plugins ?? []
+  ).fieldGroups;
   const codeFirstComponentConfigs: CodeFirstComponentConfig[] =
-    transformedConfig.fieldGroups.map(comp => toCodeFirstComponentConfig(comp));
+    transformedConfig.fieldGroups.map(comp =>
+      toCodeFirstComponentConfig(
+        comp,
+        componentSources.get(comp.slug) ?? "code"
+      )
+    );
 
   const componentSyncResult = await componentRegistry.syncCodeFirstComponents(
     codeFirstComponentConfigs
@@ -5202,8 +5220,14 @@ async function syncCodeFirstSingles(
   const { toCodeFirstSingleConfig } = await import(
     "../domains/singles/services/single-registry-service"
   );
+  // Each Single carries its origin, as each collection does (`codeFirstCollectionConfigs`).
+  const singleSources = pluginEntitySources(
+    transformedConfig.plugins ?? []
+  ).singles;
   const codeFirstSingleConfigs: CodeFirstSingleConfig[] =
-    transformedConfig.singles.map(single => toCodeFirstSingleConfig(single));
+    transformedConfig.singles.map(single =>
+      toCodeFirstSingleConfig(single, singleSources.get(single.slug) ?? "code")
+    );
 
   // Declared out here so the per-single failures can be judged AFTER the catch
   // below. Judged inside it, the refusal this raises would be caught by the

@@ -31,13 +31,14 @@ import type { FieldGroupAdminOptions } from "../../field-groups/config/types";
  *
  * - `code`: Defined in code via `defineFieldGroup()` in a config file
  * - `ui`: Created through the Visual Component Builder in Admin UI
+ * - `plugin:<name>`: Contributed by the plugin of that name
  *
  * @example
  * ```typescript
  * const source: FieldGroupSource = 'code';
  * ```
  */
-export type FieldGroupSource = "code" | "ui";
+export type FieldGroupSource = "code" | "ui" | `plugin:${string}`;
 
 /**
  * Migration status for a Component's schema.

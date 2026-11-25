@@ -90,6 +90,7 @@ import {
   readPendingEntities,
   type PendingEntities,
 } from "./pending-entities";
+import type { PluginEntitySources } from "./plugin/plugin-collection-sources";
 import { readRegistrySource, type RegistrySource } from "./registry-source";
 import { writeRegistryFromSource } from "./registry-writer";
 import { endsTheRun, reachStopPoint } from "./stop-points";
@@ -164,8 +165,8 @@ export interface ReconcileMetadataDeps {
    * consent covered, dropped as their entity's rows go; none otherwise.
    */
   dropLeftoverTranslations?: ReadonlySet<string>;
-  /** Each plugin-contributed collection's origin (`RegistryWriteDeps.collectionSources`). */
-  collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
+  /** Each plugin-contributed entity's origin (`RegistryWriteDeps.entitySources`). */
+  entitySources?: PluginEntitySources;
   /**
    * Seam for tests; defaults to reading the migration headers from disk.
    *
@@ -831,9 +832,9 @@ async function registerRows(
       {
         adapter,
         logger: asServiceLogger(logger),
-        ...(deps.collectionSources === undefined
+        ...(deps.entitySources === undefined
           ? {}
-          : { collectionSources: deps.collectionSources }),
+          : { entitySources: deps.entitySources }),
         ...(rewrites === undefined ? {} : { rewrites }),
       }
     );

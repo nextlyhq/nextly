@@ -104,8 +104,8 @@ export interface FieldGroupDefinition {
    */
   localized: boolean;
 
-  /** Source of the field group definition */
-  source: "code" | "ui";
+  /** Source of the field group definition; `plugin:<name>` for one a plugin contributes */
+  source: "code" | "ui" | `plugin:${string}`;
 
   /** Whether the field group is locked (code-first field groups are locked) */
   locked: boolean;

@@ -785,7 +785,7 @@ export function mapFieldGroupRecord(
     // collapses the optional declaration above, and absent reads false — the shape a row predating
     // the column actually describes.
     localized: record.localized === true,
-    source: record.source as "code" | "ui",
+    source: record.source as FieldGroupDefinition["source"],
     locked: record.locked,
     configPath: record.configPath ?? undefined,
     schemaHash: record.schemaHash,
@@ -832,7 +832,7 @@ export function mapSingleRecord(record: RawSingleRecord): SingleDefinition {
       string,
       unknown
     >[],
-    source: record.source as "code" | "ui" | "built-in",
+    source: record.source as SingleDefinition["source"],
     locked: record.locked,
     configPath: record.configPath ?? undefined,
     schemaHash: record.schemaHash,

@@ -164,6 +164,7 @@ import {
   orphanScopeOf,
   type MigrationOrphanScope,
 } from "../../domains/schema/migrate/permission-orphans";
+import type { PluginEntitySources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
 import {
   assertPluginHistories,
   assertPluginListsSound,
@@ -1440,10 +1441,10 @@ export interface MigrateCoreDeps {
    */
   registryRows?: "write" | "insert-missing";
   /**
-   * Each plugin-contributed collection's origin, `plugin:<name>`, for a
+   * Each plugin-contributed entity's origin, `plugin:<name>`, for a
    * registry row the run creates (`pluginMigrationArgs`).
    */
-  collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
+  entitySources?: PluginEntitySources;
   /**
    * Makes every field group's table addressable before a deleted entity's
    * leftovers are removed: given by the command, whose adapter resolves
@@ -2935,9 +2936,9 @@ async function runMigrationStreams(
     judged,
     ...(beforeApply === undefined ? {} : { beforeApply }),
     ...(afterApply === undefined ? {} : { afterApply }),
-    ...(deps.collectionSources === undefined
+    ...(deps.entitySources === undefined
       ? {}
-      : { collectionSources: deps.collectionSources }),
+      : { entitySources: deps.entitySources }),
     ...(deps.busyTable === undefined
       ? {}
       : {
@@ -3087,9 +3088,9 @@ export async function migrateCore(
     ...(deps.registryRows === undefined
       ? {}
       : { registryRows: deps.registryRows }),
-    ...(deps.collectionSources === undefined
+    ...(deps.entitySources === undefined
       ? {}
-      : { collectionSources: deps.collectionSources }),
+      : { entitySources: deps.entitySources }),
     ...(deps.prepareLeftoverTables === undefined
       ? {}
       : { prepareLeftoverTables: deps.prepareLeftoverTables }),
@@ -5489,10 +5490,10 @@ export async function runFileMigrations(args: {
    */
   afterApply?: (applied: AppliedAppMigration) => Promise<void>;
   /**
-   * Each plugin-contributed collection's origin, so a registry row a file
-   * creates with itself is that plugin's (`RegistryWriteDeps.collectionSources`).
+   * Each plugin-contributed entity's origin, so a registry row a file
+   * creates with itself is that plugin's (`RegistryWriteDeps.entitySources`).
    */
-  collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
+  entitySources?: PluginEntitySources;
   /** See `MigrateCoreDeps.busyTable`. */
   busyTable?: Omit<BusyTableRun, "appliedBefore">;
   /**
@@ -5838,9 +5839,9 @@ export async function runFileMigrations(args: {
         deps: {
           adapter: dz,
           logger: asServiceLogger(logger),
-          ...(args.collectionSources === undefined
+          ...(args.entitySources === undefined
             ? {}
-            : { collectionSources: args.collectionSources }),
+            : { entitySources: args.entitySources }),
         },
       });
       await reconcileFile({

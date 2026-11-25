@@ -108,6 +108,7 @@ import {
   schemaDraftSplit,
 } from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
+import { isConfigOwnedSource } from "../../domains/webhooks/recording-provenance";
 import { shownWorkflowSummary } from "../../domains/workflows/stage-presentation";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
@@ -367,7 +368,8 @@ function injectSingleDefaultFields<T extends SingleWithFields | null>(
   single: T
 ): T {
   if (!single) return single;
-  const isCodeFirst = single.source === "code" || single.source === "built-in";
+  const isCodeFirst =
+    isConfigOwnedSource(single.source) || single.source === "built-in";
   if (isCodeFirst) return single;
   const baseFields = single.fields ?? [];
   // Filter out any existing title/slug fields to prevent duplicates.

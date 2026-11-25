@@ -31,10 +31,12 @@ import { clearRegistryRowCache } from "../../dynamic-collections/services/collec
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import type { BuilderSaveSetup } from "../../schema/builder-save/collection-save";
 import type { SettledSave } from "../../schema/builder-save/settle-left-save";
+import { declarationTakesRow } from "../../schema/migrate/plugin/declared-owner";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
@@ -73,6 +75,12 @@ export interface UpdateComponentOptions {
    * supply the number would let one regress it.
    */
   invalidateSchemaVersion?: boolean;
+  /**
+   * Gives the row to the declaration the code-first sync writes (`source`) where the row records
+   * another owner the declaration takes it from (`declarationTakesRow`). Set by the code-first
+   * sync alone.
+   */
+  claim?: true;
 }
 
 /**
@@ -84,6 +92,12 @@ export interface UpdateComponentOptions {
  */
 export interface CodeFirstComponentConfig {
   slug: string;
+  /**
+   * The row's origin: the app's own (`code`), or the plugin that contributed it
+   * (`pluginEntitySources`). Required, so no road that syncs a field group leaves it out and
+   * records a plugin's as the app's.
+   */
+  source: FieldGroupSource;
   label: string;
   fields: DynamicFieldGroupInsert["fields"];
   description?: string;
@@ -116,10 +130,13 @@ export interface CodeFirstComponentSource {
  * same way and cannot rewrite each other's rows.
  */
 export function toCodeFirstComponentConfig(
-  fieldGroup: CodeFirstComponentSource
+  fieldGroup: CodeFirstComponentSource,
+  /** The field group's origin (`CodeFirstComponentConfig.source`). */
+  source: FieldGroupSource
 ): CodeFirstComponentConfig {
   return {
     slug: fieldGroup.slug,
+    source,
     // The declared label, else the slug with `-` and `_` as spaces and every
     // word capitalised.
     label:
@@ -463,7 +480,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       fields: JSON.stringify(data.fields),
       admin: data.admin ? JSON.stringify(data.admin) : null,
       source: data.source,
-      locked: (data.locked ?? data.source === "code") ? 1 : 0,
+      locked: (data.locked ?? isConfigOwnedSource(data.source)) ? 1 : 0,
       // i18n: persist the localized flag so embedded instances route translatable
       // fields to the companion `comp_<slug>_locales` table.
       localized: data.localized === true ? 1 : 0,
@@ -533,7 +550,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       fields: JSON.stringify(data.fields),
       admin: data.admin ? JSON.stringify(data.admin) : null,
       source: data.source,
-      locked: (data.locked ?? data.source === "code") ? 1 : 0,
+      locked: (data.locked ?? isConfigOwnedSource(data.source)) ? 1 : 0,
       // i18n: persist the localized flag so embedded instances route translatable
       // fields to the companion `comp_<slug>_locales` table.
       localized: data.localized === true ? 1 : 0,
@@ -564,7 +581,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * Update a Component's metadata.
    *
    * @throws NextlyError(NOT_FOUND) when no Component matches the slug.
-   * @throws NextlyError(FORBIDDEN) when the Component is locked and the source isn't "code".
+   * @throws NextlyError(FORBIDDEN) when the Component is locked and the source is neither "code" nor a plugin's.
    */
   async updateComponent(
     slug: string,
@@ -578,6 +595,17 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     refuseChangeOutsideCode(existing, slug, options?.source);
 
     const updateData = this.buildComponentUpdateColumns(data);
+
+    // The one update that moves a field group between owners (`UpdateComponentOptions.claim`): its
+    // source and lock written together, so the row is never a declaration's and unlocked.
+    if (
+      options?.claim === true &&
+      options.source !== undefined &&
+      declarationTakesRow(options.source, existing)
+    ) {
+      updateData.source = options.source;
+      updateData.locked = 1;
+    }
 
     // 🔴 The version advances when the PHYSICAL SHAPE changes, not when `fields` happens to be
     // present. `schema_version` is an optimistic lock: `assertSchemaVersionMatch` rejects a save
@@ -774,11 +802,12 @@ export class FieldGroupRegistryService extends BaseRegistryService<
               // config file. Pinning it here makes the check and the write one statement, which is
               // the whole reason this method exists rather than a read followed by an update.
               //
-              // Only for a non-code caller: `source: "code"` IS the owner, and the read above already
-              // permits it, so requiring `locked = false` there would refuse every code sync.
+              // Only for a caller that is neither code nor a plugin: either IS the owner, and the
+              // read above already permits it, so requiring `locked = false` there would refuse
+              // every code sync.
               // Safe as an equality because the column is NOT NULL with a default, so there is no
               // third state for it to miss.
-              ...(options?.source !== "code"
+              ...(!isConfigOwnedSource(options?.source)
                 ? [{ column: "locked", op: "=" as const, value: false }]
                 : []),
             ],
@@ -1073,7 +1102,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
               schemaHash,
               desiredTableName
             ),
-            source: "code",
+            source: config.source,
             locked: true,
             configPath: config.configPath,
           });
@@ -1186,14 +1215,19 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           configPath: config.configPath,
           locked: true,
         },
-        { source: "code" }
+        { source: config.source, claim: true }
       );
       result.updated.push(config.slug);
-    } else if (step === "metadata") {
+    } else if (
+      step === "metadata" ||
+      // A row whose only difference is its owner is written too, its owner alone: the decision
+      // compares what the declaration says, never whose the row is.
+      declarationTakesRow(config.source, existing)
+    ) {
       await this.updateComponent(
         config.slug,
         { ...declaredComponentMetadata(config), locked: true },
-        { source: "code" }
+        { source: config.source, claim: true }
       );
       result.updated.push(config.slug);
     } else {
@@ -1789,7 +1823,7 @@ function refuseChangeOutsideCode(
   slug: string,
   source: string | undefined
 ): void {
-  if (!existing.locked || source === "code") return;
+  if (!existing.locked || isConfigOwnedSource(source)) return;
   throw NextlyError.definedInCode({
     thing: "component",
     change: "change",

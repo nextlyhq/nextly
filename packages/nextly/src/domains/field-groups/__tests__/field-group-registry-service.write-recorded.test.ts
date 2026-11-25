@@ -93,6 +93,7 @@ function declared(
 ): CodeFirstComponentConfig {
   return {
     slug: "seo",
+    source: "code",
     label: "SEO",
     fields,
     description: "Search metadata",
@@ -118,7 +119,8 @@ describe("toCodeFirstComponentConfig", () => {
       localized: true,
     } satisfies FieldGroupConfig;
 
-    expect(toCodeFirstComponentConfig(fieldGroup)).toEqual({
+    expect(toCodeFirstComponentConfig(fieldGroup, "code")).toEqual({
+      source: "code",
       slug: "seo",
       label: "SEO Metadata",
       fields: [{ name: "metaTitle", type: "text" }],
@@ -136,7 +138,8 @@ describe("toCodeFirstComponentConfig", () => {
       fields: [],
     } satisfies FieldGroupConfig;
 
-    expect(toCodeFirstComponentConfig(fieldGroup)).toEqual({
+    expect(toCodeFirstComponentConfig(fieldGroup, "code")).toEqual({
+      source: "code",
       slug: "hero-banner_v2",
       label: "Hero Banner V2",
       fields: [],
@@ -360,6 +363,96 @@ describe("FieldGroupRegistryService.writeRecordedComponent", () => {
         locked: true,
       })
     ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("who owns a field group's row", () => {
+  let ctx: Ctx;
+
+  beforeEach(() => {
+    ctx = createCtx();
+  });
+
+  const PLUGIN = "plugin:@acme/shop" as const;
+
+  it.each([
+    ["the app's own, now a plugin's", "code", PLUGIN],
+    ["a plugin's, now the app's own", PLUGIN, "code"],
+    ["a plugin's, now another plugin's", "plugin:@acme/old", PLUGIN],
+  ] as const)(
+    "moves with the declaration: %s, its owner alone",
+    async (_case, recorded, declares) => {
+      ctx.adapter.selectOne.mockResolvedValue(
+        dbRow({ source: recorded, locked: 0 })
+      );
+      ctx.adapter.update.mockResolvedValue([dbRow({ source: declares })]);
+
+      const result = await ctx.service.syncCodeFirstComponents([
+        declared({ source: declares }),
+      ]);
+
+      expect(result.updated).toEqual(["seo"]);
+      expect(updateData(ctx)).toMatchObject({ source: declares, locked: 1 });
+      // No column it stores changed, so nothing is left to migrate.
+      expect(updateData(ctx)).not.toHaveProperty("schema_version");
+      expect(updateData(ctx)).not.toHaveProperty("migration_status");
+    }
+  );
+
+  it("stays the Schema Builder's under any declaration", async () => {
+    ctx.adapter.selectOne.mockResolvedValue(dbRow({ source: "ui" }));
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      declared({ source: PLUGIN }),
+    ]);
+
+    expect(result.unchanged).toEqual(["seo"]);
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+
+  it("is not written where the declaration already owns it", async () => {
+    ctx.adapter.selectOne.mockResolvedValue(dbRow({ source: PLUGIN }));
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      declared({ source: PLUGIN }),
+    ]);
+
+    expect(result.unchanged).toEqual(["seo"]);
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+
+  it("is registered as the plugin's, and locked", async () => {
+    ctx.adapter.selectOne.mockResolvedValue(null);
+    ctx.adapter.insert.mockResolvedValue(dbRow({ source: PLUGIN }));
+
+    await ctx.service.syncCodeFirstComponents([declared({ source: PLUGIN })]);
+
+    expect(ctx.adapter.insert.mock.calls[0][1]).toMatchObject({
+      source: PLUGIN,
+      locked: 1,
+    });
+  });
+
+  it("is left as it is by migrate, which writes a plugin's locked row as the pipeline does", async () => {
+    ctx.adapter.selectOne.mockResolvedValue(dbRow({ source: PLUGIN }));
+    ctx.adapter.update.mockResolvedValue([dbRow({ source: PLUGIN })]);
+
+    const outcome = await ctx.service.writeRecordedComponent(
+      declared({ source: "code", description: "Another description" }),
+      { source: "code", locked: true }
+    );
+
+    expect(outcome).toBe("updated");
+    expect(updateData(ctx)).not.toHaveProperty("source");
+  });
+
+  it("keeps a plugin's field group from a change outside code", async () => {
+    ctx.adapter.selectOne.mockResolvedValue(dbRow({ source: PLUGIN }));
+
+    await expect(
+      ctx.service.updateComponent("seo", { label: "Other" }, { source: "ui" })
+    ).rejects.toMatchObject({ code: "DEFINED_IN_CODE" });
     expect(ctx.adapter.update).not.toHaveBeenCalled();
   });
 });

@@ -60,6 +60,7 @@ import {
 } from "../../entity-rename/rename-entity";
 import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { declarationTakesRow } from "../../schema/migrate/plugin/declared-owner";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
@@ -93,6 +94,12 @@ export interface UpdateSingleOptions {
    * Used to enforce locking rules (code-first Singles can't be updated from UI).
    */
   source?: SingleSource;
+  /**
+   * Gives the row to the declaration the code-first sync writes (`source`)
+   * where the row records another owner the declaration takes it from
+   * (`declarationTakesRow`). Set by the code-first sync alone.
+   */
+  claim?: true;
 }
 
 /**
@@ -113,6 +120,13 @@ export interface DeleteSingleOptions {
 export interface CodeFirstSingleConfig {
   /** Unique slug identifier */
   slug: string;
+
+  /**
+   * The row's origin: the app's own (`code`), or the plugin that contributed
+   * it (`pluginEntitySources`). Required, so no road that syncs a Single
+   * leaves it out and records a plugin's as the app's.
+   */
+  source: SingleSource;
 
   /** Display label */
   label: string;
@@ -175,10 +189,13 @@ export interface CodeFirstSingleSource {
  * where a row came from, which each caller states for itself.
  */
 export function toCodeFirstSingleConfig(
-  single: CodeFirstSingleSource
+  single: CodeFirstSingleSource,
+  /** The Single's origin (`CodeFirstSingleConfig.source`). */
+  source: SingleSource
 ): CodeFirstSingleConfig {
   return {
     slug: single.slug,
+    source,
     // The declared label, else the slug title-cased word by word on `-`.
     label:
       single.label?.singular ??
@@ -751,7 +768,7 @@ export class SingleRegistryService extends BaseRegistryService<
    * @throws NextlyError(NOT_FOUND) when no Single matches the slug.
    * @throws NextlyError(CONFLICT) when a rename's new slug still holds the
    *   history of an earlier Single.
-   * @throws NextlyError(FORBIDDEN) when the Single is locked and the source isn't "code".
+   * @throws NextlyError(FORBIDDEN) when the Single is locked and the source is neither "code" nor a plugin's.
    */
   async updateSingle(
     slug: string,
@@ -769,9 +786,9 @@ export class SingleRegistryService extends BaseRegistryService<
         { kind: "single", slug },
         data.fields,
         existing.fields ?? [],
-        // The configuration's sync writes `define*` output, with its added system fields;
+        // The configuration's and plugins' sync writes `define*` output, with its added system fields;
         // every other caller writes fields as it was sent.
-        options?.source === "code" ? { definedInCode: "single" } : {}
+        isConfigOwnedSource(options?.source) ? { definedInCode: "single" } : {}
       );
     }
 
@@ -781,7 +798,7 @@ export class SingleRegistryService extends BaseRegistryService<
       currentResourceId: existing.id,
     });
 
-    if (existing.locked && options?.source !== "code") {
+    if (existing.locked && !isConfigOwnedSource(options?.source)) {
       // Defined in code: the caller is told so, which is a fact about the
       // thing and not about their permissions; slug and source go to the log.
       throw NextlyError.definedInCode({
@@ -872,6 +889,17 @@ export class SingleRegistryService extends BaseRegistryService<
 
     if (data.configPath !== undefined) {
       updateData.config_path = data.configPath;
+    }
+
+    // The one update that moves a Single between owners (`UpdateSingleOptions.claim`): its source
+    // and lock written together, so the row is never a declaration's and unlocked.
+    if (
+      options?.claim === true &&
+      options.source !== undefined &&
+      declarationTakesRow(options.source, existing)
+    ) {
+      updateData.source = options.source;
+      updateData.locked = 1;
     }
 
     // Status toggle: only persist when the caller explicitly sent it,
@@ -1434,12 +1462,20 @@ export class SingleRegistryService extends BaseRegistryService<
           await recordOf(config.slug)
         );
         const { schemaHash } = decision;
+        // A row whose only difference is its owner is written too, its owner
+        // alone: the decision compares what the declaration says, never whose
+        // the row is.
+        const step =
+          decision.step === "unchanged" &&
+          declarationTakesRow(config.source, decision.existing)
+            ? "metadata"
+            : decision.step;
 
-        if (decision.step === "create") {
+        if (step === "create") {
           await this.registerSingle(
             {
               ...declaredSingleRegistration(config, schemaHash),
-              source: "code",
+              source: config.source,
               locked: true,
               configPath: config.configPath,
             },
@@ -1448,7 +1484,7 @@ export class SingleRegistryService extends BaseRegistryService<
             { seedPermissions }
           );
           result.created.push(config.slug);
-        } else if (decision.step === "update") {
+        } else if (step === "update") {
           // Either fields changed or the status toggle flipped — both warrant
           // a write so dynamic_singles.status stays in sync with the
           // code-first config.
@@ -1459,11 +1495,11 @@ export class SingleRegistryService extends BaseRegistryService<
               configPath: config.configPath,
               locked: true,
             },
-            { source: "code" }
+            { source: config.source, claim: true }
           );
           result.updated.push(config.slug);
           if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
-        } else if (decision.step === "metadata") {
+        } else if (step === "metadata") {
           /*
            * Metadata only: no field changed, so nothing physical has to move.
            *
@@ -1486,7 +1522,7 @@ export class SingleRegistryService extends BaseRegistryService<
           await this.updateSingle(
             config.slug,
             { ...declaredSingleMetadata(config), locked: true },
-            { source: "code" }
+            { source: config.source, claim: true }
           );
           result.updated.push(config.slug);
           if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
@@ -1684,7 +1720,7 @@ export class SingleRegistryService extends BaseRegistryService<
       fields: fieldsJson,
       admin: data.admin ? JSON.stringify(data.admin) : null,
       source: data.source,
-      locked: (data.locked ?? data.source === "code") ? 1 : 0,
+      locked: (data.locked ?? isConfigOwnedSource(data.source)) ? 1 : 0,
       // Persist Draft/Published flag so the Singles edit form shows the
       // Save Draft / Publish split when the schema opts in.
       status: data.status === true ? 1 : 0,
