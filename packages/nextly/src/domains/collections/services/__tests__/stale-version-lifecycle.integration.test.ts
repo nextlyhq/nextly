@@ -14,6 +14,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../../config";
 import {
   createTestNextly,
@@ -21,7 +22,9 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import { createDynamicHandlers } from "../../../../routeHandler";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import type { ApiKeyService } from "../../../auth/services/api-key-service";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -362,6 +365,67 @@ describe.each(getConfiguredTestDialects())(
           )
         );
         expect(await readRev(t, PAGES, id, "all")).toMatch(/es:0$/);
+      });
+
+      it("spells a one-language read's version for that language, whatever its caller asks of the version", async () => {
+        const t = await boot(dialect);
+        const page = await translatedDraft(t);
+        const asked = { locale: "en", status: "all", revisionLocale: "all" };
+        const trusted = { ...asked, overrideAccess: true };
+        const versionIn = (rows: unknown) =>
+          (rows as { id?: unknown; _rev?: unknown }[]).find(
+            row => row.id === page.id
+          )?._rev;
+
+        const read = (await handlerOf(t).getEntry({
+          collectionName: PAGES,
+          entryId: page.id,
+          ...trusted,
+        } as never)) as Result;
+        const listed = (await handlerOf(t).listEntries({
+          collectionName: PAGES,
+          ...trusted,
+        } as never)) as Result;
+        const found = (await t.nextly.findByID({
+          collection: PAGES,
+          id: page.id,
+          ...trusted,
+        } as never)) as unknown as { _rev?: unknown };
+        const { items } = await t.nextly.find({
+          collection: PAGES,
+          ...trusted,
+        } as never);
+
+        const keys = t.getService("apiKeyService") as unknown as ApiKeyService;
+        const { key } = await keys.createApiKey(
+          await superAdminUser(t, "user-sv-admin"),
+          { name: "sv", tokenType: "full-access", expiresIn: "unlimited" }
+        );
+        const rest = async (path: string[]) => {
+          const query = new URLSearchParams(asked).toString();
+          const response = await createDynamicHandlers().GET(
+            new Request(`http://localhost/api/${path.join("/")}?${query}`, {
+              headers: { authorization: `Bearer ${key}` },
+            }),
+            { params: Promise.resolve({ params: path }) } as never
+          );
+          expect(response.status).toBe(200);
+          return (await response.json()) as Record<string, unknown>;
+        };
+        const entries = ["collections", PAGES, "entries"];
+
+        expect({
+          service: [read.data?._rev, versionIn(listed.data?.docs)],
+          directApi: [found._rev, versionIn(items)],
+          rest: [
+            (await rest([...entries, page.id]))._rev,
+            versionIn((await rest(entries)).items),
+          ],
+        }).toEqual({
+          service: [page.en, page.en],
+          directApi: [page.en, page.en],
+          rest: [page.en, page.en],
+        });
       });
 
       it("leaves a one-language read's version as it is, every language's values beside it or not", async () => {

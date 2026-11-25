@@ -11,6 +11,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineSingle, number, text } from "../../../config";
 import {
   createTestNextly,
@@ -18,6 +19,8 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { createDynamicHandlers } from "../../../routeHandler";
+import type { ApiKeyService } from "../../auth/services/api-key-service";
 import { VersionsRepository } from "../../versions/versions-repository";
 import type { SingleEntryService } from "../services/single-entry-service";
 
@@ -264,6 +267,44 @@ describe.each(getConfiguredTestDialects())(
 
         const published = await publishAll(t, { _rev: read });
         expect(published.success, JSON.stringify(published)).toBe(true);
+      });
+
+      it("spells a one-language read's version for that language, whatever its caller asks of the version", async () => {
+        const t = await boot(dialect);
+        await translatedBanner(t);
+        const english = await readRev(t, BANNER, "en");
+        const asked = { locale: "en", status: "all", revisionLocale: "all" };
+        const trusted = { ...asked, overrideAccess: true };
+
+        const read = (await singlesOf(t).get(
+          BANNER,
+          trusted as never
+        )) as Result;
+        const found = (await t.nextly.findSingle({
+          slug: BANNER,
+          ...trusted,
+        } as never)) as unknown as Doc;
+
+        const keys = t.getService("apiKeyService") as unknown as ApiKeyService;
+        const { key } = await keys.createApiKey(
+          await superAdminUser(t, "user-sv-admin"),
+          { name: "sv", tokenType: "full-access", expiresIn: "unlimited" }
+        );
+        const path = ["singles", BANNER];
+        const query = new URLSearchParams(asked).toString();
+        const response = await createDynamicHandlers().GET(
+          new Request(`http://localhost/api/${path.join("/")}?${query}`, {
+            headers: { authorization: `Bearer ${key}` },
+          }),
+          { params: Promise.resolve({ params: path }) } as never
+        );
+        expect(response.status).toBe(200);
+
+        expect({
+          service: read.data?._rev,
+          directApi: found._rev,
+          rest: ((await response.json()) as Doc)._rev,
+        }).toEqual({ service: english, directApi: english, rest: english });
       });
 
       it("refuses that publish once a language changed since the read of every language (`all`)", async () => {
