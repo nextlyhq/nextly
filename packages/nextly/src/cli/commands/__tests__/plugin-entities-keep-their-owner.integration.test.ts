@@ -524,74 +524,51 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(said).toContain(`${SETTINGS.slug} (${PLUGIN})`);
     }, 240_000);
 
-    it("takes writes to a departed plugin's Single, as to its collection, and refuses them to one the app removed", async () => {
-      await start([asWritten()]);
+    it("leaves a departed plugin's Single out of every push, as it leaves one the app removed", async () => {
+      const table = async (name: string) =>
+        (
+          await introspectLiveColumns(adapter.getDrizzle(), dialect, [name])
+        ).tables.flatMap(({ columns }) =>
+          columns.map(({ name: column, type }) => `${column} ${type}`).sort()
+        );
+      await dbSync(withPlugin());
+      const drifted = async () => {
+        for (const name of [SETTINGS_TABLE, APP_SINGLE_TABLE]) {
+          await adapter.executeQuery(
+            `ALTER TABLE ${name} ADD COLUMN kept_by_hand integer`
+          );
+        }
+      };
+      await drifted();
+      const before = {
+        plugin: await table(SETTINGS_TABLE),
+        app: await table(APP_SINGLE_TABLE),
+      };
+      expect(before.plugin).toContainEqual(
+        expect.stringContaining("kept_by_hand")
+      );
+      const after = async () => ({
+        plugin: await table(SETTINGS_TABLE),
+        app: await table(APP_SINGLE_TABLE),
+      });
+
+      // With a change of its own to apply, so the push runs.
+      const changed = defineConfig({
+        collections: [
+          defineCollection({
+            slug: NOTES.slug,
+            fields: [text({ name: "body" }), text({ name: "more" })],
+          }),
+        ],
+      });
+      await dbSync(changed);
+      expect(await after()).toEqual(before);
 
       await start(
         [],
-        async ({ nextly }) => {
-          const write = (slug: string) =>
-            nextly.updateSingle({
-              slug: slug as never,
-              data: { brand: "Changed", _overwrite: true } as never,
-            });
-          await write(SETTINGS.slug);
-          expect(
-            await nextly.findSingle({ slug: SETTINGS.slug as never })
-          ).toMatchObject({ brand: "Changed" });
-          await expect(write(APP_SINGLE.slug)).rejects.toThrow(/code/i);
-        },
-        { singles: [], fieldGroups: [] }
-      );
-    }, 180_000);
-
-    it("adds no translated column to a departed plugin's tables on a reload", async () => {
-      const localization = { locales: ["en", "fr"], defaultLocale: "en" };
-      const fields = [text({ name: "heading" }), text({ name: "tagline" })];
-      const translated = definePlugin({
-        name: PLUGIN,
-        version: "1.0.0",
-        nextly: "*",
-        contributes: {
-          singles: [
-            defineSingle({ slug: SETTINGS.slug, localized: true, fields }),
-          ],
-          fieldGroups: [
-            defineFieldGroup({ slug: HERO.slug, localized: true, fields }),
-          ],
-        },
-      } as never);
-      /** Each of the plugin's main tables, by the columns it has. */
-      const columns = async () =>
-        Object.fromEntries(
-          (
-            await introspectLiveColumns(adapter.getDrizzle(), dialect, [
-              SETTINGS_TABLE,
-              HERO_TABLE,
-            ])
-          ).tables.map(table => [
-            table.name,
-            table.columns.map(column => column.name).sort(),
-          ])
-        );
-
-      await start(
-        [translated],
         async () => {
-          const before = await columns();
-          expect(Object.values(before).flat()).not.toContain("tagline");
           vi.stubEnv("NODE_ENV", "development");
-          // The plugin leaves, and the app's collection changes in the same edit, so the reload
-          // has a schema change to apply.
-          loaded.config = defineConfig({
-            localization,
-            collections: [
-              defineCollection({
-                slug: NOTES.slug,
-                fields: [text({ name: "body" }), text({ name: "more" })],
-              }),
-            ],
-          } as never);
+          loaded.config = withoutPlugin();
           clearCachedSnapshot();
           clearLiveSnapshots();
           await reloadNextlyConfig({
@@ -600,11 +577,21 @@ for (const dialect of getConfiguredTestDialects()) {
                 ? { ...consoleLogger, ...quiet }
                 : getService(name as never),
           });
-          expect(await columns()).toEqual(before);
         },
-        { localization }
+        { singles: [], fieldGroups: [] }
       );
-    }, 180_000);
+      expect(await after()).toEqual(before);
+    }, 240_000);
+
+    it("makes no table again for a departed plugin's Single whose table is gone", async () => {
+      await dbSync(withPlugin());
+      await adapter.executeQuery(`DROP TABLE ${SETTINGS_TABLE}`);
+
+      await dbSync(withoutPlugin());
+      await start([], async () => {}, { singles: [], fieldGroups: [] });
+
+      expect(await adapter.tableExists(SETTINGS_TABLE)).toBe(false);
+    }, 240_000);
 
     it("keeps a plugin's Single among the site's content types, its address with it, and its collection out of them", async () => {
       const landing = defineSingle({
