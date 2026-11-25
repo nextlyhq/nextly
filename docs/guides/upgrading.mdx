@@ -207,6 +207,10 @@ to fix. Then:
   values;
 - check that your site's pages still render the same content.
 
+If the site holds tables an earlier release made in the Schema Builder, or field groups, also
+run `npx nextly repair-columns`: it changes nothing, and reports the columns that release made
+with another type. See [Repair old columns](/docs/database/repair-columns).
+
 ## If a step refuses
 
 Every refusal says what it found, changes nothing, and names its fix. The ones an upgrade may
