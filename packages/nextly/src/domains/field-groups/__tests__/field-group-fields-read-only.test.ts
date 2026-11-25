@@ -401,4 +401,74 @@ describe("refuseFieldGroupFieldsChangedInHost", () => {
       )
     ).rejects.toThrow(refusedNaming("card"));
   });
+
+  // A type a plugin contributes names its own settings, so a key the Schema Builder writes on a
+  // built-in field may be configuration of its own there: its copy is compared as it is, and one
+  // that changes it, whatever the key, is an edit. The fields inside it are judged by their own types.
+  it.each<[string, Field, Field]>([
+    [
+      "an option's id",
+      { options: [{ id: "star", label: "A", value: "a" }] },
+      { options: [{ id: "heart", label: "A", value: "a" }] },
+    ],
+    [
+      "an option's id taken away",
+      { options: [{ id: "star", label: "A", value: "a" }] },
+      { options: [{ label: "A", value: "a" }] },
+    ],
+    ["unique set to false", {}, { unique: false }],
+    ["unique false taken away", { unique: false }, {}],
+    ["required set to false", {}, { required: false }],
+    ["index set to false", {}, { index: false }],
+    ["a label that is its name", {}, { label: "stars" }],
+  ])(
+    "refuses a plugin field's changed copy: %s",
+    async (_what, kept, changed) => {
+      const stars = (extra: Field): Field => ({
+        name: "stars",
+        type: "rating",
+        ...extra,
+      });
+      const card = [NOTE, stars(kept)];
+      await expect(
+        refuseFieldGroupFieldsChangedInHost(
+          [cardRef({ fields: [NOTE, stars(changed)] })],
+          stored(card)
+        )
+      ).rejects.toThrow(refusedNaming("card"));
+      await expect(
+        refuseFieldGroupFieldsChangedInHost(
+          [cardRef({ fields: card })],
+          stored(card)
+        )
+      ).resolves.toBeUndefined();
+    }
+  );
+
+  it("judges the fields inside a plugin field by their own types", async () => {
+    const panel = (inside: Field): Field => ({
+      name: "panel",
+      type: "rating",
+      fields: [inside, BADGE_REF],
+    });
+    const spelled = {
+      ...panel({ ...NOTE, label: "note", required: false }),
+      fields: [
+        { ...NOTE, label: "note", required: false },
+        { ...BADGE_REF, componentFields: BADGE_FIELDS },
+      ],
+    };
+    await expect(
+      refuseFieldGroupFieldsChangedInHost(
+        [cardRef({ fields: [spelled] })],
+        stored([panel(NOTE)])
+      )
+    ).resolves.toBeUndefined();
+    await expect(
+      refuseFieldGroupFieldsChangedInHost(
+        [cardRef({ fields: [panel({ ...NOTE, required: true })] })],
+        stored([panel(NOTE)])
+      )
+    ).rejects.toThrow(refusedNaming("card"));
+  });
 });
