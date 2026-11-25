@@ -261,7 +261,16 @@ describe.each(getConfiguredTestDialects())(
             nextly.delete({ collection: "fgnm_posts" as never, id: also })
           );
       };
+      /** How many entries a list filtered on the group's field finds. */
+      const filtered = async () => {
+        const found = await nextly.find({
+          collection: "fgnm_posts" as never,
+          where: { "card.heading": { equals: "Kept" } } as never,
+        });
+        return found.items.length;
+      };
       return {
+        filtered,
         save,
         read,
         heading,
@@ -589,6 +598,42 @@ describe.each(getConfiguredTestDialects())(
         });
       }
     );
+
+    it("reads the registry for a filter on the group once more on the legacy names, and no more on the current ones", async () => {
+      /** The registry reads of one filtered list, each time, once the server is warm. */
+      const registryReads = async (migrated: boolean) => {
+        const { filtered } = await openSite({ migrated });
+        for (let n = 0; n < 3; n++) expect(await filtered()).toBe(1);
+        const reads: number[] = [];
+        for (let n = 0; n < 5; n++) {
+          const recorder = await recordStatements(site!.adapter, dialect);
+          try {
+            expect(await filtered()).toBe(1);
+          } finally {
+            recorder.uninstall();
+          }
+          reads.push(
+            recorder.statements.filter(
+              text =>
+                /^\s*select/i.test(text) &&
+                /from\s+["`](dynamic_components|dynamic_field_groups)["`]/i.test(
+                  text
+                )
+            ).length
+          );
+        }
+        await site!.close();
+        site = undefined;
+        return reads;
+      };
+      const legacy = await registryReads(false);
+      const current = await registryReads(true);
+      console.log(
+        `[statement counts] registry reads of a filtered list: legacy ${legacy.join(" ")}, current ${current.join(" ")}`
+      );
+      expect(Math.min(...legacy)).toBe(1);
+      expect(Math.min(...current)).toBe(0);
+    }, 120_000);
 
     it.runIf(dialect === "postgresql")(
       "takes a savepoint for a save on the legacy names, and none on the current ones",

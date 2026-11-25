@@ -12,7 +12,7 @@
  * - `<id> save <entryId> <heading>` answers `OK` when the save succeeded, the heading saved as
  *   the group's translated tagline too.
  * - `<id> list [<field> <value>]` answers `OK <json>`: the group of each entry, or of those whose
- *   group holds that value.
+ *   group holds that value. `count <field> <value>` answers `OK <n>`.
  * - `<id> duplicate <entryId>` answers `OK <new entryId>`.
  * - `<id> plugin-save <entryId> <heading>` and `plugin-tx-save` save through a plugin's context;
  *   `plugin-tx-save-unwarmed` does so without warming the collection's readiness first.
@@ -187,6 +187,13 @@ const COMMANDS: Record<string, (args: string[]) => Promise<string>> = {
     return `OK ${JSON.stringify(
       found.items.map(item => (item as { card?: unknown }).card ?? null)
     )}`;
+  },
+  count: async ([field, value]) => {
+    const counted = await instance.nextly.count({
+      collection: LIVE_COLLECTION as never,
+      where: { [`card.${field!}`]: { equals: value } } as never,
+    });
+    return `OK ${String((counted as { total?: unknown; totalDocs?: unknown }).total ?? (counted as { totalDocs?: unknown }).totalDocs)}`;
   },
   duplicate: async ([id]) => {
     const copied = await instance.nextly.duplicate({
