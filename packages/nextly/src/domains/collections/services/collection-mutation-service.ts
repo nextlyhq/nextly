@@ -2288,6 +2288,23 @@ function withWrittenStructures(
 }
 
 /**
+ * A promotion's split, its language going to the status the caller's write names. A pending change
+ * holds no status of its own for it to come from, and the caller's was moved off the payload to the
+ * language's row (`splitLocalizedWriteData`) before the change was folded into it.
+ */
+function withStatusWritten<
+  T extends { companionData: Record<string, unknown> },
+>(
+  split: T | null,
+  callerSplit: { companionData?: Record<string, unknown> } | null | undefined
+): T | null {
+  const status = callerSplit?.companionData?._status;
+  return split === null || typeof status !== "string"
+    ? split
+    : { ...split, companionData: { ...split.companionData, _status: status } };
+}
+
+/**
  * Lay a write's translated values back onto the row it returns, by field name: each value as the
  * translation row holds it, and for a repeater or group keeping one structure in every language,
  * whose translation row holds its text alone (keyed by row id), the value as written, its rows
@@ -14972,9 +14989,11 @@ export class CollectionMutationService extends BaseService {
       finalData: Record<string, unknown>;
       /**
        * The split those values went to: a repeater or group keeping one structure is left in
-       * `finalData` as its structure alone, and is laid back as written from here.
+       * `finalData` as its structure alone, and is laid back as written from here, and the
+       * language's status is here alone.
        */
       callerSplit?: {
+        companionData?: Record<string, unknown>;
         localizedFieldValues?: Record<string, unknown>;
         sharedStructures?: readonly SharedStructureWritten[];
       } | null;
@@ -15121,12 +15140,15 @@ export class CollectionMutationService extends BaseService {
     // Bound to this transaction's executor: the companion metadata read would
     // otherwise take a second pooled connection that this open transaction is
     // holding.
-    const localizedUpdate = await this.splitLocalizedWriteData(
-      args.collectionName,
-      promotedDocument,
-      args.draftLocale ?? args.requestLocale,
-      false,
-      tx.getDrizzle()
+    const localizedUpdate = withStatusWritten(
+      await this.splitLocalizedWriteData(
+        args.collectionName,
+        promotedDocument,
+        args.draftLocale ?? args.requestLocale,
+        false,
+        tx.getDrizzle()
+      ),
+      args.callerSplit
     );
     // Whether the caller's write moves the document off the draft it promotes:
     // the merged document, before access is judged, against the draft alone
@@ -18158,13 +18180,16 @@ export class CollectionMutationService extends BaseService {
             }
           : undefined;
 
+      // Whether this write is in a language whose status is its own companion
+      // `_status` rather than the main row's, whoever makes it.
+      const writesOtherLanguage =
+        localizedUpdate?.hasStatus === true &&
+        localizedUpdate.writeLocale !== this.localization?.defaultLocale;
       // Whether this write targets a non-default locale's companion `_status`
       // (which the in-transaction check below reads under the lock) rather than
       // the main row. A trusted write skips the transition gate entirely.
       const isNonDefaultLocaleStatusWrite =
-        !params.overrideAccess &&
-        localizedUpdate?.hasStatus === true &&
-        localizedUpdate.writeLocale !== this.localization?.defaultLocale;
+        !params.overrideAccess && writesOtherLanguage;
       // The status this write will persist: for a non-default locale it is the
       // companion `_status` the split produced (a string only when one was
       // provided), otherwise the main-row status.
@@ -18761,12 +18786,16 @@ export class CollectionMutationService extends BaseService {
           // locked reads the transition guard uses, so the decision is
           // TOCTOU-safe (a concurrent publish/unpublish committed before the
           // lock is seen). A never-published (`draft`) or per-locale-absent
-          // (`null`) document fails the test and edits in place.
-          const draftLiveStatus = isNonDefaultLocaleStatusWrite
-            ? committedLocaleStatus
-            : (((preUpdateRow as { status?: unknown } | undefined)?.status as
-                | string
-                | undefined) ?? null);
+          // (`null`) document fails the test and edits in place. A trusted write
+          // in another language is held over a published document as well: it
+          // may carry a shared value, which would go live in every language.
+          const draftLiveStatus =
+            isNonDefaultLocaleStatusWrite ||
+            (writesOtherLanguage && committedLocaleStatus === "published")
+              ? committedLocaleStatus
+              : (((preUpdateRow as { status?: unknown } | undefined)?.status as
+                  | string
+                  | undefined) ?? null);
           // The one hold rule, shared with the transaction and batch surfaces.
           // Eligibility is passed in rather than recomputed: it was resolved
           // off the transaction because it reads the component registry, and
@@ -20096,14 +20125,17 @@ export class CollectionMutationService extends BaseService {
                   // Publishing a held draft is a publish though the live row
                   // was published before and after: the move history records
                   // is the draft's, from draft to published, so it names the
-                  // publish and who made it.
+                  // publish and who made it. Taking one language offline folds
+                  // its draft too, and publishes nothing.
                   [
                     ...(companionEncodesMainTransition
                       ? []
                       : [
                           {
                             from:
-                              promotedDraft && mainTo === "published"
+                              promotedDraft &&
+                              promotesShared &&
+                              mainTo === "published"
                                 ? "draft"
                                 : mainFrom,
                             to: mainTo,
