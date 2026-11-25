@@ -100,6 +100,7 @@ import {
   builderSchemaPush,
   leavingSettingsStep,
   pushAndReconcileCompanion,
+  refuseBuilderCompanionTakingOthersElements,
   reconcileBuilderCompanion,
   type BuilderCompanionReconcile,
 } from "../helpers/builder-schema-push";
@@ -1039,6 +1040,11 @@ export const COMPONENTS_METHODS: Record<
               isStored
             );
           };
+          // What the companion reconcile would drop of another owner's, refused before either road runs.
+          await refuseBuilderCompanionTakingOthersElements(
+            "component",
+            companion
+          );
           const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
             () =>
