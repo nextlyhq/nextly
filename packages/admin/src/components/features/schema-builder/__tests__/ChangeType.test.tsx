@@ -223,6 +223,12 @@ describe("Change type… on a saved field", () => {
         refusal: null,
         outcome: null,
       },
+      {
+        type: "email",
+        blocked: "joins-translation-inside",
+        refusal: null,
+        outcome: null,
+      },
     ];
     const savedRating = { ...meta.fields![0] };
     const { user, onChanged } = renderChange("f-rating", [
@@ -259,8 +265,11 @@ describe("Change type… on a saved field", () => {
     expect(row("richText")).toHaveTextContent(
       "Unavailable: Its text is kept in each language inside its group or repeating rows, and this change can't be checked there yet. Add a new field beside it instead."
     );
+    expect(row("email")).toHaveTextContent(
+      "Unavailable: Every language shares its value inside its group or repeating rows, and this type would be translated there: the next save in one language would take the value from the others. Turn off Localized on the field and save, then change its type."
+    );
     // A type the server did not judge cannot be picked either.
-    expect(row("email")).toHaveAttribute("aria-disabled", "true");
+    expect(row("select")).toHaveAttribute("aria-disabled", "true");
     await user.click(row("textarea"));
     expect(onChanged).not.toHaveBeenCalled();
     await user.click(row("text"));

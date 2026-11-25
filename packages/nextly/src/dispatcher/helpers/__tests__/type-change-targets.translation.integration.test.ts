@@ -266,6 +266,119 @@ describe.each(getConfiguredTestDialects())(
   }
 );
 
+// A value every language shares inside a container, in a type translated there, would be each
+// language's, and the first save of the container in one language would take it from the others. The
+// way out the picker names is kept to: with Localized turned off first, every language keeps it.
+describe.each(getConfiguredTestDialects())(
+  "a value shared inside a container, becoming a text (%s)",
+  dialect => {
+    const pick = (type: string, extra: Field = {}): Field => ({
+      name: "pick",
+      type,
+      ...(type === "select"
+        ? { options: [{ label: "Red", value: "red" }] }
+        : {}),
+      ...extra,
+    });
+    const CAPTION: Field = { name: "caption", type: "text" };
+
+    it.each([
+      ["group", { pick: "red", caption: "One" }],
+      ["repeater", [{ pick: "red", caption: "One" }]],
+    ] as const)(
+      "in a %s: unavailable, and open once Localized is off, every language keeping it",
+      async (type, value) => {
+        const basePath = await mkdtemp(join(tmpdir(), "nextly-type-targets-"));
+        folders.push(basePath);
+        vi.stubEnv("NODE_ENV", "development");
+        const test = await createTestNextly({
+          dialect: dialect as TestDialect,
+          basePath,
+          db: DB,
+          localization: LOCALIZATION,
+        });
+        instance = test;
+        const holding = (field: Field): Field[] => [
+          { name: "meta", type, fields: [field, CAPTION] },
+        ];
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: "tct_joins",
+            label: "Post",
+            fields: holding(pick("select")),
+          }
+        );
+        const save = async (fields: Field[]) => {
+          const [row] = await (
+            test.adapter as unknown as {
+              executeQuery<R>(statement: string): Promise<R[]>;
+            }
+          ).executeQuery<{ v: number | string | null }>(
+            "SELECT schema_version AS v FROM dynamic_collections WHERE slug = 'tct_joins'"
+          );
+          await dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: "tct_joins" },
+            { fields, confirmed: true, schemaVersion: Number(row?.v ?? 1) }
+          );
+        };
+        const toText = async () =>
+          (await targetsOf("tct_joins", ["meta", "pick"], "select")).find(
+            target => target.type === "text"
+          );
+        expect(await toText()).toMatchObject({
+          blocked: "joins-translation-inside",
+          refusal: null,
+          outcome: null,
+        });
+
+        const created = (await test.nextly.create({
+          collection: "tct_joins",
+          locale: "en",
+          data: { title: "A", slug: "a", meta: value },
+        })) as { item: { id: string } };
+        const { id } = created.item;
+        const metaIn = async (locale: string) =>
+          (
+            (await test.nextly.findByID({
+              collection: "tct_joins",
+              id,
+              locale,
+            })) as { meta: Field | Field[] }
+          ).meta;
+        const picks = async (locale: string) =>
+          [await metaIn(locale)].flat().map(each => each.pick);
+
+        await save(holding(pick("select", { localized: false })));
+        expect(await toText()).toMatchObject({
+          blocked: null,
+          outcome: "keeps",
+        });
+        await save(holding(pick("text", { localized: false })));
+        // A save in the second language that leaves this field as it reads it.
+        const read = await metaIn("es");
+        const edited = [read].flat().map(each => ({ ...each, caption: "Uno" }));
+        await test.nextly.update({
+          collection: "tct_joins",
+          id,
+          locale: "es",
+          data: {
+            meta: Array.isArray(read) ? edited : edited[0],
+            _overwrite: true,
+          },
+        });
+        expect(await picks("en")).toEqual(["red"]);
+        expect(await picks("es")).toEqual(["red"]);
+      },
+      300_000
+    );
+  }
+);
+
 // With no migration writer the save is made by the push, which changes no translations column's
 // type: the picker offers such a change only where the save would make it.
 describe.each(getConfiguredTestDialects().filter(d => d !== "sqlite"))(

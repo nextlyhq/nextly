@@ -5,7 +5,9 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { FIELD_TYPE_CATALOG } from "../../../collections/fields/catalog";
 import { container } from "../../../di/container";
+import { defaultLocalizedForType } from "../../../domains/i18n/classify-fields";
 import { TRANSLATIONS_COLUMN_KEEPS_ITS_TYPE } from "../../../domains/schema/value-conversion/type-change/field-type-changes";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
@@ -17,6 +19,8 @@ import {
 /** A collection's save retypes a translations column in its file; a Single's and a field group's do not. */
 const COLLECTION: TranslationLayout = { perLanguage: true, fileRetypes: true };
 const SINGLE: TranslationLayout = { perLanguage: true, fileRetypes: false };
+/** The earlier layout, where nothing is kept per language: the pair's own rule alone answers. */
+const EARLIER: TranslationLayout = { perLanguage: false, fileRetypes: true };
 
 describe.each(["postgresql", "mysql", "sqlite"] as const)(
   "the type picker on an entity stored per language (%s)",
@@ -342,22 +346,222 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       });
     });
 
-    it("on the earlier layout, and for a number becoming a text: open", async () => {
+    it("on the earlier layout: open", async () => {
       expect(
         (
           await inside(holding(TWO), ["meta", "note"], "number", {
-            layout: { perLanguage: false, fileRetypes: true },
+            layout: EARLIER,
           })
         )?.blocked
       ).toBeNull();
+    });
+
+    // A value every language shares there, in a type translated by its own rule, would be each
+    // language's: the first later save of the container in one language takes it from the others.
+    const JOINS = {
+      blocked: "joins-translation-inside",
+      refusal: null,
+      outcome: null,
+    };
+    const pick = (
+      type: string,
+      extra: Record<string, unknown> = {}
+    ): Record<string, unknown> => ({
+      name: "pick",
+      type,
+      ...(type === "select" || type === "radio"
+        ? { options: [{ label: "Red", value: "red" }] }
+        : {}),
+      ...extra,
+    });
+    /** The answer for `pick`, as saved, becoming `to`. */
+    const picked = (
+      saved: Record<string, unknown>,
+      to: string,
+      asked: {
+        as?: Record<string, unknown>;
+        layout?: TranslationLayout;
+        fields?: Record<string, unknown>[];
+        path?: string[];
+      } = {}
+    ) =>
+      inside(
+        asked.fields ?? holding([saved, text("subtitle")]),
+        asked.path ?? ["meta", "pick"],
+        to,
+        {
+          type: String(saved.type),
+          ...(asked.as === undefined ? {} : { as: asked.as }),
+          ...(asked.layout === undefined ? {} : { layout: asked.layout }),
+        }
+      );
+
+    it("every kind of shared value becoming a type that is translated there, where its pair allows it: unavailable", async () => {
+      const joining = new Set<string>();
+      for (const { type } of FIELD_TYPE_CATALOG) {
+        if (defaultLocalizedForType(type)) continue;
+        for (const to of ["text", "textarea", "richText", "email", "code"]) {
+          const label = `${type} to ${to}`;
+          // What the pair alone answers, where nothing there is kept per language.
+          const alone = await picked(pick(type), to, { layout: EARLIER });
+          const answer = await picked(pick(type), to);
+          if (alone?.blocked === null) {
+            expect(answer, label).toMatchObject(JOINS);
+            joining.add(type);
+          } else {
+            expect(answer, label).toEqual(alone);
+          }
+        }
+      }
+      expect([...joining]).toEqual(
+        expect.arrayContaining([
+          "number",
+          "date",
+          "select",
+          "radio",
+          "checkbox",
+          "json",
+        ])
+      );
+    });
+
+    it.each([
+      ["a group with text beside it", holding([pick("select"), text("note")])],
+      ["a group with no text", holding([pick("select")])],
+      [
+        "repeating rows",
+        holding([pick("select"), text("note")], { type: "repeater" }),
+      ],
+      [
+        "repeating rows with no text",
+        holding([pick("select")], { type: "repeater" }),
+      ],
+      [
+        "a group with no name inside a group",
+        holding([{ name: "", type: "group", fields: [pick("select")] }]),
+      ],
+      [
+        "a group inside repeating rows",
+        holding([{ name: "inner", type: "group", fields: [pick("select")] }], {
+          type: "repeater",
+        }),
+        ["meta", "inner", "pick"],
+      ],
+    ])(
+      "a select in %s becoming a text: unavailable",
+      async (_where, fields, path?: string[]) => {
+        expect(
+          await picked(pick("select"), "text", {
+            fields,
+            path: path ?? ["meta", "pick"],
+          })
+        ).toMatchObject(JOINS);
+      }
+    );
+
+    it("a shared field the draft turns Localized on for, with its type: unavailable", async () => {
+      expect(
+        await picked(pick("text", { localized: false }), "textarea", {
+          as: { localized: true },
+        })
+      ).toMatchObject(JOINS);
+      expect(
+        await picked(pick("select"), "number", { as: { localized: true } })
+      ).toMatchObject(JOINS);
+    });
+
+    // Controls: what stays shared, or was each language's already, is taken from no language.
+    it.each([
+      [
+        "Localized off, saved, and kept by the draft",
+        pick("select", { localized: false }),
+        "text",
+        { as: pick("text", { localized: false }) },
+        "keeps",
+      ],
+      [
+        "Localized turned off by the draft with the type",
+        pick("select"),
+        "text",
+        { as: { localized: false } },
+        "keeps",
+      ],
+      [
+        "another type that is shared there",
+        pick("select"),
+        "date",
+        {},
+        "may-lose",
+      ],
+      [
+        "a group shared whole",
+        pick("select"),
+        "text",
+        {
+          fields: holding([pick("select"), text("note")], { localized: false }),
+        },
+        "keeps",
+      ],
+      [
+        "a group shared whole inside another",
+        pick("select"),
+        "text",
+        {
+          fields: holding([
+            {
+              name: "inner",
+              type: "group",
+              localized: false,
+              fields: [pick("select")],
+            },
+            text("note"),
+          ]),
+          path: ["meta", "inner", "pick"],
+        },
+        "keeps",
+      ],
+      [
+        "one that was translated there",
+        pick("select", { localized: true }),
+        "text",
+        {},
+        "keeps",
+      ],
+      [
+        "a row's own id",
+        pick("select", { name: "id" }),
+        "text",
+        {
+          fields: holding([pick("select", { name: "id" }), text("note")], {
+            type: "repeater",
+          }),
+          path: ["meta", "id"],
+        },
+        "keeps",
+      ],
+    ])("%s: open", async (_what, saved, to, asked, outcome) => {
+      expect(await picked(saved, to, asked)).toMatchObject({
+        blocked: null,
+        outcome,
+      });
+    });
+
+    it("a field on the row answers by the row's rules, never by this one", async () => {
       expect(
         (
-          await inside(
-            holding([{ name: "rank", type: "number" }, text("subtitle")]),
-            ["meta", "rank"],
-            "text",
-            { type: "number" }
-          )
+          await picked(pick("number"), "text", {
+            fields: [pick("number"), text("note")],
+            path: ["pick"],
+          })
+        )?.blocked
+      ).toBe("joins-translation");
+      expect(
+        (
+          await picked(pick("select", { localized: false }), "text", {
+            fields: [pick("select", { localized: false }), text("note")],
+            path: ["pick"],
+            as: pick("text", { localized: false }),
+          })
         )?.blocked
       ).toBeNull();
     });
