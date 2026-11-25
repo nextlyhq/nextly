@@ -559,14 +559,24 @@ function changedSentence(
   // Said once the parts are described as they are now.
   if (parts.checking) return null;
   const now = parts.described ? parts.chosenAnswer?.marks : undefined;
-  if (before === undefined || now === undefined) return CHANGED_SINCE_OPENED;
-  // Held back from the editor's copy, and nothing changed since the parts were described: it
-  // changed before they were, after the editor opened it.
-  const sinceDescribed =
-    staleVersionOf(refusal) !== undefined || !sameMarks(before, now);
-  return sinceDescribed
+  return before !== undefined &&
+    now !== undefined &&
+    movedSinceDescribed(refusal, before, now)
     ? changedSinceDescribed({ before, now, direction, labelOf })
     : CHANGED_SINCE_OPENED;
+}
+
+/**
+ * Whether what refused a move changed since the parts were described. A move held back from the
+ * editor's copy where nothing did was held by a change made before they were described, after the
+ * editor opened the document.
+ */
+function movedSinceDescribed(
+  refusal: Error,
+  before: PartMarks,
+  now: PartMarks
+): boolean {
+  return staleVersionOf(refusal) !== undefined || !sameMarks(before, now);
 }
 
 /**
