@@ -19,9 +19,15 @@ vi.mock("../../schema/schema-version", async importOriginal =>
   ).unversionedRegistryWrites(await importOriginal())
 );
 
+// What clears a `diverged` mark; each case that needs it says how it ends.
+vi.mock("../services/field-group-reconcile-service", () => ({
+  reconcileFieldGroup: vi.fn(async () => ({})),
+}));
+
 import { loadDialectTables } from "../../../database/dialect-tables";
 import type { FieldGroupConfig } from "../../../field-groups/config/types";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import { reconcileFieldGroup } from "../services/field-group-reconcile-service";
 import {
   FieldGroupRegistryService,
   toCodeFirstComponentConfig,
@@ -421,6 +427,36 @@ describe("who owns a field group's row", () => {
     expect(result.unchanged).toEqual(["seo"]);
     expect(ctx.adapter.update).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["a table the sync does not repoint", { table_name: "comp_elsewhere" }],
+    [
+      "a mark it cannot clear",
+      { migration_status: "diverged", table_name: "comp_seo" },
+    ],
+  ])(
+    "moves with the declaration where the rest of the row stays as it is: %s",
+    async (_case, row) => {
+      ctx.adapter.selectOne.mockResolvedValue(
+        dbRow({ source: "code", ...row })
+      );
+      ctx.adapter.tableExists.mockResolvedValue(true);
+      ctx.adapter.update.mockResolvedValue([dbRow({ source: PLUGIN, ...row })]);
+      vi.mocked(reconcileFieldGroup).mockRejectedValueOnce(
+        new Error("ambiguous tables")
+      );
+
+      const result = await ctx.service.syncCodeFirstComponents([
+        declared({ source: PLUGIN }),
+      ]);
+
+      expect(result.errors).toHaveLength(1);
+      expect(ctx.adapter.update).toHaveBeenCalledTimes(1);
+      expect(updateData(ctx)).toMatchObject({ source: PLUGIN, locked: 1 });
+      expect(updateData(ctx)).not.toHaveProperty("table_name");
+      expect(updateData(ctx)).not.toHaveProperty("fields");
+    }
+  );
 
   it("is registered as the plugin's, and locked", async () => {
     ctx.adapter.selectOne.mockResolvedValue(null);

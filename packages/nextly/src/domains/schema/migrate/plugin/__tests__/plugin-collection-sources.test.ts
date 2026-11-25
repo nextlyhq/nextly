@@ -157,6 +157,17 @@ describe("a collection under a plugin's legacy `collections` key", () => {
     }
   });
 
+  it("names no slug the same plugin contributes and the host renamed, which is the app's to take", () => {
+    const both = {
+      ...plugin("@a/one", ["forms"], { forms: "contact-forms" }),
+      collections: [{ slug: "forms", fields: [] }],
+    } as unknown as PluginDefinition;
+
+    expect([...pluginCollectionSources([both])]).toEqual([
+      ["contact-forms", "plugin:@a/one"],
+    ]);
+  });
+
   it("gives way to the plugin that contributes the slug, whatever their order", () => {
     const contributing = plugin("@a/one", ["events"]);
     for (const plugins of [

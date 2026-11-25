@@ -47,6 +47,7 @@ import { getService } from "../../../di/service-access";
 import { CollectionRegistryService } from "../../../domains/collections/services/collection-registry-service";
 import { FieldGroupRegistryService } from "../../../domains/field-groups/services/field-group-registry-service";
 import { siteTypes } from "../../../domains/public-addresses/public-address";
+import { introspectLiveColumns } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { SingleRegistryService } from "../../../domains/singles/services/single-registry-service";
 import { reloadNextlyConfig } from "../../../init/reload-config";
@@ -303,7 +304,7 @@ for (const dialect of getConfiguredTestDialects()) {
       during: (
         handle: Awaited<ReturnType<typeof createTestNextly>>
       ) => Promise<void> = async () => {},
-      own: { singles: unknown[]; fieldGroups: unknown[] } = {
+      own: Record<string, unknown> = {
         singles: [APP_SINGLE],
         fieldGroups: [APP_GROUP],
       }
@@ -515,6 +516,67 @@ for (const dialect of getConfiguredTestDialects()) {
           await expect(write(APP_SINGLE.slug)).rejects.toThrow(/code/i);
         },
         { singles: [], fieldGroups: [] }
+      );
+    }, 180_000);
+
+    it("adds no translated column to a departed plugin's tables on a reload", async () => {
+      const localization = { locales: ["en", "fr"], defaultLocale: "en" };
+      const fields = [text({ name: "heading" }), text({ name: "tagline" })];
+      const translated = definePlugin({
+        name: PLUGIN,
+        version: "1.0.0",
+        nextly: "*",
+        contributes: {
+          singles: [
+            defineSingle({ slug: SETTINGS.slug, localized: true, fields }),
+          ],
+          fieldGroups: [
+            defineFieldGroup({ slug: HERO.slug, localized: true, fields }),
+          ],
+        },
+      } as never);
+      /** Each of the plugin's main tables, by the columns it has. */
+      const columns = async () =>
+        Object.fromEntries(
+          (
+            await introspectLiveColumns(adapter.getDrizzle(), dialect, [
+              SETTINGS_TABLE,
+              HERO_TABLE,
+            ])
+          ).tables.map(table => [
+            table.name,
+            table.columns.map(column => column.name).sort(),
+          ])
+        );
+
+      await start(
+        [translated],
+        async () => {
+          const before = await columns();
+          expect(Object.values(before).flat()).not.toContain("tagline");
+          vi.stubEnv("NODE_ENV", "development");
+          // The plugin leaves, and the app's collection changes in the same edit, so the reload
+          // has a schema change to apply.
+          loaded.config = defineConfig({
+            localization,
+            collections: [
+              defineCollection({
+                slug: NOTES.slug,
+                fields: [text({ name: "body" }), text({ name: "more" })],
+              }),
+            ],
+          } as never);
+          clearCachedSnapshot();
+          clearLiveSnapshots();
+          await reloadNextlyConfig({
+            resolver: name =>
+              name === "logger"
+                ? { ...consoleLogger, ...quiet }
+                : getService(name as never),
+          });
+          expect(await columns()).toEqual(before);
+        },
+        { localization }
       );
     }, 180_000);
 
