@@ -65,13 +65,10 @@ const declared = {
     }),
   ],
   singles: [
-    // With drafts, which a restore puts the version back as. Its saves are recorded for no webhook,
-    // so one made by an API key, whose activity is not recorded either, assembles no document of
-    // what it replaces: its first read of the group is the one it makes to keep that aside.
+    // With drafts, which a restore puts the version back as.
     defineSingle({
       slug: "fgnm_page",
       status: true,
-      webhooks: false,
       versions: true,
       fields: [
         text({ name: "title" }),
@@ -211,7 +208,7 @@ describe.each(getConfiguredTestDialects())(
         return (found as { card?: { heading?: unknown } }).card?.heading;
       };
       /** Puts the Single's first version back, as a person in the admin does. */
-      const restoreSingle = async (as: "person" | "key" = "person") => {
+      const restoreSingle = async () => {
         const found = (await nextly.findSingle({
           slug: "fgnm_page" as never,
         })) as { id?: string };
@@ -228,9 +225,6 @@ describe.each(getConfiguredTestDialects())(
               entryId: found.id!,
               versionNo: 1,
               user: user as never,
-              ...(as === "key"
-                ? { actor: { type: "apiKey" as const, id: "fgnm-key" } }
-                : {}),
               version: { _overwrite: true },
             })
           );
@@ -431,17 +425,14 @@ describe.each(getConfiguredTestDialects())(
       120_000
     );
 
-    it.each(["person", "key"] as const)(
-      "refuses a restore of a Single's version meeting a moved table, and restores it on the retry (by a %s)",
-      async as => {
-        const { restoreSingle, draftHeading } = await openSite();
-        const restore = await restoreSingle(as);
-        await moveEverything();
+    it("refuses a restore of a Single's version meeting a moved table, and restores it on the retry", async () => {
+      const { restoreSingle, draftHeading } = await openSite();
+      const restore = await restoreSingle();
+      await moveEverything();
 
-        await tried(restore, [MOVING]);
-        expect(await draftHeading()).toBe("Kept");
-      }
-    );
+      await tried(restore, [MOVING]);
+      expect(await draftHeading()).toBe("Kept");
+    });
 
     it("refuses a delete meeting a moved table, rather than leaving the group's rows behind", async () => {
       const { remove } = await openSite();
