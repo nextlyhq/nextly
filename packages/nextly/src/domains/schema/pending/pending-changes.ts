@@ -123,17 +123,29 @@ function besideLine(file: BesideFile): string {
 }
 
 /**
+ * Whether `nextly migrate`, and a production start that runs migrations, makes what `file` would where
+ * the database lacks it, with no file (`ensureLocalizedCompanions`): a translations table, its columns
+ * and its unique indexes. Neither moves a field's values between the two tables nor retypes a column.
+ */
+export function madeByMigrate(file: BesideFile): boolean {
+  return (
+    file.kind === "translations table" ||
+    file.kind === "per-language unique indexes"
+  );
+}
+
+/**
  * The notice every surface gives of the files a run would write beside the main migration where the
- * newest snapshot records no settings (`recordsTranslationsTables`): what the translations tables
- * hold is not recorded, so it is no change of what was recorded before.
+ * newest snapshot does not say what the translations tables hold (`recordsTranslationsTables`), so
+ * none is a change of what it recorded. It sends nobody to `migrate:create`: written once
+ * `nextly migrate` has made the column, the file fills it in again over text edited since.
  */
 export function translationsNotRecordedNotice(
   files: readonly BesideFile[]
 ): string {
   return [
-    "Translations tables not recorded yet in a migration: the newest snapshot was written without " +
-      "each entity's settings, so it does not say what these tables hold. `nextly migrate:create` " +
-      "writes and records the following; until then they are not compared.",
+    "Translations tables not recorded yet in a migration: the newest snapshot does not say whether " +
+      "these are made, so they are not compared. `nextly migrate` makes what is missing.",
     ...files.map(file => `  ${besideLine(file)}`),
   ].join("\n");
 }

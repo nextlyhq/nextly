@@ -52,6 +52,7 @@ import type { MinimalConfigEntity } from "../migrate-create/generate";
 import type { SnapshotFile } from "../migrate-create/snapshot-io";
 import {
   type BesideFile,
+  madeByMigrate,
   pendingChangeLines,
   type PendingChanges,
   recordsForTheFirstTime,
@@ -114,7 +115,8 @@ export interface UnwrittenChanges {
   settingsNotRecorded?: boolean;
   /**
    * The files `migrate:create` would write beside the main migration where the newest snapshot does
-   * not say what the translations tables hold (`recordsTranslationsTables`): a notice, never a change.
+   * not say what the translations tables hold (`recordsTranslationsTables`) and `nextly migrate`
+   * makes it (`madeByMigrate`): a notice, never a change.
    */
   besideNotRecorded?: readonly BesideFile[];
 }
@@ -189,14 +191,13 @@ export function compareWithNewestSnapshot(args: {
 }): UnwrittenChanges {
   const { entities, latest, pending } = args;
   const recorded = recordsTranslationsTables(latest);
+  const notRecorded = recorded ? [] : pending.beside.filter(madeByMigrate);
   return {
     // With no file of the translations tables named, what one does to the main table is named
     // itself: the snapshot does record that table.
     tables: recorded ? pending.tables : pending.diffed,
-    beside: recorded ? pending.beside : [],
-    ...(recorded || pending.beside.length === 0
-      ? {}
-      : { besideNotRecorded: pending.beside }),
+    beside: pending.beside.filter(file => !notRecorded.includes(file)),
+    ...(notRecorded.length === 0 ? {} : { besideNotRecorded: notRecorded }),
     settings: settingsDifferences(entities, latest, args.recorded),
     // With no snapshot at all, a command that reads no database names the permissions the first
     // migration records, as `migrate:create` writes them; a database's first `nextly migrate`
@@ -214,12 +215,11 @@ export function compareWithNewestSnapshot(args: {
 }
 
 /**
- * Whether the newest snapshot says what the translations tables hold. A snapshot records their
- * unique indexes and their containers' overlay columns only where there are some, and one that
- * records the entities' settings was written by a release that recorded the indexes, and by one that
- * recorded the overlay columns or made none: in it, none recorded means there were none. One that
- * records no settings, a baseline or one written before them, says nothing of either. A template's
- * is read as what its entities were made with, and with no snapshot at all nothing was made.
+ * Whether the newest snapshot is read as saying what the translations tables hold. One that records
+ * the entities' settings is, and so is a template's, read as what its entities were made with; with
+ * no snapshot at all nothing was made. One that records no settings, a baseline or one written before
+ * them, says neither what was declared nor what was made. It is no word on the database: `nextly
+ * migrate` makes a translations table, its columns and its indexes, and records nothing.
  */
 function recordsTranslationsTables(
   latest: { data: SnapshotFile; template?: true } | null

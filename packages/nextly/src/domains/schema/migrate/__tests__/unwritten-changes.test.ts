@@ -24,6 +24,7 @@ import {
 } from "../../migrate-create/generate";
 import { NO_APP_STREAM_TABLES } from "../../migrate-create/app-stream";
 import type { SnapshotFile } from "../../migrate-create/snapshot-io";
+import { translationsNotRecordedNotice } from "../../pending/pending-changes";
 import { pendingChanges } from "../../pending/plan-pending";
 import {
   compareWithNewestSnapshot,
@@ -409,6 +410,37 @@ describe("compareWithNewestSnapshot", () => {
         "- drop_column dc_posts.title",
       ]);
       expect(changes.besideNotRecorded).toEqual(pending.beside);
+    });
+
+    // `nextly migrate` makes a translations table, its columns and its indexes; it moves no field and
+    // retypes no column, so those are never passed over as made by it.
+    it("are each a change over it where nextly migrate does not make them", () => {
+      const moved = [
+        { kind: "fields leaving translation" as const, table: "dc_a" },
+        { kind: "fields joining translation" as const, table: "dc_b" },
+        { kind: "translations column types" as const, table: "dc_c" },
+      ];
+      const changes = compareWithNewestSnapshot({
+        pending: { ...NO_TABLES, beside: [...pending.beside, ...moved] },
+        entities: posts,
+        permissions: NO_PERMISSIONS,
+        latest: snapshotOf(posts, { entities: undefined }),
+      });
+      expect(unwrittenChangeLines(changes)).toEqual([
+        "~ fields leaving translation dc_a",
+        "~ fields joining translation dc_b",
+        "~ translations column types dc_c",
+      ]);
+      expect(changes.besideNotRecorded).toEqual(pending.beside);
+    });
+
+    it("are named in a notice that sends nobody to migrate:create", () => {
+      const notice = translationsNotRecordedNotice(pending.beside);
+      expect(notice).toContain("not recorded yet");
+      expect(notice).toContain("`nextly migrate` makes what is missing");
+      for (const line of refused) expect(notice).toContain(line);
+      // The file it would write seeds the default language's text again.
+      expect(notice).not.toContain("migrate:create");
     });
 
     it("are no notice where there are none", () => {

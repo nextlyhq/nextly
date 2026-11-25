@@ -130,6 +130,9 @@ const MAIN_COLUMN_ADDED = new RegExp(`\\+ add_column dc_${SLUG}\\.box `);
 /** What says a file beside the main migration is not recorded. */
 const NOT_RECORDED = "not recorded yet";
 
+/** What a notice of it must not send anyone to: the file seeds the default language's text again. */
+const CREATE_ADVICE = "`nextly migrate:create` writes and records";
+
 export function overlayRecordCases(
   loaded: Loaded,
   layout: string,
@@ -390,6 +393,7 @@ export function overlayRecordCases(
           if (noticed) {
             expect(said).toContain(NOT_RECORDED);
             expect(said).toContain(OVERLAY_LINE);
+            expect(said).not.toContain(CREATE_ADVICE);
           } else {
             expect(said).not.toContain(NOT_RECORDED);
           }
