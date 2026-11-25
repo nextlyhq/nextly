@@ -740,6 +740,240 @@ it("pathsKeptFromCaller names the values kept over a different one, or over none
 
 // A save held over another writer's pending change keeps that change's value of each field the
 // writer may not write, and refuses a value there that neither the live row nor the change holds.
+describe("keepDeniedAtStored keeps what the writer may not read", () => {
+  /** A save of `update` over `stored`, by a writer whose read rules are `reads`. */
+  async function saved(
+    update: Record<string, unknown>,
+    stored: Record<string, unknown>,
+    reads: (document: Record<string, unknown>) => Promise<void>,
+    rules: (document: Record<string, unknown>) => Promise<void> = allow
+  ): Promise<Record<string, unknown>> {
+    const { kept } = await keepDeniedAtStored({
+      update,
+      stored,
+      applyRules: rules,
+      unread: { stored, applyRules: reads },
+    });
+    return kept;
+  }
+
+  /** Hides `secret` in every row of `rows`. */
+  const hidesRowSecrets = (
+    document: Record<string, unknown>
+  ): Promise<void> => {
+    for (const row of (document.rows ?? []) as Record<string, unknown>[]) {
+      delete row.secret;
+    }
+    return Promise.resolve();
+  };
+
+  it("keeps a hidden field the update leaves out of a group, and one it sends as sent", async () => {
+    const stored = { meta: { note: "n", secret: "s" } };
+    const hidden = denies("meta.secret");
+    expect(await saved({ meta: { note: "m" } }, stored, hidden)).toEqual({
+      meta: { note: "m", secret: "s" },
+    });
+    // Theirs to write, though they may not read it: cleared, and set.
+    for (const secret of ["t", null]) {
+      expect(
+        await saved({ meta: { note: "m", secret } }, stored, hidden)
+      ).toEqual({ meta: { note: "m", secret } });
+    }
+  });
+
+  it("deletes a field its writer could read and left out", async () => {
+    expect(
+      await saved(
+        { meta: { note: "m" } },
+        { meta: { note: "n", seen: "s" } },
+        allow
+      )
+    ).toEqual({ meta: { note: "m" } });
+  });
+
+  it("keeps the hidden part alone of a group left out of a group", async () => {
+    const stored = {
+      meta: {
+        note: "n",
+        inner: { seen: "a", secret: "s" },
+        list: [{ id: "1" }],
+      },
+    };
+    expect(
+      await saved({ meta: { note: "m" } }, stored, denies("meta.inner.secret"))
+    ).toEqual({ meta: { note: "m", inner: { secret: "s" } } });
+  });
+
+  it("clears a whole container the update clears", async () => {
+    expect(
+      await saved(
+        { meta: null },
+        { meta: { note: "n", secret: "s" } },
+        denies("meta.secret")
+      )
+    ).toEqual({ meta: null });
+  });
+
+  it("keeps each row's own, as rows are reordered, added and removed", async () => {
+    const stored = {
+      rows: [
+        { id: "a", label: "A", secret: "sa" },
+        { id: "b", label: "B", secret: "sb" },
+        { id: "c", label: "C", secret: "sc" },
+      ],
+    };
+    expect(
+      await saved(
+        {
+          rows: [
+            { id: "c", label: "C2" },
+            { label: "new" },
+            { id: "a", label: "A2" },
+          ],
+        },
+        stored,
+        hidesRowSecrets
+      )
+    ).toEqual({
+      rows: [
+        { id: "c", label: "C2", secret: "sc" },
+        { label: "new" },
+        { id: "a", label: "A2", secret: "sa" },
+      ],
+    });
+  });
+
+  it("takes no value for a row sent without its id, or one repeating another's", async () => {
+    const stored = { rows: [{ id: "a", label: "A", secret: "sa" }] };
+    expect(
+      await saved(
+        { rows: [{ label: "A" }, { id: "a", label: "A" }, { id: "a" }] },
+        stored,
+        hidesRowSecrets
+      )
+    ).toEqual({
+      rows: [
+        { label: "A" },
+        { id: "a", label: "A", secret: "sa" },
+        { id: "a" },
+      ],
+    });
+  });
+
+  it("judges a read rule that reads its siblings on the container as the update leaves it", async () => {
+    /** Hides `secret` while `kind` is private. */
+    const hiddenWhilePrivate = (
+      document: Record<string, unknown>
+    ): Promise<void> => {
+      const meta = document.meta as Record<string, unknown>;
+      if (meta.kind === "private") delete meta.secret;
+      return Promise.resolve();
+    };
+    expect(
+      await saved(
+        { meta: { kind: "private" } },
+        { meta: { kind: "public", secret: "s" } },
+        hiddenWhilePrivate
+      )
+    ).toEqual({ meta: { kind: "private", secret: "s" } });
+    expect(
+      await saved(
+        { meta: { kind: "public" } },
+        { meta: { kind: "private", secret: "s" } },
+        hiddenWhilePrivate
+      )
+    ).toEqual({ meta: { kind: "public" } });
+  });
+
+  it("shows the read rules the whole document, not the update's keys alone", async () => {
+    const hiddenUnlessAnns = (
+      document: Record<string, unknown>
+    ): Promise<void> => {
+      if (document.owner !== "ann") {
+        delete (document.meta as Record<string, unknown>).secret;
+      }
+      return Promise.resolve();
+    };
+    const stored = { owner: "ann", meta: { note: "n", secret: "s" } };
+    // Shown to its writer, who left it out: a deletion of theirs.
+    expect(
+      await saved({ meta: { note: "m" } }, stored, hiddenUnlessAnns)
+    ).toEqual({ meta: { note: "m" } });
+  });
+
+  it("keeps what the pending change its editors are shown holds, over the row's", async () => {
+    const { kept } = await keepDeniedAtStored({
+      update: {
+        rows: [
+          { id: "a", label: "A2" },
+          { id: "p", label: "P2" },
+        ],
+      },
+      stored: { rows: [{ id: "a", label: "A", secret: "live" }] },
+      applyRules: allow,
+      unread: {
+        stored: {
+          rows: JSON.stringify([
+            { id: "a", label: "A", secret: "held" },
+            { id: "p", label: "P", secret: "held too" },
+          ]),
+        },
+        applyRules: hidesRowSecrets,
+      },
+    });
+    expect(kept).toEqual({
+      rows: [
+        { id: "a", label: "A2", secret: "held" },
+        { id: "p", label: "P2", secret: "held too" },
+      ],
+    });
+  });
+
+  it("gives a component of another type none of the stored one's values", async () => {
+    const type = currentFieldGroupTypeKey;
+    expect(
+      await saved(
+        { rows: [{ id: "a", [type]: "quote" }] },
+        { rows: [{ id: "a", [type]: "card", secret: "s" }] },
+        hidesRowSecrets
+      )
+    ).toEqual({ rows: [{ id: "a", [type]: "quote" }] });
+  });
+
+  it("keeps a value its writer may neither read nor change, whatever they send there", async () => {
+    expect(
+      await saved(
+        { meta: { note: "m", secret: "theirs" } },
+        { meta: { note: "n", secret: "s" } },
+        denies("meta.secret"),
+        denies("meta.secret")
+      )
+    ).toEqual({ meta: { note: "m", secret: "s" } });
+  });
+
+  it("reaches neither the row nor the update it was given", async () => {
+    const stored = { meta: { note: "n", inner: { secret: "s" } } };
+    const update = { meta: { note: "m" } };
+    const kept = await saved(update, stored, denies("meta.inner"));
+    (kept.meta as { inner: { secret: string } }).inner.secret = "changed";
+    expect(stored.meta.inner.secret).toBe("s");
+    expect(update).toEqual({ meta: { note: "m" } });
+  });
+
+  it("names what it kept as the row's own", async () => {
+    const stored = { meta: { note: "n", secret: "s" } };
+    const { kept, permitted } = await keepDeniedAtStored({
+      update: { meta: { note: "m" } },
+      stored,
+      applyRules: allow,
+      unread: { stored, applyRules: denies("meta.secret") },
+    });
+    expect([...storedProvenance(kept, permitted).paths]).toEqual([
+      "meta.secret",
+    ]);
+  });
+});
+
 describe("keepPendingWhereDenied", () => {
   const live = { note: "live-note", runbook: "live-runbook" };
   const pending = { ops: { note: "live-note", runbook: "author-runbook" } };

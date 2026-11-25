@@ -215,6 +215,11 @@ export async function resolvePromotedDocument(
  * column is not written, so the row keeps it without being handed it back.
  * The row is narrowed to the update's own keys for the same reason, so a field
  * the update does not name is never written.
+ *
+ * A value inside a container that the writer may not READ is kept too, where
+ * they send none (`unread`): the container they read had no such key, so one
+ * they send back without it removes nothing. A value they do send there is
+ * theirs to write, as their update rules decide.
  */
 export async function keepDeniedAtStored(input: {
   /** The update as the caller sent it, before any rule has run. */
@@ -223,6 +228,8 @@ export async function keepDeniedAtStored(input: {
   stored: Record<string, unknown>;
   /** Applies the field rules to the document it is given, in place. */
   applyRules: (document: Record<string, unknown>) => Promise<void>;
+  /** What the writer may not read; absent where nothing inside a container is hidden from anyone. */
+  unread?: UnreadValues;
 }): Promise<{
   /** The document to write: the update, with denied values kept from the row. */
   kept: Record<string, unknown>;
@@ -259,7 +266,116 @@ export async function keepDeniedAtStored(input: {
   for (const key of Object.keys(input.update)) {
     if (!hasOwn(permitted, key)) delete out[key];
   }
-  return { kept: out, permitted };
+  return {
+    kept: input.unread ? await withUnread(out, input.unread) : out,
+    permitted,
+  };
+}
+
+/** What a writer was not shown of the document they save, and what decides it. */
+export interface UnreadValues {
+  /** The document as it stands, with the pending change its editors are shown. */
+  stored: Record<string, unknown>;
+  /** Applies the writer's field READ rules to the document it is given, in place. */
+  applyRules: (document: Record<string, unknown>) => Promise<void>;
+}
+
+/**
+ * `update` with each value its writer was not shown, and sends none of, put back in the container
+ * it sits in. Judged on the document as this update leaves it, as the update rules are: a read
+ * rule reads its siblings too.
+ */
+async function withUnread(
+  update: Record<string, unknown>,
+  unread: UnreadValues
+): Promise<Record<string, unknown>> {
+  const stored: Record<string, unknown> = {};
+  for (const key of Object.keys(unread.stored)) {
+    assign(stored, key, opened(unread.stored[key]));
+  }
+  // Copies, since what is put back must reach neither the row nor the caller's own values.
+  const kept = detachData(update);
+  const readable = detachData(overlayRecord(stored, kept));
+  await unread.applyRules(readable);
+  for (const key of Object.keys(kept)) {
+    if (!hasOwn(stored, key)) continue;
+    keepUnread(kept[key], stored[key], valueIn(readable, key));
+  }
+  return kept;
+}
+
+/** A container kept as JSON text, opened; any other value as it is. */
+function opened(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) || Array.isArray(parsed) ? parsed : value;
+  } catch {
+    return value;
+  }
+}
+
+/** The value at `key` where a record holds it, and nothing where it was taken out. */
+function valueIn(record: unknown, key: string): unknown {
+  return isRecord(record) && hasOwn(record, key) ? record[key] : undefined;
+}
+
+/** {@link withUnread} for one value the update holds, in place. */
+function keepUnread(kept: unknown, stored: unknown, readable: unknown): void {
+  if (Array.isArray(kept)) {
+    if (Array.isArray(stored)) keepUnreadInRows(kept, stored, readable);
+    return;
+  }
+  if (!isRecord(kept) || !isRecord(stored)) return;
+  // Another component's fields are not this one's.
+  const type = readFieldGroupType(kept);
+  const storedType = readFieldGroupType(stored);
+  if (type && storedType && type !== storedType) return;
+  for (const key of Object.keys(stored)) {
+    const judged = valueIn(readable, key);
+    if (hasOwn(kept, key)) {
+      keepUnread(kept[key], stored[key], judged);
+      continue;
+    }
+    const hidden = hiddenPart(stored[key], judged);
+    if (hidden !== undefined) assign(kept, key, detachData(hidden));
+  }
+}
+
+/**
+ * {@link withUnread} for a list: each row the update keeps, known by its id. A row sent without
+ * one is not known to be the row at its place, and a hidden value taken from there could land on
+ * a row it never belonged to; a row the update drops goes with what it held.
+ */
+function keepUnreadInRows(
+  kept: readonly unknown[],
+  stored: readonly unknown[],
+  readable: unknown
+): void {
+  const pairing = rowPairing(kept, stored);
+  for (const [index, row] of kept.entries()) {
+    const at = pairing(index);
+    if (at === undefined || rowId(row) === undefined) continue;
+    if (rowId(row) !== rowId(stored[at])) continue;
+    keepUnread(row, stored[at], itemAt(readable, at));
+  }
+}
+
+/**
+ * What of `value` its reader was not shown: all of it where the rules took it out, the hidden
+ * fields of a group they left, and nothing of a list they left, whose rows the reader saw. Nothing
+ * is kept of an empty value.
+ */
+function hiddenPart(value: unknown, readable: unknown): unknown {
+  if (value === null || value === undefined) return undefined;
+  if (readable === undefined) return value;
+  if (!isRecord(value) || !isRecord(readable)) return undefined;
+  const hidden: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    const part = hiddenPart(value[key], valueIn(readable, key));
+    if (part !== undefined) assign(hidden, key, part);
+  }
+  return Object.keys(hidden).length > 0 ? hidden : undefined;
 }
 
 /**

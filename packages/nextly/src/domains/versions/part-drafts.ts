@@ -396,6 +396,28 @@ export async function findPartDrafts(
   return { shared, language };
 }
 
+/**
+ * `live`, the document in one language, as its editors are shown it: with the
+ * pending change it holds in that language laid over it, where it holds one.
+ */
+export async function withPendingChange(
+  repo: VersionsRepository,
+  ref: VersionRef,
+  locale: string | null,
+  live: Record<string, unknown>,
+  fields: readonly PartField[],
+  executor?: unknown
+): Promise<Record<string, unknown>> {
+  if (!draftsKeptByPart() || locale === SHARED_DRAFT_SLOT) {
+    const draft = await repo.findWorkingDraft(ref, locale);
+    return draft ? { ...live, ...valuesOf(draft) } : live;
+  }
+  const parts = await findPartDrafts(repo, ref, locale);
+  if (!holdsPendingChange(parts)) return live;
+  const keys = await partKeysOf(fields, { executor });
+  return combinedDraft(live, parts, { keys, live });
+}
+
 /** Where {@link combinedDraft} finds what a structured field's drafts leave out. */
 export interface StructureSource {
   /** The document's part keys, whose `structured` fields the drafts hold a share of. */

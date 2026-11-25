@@ -226,7 +226,9 @@ import {
   applyInlineFieldGroupWriteAccess,
   keepDeniedAtStoredOnUpdate,
   keepDeniedFieldGroupsInDraft,
+  mayHideInside,
   reachesFieldGroup,
+  unreadBy,
   withStoredFieldGroups,
 } from "../../field-groups/field-group-write-access";
 import {
@@ -413,6 +415,7 @@ import {
   sharedFieldsJudged,
   storePartDrafts,
   translatedWhenSharedChanged,
+  withPendingChange,
 } from "../../versions/part-drafts";
 import {
   judgeSharedValues,
@@ -4340,7 +4343,12 @@ export class CollectionMutationService extends BaseService {
       args.overrideAccess !== true &&
       (hasFieldAccessRule("collection", args.collectionName, "update") ||
         (anyFieldGroupHasAccessRule("update") &&
-          reachesFieldGroup(args.fields as unknown as FieldConfig[])))
+          reachesFieldGroup(args.fields as unknown as FieldConfig[])) ||
+        mayHideInside(
+          { kind: "collection", slug: args.collectionName },
+          args.fields as unknown as FieldConfig[],
+          args.overrideAccess
+        ))
         ? await this.readCompanionLocalizedValues(
             args.tx ?? { getDrizzle: <T = unknown>() => this.db as T },
             args.collectionName,
@@ -4410,6 +4418,8 @@ export class CollectionMutationService extends BaseService {
       locale?: string;
     };
     executor?: unknown;
+    /** The caller's transaction, whose `executor` it is, for a write made inside one. */
+    tx?: TransactionContext;
     /**
      * The paths that hold a value kept from the stored row because a rule
      * denies it to this writer, with the value each path holds, so the
@@ -4444,6 +4454,15 @@ export class CollectionMutationService extends BaseService {
       data: args.data,
       stored: await storedIn.read(args.params.locale),
       storedIn,
+      unread: await unreadBy({
+        entity: { kind: "collection", slug: args.collectionName },
+        id: args.storedId,
+        stored: () => this.asItsEditorsSeeIt(args),
+        fields: args.fields as unknown as FieldConfig[],
+        source: this.fieldGroupDataService,
+        access,
+        executor: args.executor,
+      }),
       fields: args.fields as unknown as FieldConfig[],
       source: this.fieldGroupDataService,
       access,
@@ -4463,6 +4482,42 @@ export class CollectionMutationService extends BaseService {
           grants,
         }),
     });
+  }
+
+  /**
+   * `stored`, the entry in the write's language, with the change its editors
+   * are shown in place of it there, where the collection keeps one.
+   */
+  private async asItsEditorsSeeIt(args: {
+    stored: Record<string, unknown>;
+    storedId: string;
+    collectionName: string;
+    fields: FieldDefinition[];
+    params: { locale?: string };
+    executor?: unknown;
+    tx?: TransactionContext;
+  }): Promise<Record<string, unknown>> {
+    const collection = (await this.collectionService.getCollection(
+      args.collectionName,
+      args.executor
+    )) as { localized?: boolean; versions?: ResolvedVersionsConfig | null };
+    if (collection.versions?.drafts?.enabled !== true) return args.stored;
+    return withPendingChange(
+      new VersionsRepository(args.tx ?? this.adapter),
+      {
+        scopeKind: "collection",
+        scopeSlug: args.collectionName,
+        entryId: args.storedId,
+      },
+      workingDraftLocale({
+        documentLocalized: collection.localized === true,
+        requestLocale: args.params.locale ?? null,
+        defaultLocale: this.localization?.defaultLocale ?? null,
+      }),
+      args.stored,
+      args.fields,
+      args.executor
+    );
   }
 
   /**
@@ -24046,6 +24101,7 @@ export class CollectionMutationService extends BaseService {
           params,
           // Still inside the caller-owned transaction.
           executor: tx.getDrizzle(),
+          tx,
         }
       );
 

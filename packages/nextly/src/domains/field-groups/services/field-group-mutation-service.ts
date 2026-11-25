@@ -24,7 +24,10 @@ import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-gro
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
-import { keepDeniedAtStored } from "../../../shared/lib/denied-change";
+import {
+  keepDeniedAtStored,
+  type UnreadValues,
+} from "../../../shared/lib/denied-change";
 import {
   validateEntryData,
   type EntryWriteContext,
@@ -93,7 +96,9 @@ import {
 import {
   applyInlineFieldGroupWriteAccess,
   directFieldGroupFields,
+  unreadBy,
 } from "../field-group-write-access";
+import type { FieldGroupFieldsSource } from "../live-read-access";
 import {
   isFieldGroupFieldType,
   withResolvedFieldGroupReferences,
@@ -375,17 +380,20 @@ function reachOf(nested: ComponentFieldResolver | undefined): FieldGroupReach {
  * Judge `instance` with its container columns' denied children kept at their
  * stored values, in place: a container column is written whole, so a denied
  * child removed from the update would be erased from the row, where a denied
- * top-level field keeps its value by not being written.
+ * top-level field keeps its value by not being written. A child the writer may
+ * not read, and sends none of, keeps its stored value too.
  */
 async function keepContainersAtStored(
   instance: Record<string, unknown>,
   stored: Record<string, unknown>,
-  judge: (data: Record<string, unknown>) => Promise<void>
+  judge: (data: Record<string, unknown>) => Promise<void>,
+  unread: UnreadValues | undefined
 ): Promise<void> {
   const { kept } = await keepDeniedAtStored({
     update: instance,
     stored,
     applyRules: judge,
+    unread,
   });
   for (const key of Object.keys(instance)) delete instance[key];
   Object.assign(instance, kept);
@@ -2678,7 +2686,16 @@ export class FieldGroupMutationService extends BaseService {
       await judge(instance);
       return new Set();
     }
-    await keepContainersAtStored(instance, stored, judge);
+    const unread = await unreadBy({
+      entity: { kind: "fieldGroup", slug },
+      id: storedId,
+      stored: () => Promise.resolve(stored),
+      fields: componentFields,
+      source: this.nestedFieldsSource(),
+      access,
+      executor: writeScope.getStore()?.executor,
+    });
+    await keepContainersAtStored(instance, stored, judge, unread);
     // The stored hashes the write may put back, so the hashing pass leaves
     // them as they are: at every depth, as the hashing pass reaches them.
     return storedPasswordValues(
@@ -2767,6 +2784,15 @@ export class FieldGroupMutationService extends BaseService {
     return storedContainers(rows[0], componentFields);
   }
 
+  /** Where the fields of a field group placed in an instance are read from. */
+  private nestedFieldsSource(): FieldGroupFieldsSource {
+    return {
+      getComponentFields: async (slug, executor) =>
+        (await this.registryService.getComponentBySlug(slug, executor))
+          ?.fields ?? null,
+    };
+  }
+
   /**
    * The field groups `instance` holds inline, judged by their own create
    * rules on the write's own connection, in place.
@@ -2780,11 +2806,7 @@ export class FieldGroupMutationService extends BaseService {
     await applyInlineFieldGroupWriteAccess({
       data: instance,
       fields: componentFields,
-      source: {
-        getComponentFields: async (nestedSlug, executor) =>
-          (await this.registryService.getComponentBySlug(nestedSlug, executor))
-            ?.fields ?? null,
-      },
+      source: this.nestedFieldsSource(),
       operation: "create",
       access: scope.access,
       executor: scope.executor,
