@@ -9,6 +9,7 @@ import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, waitFor, within } from "@admin/__tests__/utils";
+import { StepRefusalNote } from "@admin/components/features/entries/review/StepRefusalNote";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 import type {
   DocumentReview,
@@ -192,6 +193,11 @@ function Drawn({
         onSave={onSave}
         onPublish={onPublish}
         publishReason={publishReason}
+      />
+      {/* The page says it, beside the work. */}
+      <StepRefusalNote
+        refusal={review.refusal}
+        onDismiss={review.clearRefusal}
       />
     </div>
   );

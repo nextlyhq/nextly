@@ -17,8 +17,17 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useId, useRef, useState, type JSX, type RefObject } from "react";
+import {
+  useId,
+  useRef,
+  useState,
+  type JSX,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
+import type { NarrowMenuItem } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
+import { StepRefusalNote } from "@admin/components/features/entries/review/StepRefusalNote";
 import { ChevronDown } from "@admin/components/icons";
 import {
   TopBarPlace,
@@ -42,6 +51,9 @@ import type { ShownCopy } from "@admin/lib/document-version";
 import { cn } from "@admin/lib/utils";
 import { entryKeys } from "@admin/services/entryApi";
 import { versionApi, type VersionScope } from "@admin/services/versionApi";
+
+import { TranslationHeaderActions } from "../workflow/TranslationHeaderActions";
+import type { TranslationReview } from "../workflow/useTranslationReview";
 
 import {
   hasSomethingToPublish,
@@ -88,6 +100,12 @@ export interface TranslationActionsProps {
   reload: () => Promise<unknown>;
   /** The document's editor. */
   editorHref: string;
+  /** Where the language stands in the workflow that holds its publishing. */
+  review: TranslationReview;
+  /** Whether a past version is on screen, which forbids every write. */
+  readingHistory: boolean;
+  /** What is drawn around the actions: History, and a version's own actions. */
+  around: (actions: ReactNode) => ReactNode;
 }
 
 /**
@@ -128,7 +146,11 @@ function useReturnFocus(): {
   };
 }
 
-function scopeOf(document: PartsTarget, documentId: string): VersionScope {
+/** The document, as its versions are addressed. */
+export function scopeOf(
+  document: PartsTarget,
+  documentId: string
+): VersionScope {
   return document.kind === "collection"
     ? { kind: "collection", slug: document.slug, entryId: document.id }
     : { kind: "single", slug: document.slug, documentId };
@@ -175,6 +197,9 @@ export function TranslationActions({
   emptyFields,
   reload,
   editorHref,
+  review,
+  readingHistory,
+  around,
 }: TranslationActionsProps): JSX.Element {
   const mayPublish = useCan(`publish-${document.slug}`);
   const mayUnpublish = useCan(`unpublish-${document.slug}`);
@@ -192,8 +217,11 @@ export function TranslationActions({
 
   const queryClient = useQueryClient();
   const reach = saveReach(rules, standing);
-  // Publish saves first only what no reader is shown by that save.
-  const savesFirst = isDirty && !readOnly && reach === "nobody";
+  // A workflow holds the language: its step leads, as it does in the editor.
+  const inWorkflow = review.binding !== undefined;
+  // Publish saves first only what no reader is shown by that save; and not
+  // under a workflow, where a save asks for the review again.
+  const savesFirst = isDirty && !readOnly && reach === "nobody" && !inWorkflow;
   const offersPublish =
     !removed && mayPublish && publishApplies(rules, standing);
   const offersOffline =
@@ -283,14 +311,52 @@ export function TranslationActions({
     : readOnly
       ? "open"
       : "save";
-  const buttons = (
-    <div
-      ref={actions}
-      role="group"
-      aria-label={`${language.label} actions`}
-      tabIndex={-1}
-      className="flex min-w-0 flex-wrap items-center justify-end gap-2"
-    >
+  // What the page offers beside the workflow's actions, on the same menu.
+  const rows: NarrowMenuItem[] = [
+    ...(offersOffline
+      ? [
+          {
+            id: "take-offline",
+            label: "Take offline…",
+            disabled: isDirty || isSaving || readingHistory,
+            onSelect: () => {
+              opening();
+              ask("offline");
+            },
+          },
+        ]
+      : []),
+    {
+      id: "open-in-editor",
+      label: "Open in editor",
+      href: editorHref,
+      onSelect: () => undefined,
+    },
+  ];
+  const reviewed = (
+    <TranslationHeaderActions
+      facts={{
+        languageLabel: language.label,
+        hasStatus: rules.hasStatus,
+        holdsDrafts: rules.holdsDrafts,
+        status: standing.published === true ? "published" : "draft",
+        pendingChange: standing.pending === true,
+        canEdit: !readOnly,
+        canPublish: offersPublish,
+        isDirty,
+        readingHistory,
+        writesRefused: removed,
+      }}
+      review={review}
+      isSaving={isSaving}
+      onSave={() => void save()}
+      onPublish={() => void askToPublish()}
+      publishReason={isDirty ? waiting : undefined}
+      rows={rows}
+    />
+  );
+  const own = (
+    <>
       {/* Save beside the main button, where it is not it. */}
       {main === "publish" && !readOnly ? saveButton(false) : null}
       <div className="flex">
@@ -371,6 +437,17 @@ export function TranslationActions({
           </DropdownMenu>
         )}
       </div>
+    </>
+  );
+  const buttons = (
+    <div
+      ref={actions}
+      role="group"
+      aria-label={`${language.label} actions`}
+      tabIndex={-1}
+      className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+    >
+      {around(inWorkflow ? reviewed : own)}
     </div>
   );
 
@@ -397,6 +474,10 @@ export function TranslationActions({
           {waiting}
         </p>
       )}
+      <StepRefusalNote
+        refusal={review.refusal}
+        onDismiss={review.clearRefusal}
+      />
       {openings > 0 ? (
         <PublishLanguageDialog
           key={`publish-${openings}`}

@@ -6,7 +6,8 @@
  *
  * Where a workflow holds the language, its next step leads, or Publish held
  * with the reason; where none does, the bar is the one a language without a
- * workflow has.
+ * workflow has. Why a step was refused is the page's to say, beside the work:
+ * the bar is one row.
  *
  * @module components/features/translations/workflow/TranslationHeaderActions
  */
@@ -17,9 +18,9 @@ import { reviewStepActionId } from "@admin/components/features/entries/EntryForm
 import {
   DocumentActionBar,
   type ActionBinding,
+  type NarrowMenuItem,
 } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
 import { NOTHING_CHANGED_REASON } from "@admin/components/features/entries/EntryForm/useDocumentActionBindings";
-import { StepRefusalNote } from "@admin/components/features/entries/review/StepRefusalNote";
 
 import {
   translationActions,
@@ -37,7 +38,11 @@ export interface TranslationHeaderActionsProps {
   onPublish: () => void;
   /** Why the language can't be published at this moment, beyond its review. */
   publishReason?: string | undefined;
+  /** The page's own rows, on the main button's menu after the model's. */
+  rows?: readonly NarrowMenuItem[];
 }
+
+const NO_ROWS: readonly NarrowMenuItem[] = [];
 
 /** Why a control waits while the page stores the language. */
 const SAVING_REASON = "Saving…";
@@ -59,8 +64,9 @@ export function TranslationHeaderActions({
   onSave,
   onPublish,
   publishReason,
+  rows = NO_ROWS,
 }: TranslationHeaderActionsProps): JSX.Element {
-  const { binding, refusal, clearRefusal, dialog } = review;
+  const { binding, dialog } = review;
   const busy = isSaving ? SAVING_REASON : undefined;
   const bindings: Record<string, ActionBinding> = {
     save: bindingOf(
@@ -76,14 +82,14 @@ export function TranslationHeaderActions({
   }
 
   return (
-    <div className="flex min-w-0 max-w-full flex-col items-end">
+    <>
       <DocumentActionBar
         actions={translationActions({ ...facts, review: binding?.state })}
         bindings={bindings}
+        mainMenuItems={rows}
         pending={isSaving}
       />
-      <StepRefusalNote refusal={refusal} onDismiss={clearRefusal} />
       {dialog}
-    </div>
+    </>
   );
 }

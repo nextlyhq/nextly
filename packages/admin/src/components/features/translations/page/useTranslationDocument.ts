@@ -20,6 +20,10 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import type { FieldConfig } from "nextly/config";
 
 import type { LocaleTranslationMeta } from "@admin/components/features/entries/translation-meta";
+import {
+  historyEnabledFrom,
+  historyRetentionFrom,
+} from "@admin/components/features/versions/history-enabled";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import {
   singleDocumentKeys,
@@ -53,6 +57,12 @@ export interface TranslationSchema {
   readsDraft: boolean;
   useAsTitle: string | undefined;
   removed: RemovedFromCodeMark;
+  /** Whether it keeps versions; undefined where the schema doesn't say. */
+  historyEnabled: boolean | undefined;
+  /** How many versions of a document it keeps, where the schema says. */
+  retention: number | false | undefined;
+  /** Whether a workflow may hold its publishing; undefined where not said. */
+  workflowExpected: boolean | undefined;
 }
 
 export interface TranslationDocument {
@@ -80,6 +90,16 @@ function fieldsOf(declared: readonly object[] | undefined): FieldConfig[] {
   return declared === undefined || declared.length === 0
     ? NO_FIELDS
     : (declared as unknown as FieldConfig[]);
+}
+
+/** What the schema says of history, read as the editor reads it. */
+function historyOf(
+  schema: object
+): Pick<TranslationSchema, "historyEnabled" | "retention"> {
+  return {
+    historyEnabled: historyEnabledFrom(schema),
+    retention: historyRetentionFrom(schema),
+  };
 }
 
 /** The schema hook's answer for either kind, and whether it is still coming. */
@@ -116,6 +136,11 @@ function useTranslationSchema(document: TranslatedDocument): SchemaAnswer {
               readsDraft: data.draftsEnabled === true,
               useAsTitle: undefined,
               removed: data,
+              ...historyOf(data),
+              // The schema read carries `workflow`, which the admin's type
+              // for it does not declare.
+              workflowExpected:
+                "workflow" in data ? data.workflow != null : undefined,
             },
     };
   }
@@ -137,6 +162,8 @@ function useTranslationSchema(document: TranslatedDocument): SchemaAnswer {
             readsDraft: readsHeldDraft(data),
             useAsTitle: data.admin?.useAsTitle,
             removed: data,
+            ...historyOf(data),
+            workflowExpected: data.workflow != null,
           },
   };
 }

@@ -76,6 +76,8 @@ export interface TranslationFormOptions {
 
 export interface TranslationForm {
   form: UseFormReturn<Record<string, unknown>>;
+  /** Every field the form holds; one list for as long as it is one schema. */
+  fields: FieldConfig[];
   isDirty: boolean;
   isSaving: boolean;
   /** Save what changed; answers whether nothing is left to save. */
@@ -373,6 +375,7 @@ export function useTranslationForm({
 
   return {
     form,
+    fields: named,
     isDirty,
     isSaving: isSubmitting || isPending,
     save,

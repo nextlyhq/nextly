@@ -53,7 +53,7 @@ export interface TranslationPanelProps {
 }
 
 /** One row: what it is, and what it says. */
-function Row({
+export function PanelRow({
   name,
   children,
 }: {
@@ -109,21 +109,23 @@ export function TranslationPanel({
       >
         {title}
       </h2>
-      {status === undefined ? null : <Row name="Status">{status}</Row>}
+      {status === undefined ? null : (
+        <PanelRow name="Status">{status}</PanelRow>
+      )}
       {children}
       {shared.length === 0 ? null : (
-        <Row name="Shared fields">
+        <PanelRow name="Shared fields">
           <Link href={editorHref} className="underline underline-offset-4">
             Edited in the document
           </Link>
           <Names fields={shared} />
-        </Row>
+        </PanelRow>
       )}
       {elsewhere.length === 0 ? null : (
-        <Row name="Not translated here">
+        <PanelRow name="Not translated here">
           Translated in their own editor
           <Names fields={elsewhere} />
-        </Row>
+        </PanelRow>
       )}
     </aside>
   );

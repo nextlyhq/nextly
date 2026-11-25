@@ -26,7 +26,7 @@ import {
 import type { SearchParams } from "@admin/lib/search-params";
 import { getSearchParam } from "@admin/lib/search-params";
 
-import { HISTORY_PARAM } from "../../versions/history-address";
+import { HISTORY_ADDRESS_PARAMS } from "../../versions/history-address";
 
 /** What the editor page knows of the document its address opens. */
 export interface LanguageAddressOf {
@@ -44,11 +44,14 @@ export interface LanguageAddressOf {
 }
 
 /**
- * Whether the address opens the history panel, which the editor alone shows:
- * a version of another language is compared and restored there.
+ * The keys that open the history panel, on a version and its restore where the
+ * address names them: the translation page reads them as the editor does.
  */
-function opensHistory(params: SearchParams): boolean {
-  return getSearchParam(params, HISTORY_PARAM) === "1";
+function historyKeys(params: SearchParams): [string, string][] {
+  return HISTORY_ADDRESS_PARAMS.flatMap(key => {
+    const value = getSearchParam(params, key);
+    return value === null ? [] : [[key, value] as [string, string]];
+  });
 }
 
 /** The address's query as the move reads it: the first of a repeated key. */
@@ -68,7 +71,8 @@ function languageQuery(params: SearchParams): URLSearchParams {
  */
 function makeMove(
   document: TranslatedDocument,
-  move: LanguageAddressMove
+  move: LanguageAddressMove,
+  history: readonly [string, string][]
 ): void {
   if (move.to === "editor") {
     setSearchParams(
@@ -77,9 +81,12 @@ function makeMove(
     );
     return;
   }
-  navigateWithinAdmin(translationAddress(document, move.pair), {
-    replace: true,
-  });
+  const address = translationAddress(document, move.pair);
+  const kept = new URLSearchParams(history.map(each => [...each]));
+  navigateWithinAdmin(
+    history.length === 0 ? address : `${address}&${kept.toString()}`,
+    { replace: true }
+  );
 }
 
 /**
@@ -108,7 +115,7 @@ export function useLanguageAddressRedirect({
 
   const answers = enabled && localized && view === undefined;
   const move =
-    !answers || copyingIn !== null || opensHistory(params)
+    !answers || copyingIn !== null
       ? undefined
       : languageAddressMove(languageQuery(params), { locales, defaultLocale });
 
@@ -116,13 +123,14 @@ export function useLanguageAddressRedirect({
   const key =
     move === undefined || document === undefined
       ? undefined
-      : JSON.stringify([document, move]);
+      : JSON.stringify([document, move, historyKeys(params)]);
   useEffect(() => {
     if (key === undefined) return;
-    const [to, next] = JSON.parse(key) as [
+    const [to, next, history] = JSON.parse(key) as [
       TranslatedDocument,
       LanguageAddressMove,
+      [string, string][],
     ];
-    makeMove(to, next);
+    makeMove(to, next, history);
   }, [key]);
 }

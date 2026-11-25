@@ -17,6 +17,7 @@ import { FormProvider } from "react-hook-form";
 
 import { sourceValueAt } from "@admin/components/features/entries/container-text";
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
+import { HISTORY_REASON } from "@admin/components/features/entries/EntryForm/document-actions";
 import { DocumentLockBanner } from "@admin/components/features/entries/EntryForm/DocumentLockBanner";
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import { VersionConflictDialog } from "@admin/components/features/entries/EntryForm/VersionConflictDialog";
@@ -27,6 +28,7 @@ import {
 } from "@admin/components/features/entries/fields/field-admin-gates";
 import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
+import { storedStampOf } from "@admin/components/features/entries/review/review-words";
 import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -53,6 +55,15 @@ import {
   type TranslatedDocument,
 } from "@admin/lib/navigation/translation-address";
 import { getSearchParam } from "@admin/lib/search-params";
+import type { ReleaseDocumentRef } from "@admin/types/releases";
+
+import {
+  TranslationHistoryBody,
+  TranslationHistoryControls,
+  TranslationHistoryProvider,
+} from "../history/TranslationHistory";
+import { useTranslationHistory } from "../history/useTranslationHistory";
+import { useTranslationReview } from "../workflow/useTranslationReview";
 
 import { languagesGoingLiveToo, languageStanding } from "./language-standing";
 import {
@@ -77,13 +88,13 @@ import {
   type TranslationFieldSet,
   type ValuesPerLanguage,
 } from "./translation-fields";
-import { TranslationActions } from "./TranslationActions";
+import { scopeOf, TranslationActions } from "./TranslationActions";
 import { TranslationCards } from "./TranslationCards";
 import {
   TranslationFieldRow,
   type TranslationLanguage,
 } from "./TranslationFieldRow";
-import { statusWords, TranslationPanel } from "./TranslationPanel";
+import { PanelRow, statusWords, TranslationPanel } from "./TranslationPanel";
 import { TranslationStrip } from "./TranslationStrip";
 import { useClaimNotice } from "./useClaimNotice";
 import {
@@ -100,6 +111,9 @@ import {
 /** What a reader who may look and not write is told, as the editor tells them. */
 const READ_ONLY_FOR_READER =
   "Your access lets you view this, but not change it. If you need to change it, ask an admin.";
+
+/** Why a step waits while the page stores the language. */
+const SAVING_REASON = "Saving…";
 
 /** The banner's own choices, which the page's notice offers none of. */
 function offersNothing(): void {}
@@ -292,6 +306,24 @@ function titleOf(
   );
 }
 
+/** The document, as its review is kept for; a Single is named by its slug. */
+function reviewedDocument(document: TranslatedDocument): ReleaseDocumentRef {
+  return {
+    scopeKind: document.kind,
+    scopeSlug: document.slug,
+    entryId: document.kind === "collection" ? document.id : "",
+  };
+}
+
+/** The stage the language stands in, and who it waits for, in words. */
+function stageWords(
+  stage: string | null,
+  waitingFor: string | null
+): string | undefined {
+  if (stage === null || stage.trim() === "") return undefined;
+  return waitingFor === null ? stage : `${stage}, waiting for ${waitingFor}`;
+}
+
 /** The document's id, as its read answers it. */
 function idOf(document: DocumentRow): string {
   return typeof document.id === "string" ? document.id : "";
@@ -481,6 +513,48 @@ function TranslationForm({
   // A Single's address doesn't carry its id; its document does.
   const documentId = document.kind === "collection" ? document.id : idOf(live);
   const claimNotice = useClaimNotice(document, documentId);
+  const scope = useMemo(
+    () => scopeOf(document, documentId),
+    [document, documentId]
+  );
+  // Nothing may be put into the page, or moved on it, while this stands.
+  const writesHeld = readOnly || isSaving;
+  const history = useTranslationHistory({
+    scope,
+    target,
+    form,
+    restore: editing.restore,
+    fields: editing.fields,
+    rows: set.rows,
+    readOnly: writesHeld,
+    historyEnabled: schema.historyEnabled,
+  });
+  const readingHistory = history.host.viewingVersion !== null;
+  const reviewed = useMemo(
+    () => (schema.hasStatus ? reviewedDocument(document) : undefined),
+    [schema.hasStatus, document]
+  );
+  const review = useTranslationReview({
+    document: reviewed,
+    language: target.code,
+    isDirty,
+    storedStamp: storedStampOf(written),
+    held: readingHistory
+      ? HISTORY_REASON
+      : isSaving
+        ? SAVING_REASON
+        : undefined,
+    ...(schema.workflowExpected === undefined
+      ? {}
+      : { workflowExpected: schema.workflowExpected }),
+  });
+  const stage =
+    review.part === undefined
+      ? undefined
+      : stageWords(
+          review.part.stageLabel ?? review.part.stage,
+          review.binding?.state.waitingFor ?? null
+        );
 
   const languageOf = (code: string): TranslationLanguage =>
     getLocale(code) ?? { code, label: code, rtl: false };
@@ -541,7 +615,15 @@ function TranslationForm({
       { basePath: text.basePath, inherited: gate }
     );
 
-  return (
+  // Around the header too, where a version's own actions read it. The value's direction is set on
+  // its control, so the field around it keeps the page's own.
+  const localeValue = {
+    locale: target.code,
+    rtl: false,
+    collectionLocalized: true,
+    isNonDefaultLocale: true,
+  };
+  const page = (
     <UnsavedChangesGuard
       isDirty={isDirty}
       busy={isSaving}
@@ -600,6 +682,16 @@ function TranslationForm({
           }
           reload={reload}
           editorHref={editorAddress(document)}
+          review={review}
+          readingHistory={readingHistory}
+          around={actions => (
+            <TranslationHistoryControls
+              history={history}
+              actionsDisabled={writesHeld}
+            >
+              {actions}
+            </TranslationHistoryControls>
+          )}
         />
         {removed ? (
           <div className="mb-6">
@@ -627,15 +719,9 @@ function TranslationForm({
         <div className="@container/translation">
           <div className="flex flex-col gap-6 @5xl/translation:flex-row">
             <div className="min-w-0 flex-1">
-              <EntryLocaleProvider
-                // The value's direction is set on its control, so the field around it
-                // keeps the page's own.
-                value={{
-                  locale: target.code,
-                  rtl: false,
-                  collectionLocalized: true,
-                  isNonDefaultLocale: true,
-                }}
+              <TranslationHistoryBody
+                history={history}
+                actionsDisabled={writesHeld}
               >
                 <FormProvider {...form}>
                   <form
@@ -679,7 +765,7 @@ function TranslationForm({
                     )}
                   </form>
                 </FormProvider>
-              </EntryLocaleProvider>
+              </TranslationHistoryBody>
             </div>
             <TranslationPanel
               title={target.label}
@@ -691,7 +777,11 @@ function TranslationForm({
               editorHref={editorAddress(document)}
               shared={set.shared}
               elsewhere={set.elsewhere}
-            />
+            >
+              {stage === undefined ? null : (
+                <PanelRow name="Stage">{stage}</PanelRow>
+              )}
+            </TranslationPanel>
           </div>
         </div>
         <VersionConflictDialog
@@ -703,5 +793,22 @@ function TranslationForm({
         />
       </PageContainer>
     </UnsavedChangesGuard>
+  );
+  return (
+    <EntryLocaleProvider value={localeValue}>
+      <TranslationHistoryProvider
+        history={history}
+        language={target.code}
+        canRestore={!readOnly}
+        writesRefused={removed}
+        isSaving={isSaving}
+        lifecycle={schema.hasStatus}
+        {...(schema.retention === undefined
+          ? {}
+          : { retention: schema.retention })}
+      >
+        {page}
+      </TranslationHistoryProvider>
+    </EntryLocaleProvider>
   );
 }

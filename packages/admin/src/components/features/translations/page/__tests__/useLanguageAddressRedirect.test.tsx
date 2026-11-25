@@ -119,12 +119,16 @@ describe("useLanguageAddressRedirect", () => {
     expect(here()).toBe(`${PAGE}?locale=es`);
   });
 
-  it("leaves an address opening history, which the editor alone shows", () => {
+  it("takes an open history along, on its version and its restore", () => {
     open("?locale=es&history=1");
-    expect(here()).toBe(`${EDITOR}?locale=es&history=1`);
-    // Only an open panel: the key without it is an ordinary address.
-    open("?locale=es&history=0");
-    expect(here()).toBe(`${PAGE}?locale=es`);
+    expect(here()).toBe(`${PAGE}?locale=es&history=1`);
+    open("?locale=es&history=1&version=3&restore=title");
+    expect(here()).toBe(`${PAGE}?locale=es&history=1&version=3&restore=title`);
+  });
+
+  it("leaves an open history in the default language on the editor", () => {
+    open("?locale=en&history=1&version=3");
+    expect(here()).toBe(`${EDITOR}?history=1&version=3`);
   });
 
   describe("while a copy from another language is under way", () => {
