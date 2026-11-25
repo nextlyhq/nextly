@@ -80,6 +80,11 @@ import {
   refuseRebuildsLosingKeptElements,
   withKeptElements,
 } from "../ownership/kept-elements";
+import {
+  deletionsOfOperations,
+  removedElementsSourcesOn,
+  refuseRemovingOthersElements,
+} from "../ownership/removed-elements";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import { withoutKeysOnKeylessRenames } from "./builder-foreign-keys";
@@ -1265,7 +1270,6 @@ export class PushSchemaPipeline {
             live: liveSnapshot,
           });
         }
-
         // A field this apply makes translated still has its value on the main table, which the diff
         // drops: the value moves to the default language's companion row first. Planned here, from
         // the live tables, so every caller of the apply moves it the same way; only a column whose
@@ -1400,6 +1404,26 @@ export class PushSchemaPipeline {
             )
           );
         plannedThisTry = { resolvedOps, moved: moves.moved };
+
+        // A column or table the push drops takes with it no element another owner built there (an
+        // index, key or check on the column, anything on the table) and no key pointing at it.
+        // Judged on the answered plan, so a table or column the answers renamed keeps what it
+        // carries rather than reading as dropped; refused here, before anything runs
+        // (`removed-elements.ts`).
+        await refuseRemovingOthersElements({
+          deletions: deletionsOfOperations(resolvedOps),
+          exactNames: true,
+          dialect,
+          entity: "The schema change",
+          sources: removedElementsSourcesOn({
+            db,
+            dialect,
+            extensions,
+            rows: elementOwners?.rows,
+          }),
+          // A push has the fields' columns, not their definitions: each column names its field.
+          fieldOf: (_table, column) => column,
+        });
 
         // A column made NOT NULL over rows no answer fills is refused here, before anything runs:
         // every column the answered plan makes NOT NULL, not only those the classifier raised.
@@ -1706,6 +1730,24 @@ export class PushSchemaPipeline {
             throw preCleanupFailure(err);
           }
 
+          // The owner rows this push planned (`pushElementOwners`), written once every refusal
+          // above has passed, before the first statement: on the apply's own transaction where its
+          // statements are transactional, so a refusal still to come (the executor's own) rolls
+          // them back with it. MySQL commits each statement as it runs, so there they are written
+          // once the executor's own refusals have passed too (`refusalsPassed`), or before the first
+          // schema statement where it runs none, so a push refused before then records no row and
+          // rows that cannot be written build nothing. Written after the statements, a failure there
+          // would leave what they built unrecorded, which a later field change could then remove. A
+          // statement that fails after the rows are written leaves a row for an element not yet
+          // built, which claims nothing the database does not have.
+          let ownersRecorded = false;
+          const recordOwners = async (): Promise<void> => {
+            if (ownersRecorded) return;
+            ownersRecorded = true;
+            await elementOwners?.write(tx);
+          };
+          if (dialect !== "mysql") await recordOwners();
+
           // Phase C: pre-resolution executor runs renames + drops, led by the
           // kit route's check and foreign-key drops: a constraint still in
           // place blocks dropping, or on MySQL retyping, a column it names. The
@@ -1759,6 +1801,9 @@ export class PushSchemaPipeline {
                   nextIsSchema = false;
                   inFlight = false;
                 },
+                ...(dialect === "mysql"
+                  ? { refusalsPassed: recordOwners }
+                  : {}),
               }
             );
             // An executor that tells nothing (a stand-in) is counted once it returns, as it reports
@@ -1895,6 +1940,8 @@ export class PushSchemaPipeline {
                   ),
                   dialect
                 );
+                // The first statement where Phase C ran none.
+                if (dialect === "mysql") await recordOwners();
                 try {
                   await executor.executeStatements(tx, createStatements);
                 } catch (err) {
@@ -2199,6 +2246,8 @@ export class PushSchemaPipeline {
             safe,
             useFastPath ? [] : resolvedOps
           );
+          // The first schema statement where neither Phase C nor the creates above ran one.
+          if (dialect === "mysql") await recordOwners();
           try {
             // On MySQL a unique index replacing a key's plain index is created before that index
             // is dropped: the kit's drop comes ahead of the restored create, and MySQL refuses to
@@ -2252,6 +2301,8 @@ export class PushSchemaPipeline {
           // that connection (`assertHeld`), so the lease extended commits with the change and
           // outlasts a push however long it ran.
           if (dialect !== "mysql") await assertSchemaLockHeld();
+          // MySQL: an apply with no statement of its own still records what it found.
+          if (dialect === "mysql") await recordOwners();
           return (
             safe.length +
             preCreatedStatements +

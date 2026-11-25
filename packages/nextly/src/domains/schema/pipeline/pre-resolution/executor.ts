@@ -105,6 +105,7 @@ export async function executePreResolutionOps(
   // safe moment to discover that the data will not convert is before the first statement.
   await assertConversionsAreSafe(txOrDb, ordered, dialect);
   await assertNarrowingsFit(txOrDb, ordered, dialect);
+  await record.refusalsPassed?.();
 
   for (const statement of leadingStatements) {
     await runTold(txOrDb, statement, dialect, record);
@@ -164,6 +165,12 @@ async function runOrderedOp(
 export interface RanStatements {
   starting(statement: string): void;
   finished(statement: string): void;
+  /**
+   * Asked, and waited for, once every refusal has passed and before the first statement: what the
+   * caller records of an apply about to start. On MySQL, where a statement commits as it runs, it
+   * is the last moment a record can be made of an apply that a refusal would have undone.
+   */
+  refusalsPassed?(): Promise<void>;
 }
 
 const NO_RECORD: RanStatements = {

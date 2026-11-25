@@ -81,9 +81,15 @@ export interface ReconcileSingleCompanionArgs {
   busyTable?: BusyTableWait;
 }
 
-export async function reconcileSingleCompanion(
+/**
+ * The companion transition `reconcileSingleCompanion` runs for a save, planned from the
+ * translations table as this database holds it now: one plan for the reconcile and for the check
+ * that judges its drops before any statement of the save
+ * (`refuseSingleCompanionTakingOthersElements`).
+ */
+async function singleCompanionPlanOf(
   args: ReconcileSingleCompanionArgs
-): Promise<void> {
+): Promise<ReturnType<typeof buildCompanionTransitionStatements>> {
   const {
     slug,
     tableName,
@@ -92,13 +98,8 @@ export async function reconcileSingleCompanion(
     localized,
     status,
     wasStatus,
-    adapter,
   } = args;
-  const wasLocalized = args.wasLocalized;
-  // Nothing to do when the single was and remains non-localized.
-  if (!wasLocalized && !localized) return;
-
-  const dialect = adapter.dialect;
+  const { adapter, wasLocalized } = args;
   const companionTable = `${tableName}_locales`;
   const companionExists = await adapter.tableExists(companionTable);
   // Only introspect `_status` when it can matter: an existing companion that stays localized
@@ -107,29 +108,16 @@ export async function reconcileSingleCompanion(
     companionExists && wasLocalized && localized
       ? await companionHasStatusColumn(adapter, companionTable)
       : undefined;
-
-  // The seed (enable) and restore (disable) copy the default-locale value to/from the companion;
-  // read the configured default locale (falls back to "en" when localization isn't configured).
-  const defaultLocale = appLocalization()?.defaultLocale ?? "en";
-
-  // A translated field made unique is refused before any DDL on a server that cannot key its index.
-  refuseUnindexableTranslatedUnique(adapter, {
-    entity: slug,
-    builtBy: "collection",
-    oldFields,
-    newFields,
-    wasLocalized,
-    isLocalized: localized,
-  });
-
-  const plan = buildCompanionTransitionStatements({
+  return buildCompanionTransitionStatements({
     // The companion mirrors the main table, and a single's table comes from the same builder as a collection's.
     builtBy: "collection" as const,
     slug,
     kind: "single",
     tableName,
-    dialect,
-    defaultLocale,
+    dialect: adapter.dialect,
+    // The seed (enable) and restore (disable) copy the default-locale value to/from the
+    // companion; the configured default locale, "en" where localization isn't configured.
+    defaultLocale: appLocalization()?.defaultLocale ?? "en",
     languageOrder: appLanguageOrder(),
     status,
     wasLocalized,
@@ -152,6 +140,51 @@ export async function reconcileSingleCompanion(
       companionExists,
     })),
   });
+}
+
+/**
+ * Refuse, before any statement of a Single's save, what its companion reconcile would drop where
+ * another owner built on it (`refuseCompanionPlanTakingOthersElements`): the reconcile runs once
+ * the Single's own table has changed, so its plan is judged here first.
+ */
+export async function refuseSingleCompanionTakingOthersElements(
+  args: ReconcileSingleCompanionArgs
+): Promise<void> {
+  if (!args.wasLocalized && !args.localized) return;
+  const { refuseCompanionPlanTakingOthersElements } = await import(
+    "../../schema/ownership/removed-elements"
+  );
+  await refuseCompanionPlanTakingOthersElements({
+    adapter: args.adapter,
+    plan: await singleCompanionPlanOf({ ...args, settleLeaving: undefined }),
+    kind: "single",
+    slug: args.slug,
+    oldFields: args.oldFields,
+  });
+}
+
+export async function reconcileSingleCompanion(
+  args: ReconcileSingleCompanionArgs
+): Promise<void> {
+  const { slug, tableName, oldFields, newFields, localized, status, adapter } =
+    args;
+  const wasLocalized = args.wasLocalized;
+  // Nothing to do when the single was and remains non-localized.
+  if (!wasLocalized && !localized) return;
+
+  const dialect = adapter.dialect;
+
+  // A translated field made unique is refused before any DDL on a server that cannot key its index.
+  refuseUnindexableTranslatedUnique(adapter, {
+    entity: slug,
+    builtBy: "collection",
+    oldFields,
+    newFields,
+    wasLocalized,
+    isLocalized: localized,
+  });
+
+  const plan = await singleCompanionPlanOf(args);
 
   await applyCompanionTransition({
     adapter,
