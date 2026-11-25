@@ -517,6 +517,7 @@ describe.each(getConfiguredTestDialects())(
     // translations table with it, so the run never reaches the two spellings that table holds: it
     // applies, refusing nothing. Broken, the count before the migration still finds the collection
     // in the registry and refuses the rows the migration is about to delete, with no way through.
+    // A dry run describes the same run, so it lists no such refusal either.
     it("refuses nothing over the rows of a collection the waiting migration removes", async () => {
       await siteWithTwoSpellings();
       state.config = defineConfig({
@@ -525,6 +526,13 @@ describe.each(getConfiguredTestDialects())(
         db: { migrationsDir: "./migrations" },
       });
       await capture("removed", { acceptDataLoss: true });
+
+      const previewed = await migrate({
+        dryRun: true,
+        backupConfirmed: true,
+        acceptDataLoss: true,
+      });
+      expect(previewed.join("\n")).not.toContain("Rows under both");
 
       await migrate({ backupConfirmed: true, acceptDataLoss: true });
 

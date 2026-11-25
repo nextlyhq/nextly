@@ -54,8 +54,14 @@ interface StoredDataLogger {
 export interface StoredDataOfRun {
   /** The run's one backup question; a yes holds for the rest of the run. */
   askBackedUp: () => Promise<boolean>;
-  /** `--dry-run`: lists each step with work, read-only. */
-  preview: (stepped: boolean) => Promise<void>;
+  /**
+   * `--dry-run`: lists each step with work, read-only. `droppedAhead` names the tables the run's
+   * migrations drop, left out as the run leaves them out (`confirmBeforeSchemaChanges`).
+   */
+  preview: (
+    stepped: boolean,
+    droppedAhead?: ReadonlySet<string>
+  ) => Promise<void>;
   /**
    * `--dry-run`, for a command that reports one plan: the steps' work as
    * that plan's changes, refusals and notes, read-only. A count that cannot
@@ -283,9 +289,11 @@ export function storedDataOfRun(args: {
 
   // A count that cannot be read, on a database whose tables the run
   // creates, is said so in a note rather than guessed.
-  const plan = async (): Promise<DryRunPlan> => {
+  const plan = async (
+    droppedAhead?: ReadonlySet<string>
+  ): Promise<DryRunPlan> => {
     try {
-      return await previewDataSteps(deps(false));
+      return await previewDataSteps(deps(false, droppedAhead));
     } catch (error) {
       return {
         changes: [],
@@ -303,11 +311,11 @@ export function storedDataOfRun(args: {
     askBackedUp,
     refusal: () => refused,
 
-    plan,
+    plan: () => plan(),
 
     // The same plan, printed under a heading of its own.
-    preview: async stepped => {
-      reportPlan(await plan(), logger, stepped);
+    preview: async (stepped, droppedAhead) => {
+      reportPlan(await plan(droppedAhead), logger, stepped);
     },
 
     // Asked before anything changes, so a run that would be refused for the

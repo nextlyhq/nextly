@@ -405,6 +405,35 @@ describeEachDialect(
       }
     );
 
+    // What an index reads is its key and its condition, not its own name or its table's: an
+    // expression index named for the moved column, over another, does not hold it, and the
+    // upgrade moves the column. Broken (the whole catalog DDL read), the index's name is taken for
+    // the column it reads and the upgrade is refused.
+    it("moves a column an unrelated index is only named after", async () => {
+      await legacySite();
+      const adapter = database!.adapter;
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const columnsOf = async (table: string) => {
+        const { tables } = await introspectLiveColumns(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          [table]
+        );
+        return (tables[0]?.columns ?? []).map(column => column.name);
+      };
+      // MySQL writes a functional key part in its own parentheses.
+      const keyed =
+        dialect === "mysql" ? `((lower(${q("id")})))` : `(lower(${q("id")}))`;
+      await adapter.executeQuery(
+        `CREATE INDEX ${q("title")} ON ${q("dc_notes")} ${keyed}`
+      );
+
+      expect(await refusalBeforeSchemaChanges(adapter, SITE)).toBeUndefined();
+      await upgrade();
+      expect(await columnsOf("dc_notes")).not.toContain("title");
+    });
+
     // A field group declared in code had its columns built by the pipeline, whose rule bounds a
     // text field that states no width (255 characters on MySQL and PostgreSQL); the Schema
     // Builder's field-group creator leaves it unbounded. A moved column keeps the capacity its

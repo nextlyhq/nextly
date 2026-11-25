@@ -308,17 +308,32 @@ export interface LocalizationUpOptions {
  * before the columns go; refused, naming each, where an index stands on one of them with other
  * columns or on part of it, before anything runs.
  */
+/** One identifier as a catalog writes it: double-quoted, backquoted or bare, maybe schema-qualified. */
+const IDENTIFIER = String.raw`(?:"(?:[^"]|"")*"|\`[^\`]*\`|[\w$]+)(?:\s*\.\s*(?:"(?:[^"]|"")*"|\`[^\`]*\`|[\w$]+))?`;
+
+/**
+ * The head of the DDL PostgreSQL (`indexdef`) and SQLite (`sqlite_master.sql`) keep for an index,
+ * up to its key: `CREATE [UNIQUE] INDEX <name> ON [ONLY] <table> [USING <method>]`. Its name and
+ * table's are no column it reads.
+ */
+const INDEX_HEAD = new RegExp(
+  String.raw`^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?${IDENTIFIER}\s+ON\s+(?:ONLY\s+)?${IDENTIFIER}\s*(?:USING\s+\w+\s*)?`,
+  "i"
+);
+
 /**
  * Whether an index's `definition` names one of `columns` (lower-cased), as a whole word, quoted
- * or not. A definition that could not be read names them all, so an index nothing can vouch for
- * is held rather than dropped under.
+ * or not, in what the index reads: its key, its included columns and its condition, never its own
+ * name or its table's (`INDEX_HEAD`). A definition of another form is read whole, and one that
+ * could not be read names them all, so an index nothing can vouch for is held rather than dropped
+ * under.
  */
 function definitionNames(
   definition: string | undefined,
   columns: ReadonlySet<string>
 ): boolean {
   if (definition === undefined) return true;
-  const text = definition.toLowerCase();
+  const text = definition.replace(INDEX_HEAD, "").toLowerCase();
   return [...columns].some(column =>
     new RegExp(
       `(^|[^a-z0-9_$])${column.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9_$])`

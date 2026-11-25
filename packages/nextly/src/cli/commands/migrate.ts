@@ -845,6 +845,23 @@ export async function runMigrate(
         },
       });
 
+    // The run's own plan (`migrationsAhead`): whether a `--step` leaves migrations pending, and the
+    // tables its migrations drop, whose rows the data steps never reach. Read before a dry run too,
+    // so its preview leaves out what the run leaves out. A plan that cannot be read is taken as
+    // leaving some pending, as `--step` always was, and as dropping nothing.
+    const ahead = await migrationsAhead({
+      adapter,
+      db,
+      dialect,
+      migrationsDir: appMigrationsDir,
+      logger,
+      declared,
+      pluginMigrationSets: (
+        await pluginMigrationArgs(configResult.config.plugins ?? [])
+      ).pluginMigrationSets,
+      step: options.step,
+    }).catch(() => undefined);
+
     if (options.dryRun) {
       try {
         await refuseUnwritten();
@@ -863,7 +880,7 @@ export async function runMigrate(
         serverConstructs,
         extensionSchema,
       });
-      await storedData.preview(options.step !== undefined);
+      await storedData.preview(options.step !== undefined, ahead?.dropped);
       logger.success("Dry run complete (no changes made).");
       return;
     }
@@ -873,21 +890,7 @@ export async function runMigrate(
     // backup nobody confirmed is refused here, before anything changes.
     // A run whose `--step` takes every pending migration reaches the data steps as a run without
     // it does, so it is asked the same before its schema changes; only one that leaves some
-    // pending leaves the steps to the run that finishes them. Which it does is read from the
-    // run's own plan (`migrationsAhead`). A plan that cannot be read is taken as leaving some, as
-    // `--step` always was.
-    const ahead = await migrationsAhead({
-      adapter,
-      db,
-      dialect,
-      migrationsDir: appMigrationsDir,
-      logger,
-      declared,
-      pluginMigrationSets: (
-        await pluginMigrationArgs(configResult.config.plugins ?? [])
-      ).pluginMigrationSets,
-      step: options.step,
-    }).catch(() => undefined);
+    // pending leaves the steps to the run that finishes them (`ahead`, the run's own plan).
     const stepLeavesPending =
       options.step !== undefined && (ahead?.leavesPending ?? true);
     await storedData

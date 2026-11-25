@@ -2044,6 +2044,31 @@ describe("the tables a statement list leaves dropped", () => {
     ).toEqual(["dc_notes", "dc_tags"]);
   });
 
+  // A temporary table shadows the live one of its name: an unqualified drop then drops the
+  // temporary table, and the live one stands again. Broken (the temporary create ignored), the
+  // live table is taken for dropped and its rows go unchecked.
+  it("leaves out a live table a temporary one shadowed when the drop met the temporary one", () => {
+    expect(
+      tablesLeftDropped(
+        [
+          'CREATE TEMPORARY TABLE "dc_notes" ("id" text)',
+          'DROP TABLE "dc_notes"',
+        ],
+        "postgresql"
+      )
+    ).toEqual([]);
+    expect(
+      tablesLeftDropped(
+        [
+          'CREATE TEMPORARY TABLE "dc_notes" ("id" text)',
+          'DROP TABLE "dc_notes"',
+          'DROP TABLE "dc_notes"',
+        ],
+        "postgresql"
+      )
+    ).toEqual(["dc_notes"]);
+  });
+
   it("names a table renamed away, and nothing for a statement that drops none", () => {
     expect(
       tablesLeftDropped(

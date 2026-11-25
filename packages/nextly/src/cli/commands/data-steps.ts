@@ -383,6 +383,7 @@ export async function previewDataSteps(
     | "log"
     | "warn"
     | "site"
+    | "droppedAhead"
   >
 ): Promise<DryRunPlan> {
   const {

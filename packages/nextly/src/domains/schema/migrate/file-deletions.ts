@@ -2846,15 +2846,30 @@ export function tablesLeftDropped(
       there,
     });
   };
+  // The names a temporary table the list made shadows, as `FileWalk` reads them: an unqualified
+  // drop of such a name drops the temporary table and gives the name back to the table it hid, a
+  // temporary drop of any other name drops none of the database's tables, and a temporary table
+  // renamed away takes its shadow with it.
+  const shadowed = new Set<string>();
   for (const statement of statements) {
     for (const read of readStatement(statement, dialect)) {
-      if (read.kind === "drop" && read.temporary !== true) {
-        step(read.table.toLowerCase(), false, false);
-      } else if (read.kind === "create" && read.temporary !== true) {
-        step(read.table.toLowerCase(), true, read.conditional !== true);
+      if (read.kind === "drop") {
+        const table = read.table.toLowerCase();
+        if (shadowed.delete(table) || read.temporary === true) continue;
+        step(table, false, false);
+      } else if (read.kind === "create") {
+        const table = read.table.toLowerCase();
+        if (read.temporary === true) shadowed.add(table);
+        else step(table, true, read.conditional !== true);
       } else if (read.kind === "rename-table") {
-        step(read.from.toLowerCase(), false, false);
-        step(read.to.toLowerCase(), true, true);
+        const from = read.from.toLowerCase();
+        const to = read.to.toLowerCase();
+        if (shadowed.delete(from)) {
+          shadowed.add(to);
+          continue;
+        }
+        step(from, false, false);
+        step(to, true, true);
       }
     }
   }
