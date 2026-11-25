@@ -98,9 +98,10 @@ const RUN_TIMEOUT_MS = 10_000;
 // A command's own code, timed to the line it writes once that code has loaded.
 const CODE_LOAD_RUNS = 5;
 // Temporary: it keeps commands from getting slower until the smaller budgets
-// they are meant for hold. The slowest command has taken 1.3 to 2.0 s on the
-// Linux runner, the same code taking more on a slower machine.
-export const CODE_LOAD_LIMIT_MS = 2500;
+// they are meant for hold. The slowest command took 1.6 s in one run on the
+// Linux runner and 2.37 s in another, loading the same modules; this is about
+// half as much again as the slower of them.
+export const CODE_LOAD_LIMIT_MS = 3500;
 // One load that takes this long has hung, as has one run to its connection.
 const CODE_LOAD_TIMEOUT_MS = 60_000;
 // The one dialect the connect pass runs on, whose database is a file of its own.

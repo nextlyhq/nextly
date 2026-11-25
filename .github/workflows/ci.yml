@@ -3207,7 +3207,7 @@ jobs:
   # The commands come from the program's own list, so a new command's help is
   # timed by being defined. Then every command is timed to its first line, and
   # to the moment its own code has loaded (5 runs each, reported with the
-  # modules it resolved; a temporary limit of 2.5 s keeps it from growing).
+  # modules it resolved; a temporary limit of 3.5 s keeps it from growing).
   # Last, every command that may reach a database is timed to its connection,
   # which is only reported, except one that declares why it must not be run.
   # Linux only: the budgets are stated for this runner.
