@@ -372,6 +372,7 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
 import { readProxyTrustSettings } from "../utils/proxy-trust";
 
+import { warnOfBuilderProblemsAtStart } from "./builder-problems-at-start";
 import {
   container,
   type Container,
@@ -1457,6 +1458,13 @@ async function registerServicesOnce(
         // A production start adds no plugin field to a Builder entity, neither
         // its column nor its registry row: the entity is served as migrated.
         materialize: !structure.productionStart,
+        // A development start's own reload warns from the definition file, so
+        // the start speaks at once only where that reload is not to come.
+        ...(options.start === true && {
+          warnOfBuilderProblems: bootApplyEnabled()
+            ? ("unless-reloaded" as const)
+            : ("now" as const),
+        }),
       });
 
       // A production start writes no registry row, no permission and no
@@ -2287,6 +2295,11 @@ async function reconcileBuilderTargets<T>(
      * serves each entity as the database holds it.
      */
     materialize: boolean;
+    /**
+     * When a start says what is wrong in the Builder's definitions it serves
+     * (`warnOfBuilderProblemsAtStart`); absent for a command's registration.
+     */
+    warnOfBuilderProblems?: "now" | "unless-reloaded";
   }
 ): Promise<T> {
   const { adapter, logger, transformedConfig } = args;
@@ -2312,6 +2325,16 @@ async function reconcileBuilderTargets<T>(
     transformedConfig,
     builderEntities.collections
   );
+  // From the rows just read, so nothing is read for it; it warns and never refuses. A collection
+  // handed to the Schema Builder is the Builder's, whatever code entry is still there.
+  if (args.warnOfBuilderProblems !== undefined) {
+    warnOfBuilderProblemsAtStart({
+      entities: builderEntities,
+      code: configuredByCode,
+      logger,
+      when: args.warnOfBuilderProblems,
+    });
+  }
   await assertConfiguredAddresses(configuredByCode, builderEntities, table =>
     tableExistsAtStart(adapter, table)
   );
