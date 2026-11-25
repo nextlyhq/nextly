@@ -289,6 +289,33 @@ describe.each(getConfiguredTestDialects())(
       expect(await valuesKept(id)).toEqual(["Hello"]);
     });
 
+    it("goes, with the record that named it, when a published draft cleared the translation", async () => {
+      await boot(dialect);
+      const id = await create("notes", { title: "Hi", summary: "Short" });
+      await save(id, "en", { status: "published" }, "notes");
+      await save(
+        id,
+        "es",
+        { title: "Hola", summary: "Corto", status: "published" },
+        "notes"
+      );
+
+      // Held: the live title is still the language's own until the draft is published.
+      await save(id, "es", { title: "" }, "notes");
+      expect((await recordsOf(id, "es")).map(row => row.partState)).toEqual([
+        "live",
+      ]);
+      expect(await valuesKept(id)).toEqual(["Hi"]);
+
+      await save(id, "es", { status: "published" }, "notes");
+      // The language reads the title from another now, so nothing it was made from is kept.
+      expect(await recordsOf(id, "es")).toEqual([]);
+      expect(await valuesKept(id)).toEqual([]);
+      // The field the draft left alone keeps both.
+      expect(await recordsOf(id, "es", "summary")).toHaveLength(1);
+      expect(await valuesKept(id, "summary")).toEqual(["Short"]);
+    });
+
     it("keeps an empty source as empty, not as no source", async () => {
       await boot(dialect);
       const id = await create("posts", { title: "Hi" });

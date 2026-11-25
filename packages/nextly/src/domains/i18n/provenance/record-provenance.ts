@@ -773,9 +773,14 @@ export async function recordWrittenValues(
   let values = write.values;
   if (write.promotesDraft === true) {
     const promoted = await promoteDraftProvenance(db, write);
-    // The live records the draft's took the place of may have been the last to name their source.
+    const cleared = await forgetCleared(db, write);
+    // The live records that went, cleared or with the draft's in their place, may have been the
+    // last to name their source.
     if (write.sources?.kept === true) {
-      await pruneSources(write.sources.db, documentOf(write), promoted);
+      await pruneSources(write.sources.db, documentOf(write), [
+        ...promoted,
+        ...cleared,
+      ]);
     }
     // The draft's values are the whole language, untouched fields included, and the publish may
     // give a field a value of its own over the draft's. Read once the draft's records are live: a
@@ -797,6 +802,26 @@ export async function recordWrittenValues(
     );
   }
   await recordTranslationProvenance(db, { ...write, values });
+}
+
+/**
+ * Forgets the live record of each translation a published draft cleared, and answers those fields.
+ * A cleared value has no record in the draft to put live, so nothing else takes the place of the
+ * one that describes the value it replaced. A field the publish does not write has no value here.
+ */
+async function forgetCleared(
+  db: ProvenanceDb,
+  write: ProvenanceWrite
+): Promise<string[]> {
+  if (write.locale === write.defaultLocale) return [];
+  const cleared = Object.keys(write.values).filter(
+    field =>
+      write.values[field] !== undefined && isBlankValue(write.values[field])
+  );
+  if (cleared.length === 0) return [];
+  const existing = await recordedPaths(db, { ...write, partState: "live" });
+  for (const field of cleared) await forgetField(db, field, existing);
+  return cleared;
 }
 
 /** A value that holds nothing translated: absent, null or an empty string. */
@@ -867,10 +892,11 @@ export async function renameFieldProvenance(
 
 /**
  * The statements that move one entity's records of a renamed translated field by hand, as
- * `renameFieldProvenance` moves them: the field's own records; then each row's record whose new
- * path would not fit the column is deleted, as the move drops it; then each other row's record
- * under the field's name and the row separator is moved. Text for a developer finishing a rename
- * whose move failed, never run here.
+ * `renameFieldProvenance` moves them, in `records`: the provenance table, or another keyed by the
+ * same columns. The field's own records; then each row's record whose new path would not fit the
+ * column is deleted, as the move drops it; then each other row's record under the field's name and
+ * the row separator is moved. Text for a developer finishing a rename whose move failed, never run
+ * here.
  *
  * @experimental
  */
@@ -881,12 +907,13 @@ export function renameFieldProvenanceStatements(
     scopeSlug: string;
     from: string;
     to: string;
-  }
+  },
+  records: string = TRANSLATION_PROVENANCE_TABLE
 ): string[] {
   const id = (name: string) => quoteIdent(name, dialect);
   const text = (value: string) => quoteSqlLiteral(value, dialect);
   const mysql = dialect === "mysql";
-  const table = id(TRANSLATION_PROVENANCE_TABLE);
+  const table = id(records);
   const path = id("field_path");
   const scope = `${id("scope_kind")} = ${text(rename.scopeKind)} AND ${id("scope_slug")} = ${text(rename.scopeSlug)}`;
   const prefix = `${rename.from}${ROW_PATH_SEPARATOR}`;
