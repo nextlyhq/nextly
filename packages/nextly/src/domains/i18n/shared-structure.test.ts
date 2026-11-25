@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import {
   assembleSharedStructure,
   componentStructureShape,
+  holdsUnkeyedText,
   keepsTranslationsInside,
   pruneOverlay,
   sharedStructureShape,
@@ -482,5 +483,47 @@ describe("an overlay held as the container's whole value", () => {
     ).toEqual([
       expect.objectContaining({ id: "r1", caption: "first", rank: 1 }),
     ]);
+  });
+});
+
+describe("holdsUnkeyedText", () => {
+  it("finds text on a row with no id, and on one whose id an earlier row holds", () => {
+    expect(
+      holdsUnkeyedText([{ caption: "first", rank: 1 }], slidesShape())
+    ).toBe(true);
+    expect(
+      holdsUnkeyedText(
+        [
+          { id: "r1", caption: "first" },
+          { id: "r1", caption: "again" },
+        ],
+        slidesShape()
+      )
+    ).toBe(true);
+  });
+
+  it("finds text on a row with no id inside a row that has one", () => {
+    expect(
+      holdsUnkeyedText(
+        [{ id: "r1", rank: 1, points: [{ body: "inner", score: 2 }] }],
+        slidesShape()
+      )
+    ).toBe(true);
+  });
+
+  it("finds none where every row with text has its id, or a row with no id holds no text", () => {
+    expect(
+      holdsUnkeyedText(
+        [{ id: "r1", caption: "first", points: [{ id: "p1", body: "inner" }] }],
+        slidesShape()
+      )
+    ).toBe(false);
+    // Shared values alone, or blank text: nothing a split would leave on the structure as text.
+    expect(
+      holdsUnkeyedText([{ rank: 1, code: "A", caption: "" }], slidesShape())
+    ).toBe(false);
+    expect(
+      holdsUnkeyedText({ headline: "Title" }, sharedStructureShape(SEO)!)
+    ).toBe(false);
   });
 });

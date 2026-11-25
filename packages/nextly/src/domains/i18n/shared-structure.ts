@@ -593,6 +593,48 @@ export function isWholeValue(
   return Object.keys(parsed).some(key => !text.has(key));
 }
 
+/**
+ * Whether `value`, a container's value, holds translatable text on a row or component instance
+ * that has no key of its own (no id, or one an earlier row of its list holds), at any depth: text
+ * a split cannot file by row, so it stays on the structure ({@link splitSharedStructure}), where
+ * it would be read as every language's.
+ */
+export function holdsUnkeyedText(
+  value: unknown,
+  shape: SharedStructureShape
+): boolean {
+  const parsed = valueOf(value);
+  if (shape.kind === "group") {
+    return (
+      isPlainRecord(parsed) &&
+      innerHoldsUnkeyedText(parsed, shapeOfRow(parsed, shape))
+    );
+  }
+  if (!Array.isArray(parsed)) return false;
+  const keys = rowKeys(parsed);
+  return parsed.some((row, index) => {
+    if (!isPlainRecord(row)) return false;
+    const rowShape = shapeOfRow(row, shape);
+    // A row with no key: any text of its own, or text in a list inside it.
+    if (keys[index] === undefined) {
+      const { overlay } = splitLevel(row, rowShape);
+      if (!sameShare(overlay, {})) return true;
+    }
+    return innerHoldsUnkeyedText(row, rowShape);
+  });
+}
+
+/** Whether a container nested in `level` holds text on a row with no key. */
+function innerHoldsUnkeyedText(
+  level: Record<string, unknown>,
+  shape: SharedStructureShape
+): boolean {
+  return Object.entries(shape.inner).some(
+    ([name, nested]) =>
+      Object.hasOwn(level, name) && holdsUnkeyedText(level[name], nested)
+  );
+}
+
 /** Whether `value`, a container's value, holds any translatable text at any depth. */
 export function holdsText(
   value: unknown,

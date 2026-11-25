@@ -29,6 +29,7 @@ import { storesPerLanguage } from "../../../domains/i18n/per-language-storage";
 import type { LaidOutEntity } from "../../../domains/i18n/per-language-storage-layout";
 import {
   holdsText,
+  holdsUnkeyedText,
   isWholeValue,
   sameShare,
   splitSharedStructure,
@@ -188,6 +189,8 @@ interface SplitDrafts {
   conflicts: SharedConflict[];
   /** Conflicts whose two saves were made at the same moment, so neither is the later. */
   ties: SharedConflict[];
+  /** Each field a draft holds text in on a row or instance with no id, as `field (language)`. */
+  unkeyed: string[];
 }
 
 /** The time a draft was last saved, for ordering its document's drafts oldest first. */
@@ -261,6 +264,7 @@ interface SplitState {
   conflicts: SharedConflict[];
   ties: SharedConflict[];
   languageOrigins: LanguageOrigins;
+  unkeyed: string[];
 }
 
 /**
@@ -313,6 +317,13 @@ function structureOfDraftValue(
   ) {
     keepText(held);
     return undefined;
+  }
+  // Text on a row or component instance with no id cannot be filed by row: a split leaves it on
+  // the structure, the shared draft's, where any language's publish would take it live. An earlier
+  // release kept no id on an instance held inline, so such a draft is refused rather than guessed
+  // at by position: its rows need not be the live row's.
+  if (holdsUnkeyedText(held, shape)) {
+    state.unkeyed.push(`${key} (${draft.locale ?? "no language"})`);
   }
   const split = splitSharedStructure(held, shape);
   if (split.overlay !== undefined) keepText(split.overlay);
@@ -388,6 +399,7 @@ function splitDrafts(
     conflicts: [],
     ties: [],
     languageOrigins: new Map(),
+    unkeyed: [],
   };
   const ordered = [...document.drafts].sort((a, b) => savedAt(a) - savedAt(b));
   for (const draft of ordered) {
@@ -400,6 +412,7 @@ function splitDrafts(
     languages: state.languages,
     conflicts: state.conflicts,
     ties: state.ties,
+    unkeyed: state.unkeyed,
   };
 }
 
@@ -442,7 +455,9 @@ interface PlannedSplit {
 /**
  * Every document to split and what its drafts become, refused before any is split where two
  * languages changed one shared field in saves made at the same moment: nothing says which change
- * came later, so neither is kept on a guess. The count, the run and the dry run read this one plan.
+ * came later, so neither is kept on a guess. Refused too where a draft holds text inside a repeater
+ * or group on a row or component instance with no id (`holdsUnkeyedText`), which no split can file
+ * under its language. The count, the run and the dry run read this one plan.
  */
 async function plannedSplits(
   context: UpgradeStepContext
@@ -467,6 +482,25 @@ async function plannedSplits(
         `(${tie.field}, in ${tie.earlier} and ${tie.later})`
     )
   );
+  const unkeyed = planned.flatMap(({ document, split }) =>
+    split.unkeyed.length === 0
+      ? []
+      : [
+          `the ${document.entity.kind} "${document.entity.slug}" entry ${document.ref.entryId} ` +
+            `(${split.unkeyed.join(", ")})`,
+        ]
+  );
+  if (unkeyed.length > 0) {
+    throw new NextlyError({
+      code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
+      publicMessage:
+        `Pending changes hold translated text on repeater rows or component instances with no id ` +
+        `for ${unkeyed.join("; ")}, so that text cannot be kept by row for its language. ` +
+        "Publish or discard these pending changes, then run `nextly migrate` again. " +
+        NOTHING_CHANGED,
+      logContext: { unkeyed },
+    });
+  }
   if (tied.length > 0) {
     throw new NextlyError({
       code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",

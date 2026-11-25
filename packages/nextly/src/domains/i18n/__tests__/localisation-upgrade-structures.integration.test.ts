@@ -608,6 +608,99 @@ describeEachDialect(
       BOOT_TIMEOUT
     );
 
+    // An earlier release kept no id on an instance held inline, so a pending change it saved holds
+    // the instances' text with nothing to file it by row: split, it would stay on the shared draft,
+    // where any language's publish takes it live. Refused, naming it, with the way on; nothing moves.
+    it(
+      "refuses a pending change holding text on component instances with no id, naming the document and field, in a dry run too",
+      async () => {
+        await boot();
+        const created = await t!.nextly.create({
+          collection: "upboards",
+          locale: "en",
+          data: {
+            title: "Board",
+            panels: [
+              {
+                position: 1,
+                cards: [{ _componentType: "upcard", label: "one", size: 1 }],
+              },
+            ],
+          },
+        });
+        const id = (created.item as { id: string }).id;
+        const [panel] = (
+          (await t!.nextly.findByID({
+            collection: "upboards",
+            id,
+            locale: "en",
+          })) as { panels: { id: string }[] }
+        ).panels;
+        const ref = {
+          scopeKind: "collection" as const,
+          scopeSlug: "upboards",
+          entryId: id,
+        };
+        const held = {
+          title: "Tablero",
+          panels: [
+            {
+              id: panel!.id,
+              position: 1,
+              cards: [{ _componentType: "upcard", label: "uno", size: 1 }],
+            },
+          ],
+        };
+        await database!.adapter.insert(
+          VERSIONS_TABLE,
+          {
+            id: crypto.randomUUID(),
+            scopeKind: "collection",
+            scopeSlug: "upboards",
+            entryId: id,
+            versionNo: null,
+            status: "draft",
+            isAutosave: false,
+            snapshot: JSON.stringify(held),
+            label: null,
+            locale: "es",
+            draftKey: workingDraftKey(ref, "es"),
+            sourceVersionNo: null,
+            createdBy: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          { returning: [] }
+        );
+        const named = new RegExp(
+          `"upboards" entry ${id} \\(panels \\(es\\)\\)[\\s\\S]*Publish or discard these pending changes`
+        );
+
+        const plan = await previewMigrateData(database!.adapter, SITE);
+        expect(plan.refusals).toEqual([expect.stringMatching(named)]);
+        await expect(
+          migrateData(database!.adapter, SITE, DRAFTS_STEP)
+        ).rejects.toThrow(named);
+
+        // Nothing was split: the pending change is as it was saved.
+        const rows = await database!.adapter.select<{
+          locale: string | null;
+          snapshot: unknown;
+        }>(VERSIONS_TABLE, {
+          where: {
+            and: [
+              { column: "entryId", op: "=", value: id },
+              ...WORKING_DRAFT_SHAPE,
+            ],
+          },
+        });
+        expect(
+          rows.map(row => [row.locale, parsedValue(row.snapshot)])
+        ).toEqual([["es", held]]);
+      },
+      BOOT_TIMEOUT
+    );
+
     /** The context the step is handed, as `nextly migrate` builds it. */
     function stepContext() {
       const adapter = database!.adapter;
