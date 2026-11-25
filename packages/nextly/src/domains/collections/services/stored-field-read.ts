@@ -75,6 +75,10 @@ import {
   cachedCompanionReadiness,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import {
+  splitStoredValue,
+  type SharedStructureShape,
+} from "../../i18n/shared-structure";
 import { classifyFieldKind } from "../../schema/services/field-column-descriptor";
 import type { VersionsDbApi } from "../../versions/db-api";
 import {
@@ -86,6 +90,8 @@ import {
   combinedDraft,
   draftsKeptByPart,
   holdsPendingChange,
+  partKeysOf,
+  type PartKeys,
   SHARED_DRAFT_SLOT,
 } from "../../versions/part-drafts";
 import { resolveComponentSchemas } from "../../versions/restore-version";
@@ -200,7 +206,8 @@ export function storedReadsOn(connection: StoredFieldConnection): StoredReads {
  * groups store their fields at the level they sit in; a repeater's rows and a
  * field-group instance are not walked, being stored elsewhere. A group kept
  * per language is walked: the write holds a value for a field inside it,
- * though a stored read of that field is refused.
+ * though a stored read of that field is refused. A group with one structure
+ * in every language is read like any other.
  */
 function pathsOfType(
   fields: readonly FieldDefinition[],
@@ -541,14 +548,20 @@ export async function prepareStoredRead(
 interface PlacedField {
   readonly field: string;
   readonly path: StoredFieldPath;
-  /** The field's language-row column, for a field kept per language. */
+  /**
+   * The field's language-row column, for a field kept per language; for a
+   * field inside a group with one structure in every language, the group's
+   * overlay column, which holds the language's text inside it.
+   */
   readonly perLanguage: CompanionField | undefined;
 }
 
 /**
  * Each field with where it is stored. Only a top-level field can be kept per
  * language on its own: a field inside a group is stored in the group's value,
- * and a group kept per language is refused by the path rule.
+ * a group kept per language is refused by the path rule, and a group with one
+ * structure is read from its structure on the main row with the language's
+ * overlay on it.
  */
 function placedFields(
   entity: StoredEntity,
@@ -558,25 +571,33 @@ function placedFields(
 ): PlacedField[] {
   return fields.map(field => {
     const path = storedFieldPath(entity, { ...target, field }, scope);
+    const kept = companionFieldOf(entity, path.column);
     return {
       field,
       path,
       perLanguage:
-        path.within.length === 0
-          ? companionFieldOf(entity, path.column)
+        path.within.length === 0 || kept?.field.sharedStructure !== undefined
+          ? kept
           : undefined,
     };
   });
 }
 
-/** The main row's columns a read needs: its fields' own, and its state's. */
+/**
+ * The main row's columns a read needs: its fields' own, a group's with one
+ * structure (which the language's overlay goes on), and its state's.
+ */
 function rowColumns(
   placed: readonly PlacedField[],
   state: "row" | "language" | undefined
 ): string[] {
   return [
     ...placed
-      .filter(({ perLanguage }) => perLanguage === undefined)
+      .filter(
+        ({ perLanguage }) =>
+          perLanguage === undefined ||
+          perLanguage.field.sharedStructure !== undefined
+      )
       .map(({ path }) => path.column),
     ...(state === "row" ? ["status"] : []),
   ];
@@ -591,13 +612,19 @@ function notStored(fields: readonly string[]): StoredFieldsRead {
   };
 }
 
-/** The fields kept per language whose value the shown draft does not carry. */
+/**
+ * The fields kept per language whose value the shown draft does not carry,
+ * and every group with one structure: a draft holding its structure may hold
+ * no text of the language's, which then reads from the live overlay.
+ */
 function fromLanguageRow(
   placed: readonly PlacedField[],
   draft: PendingDraft | undefined
 ): LanguageRowAsk["fields"] {
   return placed.flatMap(({ field, path, perLanguage }) =>
-    perLanguage === undefined || draftCarries(draft, path.column)
+    perLanguage === undefined ||
+    (draftCarries(draft, path.column) &&
+      perLanguage.field.sharedStructure === undefined)
       ? []
       : [{ field, kept: perLanguage }]
   );
@@ -612,6 +639,31 @@ function shownValues(
 ): Map<string, PluginStoredValue> {
   const values = new Map<string, PluginStoredValue>();
   for (const { field, path, perLanguage } of placed) {
+    const shape = perLanguage?.field.sharedStructure;
+    if (perLanguage !== undefined && shape !== undefined) {
+      const live = translated.get(perLanguage.field.name);
+      // A draft holding the group is read as its structure with its own text,
+      // the language's live text where the draft holds none: a held change to
+      // the structure alone carries no text of the language's.
+      const snapshot = draft?.snapshot;
+      const drafted =
+        draftCarries(draft, path.column) && isRecord(snapshot)
+          ? splitStoredValue(snapshot[path.column], shape)
+          : undefined;
+      values.set(
+        field,
+        storedValueOf(
+          valueInSharedStructure({
+            structure: drafted ? drafted.structure : row[path.column],
+            overlays: drafted ? [drafted.overlay, live] : [live],
+            shape,
+            within: path.within,
+          }),
+          path
+        )
+      );
+      continue;
+    }
     const shown = shownValue({
       column: path.column,
       stored: row[path.column],
@@ -624,6 +676,34 @@ function shownValues(
     values.set(field, storedValueOf(reached, path));
   }
   return values;
+}
+
+/**
+ * The value `within` leads to inside a group with one structure, as one
+ * language holds it: a translated field from the first of `overlays` (that
+ * language's own, a draft's before the live one) holding a value for it, and
+ * no other language's, so a language that holds no text for it leaves it
+ * without a value; any other field from the structure every language shares.
+ * Only named groups are walked (`storedFieldPath`), so the shape is followed
+ * through its groups alone.
+ */
+function valueInSharedStructure(at: {
+  readonly structure: unknown;
+  readonly overlays: readonly unknown[];
+  readonly shape: SharedStructureShape;
+  readonly within: readonly string[];
+}): { value: unknown } | undefined {
+  let level: SharedStructureShape | undefined = at.shape;
+  for (const name of at.within.slice(0, -1)) level = level?.inner[name];
+  const last = at.within.at(-1);
+  const translated =
+    level !== undefined && last !== undefined && level.texts.includes(last);
+  if (!translated) return valueWithin(at.structure, at.within);
+  for (const overlay of at.overlays) {
+    const reached = valueWithin(overlay, at.within);
+    if (reached !== undefined && reached.value !== null) return reached;
+  }
+  return undefined;
 }
 
 /**
@@ -704,6 +784,8 @@ interface StoredFieldPath {
  * since its value is not the main row's to answer for every language; so is a
  * group below the top flagged as translated in an entity kept per language:
  * its author asked for a value per language, and the shared value is not one.
+ * A group with one structure in every language is not kept per language: its
+ * structure is the main row's, and the language's text is read onto it.
  */
 function storedFieldPath(
   entity: StoredEntity,
@@ -775,17 +857,18 @@ function namedGroupIn(
 
 /**
  * Whether a group on a read's path keeps its value per language: a top-level
- * one by the companion schema every localized write is split by, and one
- * below it by its own flag, in an entity kept per language.
+ * one by the companion schema every localized write is split by, unless it
+ * keeps one structure in every language, and one below it by its own flag, in
+ * an entity kept per language.
  */
 function groupKeptPerLanguage(
   entity: StoredEntity,
   group: NamedGroup,
   depth: number
 ): boolean {
-  return depth === 0
-    ? companionFieldOf(entity, group.name) !== undefined
-    : entity.storedPerLanguage && group.localized === true;
+  if (depth > 0) return entity.storedPerLanguage && group.localized === true;
+  const kept = companionFieldOf(entity, group.name);
+  return kept !== undefined && kept.field.sharedStructure === undefined;
 }
 
 /**
@@ -1334,7 +1417,8 @@ async function pendingWorkingDrafts(
     new VersionsRepository(connection.db),
     { scopeKind: entity.kind, scopeSlug: entity.slug },
     ids,
-    provisional.draftLocale
+    provisional.draftLocale,
+    await partKeysOf(fields, { executor: connection.executor })
   );
   if (found.size === 0) return found;
 
@@ -1360,7 +1444,8 @@ async function workingDraftsOf(
   repo: VersionsRepository,
   scope: Pick<VersionRef, "scopeKind" | "scopeSlug">,
   ids: readonly string[],
-  draftLocale: string | null
+  draftLocale: string | null,
+  keys: PartKeys
 ): Promise<Map<string, PendingDraft>> {
   const draftsOf = async (slot: string | null) => {
     const drafts = new Map<string, VersionRow>();
@@ -1392,7 +1477,9 @@ async function workingDraftsOf(
       ...(language.has(id) ? { language: language.get(id) as VersionRow } : {}),
     };
     if (holdsPendingChange(parts)) {
-      found.set(id, { snapshot: combinedDraft({}, parts) });
+      // Read field by field with no assembled live document to hand, so a
+      // structured field only the language's draft holds reads as stored.
+      found.set(id, { snapshot: combinedDraft({}, parts, { keys, live: {} }) });
     }
   }
   return found;

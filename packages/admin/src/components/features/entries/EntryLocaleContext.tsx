@@ -55,6 +55,11 @@ export interface EntryLocaleContextValue {
   /** Names of this collection's translatable fields — the field-scoped set copy-from-language copies. */
   localizedFieldNames?: string[];
   /**
+   * The repeaters and groups whose rows hold translated text: copy-from-language copies the text
+   * inside them onto this language's own rows, by row id (`withTextFrom`).
+   */
+  textContainers?: readonly unknown[];
+  /**
    * Read another language's raw values for this document, for copy-from-language.
    *
    * Supplied by the form rather than resolved here because entries and singles

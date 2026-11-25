@@ -30,6 +30,22 @@ describe("bulkMoveSummary", () => {
     });
   });
 
+  it("says how many were never sent, and why, when a request was not answered", () => {
+    expect(
+      bulkMoveSummary("submit", {
+        moved: 200,
+        refused: [{ title: "Pricing FAQ", reason: "already in review" }],
+        unsent: { count: 250, reason: "The server could not be reached" },
+      })
+    ).toEqual({
+      head: "200 moved; 1 refused; 250 not sent.",
+      refusals: [
+        "Pricing FAQ: already in review.",
+        "Not sent: The server could not be reached.",
+      ],
+    });
+  });
+
   it("says assigned and sent back for those moves, and nothing refused when none was", () => {
     expect(bulkMoveSummary("assign", { moved: 2, refused: [] })).toEqual({
       head: "2 assigned.",
@@ -72,6 +88,19 @@ describe("bulkMoveSteps", () => {
     ).toEqual({ sendBack: "send-back" });
   });
 
+  it("says when the one submit step needs a comment, which the list then asks for", () => {
+    expect(
+      bulkMoveSteps([
+        { ...step("submit", "submit"), commentRequired: true },
+        step("send-back", "request-changes"),
+      ])
+    ).toEqual({
+      submit: "submit",
+      submitNeedsComment: true,
+      sendBack: "send-back",
+    });
+  });
+
   it("offers no step move where the workflow has none of either kind", () => {
     expect(bulkMoveSteps([step("clear", "approve")])).toEqual({});
   });
@@ -101,6 +130,51 @@ describe("bulkMoveSteps", () => {
         "300",
         "400",
       ]);
+    });
+
+    it("keeps the answers of the requests before one that fails, and says how many were not sent", async () => {
+      const sent: number[][] = [];
+      const failure = new Error("offline");
+      const answer = await inBatches(
+        Array.from({ length: 450 }, (_, n) => n),
+        DOCUMENTS_PER_MOVE,
+        batch => {
+          sent.push(batch);
+          return sent.length === 2
+            ? Promise.reject(failure)
+            : Promise.resolve({
+                items: batch.map(n => ({ id: n })),
+                errors: [],
+              });
+        }
+      );
+      // The first request's moves stand and are reported; nothing after the failure is sent.
+      expect(sent.map(batch => batch.length)).toEqual([200, 200]);
+      expect(answer.items).toHaveLength(200);
+      expect(answer.stopped).toEqual({ reason: failure, unsent: 250 });
+    });
+
+    it("counts what was not sent in documents where each document's parts are sent apart", async () => {
+      // Ten documents of two parts each, four parts a request: the second request fails, so
+      // parts 4 to 19 (documents 2 to 9) were not sent. Counted as parts it would claim 16 of
+      // the 10 documents selected.
+      const parts = Array.from({ length: 20 }, (_, n) => ({
+        document: `doc-${Math.floor(n / 2)}`,
+        part: n % 2 === 0 ? null : "es",
+      }));
+      let requests = 0;
+      const answer = await inBatches(
+        parts,
+        4,
+        batch => {
+          requests += 1;
+          return requests === 2
+            ? Promise.reject(new Error("offline"))
+            : Promise.resolve({ items: batch, errors: [] });
+        },
+        part => part.document
+      );
+      expect(answer.stopped?.unsent).toBe(8);
     });
 
     it("sends nothing for nothing", async () => {

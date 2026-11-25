@@ -13,7 +13,9 @@ import {
   fieldGroup,
   defineFieldGroup,
   defineSingle,
+  number,
   password,
+  repeater,
   text,
 } from "../../../config";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -394,6 +396,56 @@ describe("webhook outbox capture — singles (integration)", () => {
     expect((last.previous as { body?: string } | null)?.body).toBe("welt");
     expect(last.changedFields).toContain("title");
     expect(last.changedFields).not.toContain("body");
+  });
+
+  // A repeater keeps one structure in every language and only its text per language: the event
+  // carries the field as a read shows it, the rows with this language's text, never the language's
+  // text alone keyed by row id as its translation row stores it.
+  it("carries a repeater written in a language as its rows with that language's text", async () => {
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      singles: [
+        defineSingle({
+          slug: "gallerysite",
+          localized: true,
+          fields: [
+            text({ name: "title" }),
+            repeater({
+              name: "slides",
+              fields: [text({ name: "caption" }), number({ name: "rank" })],
+            }),
+          ],
+        }),
+      ],
+    });
+
+    await singles(current).update(
+      "gallerysite",
+      { slides: [{ caption: "first", rank: 1 }], _overwrite: true },
+      { overrideAccess: true, locale: "en" }
+    );
+    const read = await singles(current).get("gallerysite", {
+      overrideAccess: true,
+      locale: "en",
+    });
+    const [slide] = (read.data as { slides: { id: string }[] }).slides;
+    await singles(current).update(
+      "gallerysite",
+      {
+        slides: [{ id: slide!.id, caption: "erste", rank: 1 }],
+        _overwrite: true,
+      },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    const german = (await events(current))
+      .filter(r => r.type === "single.updated")
+      .map(envelopeOf)
+      .find(event => event.resource.locale === "de");
+    expect(german).toBeDefined();
+    expect((german!.data as { slides?: unknown }).slides).toEqual([
+      expect.objectContaining({ id: slide!.id, caption: "erste", rank: 1 }),
+    ]);
   });
 
   it("omits resource.locale for a non-localized single even when localization is configured", async () => {

@@ -16,6 +16,7 @@ import {
   otherLanguagesChoice,
   partsOutcomeSentence,
   refusalsByPart,
+  sameParts,
   sharedSentence,
   withLanguage,
   type PartsChoice,
@@ -114,6 +115,28 @@ describe("choosing parts", () => {
     expect(choosesAnything({ locales: [], shared: false })).toBe(false);
     expect(choosesAnything({ locales: [], shared: true })).toBe(true);
     expect(choosesAnything({ locales: ["es"], shared: false })).toBe(true);
+  });
+});
+
+describe("whether two choices are of the same parts", () => {
+  const CHOICE: PartsChoice = { locales: ["en", "es"], shared: false };
+
+  it("is so in whatever order they were chosen", () => {
+    expect(sameParts(CHOICE, { locales: ["es", "en"], shared: false })).toBe(
+      true
+    );
+  });
+
+  it("is not so for a language more, less or other, or for the shared fields", () => {
+    for (const other of [
+      { ...CHOICE, locales: ["en"] },
+      { ...CHOICE, locales: ["en", "ar"] },
+      { ...CHOICE, locales: ["en", "es", "ar"] },
+      { ...CHOICE, shared: true },
+    ]) {
+      expect(sameParts(CHOICE, other)).toBe(false);
+      expect(sameParts(other, CHOICE)).toBe(false);
+    }
   });
 });
 

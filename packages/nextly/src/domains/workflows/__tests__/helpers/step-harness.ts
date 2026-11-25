@@ -10,6 +10,8 @@
  */
 import { randomUUID } from "node:crypto";
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import { apiKeyScope } from "../../../../auth/authenticated-scope";
 import { defineCollection, defineSingle, text } from "../../../../config";
 import { getDialectTables } from "../../../../database/index";
@@ -21,6 +23,7 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import { permissionSlug } from "../../../../schemas/_zod/rbac";
+import { reviewStatesTables } from "../../../../schemas/review-states";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
 import { ServiceContainer } from "../../../../services/index";
 import { WITHOUT_REVIEW_KEY } from "../../../collections/services/save-door-gate";
@@ -330,6 +333,57 @@ export function seedState(
     enteredBy: fields.enteredBy ?? "seeder",
     ...fields,
   });
+}
+
+/**
+ * Rows a statement inserts at once: each review state row binds under 20 values, so this stays
+ * under SQLite's 999 bound values, and every dialect takes the batch as one round trip.
+ */
+const STATES_PER_INSERT = 40;
+
+/**
+ * Gives each of `parts` a review state as {@link seedState} does, in batched inserts rather than a
+ * statement each: a case that needs a thousand states seeds them in a few round trips, so it is
+ * not slow on a busy database. Each row is the one `createReviewState` writes, collected rather
+ * than sent, so the batch cannot drift from it.
+ */
+export async function seedStates(
+  t: TestNextly,
+  parts: readonly ReviewPart[],
+  stage: string,
+  fields: Parameters<typeof seedState>[3]
+): Promise<void> {
+  const rows: Record<string, unknown>[] = [];
+  const collecting = {
+    insert: (_table: string, row: Record<string, unknown>) => {
+      rows.push(row);
+      return Promise.resolve(undefined);
+    },
+  } as unknown as ReviewStatesDb;
+  for (const part of parts) {
+    await createReviewState(collecting, part, {
+      stage,
+      enteredAt: AT,
+      enteredBy: fields.enteredBy ?? "seeder",
+      ...fields,
+    });
+  }
+  // Through the dialect's own table, as the repository's insert writes: the rows name its
+  // properties (`scopeKind`), which the table turns into its columns (`scope_kind`) and encodes
+  // (dates, JSON) for the dialect. An adapter's raw bulk insert takes column names as given.
+  const { nextlyReviewStates } = reviewStatesTables(
+    t.adapter.dialect as SupportedDialect
+  );
+  const db = t.adapter.getDrizzle<{
+    insert(table: unknown): {
+      values(rows: Record<string, unknown>[]): PromiseLike<unknown>;
+    };
+  }>();
+  for (let at = 0; at < rows.length; at += STATES_PER_INSERT) {
+    await db
+      .insert(nextlyReviewStates)
+      .values(rows.slice(at, at + STATES_PER_INSERT));
+  }
 }
 
 export const stateOf = (

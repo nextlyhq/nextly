@@ -1859,7 +1859,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               fields: {
                 tableName,
                 builtBy: "collection",
-                oldFields: (single.fields ?? []) as unknown as FieldDefinition[],
+                oldFields: (single.fields ??
+                  []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
                 wasLocalized,
                 isLocalized,

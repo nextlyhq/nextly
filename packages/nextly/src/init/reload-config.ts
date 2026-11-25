@@ -1543,6 +1543,8 @@ async function ensureLocalizedCompanionsForReload(
           // entity kind; a kind with no history correctly seeds nothing.
           versionScope: versionScopeForEntityKind(kind),
           recordedBefore: recordedBeforeOf(recordedBefore, kind, entity.slug),
+          // A container's overlay column added now is seeded as the default language's text.
+          defaultLocale: transitions?.defaultLocale,
         },
         error => {
           companionRefused = true;

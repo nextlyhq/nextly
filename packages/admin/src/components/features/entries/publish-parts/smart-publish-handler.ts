@@ -9,8 +9,6 @@
 
 import type { FieldConfig } from "nextly/config";
 
-import { formFieldsOf } from "../../versions/snapshot-to-form-values";
-import { localizedFieldNamesOf } from "../entry-locale-source";
 import type { SubmitOutcome } from "../EntryForm/submit-outcome";
 import type { DocumentActionOutcome } from "../EntryForm/useDocumentActionBindings";
 import type { EntryFormIntent } from "../EntryForm/useEntryForm";
@@ -56,9 +54,6 @@ export function smartPublishHandler(
 ): { onPublish?: () => Promise<DocumentActionOutcome> } {
   if (smartPublish === undefined) return {};
   const save = savesWithoutPublishing(editor);
-  // A nameless layout's fields store their values beside it, so each is shared or translated for
-  // itself, as a field outside the layout is.
-  const fields = formFieldsOf(editor.fields);
   return {
     onPublish: () =>
       smartPublish({
@@ -68,8 +63,8 @@ export function smartPublishHandler(
         unsaved: editor.unsaved,
         sharedEdited: () =>
           editsSharedFields({
-            fields,
-            translated: localizedFieldNamesOf(fields, editor.localized),
+            fields: editor.fields,
+            localized: editor.localized,
             startedFrom: editor.form.formState.defaultValues ?? {},
             current: editor.form.getValues(),
           }),
