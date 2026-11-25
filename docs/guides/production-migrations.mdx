@@ -90,13 +90,6 @@ The files `migrate:create` would write for them are named in a notice ("Translat
 recorded yet in a migration") by `nextly migrate:check`, `nextly migrate` and a production start that
 runs migrations, and none of them is refused. A change to the main table still is.
 
-Over any later snapshot they are changes like any other. A site made on an earlier release that has
-a repeater or group with translated text needs one such file: its text is now kept in a column of the
-translations table, and without it that collection or Single cannot be read. Run
-`nextly migrate:create --name="<migration-name>"`, commit the result, and deploy as usual. Until then
-`nextly migrate:check` fails, and `nextly migrate` and a production start that runs migrations refuse,
-naming it as `~ translations table dc_pages`.
-
 ### A migration that deletes data
 
 When the change you made drops something (a collection, Single or field group no longer in the
