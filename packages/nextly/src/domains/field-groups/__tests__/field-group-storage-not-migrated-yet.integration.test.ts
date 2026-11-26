@@ -373,6 +373,27 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    it.runIf(dialect === "postgresql")(
+      "refuses at most once, then gives the database's own error, when a settled server's table is gone for another reason",
+      async () => {
+        // Settled by following the move, so it takes no savepoint and cannot ask what failed.
+        const { save } = await openSite();
+        expect(await save("Before")).toBe("ok");
+        await moveEverything();
+        await tried(() => save("First"), [MOVING]);
+
+        // Gone, and not by the migration: there is no other name to follow.
+        await run(`DROP TABLE ${quoted(CURRENT)} CASCADE`);
+        const answers: string[] = [];
+        for (let n = 0; n < 3; n++) answers.push(await save(`Gone ${n}`));
+        expect(answers.slice(1), answers.join(" / ")).not.toContain(MOVING);
+        expect(
+          answers.filter(answer => answer === MOVING).length,
+          answers.join(" / ")
+        ).toBeLessThanOrEqual(1);
+      }
+    );
+
     it("refuses a first save of a group that keeps its table name, whose column moved, and saves it on the retry", async () => {
       // As a group whose stored table name the migration did not give: only its column moves.
       const { save, heading } = await openSite();
