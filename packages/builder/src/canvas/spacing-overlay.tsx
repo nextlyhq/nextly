@@ -62,7 +62,7 @@
  * @module spacing-overlay
  */
 
-import { findNode } from "@nextlyhq/blocks-engine";
+import { COMPONENT_INSTANCE_TYPE, findNode } from "@nextlyhq/blocks-engine";
 import { registeredBlocks, type BlockResolver } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
@@ -681,15 +681,26 @@ function usePointedBand(
         box.top + (frame.clientTop + event.clientY) * scale
       );
     };
+    /*
+     * A pointer leaving the window (or the frame) from over a band sends no
+     * later move, so the number it showed would stay shown; leaving clears
+     * it. Leaving the frame for the editor is followed by the editor's own
+     * moves, which point again.
+     */
+    const onLeave = (): void => setPointed(null);
     const inner = frame?.contentDocument ?? null;
     chrome.addEventListener("pointermove", onChrome, { passive: true });
+    chrome.documentElement.addEventListener("pointerleave", onLeave);
     if (inner !== null && inner !== chrome) {
       inner.addEventListener("pointermove", onFrame, { passive: true });
+      inner.documentElement.addEventListener("pointerleave", onLeave);
     }
     return () => {
       chrome.removeEventListener("pointermove", onChrome);
+      chrome.documentElement.removeEventListener("pointerleave", onLeave);
       if (inner !== null && inner !== chrome) {
         inner.removeEventListener("pointermove", onFrame);
+        inner.documentElement.removeEventListener("pointerleave", onLeave);
       }
     };
   }, [layer, active, frameKey]);
@@ -1043,12 +1054,19 @@ export function SpacingOverlay({
    * A block that holds no blocks (a Button, a Heading) has its bands drawn as
    * outlines with no fill, so its own colors show true under them. A container
    * keeps filled bands: there the fill is the room it gives its children.
-   * Asked of `holdsBlocks`, the one answer a drag and Layers use too.
+   * Asked of `holdsBlocks`, the one answer a drag and Layers use too. A
+   * component copy keeps them as well: it draws a whole set of blocks, kept in
+   * the component rather than in slots of its own, so whether its slots hold
+   * blocks says nothing about its size.
    */
   const outlines = React.useMemo(() => {
     if (selectedId === null) return false;
     const node = findNode(document.nodes, selectedId);
-    return node !== undefined && !holdsBlocks(node, undefined);
+    return (
+      node !== undefined &&
+      node.type !== COMPONENT_INSTANCE_TYPE &&
+      !holdsBlocks(node, undefined)
+    );
   }, [document, selectedId]);
 
   /*

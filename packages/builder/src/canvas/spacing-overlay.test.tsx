@@ -1446,6 +1446,24 @@ describe("small blocks keep their own label and color under the bands", () => {
     expect(thin.hasAttribute("data-pointed")).toBe(false);
   });
 
+  it("hides that number again when the pointer leaves the editor from over its band", () => {
+    stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
+    stubOverlayBoxes();
+    const { container } = mount(editorOf("a"));
+    const thin = band(container, "margin", "top");
+    const box = thin.getBoundingClientRect();
+    pointAt(box.x + box.width / 2, box.y + box.height / 2);
+    expect(thin.hasAttribute("data-pointed")).toBe(true);
+
+    // Out of the window with no move in between: no later move clears it.
+    act(() => {
+      document.documentElement.dispatchEvent(
+        new MouseEvent("pointerleave", { bubbles: false })
+      );
+    });
+    expect(thin.hasAttribute("data-pointed")).toBe(false);
+  });
+
   it("draws the bands of a block that holds no blocks as outlines", () => {
     stubComputedStyle({ a: { paddingTop: "12px" } });
     const { container } = mount(editorOf("a"));
@@ -1490,6 +1508,31 @@ describe("small blocks keep their own label and color under the bands", () => {
     } as EditorState);
     const layer = container.querySelector(".nx-spacing-overlay");
     expect(container.querySelector(".nx-spacing-overlay__band")).not.toBeNull();
+    expect(layer?.hasAttribute("data-outlines")).toBe(false);
+  });
+
+  it("keeps filled bands on a component copy, which draws a whole set of blocks", () => {
+    // Stored with no slots of its own: its blocks live in the component, so a
+    // reading of the copy alone would take it for a single small block.
+    const withCopy = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "c",
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "card" },
+        },
+      ],
+    } as unknown as BlockDocument;
+    stubComputedStyle({ c: { paddingTop: "64px" } });
+    const { container } = mount({
+      ...editorOf("c"),
+      document: withCopy,
+    } as EditorState);
+    const layer = container.querySelector(".nx-spacing-overlay");
+    expect(layer).not.toBeNull();
     expect(layer?.hasAttribute("data-outlines")).toBe(false);
   });
 });
