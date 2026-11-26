@@ -341,7 +341,7 @@ describeEachDialect("db:sync and what the database refuses", dialect => {
 
   it("a table a new field group needs is refused: names the group, and syncs the rest", async () => {
     await dbSync(configuration(false, []));
-    refuse = /CREATE TABLE .*fg_rc_seob\b/;
+    refuse = /CREATE TABLE .*fg_rc_seo\b/;
     const run = await dbSync(configuration(true));
 
     expect(run.error?.code).toBe("ENTITIES_NOT_SYNCED");
