@@ -57,7 +57,11 @@ import {
   registryReadTransaction,
   registryRowOnTransaction,
 } from "./collection-row-cache";
-import { ENTITY_NOUN, type EntityRef } from "./entity-hold";
+import {
+  ENTITY_NOUN,
+  type EntityRef,
+  holdEntityInPostgresTransaction,
+} from "./entity-hold";
 
 export interface CollectionMetadata {
   id: string;
@@ -731,8 +735,10 @@ export class DynamicCollectionRegistryService extends BaseService {
    * a write holding a row for `"share"` (one that must not outlive the
    * collection, such as a plugin's row naming it) and the delete take turns.
    * The write either commits before the delete reads what it removes, or
-   * waits and finds the row gone. SQLite has one writer at a time, so there
-   * the rows are only read.
+   * waits and finds the row gone. On PostgreSQL an entry write holds the
+   * collection's advisory lock for share instead of its row, so there the
+   * delete takes that lock exclusive too, before the row. SQLite has one
+   * writer at a time, so there the rows are only read.
    *
    * MySQL ends a transaction at its first table drop, which releases row
    * locks while the delete still has the registry rows to remove. So there
@@ -780,6 +786,19 @@ export class DynamicCollectionRegistryService extends BaseService {
             options.waitMs
           )
         : { release: none };
+    // On PostgreSQL an entry write's share is the collection's advisory lock with a plain read of
+    // its row (`holdEntityForWrite`), which no row lock waits for. So a delete takes the advisory
+    // lock exclusive first, before the row, as a write takes them: it waits for every write holding
+    // its share to commit, and a write after it waits for its transaction and finds the row gone.
+    if (strength === "update" && this.dialect === "postgresql") {
+      for (const slug of [...slugs].sort()) {
+        await holdEntityInPostgresTransaction(
+          query => tx.queryStatement(query),
+          { kind: "collection", slug },
+          options.waitMs
+        );
+      }
+    }
     // Keyed by the table's property names, as a row read through the adapter is.
     let rows: {
       slug: string;

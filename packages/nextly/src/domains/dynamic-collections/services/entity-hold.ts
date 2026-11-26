@@ -133,6 +133,24 @@ export function shareEntityOnPostgres(
 }
 
 /**
+ * `entity`'s hold on PostgreSQL, exclusive, in a transaction (`rows` runs there) and held until it
+ * ends: what a collection delete takes before it reads what it removes. It waits for every entry
+ * write holding its share (`shareEntityOnPostgres`) to commit, and a write that comes after waits for
+ * the transaction, then finds the collection gone. Refused, with nothing changed, after `waitMs`.
+ */
+export function holdEntityInPostgresTransaction(
+  rows: RowsOn,
+  entity: EntityRef,
+  waitMs = ENTITY_HOLD_WAIT_MS
+): Promise<void> {
+  return attemptUntil(
+    () => got(rows, sql`pg_try_advisory_xact_lock(${advisoryKeysOf(entity)})`),
+    () => entityBeingChanged(entity, "entity-hold-timeout"),
+    waitMs
+  );
+}
+
+/**
  * The refusal, at once, of an entry write's share of `entity` on PostgreSQL where a save holds it and
  * the write may not wait: on a transaction its caller opened, which keeps a connection the save
  * needs to finish.
