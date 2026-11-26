@@ -241,6 +241,7 @@ const SEEDERS: Record<
     await insert("nextly_jobs", {
       id: randomUUID(),
       slug: plain,
+      state: "pending",
       input: { link: `https://example.test/reset?token=${value}` },
     });
     return { secrets: [{ label: "nextly_jobs.input", value }], plain: [plain] };
