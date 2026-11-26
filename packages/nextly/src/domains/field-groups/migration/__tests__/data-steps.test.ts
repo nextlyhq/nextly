@@ -278,6 +278,34 @@ describe("rewriting the wire key inside the ledgers", () => {
     });
   });
 
+  it.each([
+    ["earlier in the same second the step began", 100],
+    ["in the second before it began, stored rounded up to the next", 1000],
+  ])(
+    "refuses a missed row the database stamped %s",
+    async (_when, stampedAt) => {
+      // The database's clock reads 600 ms into a whole second when the step begins. SQLite keeps
+      // whole seconds, and MySQL rounds a stamp to the column's precision, so a row written before
+      // the step can be stored on, or one second past, the whole second the step began in.
+      const second = Math.floor(Date.now() / 1000) * 1000 - 60_000;
+      const started = Date.now();
+      const databaseNow = (): Date =>
+        new Date(second + 600 + (Date.now() - started));
+      const target = timedWorld(databaseNow);
+      const step = stepNamed(target, "data:nextly_versions.snapshot");
+      await step.run(target.session);
+
+      await expect(
+        step.verify(alwaysWriting(target, () => new Date(second + stampedAt)))
+      ).rejects.toMatchObject({
+        logContext: {
+          reason: "row rewrite did not reach every row",
+          row: expect.stringMatching(/^late-/),
+        },
+      });
+    }
+  );
+
   // The cutoff is the database's clock, which stamps the rows, never this process's: a host
   // whose clock runs apart from the database's would misjudge which rows the site wrote since.
   const HOUR = 60 * 60 * 1000;

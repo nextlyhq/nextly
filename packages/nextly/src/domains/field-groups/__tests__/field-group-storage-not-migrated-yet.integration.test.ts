@@ -351,6 +351,28 @@ describe.each(getConfiguredTestDialects())(
       expect(await rowsIn(CURRENT)).toBe(3);
     });
 
+    it.runIf(dialect === "postgresql")(
+      "takes no savepoint once it has followed the move, as a process started on the current names",
+      async () => {
+        const { save } = await openSite();
+        expect(await save("Before")).toBe("ok");
+        await moveEverything();
+        await tried(() => save("First"), [MOVING]);
+
+        const recorder = await recordStatements(site!.adapter, dialect);
+        try {
+          expect(await save("Settled")).toBe("ok");
+        } finally {
+          recorder.uninstall();
+        }
+        expect(
+          recorder.statements.filter(text =>
+            /savepoint "?nextly_moved_storage/i.test(text)
+          )
+        ).toEqual([]);
+      }
+    );
+
     it("refuses a first save of a group that keeps its table name, whose column moved, and saves it on the retry", async () => {
       // As a group whose stored table name the migration did not give: only its column moves.
       const { save, heading } = await openSite();
