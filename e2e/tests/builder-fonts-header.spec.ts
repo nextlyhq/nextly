@@ -72,6 +72,9 @@ test("the Fonts header lines up with the other headers, with Manage fonts… at 
   // which is there to compare. Text styles, drawn after the variables, keeps
   // its own place for now and is not measured here.
   const headers = panel.locator(".nx-vars__body .nx-vars__group-name");
+  // The Fonts header is drawn before the site's variables arrive, so wait
+  // for the headers it is measured against rather than for it alone.
+  await expect(headers.first()).toBeVisible({ timeout: 30_000 });
   expect(await headers.count()).toBeGreaterThan(0);
   const fontsLeft = (await box(heading)).x;
   for (const other of await headers.all()) {

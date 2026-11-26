@@ -505,6 +505,38 @@ describe("Manage fonts… from a Font control in Design", () => {
     );
   });
 
+  it("hands focus to the Type tab when its Manage fonts… is still not drawn", async () => {
+    // The part of Type holding the link has not arrived (its code is slow,
+    // or failed): focus lands on the tab, not on the gone Back control.
+    const choose = vi.fn();
+    const panel = (view: string): React.JSX.Element => (
+      <DesignPanel
+        view={{ current: view, choose }}
+        fonts={close => (
+          <button type="button" onClick={close}>
+            Back to Design
+          </button>
+        )}
+        tabs={{
+          colours: () => null,
+          type: () => <p>type rows, no link yet</p>,
+          spacing: () => null,
+          styles: () => null,
+        }}
+      />
+    );
+    const view = render(panel(FONTS_SCREEN_VIEW));
+    fireEvent.click(screen.getByRole("button", { name: "Back to Design" }));
+    view.rerender(panel("type"));
+    await waitFor(
+      () =>
+        expect(document.activeElement).toBe(
+          screen.getByRole("tab", { name: "Type" })
+        ),
+      { timeout: 4000 }
+    );
+  });
+
   it("goes back to Type with focus on the Body or Headings picker it is sent to", async () => {
     // A font's "Headings font" link: back to Type, onto that role's picker.
     const choose = vi.fn();
