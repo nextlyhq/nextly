@@ -33,6 +33,7 @@ import { qualifiedFilename } from "../../domains/schema/migrate/plugin/plugin-mi
 import { tablesLeftInPlace } from "../../domains/schema/ownership/drop-guard";
 import { assertDependenciesInstalled } from "../../domains/schema/ownership/install-plan";
 import {
+  carriedByPlugin,
   createOwnerRegistry,
   ELEMENT_NOUNS,
   type OwnerRecord,
@@ -1172,6 +1173,8 @@ function uninstallDeletions(
         row =>
           row.elementKind === "column" &&
           row.ownerId === plugin.name &&
+          // A column the app's migrations carry is dropped by none of its DOWNs.
+          carriedByPlugin(row, plugin.name) &&
           !dropped.has(row.tableName)
       )
       .map(row => ({
@@ -1498,6 +1501,9 @@ async function liveElementsItAdded(
       kind === "table" ||
       row.ownerKind !== "plugin" ||
       row.ownerId !== plugin.name ||
+      // What it added to an entity's or a core table rides the app's migrations: none of its DOWNs
+      // drops it, so the uninstall leaves it in place rather than waiting for it to go.
+      !carriedByPlugin(row, plugin.name) ||
       dropped.has(row.tableName)
     ) {
       return [];
