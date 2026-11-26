@@ -6,7 +6,8 @@
  *
  * A Single holds its values on its one row; a field group on its instance table, whose rows every
  * entry and Single placing it writes. On per-language storage a translatable field's values are in
- * the entity's translations table, where they are counted.
+ * the entity's translations table, where they are counted, and a field kept out of translation's on
+ * the entity's own row.
  *
  * What separates a counted save from plausible wrong ones: a save that reads no count deletes a
  * value written after the review uncounted; a count taken from the main table alone reads a
@@ -144,7 +145,27 @@ const PARENT = "dhs_posts";
 /** A collection placing the field group twice, so one entry writes two of its rows. */
 const TWICE = "dhs_twice";
 const KEPT = [{ name: "heading", type: "text" }];
-const NOTED = [...KEPT, { name: "note", type: "text" }];
+/** The fields before the save: `note` translatable, or kept out of translation (`translated` false). */
+const notedFields = (translated: boolean) => [
+  ...KEPT,
+  { name: "note", type: "text", ...(translated ? {} : { localized: false }) },
+];
+
+/**
+ * Where `note`'s values are: on the entity's own row in the earlier layout; in its translations
+ * table on per-language storage; and on its own row again on per-language storage where the field
+ * is kept out of translation. A count that reads the translations table for every field of a
+ * per-language entity reads that last one as none.
+ */
+const LAYOUTS = [
+  { label: "", perLanguage: false, translated: true },
+  { label: ", on per-language storage", perLanguage: true, translated: true },
+  {
+    label: ", on per-language storage, the field kept out of translation",
+    perLanguage: true,
+    translated: false,
+  },
+] as const;
 
 const KINDS = ["Single", "field group"] as const;
 type Kind = (typeof KINDS)[number];
@@ -155,10 +176,10 @@ type Kind = (typeof KINDS)[number];
  */
 const ROADS = ["file", "push", "no writer"] as const;
 
-/** The table that holds the entity's values: its own, or its translations table. */
-function valuesTable(kind: Kind, perLanguage: boolean): string {
+/** The table that holds `note`'s values: the entity's own, or its translations table. */
+function valuesTable(kind: Kind, inTranslations: boolean): string {
   const table = kind === "Single" ? `single_${SINGLE}` : `comp_${GROUP}`;
-  return perLanguage ? `${table}${STORAGE_FORMAT.companionSuffix}` : table;
+  return inTranslations ? `${table}${STORAGE_FORMAT.companionSuffix}` : table;
 }
 
 /** The refusal of a save whose removed field's count moved since the review: `count` now. */
@@ -175,9 +196,10 @@ const refusedWith = (count: number) => ({
   },
 });
 
-for (const perLanguage of [false, true]) {
+for (const { label, perLanguage, translated } of LAYOUTS) {
+  const NOTED = notedFields(translated);
   describe.each(getConfiguredTestDialects())(
-    `a save that removes a Single's or a field group's field deletes the count confirmed${perLanguage ? ", on per-language storage" : ""} (%s)`,
+    `a save that removes a Single's or a field group's field deletes the count confirmed${label} (%s)`,
     dialect => {
       const q = (n: string) => (dialect === "mysql" ? `\`${n}\`` : `"${n}"`);
 
@@ -278,7 +300,7 @@ for (const perLanguage of [false, true]) {
               executeQuery<R>(statement: string): Promise<R[]>;
             }
           ).executeQuery<{ n: number | string }>(
-            `SELECT COUNT(*) AS n FROM ${q(valuesTable(kind, perLanguage))} WHERE ${q("note")} IS NOT NULL`
+            `SELECT COUNT(*) AS n FROM ${q(valuesTable(kind, perLanguage && translated))} WHERE ${q("note")} IS NOT NULL`
           );
           return Number(row?.n);
         } catch {
