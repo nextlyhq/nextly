@@ -51,8 +51,6 @@ export { createNoticesNamespace, type NoticesNamespace } from "./notices";
 export { createFilesNamespace, type FilesNamespace } from "./files";
 export {
   createTranslationsNamespace,
-  type SuggestionAccepted,
-  type SuggestionInLanguage,
   type TranslationsNamespace,
 } from "./translations";
 export { createVersionsNamespace, type VersionsNamespace } from "./versions";

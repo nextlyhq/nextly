@@ -234,6 +234,14 @@ function fieldOrigin(
       sourceLocale: write.defaultLocale,
     };
   }
+  return claimedOrigin(write, claim);
+}
+
+/** Where a translation came from, by what is claimed of it. */
+function claimedOrigin(
+  write: ProvenanceWrite,
+  claim: Exclude<ProvenanceClaim, { origin: "original" }>
+): FieldOrigin {
   if (claim.origin === "suggestion") {
     return {
       origin: claim.made,
@@ -272,15 +280,22 @@ function sourceFingerprintOf(
   if (origin.sourceLocale === null) return null;
   const claim = ownEntry(write.claims, field);
   if (claim?.origin === "suggestion") return claim.sourceFingerprint;
-  if (claim?.origin === "copy" && !copiedFromCurrentSource(claim, write)) {
-    return SOURCE_FINGERPRINT_MOVED;
-  }
   const live = sources.get(origin.sourceLocale)?.get(field) ?? null;
-  return claim?.origin === "translated" &&
+  return madeFromAnother(write, claim, live) ? SOURCE_FINGERPRINT_MOVED : live;
+}
+
+/** Whether a value is claimed of a version of its source that is not its `live` one. */
+function madeFromAnother(
+  write: ProvenanceWrite,
+  claim: ProvenanceClaim | undefined,
+  live: string | null
+): boolean {
+  if (claim?.origin === "copy") return !copiedFromCurrentSource(claim, write);
+  return (
+    claim?.origin === "translated" &&
     claim.sourceFingerprint !== undefined &&
     claim.sourceFingerprint !== live
-    ? SOURCE_FINGERPRINT_MOVED
-    : live;
+  );
 }
 
 /** The rows of one document's language and part, matched by these columns. */
@@ -474,25 +489,39 @@ async function judgeWritten(
   // A container is judged before its texts, which stand after it among the values.
   const changed = new Set<string>();
   for (const field of Object.keys(write.values)) {
-    if (holdsNothingHere(write, field)) {
-      forgotten.push(field);
-      continue;
+    const verdict = judgedByRecords(write, field, existing, live);
+    if (verdict === "forgotten") forgotten.push(field);
+    else if (verdict === "changed") changed.add(field);
+    else if (verdict === "container") {
+      if (claimedInPart.has(fieldOfPath(field))) standing.push(field);
+      else if (changed.has(fieldOfPath(field))) changed.add(field);
     }
-    if (ownEntry(write.claims, field) !== undefined) {
-      changed.add(field);
-      continue;
-    }
-    const fingerprint = writtenFingerprint(write, field);
-    const own = ownRecord(write, field, existing);
-    const ownLive = ownRecord(write, field, live);
-    if (own?.valueFingerprint === fingerprint) continue;
-    if (ownLive?.valueFingerprint === fingerprint) forgotten.push(field);
-    else if (own ?? ownLive ?? !followsContainer(write, field)) {
-      changed.add(field);
-    } else if (claimedInPart.has(fieldOfPath(field))) standing.push(field);
-    else if (changed.has(fieldOfPath(field))) changed.add(field);
   }
   return { forgotten, standing, changed: [...changed] };
+}
+
+/**
+ * What one field or text's own records say of the value a write gives it: that it loses its record
+ * or is recorded, that it keeps the one it has, or that its container's is to say.
+ */
+function judgedByRecords(
+  write: WriteWithTexts,
+  field: string,
+  existing: ReadonlyMap<string, RecordedPath>,
+  live: ReadonlyMap<string, RecordedPath> | undefined
+): "forgotten" | "changed" | "kept" | "container" {
+  if (holdsNothingHere(write, field)) return "forgotten";
+  if (ownEntry(write.claims, field) !== undefined) return "changed";
+  const fingerprint = writtenFingerprint(write, field);
+  const isOf = (record: RecordedPath | undefined) =>
+    record?.valueFingerprint === fingerprint;
+  const own = ownRecord(write, field, existing);
+  const ownLive = ownRecord(write, field, live);
+  if (isOf(own)) return "kept";
+  if (isOf(ownLive)) return "forgotten";
+  return (own ?? ownLive ?? !followsContainer(write, field))
+    ? "changed"
+    : "container";
 }
 
 /** The containers a write says where only some of their texts came from. */
@@ -619,25 +648,46 @@ async function recordStanding(
     await upsert(path, {
       valueFingerprint: writtenFingerprint(write, path),
       ...origin,
-      actorKind: container?.actorKind ?? null,
-      actorId: container?.actorId ?? null,
-      actorPrincipalKind: container?.actorPrincipalKind ?? null,
+      ...standingWriter(write, container),
       sourceFingerprint,
       originRowId: null,
-      writtenAt: container?.writtenAt ?? writtenAt(write),
     });
-    if (
-      origin.sourceLocale !== null &&
-      sourceFingerprint !== null &&
-      sourceFingerprint !== SOURCE_FINGERPRINT_MOVED
-    ) {
-      made.set(path, {
-        sourceLocale: origin.sourceLocale,
-        fingerprint: sourceFingerprint,
-      });
-    }
+    const source = namedSource(origin, sourceFingerprint);
+    if (source !== null) made.set(path, source);
   }
   return made;
+}
+
+/** The source a record names by a fingerprint of its value; none where it names no such version. */
+function namedSource(
+  { sourceLocale }: FieldOrigin,
+  fingerprint: string | null
+): RecordedSource | null {
+  return sourceLocale === null ||
+    fingerprint === null ||
+    fingerprint === SOURCE_FINGERPRINT_MOVED
+    ? null
+    : { sourceLocale, fingerprint };
+}
+
+/** Who made a text with no record of its own, and when, by its container's record. */
+function standingWriter(
+  write: ProvenanceWrite,
+  container: ContainerRecord | undefined
+): Pick<
+  ContainerRecord,
+  "actorKind" | "actorId" | "actorPrincipalKind" | "writtenAt"
+> {
+  if (container === undefined) {
+    return {
+      actorKind: null,
+      actorId: null,
+      actorPrincipalKind: null,
+      writtenAt: writtenAt(write),
+    };
+  }
+  const { actorKind, actorId, actorPrincipalKind, writtenAt: made } = container;
+  return { actorKind, actorId, actorPrincipalKind, writtenAt: made };
 }
 
 /**
@@ -711,16 +761,8 @@ async function recordChanged(
       writtenAt: now,
     };
     await upsert(field, values);
-    if (
-      origin.sourceLocale !== null &&
-      sourceFingerprint !== null &&
-      sourceFingerprint !== SOURCE_FINGERPRINT_MOVED
-    ) {
-      made.set(field, {
-        sourceLocale: origin.sourceLocale,
-        fingerprint: sourceFingerprint,
-      });
-    }
+    const source = namedSource(origin, sourceFingerprint);
+    if (source !== null) made.set(field, source);
     if (isTextPath(field)) continue;
     await recordRowOrigins(db, {
       field,
@@ -941,10 +983,7 @@ async function recordRowOrigins(
   const prefix = `${args.field}${ROW_PATH_SEPARATOR}`;
   // A structure per language is stored as JSON: its value may arrive as text.
   const rows = rowsOf(writtenValueOf(args.value, true));
-  const claimedRows =
-    args.claim !== undefined && "rows" in args.claim
-      ? (args.claim.rows ?? {})
-      : {};
+  const claimedRows = rowsClaimed(args.claim);
   const rowPaths = new Set<string>();
   for (const [rowId, row] of rows) {
     const fieldPath = rowProvenancePath(args.field, rowId);
@@ -973,6 +1012,13 @@ async function recordRowOrigins(
       and: [{ column: "id", op: "IN", value: gone }],
     });
   }
+}
+
+/** The source row a claim names for each row; none for a claim that names none. */
+function rowsClaimed(
+  claim: ProvenanceClaim | undefined
+): Readonly<Record<string, string>> {
+  return claim !== undefined && "rows" in claim ? (claim.rows ?? {}) : {};
 }
 
 /**

@@ -93,7 +93,17 @@ function replaced(
     return inner && { value: { ...level, [segment.field]: inner.value } };
   }
   if ("node" in segment || !Array.isArray(value)) return undefined;
-  const index = rowIndex(value, segment.row);
+  return replacedInRow(value, segment.row, after, text);
+}
+
+/** {@link replaced} in the row of `value` with `id`. */
+function replacedInRow(
+  value: readonly unknown[],
+  id: string,
+  after: readonly UnitSegment[],
+  text: unknown
+): { value: unknown } | undefined {
+  const index = rowIndex(value, id);
   if (index === -1) return undefined;
   const inner = replaced(value[index], after, text);
   return (

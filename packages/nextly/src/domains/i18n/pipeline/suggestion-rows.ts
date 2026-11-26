@@ -232,22 +232,29 @@ export function renameFieldSuggestionsStatements(
 function rowIsGone(structure: unknown, steps: readonly UnitSegment[]): boolean {
   let from: unknown = structure ?? null;
   for (const step of steps) {
-    if ("node" in step) return false;
-    const value = parsedValue(from);
-    if ("field" in step) {
-      if (!isPlainObject(value) || !Object.hasOwn(value, step.field)) {
-        return false;
-      }
-      from = value[step.field];
-      continue;
-    }
-    if (value === null) return true;
-    if (!Array.isArray(value)) return false;
-    const index = rowKeys(value).indexOf(step.row);
-    if (index === -1) return true;
-    from = value[index];
+    const next = stepInStructure(parsedValue(from), step);
+    if (next === "gone") return true;
+    if (next === "unknown") return false;
+    from = next.value;
   }
   return false;
+}
+
+/** What one step leads to in a structure: its value, a row that is gone, or nothing it can say. */
+function stepInStructure(
+  value: unknown,
+  step: UnitSegment
+): { value: unknown } | "gone" | "unknown" {
+  if ("field" in step) {
+    return isPlainObject(value) && Object.hasOwn(value, step.field)
+      ? { value: value[step.field] }
+      : "unknown";
+  }
+  if ("node" in step) return "unknown";
+  if (value === null) return "gone";
+  if (!Array.isArray(value)) return "unknown";
+  const index = rowKeys(value).indexOf(step.row);
+  return index === -1 ? "gone" : { value: value[index] as unknown };
 }
 
 /** The way down to an address's last row; none for a text in no row. */

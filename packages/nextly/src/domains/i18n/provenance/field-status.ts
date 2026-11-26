@@ -326,19 +326,24 @@ export async function fieldProvenanceOf(
     fields[path] = fieldStatusOf(row);
     out.set(key, fields);
   }
-  for (const row of textRows) {
-    const key = documentLanguageKey(String(row.entryId), String(row.locale));
-    const path = String(row.fieldPath);
-    const fields = out.get(key) ?? {};
-    const field = fieldOfPath(path);
-    // Never an entry of its own: each is a field's.
-    if (!Object.hasOwn(fields, field)) continue;
-    (fields[field].texts ??= {})[path] = fieldStatusOf(row);
-  }
+  for (const row of textRows) addText(out, row);
   for (const fields of out.values()) {
     for (const field of Object.values(fields)) rollUpTexts(field);
   }
   return out;
+}
+
+/** Puts a text's answer beside its field's: never an entry of its own. */
+function addText(
+  out: ReadonlyMap<string, Record<string, FieldProvenance>>,
+  row: Record<string, unknown>
+): void {
+  const key = documentLanguageKey(String(row.entryId), String(row.locale));
+  const path = String(row.fieldPath);
+  const fields = out.get(key) ?? {};
+  const field = fieldOfPath(path);
+  if (!Object.hasOwn(fields, field)) return;
+  (fields[field].texts ??= {})[path] = fieldStatusOf(row);
 }
 
 /** Whether a text's record says where it came from, as {@link textRecordSql} asks. */

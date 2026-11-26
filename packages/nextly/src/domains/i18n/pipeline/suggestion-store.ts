@@ -132,12 +132,20 @@ function submittedBy(actor: RequestActor | undefined): {
   createdById: string | null;
   createdByPrincipalKind: string | null;
 } {
-  const principal = actor?.type === "principal";
-  return {
-    createdByKind: actor?.type ?? null,
-    createdById: principal ? null : (actor?.id ?? null),
-    createdByPrincipalKind: principal ? (actor.principal?.kind ?? null) : null,
+  const nobody = {
+    createdByKind: null,
+    createdById: null,
+    createdByPrincipalKind: null,
   };
+  if (actor === undefined) return nobody;
+  const { type: createdByKind } = actor;
+  return createdByKind === "principal"
+    ? {
+        ...nobody,
+        createdByKind,
+        createdByPrincipalKind: actor.principal?.kind ?? null,
+      }
+    : { ...nobody, createdByKind, createdById: actor.id ?? null };
 }
 
 /** What a suggestion is kept through: each call in a transaction of its own. */
