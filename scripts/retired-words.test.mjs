@@ -62,7 +62,7 @@ const PENDING = JSON.parse(
  * new text joined the list instead of being written in the glossary's words,
  * which review should refuse.
  */
-const PENDING_COUNT = 535;
+const PENDING_COUNT = 537;
 
 /**
  * Places where a retired word names another idea, or where the text is code
@@ -146,6 +146,7 @@ const FAILS = {
     "New header & footer set",
     "Header & footer sets",
     "A site can have more than one set of a header and footer.",
+    "Give the header & footer set a name.",
   ],
   look: [
     "Keep the look on this block only",
@@ -238,6 +239,15 @@ const PASSES = [
   "Adds a field to the form",
   "This form has 3 fields",
   "Fields",
+  "Have a look",
+  "Take a look at it",
+  "One look tells you",
+  "The block looks as it does now",
+  "Button looks off",
+  "The footer sets its own color",
+  "The value is bound by its parent",
+  "The space between the paragraphs of rich text.",
+  "The space between columns, and between gallery images.",
 ];
 
 const BUILDER_FILE = "packages/builder/src/probe.tsx";
@@ -312,6 +322,15 @@ describe("the retired words", () => {
     expect(retiredIn(text, ADMIN_FILE, RETIRED_WORDS)).not.toContain(rule);
   });
 
+  it("keeps a content field's words on a component's own screens", () => {
+    const file = "packages/builder/src/inspector/instance-inspector-panel.tsx";
+    for (const text of ["Connect to a field", "Connected to {…} field"]) {
+      expect(retiredIn(text, file, RETIRED_WORDS)).not.toContain(
+        "component-fields"
+      );
+    }
+  });
+
   it.each(PASSES)("passes %s", text => {
     expect(retiredIn(text, BUILDER_FILE, RETIRED_WORDS)).toEqual([]);
     expect(retiredIn(text, ADMIN_FILE, RETIRED_WORDS)).toEqual([]);
@@ -346,6 +365,12 @@ describe("the retired words", () => {
         'const H = () => <p>{n === 1 ? "colour" : "colours"}</p>;',
         'const I = `Remove ${name || "breakpoint"}`;',
         'const J = () => <Row name={x ?? "Layer order"} value="Insert a row" />;',
+        // A choice in a template made only of the spaces between words, and
+        // a word handed to a helper in a shown template.
+        'const K = `${n} ${n === 1 ? "colour" : "colours"}`;',
+        'const L = `Remove ${pluralise(n, "breakpoint")}`;',
+        // A tag-like prefix is still read where a value is shown.
+        'const M = { label: "[Beta] Insert a block" };',
       ].join("\n"),
       "probe.tsx"
     );
@@ -368,6 +393,10 @@ describe("the retired words", () => {
       "breakpoint",
       "Layer order",
       "Insert a row",
+      "colour",
+      "colours",
+      "breakpoint",
+      "[Beta] Insert a block",
     ]);
   });
 
@@ -409,6 +438,9 @@ describe("the retired words", () => {
         'deps.warn("[page-builder] the default header & footer set was made");',
         "const message = `[Nextly] The label names no element`;",
         'check({ remedies: { absent: "Wrap the element in FormControl." } });',
+        // A code template's branches: an address, a class name.
+        'const url = `/api/${t ? "tokens" : "fonts"}/list`;',
+        'const cls = `nx-${on ? "inspector" : "panel"}`;',
       ].join("\n"),
       "probe.tsx"
     );

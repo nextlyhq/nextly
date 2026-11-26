@@ -101,8 +101,6 @@
     "How wide a centred container may grow.",
     "Space between blocks",
     "Space between columns",
-    "The space between columns, and between gallery images.",
-    "The space between the paragraphs of rich text.",
     "\"{…}\" is nested too deeply, so it was not written. A token name holds at most {…} dot-separated parts.",
     "\"{…}\" is written under more than {…} characters, so it was not written. The {…} a token is written under is at most {…} characters.",
     "\"{…}\" is not a token name, so it was not written. A name is dot-separated words of letters, digits and dashes, like \"color.primary\".",
@@ -147,6 +145,8 @@
     "The name each page’s editor shows for this field.",
     "Field",
     "no fields yet",
+    "field",
+    "fields",
     "No fields yet",
     "Fields",
     "Name of the field {…}",
@@ -275,6 +275,8 @@
     "Hidden colours still work where core blocks use them"
   ],
   "packages/builder/src/panels/design/colour-cleanup.tsx": [
+    "colour",
+    "colours",
     "Clean up unused colours",
     "Colours you made that nothing on the site uses. Untick any you want to keep.",
     "Every colour you made is in use.",

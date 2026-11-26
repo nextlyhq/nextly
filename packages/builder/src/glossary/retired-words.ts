@@ -141,7 +141,7 @@ const HEADER_OR_FOOTER = /\b(?:header|footer)s?\b/i;
  * the verb ("Set a width", "the header sets the title").
  */
 const SET_NOUN =
-  /\b(?:footer|a|an|the|one|this|each|every|another|new|default|other|which|its|no|than one|untitled)\s+sets?\b|\{…\}\s+sets?\b|\bthis set's\b/i;
+  /\bfooter\s+set\b|\bfooter\s+sets\b(?!\s+(?:its|the|a|an|their|how|what|which|up)\b)|\b(?:a|an|the|one|this|each|every|another|new|default|other|which|its|no|than one|untitled)\s+sets?\b|\{…\}\s+sets?\b|\bthis set's\b/i;
 
 /**
  * The header & footer screens, where "set" means a header & footer even when
@@ -161,7 +161,7 @@ const HEADER_FOOTER_PLACES = [
 ] as const;
 
 /** What follows "look" when it is the verb: "looks right", "look at". */
-const LOOK_VERB = String.raw`(?!\s+(?:at|for|like|up|into|through|over|right|wrong|empty|exactly|good|fine|best|better|great|ok|okay|the same|different)\b)`;
+const LOOK_VERB = String.raw`(?!\s+(?:at|for|like|up|into|through|over|right|wrong|empty|exactly|good|fine|best|better|great|ok|okay|off|as|the same|different|nice|bad)\b)`;
 
 /**
  * "look" as a noun naming a block style: "a look for buttons", "other
@@ -170,7 +170,7 @@ const LOOK_VERB = String.raw`(?!\s+(?:at|for|like|up|into|through|over|right|wro
  */
 const LOOK_NOUN = new RegExp(
   [
-    String.raw`\b(?:a|an|the|its|each|every|new|saved|another|no|other|your|default|built-in|one|rename|delete|edit)\s+looks?\b(?!\s+at\b)`,
+    String.raw`(?<!\b(?:have|has|had|take|takes|took|give|gives|gave|get|quick)\s+)\b(?:a|an|the|its|each|every|new|saved|another|no|other|your|default|built-in|rename|delete|edit)\s+looks?\b(?!\s+(?:at|tells)\b)`,
     String.raw`\b(?:this|which)\s+look\b(?!\s+(?:at|for|like|up)\b)`,
     String.raw`(?:\bblock|\bbutton|\{…\}['’]?s?)\s+looks?\b${LOOK_VERB}`,
     String.raw`^looks?\b${LOOK_VERB}`,
@@ -179,12 +179,14 @@ const LOOK_NOUN = new RegExp(
 );
 
 /**
- * "Space between" as a layout name, the gap or a Spread choice. "Space
+ * "Space between" as a layout name, the gap or a Spread choice: a name
+ * starts with it ("Space between", "Space between blocks, 20px"). "Space
  * between paragraphs" names no gap, and "Space between the blocks inside" is
- * the gap's own hint; both stay.
+ * the gap's own hint; both stay, as does a sentence about the space between
+ * things ("The space between the paragraphs of rich text.").
  */
 const SPACE_BETWEEN_NAME =
-  /\bspace[ -]between\b(?!\s+(?:paragraphs|the blocks inside)\b)/i;
+  /^space[ -]between\b(?!\s+(?:paragraphs|the blocks inside)\b)/i;
 
 /**
  * The screens of a component's per-copy settings, where "field" means one of
@@ -199,6 +201,9 @@ const COMPONENT_PROPERTY_PLACES = [
   "packages/builder/src/shell/exposure-picker.tsx",
 ] as const;
 
+/** A content field a property is connected to: "Connect to a field". */
+const CONNECTING = /\bconnect(?:ed)? to\b|\bdisconnect\b/i;
+
 /** Fields spoken of beside a component, or counted on one ("· 2 fields"). */
 const COMPONENT_FIELDS =
   /\bcomponent(?:['’]s)?\b.*\bfields?\b|\bfields?\b.*\bcomponent\b|· \{…\} fields?\b/i;
@@ -207,9 +212,12 @@ const COMPONENT_FIELDS =
 const PAGE_SETTINGS_DIALOG =
   "packages/plugin-page-builder/src/admin/editor/settings-dialog.tsx";
 
-/** "bind" and its forms; "Upper bound" and "lower bound" are not. */
+/**
+ * "bind" and its forms; "Upper bound", "lower bound" and "bound by" are
+ * not.
+ */
 const BIND =
-  /\b(?:un)?bind(?:s|ing|ings)?\b|(?<!\b(?:upper|lower) )\b(?:un)?bound\b/i;
+  /\b(?:un)?bind(?:s|ing|ings)?\b|(?<!\b(?:upper|lower) )\b(?:un)?bound\b(?!\s+by\b)/i;
 
 /** A bare "Template" as a name; "Collection templates" stays. */
 const BARE_TEMPLATE = /(?<![Cc]ollection )\bTemplates?\b/;
@@ -289,7 +297,7 @@ export const RETIRED_WORDS: readonly RetiredWord[] = [
     where: BUILDER_AND_PLUGIN,
     test: (text, path) =>
       inPlaces(path, COMPONENT_PROPERTY_PLACES)
-        ? /\bfields?\b/i.test(text)
+        ? /\bfields?\b/i.test(text) && !CONNECTING.test(text)
         : COMPONENT_FIELDS.test(text),
   },
   {

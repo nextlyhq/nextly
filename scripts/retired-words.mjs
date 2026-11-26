@@ -102,9 +102,11 @@ const SHOWN_PLACE =
 
 /**
  * A module that holds only shown words: `*-words.ts`, the glossary's
- * `words.ts`. The retired-words list holds rules, not words.
+ * `words.ts`. The retired-words list holds rules, and `count-words` counts
+ * them; neither holds words.
  */
-const WORDS_MODULE = /(?:^|\/)(?!retired-words\.)[\w-]*words\.[cm]?[jt]sx?$/;
+const WORDS_MODULE =
+  /(?:^|\/)(?:words|(?!retired-|count-)[\w-]+-words)\.[cm]?[jt]sx?$/;
 
 /** A lone lower-case word, which a words module may say: "colour". */
 const LONE_WORD = /^[a-z]+$/;
@@ -144,9 +146,14 @@ function placeName(holder) {
   return null;
 }
 
-/** The nodes a value passes through unchanged on its way to its slot. */
+/**
+ * The nodes a value passes through on its way to its slot: a choice's
+ * branch, a fallback, or a helper's argument (`pluralise(n, "colour")`),
+ * whose result says the word.
+ */
 function passesThrough(above, below) {
   if (above.type === "ConditionalExpression") return above.test !== below;
+  if (above.type === "CallExpression") return above.callee !== below;
   return (
     above.type === "LogicalExpression" ||
     above.type === "ParenthesizedExpression" ||
@@ -172,10 +179,12 @@ function inShownPlace(node, ancestors) {
   const slot = ancestors[at];
   if (slot === undefined) return false;
   if (slot.type === "TemplateLiteral") {
-    const own = tidy(
-      slot.quasis.map(quasi => quasi.value.cooked ?? "").join(" ")
-    );
-    return own !== "" && !CODE_NAME.test(own);
+    // Shown when its own text is words ("Remove {…}"), or only the spaces
+    // between words ("{…} {…}", "3 colours"); a code template ("/api/{…}",
+    // "nx-{…}") or one with no text of its own is not.
+    const own = slot.quasis.map(quasi => quasi.value.cooked ?? "").join("");
+    if (own.trim() === "") return own !== "";
+    return !CODE_NAME.test(tidy(own));
   }
   if (slot.type === "JSXExpressionContainer") {
     const holder = ancestors[at - 1];
@@ -349,7 +358,8 @@ export function shownTexts(source, fileName) {
     ) {
       return;
     }
-    if (LOG_TAG.test(text) || CSS_TEXT.test(text)) return;
+    const shownPlace = inShownPlace(node, ancestors);
+    if (!shownPlace && (LOG_TAG.test(text) || CSS_TEXT.test(text))) return;
     if (notShown(node, ancestors)) return;
     texts.push(text);
   });
