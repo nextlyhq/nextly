@@ -175,11 +175,32 @@ const LOOK_NOUN = new RegExp(
     String.raw`\b(?:this|which)\s+look\b(?!\s+(?:at|for|like|up)\b)`,
     String.raw`(?:\bblock|\bbutton|\{…\}['’]?s?)\s+looks?\b${LOOK_VERB}`,
     String.raw`^looks?\b${LOOK_VERB}`,
-    // A label naming any block's style: "Image look", "Feature card looks".
-    String.raw`^(?!(?:have|has|had|take|takes|took|give|gives|gave|get|quick)\b)[A-Z][\w-]*(?:\s+(?!(?:a|an|the|this|that|its)\b)[\w-]+){0,3}\s+looks?$`,
   ].join("|"),
   "i"
 );
+
+/**
+ * A word that makes a short line ending in "looks" a sentence, not a
+ * style's name: a verb that starts one ("Choose how it looks"), a pronoun
+ * or a possessive ("Your image looks"), or "how".
+ */
+const LOOK_SENTENCE_WORD = String.raw`(?:have|has|had|take|takes|took|give|gives|gave|get|quick|choose|see|check|show|preview|change|pick|decide|control|set|make|how|what|which|who|it|its|it's|this|that|these|those|a|an|the|your|my|our|their|his|her|you|we|they|he|she|i|everything|nothing)`;
+
+/**
+ * A label naming a block's style, "Image look" or "Feature card looks": a
+ * name of up to four words, none of them a word that makes the line a
+ * sentence, read without regard to case; the label also starts with a
+ * capital (`startsWithCapital`).
+ */
+const LOOK_LABEL = new RegExp(
+  String.raw`^(?!${LOOK_SENTENCE_WORD}\b)[a-z][\w-]*(?:\s+(?!${LOOK_SENTENCE_WORD}\b)[\w-]+){0,3}\s+looks?$`,
+  "i"
+);
+
+/** Whether a text starts with a capital letter, as a label does. */
+function startsWithCapital(text: string): boolean {
+  return /^[A-Z]/.test(text);
+}
 
 /**
  * "Space between" as a layout name, the gap or a Spread choice: a name
@@ -193,16 +214,13 @@ const SPACE_BETWEEN_NAME =
 
 /**
  * The screens of a component's per-copy settings, where "field" means one of
- * them even when the text doesn't say "component".
+ * them even when the text doesn't say "component": by the builder's naming,
+ * any file named `component-…` or `instance-…`, anything in the Components
+ * panel's folder, and the picker that makes a setting one of them. A new
+ * screen named the same way is covered without a list to extend.
  */
-const COMPONENT_PROPERTY_PLACES = [
-  "packages/builder/src/inspector/component-fields-panel.tsx",
-  "packages/builder/src/inspector/component-variants-panel.tsx",
-  "packages/builder/src/inspector/instance-inspector-panel.tsx",
-  "packages/builder/src/panels/components/component-fields.ts",
-  "packages/builder/src/panels/components/component-variants.ts",
-  "packages/builder/src/shell/exposure-picker.tsx",
-] as const;
+const COMPONENT_PROPERTY_SCREEN =
+  /^packages\/builder\/src\/(?:(?:[\w-]+\/)*(?:component|instance)-[\w.-]+|panels\/components\/.+|shell\/exposure-picker\.tsx)$/;
 
 /** A content field a property is connected to: "Connect to a field". */
 const CONNECTING = /\bconnect(?:ed)? to\b|\bdisconnect\b/i;
@@ -262,7 +280,9 @@ export const RETIRED_WORDS: readonly RetiredWord[] = [
     id: "look",
     where: BUILDER_AND_PLUGIN,
     says: `${EDITOR_WORDS.style} · ${EDITOR_WORDS.blockStyles} · ${EDITOR_WORDS.sharedStyles}`,
-    test: matching(LOOK_NOUN),
+    test: text =>
+      LOOK_NOUN.test(text) ||
+      (startsWithCapital(text) && LOOK_LABEL.test(text)),
   },
   {
     id: "element",
@@ -299,7 +319,7 @@ export const RETIRED_WORDS: readonly RetiredWord[] = [
     says: PROPERTY_WORDS.properties,
     where: BUILDER_AND_PLUGIN,
     test: (text, path) =>
-      inPlaces(path, COMPONENT_PROPERTY_PLACES)
+      COMPONENT_PROPERTY_SCREEN.test(path)
         ? /\bfields?\b/i.test(text) && !CONNECTING.test(text)
         : COMPONENT_FIELDS.test(text),
   },

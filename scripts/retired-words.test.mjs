@@ -15,9 +15,9 @@
  *
  * Both lists only shrink. A listed text that is no longer shown fails, so a
  * rename removes its own entries; a place that no longer holds the word
- * fails; and the pending list's size is pinned, so a new text cannot join it
- * without the pin changing in review. A new screen that uses a retired word
- * fails here.
+ * fails; and the pending list may only lose entries against its copy at
+ * the base commit, so a new text cannot join it, even in place of one a
+ * rename took out. A new screen that uses a retired word fails here.
  *
  * @module retired-words.test
  */
@@ -46,8 +46,12 @@ import {
 } from "../packages/builder/src/glossary/words.ts";
 
 import {
+  PENDING_FILE,
   SCANNED,
+  addedPending,
   findRetired,
+  pendingAt,
+  pendingBase,
   repoPath,
   retiredIn,
   shippedFiles,
@@ -60,16 +64,7 @@ import {
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** The texts still to rename, by file, once per time each is shown. */
-const PENDING = JSON.parse(
-  readFileSync(join(ROOT, "scripts/retired-words-pending.json"), "utf8")
-);
-
-/**
- * How many texts are still to rename. A rename lowers it; raising it means a
- * new text joined the list instead of being written in the glossary's words,
- * which review should refuse.
- */
-const PENDING_COUNT = 531;
+const PENDING = JSON.parse(readFileSync(join(ROOT, PENDING_FILE), "utf8"));
 
 /**
  * Places where a retired word names another idea, or where the text is code
@@ -216,6 +211,17 @@ const FAILS_IN_PLACE = [
     file: "packages/builder/src/inspector/component-fields-panel.tsx",
     texts: ["No fields yet", "Remove field", "Field", "Give the field a name."],
   },
+  // A component screen added later is covered by its name, not by a list.
+  {
+    rule: "component-fields",
+    file: "packages/builder/src/inspector/component-slots-panel.tsx",
+    texts: ["Fields"],
+  },
+  {
+    rule: "component-fields",
+    file: "packages/builder/src/panels/components/component-preview.tsx",
+    texts: ["No fields yet"],
+  },
   {
     rule: "fields-tab",
     file: "packages/plugin-page-builder/src/admin/editor/settings-dialog.tsx",
@@ -256,6 +262,11 @@ const PASSES = [
   "The block looks as it does now",
   "Button looks off",
   "The image looks sharp",
+  "Choose how it looks",
+  "Your image looks",
+  "spacing looks",
+  "See how your page looks",
+  "It looks",
   "The footer sets its own color",
   "The value is bound by its parent",
   "The space between the paragraphs of rich text.",
@@ -297,8 +308,11 @@ describe("the retired words", () => {
     expect(stalePending(findings, PENDING)).toEqual([]);
   });
 
-  it("list no more texts still to rename than the pin", () => {
-    expect(Object.values(PENDING).flat()).toHaveLength(PENDING_COUNT);
+  it("add no text to the list still to rename", () => {
+    // Held to the base commit's copy; null only where that commit has no
+    // list yet, which is the change that adds it.
+    const base = pendingAt(ROOT, pendingBase(ROOT));
+    expect(base === null ? [] : addedPending(base, PENDING)).toEqual([]);
   });
 
   it("allow no place that no longer says the word", () => {
@@ -332,6 +346,51 @@ describe("the retired words", () => {
     expect(retiredIn(text, file, RETIRED_WORDS)).toContain(rule);
     // The same text elsewhere names another idea.
     expect(retiredIn(text, ADMIN_FILE, RETIRED_WORDS)).not.toContain(rule);
+  });
+
+  it("finds a component's fields by the builder's naming of its screens, and nowhere else", () => {
+    for (const file of [
+      "packages/builder/src/inspector/component-slots-panel.tsx",
+      "packages/builder/src/panels/components/slots.ts",
+      "packages/builder/src/shell/exposure-picker.tsx",
+    ]) {
+      expect(retiredIn("Fields", file, RETIRED_WORDS)).toContain(
+        "component-fields"
+      );
+    }
+    // A builder screen named otherwise, and the plugin's component
+    // collections, whose fields are content fields.
+    for (const file of [
+      "packages/builder/src/inspector/form-panel.tsx",
+      "packages/builder/src/inspector/my-component-panel.tsx",
+      "packages/plugin-page-builder/src/collections/component-usage-index.ts",
+    ]) {
+      expect(retiredIn("Fields", file, RETIRED_WORDS)).not.toContain(
+        "component-fields"
+      );
+    }
+  });
+
+  it("refuses a text added to the list still to rename, even in place of one taken out", () => {
+    const base = {
+      "packages/builder/src/a.tsx": ["Insert a block", "Inspector"],
+    };
+    // A rename that takes one text out and lists another keeps the size.
+    expect(
+      addedPending(base, {
+        "packages/builder/src/a.tsx": ["Insert a block", "Edit breakpoints"],
+      })
+    ).toEqual(["packages/builder/src/a.tsx: Edit breakpoints"]);
+    // A text listed once more than before is an addition too.
+    expect(
+      addedPending(base, {
+        "packages/builder/src/a.tsx": ["Insert a block", "Insert a block"],
+      })
+    ).toEqual(["packages/builder/src/a.tsx: Insert a block"]);
+    // Taking entries out is what a rename does.
+    expect(
+      addedPending(base, { "packages/builder/src/a.tsx": ["Inspector"] })
+    ).toEqual([]);
   });
 
   it("keeps a content field's words on a component's own screens", () => {
@@ -389,6 +448,11 @@ describe("the retired words", () => {
         // each branch read once beside the text around it.
         'const O = () => <p>Normal {"flow"}</p>;',
         'const P = () => <p>Page {kind === "data" ? "data" : "content"}</p>;',
+        // Two choices side by side, read in every combination.
+        'const Q = () => <p>{a ? "Normal" : "Default"} {b ? "flow" : "position"}</p>;',
+        // A native field's value, which the field draws.
+        'const R = () => <input value="token" />;',
+        'const S = () => <textarea defaultValue="colour" />;',
       ].join("\n"),
       "probe.tsx"
     );
@@ -418,6 +482,9 @@ describe("the retired words", () => {
       "Normal flow here",
       "Normal flow",
       "Page data",
+      "Normal flow",
+      "token",
+      "colour",
     ]);
   });
 
@@ -492,6 +559,11 @@ describe("the retired words", () => {
         // A code template's branches: an address, a class name.
         'const url = `/api/${t ? "tokens" : "fonts"}/list`;',
         'const cls = `nx-${on ? "inspector" : "panel"}`;',
+        // A value no field draws: a hidden input's, a checkbox's, and a
+        // component's `value` prop, which is data.
+        'const T = () => <input type="hidden" value="token" />;',
+        'const U = () => <input type="checkbox" value="viewport" />;',
+        'const V = () => <Select value="inspector" />;',
       ].join("\n"),
       "probe.tsx"
     );

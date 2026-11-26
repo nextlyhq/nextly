@@ -40,6 +40,7 @@
  *
  * @module retired-words
  */
+import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
@@ -192,10 +193,43 @@ function inShownPlace(node, ancestors) {
     if (holder?.type === "JSXElement" || holder?.type === "JSXFragment") {
       return true;
     }
-    return holder !== undefined && SHOWN_PLACE.test(placeName(holder) ?? "");
+    return (
+      holder !== undefined &&
+      (SHOWN_PLACE.test(placeName(holder) ?? "") ||
+        isDrawnValue(holder, ancestors[at - 2]))
+    );
   }
   if (slot.type === "Property" && slot.value !== below) return false;
-  return SHOWN_PLACE.test(placeName(slot) ?? "");
+  return (
+    SHOWN_PLACE.test(placeName(slot) ?? "") ||
+    isDrawnValue(slot, ancestors[at - 1])
+  );
+}
+
+/** The input types whose `value` is never drawn as text in the field. */
+const UNDRAWN_INPUT = /^(?:hidden|checkbox|radio|file|color|range|image)$/;
+
+/**
+ * A native form control's value, which the field draws: `value` or
+ * `defaultValue` on an `<input>` (unless its type draws none, such as a
+ * checkbox or a hidden input) or a `<textarea>`. A component's `value` prop
+ * is data, not a label, and stays code.
+ */
+function isDrawnValue(attribute, opening) {
+  if (attribute.type !== "JSXAttribute") return false;
+  if (!/^(?:value|defaultValue)$/.test(placeName(attribute) ?? "")) {
+    return false;
+  }
+  if (opening?.type !== "JSXOpeningElement") return false;
+  if (opening.name.type !== "JSXIdentifier") return false;
+  if (opening.name.name === "textarea") return true;
+  if (opening.name.name !== "input") return false;
+  const type = opening.attributes.find(
+    other => other.type === "JSXAttribute" && placeName(other) === "type"
+  );
+  const kind =
+    type?.value?.type === "Literal" ? String(type.value.value) : "text";
+  return !UNDRAWN_INPUT.test(kind);
 }
 
 /** An attribute only code reads (`className`, `data-*`, `xlink:href`). */
@@ -365,14 +399,28 @@ function elementParts(children, read) {
   });
 }
 
+/** The most lines one element's choices are read as, every combination. */
+const MOST_COMBINATIONS = 64;
+
 /**
- * The lines a run of parts can read. A part with one text is always in its
- * place; for a part with several, one line per text, with every other such
- * part read as `{…}`, so each branch is read once beside the fixed text
- * around it.
+ * The lines a run of parts can read: every combination of its parts'
+ * texts, so two choices side by side
+ * (`{a ? "Normal" : "Default"} {b ? "flow" : "position"}`) read "Normal
+ * flow". Past `MOST_COMBINATIONS`, one line per text of each varying part,
+ * with every other varying part read as `{…}`, so each branch is still read
+ * beside the fixed text around it.
  */
 function partLines(parts) {
-  const varying = parts.flatMap((part, at) => (part.length > 1 ? [at] : []));
+  const combinations = parts.reduce((count, part) => count * part.length, 1);
+  if (combinations <= MOST_COMBINATIONS) {
+    return parts
+      .reduce(
+        (lines, part) =>
+          lines.flatMap(line => part.map(text => `${line}${text}`)),
+        [""]
+      )
+      .map(tidy);
+  }
   const line = (at, text) =>
     tidy(
       parts
@@ -382,7 +430,7 @@ function partLines(parts) {
         })
         .join("")
     );
-  if (varying.length === 0) return [line(-1, "")];
+  const varying = parts.flatMap((part, at) => (part.length > 1 ? [at] : []));
   return varying.flatMap(at => parts[at].map(text => line(at, text)));
 }
 
@@ -582,6 +630,61 @@ export function stalePending(findings, pending) {
     for (let n = 0; n < extra; n += 1) stale.push(`${file}: ${text}`);
   }
   return stale;
+}
+
+/**
+ * Listed texts the list holds more often than its copy at the base did: an
+ * entry a change added, which the list's only-shrinks rule refuses. Renaming
+ * one text while listing another keeps the list's size, and is still found.
+ */
+export function addedPending(base, pending) {
+  const before = tally(pendingPairs(base));
+  const added = [];
+  for (const [key, listed] of tally(pendingPairs(pending))) {
+    const extra = listed - (before.get(key) ?? 0);
+    const [file, text] = JSON.parse(key);
+    for (let n = 0; n < extra; n += 1) added.push(`${file}: ${text}`);
+  }
+  return added;
+}
+
+/** Where the list of texts still to rename lives, from the repository root. */
+export const PENDING_FILE = "scripts/retired-words-pending.json";
+
+/**
+ * The commit the list is held to, which it may only lose entries against:
+ * `RETIRED_WORDS_BASE` when set; in GitHub Actions the checkout's first
+ * parent, which on a pull request's merge commit is the base branch's tip
+ * and on a push the commit before it; otherwise where this branch left
+ * `origin/dev`.
+ */
+export function pendingBase(root, env = process.env) {
+  if (env.RETIRED_WORDS_BASE) return env.RETIRED_WORDS_BASE;
+  if (env.GITHUB_ACTIONS === "true") return "HEAD^1";
+  return git(root, ["merge-base", "HEAD", "origin/dev"]).trim();
+}
+
+/**
+ * The list as it stood at `ref`, or null where that commit has no list yet
+ * (the change that adds it). A commit that cannot be read fails rather
+ * than skips, since a skipped comparison would hold the list to nothing.
+ */
+export function pendingAt(root, ref) {
+  git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+  try {
+    git(root, ["cat-file", "-e", `${ref}:${PENDING_FILE}`]);
+  } catch {
+    return null;
+  }
+  return JSON.parse(git(root, ["show", `${ref}:${PENDING_FILE}`]));
+}
+
+function git(root, args) {
+  return execFileSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
 /** Allowed places and rules that no longer hold a finding to allow. */

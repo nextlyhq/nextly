@@ -9,7 +9,7 @@
   "packages/admin/src/components/features/email-hub/design/LayoutsList.tsx": [
     "Customised",
     "Customised",
-    "{…} changed since you customised it. Open {…} to review the change."
+    "{…} changed since you customised it. Open it to review the change."
   ],
   "packages/admin/src/components/features/email-hub/design/MatchMySite.tsx": [
     "Your site's colours",
@@ -398,7 +398,7 @@
     "{…} replaces the saved section's content. Pages that inserted it earlier keep their own copies."
   ],
   "packages/plugin-page-builder/src/admin/DeleteComponentDialog.tsx": [
-    "A header & footer set uses . Choose a different component in {…} first.",
+    "A header & footer set uses . Choose a different component in that header & footer set first.",
     "Header & footer sets"
   ],
   "packages/plugin-page-builder/src/admin/RemoveLayoutAction.tsx": [
