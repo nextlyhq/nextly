@@ -1022,24 +1022,11 @@ export async function generateMigration(
     previousContributions: previous?.data.contributions ?? {},
     desired: withTablesAsTheyStand(
       buildDesiredSnapshotFromConfig(
-        // A required container leaving whole translation is added nullable in this run, its
-        // rows filled after the migrations (`withStagedContainerColumns`).
-        args.collections.map(c =>
-          withStagedContainerColumns(
-            c,
-            "collection",
-            previous?.data.snapshot,
-            args.dialect
-          )
-        ),
-        args.singles.map(c =>
-          withStagedContainerColumns(
-            c,
-            "single",
-            previous?.data.snapshot,
-            args.dialect
-          )
-        ),
+        // A container keeping one structure has its main column nullable however it is declared
+        // (`buildDesiredTableFromFields`), so one leaving whole translation is added to rows that
+        // get their structure from the data step after the migrations, in every run.
+        args.collections,
+        args.singles,
         args.components,
         args.dialect
       ),
@@ -4326,48 +4313,6 @@ function stripRelocatedDrops(
     }
     return true;
   });
-}
-
-/**
- * `entity` with each required repeater or group that was translated whole before, and so had no
- * column on its main table, made optional for this run's main table: the column that now holds its
- * one structure is added nullable, since the rows already there get their structure only from
- * `nextly migrate`'s data step after the migrations, and a NOT NULL column added to rows that have
- * no value is refused. The next run, which finds the column there and the container no longer
- * translated whole, makes it required as declared. Nothing changes without a previous snapshot.
- */
-function withStagedContainerColumns(
-  entity: MinimalConfigEntity,
-  kind: I18nTransitionKind,
-  existing: NextlySchemaSnapshot | undefined,
-  dialect: SupportedDialect
-): MinimalConfigEntity {
-  const previous = existing?.tables.find(t => t.name === entity.tableName);
-  if (!previous?.localizedColumns?.length) return entity;
-  const wasTranslated = new Set(previous.localizedColumns);
-  const onMain = new Set(previous.columns.map(column => column.name));
-  const staged = new Set(
-    overlayContainersOf(entity).filter(field => {
-      if (field.required !== true) return false;
-      const column = fieldToLocalizedColumnSpec(
-        field,
-        dialect,
-        columnOriginOf(entity, kind)
-      );
-      return (
-        column != null &&
-        wasTranslated.has(column.name) &&
-        !onMain.has(column.name)
-      );
-    })
-  );
-  if (staged.size === 0) return entity;
-  return {
-    ...entity,
-    fields: entity.fields.map(field =>
-      staged.has(field) ? { ...field, required: false } : field
-    ),
-  };
 }
 
 /**
