@@ -1069,3 +1069,14 @@ export { endTypingRuns, typingEpoch } from "./typing-run";
  * @experimental
  */
 export { finishFieldEdit, useFieldDraftHeld } from "./field-edit";
+
+/**
+ * The popover content every builder popup is built from, for a host's own
+ * popups beside the editor: placed once when it opens, then held there while
+ * its content changes, moving only with its anchor's scroll or a window
+ * resize. Takes the general popover content's props.
+ *
+ * @experimental
+ */
+export { BuilderPopoverContent } from "./popups/builder-popover";
+export type { BuilderPopoverContentProps } from "./popups/builder-popover";
