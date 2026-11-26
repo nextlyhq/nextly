@@ -467,6 +467,9 @@
   flex-direction: column;
   gap: 6px;
   margin-bottom: 0.5rem;
+  /* The same inset as the variables body under it (.nx-vars__body), so the
+     Fonts header and its cards line up with the tab's other sections. */
+  padding: 0.5rem 0.75rem 0;
 }
 
 .nx-font-roles__item {

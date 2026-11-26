@@ -184,7 +184,7 @@ async function openType(page: Page) {
       .click();
   }
   await panel.getByRole("tab", { name: /^Type/ }).click();
-  const fonts = panel.getByRole("region", { name: "Fonts" });
+  const fonts = panel.getByRole("region", { name: "Fonts", exact: true });
   await expect(fonts).toBeVisible({ timeout: 30_000 });
   return { panel, fonts };
 }
@@ -466,7 +466,9 @@ test("a role that may read Design but not change it sees the fonts and cannot ch
     const { fonts } = await openType(view);
     await expect(fonts).toContainText("Body font");
     await expect(fonts).toContainText("Your site's own font");
-    await expect(fonts.getByRole("button")).toHaveCount(0);
+    // Nothing to change: the one button is the way to the Fonts screen,
+    // which a reader sees read-only.
+    await expect(fonts.getByRole("button")).toHaveText(["Manage fonts…"]);
     const headers = await writeHeaders(reader.context.request);
     const refused = await reader.context.request.patch(SITE_STYLE, {
       headers,
