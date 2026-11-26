@@ -1106,6 +1106,7 @@ interface GoingLiveArgs {
   /** The write's locale split, or `null` for a collection without one. */
   localizedUpdate: {
     writeLocale: string;
+    companionData?: Record<string, unknown>;
     localizedFieldValues?: Record<string, unknown>;
     sharedStructures?: readonly SharedStructureWritten[];
     hasStatus?: boolean;
@@ -2290,6 +2291,23 @@ function withWrittenTranslations(
     if (column !== undefined || value !== undefined) out[field] = value;
   }
   return out;
+}
+
+/**
+ * `data` with the status the caller's write moves its language to, where the split moved it off
+ * the payload to the language's row: a held change folded into the write is judged, by the rules
+ * and the validators, as the language it is going live, or offline, in, as the same write over
+ * nothing held is. `data` as it is where it names a status of its own, as a write in the default
+ * language does.
+ */
+function withLanguageStatus(
+  data: Record<string, unknown>,
+  split: { companionData?: Record<string, unknown> } | null | undefined
+): Record<string, unknown> {
+  const status = split?.companionData?._status;
+  return typeof status !== "string" || Object.hasOwn(data, "status")
+    ? data
+    : { ...data, status };
 }
 
 /**
@@ -5344,8 +5362,8 @@ export class CollectionMutationService extends BaseService {
           {
             ...args,
             // What the write folds over the draft (`foldWorkingDraft`).
-            finalData: withWrittenTranslations(
-              args.finalData,
+            finalData: withLanguageStatus(
+              withWrittenTranslations(args.finalData, args.localizedUpdate),
               args.localizedUpdate
             ),
           },
@@ -15038,6 +15056,10 @@ export class CollectionMutationService extends BaseService {
     // left a repeater or group keeping one structure there as its structure alone, which would
     // replace the change's whole value and lose both its text and the caller's.
     const finalData = withWrittenTranslations(args.finalData, args.callerSplit);
+    // Judged with the status the write moves its language to, which the split took to the
+    // language's row. It is written there (`withStatusWritten`): the main row's status is the
+    // default language's, which a write in another language leaves as it is.
+    const judgedData = withLanguageStatus(finalData, args.callerSplit);
     const { payload: draftInput } = buildRestorePayload(
       args.snapshot,
       fields as unknown as FieldConfig[],
@@ -15060,7 +15082,7 @@ export class CollectionMutationService extends BaseService {
     const mergedPromoteData = this.deserializeJsonFieldsForSnapshot(
       this.assemblePromotedDocument(
         draftInput,
-        finalData,
+        judgedData,
         componentFieldData,
         manyToManyData,
         fields,
@@ -15080,7 +15102,7 @@ export class CollectionMutationService extends BaseService {
     // judges the rest as the pending change holds it. Logical, through the
     // same conversion as the document it is compared against.
     const callerContribution = this.callerContributionOf({
-      finalData,
+      finalData: judgedData,
       componentFieldData,
       manyToManyData,
       fields,

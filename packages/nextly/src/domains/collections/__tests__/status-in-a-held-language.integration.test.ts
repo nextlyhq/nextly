@@ -39,6 +39,11 @@ type Caller = Record<string, unknown>;
 
 const TRUSTED: Caller = { overrideAccess: true };
 const SLUG = "articles";
+/** Its rules ask the status the document goes to. */
+const GATED = "gated";
+/** A body that may be kept but not published, and one a person may not publish. */
+const UNFINISHED = "Borrador";
+const SECRET = "Secreto";
 
 describeEachDialect("a status saved in a held language", dialect => {
   let t: TestNextly | undefined;
@@ -65,6 +70,32 @@ describeEachDialect("a status saved in a held language", dialect => {
           },
           fields: [text({ name: "title" }), text({ name: "body" })],
         }),
+        defineCollection({
+          slug: GATED,
+          localized: true,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+            unpublish: () => true,
+          },
+          fields: [
+            text({ name: "title" }),
+            text({
+              name: "body",
+              validate: (value, { data }) =>
+                data.status === "published" && value === UNFINISHED
+                  ? "Not to be published."
+                  : true,
+              access: {
+                update: ({ data }) =>
+                  !(data?.status === "published" && data.body === SECRET),
+              },
+            }),
+          ],
+        }),
       ],
       localization: { locales: ["en", "es"], defaultLocale: "en" },
     });
@@ -75,11 +106,11 @@ describeEachDialect("a status saved in a held language", dialect => {
       t!.getService("collectionsHandler") as CollectionsHandler
     ).getEntryService() as CollectionEntryService;
 
-  /** A signed-in person who may do each of `actions` to the articles. */
+  /** A signed-in person who may do each of `actions` to the articles and the gated entries. */
   async function person(...actions: string[]): Promise<Caller> {
     const [first = "read", ...rest] = actions;
-    const id = await userWhoMay(t!, "ann", first, [SLUG]);
-    for (const action of rest) await grantTo(t!, id, action, [SLUG]);
+    const id = await userWhoMay(t!, "ann", first, [SLUG, GATED]);
+    for (const action of rest) await grantTo(t!, id, action, [SLUG, GATED]);
     return { user: { id, roles: [] }, overrideAccess: false };
   }
   const whoMayEverything = () =>
@@ -98,10 +129,11 @@ describeEachDialect("a status saved in a held language", dialect => {
     id: string,
     caller: Caller,
     data: Doc,
-    locale = "es"
+    locale = "es",
+    slug = SLUG
   ): Promise<{ success: boolean; statusCode?: number }> {
     return entries().updateEntry(
-      { collectionName: SLUG, entryId: id, locale, ...caller } as never,
+      { collectionName: slug, entryId: id, locale, ...caller } as never,
       { ...data, _overwrite: true }
     );
   }
@@ -116,8 +148,12 @@ describeEachDialect("a status saved in a held language", dialect => {
   }
 
   /** The language's row as it is stored, or null where there is none. */
-  async function row(id: string, locale = "es"): Promise<Doc | null> {
-    const rows = await t!.adapter.select<Doc>(`dc_${SLUG}_locales`, {
+  async function row(
+    id: string,
+    locale = "es",
+    slug = SLUG
+  ): Promise<Doc | null> {
+    const rows = await t!.adapter.select<Doc>(`dc_${slug}_locales`, {
       where: { and: [{ column: "_parent", op: "=", value: id }] },
     });
     const own = rows.find(each => each._locale === locale);
@@ -347,6 +383,109 @@ describeEachDialect("a status saved in a held language", dialect => {
     expect(await row(id)).toMatchObject({ status: "published", body: "Nuevo" });
     expect(await served(id)).toEqual(["Nuevo"]);
     expect(await held(id)).toEqual([]);
+  });
+
+  /** A gated entry live in English and, with `body`, in Spanish. */
+  async function gated(body: string, locale = "es"): Promise<string> {
+    const made = await entries().createEntry(
+      { collectionName: GATED, locale: "en", ...TRUSTED } as never,
+      { title: "Hello", body: "English", status: "published" }
+    );
+    const id = (made.data as { id: string }).id;
+    if (locale === "es") {
+      const live = { title: "Hola", body, status: "published" };
+      expect((await save(id, TRUSTED, live, "es", GATED)).success).toBe(true);
+    }
+    return id;
+  }
+
+  // Broken by judging the held change with the status it holds, which a change kept by part does
+  // not hold at all, rather than the one the save moves the language to.
+  it.each([
+    ["trusted code", () => Promise.resolve(TRUSTED)],
+    ["a person who may", whoMayEverything],
+  ])(
+    "judges a held change by the status the save names: %s",
+    async (_who, caller) => {
+      await boot();
+      const who = await caller();
+      // The same publish over nothing held, which the rule refuses.
+      const plain = await gated("Vivo");
+      await save(
+        plain,
+        TRUSTED,
+        { body: UNFINISHED, status: "draft" },
+        "es",
+        GATED
+      );
+      expect(
+        (await save(plain, who, PUBLISH, "es", GATED)).success,
+        "over nothing held"
+      ).toBe(false);
+
+      const id = await gated("Vivo");
+      await save(id, TRUSTED, { body: UNFINISHED }, "es", GATED);
+      expect(await held(id)).toEqual(["es"]);
+      const answer = await save(id, who, PUBLISH, "es", GATED);
+      expect(answer).toMatchObject({ success: false, statusCode: 400 });
+      expect(await row(id, "es", GATED)).toMatchObject({
+        status: "published",
+        body: "Vivo",
+      });
+      expect(await held(id)).toEqual(["es"]);
+      // The language's status stays its own: the default language's is not moved.
+      expect(await row(id, "en", GATED)).toMatchObject({ status: "published" });
+    }
+  );
+
+  // Broken by asking a person's field rules of the held change with the status it holds.
+  it.each(["es", "en"])(
+    "asks a person's rules of a held change by the status the save names, in %s",
+    async locale => {
+      await boot();
+      const who = await whoMayEverything();
+      const id = await gated("Vivo", locale);
+      await save(id, TRUSTED, { body: SECRET }, locale, GATED);
+      expect(await held(id)).toEqual([locale]);
+      const before = await row(id, locale, GATED);
+
+      expect((await save(id, who, PUBLISH, locale, GATED)).success).toBe(false);
+
+      expect(await row(id, locale, GATED)).toEqual(before);
+      expect(await held(id)).toEqual([locale]);
+      // The control: trusted code, which no rule is asked of.
+      expect((await save(id, TRUSTED, PUBLISH, locale, GATED)).success).toBe(
+        true
+      );
+      expect(await row(id, locale, GATED)).toMatchObject({
+        status: "published",
+        body: SECRET,
+      });
+    }
+  );
+
+  // Broken by putting the language's status on the main row, which is the default language's.
+  it("publishes a held change the rules allow, the default language as it was", async () => {
+    await boot();
+    const who = await whoMayEverything();
+    const id = await english("draft");
+    await save(id, TRUSTED, {
+      title: "Hola",
+      body: "Vivo",
+      status: "published",
+    });
+    await save(id, who, HELD);
+    expect(await held(id)).toEqual(["es"]);
+    expect((await save(id, who, PUBLISH)).success).toBe(true);
+    expect(await row(id)).toMatchObject({
+      status: "published",
+      body: "Retenido",
+    });
+    expect(await row(id, "en")).toMatchObject({ status: "draft" });
+    const [main] = await t!.adapter.select<Doc>(`dc_${SLUG}`, {
+      where: { and: [{ column: "id", op: "=", value: id }] },
+    });
+    expect(main?.status).toBe("draft");
   });
 
   // The default language's status is the document's own, never lost.
