@@ -1094,8 +1094,9 @@ describe("the colour variables a typed colour box suggests", () => {
     ]);
     // Each is a whole-name match only by its qualified label.
     expect(both.every(match => match.exact)).toBe(false);
+    expect(both.every(match => match.whole)).toBe(true);
     expect(
       colourVariablesMatching("Accent (color.accent.two)", [one, two])[0]
-    ).toEqual({ variable: two, exact: true });
+    ).toEqual({ variable: two, whole: true, exact: true });
   });
 });

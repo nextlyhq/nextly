@@ -35,6 +35,7 @@ import {
 } from "vitest";
 
 import { useEditorState, type EditorState } from "../../editor-state";
+import { escapeFieldEdit } from "../../field-edit";
 import { InspectorPanel } from "../inspector-panel";
 
 beforeAll(() => {
@@ -83,6 +84,19 @@ const TOKENS: SiteTokenSet = {
       label: "Yellow 300",
       kind: "color",
       values: { light: "#fde68a" },
+    },
+    // Two variables an author named alike.
+    {
+      name: "color.accent.one",
+      label: "Accent",
+      kind: "color",
+      values: { light: "#111111" },
+    },
+    {
+      name: "color.accent.two",
+      label: "Accent",
+      kind: "color",
+      values: { light: "#222222" },
     },
   ],
 };
@@ -281,5 +295,88 @@ describe("a colour box's suggestions by keyboard", () => {
     });
     expect(box.getAttribute("aria-controls")).toBe(list.id);
     expect(box.getAttribute("aria-autocomplete")).toBe("list");
+  });
+});
+
+/** One animation frame, after which focus moved after a choice has landed. */
+async function frame(): Promise<void> {
+  await act(async () => {
+    await new Promise(done => requestAnimationFrame(() => done(null)));
+  });
+}
+
+describe("what a colour box says, and where it leaves focus", () => {
+  it("shows each suggestion's light and dark swatches beside its name", () => {
+    const box = mount();
+    typeInto(box, "yellow 5");
+    const list = screen.getByRole("listbox", {
+      name: "Matching color variables",
+    });
+    for (const option of within(list).getAllByRole("option")) {
+      expect(option.querySelectorAll(".nx-vars__swatch")).toHaveLength(2);
+    }
+  });
+
+  it("drops its refusal once the colour is chosen another way", () => {
+    const box = mount();
+    typeInto(box, "yellow 50");
+    fireEvent.blur(box);
+    expect(screen.getByRole("alert").textContent).toContain("yellow 50");
+    // Picked from the swatch's own list, not typed.
+    fireEvent.click(screen.getByRole("button", { name: /^Colour for Colour/ }));
+    fireEvent.click(
+      within(
+        screen.getByRole("listbox", { name: "Colour variables" })
+      ).getByRole("option", { name: "Yellow 500" })
+    );
+    expect(colourOf()).toEqual({ $token: "color.yellow.500" });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("says when more than one variable has the name typed", () => {
+    const box = mount();
+    typeInto(box, "accent");
+    fireEvent.blur(box);
+    expect(colourOf()).toBe("#0000ff");
+    expect(
+      screen.getAllByRole("alert").map(alert => alert.textContent)
+    ).toEqual([
+      'More than one variable is called "accent". Choose one from the list.',
+    ]);
+  });
+
+  it("leaves the Enter that confirms an input method's characters to it", () => {
+    const box = mount();
+    typeInto(box, "yellow 5");
+    // Safari's confirming Enter is key 229, not marked as composing.
+    fireEvent.keyDown(box, { key: "Enter", keyCode: 229 });
+    expect(colourOf()).toBe("#0000ff");
+  });
+
+  it("puts focus on the variable it connects, not on the page", async () => {
+    const box = mount();
+    typeInto(box, "yellow 5");
+    fireEvent.keyDown(box, { key: "Enter" });
+    await frame();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: /^Colour for Colour: Yellow 500/ })
+    );
+  });
+
+  it("stays closed when Escape puts the old text back", () => {
+    const box = mount();
+    // A stored colour the list would answer: Yellow 300's own value.
+    typeInto(box, "#fde68a");
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(colourOf()).toBe("#fde68a");
+    typeInto(box, "yellow 5");
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(suggestions()).toEqual([]);
+    fireEvent.keyDown(box, { key: "Escape" });
+    act(() => {
+      escapeFieldEdit(box);
+    });
+    expect(box.value).toBe("#fde68a");
+    expect(suggestions()).toEqual([]);
   });
 });

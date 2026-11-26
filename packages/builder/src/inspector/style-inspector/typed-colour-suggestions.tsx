@@ -136,7 +136,17 @@ export function TypedColourSuggestions({
   // the highlight rather than step the value, Enter takes the highlighted
   // entry, and Escape closes the list before it puts the old text back.
   const onKeyDownCapture = (event: React.KeyboardEvent): void => {
-    if (!open || event.nativeEvent.isComposing) return;
+    // The Enter that confirms an input method's characters is its own: Safari
+    // reports it as key 229 rather than marking it composing.
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) {
+      return;
+    }
+    if (!open) {
+      // The field's own Escape puts the stored text back, which is no typing:
+      // the list stays closed until the author types again.
+      if (event.key === "Escape") setTyped(false);
+      return;
+    }
     const step =
       event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
     if (step !== 0) {

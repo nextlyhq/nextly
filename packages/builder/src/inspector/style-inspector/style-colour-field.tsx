@@ -8,6 +8,7 @@
  * @module style-colour-field
  */
 import {
+  checkColorValue,
   isRawColour,
   isTokenRef,
   type ContrastResult,
@@ -318,8 +319,8 @@ export function ColourField({
   const noteId = React.useId();
   const refusalId = React.useId();
   // Text the box was left holding that is neither a colour nor a variable's
-  // name, said in the box's own words until it is typed in again.
-  const [refused, setRefused] = React.useState<string>();
+  // name, said in the box's own words until the box is written another way.
+  const [refused, setRefused] = React.useState<TypedRefusal>();
   // Lifted out of the text field because two controls edit one value: a draft
   // private to the field would leave the swatch painting a superseded one.
   const { draft, setDraft, edited, reset, live } = useDraft(stored);
@@ -341,16 +342,28 @@ export function ColourField({
   const typedCommit = useTypedColourCommit({
     choices,
     stored,
+    typesLive: live !== undefined,
     onCommit,
     commitColour,
     setRefused,
   });
-  const { commitInstead, closed, onColour } = usePickerWrites({
+  const picker = usePickerWrites({
     commitColour,
     onMove: typed,
     reset,
     setDraft,
   });
+  // Every other way of writing the value ends what the box refused: the
+  // picker, a recent colour, a suggestion and Unlink alike.
+  const commitInstead = (value: StyleValue | null): void => {
+    setRefused(undefined);
+    picker.commitInstead(value);
+  };
+  const onColour = (value: string): void => {
+    setRefused(undefined);
+    picker.onColour(value);
+  };
+  const { closed } = picker;
   // What the surface is currently SHOWING: the draft while a literal is being
   // typed, so the swatch follows the field, and the stored value for a
   // reference, which no field is editing. Named once and resolved once, rather
@@ -442,8 +455,17 @@ export function ColourField({
             draft={draft}
             offered={choices}
             onChoose={variable => {
-              setRefused(undefined);
+              const row = document
+                .getElementById(id)
+                ?.closest<HTMLElement>(".nx-style-inspector__colour");
               commitInstead({ $token: variable.identity });
+              // The box gives way to the trigger naming the variable: focus
+              // goes there, rather than falling to the page with the box.
+              focusAfterUnlink(() =>
+                row?.querySelector<HTMLElement>(
+                  ".nx-style-inspector__colour-pick"
+                )
+              );
             }}
           >
             <TextField
@@ -480,9 +502,9 @@ export function ColourField({
           />
         )}
       </div>
-      {refused === undefined ? null : (
+      {refused === undefined || reference !== null ? null : (
         <p className="nx-inspector__error" id={refusalId} role="alert">
-          {`No color or variable is called "${refused}".`}
+          {refusalWords(refused)}
         </p>
       )}
       <ContrastNote id={noteId} contrast={contrast} />
@@ -492,44 +514,64 @@ export function ColourField({
   );
 }
 
+/** Text the colour box was left holding and did not take. */
+interface TypedRefusal {
+  readonly text: string;
+  /** Whether it is the whole name of more than one variable. */
+  readonly shared: boolean;
+}
+
+/** What the box says about text it did not take. */
+function refusalWords(refused: TypedRefusal): string {
+  return refused.shared
+    ? `More than one variable is called "${refused.text}". Choose one from the list.`
+    : `No color or variable is called "${refused.text}".`;
+}
+
 /**
  * The colour box's end-of-edit write.
  *
  * A variable's whole name connects it, ignoring case, spaces and hyphens, as
- * the list under the box matches it. Anything else is written as typed, and
- * the write decides whether it is a colour. Text refused there is said in the
- * box's own words, and the write's own line is cleared by asking for the
- * stored value again, which moves nothing: the document keeps the value from
- * before the edit and only "No color or variable is called …" is shown.
+ * the list under the box matches it. Text the engine's colour check takes is
+ * written as typed, and a refusal of the write itself (a locked design, a
+ * page at its size limit) is the write's to say. Text that is neither a
+ * colour nor a variable's name is refused here, in the box's own words, and
+ * nothing is written: the document keeps the value from before the edit.
  */
 function useTypedColourCommit({
   choices,
   stored,
+  typesLive,
   onCommit,
   commitColour,
   setRefused,
 }: {
   choices: readonly SiteVariable[];
   stored: StyleValue | undefined;
+  /** Whether the box writes as it is typed, so a keystroke's refusal may show. */
+  typesLive: boolean;
   onCommit: (value: StyleValue | null) => CommitOutcome;
   commitColour: (value: StyleValue | null) => CommitOutcome;
-  setRefused: (text: string | undefined) => void;
+  setRefused: (refused: TypedRefusal | undefined) => void;
 }): (value: StyleValue | null) => CommitOutcome {
   return value => {
     setRefused(undefined);
     if (typeof value !== "string") return commitColour(value);
-    const named = colourVariablesMatching(value, choices).find(
-      match => match.exact
-    );
+    const matches = colourVariablesMatching(value, choices);
+    const named = matches.find(match => match.exact);
     if (named !== undefined) {
       return commitColour({ $token: named.variable.identity });
     }
-    const outcome = commitColour(value);
-    if (outcome === "refused") {
-      onCommit(stored ?? null);
-      setRefused(value.trim());
-    }
-    return outcome;
+    if (checkColorValue(value.trim()) === null) return commitColour(value);
+    // A keystroke's write may have left its own refusal beside the box ("half
+    // a hex colour"). Asking for the stored value clears it and moves nothing
+    // on a block, the only target written as it is typed.
+    if (typesLive) onCommit(stored ?? null);
+    setRefused({
+      text: value.trim(),
+      shared: matches.filter(match => match.whole).length > 1,
+    });
+    return "refused";
   };
 }
 

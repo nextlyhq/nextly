@@ -582,6 +582,8 @@ export function variableLabel(
 /** A colour variable that answers what was typed into a colour box. */
 export interface TypedColourMatch {
   readonly variable: SiteVariable;
+  /** Whether the text is one of this variable's names, whole. */
+  readonly whole: boolean;
   /**
    * Whether the text is this variable's whole name, and no other variable's:
    * the one case a box connects without a choice being made.
@@ -610,7 +612,9 @@ const NAME_RANKS = {
  * does not: its whole name, the start of one, somewhere in one, or only the
  * typed text's first word starting it ("yellow" of "yellow 5" for "Yellow
  * 300"). Asked of every name the box answers to: the label the list shows,
- * that label qualified where two share it, and the code name.
+ * that label qualified where two share it, the code name, and the identity a
+ * reference stores, the names a variable's typed name is matched against
+ * everywhere else (`tokenForTypedName`).
  */
 function nameRank(
   variable: SiteVariable,
@@ -622,6 +626,7 @@ function nameRank(
     variable.label,
     variableLabel(variable, offered),
     variable.name,
+    variable.identity,
   ].map(squashedName);
   if (names.includes(typed)) return NAME_RANKS.whole;
   if (names.some(name => name.startsWith(typed))) return NAME_RANKS.start;
@@ -677,6 +682,7 @@ export function colourVariablesMatching(
   const wholeNames = ranked.filter(entry => entry.rank === NAME_RANKS.whole);
   return ranked.map(({ variable, rank }) => ({
     variable,
+    whole: rank === NAME_RANKS.whole,
     exact: rank === NAME_RANKS.whole && wholeNames.length === 1,
   }));
 }
