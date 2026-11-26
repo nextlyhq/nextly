@@ -1,0 +1,25 @@
+---
+title: TYPE_CHANGE_VALUES_CHANGED
+description: "A field type change's values were written to while they were converted, so it stopped before its column changed."
+---
+
+## Cause
+
+A field type change's values were written to while they were converted, so it stopped before its column changed.
+
+A migration the Schema Builder writes for a field type change converts each value as the new type reads it, rather than leaving the database's cast to reach it. Before any statement, `nextly migrate` judges every value of the column, and counts the values it keeps, changes and loses. It judges them again as it writes them. Where any of the counts differs, something wrote to the column in between, and the run stops before the column changes type. The Why line names the field and both sets of counts.
+
+Nothing of the change stays: the column's values and type are as they were, and the column the conversion writes the converted values into is dropped again before the run stops.
+
+## Fix
+
+Run the command again once those writes have finished: the change converts the values as they then stand. A run not given consent to clear values that cannot convert is refused again where some now cannot, naming the `--accept-data-loss` that clears them.
+
+## Example
+
+```text
+✗ A field's type change stopped before its column changed: its values were written to while they were converted.
+  Why:  fields.price: Collection 'products' (migration 20261123_101500_products.sql): price was written to while its values were converted: it now keeps 3, changes 1 and loses 2 of its values, not the 3, 2 and 1 judged. Try again once its writes have finished.
+  Next: Run the command again once those writes have finished: the change converts the values as they then stand.
+  Docs: https://nextlyhq.com/docs/cli/errors/type-change-values-changed  (TYPE_CHANGE_VALUES_CHANGED)
+```

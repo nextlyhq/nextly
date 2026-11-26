@@ -509,17 +509,31 @@ export function uncountedAtStatement(
 }
 
 /**
+ * The columns whose rows holding no value are written before a file's first statement, by what runs
+ * ahead of it: a type change's fill (`TypeConversion`), judged to reach every one of them where it
+ * runs. Not counted as breaking the file, as rows an earlier statement of its own fills are not.
+ */
+export type FilledColumns = (table: string, column: string) => boolean;
+
+const NONE_FILLED: FilledColumns = () => false;
+
+/**
  * The columns a file would break before any of its statements runs: each change no earlier
  * statement of the file writes rows for, counted under the names it had before the file, and
- * skipped where the file itself created its table or column. Reads nothing when there is none.
+ * skipped where the file itself created its table or column, or where its rows are filled ahead of
+ * it (`filled`). Reads nothing when there is none.
  */
 async function requiredColumnBreaksBeforeRun(
   db: unknown,
   dialect: SupportedDialect,
-  statements: readonly string[]
+  statements: readonly string[],
+  filled: FilledColumns
 ): Promise<RequiredColumnBreak[]> {
   const targets = readNotNullChanges(statements, dialect).flatMap(change =>
-    change.writtenEarlier || change.before === null
+    change.writtenEarlier ||
+    change.before === null ||
+    (change.before.column !== null &&
+      filled(change.before.table, change.before.column))
       ? []
       : [
           {
@@ -551,9 +565,15 @@ export async function refuseRequiredColumnsOverNulls(
   db: unknown,
   dialect: SupportedDialect,
   statements: readonly string[],
-  source: string
+  source: string,
+  filled: FilledColumns = NONE_FILLED
 ): Promise<void> {
-  const breaks = await requiredColumnBreaksBeforeRun(db, dialect, statements);
+  const breaks = await requiredColumnBreaksBeforeRun(
+    db,
+    dialect,
+    statements,
+    filled
+  );
   if (breaks.length === 0) return;
   throw requiredColumnMigrationRefusal(breaks, { source, dialect });
 }
@@ -574,7 +594,8 @@ export async function previewRequiredColumns(
   file: { upSql: string; transaction: boolean },
   logger: { info(message: string): void },
   /** Migrations run before this one: plugin modules, or earlier pending files. */
-  afterEarlier: boolean
+  afterEarlier: boolean,
+  filled: FilledColumns = NONE_FILLED
 ): Promise<void> {
   const statements = splitSqlStatements(file.upSql, dialect, file);
   if (afterEarlier) {
@@ -587,7 +608,12 @@ export async function previewRequiredColumns(
   }
   let breaks: RequiredColumnBreak[];
   try {
-    breaks = await requiredColumnBreaksBeforeRun(db, dialect, statements);
+    breaks = await requiredColumnBreaksBeforeRun(
+      db,
+      dialect,
+      statements,
+      filled
+    );
   } catch (error) {
     // A file whose rows cannot be counted is one a real run would refuse: reported as a line of
     // the preview, not as the end of it. Anything else still fails the preview.

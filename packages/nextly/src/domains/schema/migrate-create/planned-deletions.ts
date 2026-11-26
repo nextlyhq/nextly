@@ -21,6 +21,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { ConvertedColumnName } from "../migrate/converts-header";
 import { deletionKey, type Deletion } from "../migrate/data-loss-consent";
 import { entityOwners, type CoveredEntity } from "../migrate/entity-coverage";
 import { coverRunDeletions } from "../migrate/entity-shared-rows";
@@ -181,6 +182,60 @@ export function judgedDeletions(args: {
     deletion => deletion.kind !== "rows" || deletion.of === undefined
   );
   return { main, all, perFile };
+}
+
+/**
+ * `deletions` with the column of each fill a file writes (`ConvertedColumnName.fill`): the values a
+ * fill replaces go as a cleared one does, so the file says so, beside the type change where that is
+ * listed, and asks the same consent for a fill that deletes nothing, as `nextly migrate` does.
+ */
+export function withFills(
+  deletions: readonly Deletion[],
+  converts: readonly ConvertedColumnName[]
+): Deletion[] {
+  const filled = converts.flatMap(column =>
+    column.fill === undefined ? [] : [{ ...column, fill: column.fill }]
+  );
+  const of = (table: string, column: string) =>
+    filled.find(each => each.table === table && each.column === column);
+  const listed = deletions.map(deletion => {
+    const found =
+      deletion.kind === "column"
+        ? of(deletion.table, deletion.column)
+        : undefined;
+    if (found === undefined || deletion.kind !== "column") return deletion;
+    const replaced = replacedBy(found.fill);
+    return {
+      ...deletion,
+      reason:
+        deletion.reason === undefined
+          ? replaced
+          : `${deletion.reason}; ${replaced}`,
+    };
+  });
+  const missing = filled.filter(
+    column =>
+      !deletions.some(
+        deletion =>
+          deletion.kind === "column" &&
+          deletion.table === column.table &&
+          deletion.column === column.column
+      )
+  );
+  return [
+    ...listed,
+    ...missing.map(column => ({
+      kind: "column" as const,
+      table: column.table,
+      column: column.column,
+      reason: replacedBy(column.fill),
+    })),
+  ];
+}
+
+/** What a fill does, as a deletion's reason says it. */
+function replacedBy(fill: { value: unknown }): string {
+  return `each row the change would leave with no value is replaced with ${JSON.stringify(fill.value)}`;
 }
 
 /** The main file's UP as `nextly migrate` splits it: the statements as the file writes them. */

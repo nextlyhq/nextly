@@ -94,7 +94,9 @@ export type OutcomeReason =
   /** The new column refuses the value's writing outright, so it cannot hold it at all. */
   | "column-refuses"
   /** The new field's own validation refuses the value as the new type reads it. */
-  | "field-refuses";
+  | "field-refuses"
+  /** A text that is itself JSON, which the new JSON column's field would not read back as a text. */
+  | "read-as-json";
 
 /** How a relationship keeps its links. */
 type RelationKept = RelationTarget["kept"];

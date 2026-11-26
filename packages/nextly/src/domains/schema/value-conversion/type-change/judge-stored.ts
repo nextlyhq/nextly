@@ -41,6 +41,19 @@ export interface StoredTypeChangeJudgement {
   cleared: RowKey[];
   /** How many values each outcome holds, for a review that names the changed ones too. */
   counts: Record<ValueOutcome, number>;
+  /**
+   * How many rows hold something now and no value after: a lost value, or one the new type keeps as
+   * no value (a list's `[]` becoming a text).
+   */
+  emptied: number;
+  /** How many rows hold no value, before and after. */
+  empty: number;
+  /**
+   * How many rows hold a value the new type reads only once it is written: one lost or emptied, one
+   * whose stored form is not its reading, or one filled. Where none does, the database's own conversion reaches
+   * every reading, as `rewrites` absent judges it.
+   */
+  written: number;
 }
 
 /** What a collection is asked besides the class, reasons and rows. */
@@ -53,6 +66,23 @@ export interface CollectOptions {
   unique?: boolean;
   /** Each kept or changed value, as the new type reads it, handed over as it is judged. */
   onReading?: (key: RowKey, readsAs: string) => void;
+  /**
+   * The save writes each kept or changed value as the new type reads it, and each empty one as no
+   * value (`TypeConversion`), rather than leaving the database's cast to reach them: a value whose
+   * stored form is not its reading, or an empty list stored as `[]`, then blocks nothing. Asked
+   * only by a save that runs that conversion, for the pairs it writes (`rewritesPair`).
+   */
+  rewrites?: boolean;
+  /**
+   * The value the save writes into each row the change leaves with none, as the new type reads it:
+   * a required field's fill (`fill.ts`). Handed over as any reading is, and a unique field's repeats
+   * count it as one. Each row is still counted as its own value was judged.
+   */
+  fill?: {
+    readsAs: string;
+    /** Whether the rows that hold no value already are filled too, not only those emptied. */
+    empties: boolean;
+  };
 }
 
 /**
@@ -82,6 +112,7 @@ const REPORTED_AS: Record<
   "link-not-carried": "link-not-carried",
   "column-refuses": "column-refuses",
   "field-refuses": "field-refuses",
+  "read-as-json": "read-as-json",
 };
 
 /**
@@ -105,10 +136,14 @@ export async function collectTypeChange(
     tally.add(
       value.key,
       await withFieldRule(
-        asConverted(
-          judgeValue(from, to, decodeStored(from, value)),
-          stored,
-          read
+        readBack(
+          to,
+          asConverted(
+            judgeValue(from, to, decodeStored(from, value)),
+            stored,
+            read
+          ),
+          options
         ),
         accepts
       ),
@@ -200,7 +235,46 @@ function blockedPairJudgement(
     },
     cleared: [],
     counts: { kept: 0, changed: 0, lost: 0, blocked: 0 },
+    emptied: 0,
+    empty: 0,
+    written: 0,
   };
+}
+
+/**
+ * A verdict as an entry reads it back, where the save writes the value itself (`rewrites`). A JSON
+ * column's driver on PostgreSQL hands a stored JSON string back as a text, which an entry's read
+ * takes as JSON once more (`decodeJsonFieldValues`), as it must on a database that keeps JSON as
+ * text: a text that is itself JSON (`12`, `{"a":1}`) would read back as what it says. Its column's
+ * value alone, never one inside another JSON value, which is read whole.
+ */
+function readBack(
+  to: FieldTypeOnDialect,
+  verdict: ValueVerdict,
+  options: CollectOptions
+): ValueVerdict {
+  if (options.rewrites !== true || verdict.readsAs === undefined) {
+    return verdict;
+  }
+  return readsAsItsOwnJson(to, verdict.readsAs)
+    ? { outcome: "blocked", reason: "read-as-json" }
+    : verdict;
+}
+
+/** Whether a JSON column's `readsAs` is a string an entry's read takes as another value (`readBack`). */
+export function readsAsItsOwnJson(
+  to: FieldTypeOnDialect,
+  readsAs: string
+): boolean {
+  if (to.family !== "json" || to.dialect === "sqlite") return false;
+  const value: unknown = JSON.parse(readsAs);
+  if (typeof value !== "string") return false;
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -237,6 +311,11 @@ function asConverted(
   return verdict;
 }
 
+/** Whether a verdict leaves its row with no value: a lost one, or one kept as no value. */
+function leavesNone(verdict: ValueVerdict): boolean {
+  return verdict.outcome === "lost" || verdict.reason === "empty";
+}
+
 /** The values of one type change counted as they are judged: by outcome, by reason, and cleared. */
 class TypeChangeTally {
   private readonly counts: Record<ValueOutcome, number> = {
@@ -250,6 +329,9 @@ class TypeChangeTally {
     { count: number; first: RowKey[] }
   >();
   private readonly cleared: RowKey[] = [];
+  private emptied = 0;
+  private empty = 0;
+  private written = 0;
   private readonly repeatsOf:
     | ((key: RowKey, readsAs: string) => RowKey[] | undefined)
     | undefined;
@@ -266,15 +348,61 @@ class TypeChangeTally {
     if (
       this.emptyNotHeld(key, verdict, stored) ||
       (verdict.readsAs !== undefined &&
-        this.blocks(key, verdict.outcome, verdict.readsAs, stored))
+        this.blocks(key, verdict.outcome, verdict.readsAs, stored)) ||
+      this.fillBlocks(key, verdict, stored)
     ) {
       this.counts.blocked += 1;
       return;
     }
     this.counts[verdict.outcome] += 1;
-    if (verdict.outcome === "lost") this.cleared.push(key);
+    this.countWritten(key, verdict, stored);
     if (verdict.reason === "same-value" || verdict.reason === "empty") return;
     this.note(REPORTED_AS[verdict.reason], key);
+  }
+
+  /**
+   * A row as the change writes it, counted: one cleared, one emptied, one that holds none already, one
+   * stored in another form, one filled.
+   */
+  private countWritten(
+    key: RowKey,
+    verdict: ValueVerdict,
+    stored: string | null
+  ): void {
+    const lost = verdict.outcome === "lost";
+    if (lost) this.cleared.push(key);
+    if (leavesNone(verdict)) this.countNone(stored);
+    if (
+      lost ||
+      this.filled(verdict, stored) ||
+      this.outcomeAsStored(verdict, stored) !== verdict.outcome
+    ) {
+      this.written += 1;
+    }
+  }
+
+  /** A row left with no value: one that holds something now, or one that holds none already. */
+  private countNone(stored: string | null): void {
+    if (stored === null) this.empty += 1;
+    else this.emptied += 1;
+  }
+
+  /** Whether the change writes its fill into the row. */
+  private filled(verdict: ValueVerdict, stored: string | null): boolean {
+    const { fill } = this.options;
+    if (fill === undefined || !leavesNone(verdict)) return false;
+    return stored !== null || fill.empties;
+  }
+
+  /** Whether the fill, where the row takes it, blocks the change: one a unique field would hold twice. */
+  private fillBlocks(
+    key: RowKey,
+    verdict: ValueVerdict,
+    stored: string | null
+  ): boolean {
+    const { fill } = this.options;
+    if (fill === undefined || !this.filled(verdict, stored)) return false;
+    return this.blocks(key, "changed", fill.readsAs, null);
   }
 
   /** The class the worst value gives, every reason with its rows, and the rows to clear. */
@@ -293,6 +421,9 @@ class TypeChangeTally {
       },
       cleared: this.cleared,
       counts: this.counts,
+      emptied: this.emptied,
+      empty: this.empty,
+      written: this.written,
     };
   }
 
@@ -305,9 +436,10 @@ class TypeChangeTally {
     verdict: ValueVerdict,
     stored: string | null
   ): boolean {
-    if (verdict.reason !== "empty" || !this.emptyStoredAsValue(stored)) {
-      return false;
-    }
+    if (verdict.reason !== "empty") return false;
+    // A save that rewrites the values writes an empty one as no value, whatever it was stored as.
+    if (this.options.rewrites === true) return false;
+    if (!this.emptyStoredAsValue(stored)) return false;
     this.note("needs-rewrite", key);
     return true;
   }
@@ -349,7 +481,11 @@ class TypeChangeTally {
       for (const row of repeated) this.note("repeated", row);
       return true;
     }
-    if (!this.read.value(stored, readsAs, outcome)) {
+    // A save that rewrites the values writes this one as it reads: its stored form does not matter.
+    if (
+      this.options.rewrites !== true &&
+      !this.read.value(stored, readsAs, outcome)
+    ) {
       this.note("needs-rewrite", key);
       return true;
     }
@@ -447,11 +583,28 @@ function valueOf(to: FieldTypeOnDialect, readsAs: string): unknown {
   }
 }
 
+/** One kept or changed value as the new type reads it, by its row. */
+export interface Reading {
+  key: RowKey;
+  readsAs: string;
+}
+
+/**
+ * Where a judgement hands its readings a page at a time (`judgeStoredTypeChange`'s
+ * `readingPages`): `write` is given each page of at most `size` readings, awaited before the next
+ * page of values is read, so no more than a page is ever held.
+ */
+export interface ReadingPages {
+  size: number;
+  write: (page: readonly Reading[]) => Promise<void>;
+}
+
 /**
  * A field's type change judged over every value `column` of `table` holds, read a page at a time
- * and keyed as the table keys its rows.
+ * and keyed as the table keys its rows. With `readingPages`, each kept or changed value's reading
+ * is handed over a page at a time as the values are judged, the last page once every value is.
  */
-export function judgeStoredTypeChange(
+export async function judgeStoredTypeChange(
   args: {
     db: unknown;
     dialect: SupportedDialect;
@@ -462,21 +615,53 @@ export function judgeStoredTypeChange(
     to: FieldTypeOnDialect;
     /** The new field's own validation, asked of each kept or changed value (`fieldAccepts`). */
     accepts?: (readsAs: string) => Promise<boolean>;
+    readingPages?: ReadingPages;
   } & CollectOptions
 ): Promise<StoredTypeChangeJudgement> {
-  return collectTypeChange(
+  const values = readStoredValues(args.db, args.dialect, {
+    table: args.table,
+    column: args.column,
+    keyedBy: args.keyedBy,
+    toJson: false,
+  });
+  const pages = args.readingPages;
+  const page: Reading[] = [];
+  const onReading =
+    pages === undefined
+      ? args.onReading
+      : (key: RowKey, readsAs: string) => {
+          args.onReading?.(key, readsAs);
+          page.push({ key, readsAs });
+        };
+  const judgement = await collectTypeChange(
     args.from,
     args.to,
-    readStoredValues(args.db, args.dialect, {
-      table: args.table,
-      column: args.column,
-      keyedBy: args.keyedBy,
-      toJson: false,
-    }),
+    pages === undefined ? values : writtenAsRead(values, page, pages),
     args.accepts,
     {
       ...(args.unique !== undefined ? { unique: args.unique } : {}),
-      ...(args.onReading !== undefined ? { onReading: args.onReading } : {}),
+      ...(onReading !== undefined ? { onReading } : {}),
+      ...(args.rewrites === true ? { rewrites: true } : {}),
+      ...(args.fill !== undefined ? { fill: args.fill } : {}),
     }
   );
+  if (pages !== undefined && page.length > 0) {
+    await pages.write(page.splice(0));
+  }
+  return judgement;
+}
+
+/**
+ * `values`, handing the readings judged so far (`page`, filled as each value is judged) to
+ * `pages.write` once there are a page of them, before the next value is read.
+ */
+async function* writtenAsRead<V>(
+  values: AsyncIterable<V>,
+  page: Reading[],
+  pages: ReadingPages
+): AsyncIterable<V> {
+  for await (const value of values) {
+    if (page.length >= pages.size) await pages.write(page.splice(0));
+    yield value;
+  }
 }

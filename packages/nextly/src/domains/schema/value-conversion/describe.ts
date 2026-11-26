@@ -46,6 +46,8 @@ const REASON_TEXT: Record<ConversionReasonKind, string> = {
   "column-refuses": "values the new column refuses outright would be cleared",
   "field-refuses":
     "values the new field's own validation refuses would be cleared",
+  "read-as-json":
+    "texts that are themselves JSON, which the JSON field would read back as what they say, not as text",
   rounded: "values the new type holds only rounded",
   "out-of-range": "values outside the range the new type holds",
   "no-time-or-offset": "date texts that name no time or no offset from UTC",
@@ -138,6 +140,8 @@ const REASON_OWNER_CAN: Record<BlockingReasonKind, string | null> = {
   "late-write": null,
   "cleared-under-not-null":
     "give the named rows a value the new type holds, or make the field optional",
+  "read-as-json":
+    "change the named texts so none is JSON by itself, or keep them in a new field",
   rounded: "change the named values so the new type holds each exactly",
   "out-of-range": "change the named values to ones within the new type's range",
   "no-time-or-offset": "give the named dates a time and an offset from UTC",

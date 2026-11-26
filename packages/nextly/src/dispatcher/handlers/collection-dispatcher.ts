@@ -64,6 +64,7 @@ import {
   deletionHoldOf,
 } from "../../domains/schema/builder-save/deletion-counts";
 import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
+import { writerAppliesHere } from "../../domains/schema/builder-save/entity-save-deps";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
@@ -135,6 +136,7 @@ import {
 } from "../helpers/authenticated-user";
 import {
   NOTHING_TO_REVIEW,
+  readConfirmedTypeChanges,
   reviewOf,
   withMoves,
   type BuilderSaveReview,
@@ -1008,6 +1010,7 @@ const COLLECTIONS_METHODS: Record<
         layout: {
           perLanguage: storesPerLanguage(collection),
           fileRetypes: container.has("builderSaveSetup"),
+          converts: container.has("builderSaveSetup") && writerAppliesHere(),
         },
       });
     },
@@ -1209,6 +1212,8 @@ const COLLECTIONS_METHODS: Record<
       // The counts the person confirmed deleting, read with the rest of the request, before the
       // lock: a malformed one refuses the save before anything is read from the database.
       const confirmedDeletions = readConfirmedDeletions(body);
+      // The counts the person confirmed for fields changing type.
+      const confirmedTypeChanges = readConfirmedTypeChanges(body);
       assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: "under-lock",
@@ -1637,6 +1642,9 @@ const COLLECTIONS_METHODS: Record<
                 ? {}
                 : { acknowledgedConversions }),
               ...confirmedDeletionsAnswer(confirmedDeletions),
+              ...(confirmedTypeChanges === undefined
+                ? {}
+                : { confirmedTypeChanges }),
             },
           });
           // Thrown before the registry row is written: the row keeps the fields the database
@@ -2431,7 +2439,7 @@ async function writerSaveOf(change: WriterChange): Promise<
       ...setup,
       adapter,
       logger,
-      applies: process.env.NODE_ENV === "development",
+      applies: writerAppliesHere(),
     },
     save: await withMoves(save, change.moves, adapter),
     fields,
@@ -2475,6 +2483,8 @@ function pushReasonOf(args: {
       columnOf: field =>
         getColumnDescriptor(field, adapter.dialect, "collection"),
       renames: renamedFieldsOf(args.renames),
+      // As the save's own road judges it (`collectionChangeCarriesValues`).
+      convertsValues: { dialect: adapter.dialect, builtBy: "collection" },
     });
     return carries ? "carries-values" : null;
   };

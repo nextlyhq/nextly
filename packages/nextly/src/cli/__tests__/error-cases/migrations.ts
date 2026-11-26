@@ -3,6 +3,7 @@
  *
  * @module cli/__tests__/error-cases/migrations
  */
+import { valuesChangedWhileConverting } from "../../../domains/schema/builder-save/type-conversion";
 import { tableBusyError } from "../../../domains/schema/busy-table/report";
 import { assertNoLegacyBookkeeping } from "../../../domains/schema/events/legacy-detection";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
@@ -15,6 +16,10 @@ import {
   coreUpgradeIncomplete,
   coreUpgradeUnsupported,
 } from "../../../domains/schema/migrate/core-reconcile";
+import {
+  readConvertsMark,
+  unjudgeableMarkRefusal,
+} from "../../../domains/schema/migrate/converts-header";
 import { coreDeletionOf } from "../../../domains/schema/migrate/core-retired-columns";
 import { migrationDriftError } from "../../../domains/schema/migrate/drift-error";
 import { ownWriteLockError } from "../../../domains/schema/migrate/migration-transaction";
@@ -662,6 +667,30 @@ export const MIGRATION_CASES = {
       ],
       { source: "20261103_101500_posts.sql", dialect: "postgresql" }
     ),
+  // As the conversion of a migration's field type change refuses values written to between its
+  // judgement and its writing (`convertColumn`).
+  TYPE_CHANGE_VALUES_CHANGED: () =>
+    valuesChangedWhileConverting({
+      label: "Collection 'products' (migration 20261123_101500_products.sql)",
+      field: "price",
+      table: "dc_products",
+      column: "price",
+      now: { kept: 3, changed: 1, lost: 2 },
+      judged: { kept: 3, changed: 2, lost: 1 },
+    }),
+  CONVERSION_RULES_UNKNOWN: () => {
+    try {
+      readConvertsMark(
+        "-- Migration: products\n-- Converts values: rules 2; dc_products.price\n\n-- UP\n",
+        "20261123_101500_products.sql"
+      );
+    } catch (error) {
+      return error;
+    }
+    throw new Error("the mark was read");
+  },
+  CONVERSION_SNAPSHOT_MISSING: () =>
+    unjudgeableMarkRefusal("20261123_101500_products.sql"),
   REQUIRED_COLUMN_UNCOUNTED: () =>
     requiredColumnUncountedError({
       table: "dc_posts",

@@ -139,9 +139,10 @@ function triggerTablesQuery(
  * MySQL lists a table's triggers only to an account holding `TRIGGER` on that table, while a row
  * change still fires them. Read from the privilege tables the account sees of its own grants. A
  * grant this does not find (on single tables, through a role, by a schema pattern) answers no,
- * which only makes the reading more cautious.
+ * which only makes the reading more cautious. Asked by `triggerTables`, and by a type change's
+ * conversion before it writes a table's rows (`overUpdateTriggers`).
  */
-function mysqlSeesEveryTriggerQuery(): SQL {
+export function mysqlSeesEveryTriggerQuery(): SQL {
   // `CURRENT_USER()` is `name@host`; the privilege tables name the grantee as `'name'@'host'`.
   const grantee = sql`CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''', SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''')`;
   return sql`SELECT 1 AS seen FROM information_schema.USER_PRIVILEGES

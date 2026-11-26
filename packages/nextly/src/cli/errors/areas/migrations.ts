@@ -47,6 +47,8 @@ import {
   sentences,
 } from "../messages";
 
+import { issueLines } from "./general";
+
 /**
  * A command's refusal once what the operator agreed to changed before it could act
  * (`planChangedAfterConsent`). The error's log context names the command and both lists, so the
@@ -934,6 +936,59 @@ export const MIGRATION_CODES = defineCodes({
             next: UNIQUE_INDEX_NAME_HELD_ADVICE,
           };
         },
+      },
+    ],
+  },
+  TYPE_CHANGE_VALUES_CHANGED: {
+    cause:
+      "A field type change's values were written to while they were converted, so it stopped before its column changed.",
+    from: [
+      {
+        // The conversion judges each value before any statement and again as it writes them; a
+        // count of values it keeps, changes or loses that differs between the two was written in
+        // between.
+        code: "VALIDATION_ERROR",
+        issue: "TYPE_CHANGE_VALUES_CHANGED",
+        describe: error => ({
+          what: "A field's type change stopped before its column changed: its values were written to while they were converted.",
+          why: issueLines(error).join("\n") || error.publicMessage,
+          next: "Run the command again once those writes have finished: the change converts the values as they then stand.",
+        }),
+      },
+    ],
+  },
+  CONVERSION_RULES_UNKNOWN: {
+    cause:
+      "A migration converts its field type changes' values by rules this version of Nextly cannot follow.",
+    from: [
+      {
+        // A file's mark (`readConvertsMark`) names rules this version does not know, or cannot be
+        // read: refused before any statement, never run by the database's cast instead.
+        code: "VALIDATION_ERROR",
+        reason: "converts-mark-unreadable",
+        describe: error => ({
+          what: "A migration's field type change converts its values by rules this version of Nextly cannot follow, so nothing of it ran.",
+          why: issueLines(error).join("\n") || error.publicMessage,
+          next: "Run it with the version of Nextly that wrote it, or a later one. A mark edited by hand goes back to the line the Schema Builder wrote.",
+        }),
+      },
+    ],
+  },
+  CONVERSION_SNAPSHOT_MISSING: {
+    cause:
+      "A migration converts its field type changes' values, and the snapshots its values are judged by do not both record its fields.",
+    from: [
+      {
+        // A marked file deployed or rolled back is judged between its own snapshot and the newest
+        // one before it (`unjudgeableMarkRefusal`): without both, nothing of it ran, never by the
+        // database's cast instead.
+        code: "VALIDATION_ERROR",
+        reason: "converts-snapshot-missing",
+        describe: error => ({
+          what: "A migration's field type change converts its values, and the snapshots that say how could not both be read, so nothing of it ran.",
+          why: issueLines(error).join("\n") || error.publicMessage,
+          next: "Restore the snapshot missing from the migrations folder's meta/ from version control, where it was committed with its migration, then run the command again.",
+        }),
       },
     ],
   },

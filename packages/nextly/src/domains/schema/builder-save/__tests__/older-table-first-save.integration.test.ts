@@ -32,7 +32,7 @@ import {
   withStrayDefault,
 } from "./helpers/older-table";
 
-type Field = { name: string; type: string };
+type Field = { name: string; type: string } & Record<string, unknown>;
 
 const FIELDS: Field[] = [
   { name: "heading", type: "text" },
@@ -41,13 +41,24 @@ const FIELDS: Field[] = [
 /** The person's change: one field added. */
 const WITH_EXTRA: Field[] = [...FIELDS, { name: "extra", type: "text" }];
 
+/** The fields with a relationship beside them, one entry's link on the row. */
+const WITH_LINK: Field[] = [
+  ...FIELDS,
+  { name: "related", type: "relationship", relationTo: "users" },
+];
 /**
- * The person's change that keeps the push rather than the save's file: a column's type changed,
- * whose stored values the push judges before it alters the column.
+ * The person's change that keeps the push rather than the save's file: how a relationship keeps its
+ * links, which only the push plans from the live table (`reachesRelationStorage`). A field's type
+ * changed is no such change: the save's file converts its values.
  */
-const HEADING_AS_NUMBER: Field[] = [
-  { name: "heading", type: "number" },
-  { name: "views", type: "number" },
+const WITH_LINKS: Field[] = [
+  ...FIELDS,
+  {
+    name: "related",
+    type: "relationship",
+    relationTo: "users",
+    hasMany: true,
+  },
 ];
 
 /** What the preview tells the Builder's review. */
@@ -74,7 +85,7 @@ interface Answers {
 interface Kind {
   name: string;
   table: string;
-  create(): Promise<unknown>;
+  create(fields?: Field[]): Promise<unknown>;
   preview(fields: Field[]): Promise<unknown>;
   apply(fields: Field[], answers: Answers): Promise<unknown>;
 }
@@ -92,12 +103,12 @@ const KINDS: Kind[] = [
   {
     name: "a collection",
     table: "dc_posts",
-    create: () =>
+    create: (fields = FIELDS) =>
       dispatchCollections(
         {} as ServiceContainer,
         "createCollection",
         {},
-        { name: "posts", label: "Post", fields: FIELDS }
+        { name: "posts", label: "Post", fields }
       ),
     preview: fields =>
       dispatchCollections(
@@ -117,11 +128,11 @@ const KINDS: Kind[] = [
   {
     name: "a Single",
     table: "single_notice",
-    create: () =>
+    create: (fields = FIELDS) =>
       dispatchSingles(
         "createSingle",
         {},
-        { slug: "notice", label: "Notice", fields: FIELDS }
+        { slug: "notice", label: "Notice", fields }
       ),
     preview: fields =>
       dispatchSingles(
@@ -139,11 +150,11 @@ const KINDS: Kind[] = [
   {
     name: "a field group",
     table: "comp_card",
-    create: () =>
+    create: (fields = FIELDS) =>
       dispatchComponents(
         "createComponent",
         {},
-        { slug: "card", label: "Card", fields: FIELDS }
+        { slug: "card", label: "Card", fields }
       ),
     preview: fields =>
       dispatchComponents(
@@ -268,8 +279,9 @@ for (const kind of KINDS) {
   );
 }
 
-// A Single's and a field group's save of a column type change is the push's; a collection's runs
-// its own files, adoption and conversion included, as the cases above show.
+// A Single's and a field group's save that changes how a relationship keeps its links is the
+// push's; a collection's change that reaches no relation runs its own files, adoption and
+// conversion included, as the cases above show.
 for (const kind of KINDS.filter(k => k.name !== "a collection")) {
   describeEachDialect(
     `the first Builder save of ${kind.name}'s table an earlier version made with a column default, by a change the push applies`,
@@ -279,7 +291,7 @@ for (const kind of KINDS.filter(k => k.name !== "a collection")) {
       beforeEach(async () => {
         vi.stubEnv("NODE_ENV", "development");
         t = await createTestNextly({ dialect });
-        await kind.create();
+        await kind.create(WITH_LINK);
         await asCreatedBefore(t, dialect, kind.table);
         // An earlier create wrote a column DEFAULT for a field stating a default; today's writes
         // none, and the field here states none, so the default is a difference to convert. On a
@@ -299,15 +311,13 @@ for (const kind of KINDS.filter(k => k.name !== "a collection")) {
             c => c.name === name
           );
         // Both columns there before the save: a column the reader missed would read as no default.
-        const headingBefore = await columnOf("heading");
+        const relatedBefore = await columnOf("related");
         const viewsBefore = await columnOf("views");
-        expect(headingBefore).toBeDefined();
+        expect(relatedBefore).toBeDefined();
         expect(viewsBefore).toBeDefined();
         expect(viewsBefore!.default).not.toBeNull();
 
-        const shown = await bodyOf<Preview>(
-          await kind.preview(HEADING_AS_NUMBER)
-        );
+        const shown = await bodyOf<Preview>(await kind.preview(WITH_LINKS));
         const keys = (shown.conversions ?? []).map(c => c.column);
         // What the person is asked to confirm: the default removed, on this table's column.
         expect(
@@ -323,7 +333,7 @@ for (const kind of KINDS.filter(k => k.name !== "a collection")) {
 
         // A save the push applies records the files it wrote applied once the table stands as the
         // newest one says: a default the push left would refuse it as drift, here.
-        await kind.apply(HEADING_AS_NUMBER, {
+        await kind.apply(WITH_LINKS, {
           schemaVersion: shown.schemaVersion,
           acknowledgedConversions: keys,
         });
@@ -338,15 +348,15 @@ for (const kind of KINDS.filter(k => k.name !== "a collection")) {
         expect(
           recorded.map(r => (r.ran === null ? null : Number(r.ran)))
         ).toEqual(recorded.map(() => 0));
-        // `heading` now has the type a number field's column has: `views`'s, made by the create.
-        expect(viewsBefore!.type).not.toBe(headingBefore!.type);
-        expect(await columnOf("heading")).toMatchObject({
-          type: viewsBefore!.type,
-        });
+        // `related` now has a list's column: JSON, where one link's is a text. SQLite keeps both as
+        // text, so there the column's type says nothing and only its being there is held.
+        const related = await columnOf("related");
+        expect(related).toBeDefined();
+        if (dialect !== "sqlite") {
+          expect(related!.type).not.toBe(relatedBefore!.type);
+        }
         expect(await columnOf("views")).toMatchObject({ default: null });
-        const next = await bodyOf<Preview>(
-          await kind.preview(HEADING_AS_NUMBER)
-        );
+        const next = await bodyOf<Preview>(await kind.preview(WITH_LINKS));
         expect(next.conversions).toEqual([]);
         const migrated = await migrateCore({
           extensionSchema: undefined,

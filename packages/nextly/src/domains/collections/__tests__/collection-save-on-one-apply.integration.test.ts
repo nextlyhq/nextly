@@ -56,12 +56,14 @@ const BEFORE = [
   { name: "rating", type: "number" },
   { name: "note", type: "text" },
   relationTo("owner", "people"),
+  relationTo("team", "teams"),
 ];
 
 /**
- * The save: a field made Unique, one renamed, one added, one removed, one retyped, one indexed,
- * and Draft/Published turned on. The keyed `owner` keeps its target: pointing a keyed
- * relationship elsewhere is refused before anything runs.
+ * The save: a field made Unique, one renamed, one added, one removed, one retyped, one indexed, one
+ * relationship keeping several links where it kept one, and Draft/Published turned on. The keyed
+ * `owner` keeps its target: pointing a keyed relationship elsewhere is refused before anything runs.
+ * How `team` keeps its links is what only the apply plans, from the live table.
  */
 const AFTER = [
   { name: "title", type: "text", unique: true },
@@ -70,6 +72,7 @@ const AFTER = [
   { name: "rating", type: "text" },
   { name: "note", type: "text", index: true },
   relationTo("owner", "people"),
+  { ...relationTo("team", "teams"), hasMany: true },
 ];
 
 describeEachDialect("a collection's Builder save", dialect => {

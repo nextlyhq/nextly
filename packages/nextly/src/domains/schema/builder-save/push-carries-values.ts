@@ -13,7 +13,10 @@ import { reachesRelationStorage } from "../pipeline/recorded-shapes";
 import {
   toSnakeCase,
   type ColumnDescriptor,
+  type SupportedDialect,
 } from "../services/field-column-descriptor";
+import type { ColumnAt } from "../value-conversion/type-change/field-type";
+import { convertsByValue } from "../value-conversion/type-change/field-type-changes";
 
 import { fieldsNewToSingleTable, namedOnRow } from "./single-row-fills";
 
@@ -26,7 +29,9 @@ import { fieldsNewToSingleTable, namedOnRow } from "./single-row-fills";
  * (`fieldsWithLeavingSettingsDeferred`); a field whose column changes type or size, whose stored
  * values the push judges before it alters the column (not a field kept per language before the
  * save and after it, whose only column is its translations column, which the file's `retypes`
- * step changes, judged in each language by the save before the file is written); a field new to a
+ * step changes, judged in each language by the save before the file is written; nor one the save
+ * converts value by value, `convertsValues`, whose file judges and converts each value before its
+ * statements, in their transaction); a field new to a
  * Single's table that its row
  * is filled in; and a change reaching a relation's storage (`reachesRelationStorage`), which the
  * push plans from the live table.
@@ -69,6 +74,13 @@ export async function pushCarriesValues(args: {
    * from a group is not new to it.
    */
   moved?: readonly MovedField[];
+  /**
+   * Where the save's fields are kept, on the dialect its file runs on, for a save that writes the
+   * values of a type change itself: a field whose change it converts value by value
+   * (`convertsByValue`) is the file's to change, not the push's. Absent, every type change keeps
+   * the push.
+   */
+  convertsValues?: ColumnAt & { dialect: SupportedDialect };
 }): Promise<boolean> {
   // Translation turned off: its file puts each column back as the main table's snapshot records
   // it, Required and Unique settings included, and the main file that follows is recorded as
@@ -164,36 +176,66 @@ function columnTypeChanges(args: {
   isStored: boolean;
   columnOf: (field: FieldDefinition) => ColumnDescriptor | null;
   renames: ReadonlyArray<{ from: string; to: string }>;
+  convertsValues?: ColumnAt & { dialect: SupportedDialect };
 }): boolean {
   const before = new Map(
     namedOnRow(args.oldFields).map(
       field => [toSnakeCase(field.name), field] as const
     )
   );
-  // The type as the database declares it, sizes included (`varchar(255)`, `numeric(10, 2)`): a
-  // field whose column keeps it (a Unique text on PostgreSQL stays `text`) changes nothing there.
-  const shape = (field: FieldDefinition) =>
-    args.columnOf(field)?.dialectType ?? null;
   return namedOnRow(args.newFields).some(field => {
     const column = toSnakeCase(field.name);
     const from =
       args.renames.find(rename => rename.to === column)?.from ?? column;
     const old = before.get(from);
-    if (old === undefined) return false;
-    // Kept per language before the save and after it: the field has no column on this table, and
-    // its translations column takes the new type in the save's own file.
-    if (
-      isFieldLocalized(old, args.wasStored) &&
-      isFieldLocalized(field, args.isStored)
-    ) {
-      return false;
-    }
-    // A field gaining or losing a column of its own (a many-to-many, kept in a junction table, made
-    // one-to-one) changes no column's type: the column is added or dropped, as the file writes it.
-    const was = shape(old);
-    const is = shape(field);
-    return was !== null && is !== null && was !== is;
+    return old !== undefined && fieldColumnTypeChanges(old, field, args);
   });
+}
+
+/**
+ * Whether `old` becoming `field` changes a column's type that the push must judge: not a field
+ * kept per language before the save and after it, which has no column on this table and whose
+ * translations column takes the new type in the save's own file; not one gaining or losing a column
+ * of its own (a many-to-many, kept in a junction table, made one-to-one), whose column is added or
+ * dropped as the file writes it; and not one the save converts value by value, whose file judges
+ * and converts each value. The type is the one the database declares, sizes included
+ * (`varchar(255)`, `numeric(10, 2)`): a field whose column keeps it changes nothing there.
+ */
+function fieldColumnTypeChanges(
+  old: FieldDefinition,
+  field: FieldDefinition,
+  args: Parameters<typeof columnTypeChanges>[0]
+): boolean {
+  if (
+    isFieldLocalized(old, args.wasStored) &&
+    isFieldLocalized(field, args.isStored)
+  ) {
+    return false;
+  }
+  const was = dialectTypeOf(args, old);
+  const is = dialectTypeOf(args, field);
+  if (was === null || is === null || was === is) return false;
+  return !convertsInFile(old, field, args.convertsValues);
+}
+
+/** The type the database declares for a field's column on this dialect, or none. */
+function dialectTypeOf(
+  args: Parameters<typeof columnTypeChanges>[0],
+  field: FieldDefinition
+): string | null {
+  return args.columnOf(field)?.dialectType ?? null;
+}
+
+/** Whether the save's file converts `old` becoming `field` value by value (`convertsByValue`). */
+function convertsInFile(
+  old: FieldDefinition,
+  field: FieldDefinition,
+  converts: Parameters<typeof columnTypeChanges>[0]["convertsValues"]
+): boolean {
+  return (
+    converts !== undefined &&
+    convertsByValue(old, field, converts.dialect, converts)
+  );
 }
 
 /** Whether a field new to a Single's table is filled in its row, which the table holds. */

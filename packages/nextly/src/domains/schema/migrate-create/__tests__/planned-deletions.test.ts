@@ -16,6 +16,7 @@ import {
   judgedDeletions,
   refuseDeletionsBeforeReads,
   type DeletionPlan,
+  withFills,
 } from "../planned-deletions";
 
 const POSTS: MinimalConfigEntity = {
@@ -183,6 +184,46 @@ describe("judgedDeletions", () => {
       ['DROP TABLE "dc_scratch"'],
     ]);
     expect(all).toEqual([]);
+  });
+});
+
+// A fill replaces values, or puts one where there was none, under the same consent as a deletion: the
+// file says so of its column, whatever else it says of it.
+describe("the fills a file writes", () => {
+  const typeChange = {
+    kind: "column" as const,
+    table: "dc_posts",
+    column: "price",
+    reason: "type changes from text to integer",
+  };
+  const filled = {
+    table: "dc_posts",
+    column: "price",
+    fill: { value: "a 'b'" },
+  };
+  const replaced =
+    "each row the change would leave with no value is replaced with \"a 'b'\"";
+
+  it("is named beside the column's type change, and as itself where none is listed", () => {
+    expect(withFills([typeChange], [filled])).toEqual([
+      { ...typeChange, reason: `${typeChange.reason}; ${replaced}` },
+    ]);
+    expect(withFills([], [filled])).toEqual([
+      { kind: "column", table: "dc_posts", column: "price", reason: replaced },
+    ]);
+  });
+
+  it("changes nothing of a file with none, or of another column", () => {
+    const other = { ...typeChange, column: "summary" };
+    const unfilled = { table: "dc_posts", column: "price" };
+    expect(withFills([typeChange, other], [unfilled])).toEqual([
+      typeChange,
+      other,
+    ]);
+    expect(withFills([other], [filled])).toEqual([
+      other,
+      { kind: "column", table: "dc_posts", column: "price", reason: replaced },
+    ]);
   });
 });
 

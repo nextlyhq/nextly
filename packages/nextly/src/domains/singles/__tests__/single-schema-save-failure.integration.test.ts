@@ -323,6 +323,9 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
     const { thrown, said } = await attempt([
       { name: "count", type: "text" },
       { name: "score", type: "number" },
+      // The row filled in a field new to its table, so the service's own statements apply the save:
+      // a save of the type change alone converts its values in its file.
+      { name: "rank", type: "number", required: true, defaultValue: 1 },
     ]);
 
     // Control: the column was added once the change had landed.

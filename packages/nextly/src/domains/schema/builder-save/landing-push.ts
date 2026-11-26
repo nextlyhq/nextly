@@ -16,6 +16,7 @@
  * @module domains/schema/builder-save/landing-push
  */
 import { NextlyError } from "../../../errors/nextly-error";
+import type { PublicData } from "../../../errors/public-data";
 import { busyTableLeftNothing } from "../busy-table/report";
 import type { PromptDispatcher } from "../pipeline/pushschema-pipeline-interfaces";
 
@@ -225,14 +226,17 @@ function keptFilesText(
 
 /**
  * `error` told with `kept` after its own words: its code, status, public data and log message
- * unchanged, so a caller reading any of them reads what the failure said.
+ * unchanged, so a caller reading any of them reads what the failure said. The one thing it no
+ * longer says is that its review is to be taken again (`ReviewAgainPublicData`), which is said only
+ * where nothing was changed.
  */
 function withKeptFiles(
   error: NextlyError,
   kept: string,
   keptFiles: readonly string[]
 ): NextlyError {
-  const { publicData, logMessage } = error;
+  const { logMessage } = error;
+  const publicData = withoutReviewAgain(error.publicData);
   return new NextlyError({
     code: error.code,
     statusCode: error.statusCode,
@@ -242,6 +246,18 @@ function withKeptFiles(
     logContext: { ...error.logContext, keptFiles: [...keptFiles] },
     cause: error,
   });
+}
+
+/**
+ * `publicData` with no review to take again: its marker and the counts beside it left out, and
+ * everything else as it was. Absent where it was absent, or said nothing else.
+ */
+function withoutReviewAgain(publicData: PublicData): PublicData {
+  if (publicData === undefined || !("reviewAgain" in publicData)) {
+    return publicData;
+  }
+  const { reviewAgain: _reviewAgain, counts: _counts, ...rest } = publicData;
+  return Object.keys(rest).length === 0 ? undefined : rest;
 }
 
 /**

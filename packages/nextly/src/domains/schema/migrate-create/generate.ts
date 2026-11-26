@@ -104,6 +104,7 @@ import {
   type StructuredField,
 } from "../../i18n/shared-structure";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
+import type { ConvertedColumnName } from "../migrate/converts-header";
 import type { Deletion } from "../migrate/data-loss-consent";
 import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
 import { mergedBy } from "../migrate/history-line";
@@ -535,6 +536,12 @@ export interface GenerateArgs {
    * with its destructive mark.
    */
   judgeDeletions?: (deletions: readonly Deletion[]) => Promise<void>;
+  /**
+   * The columns whose type changes the run's main file converts value by value (a Schema Builder
+   * save's, `typeConversionOf`), which its header marks (`FormatArgs.convertsValues`). None from
+   * `migrate:create`, whose files keep the database's cast.
+   */
+  convertsValues?: readonly ConvertedColumnName[];
 }
 
 /** A translation-table migration file a run writes beside the main one, by what it is for. */
@@ -1766,6 +1773,9 @@ export async function generateMigration(
     settingsChanges: changedSettings.map(describeSettingsChange),
     permissionChanges: changedPermissions.map(describePermissionChange),
     deletions: judged.main,
+    ...(args.convertsValues === undefined
+      ? {}
+      : { convertsValues: args.convertsValues }),
     // A junction table the caller adds is a table this file changes.
     changesNoTable:
       operations.length === 0 &&

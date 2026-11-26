@@ -9,6 +9,12 @@
  * development database never held, then the rest of the run, with the data-loss consent the type
  * change's file asks for. Driven through the command's own entry point with nobody to ask; only
  * the config loader and the command's connection are stood in for.
+ *
+ * The development save marks its file as converting the values itself (`-- Converts values:`).
+ * Most cases here deploy the file without that mark, as one written before a save converted
+ * values, which `nextly migrate` judges by the database's cast (`withoutConversionMarks`). The
+ * translated cases deploy it marked: each language's value converted, and one that cannot convert
+ * cleared under the consent naming its column.
  */
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -38,6 +44,7 @@ import { splitSqlStatements } from "../../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import type { RenameCandidate } from "../../../domains/schema/pipeline/pushschema-pipeline-interfaces";
 import { resolveCollectionTableName } from "../../../domains/schema/utils/resolve-table-name";
+import { rewritesValuesOn } from "../../../domains/schema/value-conversion/type-change/field-type-changes";
 import {
   judgementIn,
   refusalText,
@@ -98,6 +105,24 @@ const SERVER_URL_ENV = {
 } as const;
 
 const MIGRATIONS = "./database/history";
+
+/**
+ * The migration files in `dir` without the mark of the values they convert, as files written
+ * before a save converted values: `nextly migrate` judges such a file by the database's cast. A
+ * folder with no marked file would test nothing, so at least one must be found, but where no road
+ * rewrites values (MySQL): a save there marks none, and its files are such files already.
+ */
+function withoutConversionMarks(dir: string, dialect: TestDialect): void {
+  let marked = 0;
+  for (const file of readdirSync(dir).filter(name => name.endsWith(".sql"))) {
+    const text = readFileSync(join(dir, file), "utf-8");
+    const unmarked = text.replace(/^-- Converts values:.*\n/m, "");
+    if (unmarked === text) continue;
+    writeFileSync(join(dir, file), unmarked);
+    marked += 1;
+  }
+  expect(marked > 0).toBe(rewritesValuesOn(dialect));
+}
 const DEFINITION_FILE = "./schema/builder.json";
 const TABLE = "dc_posts";
 
@@ -204,6 +229,7 @@ describe.each(getConfiguredTestDialects())(
       );
       await current.destroy();
       current = undefined;
+      withoutConversionMarks(join(project, "database", "history"), dialect);
     }, 180_000);
 
     afterEach(async () => {
@@ -659,6 +685,7 @@ describe.each(getConfiguredTestDialects())(
       }
       await current.destroy();
       current = undefined;
+      withoutConversionMarks(history, dialect);
 
       // The deploy: every file before the field leaves translation, then a value the development
       // database never held, in its default language.
@@ -770,6 +797,7 @@ describe.each(getConfiguredTestDialects())(
       );
       await current.destroy();
       current = undefined;
+      withoutConversionMarks(history, dialect);
 
       const files = readdirSync(history)
         .filter(file => file.endsWith(".sql"))
@@ -1053,42 +1081,86 @@ describe.each(getConfiguredTestDialects())(
       await rm(site, { recursive: true, force: true });
     }, 240_000);
 
-    // Each language's value is judged before the change's first file: a value only `es` holds
+    // The development save's file is marked as converting each value itself: a value only `es`
+    // holds that no number reads is cleared under the consent naming the translations column,
+    // while `en` converts, and the column takes the new type.
+    it.skipIf(!rewritesValuesOn(dialect))(
+      "clears under consent a value one language holds that no number reads, and converts the rest",
+      async () => {
+        const { site, adapter } = await deployedTranslated({
+          en: "12",
+          es: "abc",
+        });
+        vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", "dc_notes.v,dc_notes_locales.v");
+
+        expect(
+          await runMigrate(
+            { cwd: site, quiet: true, throwOnFailure: true } as never,
+            context
+          ).then(
+            () => "applied",
+            (error: unknown) => error
+          )
+        ).toBe("applied");
+
+        expect(await columnType(adapter, "dc_notes_locales", "v")).not.toMatch(
+          /char|text/
+        );
+        const rows = (await adapter.executeQuery(
+          `SELECT ${q("_locale")} AS locale, ${q("v")} AS v FROM ${q("dc_notes_locales")} ORDER BY ${q("_locale")}`
+        )) as Array<{ locale: string; v: unknown }>;
+        expect(
+          rows.map(row => [row.locale, row.v === null ? null : Number(row.v)])
+        ).toEqual([
+          ["en", 12],
+          ["es", null],
+        ]);
+        await rm(site, { recursive: true, force: true });
+      },
+      240_000
+    );
+
+    // Where no road rewrites values (MySQL), consent clears nothing, as the database's cast clears
+    // none: each language's value is judged before the change's first file: a value only `es` holds
     // that no number reads refuses the run, naming that row, and the column keeps its type.
-    it("refuses a deploy over a value one language holds that no number reads, before any statement", async () => {
-      const { site, adapter } = await deployedTranslated({
-        en: "12",
-        es: "abc",
-      });
-      vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", "dc_notes.v,dc_notes_locales.v");
+    it.runIf(!rewritesValuesOn(dialect))(
+      "refuses a deploy over a value one language holds that no number reads, before any statement",
+      async () => {
+        const { site, adapter } = await deployedTranslated({
+          en: "12",
+          es: "abc",
+        });
+        vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", "dc_notes.v,dc_notes_locales.v");
 
-      const refused = await runMigrate(
-        { cwd: site, quiet: true, throwOnFailure: true } as never,
-        context
-      ).then(
-        () => "applied",
-        (error: unknown) => error
-      );
+        const refused = await runMigrate(
+          { cwd: site, quiet: true, throwOnFailure: true } as never,
+          context
+        ).then(
+          () => "applied",
+          (error: unknown) => error
+        );
 
-      expect(NextlyError.is(refused)).toBe(true);
-      const errors = (
-        refused as {
-          publicData?: {
-            errors?: { path: string; code: string; message: string }[];
-          };
-        }
-      ).publicData?.errors;
-      expect(errors).toEqual([
-        expect.objectContaining({
-          path: "fields.v",
-          code: "TYPE_CHANGE_LOSES_VALUES",
-          message: expect.stringMatching(/\bes\b/),
-        }),
-      ]);
-      expect(await columnType(adapter, "dc_notes_locales", "v")).toMatch(
-        /char|text/
-      );
-      await rm(site, { recursive: true, force: true });
-    }, 240_000);
+        expect(NextlyError.is(refused)).toBe(true);
+        const errors = (
+          refused as {
+            publicData?: {
+              errors?: { path: string; code: string; message: string }[];
+            };
+          }
+        ).publicData?.errors;
+        expect(errors).toEqual([
+          expect.objectContaining({
+            path: "fields.v",
+            code: "TYPE_CHANGE_LOSES_VALUES",
+            message: expect.stringMatching(/\bes\b/),
+          }),
+        ]);
+        expect(await columnType(adapter, "dc_notes_locales", "v")).toMatch(
+          /char|text/
+        );
+        await rm(site, { recursive: true, force: true });
+      },
+      240_000
+    );
   }
 );

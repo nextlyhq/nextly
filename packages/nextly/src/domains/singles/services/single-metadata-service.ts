@@ -116,6 +116,7 @@ import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import type { ReconcileSingleCompanionArgs } from "./reconcile-single-companion";
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
+import type { SingleCompanionRetype } from "./single-companion-retype";
 import type {
   SingleRegistryService,
   UnregisteredSingleRow,
@@ -356,6 +357,13 @@ interface UpdateDdlPlan {
   sqliteTypes?: ReadonlyMap<string, SqliteTypeChange>;
   /** The values judged again on the rebuild's own transaction, where it changes a type. */
   sqliteTypeJudge?: (db: unknown) => Promise<void>;
+  /**
+   * The translations columns the plan's statements give their fields' new types, run ahead of
+   * `migrationSQL` in its transaction (`singleCompanionRetype`); absent where none takes another type.
+   */
+  companionRetype?: SingleCompanionRetype | undefined;
+  /** The values judged again in that transaction, before its first statement. */
+  retypeJudge?: ((db: unknown) => Promise<void>) | undefined;
   /** The field list the table holds once this plan has run. */
   fields: FieldDefinition[];
   /** The field list the table holds now. The companion reconcile diffs against it. */
@@ -386,6 +394,21 @@ interface UpdateDdlPlan {
    * overwritten with a verdict about a migration that was never requested.
    */
   ownsMigrationStatus: boolean;
+}
+
+/** The fields whose translations column a plan retypes, as a type change's judgement takes them. */
+function retypedIn(retype: SingleCompanionRetype | undefined): {
+  retyped?: ReadonlySet<string>;
+} {
+  return retype === undefined ? {} : { retyped: retype.fields };
+}
+
+/** The same fields as the save's writer takes them. */
+function retypedByPlan(
+  plan: UpdateDdlPlan | null
+): Pick<CollectionSave, "retypedTranslations"> {
+  const { retyped } = retypedIn(plan?.companionRetype);
+  return retyped === undefined ? {} : { retypedTranslations: retyped };
 }
 
 /**
@@ -1363,6 +1386,7 @@ export class SingleMetadataService {
       entity: entityWith(planned),
       change: "update",
       ...(rename ? { renamedFields: [rename] } : {}),
+      ...retypedByPlan(plan),
       ...(await entityRelations(
         deps.adapter,
         this.logger,
@@ -1455,6 +1479,8 @@ export class SingleMetadataService {
       renames: renamed
         ? [{ from: toSnakeCase(renamed.from), to: toSnakeCase(renamed.to) }]
         : [],
+      // A type change the save converts value by value is its file's to apply.
+      convertsValues: { dialect, builtBy: "collection" },
       // A Single's one row is filled in, in the service's own statements, for a field new to its
       // table that is required or states a default the row takes: a value the file does not carry.
       singleRow: {
@@ -1969,16 +1995,22 @@ export class SingleMetadataService {
       alterInput.oldFields
     );
 
+    const companionRetype = await this.companionRetypeOf(adapter, input, {
+      previousFields: startingFields,
+      fields,
+    });
+    const typeChange = {
+      previousFields: startingFields,
+      fields,
+      wasLocalized,
+      isLocalized,
+      migrationStatus: existing.migrationStatus,
+      ...retypedIn(companionRetype),
+    };
     await this.refuseWhatTheValueCannotTake(
       input.slug,
       tableName,
-      {
-        previousFields: startingFields,
-        fields,
-        wasLocalized,
-        isLocalized,
-        migrationStatus: existing.migrationStatus,
-      },
+      typeChange,
       liveFacts.liveColumnTypes,
       schemaService
     );
@@ -2059,20 +2091,88 @@ export class SingleMetadataService {
       sqliteTypeJudge: this.typeChangeJudgeInRebuild(
         input.slug,
         tableName,
-        {
-          previousFields: startingFields,
-          fields,
-          wasLocalized,
-          isLocalized,
-          migrationStatus: existing.migrationStatus,
-        },
+        typeChange,
         schemaService
       ),
+      companionRetype,
+      retypeJudge:
+        companionRetype === undefined
+          ? undefined
+          : this.typeChangeJudge(
+              input.slug,
+              tableName,
+              typeChange,
+              schemaService
+            ),
       fields,
       previousFields,
       describesWholeTable: false,
       ownsMigrationStatus: true,
     };
+  }
+
+  /**
+   * Whether the road this save takes can give a translations column its new type: its own file, which
+   * the writer runs, or its own statements, whose transaction changes both tables. Not its statements
+   * on MySQL, which commits each one, so a save that stopped between the two tables would leave them
+   * apart, with nothing to put them back.
+   */
+  private async retypesOnItsRoad(
+    adapter: DrizzleAdapter,
+    input: UpdateSingleSchemaInput,
+    change: { previousFields: FieldDefinition[]; fields: FieldDefinition[] }
+  ): Promise<boolean> {
+    if (adapter.getCapabilities().dialect !== "mysql") return true;
+    if (this.saveDeps()?.applies !== true) return false;
+    const before = (input.existing.fields ??
+      []) as unknown as FieldDefinition[];
+    return !(await this.carriesValues(
+      input,
+      before,
+      change.fields,
+      await this.detectedFieldRename(before, change.fields)
+    ));
+  }
+
+  /**
+   * The translations columns this save's own statements give their fields' new types
+   * (`singleCompanionRetype`): none of a Single not translated before and after, or whose
+   * translations table is not there.
+   */
+  private async companionRetypeOf(
+    adapter: DrizzleAdapter,
+    input: UpdateSingleSchemaInput,
+    change: { previousFields: FieldDefinition[]; fields: FieldDefinition[] }
+  ): Promise<SingleCompanionRetype | undefined> {
+    if (!input.wasLocalized || !input.isLocalized) return undefined;
+    const { tableName } = input.existing;
+    if (!(await adapter.tableExists(`${tableName}_locales`))) return undefined;
+    if (!(await this.retypesOnItsRoad(adapter, input, change)))
+      return undefined;
+    const [{ singleCompanionRetype }, { perLanguageAfter, perLanguageBefore }] =
+      await Promise.all([
+        import("./single-companion-retype"),
+        import("../../schema/value-conversion/type-change/field-type-changes"),
+      ]);
+    const { translatedBefore = new Set<string>() } = perLanguageBefore(
+      { localized: input.wasLocalized },
+      tableName,
+      change.previousFields
+    );
+    const { translatedAfter = new Set<string>() } = perLanguageAfter(
+      { localized: input.isLocalized },
+      change.fields
+    );
+    return singleCompanionRetype({
+      adapter,
+      slug: input.slug,
+      tableName,
+      defaultLocale: appLocalization()?.defaultLocale ?? "en",
+      previous: change.previousFields,
+      next: change.fields,
+      translatedBefore,
+      translatedAfter,
+    });
   }
 
   /**
@@ -2092,6 +2192,10 @@ export class SingleMetadataService {
       wasLocalized: boolean;
       isLocalized: boolean;
       migrationStatus: string | null | undefined;
+      /** The fields whose translations column the save gives the new type (`companionRetypeOf`). */
+      retyped?: ReadonlySet<string>;
+      /** Those judged already, whose columns the save's statements have changed since. */
+      judgedBefore?: ReadonlySet<string> | undefined;
     },
     schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
   ) {
@@ -2122,6 +2226,12 @@ export class SingleMetadataService {
         change.previousFields
       ),
       ...perLanguageAfter({ localized: change.isLocalized }, change.fields),
+      ...(change.retyped === undefined
+        ? {}
+        : { retypedTranslations: change.retyped }),
+      ...(change.judgedBefore === undefined
+        ? {}
+        : { ignore: change.judgedBefore }),
       previous: change.previousFields,
       next: change.fields,
       ...(rename !== null
@@ -2129,6 +2239,9 @@ export class SingleMetadataService {
         : {}),
       migrationStatus: change.migrationStatus ?? null,
       builtBy: builtByFor("single", true),
+      // Judged as the save's writer judges it: where the writer applies the change here, it
+      // writes each value of a pair it converts, so a Single answers a pair as a collection does.
+      rewrites: this.saveDeps()?.applies === true,
     });
   }
 
@@ -2148,6 +2261,8 @@ export class SingleMetadataService {
       wasLocalized: boolean;
       isLocalized: boolean;
       migrationStatus: string | null | undefined;
+      /** The fields whose translations column the save gives the new type (`companionRetypeOf`). */
+      retyped?: ReadonlySet<string>;
     },
     schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
   ): (db: unknown) => Promise<void> {
@@ -2163,12 +2278,33 @@ export class SingleMetadataService {
               ? { ...field, name: rename.to.name }
               : field
           );
+    // The columns the save's own statements retyped were judged before them (`retypeJudge`): by now
+    // they hold what those wrote.
+    return this.typeChangeJudge(
+      slug,
+      tableName,
+      { ...change, previousFields, judgedBefore: change.retyped },
+      schemaService
+    );
+  }
+
+  /**
+   * The judgement as a check run on a transaction of the save's: it throws what it would refuse.
+   *
+   * @throws NextlyError `VALIDATION_ERROR` naming each field
+   */
+  private typeChangeJudge(
+    slug: string,
+    tableName: string,
+    change: Parameters<SingleMetadataService["typeChangeRefusals"]>[3],
+    schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
+  ): (db: unknown) => Promise<void> {
     return async db => {
       const refusals = await this.typeChangeRefusals(
         db,
         slug,
         tableName,
-        { ...change, previousFields },
+        change,
         schemaService
       );
       if (refusals.length === 0) return;
@@ -2205,6 +2341,8 @@ export class SingleMetadataService {
       isLocalized: boolean;
       /** The registry row's status: a type change while it awaits its migration is refused. */
       migrationStatus: string | null | undefined;
+      /** The fields whose translations column the save gives the new type (`companionRetypeOf`). */
+      retyped?: ReadonlySet<string>;
     },
     liveColumnTypes: ReadonlyMap<string, string>,
     schemaService: Pick<
@@ -2881,19 +3019,26 @@ export class SingleMetadataService {
   ): Promise<void> {
     if (
       !plan.migrationSQL &&
+      !plan.companionRetype &&
       !plan.sqliteNullability?.size &&
       !plan.sqliteTypes?.size
     ) {
       return;
     }
+    const { asMigration } = await import("./single-companion-retype");
     try {
       await applyMigrationWhole({
         db: adapter.getDrizzle(),
         dialect: adapter.getCapabilities().dialect,
-        migrationSQL: plan.migrationSQL,
+        // The translations columns' new types first, in the one transaction both tables change in.
+        migrationSQL: asMigration([
+          plan.companionRetype?.sql ?? "",
+          plan.migrationSQL,
+        ]),
         entity: "single",
         tolerateApplied: true,
         busyTable: this.busyTableWait(adapter),
+        ...(plan.retypeJudge === undefined ? {} : { before: plan.retypeJudge }),
         sqliteNullability: {
           adapter,
           tableName,

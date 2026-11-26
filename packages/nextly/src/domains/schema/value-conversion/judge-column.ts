@@ -44,6 +44,7 @@ const CLASS_OF: Record<ConversionReasonKind, ConversionClass> = {
   "kind-never-held": "lossy",
   "column-refuses": "lossy",
   "field-refuses": "lossy",
+  "read-as-json": "blocked",
   rounded: "blocked",
   "out-of-range": "blocked",
   "no-time-or-offset": "blocked",

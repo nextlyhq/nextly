@@ -14,6 +14,9 @@
  *
  * @module dispatcher/helpers/builder-save-change
  */
+import { z } from "zod";
+
+import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { container } from "../../di/container";
 import type {
   BuilderSaveSetup,
@@ -22,6 +25,7 @@ import type {
   CollectionSavePreview,
 } from "../../domains/schema/builder-save/collection-save";
 import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
+import { writerAppliesHere } from "../../domains/schema/builder-save/entity-save-deps";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
@@ -69,9 +73,7 @@ export function builderSaveDeps(): CollectionSaveDeps | undefined {
     ...setup,
     adapter,
     logger: getLoggerFromDI() ?? consoleLogger,
-    // Development records each file applied, as the Builder does for a
-    // collection; elsewhere the deploy's `nextly migrate` applies them.
-    applies: process.env.NODE_ENV === "development",
+    applies: writerAppliesHere(),
   };
 }
 
@@ -352,16 +354,59 @@ export async function reviewBuilderSchemaChange(
  */
 export type BuilderSaveReview = Pick<
   CollectionSavePreview,
-  "notices" | "conversions"
+  "notices" | "conversions" | "typeChanges"
 >;
 
 /** The review of a save with no writer: nothing beyond the change. */
 export const NOTHING_TO_REVIEW: BuilderSaveReview = {
   notices: [],
   conversions: [],
+  typeChanges: [],
 };
 
-/** The review a save's preview gives. */
+/**
+ * The review a save's preview gives, with how many values each field type change keeps, changes and
+ * loses (`typeChanges`), which the Builder sends back as `confirmedTypeChanges` once confirmed.
+ */
 export function reviewOf(preview: CollectionSavePreview): BuilderSaveReview {
-  return { notices: preview.notices, conversions: preview.conversions };
+  return {
+    notices: preview.notices,
+    conversions: preview.conversions,
+    typeChanges: preview.typeChanges,
+  };
+}
+
+/**
+ * The counts the person confirmed for fields changing type, as an apply's body sends them: each
+ * field's name and how many of its values the change keeps, changes and loses, at most 500. Absent
+ * where the body sends none: a change that loses values is then refused as it always has been, and
+ * one that loses none goes ahead (`CollectionSave.confirmedTypeChanges`). A required field's item may
+ * carry the value written into the rows its change would leave with none (`fill`), held to the field's
+ * new type where the change is judged. One reading for the
+ * collection's, the Single's and the field group's apply, so the three take the same consent.
+ */
+const ConfirmedTypeChangesBody = z.object({
+  confirmedTypeChanges: z
+    .array(
+      z.object({
+        field: z.string().min(1),
+        kept: z.number().int().min(0),
+        changed: z.number().int().min(0),
+        lost: z.number().int().min(0),
+        fill: z.unknown().optional(),
+      })
+    )
+    .max(500)
+    .optional(),
+});
+
+export function readConfirmedTypeChanges(
+  body: unknown
+): z.infer<typeof ConfirmedTypeChangesBody>["confirmedTypeChanges"] {
+  try {
+    return ConfirmedTypeChangesBody.parse(body ?? {}).confirmedTypeChanges;
+  } catch (error) {
+    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+    throw error;
+  }
 }

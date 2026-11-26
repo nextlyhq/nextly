@@ -1,0 +1,29 @@
+---
+title: CONVERSION_SNAPSHOT_MISSING
+description: "A migration converts its field type changes' values, and the snapshots its values are judged by do not both record its fields."
+---
+
+## Cause
+
+A migration converts its field type changes' values, and the snapshots its values are judged by do not both record its fields.
+
+A migration the Schema Builder writes for a field type change marks, in its header, the columns it converts value by value:
+
+```sql
+-- Converts values: rules 1; dc_products.price
+```
+
+Which value converts, and to what, is read from two snapshots in the migrations folder's `meta/`: the migration's own, which records its fields as it leaves them, and the newest one before it, which records them as it found them. `nextly migrate` judges the change from the earlier one to the migration's own, and `nextly migrate:down` judges its rollback the other way round. Where either snapshot is missing, or was written before snapshots recorded fields, the change cannot be judged, so the command refuses it before any of its statements runs. It is never left to the database's cast instead, which could write other values than the Schema Builder's save gave its own database.
+
+## Fix
+
+Restore the snapshot missing from the migrations folder's `meta/` from version control, where it was committed with its migration, then run the command again.
+
+## Example
+
+```text
+✗ A migration's field type change converts its values, and the snapshots that say how could not both be read, so nothing of it ran.
+  Why:  migrations.20261123_101500_products.sql: Migration 20261123_101500_products.sql converts its field type changes' values, but the snapshots it is judged between do not both record the fields: one is missing from meta/, or was written before snapshots recorded them. Nothing was changed.
+  Next: Restore the snapshot missing from the migrations folder's meta/ from version control, where it was committed with its migration, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/conversion-snapshot-missing  (CONVERSION_SNAPSHOT_MISSING)
+```

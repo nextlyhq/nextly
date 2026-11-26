@@ -93,6 +93,170 @@ describe("a stored value read as its old field reads it", () => {
 });
 
 describe("a type change collected over its stored values", () => {
+  // What leaves a NOT NULL column without a value: a lost value, and a stored empty the new type keeps
+  // as none. A row that holds none already is not emptied.
+  it("counts the rows it empties: a lost value and a stored empty kept as none, never a null", async () => {
+    const texts = await collectTypeChange(
+      typeOf("postgresql", "text"),
+      typeOf("postgresql", "number"),
+      stored("12", "abc", null),
+      undefined,
+      { rewrites: true }
+    );
+    expect([texts.emptied, texts.counts]).toEqual([
+      1,
+      { kept: 1, changed: 1, lost: 1, blocked: 0 },
+    ]);
+
+    const lists = await collectTypeChange(
+      typeOf("postgresql", "chips"),
+      typeOf("postgresql", "text"),
+      stored('["x"]', "[]", null),
+      undefined,
+      { rewrites: true }
+    );
+    expect([lists.emptied, lists.counts]).toEqual([
+      1,
+      { kept: 2, changed: 1, lost: 0, blocked: 0 },
+    ]);
+  });
+
+  // A required field's fill goes into each row left with no value: one lost, one emptied, and one that
+  // holds none only where the column would refuse it. Each is counted as its own value was judged.
+  it.each([
+    ["text", "number", "0", true, { kept: 1, changed: 1, lost: 1 }, [1, 1, 3]],
+    ["text", "number", "0", false, { kept: 1, changed: 1, lost: 1 }, [1, 1, 2]],
+    [
+      "chips",
+      "text",
+      "none",
+      true,
+      { kept: 2, changed: 1, lost: 0 },
+      [1, 1, 3],
+    ],
+    [
+      "chips",
+      "text",
+      "none",
+      false,
+      { kept: 2, changed: 1, lost: 0 },
+      [1, 1, 2],
+    ],
+  ] as const)(
+    "hands the fill over for each row it is written into (%s to %s, %s, rows holding none too: %s)",
+    async (from, to, readsAs, empties, counts, [emptied, empty, written]) => {
+      const handed: [string, string][] = [];
+      const texts =
+        from === "text" ? ["012", "abc", null] : ['["x"]', "[]", null];
+      const result = await collectTypeChange(
+        typeOf("postgresql", from),
+        typeOf("postgresql", to),
+        stored(...texts),
+        undefined,
+        {
+          rewrites: true,
+          fill: { readsAs, empties },
+          onReading: (key, reading) =>
+            handed.push([(key as { id: string }).id, reading]),
+        }
+      );
+
+      expect(handed).toEqual([
+        ["1", from === "text" ? "12" : "x"],
+        ["2", readsAs],
+        ...(empties ? [["3", readsAs]] : []),
+      ]);
+      expect(result.counts).toMatchObject(counts);
+      expect([result.emptied, result.empty, result.written]).toEqual([
+        emptied,
+        empty,
+        written,
+      ]);
+    }
+  );
+
+  it("counts a fill as a value a unique field holds once", async () => {
+    const read = (...texts: (string | null)[]) =>
+      collectTypeChange(
+        typeOf("postgresql", "text"),
+        typeOf("postgresql", "number"),
+        stored(...texts),
+        undefined,
+        { rewrites: true, unique: true, fill: { readsAs: "0", empties: true } }
+      );
+
+    expect((await read("12", "abc")).judgement.class).toBe("lossy");
+    expect((await read("abc", "def")).judgement.reasons).toContainEqual(
+      expect.objectContaining({ kind: "repeated" })
+    );
+    // One another row holds already, as its own value.
+    expect((await read("0", null)).judgement.class).toBe("blocked");
+  });
+
+  // What the database's own conversion does not reach: a value lost, emptied, or stored in another
+  // form than its reading. Where it counts none, the judgement without the rewrite blocks none.
+  it.each([
+    ["text", "number", ["12", null], 0],
+    ["text", "number", ["012", "12"], 1],
+    ["text", "number", ["abc", "12"], 1],
+    ["chips", "text", ["[]", null], 1],
+    ["chips", "text", ['["x"]'], 1],
+    ["email", "text", ["a@b.co"], 0],
+    ["text", "json", ["word"], 1],
+  ] as const)(
+    "counts the values a change from %s to %s writes: %j",
+    async (from, to, texts, written) => {
+      const read = (rewrites: boolean) =>
+        collectTypeChange(
+          typeOf("postgresql", from),
+          typeOf("postgresql", to),
+          stored(...texts),
+          undefined,
+          { rewrites }
+        );
+
+      expect((await read(true)).written).toBe(written);
+      // The one question, asked the way a road that rewrites nothing asks it.
+      expect((await read(false)).judgement.class === "safe").toBe(
+        written === 0
+      );
+    }
+  );
+
+  // An entry's read takes a JSON column's string as JSON once more where the driver parses JSON: a
+  // text that is itself JSON would read back as what it says. SQLite's driver parses none.
+  it.each([
+    ["postgresql", 2],
+    ["mysql", 2],
+    ["sqlite", 0],
+  ] as const)(
+    "blocks a text that is itself JSON, where the JSON column's driver parses it (%s)",
+    async (dialect, blocked) => {
+      const read = (rewrites: boolean) =>
+        collectTypeChange(
+          typeOf(dialect, "text"),
+          typeOf(dialect, "json"),
+          stored("word", "12", '{"a":1}'),
+          undefined,
+          { rewrites }
+        );
+
+      const result = await read(true);
+      expect(result.counts).toMatchObject({ kept: 3 - blocked, blocked });
+      expect(
+        result.judgement.reasons.find(r => r.kind === "read-as-json")?.rows
+      ).toEqual(
+        blocked === 0
+          ? undefined
+          : { first: [{ id: "2" }, { id: "3" }], count: 2 }
+      );
+      // Judged by the cast, where no road writes the value, it is the rewrite it needs that blocks it.
+      expect(
+        (await read(false)).judgement.reasons.map(r => r.kind)
+      ).not.toContain("read-as-json");
+    }
+  );
+
   it("counts each outcome, names each reason's rows, and clears only the lost values", async () => {
     const result = await collectTypeChange(
       typeOf("postgresql", "text"),
@@ -623,6 +787,17 @@ describe("a type change of a field held inside JSON, collected over its rows", (
     );
     expect(result.judgement.class).toBe("safe");
     expect(result.counts.blocked).toBe(0);
+  });
+
+  // A container's JSON is read whole, so a text in it that is itself JSON is never parsed on its own,
+  // as a JSON column's string is.
+  it("keeps a text that is itself JSON", async () => {
+    const result = await collectNestedTypeChange(
+      inJson("text"),
+      inJson("json"),
+      rows(["12"])
+    );
+    expect(result.judgement.class).toBe("safe");
   });
 
   it("asks the new field's validation of every value of a row before naming the row by its worst", async () => {

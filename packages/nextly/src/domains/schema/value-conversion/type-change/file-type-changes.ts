@@ -8,16 +8,41 @@
  * file leaves them, and the newest snapshot before it records them as they were; its statements
  * rename columns. A type change that keeps its column writes no statement at all, so the two
  * snapshots are where it is read. A file run without snapshots on both sides (a hand-written one,
- * or one older than recorded fields) states no field types, and nothing is judged.
+ * or one older than recorded fields) states no field types, and nothing is judged; a marked one is
+ * refused instead, as its values could not be converted as its mark says (`unjudgeableMarkRefusal`).
  *
  * Asked by `nextly migrate` for each pending file, before the file's first statement, where the
  * files before it in the run have already applied and its values are as it will find them.
+ *
+ * A file whose header marks the columns it converts value by value (`readConvertsMark`, written by
+ * a Schema Builder save that converted them) has those changes judged as converted, as the save
+ * judged them: each value as the new type reads it, the values that cannot convert cleared where
+ * the run's consent covers them (`--accept-data-loss`), and answers the conversion that writes them
+ * on this database (`judgeFileTypeChanges`). Every other change keeps the cast's judgement.
  *
  * @module domains/schema/value-conversion/type-change/file-type-changes
  */
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import {
+  type ClearConsent,
+  consentedRefusals,
+  conversionRefusalsAsItStands,
+  type TypeConversion,
+  typeConversionOf,
+} from "../../builder-save/type-conversion";
+import {
+  type ConvertedColumnName,
+  unjudgeableMarkRefusal,
+} from "../../migrate/converts-header";
+import {
+  ACCEPT_DATA_LOSS_FLAG,
+  consentCovers,
+  type DataLossConsent,
+  NO_CONSENT,
+} from "../../migrate/data-loss-consent";
 import { DEFAULT_TABLE_NAME_RESOLVERS } from "../../migrate/resolved-schema";
+import { NO_TRANSACTION_MARKER } from "../../migrate/split-sql";
 import { renamesIn, tablesChangedIn } from "../../migrate/statement-targets";
 import type {
   EntitySettingsRecord,
@@ -41,8 +66,9 @@ import {
   type EntityTypeChangeInput,
   entityLabel,
   type FieldTypeChange,
-  fieldTypeChangeRefusals,
   fieldTypeChangesOf,
+  judgeEntityTypeChanges,
+  type JudgedFieldTypeChange,
   perLanguageAfter,
   perLanguageBefore,
   type TypeChangeRefusal,
@@ -71,10 +97,34 @@ export interface FileTypeChangeSource {
    * where none of them gives it the new type.
    */
   retyped?: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * The columns the change's files convert value by value, as their marks name them
+   * (`readConvertsMark`): each judged as converted. None where no file of the change is marked,
+   * whose changes the cast converts.
+   */
+  converts?: readonly ConvertedColumnName[];
+  /**
+   * Where `converts` names each column: as the file's own run finds it, before the file's first
+   * statement (`"before"`, the default, as the mark is written); or as `target` records it, for a
+   * rollback judging the file's change in reverse from the columns the file left, whose mark still
+   * names each as it was before the file. A field the file renames, or whose table it renames, is
+   * then matched through the column it becomes there.
+   */
+  convertsNamedAt?: "before" | "target";
+  /**
+   * The run's consent to lose data (`--accept-data-loss`), which clears a converted column's
+   * values that cannot convert where it covers that column. None, by default.
+   */
+  consent?: DataLossConsent;
+  /**
+   * The change's files that run outside a transaction (`-- nextly:no-transaction`): none of it is
+   * converted there (`outsideTransactionRefusals`). None, by default.
+   */
+  outsideTransaction?: readonly string[];
 }
 
 /** One refusal of a file's type changes, with the entity it is of. */
-interface FileTypeChangeRefusal extends TypeChangeRefusal {
+export interface FileTypeChangeRefusal extends TypeChangeRefusal {
   entity: { kind: SettingsEntityKind; slug: string };
 }
 
@@ -452,10 +502,106 @@ function entityTypeChange(args: {
         ...(relationsShaped.size > 0 ? { ignore: relationsShaped } : {}),
         ...(builtByBefore !== at.builtBy ? { builtByBefore } : {}),
         ...retypedOf(source, [translationsTable, `${table}_locales`]),
+        ...convertedOf(source, { readFrom, table, changes, columnOf }),
         ...at,
       },
     },
   ];
+}
+
+/**
+ * The columns a marked change rewrites (`EntityTypeChangeInput.rewrites`): those its marks name,
+ * by table and column, as the database spells them in either case, where the values are read
+ * before the first statement, with the fills they carry (`fillsOf`). A mark naming the columns as
+ * `target` holds them (`convertsNamedAt`) names them through the fields they become
+ * (`heldThroughTarget`), and its fills are the change's own, never its reverse's. Nothing for an
+ * unmarked one.
+ */
+function convertedOf(
+  source: FileTypeChangeSource,
+  entity: EntityNames
+): Pick<EntityTypeChangeInput, "rewrites" | "fills"> {
+  const named = new Set(
+    (source.converts ?? []).map(c => columnKey(c.table, c.column))
+  );
+  if (named.size === 0) return {};
+  const held =
+    source.convertsNamedAt === "target"
+      ? heldThroughTarget(named, entity)
+      : named;
+  return {
+    rewrites: (table, column) => held.has(columnKey(table, column)),
+    ...(source.convertsNamedAt === "target"
+      ? {}
+      : { fills: fillsOf(source.converts ?? [], entity) }),
+  };
+}
+
+/** The fills a file's marks carry for the entity's changed fields, by each field's new name. */
+function fillsOf(
+  converts: readonly ConvertedColumnName[],
+  entity: EntityNames
+): Map<string, unknown> {
+  const fills = new Map<string, unknown>();
+  for (const change of entity.changes) {
+    if (change.within !== undefined) continue;
+    const column = entity.columnOf(change.from);
+    if (column === undefined) continue;
+    const marked = converts.find(
+      each =>
+        each.fill !== undefined &&
+        [entity.readFrom, `${entity.readFrom}_locales`].some(
+          table =>
+            columnKey(table, column) === columnKey(each.table, each.column)
+        )
+    );
+    if (marked?.fill !== undefined) {
+      fills.set(change.to.name, marked.fill.value);
+    }
+  }
+  return fills;
+}
+
+/** An entity's tables and changed fields, as `entityTypeChange` reads them. */
+interface EntityNames {
+  /** The table its values are read from, before the first statement. */
+  readFrom: string;
+  /** Its table as `target` records it. */
+  table: string;
+  changes: readonly FieldTypeChange[];
+  /** A field's column, lower-cased. */
+  columnOf: (field: FieldDefinition) => string | undefined;
+}
+
+/** A column's key in a set of columns: its table and name, lower-cased. */
+function columnKey(table: string, column: string): string {
+  return `${table}.${column}`.toLowerCase();
+}
+
+/**
+ * The columns, where the values are read before the first statement, of the changed fields whose
+ * columns as `target` holds them `named` names: on the entity's table, or on its translations
+ * table, each through the field it becomes. A field held inside JSON is never marked.
+ */
+function heldThroughTarget(
+  named: ReadonlySet<string>,
+  entity: EntityNames
+): Set<string> {
+  const held = new Set<string>();
+  const tables = [
+    [entity.readFrom, entity.table],
+    [`${entity.readFrom}_locales`, `${entity.table}_locales`],
+  ] as const;
+  for (const change of entity.changes) {
+    if (change.within !== undefined) continue;
+    const from = entity.columnOf(change.from);
+    const to = entity.columnOf(change.to);
+    if (from === undefined || to === undefined) continue;
+    for (const [heldIn, namedIn] of tables) {
+      if (named.has(columnKey(namedIn, to))) held.add(columnKey(heldIn, from));
+    }
+  }
+  return held;
 }
 
 /** The fields the change's `retypes` files retype in the first of `tables` they name. */
@@ -610,16 +756,56 @@ function unreadRenameFields(args: {
 /**
  * Every refusal of the file's field type changes, judged on the values the database holds now:
  * each blocked change, and each change that would lose a value, since a file clears no value its
- * new type cannot read. Empty where the file changes no field type, or every value is kept. Each
- * names its entity, the field and the file. A file renaming on an entity's table in a way not read
- * here, beside fields it drops and adds with another type, is refused without reading a row: the
- * pairs cannot be told, so nothing would be judged.
+ * new type cannot read unless it converts that column (`converts`) and the run's consent covers
+ * it. Empty where the file changes no field type, or every value is kept. Each names its entity,
+ * the field and the file. A file renaming on an entity's table in a way not read here, beside
+ * fields it drops and adds with another type, is refused without reading a row: the pairs cannot
+ * be told, so nothing would be judged.
  */
 export async function fileTypeChangeRefusals(
   db: unknown,
   source: FileTypeChangeSource
 ): Promise<FileTypeChangeRefusal[]> {
+  return (await judgeFileTypeChanges(db, source)).refusals;
+}
+
+/** What `judgeFileTypeChanges` answers: the refusals, and the conversion of each entity's values. */
+export interface FileTypeChangeJudgement {
+  refusals: FileTypeChangeRefusal[];
+  /**
+   * The conversion of each entity's columns the file converts value by value, judged clear of
+   * refusals or not: run before the first statement that changes each table, it judges them
+   * again where it runs (`TypeConversion.run`).
+   */
+  conversions: TypeConversion[];
+}
+
+/**
+ * Refuse a marked file whose snapshots do not both record the fields: a marked change is converted
+ * as its mark says, or refused, and one that cannot be judged is never left to the database's cast
+ * instead.
+ *
+ * @throws {NextlyError} a validation error (`unjudgeableMarkRefusal`)
+ */
+function refuseUnjudgeableMark(source: FileTypeChangeSource): void {
+  if ((source.converts ?? []).length === 0) return;
+  if (source.before === undefined || source.target === undefined) {
+    throw unjudgeableMarkRefusal(source.filename);
+  }
+}
+
+/**
+ * The file's field type changes judged on the values the database holds now: their refusals
+ * (`fileTypeChangeRefusals`), and for a change whose file converts its values, the conversion
+ * that writes them, with the run's consent to clear those that cannot convert.
+ */
+export async function judgeFileTypeChanges(
+  db: unknown,
+  source: FileTypeChangeSource
+): Promise<FileTypeChangeJudgement> {
+  refuseUnjudgeableMark(source);
   const refusals: FileTypeChangeRefusal[] = [];
+  const conversions: TypeConversion[] = [];
   for (const { kind, slug, input, unread } of fileTypeChangesOf(source)) {
     for (const field of unread?.fields ?? []) {
       refusals.push({
@@ -634,33 +820,159 @@ export async function fileTypeChangeRefusals(
         entity: { kind, slug },
       });
     }
-    for (const refusal of await fieldTypeChangeRefusals(
-      db,
-      source.dialect,
-      input
-    )) {
+    const judged = await judgeEntityTypeChanges(db, source.dialect, input);
+    const consent = runConsentOf(source, input);
+    // A marked change's refusals are read again from what was judged, with the run's consent to clear.
+    // Where the judgement refused before any value was read, nothing was judged and they are its own.
+    const entityRefusals =
+      input.rewrites === undefined || judged.judged.length === 0
+        ? judged.refusals
+        : consentedRefusals(input.label, judged.judged, consent).refusals;
+    const converted = await conversionOf(db, source.dialect, input, {
+      judged: judged.judged,
+      consent,
+    });
+    for (const refusal of [
+      ...entityRefusals,
+      ...converted.refusals,
+      ...outsideTransactionRefusals(source, input.label, converted.conversion),
+    ]) {
       refusals.push({ ...refusal, entity: { kind, slug } });
     }
+    if (converted.conversion !== undefined) {
+      conversions.push(converted.conversion);
+    }
   }
-  return refusals;
+  return { refusals, conversions };
+}
+
+/**
+ * The conversion of a marked entity's judged changes, where any converts, and its refusals beyond
+ * their values (`conversionRefusalsAsItStands`), asked before the change's first file.
+ */
+async function conversionOf(
+  db: unknown,
+  dialect: SupportedDialect,
+  input: EntityTypeChangeInput,
+  of: { judged: readonly JudgedFieldTypeChange[]; consent: ClearConsent }
+): Promise<{
+  conversion?: TypeConversion;
+  refusals: TypeChangeRefusal[];
+}> {
+  // A file with no mark converts nothing: the database's cast changes its columns.
+  if (input.rewrites === undefined) return { refusals: [] };
+  const conversion = typeConversionOf({ dialect, input, ...of });
+  if (conversion === undefined) return { refusals: [] };
+  return {
+    conversion,
+    refusals: await conversionRefusalsAsItStands(
+      db,
+      dialect,
+      input.label,
+      conversion,
+      of.judged
+    ),
+  };
+}
+
+/**
+ * The refusal of each column a change would convert while a file of it runs outside a transaction.
+ * Each statement commits as it runs there, so nothing holds a value written between the copy of the
+ * values and that copy taking the column's place, and a conversion that stops leaves its copy behind.
+ * No save and no `migrate:create` writes such a file: only an edit marks one. Asked of the whole
+ * change, as the first of its files that changes a table is the one that converts it.
+ */
+function outsideTransactionRefusals(
+  source: FileTypeChangeSource,
+  label: string,
+  conversion: TypeConversion | undefined
+): TypeChangeRefusal[] {
+  const files = source.outsideTransaction ?? [];
+  if (conversion === undefined || files.length === 0) return [];
+  const many = files.length > 1;
+  return conversion.columns.map(column => ({
+    path: column.field,
+    code: "TYPE_CHANGE_BLOCKED" as const,
+    message: `${label}: field '${column.field}' cannot change type while ${files.join(", ")} ${many ? "run" : "runs"} outside a transaction, marked by ${many ? "their" : "its"} first line \`${NO_TRANSACTION_MARKER}\`: a value written while the others are converted would be lost, and a conversion that stops would stay half made. Remove that line, then try again.`,
+  }));
+}
+
+/**
+ * How a run's consent clears a converted column's values that cannot convert (`ClearConsent`): a
+ * deletion of that column's values, which `--accept-data-loss` covers without targets, or naming
+ * the column, its table, or, for a translations table, the entity's own table; and how the run's
+ * refusal asks for it.
+ */
+function runConsentOf(
+  source: FileTypeChangeSource,
+  input: EntityTypeChangeInput
+): ClearConsent {
+  const consent = source.consent ?? NO_CONSENT;
+  return {
+    kind: "run",
+    covers: change => consentCovers(consent, clearOf(change, input)),
+    clearsBy: change =>
+      `Run it again with ${ACCEPT_DATA_LOSS_FLAG}=${change.table}.${change.column} to ${
+        change.fill?.readsAs === undefined
+          ? `clear the ${String(change.result.cleared.length)} value(s) that cannot convert, as the ` +
+            `save that wrote it cleared those its database held.`
+          : `write the fill value the file carries into the ${String(change.leavesEmpty ?? 0)} row(s) ` +
+            `the change would leave with no value, as the save that wrote it did.`
+      }`,
+  };
+}
+
+/** A converted change's clearing, as the run's consent judges a deletion of a column's values. */
+function clearOf(
+  change: JudgedFieldTypeChange,
+  input: EntityTypeChangeInput
+): Parameters<typeof consentCovers>[1] {
+  return {
+    kind: "column",
+    table: change.table,
+    column: change.column,
+    count: change.result.cleared.length,
+    reason: `values that cannot convert to ${change.to.type}`,
+    ...(change.table === input.table ? {} : { owner: input.table }),
+  };
 }
 
 /**
  * Refuse the file before its first statement where any of its field type changes is blocked or
- * would lose a value (`fileTypeChangeRefusals`), naming every refusal at once.
+ * would lose a value (`fileTypeChangeRefusals`), naming every refusal at once. Answers the
+ * conversion of each entity's values its marks convert (`judgeFileTypeChanges`), for the run to
+ * write before the first statement that changes each of their tables.
  *
+ * @param judgedAhead the file's judgement on this database, where the caller has made it already
  * @throws {NextlyError} a validation error listing each refusal, with its entity and field
  */
 export async function refuseFileTypeChanges(
   db: unknown,
-  source: FileTypeChangeSource
-): Promise<void> {
-  const refusals = await fileTypeChangeRefusals(db, source);
+  source: FileTypeChangeSource,
+  judgedAhead?: FileTypeChangeJudgement
+): Promise<TypeConversion[]> {
+  const { refusals, conversions } =
+    judgedAhead ?? (await judgeFileTypeChanges(db, source));
+  throwFileTypeChangeRefusals(source.filename, refusals);
+  return conversions;
+}
+
+/**
+ * Throw a file's type change refusals (`judgeFileTypeChanges`) as one validation error, each with
+ * its entity and field, where there are any: the error `refuseFileTypeChanges` throws, for a
+ * caller that judged the file itself (a rollback, which lists the judgement in its dry run).
+ *
+ * @throws {NextlyError} a validation error listing each refusal
+ */
+export function throwFileTypeChangeRefusals(
+  filename: string,
+  refusals: readonly FileTypeChangeRefusal[]
+): void {
   if (refusals.length === 0) return;
   throw NextlyError.validation({
     errors: refusals.map(refusal => typeChangeError(refusal)),
     logContext: {
-      file: source.filename,
+      file: filename,
       entities: [
         ...new Set(refusals.map(r => `${r.entity.kind}:${r.entity.slug}`)),
       ],

@@ -764,6 +764,75 @@ export async function readIndexNames(
   return names;
 }
 
+/**
+ * The triggers that fire when a row of `tableName` is updated, by name: what a statement writing
+ * its rows one by one runs once per row, which nothing in the statement shows. PostgreSQL reads
+ * the table's own triggers whose events include UPDATE, MySQL its UPDATE triggers. SQLite keeps a
+ * trigger as its text, so one whose head (before its body) names UPDATE is counted: a head is
+ * read whole, so a trigger that may fire on an update is never left out.
+ */
+export async function readUpdateTriggers(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<string[]> {
+  const lower = tableName.toLowerCase();
+  if (dialect === "postgresql") {
+    // `tgtype`'s bit 4 is UPDATE; an internal trigger is a constraint's own, which writes no row.
+    const rows = await rowsOf<{ name: string }>(
+      db,
+      dialect,
+      sql`SELECT t.tgname AS name FROM pg_trigger t
+          WHERE t.tgrelid = to_regclass(${tableName})
+            AND NOT t.tgisinternal AND (t.tgtype & 16) <> 0`
+    );
+    return rows.map(row => row.name);
+  }
+  if (dialect === "mysql") {
+    const rows = await rowsOf<{ name: string }>(
+      db,
+      dialect,
+      sql`SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS
+          WHERE EVENT_OBJECT_SCHEMA = DATABASE()
+            AND lower(EVENT_OBJECT_TABLE) = ${lower}
+            AND EVENT_MANIPULATION = 'UPDATE'`
+    );
+    return rows.map(row => row.name);
+  }
+  const rows = await rowsOf<{ name: string; sql: string | null }>(
+    db,
+    dialect,
+    sql`SELECT name, sql FROM sqlite_master
+        WHERE type = 'trigger' AND lower(tbl_name) = ${lower}`
+  );
+  return rows
+    .filter(row => /\bUPDATE\b/i.test((row.sql ?? "").split(/\bBEGIN\b/i)[0]))
+    .map(row => row.name);
+}
+
+/**
+ * The PostgreSQL rules that rewrite an UPDATE of `tableName`, by name, the disabled ones left out:
+ * a rule may leave a row out of the update, or run statements of its own for it, and nothing in the
+ * statement shows it. An INSERT's or a DELETE's rule rewrites no update. Other dialects have none.
+ */
+export async function readUpdateRules(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<string[]> {
+  if (dialect !== "postgresql") return [];
+  // `ev_type` 2 is UPDATE, `ev_enabled` D a disabled rule.
+  const rows = await rowsOf<{ name: string }>(
+    db,
+    dialect,
+    sql`SELECT r.rulename AS name FROM pg_rewrite r
+        WHERE r.ev_class = to_regclass(${tableName})
+          AND r.ev_type = '2' AND r.ev_enabled <> 'D'
+        ORDER BY r.rulename`
+  );
+  return rows.map(row => row.name);
+}
+
 /** The names of the unique ones among `indexes` (`readIndexUniqueness`). */
 export function uniqueIndexNames(
   indexes: ReadonlyMap<string, { unique: boolean }>

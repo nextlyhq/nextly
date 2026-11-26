@@ -28,6 +28,7 @@ import {
 import type { PromptDispatcher } from "../../schema/pipeline/pushschema-pipeline-interfaces";
 import { RegexRenameDetector } from "../../schema/pipeline/rename-detector";
 import { DrizzleStatementExecutor } from "../../schema/services/drizzle-statement-executor";
+import { rewritesValuesOn } from "../../schema/value-conversion/type-change/field-type-changes";
 import { setPerLanguageStorage } from "../per-language-storage";
 import {
   createTestNextly,
@@ -485,9 +486,10 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     }
   );
 
-  it("refuses first a type change whose values the new type cannot read, as it becomes translated, through the collection's schema dialog", async () => {
-    // "Hello" is no number: the collection's save judges the values before the translation's
-    // own check, so its refusal names the field and the values, and nothing changes.
+  it("refuses a type change whose values the new type cannot read, as it becomes translated, through the collection's schema dialog", async () => {
+    // "Hello" is no number. Where the save's file converts the change, the translation's own check
+    // comes first and names the two saves that make it; where no road rewrites values (MySQL), the
+    // push judges the values first and names them. Either way nothing changes.
     const dialog = PATHS.find(
       p => p.path === "the builder applies the change with the schema dialog"
     );
@@ -507,7 +509,11 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       refusal instanceof Error
         ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
         : String(refusal);
-    expect(reported).toMatch(/TYPE_CHANGE_LOSES_VALUES/);
+    expect(reported).toMatch(
+      rewritesValuesOn(dialect)
+        ? /RESHAPED_FIELD_JOINS_TRANSLATION/
+        : /TYPE_CHANGE_LOSES_VALUES/
+    );
     expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
     const [row] = await query<{ heading: string }>(
       `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, table)} WHERE ${quote(dialect, "id")} = '${id}'`
