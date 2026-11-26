@@ -957,14 +957,16 @@ describe.each(getConfiguredTestDialects())(
         indexed?: boolean;
         /** The file's UP, rewritten by hand before it runs. */
         edit?: (up: string) => string;
+        /** Whether the plugin is in the configuration; it is unless said. */
+        pluginConfigured?: boolean;
       } = {}
     ) {
       // The plugin stays configured and stops declaring the part, so the change is the app's own
       // and the part is judged as drift; a plugin no longer configured is refused before that.
-      const configured = (config: ReturnType<typeof shaped>) => ({
-        ...config,
-        plugins: [stoppedDeclaring],
-      });
+      const configured = (config: ReturnType<typeof shaped>) =>
+        options.pluginConfigured === false
+          ? config
+          : { ...config, plugins: [stoppedDeclaring] };
       const url = await emptyDatabase();
       use(url);
       wentThrough(await migrateCreate("add_posts", configured(shaped({}))));
@@ -1128,6 +1130,28 @@ describe.each(getConfiguredTestDialects())(
         );
       }
     );
+
+    it("nextly migrate refuses a file dropping a plugin's column and its index, the plugin no longer configured, naming it before any drift, changing nothing", async () => {
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const drop = [
+        ...(dialect === "mysql" ? [] : [`DROP INDEX ${q(MARKER_INDEX)};`]),
+        `ALTER TABLE ${q(TABLE)} DROP COLUMN ${q(MARKER)};`,
+      ].join("\n\n");
+      const ran = await changedOverTheParts({
+        pluginConfigured: false,
+        edit: up => up.replace("-- DOWN", `${drop}\n\n-- DOWN`),
+      });
+
+      expect(ran.migrated.code, ran.migrated.said).toBe(1);
+      expect(ran.migrated.said).toContain("FOREIGN_ELEMENT_REMOVED");
+      for (const part of [PLUGIN, MARKER_INDEX, TABLE]) {
+        expect(ran.migrated.said).toContain(part);
+      }
+      expect(ran.migrated.said).not.toContain("schema drift detected");
+      expect(await markerOf(ran.url)).toEqual(ran.before.marker);
+      expect(await shapeOf(ran.url, TABLE)).toEqual(ran.before.shape);
+    });
 
     it("nextly migrate refuses a file whose statements name a plugin's part as drift, changing nothing", async () => {
       const q = (name: string) =>
