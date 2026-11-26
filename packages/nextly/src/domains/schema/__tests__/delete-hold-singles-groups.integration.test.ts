@@ -59,6 +59,8 @@ const afterCount = vi.hoisted(() => ({
   armed: false,
   paused: undefined as undefined | (() => void),
   release: undefined as undefined | Promise<void>,
+  /** Lets a paused save go: called after each case too, so a case that failed first ends. */
+  letGo: undefined as undefined | (() => void),
 }));
 vi.mock("../builder-save/deletion-counts", async importOriginal => {
   const real =
@@ -124,6 +126,7 @@ function gateAfterCount(): { paused: Promise<void>; release: () => void } {
   const paused = new Promise<void>(resolve => {
     afterCount.paused = resolve;
   });
+  afterCount.letGo = release;
   afterCount.armed = true;
   return { paused, release };
 }
@@ -131,6 +134,10 @@ function gateAfterCount(): { paused: Promise<void>; release: () => void } {
 let instance: TestNextly | undefined;
 afterEach(async () => {
   afterCount.armed = false;
+  // A case that failed before letting its save go leaves it paused at the gate, holding what the
+  // app's teardown waits for.
+  afterCount.letGo?.();
+  afterCount.letGo = undefined;
   slowRow.ms = 0;
   pushRoad.forced = false;
   vi.restoreAllMocks();
