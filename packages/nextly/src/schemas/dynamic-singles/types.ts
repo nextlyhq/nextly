@@ -44,13 +44,14 @@ export type { StoredWebhookRecording };
  * - `code`: Defined in code via `defineSingle()` in a config file
  * - `ui`: Created through the Visual Single Builder in Admin UI
  * - `built-in`: System Singles provided by Nextly core (future use)
+ * - `plugin:<name>`: Contributed by the plugin of that name
  *
  * @example
  * ```typescript
  * const source: SingleSource = 'code';
  * ```
  */
-export type SingleSource = "code" | "ui" | "built-in";
+export type SingleSource = "code" | "ui" | "built-in" | `plugin:${string}`;
 
 /**
  * Migration status for a Single's schema.

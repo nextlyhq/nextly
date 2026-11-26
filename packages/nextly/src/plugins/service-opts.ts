@@ -1414,7 +1414,7 @@ export interface PluginHostTypes {
   /**
    * Each Single holding one, as `services.singles.list` lists it, in the
    * order it lists them. A code-first Single's row that outlived its config
-   * is included, as it is there, and says so with `source: "code"`.
+   * is included, as it is there, with the source it was recorded with.
    */
   readonly singles: readonly PluginSingleRecord[];
 }

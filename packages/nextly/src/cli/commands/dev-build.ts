@@ -44,6 +44,8 @@ import {
 } from "../../domains/schema/busy-table/bounds";
 import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
 import type { Deletion } from "../../domains/schema/migrate/data-loss-consent";
+import { pluginEntitySources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
+import { keepsMigrationFiles } from "../../domains/schema/migrate-create/snapshot-io";
 import { refuseFieldGroupSwitches } from "../../domains/schema/pipeline/companion-shape-switches";
 import { registryRows } from "../../domains/schema/pipeline/recorded-fields";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -95,6 +97,7 @@ import {
   performSinglesAutoSync,
   performSinglesReconcile,
 } from "./dev-server";
+import { reportKeptPluginEntities } from "./kept-plugin-entities";
 
 // ============================================================================
 // Orphan Record Type
@@ -160,6 +163,22 @@ async function runSyncStatements(
   });
 }
 
+/** What the three syncs' kept lines are written with (`reportKeptPluginEntities`). */
+function keptReport(
+  config: LoadConfigResult["config"],
+  options: ResolvedDevOptions,
+  logger: CommandContext["logger"]
+): Parameters<typeof reportKeptPluginEntities>[3] {
+  return {
+    logger,
+    keepsMigrationFiles: async () =>
+      keepsMigrationFiles({
+        cwd: options.cwd,
+        migrationsDir: config.db.migrationsDir,
+      }),
+  };
+}
+
 // ============================================================================
 // Extension schema
 // ============================================================================
@@ -216,6 +235,40 @@ export async function publishExtensionSchema(
       debug: m => context.logger.debug(m),
     },
   });
+}
+
+/**
+ * Records each Single and field group the configuration declares as its declaration's, before the
+ * first push: the collections' push, where it is refused, ends the run before their own syncs.
+ * A collection is recorded by its own sync, ahead of that push.
+ */
+export async function claimDeclaredOwners(
+  configResult: LoadConfigResult,
+  adapter: CLIDatabaseAdapter,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const { config } = configResult;
+  const live = adapter as unknown as DrizzleAdapter;
+  const serviceLogger: ServiceLogger = {
+    info: (msg: string) => logger.debug(msg),
+    warn: (msg: string) => logger.warn(msg),
+    error: (msg: string) => logger.error(msg),
+    debug: (msg: string) => logger.debug(msg),
+  };
+  const sources = pluginEntitySources(config.plugins ?? []);
+  await new SingleRegistryService(live, serviceLogger).claimDeclared(
+    config.singles.map(({ slug }) => ({
+      slug,
+      source: sources.singles.get(slug) ?? "code",
+    }))
+  );
+  await new FieldGroupRegistryService(live, serviceLogger).claimDeclared(
+    config.fieldGroups.map(({ slug }) => ({
+      slug,
+      source: sources.fieldGroups.get(slug) ?? "code",
+    }))
+  );
 }
 
 // ============================================================================
@@ -290,6 +343,14 @@ export async function syncCollections(
     throw error;
   }
 
+  // From the rows read above: the sync writes only what the configuration declares.
+  await reportKeptPluginEntities(
+    "collection",
+    recordedCollections,
+    config.collections,
+    keptReport(config, options, logger)
+  );
+
   // Display sync results
   displaySyncResults(result, options, context);
 
@@ -353,10 +414,14 @@ export async function syncSingles(
     serviceLogger
   );
 
+  // Each Single's origin, by the rule a start and a reload give it.
+  const sources = pluginEntitySources(config.plugins ?? []).singles;
+
   // Transform SingleConfig[] to CodeFirstSingleConfig[]
   const codeFirstConfigs: CodeFirstSingleConfig[] = config.singles.map(
     single => ({
       slug: single.slug,
+      source: sources.get(single.slug) ?? "code",
       label: single.label?.singular ?? toTitleCase(single.slug),
       fields: single.fields,
       description: single.description,
@@ -406,6 +471,13 @@ export async function syncSingles(
       );
     }
   }
+
+  await reportKeptPluginEntities(
+    "single",
+    await singleRegistry.getAllSingles(),
+    config.singles,
+    keptReport(config, options, logger)
+  );
 
   // Display sync results
   displaySinglesSyncResults(result, options, context);
@@ -473,10 +545,14 @@ export async function syncComponents(
     serviceLogger
   );
 
+  // Each field group's origin, by the rule a start and a reload give it.
+  const sources = pluginEntitySources(config.plugins ?? []).fieldGroups;
+
   // Transform FieldGroupConfig[] to CodeFirstComponentConfig[]
   const codeFirstConfigs: CodeFirstComponentConfig[] = config.fieldGroups.map(
     component => ({
       slug: component.slug,
+      source: sources.get(component.slug) ?? "code",
       label: component.label?.singular ?? toTitleCase(component.slug),
       fields: component.fields,
       description: component.description,
@@ -536,6 +612,13 @@ export async function syncComponents(
       );
     }
   }
+
+  await reportKeptPluginEntities(
+    "component",
+    await componentRegistry.getAllComponents(),
+    config.fieldGroups,
+    keptReport(config, options, logger)
+  );
 
   // Display sync results
   displayComponentsSyncResults(result, options, context);
