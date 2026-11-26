@@ -9,6 +9,9 @@
  * the entity's translations table, where they are counted, and a field kept out of translation's on
  * the entity's own row.
  *
+ * A removed many-to-many is counted where its links are: a Single's link table, a field group's own
+ * row, which has no link table.
+ *
  * What separates a counted save from plausible wrong ones: a save that reads no count deletes a
  * value written after the review uncounted; a count taken from the main table alone reads a
  * translatable field's values as none; a road that compares nothing (a push, or an app with no
@@ -80,6 +83,23 @@ const LAYOUTS = [
   },
 ] as const;
 
+/** The collection a removed many-to-many links to. */
+const TAGS = "dhs_tags";
+/**
+ * The fields before a save removing a many-to-many, `links`: a Single keeps its links in a link
+ * table, a field group in a column of its own row, where its review and its save count them.
+ */
+const LINKED = [
+  ...KEPT,
+  {
+    name: "links",
+    type: "relationship",
+    relationTo: TAGS,
+    hasMany: true,
+    options: { target: TAGS, relationType: "manyToMany" },
+  },
+];
+
 const KINDS = ["Single", "field group"] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -96,12 +116,12 @@ function valuesTable(kind: Kind, inTranslations: boolean): string {
 }
 
 /** The refusal of a save whose removed field's count moved since the review: `count` now. */
-const refusedWith = (count: number) => ({
+const refusedWith = (count: number, field = "note") => ({
   code: "VALIDATION_ERROR",
   publicData: {
     errors: [
       expect.objectContaining({
-        path: "fields.note",
+        path: `fields.${field}`,
         code: "DELETION_COUNT_CHANGED",
         message: expect.stringContaining(`now holds ${String(count)} value`),
       }),
@@ -116,8 +136,14 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
     dialect => {
       const q = (n: string) => (dialect === "mysql" ? `\`${n}\`` : `"${n}"`);
 
-      /** The app in development, with the Single, or the field group placed in a collection. */
-      async function boot(kind: Kind): Promise<TestNextly> {
+      /**
+       * The app in development, with the Single, or the field group placed in a collection, holding
+       * `fields`: with `links`, after the collection it links to.
+       */
+      async function boot(
+        kind: Kind,
+        fields: readonly unknown[] = NOTED
+      ): Promise<TestNextly> {
         vi.stubEnv("NODE_ENV", "development");
         const t = await createTestNextly({
           dialect,
@@ -128,17 +154,29 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
           },
         });
         instance = t;
+        if (fields === LINKED) {
+          await dispatchCollections(
+            {} as ServiceContainer,
+            "createCollection",
+            {},
+            {
+              name: TAGS,
+              label: "Tags",
+              fields: [{ name: "title", type: "text" }],
+            }
+          );
+        }
         if (kind === "Single") {
           await dispatchSingles(
             "createSingle",
             {},
-            { slug: SINGLE, label: "Notice", fields: NOTED }
+            { slug: SINGLE, label: "Notice", fields }
           );
         } else {
           await dispatchComponents(
             "createComponent",
             {},
-            { slug: GROUP, label: "Meta", fields: NOTED }
+            { slug: GROUP, label: "Meta", fields }
           );
           await dispatchCollections(
             {} as ServiceContainer,
@@ -176,6 +214,30 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
         } as never);
       }
 
+      /** A link to a new entry of TAGS, written as a person writes it: the Single's, or a new entry's group. */
+      async function writeLink(t: TestNextly, kind: Kind): Promise<void> {
+        const tag = (await t.nextly.create({
+          collection: TAGS,
+          data: { title: "t" },
+        } as never)) as { item: { id: unknown } };
+        const links = [String(tag.item.id)];
+        if (kind === "Single") {
+          const saved = await (
+            t.getService("singleEntryService") as SingleEntryService
+          ).update(
+            SINGLE,
+            { heading: "h", links, _overwrite: true },
+            { overrideAccess: true }
+          );
+          if (!saved.success) throw new Error(String(saved.message));
+          return;
+        }
+        await t.nextly.create({
+          collection: PARENT,
+          data: { title: "p", meta: { heading: "h", links } },
+        } as never);
+      }
+
       /** The `note` values the entity's values table holds, or `"gone"` once its column is. */
       async function notes(
         t: TestNextly,
@@ -205,9 +267,10 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
         return Number((row as { schemaVersion?: unknown }).schemaVersion ?? 1);
       }
 
-      /** What the review shows for `note` when the entity keeps only `heading`. */
+      /** What the review shows for `field` (`note` unless named) when the entity keeps only `heading`. */
       async function reviewed(
-        kind: Kind
+        kind: Kind,
+        field = "note"
       ): Promise<{ rowCount?: number; rowCountUnknown?: boolean } | undefined> {
         const body = (await (kind === "Single"
           ? dispatchSingles(
@@ -233,21 +296,22 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
               }>;
             }
           | undefined;
-        return changes?.removed?.find(field => field.name === "note");
+        return changes?.removed?.find(removed => removed.name === field);
       }
 
-      /** The save removing `note`, confirming `confirmed` values deleted, as the dialog sends it. */
+      /** The save removing `field` (`note` unless named), confirming `confirmed` values deleted, as the dialog sends it. */
       async function save(
         t: TestNextly,
         kind: Kind,
-        confirmed: number
+        confirmed: number,
+        field = "note"
       ): Promise<unknown> {
         const body = {
           fields: KEPT,
           confirmed: true,
           schemaVersion: await schemaVersion(t, kind),
-          resolutions: { note: { action: "confirm_drop" } },
-          confirmedDeletions: [{ field: "note", count: confirmed }],
+          resolutions: { [field]: { action: "confirm_drop" } },
+          confirmedDeletions: [{ field, count: confirmed }],
         };
         return (
           kind === "Single"
@@ -297,6 +361,24 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
 
             expect(await save(t, kind, 0)).toMatchObject(refusedWith(1));
             expect(await notes(t, kind)).toBe(1);
+          }, 60_000);
+
+          // A removed many-to-many is counted where its links are, by the entity's own storage: a
+          // Single's link table, a field group's own row, which has no link table. Counted as a link
+          // table on a field group, it reads as unknown, and a save confirming any count is refused.
+          it("counts a removed many-to-many where its links are, deletes the count confirmed and refuses a stale one", async () => {
+            const t = await boot(kind, LINKED);
+            await writeLink(t, kind);
+            const review = await reviewed(kind, "links");
+            expect(review).toMatchObject({ rowCount: 1 });
+            expect(review?.rowCountUnknown).toBeUndefined();
+            // A link written after the review counted one.
+            await writeLink(t, kind);
+            expect(await save(t, kind, 1, "links")).toMatchObject(
+              refusedWith(2, "links")
+            );
+
+            expect(await save(t, kind, 2, "links")).toBe("applied");
           }, 60_000);
         });
       });
