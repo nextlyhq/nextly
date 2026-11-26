@@ -8,7 +8,7 @@
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const record = vi.hoisted(() => ({ ready: false, retried: 0 }));
+const record = vi.hoisted(() => ({ ready: false, retried: 0, holdersRead: 0 }));
 
 vi.mock("../../address-record/catch-up", () => ({
   addressRecordReady: () => record.ready,
@@ -19,10 +19,26 @@ vi.mock("../../address-record/catch-up", () => ({
   },
 }));
 
+// The record holds no page at any address here: each read of it is the
+// handler's question whether the site serves a copy's address itself.
+vi.mock("../../address-record/participant", () => ({
+  addressHolders: async () => {
+    record.holdersRead += 1;
+    return [];
+  },
+  withAddressHolders: async (
+    _ctx: unknown,
+    _language: unknown,
+    _paths: unknown,
+    run: () => Promise<void>
+  ) => run(),
+}));
+
 import { plainCopyProxyHandler, prefersMarkdown } from "../ai-outputs";
 
 beforeEach(() => {
   record.retried = 0;
+  record.holdersRead = 0;
 });
 
 describe("a copy asked for before the address record is ready", () => {
@@ -42,8 +58,25 @@ describe("a copy asked for before the address record is ready", () => {
     expect(answer?.response?.headers.get("retry-after")).toBe("120");
     expect(answer?.response?.headers.get("cache-control")).toBe("no-store");
     expect(record.retried).toBe(1);
-    // Only whether copies are served is read while the record is not ready.
+    // Read while the record is not ready: whether copies are served, and
+    // whether a page of the site holds the address.
     expect(readRules).toHaveBeenCalledTimes(1);
+    expect(record.holdersRead).toBe(1);
+  });
+
+  it("passes to the site a page the site serves at a copy's address", async () => {
+    // A page built in code at `/guide.md`: the site's, whatever the record says.
+    const handler = plainCopyProxyHandler({
+      readRules: async () => ({ patterns: {}, plainTextCopies: true }),
+      codeRoutes: () => [
+        { path: "/guide.md", source: "built", route: "app/guide.md/page.tsx" },
+      ],
+    });
+    const answer = await handler.handle(
+      new Request("https://acme.example/guide.md"),
+      {} as PluginContext
+    );
+    expect(answer).toBeUndefined();
   });
 
   it("passes to the site where copies are switched off", async () => {

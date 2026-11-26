@@ -957,8 +957,11 @@ const COPY_RECORD_WAIT_MS = 5000;
  * as the sitemap's is: readers come back, and nothing between keeps it.
  */
 function copyNotReady(): Response {
-  return new Response("The plain-text copy is being brought up to date.", {
-    status: 503,
+  const unavailable = NextlyError.serviceUnavailable({
+    publicMessage: "The plain-text copy is being brought up to date.",
+  });
+  return new Response(unavailable.publicMessage, {
+    status: unavailable.statusCode,
     headers: { "cache-control": "no-store", "retry-after": "120" },
   });
 }
@@ -998,6 +1001,9 @@ export function plainCopyProxyHandler(
         const rules = await config.readRules(ctx, undefined);
         if (rules.plainTextCopies !== true) return;
         if (!(await addressRecordReadyWithin(COPY_RECORD_WAIT_MS))) {
+          // A page of the site at this address, one built in code or one
+          // the record already holds, is served there as ever.
+          if ((await copiesTaken(ctx, [url.href], config)).size > 0) return;
           return { response: copyNotReady() };
         }
       }

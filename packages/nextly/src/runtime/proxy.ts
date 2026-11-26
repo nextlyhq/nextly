@@ -162,8 +162,11 @@ async function startWithin(
  * which a reader may keep, so it is asked to come back instead.
  */
 function stillStarting(): Response {
-  return new Response("The site is starting. Try again shortly.", {
-    status: 503,
+  const unavailable = NextlyError.serviceUnavailable({
+    publicMessage: "The site is starting. Try again shortly.",
+  });
+  return new Response(unavailable.publicMessage, {
+    status: unavailable.statusCode,
     headers: { "cache-control": "no-store", "retry-after": "30" },
   });
 }
