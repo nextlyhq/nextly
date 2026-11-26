@@ -1271,6 +1271,12 @@ cuts a minute. It needs `sharp`, as making a share image does; without it, the p
 it is and the SEO tab says what keeps it from showing. The address assumes the Nextly handler is
 mounted at `/admin/api`, as a scaffolded project mounts it.
 
+Networks fetch a card as crawlers do, and robots.txt keeps crawlers out of `/admin/`, so the
+plugin's robots.txt allows the cards' path,
+`Allow: /admin/api/plugins/@nextlyhq/plugin-seo/share-card/`; the longer rule wins, so nothing else
+under the admin is opened. A site that serves its own robots.txt, such as with core's
+`nextlyRobots`, adds the same path to its `allow` list.
+
 A share image chosen for the page, or one made with **Make a share image**, is the page's own and is
 never replaced: it is served as it is, and the tab says if networks would crop it. The sitemap lists
 the page's picture itself, not the card.

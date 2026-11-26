@@ -81,9 +81,16 @@ export function cardVersionOf(
   );
 }
 
+/**
+ * Where every card is served under: the path robots.txt allows, since the
+ * admin and its API around it are kept from crawlers, and networks fetch a
+ * card as a crawler does.
+ */
+export const SHARE_CARD_PREFIX: string = `${API_MOUNT}/plugins/${SEO_PLUGIN_NAME}${SHARE_CARD_ROUTE_PATH}/`;
+
 /** The address a card of `id` at `version` is served at. */
 export function cardAddressOf(id: string, version: string): string {
-  return `${API_MOUNT}/plugins/${SEO_PLUGIN_NAME}${SHARE_CARD_ROUTE_PATH}/${encodeURIComponent(id)}/${version}.jpg`;
+  return `${SHARE_CARD_PREFIX}${encodeURIComponent(id)}/${version}.jpg`;
 }
 
 /**
