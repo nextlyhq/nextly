@@ -390,6 +390,70 @@ describe("what the answer depends on", () => {
     });
   });
 
+  describe("a page's own picture of the wrong shape", () => {
+    /** A featured image networks would crop: 1212 × 758, focus on the left. */
+    const COVER = {
+      id: "f1",
+      url: "https://files.example.com/cover.jpg",
+      filename: "cover-ab12.jpg",
+      mimeType: "image/jpeg",
+      width: 1212,
+      height: 758,
+      focalX: 20,
+      focalY: 50,
+      altText: "A desk by a window",
+    };
+    const CARD =
+      /^\/admin\/api\/plugins\/@nextlyhq\/plugin-seo\/share-card\/f1\/[0-9a-f]{8}\.jpg$/;
+
+    async function answerFor(media: Record<string, unknown>) {
+      return resolveSeo(
+        context({ f1: media }),
+        entryInput("pages", { slug: "a", featuredImage: "f1" })
+      );
+    }
+
+    it("is served as a 1200 × 630 card cut from it, with its alt text", async () => {
+      const answer = await answerFor(COVER);
+      expect(answer.image).toMatchObject({
+        value: { width: 1200, height: 630, alt: "A desk by a window" },
+        from: "content",
+        field: "featuredImage",
+        // What the card was made from, for the SEO tab and the sitemap.
+        madeFrom: { url: COVER.url, width: 1212, height: 758 },
+      });
+      expect(answer.image?.value.url).toMatch(CARD);
+    });
+
+    it("is a new card once its file or focal point changes, and the same one for a new alt", async () => {
+      const first = (await answerFor(COVER)).image?.value.url;
+      const replaced = (
+        await answerFor({ ...COVER, filename: "cover-cd34.jpg" })
+      ).image?.value.url;
+      const refocused = (await answerFor({ ...COVER, focalX: 70 })).image?.value
+        .url;
+      const realt = await answerFor({ ...COVER, altText: "A new desk" });
+      expect(new Set([first, replaced, refocused]).size).toBe(3);
+      expect(realt.image?.value.url).toBe(first);
+      expect(realt.image?.value.alt).toBe("A new desk");
+    });
+
+    it("is served as it is where networks show it in full", async () => {
+      const answer = await answerFor({ ...COVER, width: 1200, height: 630 });
+      expect(answer.image?.value.url).toBe(COVER.url);
+      expect(answer.image).not.toHaveProperty("madeFrom");
+    });
+
+    it("is never put in place of a share image chosen for the page", async () => {
+      const answer = await resolveSeo(
+        context({ f1: COVER }),
+        entryInput("pages", { slug: "a", seo: { ogImage: "f1" } })
+      );
+      expect(answer.image?.value.url).toBe(COVER.url);
+      expect(answer.image?.from).toBe("page");
+    });
+  });
+
   it("goes on to the next content image where one names an image that is gone", async () => {
     const answer = await resolveSeo(
       context({ f1: { url: "/featured.jpg" } }),

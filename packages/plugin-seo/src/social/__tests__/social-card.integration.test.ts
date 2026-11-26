@@ -243,7 +243,7 @@ function serveUploads(status = 200) {
 }
 
 describe.each(getConfiguredTestDialects())("social cards (%s)", dialect => {
-  it("states the site's name, the language and the cover at its full address, with its size and alt text", async () => {
+  it("states the site's name, the language and a card cut from the cover at its full address, with its size and alt text", async () => {
     const t = await boot(dialect);
     const cover = await undersized(t);
     expect(cover.url).toMatch(/^\/uploads\//);
@@ -259,10 +259,16 @@ describe.each(getConfiguredTestDialects())("social cards (%s)", dialect => {
 
     const head = await headOf(t, "harbour");
 
+    // The 800 × 600 cover networks would crop is served as a 1200 × 630
+    // card cut from it, named by the cover's id and version, with its alt.
     const image = {
-      url: `https://example.com${cover.url}`,
-      width: 800,
-      height: 600,
+      url: expect.stringMatching(
+        new RegExp(
+          `^https://example\\.com/admin/api/plugins/@nextlyhq/plugin-seo/share-card/${cover.id}/[0-9a-f]{8}\\.jpg$`
+        )
+      ) as unknown as string,
+      width: 1200,
+      height: 630,
       alt: "A harbour at dawn",
     };
     expect(head.openGraph).toMatchObject({

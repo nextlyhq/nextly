@@ -184,6 +184,8 @@ describe("seoPlugin", () => {
       ["GET", "/llms-full.txt", "root", true],
       ["GET", "/sitemap.xml", undefined, true],
       ["POST", "/share-image", undefined, undefined],
+      // The cards a page's own picture is served as, fetched by networks.
+      ["GET", "/share-card/:media/:file", undefined, true],
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
       // Which sitemap pages own robots.txt rules being typed would block.
@@ -299,6 +301,7 @@ describe("seoPlugin", () => {
       "/llms.txt",
       "/llms-full.txt",
       "/share-image",
+      "/share-card/:media/:file",
       "/settings/content-types",
       "/settings/robots-rules-check",
       "/settings/document",
@@ -348,6 +351,7 @@ describe("seoPlugin", () => {
       "/llms.txt",
       "/llms-full.txt",
       "/share-image",
+      "/share-card/:media/:file",
       "/settings/content-types",
       "/settings/robots-rules-check",
       "/settings/document",

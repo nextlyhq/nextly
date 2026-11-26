@@ -1253,6 +1253,28 @@ The image's alt text is the media item's own, so give share images alt text in t
 
 ### Share images of the right size
 
+A page's automatic share image, its own picture (a cover or featured image), is served at the right
+size by itself. Where networks would not show the picture in full (the wrong shape, narrower than
+1200 pixels, or an SVG, AVIF or WebP file), the head names a 1200 × 630 JPEG cut from it around its
+focal point, with the picture's alt text, at the plugin's
+`/admin/api/plugins/@nextlyhq/plugin-seo/share-card/<media id>/<version>.jpg`. The version is taken
+from the picture's stored file and focal point, so a new picture, a replaced file or a moved focal
+point is a new address and a new card, and a card is never served from an earlier picture. A new alt
+text needs no new card: the alt is read from the picture with the page's head.
+
+The card is cut when its address is first fetched, from the picture as the site serves it (on
+`baseUrl` where set), and answered with a year's cache, so the browser and any CDN in front of the
+site keep it. Nothing is stored, and naming the card reads nothing the head does not read already,
+so it costs a page's head nothing. An address naming an earlier version is sent on to the current
+card. The route is public, since networks fetch cards with no session, and holds one client to 60
+cuts a minute. It needs `sharp`, as making a share image does; without it, the picture is served as
+it is and the SEO tab says what keeps it from showing. The address assumes the Nextly handler is
+mounted at `/admin/api`, as a scaffolded project mounts it.
+
+A share image chosen for the page, or one made with **Make a share image**, is the page's own and is
+never replaced: it is served as it is, and the tab says if networks would crop it. The sitemap lists
+the page's picture itself, not the card.
+
 Networks show a share image in full at 1200 × 630. A picture narrower than 1200 pixels, or whose
 width is not between 1.8 and 2.0 times its height, is cropped or shrunk. `shareImageProblems(ctx,
 input)` says so for a page, such as `800 × 600, LinkedIn will crop it`, and says where it is fixed:
@@ -1279,6 +1301,9 @@ The route is for a signed-in person who may add to the media library (`create-me
 is set. A picture that storage will not serve to an anonymous reader is refused, since no network
 could load it either. It needs the `sharp` image library, which the media library uses to read image sizes:
 install it with `npm install sharp`.
+
+Under **Advanced**, a card cut from the page's picture is shown as the share image, with what it
+was cut from and that it follows that picture.
 
 In the SEO tab, the **When shared** preview says how the share image fits the card: the size every
 network shows in full, or where a picture of another shape is cut, with a dashed line where the card
