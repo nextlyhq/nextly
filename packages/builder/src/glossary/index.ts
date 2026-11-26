@@ -21,12 +21,8 @@
  */
 export {
   CONVERSION_WORDS,
-  DARK_PREVIEW_WORDS,
   DESIGN_ACTION_WORDS,
   EDITOR_WORDS,
-  FONT_ROLE_WORDS,
-  VARIABLE_LOSS_WORDS,
-  noBoldWords,
   type EditorWord,
 } from "../editor-words";
 export {
@@ -55,8 +51,4 @@ export {
   letEachPageChange,
   propertyCount,
 } from "./words";
-export {
-  BRITISH_SPELLINGS,
-  RETIRED_WORDS,
-  type RetiredWord,
-} from "./retired-words";
+export { RETIRED_WORDS } from "./retired-words";
