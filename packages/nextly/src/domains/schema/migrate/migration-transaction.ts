@@ -34,6 +34,11 @@ import {
 
 import { commitsOnMysql } from "./mysql-implicit-commit";
 import { requiredColumnCheckpoint } from "./required-column-guard";
+import {
+  retirementCheckpoint,
+  type RetirementContext,
+} from "./retired-documents";
+import { tableHold, type UnitConnection } from "./retirement-hold";
 import { leadingWords } from "./split-sql";
 import {
   assertForeignKeysOff,
@@ -368,10 +373,17 @@ export interface MigrationUnit {
   transaction: boolean;
   /**
    * Which way the unit runs: its UP, the default, or a DOWN undoing it. Read
-   * only by the advice a failure outside a transaction gives, because
-   * recording a unit applied is the recovery for an UP alone.
+   * by the advice a failure outside a transaction gives, because recording a
+   * unit applied is the recovery for an UP alone, and by the capture of the
+   * documents a DOWN's drop retires (`retired-documents.ts`).
    */
   direction?: "up" | "down";
+  /**
+   * The entities the unit retires, whose documents end with it (`retired-documents.ts`): given by a
+   * run of `nextly migrate` or `migrate:down`, absent for a Builder save, whose delete records its
+   * own.
+   */
+  retirements?: RetirementContext;
 }
 
 /**
@@ -855,12 +867,23 @@ async function runUnitStatements(
   // way (`uniqueIndexCheckpoint`).
   const required = requiredColumnCheckpoint(statements, dialect, unit);
   const unique = uniqueIndexCheckpoint(statements, dialect, unit);
+  // The documents of each entity the unit retires are named just before the statement that drops
+  // its table, after whatever the unit's own statements wrote there (`retirementCheckpoint`).
+  const retirement = retirementCheckpoint(
+    statements,
+    dialect,
+    unit,
+    unit.transaction,
+    // Made here, before the unit's transaction opens (`tableHold`).
+    tableHold(adapter, dialect)
+  );
   const checkpoint =
-    required === undefined && unique === undefined
+    required === undefined && unique === undefined && !retirement.retires
       ? undefined
       : async (db: unknown, index: number) => {
           await required?.(db, index);
           await unique?.(db, index);
+          await retirement.before(db, index);
         };
   // Each statement is marked with the lock's claim on the servers, where a run taking over a
   // lapsed lock looks for an earlier holder's statements still running. SQLite runs one writer at
@@ -872,6 +895,19 @@ async function runUnitStatements(
     dialect === "sqlite"
       ? statement
       : markedForSchemaLock(statement, unit.source);
+  /** The connection the unit's statements run on, for a hold of the tables it drops. */
+  const connectionOf = (
+    db: unknown,
+    execute: (statement: string) => Promise<unknown>,
+    index: number
+  ): UnitConnection => ({
+    db,
+    send: statement => execute(sent(statement)),
+    sending: () => bound?.onSend?.(index),
+    idle: async () => {
+      await bound?.beforeStatement?.();
+    },
+  });
   // A try that resumes starts at `from`; the settings made before it are made again first.
   const from = Math.max(0, Math.min(bound?.from ?? 0, statements.length));
   const settingsBefore = statements
@@ -902,6 +938,7 @@ async function runUnitStatements(
         // MySQL try resumed after statements that committed on their own skips it, as below.
         if (from > 0) await bound?.beforeResume?.(tx.db);
         if (from === 0) await bound?.before?.(tx.db);
+        await retirement.begin(tx.db, from);
         // Whether the ledger write is left outside the unit's transaction (MySQL only).
         let outside = await commitBeforeLedgerOnlyTry(
           tx,
@@ -922,22 +959,23 @@ async function runUnitStatements(
           // A cancel the checkpoint's wait drew is settled before the statement is sent.
           await bound?.beforeStatement?.();
           await sqliteWaitLeft(statement => tx.execute(statement));
-          bound?.onSend?.(index);
-          await executeTolerated(
-            tx,
-            sent(statement),
-            statement,
-            dialect,
-            bound
+          await retirement.sending(
+            connectionOf(tx.db, marked => tx.execute(marked), index),
+            index,
+            () =>
+              executeTolerated(tx, sent(statement), statement, dialect, bound)
           );
           outside = await reopenAfterMysqlImplicitCommit(tx, dialect, bound, {
             statement,
             index,
             total: statements.length,
           });
+          await retirement.after(tx.db, index);
           await reachStopPoint(`${unit.source}: after statement ${index + 1}`);
         }
         bound?.onStatement?.(statements.length);
+        // A capture whose table the drop left standing goes with the unit's own commit.
+        await retirement.done(tx.db);
         // A unit may rewrite registry rows (a schema save's upsert of its own
         // row): what the transaction read of them before is read again.
         clearRegistryRowCache();
@@ -980,6 +1018,7 @@ async function runUnitStatements(
     // already changed by them, and a refusal now would undo none of them.
     if (from > 0) await bound?.beforeResume?.(checkpointDb);
     if (from === 0) await bound?.before?.(checkpointDb);
+    await retirement.begin(checkpointDb, from);
     for (const [offset, statement] of statements.slice(from).entries()) {
       const index = from + offset;
       // Asked before the statement, outside the failure below: refused here, nothing of it ran.
@@ -996,17 +1035,24 @@ async function runUnitStatements(
       await checkpoint?.(checkpointDb, index);
       // A cancel the checkpoint's wait drew is settled before the statement is sent.
       await bound?.beforeStatement?.();
-      bound?.onSend?.(index);
       await sqliteWaitLeft(statement => adapter.executeQuery(statement));
       try {
-        await execute(sent(statement));
+        await retirement.sending(
+          connectionOf(checkpointDb, execute, index),
+          index,
+          async run => {
+            await run(statement);
+          }
+        );
       } catch (error) {
         if (passesOver(bound, error, statement, dialect)) continue;
         throw partialFailure(unit, index, statements.length, error);
       }
+      await retirement.after(checkpointDb, index);
       await reachStopPoint(`${unit.source}: after statement ${index + 1}`);
     }
     bound?.onStatement?.(statements.length);
+    await retirement.done(checkpointDb);
     await bound?.settle?.();
   };
   // `settled` follows on the handle the statements ran on, however they ended.
@@ -1031,13 +1077,16 @@ async function runUnitStatements(
           `${unit.source} ran outside a transaction, and left ${String(count)} row(s) referencing rows that do not exist (${pairs}). Its statements stayed applied: repair or remove those rows${unit.direction === "down" ? "" : `, then ${markAppliedAdvice(unit.source)}`}.`
       );
     });
-  } else if (dialect === "mysql") {
-    // Strict mode, as `executeTransaction` gives a unit run in a transaction:
-    // a statement that would cut a value short, such as a column narrowed
-    // below a stored value's length, fails instead of applying with a
-    // warning nobody reads. A session setting covers only its own
-    // connection, so every statement runs on the one connection the session
-    // holds, which is closed afterwards rather than pooled.
+  } else if (dialect === "mysql" || bound !== undefined || retirement.retires) {
+    // On MySQL, strict mode, as `executeTransaction` gives a unit run in a
+    // transaction: a statement that would cut a value short, such as a column
+    // narrowed below a stored value's length, fails instead of applying with a
+    // warning nobody reads. A session setting covers only its own connection,
+    // so every statement runs on the one connection the session holds, which
+    // is closed afterwards rather than pooled.
+    // On PostgreSQL, a try is watched on one session, so a bounded unit runs on
+    // one too, rather than each statement on whichever pooled one is free; and
+    // a drop's short transaction (`retirement.sending`) is that session's.
     await adapter.withSession(
       session => {
         const each = () =>
@@ -1049,18 +1098,7 @@ async function runUnitStatements(
           ? each()
           : boundSessionTry(session, dialect, bound, each);
       },
-      { strictSqlMode: true }
-    );
-  } else if (bound !== undefined) {
-    // A try is watched on one session, so a bounded unit runs on one connection the session
-    // holds and closes afterwards, rather than each statement on whichever pooled one is free.
-    await adapter.withSession(session =>
-      boundSessionTry(session, dialect, bound, () =>
-        runEachHeld(
-          statement => session.execute(statement),
-          sessionReader(session, dialect)
-        )
-      )
+      dialect === "mysql" ? { strictSqlMode: true } : undefined
     );
   } else {
     await runEachHeld(onPool, adapter.getDrizzle());
