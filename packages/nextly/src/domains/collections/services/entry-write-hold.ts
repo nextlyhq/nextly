@@ -472,9 +472,10 @@ function refuseUnlessSameRow(
  * reads; a write that sets the status of a lifecycle that went is refused naming it, as one that
  * sets a removed field is.
  *
- * A write refused as made for a definition that changed has its tries told: one that can be
+ * A write refused as made for a definition whose fields changed has its tries told: one that can be
  * made again, from what its hooks left, is (`WriteTries`). A field it sets is named instead, since
- * no try could write it.
+ * no try could write it. One made before a lifecycle or translation came or went is refused and not
+ * made again: its gates were chosen by the definition it was made for.
  */
 function refuseMadeFromEarlier(
   entity: EntityRef,
@@ -498,8 +499,11 @@ function refuseMadeFromEarlier(
       loaded.insertsOnly === true && loaded.tries?.remakes !== true;
     const reads = goesOn ? loaded.namesFields : loaded.fields;
     if (madeFromWhatHolds(reads, loaded, held.fields, dialect)) return;
+    // Only a change of the fields is made again: the write's gates (an update's, or a publish's
+    // where it sets a status) were chosen by the lifecycle and translation it was made for, before
+    // its tries, so it is never made again under another.
+    loaded.tries?.compared(true);
   }
-  loaded.tries?.compared(true);
   throw changedWhileHeld(entity.slug);
 }
 
