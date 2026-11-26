@@ -53,13 +53,22 @@ export function withStructuredData(
   // only with the route's code, so with a deploy. The address record a
   // trail is named from is among the head's tags.
   return overAnswer(resolver, async (answer, input) => {
-    const { nodes } = await buildStructuredData(
+    const { nodes, article } = await buildStructuredData(
       ctx,
       input,
       answer,
       await readRules(ctx, input.locale)
     );
-    return nodes.length === 0 ? answer : { ...answer, structuredData: nodes };
+    // An article's card carries its dates, authors and tags as its markup
+    // states them; a route's own card values win over these in core.
+    const card =
+      article === undefined
+        ? answer
+        : {
+            ...answer,
+            social: { ...answer.social, type: "article" as const, article },
+          };
+    return nodes.length === 0 ? card : { ...card, structuredData: nodes };
   });
 }
 

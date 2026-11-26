@@ -189,6 +189,9 @@ function SortRowMenu({
           type="button"
           size="icon-sm"
           variant="ghost"
+          // Faded until its row is pointed at or focused, or its menu is
+          // open (field-rows.css).
+          className="nx-list-sort__more"
           aria-label={`More for sort by ${name}`}
           disabled={disabled}
         >

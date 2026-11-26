@@ -1203,3 +1203,54 @@ describe("the structured data options", () => {
     });
   });
 });
+
+describe("an article's card details", () => {
+  it("are its dates, its author's page and one tag each, from the same details", async () => {
+    const { article } = await buildStructuredData(
+      context(),
+      entryInput("posts", POST),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI | Rext AI"),
+      rules({ types: { posts: { type: "blogPosting" } } })
+    );
+    expect(article).toEqual({
+      publishedTime: "2026-09-24T13:52:11.914Z",
+      modifiedTime: "2026-11-03T09:47:39.000Z",
+      authors: [`${ORIGIN}/authors/sajad-hussain`],
+      tags: ["Comparison", "AI writing"],
+    });
+  });
+
+  it("name an author with no page of their own by name", async () => {
+    // A byline typed as text, rather than an author entry with a page.
+    const { author: _entry, ...rest } = POST;
+    const { article } = await buildStructuredData(
+      context(),
+      entryInput("posts", { ...rest, writer: "Sajad Hussain" }),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({ types: { posts: { type: "article" } } })
+    );
+    expect(article?.authors).toEqual(["Sajad Hussain"]);
+  });
+
+  it("are none for a page that is not an article", async () => {
+    const { article } = await buildStructuredData(
+      context(),
+      entryInput("posts", POST),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({ types: { posts: { type: "webPage" } } })
+    );
+    expect(article).toBeUndefined();
+  });
+
+  it("are none for an article left out for a missing detail", async () => {
+    const { author: _none, ...anonymous } = POST;
+    const { article, problems } = await buildStructuredData(
+      context(),
+      entryInput("posts", anonymous),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({ types: { posts: { type: "blogPosting" } } })
+    );
+    expect(problems.map(problem => problem.detail)).toContain("author");
+    expect(article).toBeUndefined();
+  });
+});

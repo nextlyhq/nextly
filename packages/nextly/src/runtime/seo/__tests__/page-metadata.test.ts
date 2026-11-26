@@ -1250,3 +1250,87 @@ describe("the answer's verification tags", () => {
     expect(cacheOutcomes).toEqual([{ refused: true }]);
   });
 });
+
+describe("the answer's article details", () => {
+  const ARTICLE = {
+    publishedTime: "2026-11-26",
+    modifiedTime: "2026-11-27T09:30:00.000Z",
+    authors: ["https://example.com/about"],
+    tags: ["Community", "WordPress"],
+  };
+
+  it("places an article's dates, authors and one tag each in the card", () => {
+    const metadata = metadataFromAnswer({
+      title: "A post",
+      social: { type: "article", article: ARTICLE },
+    });
+    expect(metadata.openGraph).toMatchObject({
+      type: "article",
+      publishedTime: "2026-11-26",
+      modifiedTime: "2026-11-27T09:30:00.000Z",
+      authors: ["https://example.com/about"],
+      tags: ["Community", "WordPress"],
+    });
+  });
+
+  it("serves them where the route sets none", async () => {
+    provide({
+      resolve: () => ({
+        title: "A post",
+        social: { type: "article", article: ARTICLE },
+      }),
+    });
+    const metadata = await pageMetadataFor({ ...page, code: {}, tags: [] });
+    expect(metadata.openGraph).toMatchObject({
+      type: "article",
+      publishedTime: "2026-11-26",
+      modifiedTime: "2026-11-27T09:30:00.000Z",
+      authors: ["https://example.com/about"],
+      tags: ["Community", "WordPress"],
+    });
+  });
+
+  it("keeps each the route sets as the route set it, and never doubles one", async () => {
+    provide({
+      resolve: () => ({
+        title: "A post",
+        social: { type: "article", article: ARTICLE },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: {
+        openGraph: {
+          type: "article",
+          publishedTime: "2026-01-01T08:00:00.000Z",
+          tags: ["Own tag"],
+        },
+      },
+      tags: [],
+    });
+    expect(metadata.openGraph).toMatchObject({
+      type: "article",
+      // The route's own, and not joined by the answer's.
+      publishedTime: "2026-01-01T08:00:00.000Z",
+      tags: ["Own tag"],
+      // What the route left unsaid comes from the answer.
+      modifiedTime: "2026-11-27T09:30:00.000Z",
+      authors: ["https://example.com/about"],
+    });
+  });
+
+  it("keeps the kind of card the route says the page is", async () => {
+    provide({
+      resolve: () => ({
+        title: "A post",
+        social: { type: "article", article: ARTICLE },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: { openGraph: { type: "website" } },
+      tags: [],
+    });
+    expect(metadata.openGraph).toMatchObject({ type: "website" });
+  });
+});

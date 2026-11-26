@@ -199,6 +199,22 @@ describe("a prop's bind button", () => {
       screen.queryByRole("button", { name: "Bind Text to a field" })
     ).toBeNull();
   });
+
+  it("is a row action: in its row and the keyboard order, open with its picker", async () => {
+    mount(undefined);
+    const bind = screen.getByRole("button", { name: "Bind Text to a field" });
+    // The class and the row the row-action rule fades at rest
+    // (field-rows.css): faded, never taken out of the order or the tree.
+    expect(bind.classList.contains("nx-binding-row__bind")).toBe(true);
+    expect(bind.closest(".nx-binding-row")).not.toBeNull();
+    expect(bind.getAttribute("tabindex")).not.toBe("-1");
+    expect(bind.closest("[aria-hidden='true']")).toBeNull();
+    expect(bind.hasAttribute("data-open")).toBe(false);
+    fireEvent.click(bind);
+    await screen.findByRole("listbox", { name: "Fields for Text" });
+    // Open: the state the rule keeps it shown by.
+    expect(bind.hasAttribute("data-open")).toBe(true);
+  });
 });
 
 describe("the field picker", () => {
@@ -551,6 +567,12 @@ describe("a bound prop", () => {
       name: "Text: bound to Title of this post",
     });
     expect(chip.getAttribute("title")).toBe("Title of this post");
+    // Connected, the chip stands in the bind button's place and is never a
+    // faded row action.
+    expect(chip.classList.contains("nx-binding-row__bind")).toBe(false);
+    expect(
+      screen.queryByRole("button", { name: "Bind Text to a field" })
+    ).toBeNull();
     expect((screen.getByLabelText("Fallback") as HTMLInputElement).value).toBe(
       "Untitled"
     );

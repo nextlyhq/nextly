@@ -589,44 +589,45 @@
 }
 
 /*
- * Content and Style as underlined tabs, set at the start of the panel: two
- * views of one block, not a choice of value, so drawn unlike the segmented
- * choices in the fields below. 12px semibold, the open tab in the panel's text
- * colour over a 2px line, the other muted, and one 1px divider under the row.
- * Unlayered, so these outrank the shared tabs' own utilities.
+ * Content, Style and Advanced as one segmented bar across the panel: three
+ * views of one block, on a muted track, the open one raised on the page's
+ * background at 600, as the Add panel's Blocks and Sections are drawn. Kept unlike a value's segments below (Fill / Fit /
+ * Fixed) on every count an author sees: taller, on a track where they are
+ * clear, and the open tab raised where a chosen value is filled with the
+ * text colour. Unlayered, so these outrank the shared tabs' own utilities.
  */
 .nx-inspector__tablist {
   display: flex;
-  justify-content: flex-start;
+  justify-content: stretch;
   align-items: stretch;
-  gap: 1rem;
-  height: var(--nx-builder-control-height);
-  padding: 0;
-  border: 0;
+  gap: 0.125rem;
+  inline-size: 100%;
+  height: calc(var(--nx-builder-control-height) + 0.25rem);
+  padding: 0.125rem;
   /* The builder's border token, which a request for more contrast promotes. */
-  border-block-end: 1px solid var(--nx-builder-border);
-  border-radius: 0;
-  background: transparent;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  /* Muted, so the open tab's background stands out in either scheme: white
+     on grey in light, black on grey in dark. */
+  background: var(--nx-muted);
 }
 
 /*
- * As tall as the row, so the whole 28px answers a click; its line sits over
- * the divider rather than under it.
+ * An equal share of the bar each, so the bar reads as one control, and as
+ * tall as the track inside it, so the whole share answers a click.
  */
 .nx-inspector__tab {
-  /* The match count is set over the label's end. */
-  position: relative;
-  flex: none;
+  flex: 1 1 0;
+  min-width: 0;
   height: auto;
-  margin: 0 0 -1px;
-  padding: 0;
+  margin: 0;
+  padding: 0 0.5rem;
   border: 0;
-  border-block-end: 2px solid transparent;
-  border-radius: 0;
+  border-radius: calc(var(--radius-md) - 0.125rem);
   background: transparent;
   box-shadow: none;
   font-size: var(--nx-builder-font-size);
-  font-weight: 600;
+  font-weight: 500;
   color: var(--nx-muted-foreground);
 }
 
@@ -635,14 +636,27 @@
 }
 
 /*
- * The open tab's words in the panel's own text colour, never the accent,
+ * The label and its match count, which is set over the label's end: the
+ * label, not the equal-width tab, is what the count is placed from, so it
+ * sits beside its own tab's words, never over the next tab.
+ */
+.nx-inspector__tab-label {
+  position: relative;
+}
+
+/*
+ * The open tab raised on the page's background with a hairline and a soft
+ * shadow, its words in the panel's own text colour at 600, never the accent,
  * which measured 4.09:1 as text on the panel surface, under the 4.5:1 text
- * this size needs; its line is the foreground too, so it holds in both
- * schemes.
+ * this size needs.
  */
 .nx-inspector__tab[data-state="active"] {
   color: var(--nx-builder-text, var(--nx-foreground));
-  border-block-end-color: var(--nx-foreground);
+  font-weight: 600;
+  background: var(--nx-background);
+  box-shadow:
+    0 0 0 1px var(--nx-builder-border),
+    0 1px 2px color-mix(in srgb, var(--nx-shadow-color) 10%, transparent);
 }
 
 .nx-inspector__tab:focus-visible {
@@ -650,10 +664,14 @@
   outline-offset: 1px;
 }
 
-/* Forced colours replace the palette: the open tab's line in a system colour. */
+/*
+ * Forced colours drop the surface and the shadow: the open tab is outlined,
+ * except while it has keyboard focus, which keeps its own 2px ring.
+ */
 @media (forced-colors: active) {
-  .nx-inspector__tab[data-state="active"] {
-    border-block-end-color: CanvasText;
+  .nx-inspector__tab[data-state="active"]:not(:focus-visible) {
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
   }
 }
 

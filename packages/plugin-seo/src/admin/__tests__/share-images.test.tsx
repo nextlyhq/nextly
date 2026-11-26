@@ -10,11 +10,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 /** The route's answer, held until the test lets it go. */
 const route = vi.hoisted(() => ({
   answer: (_value: unknown) => {},
+  refuse: (_error: Error) => {},
 }));
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute: () =>
-    new Promise(resolve => {
+    new Promise((resolve, reject) => {
       route.answer = resolve;
+      route.refuse = reject;
     }),
   useMediaItem: () => ({ data: undefined }),
 }));
@@ -35,6 +37,7 @@ function setup(documentKey: string) {
 
 beforeEach(() => {
   route.answer = () => {};
+  route.refuse = () => {};
 });
 
 describe("making a share image", () => {
@@ -72,6 +75,20 @@ describe("making a share image", () => {
       route.answer({ item: { id: "copy-1" } });
       await made;
     });
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("passes on why a copy couldn't be made, rather than answering nothing", async () => {
+    const { set, hook } = setup("collection:posts:p1:en");
+    const made = hook.result.current.make?.();
+    const refusal = new Error(
+      "This picture is too large to make a share image from."
+    );
+    await act(async () => {
+      route.refuse(refusal);
+      await made?.catch(() => undefined);
+    });
+    await expect(made).rejects.toBe(refusal);
     expect(set).not.toHaveBeenCalled();
   });
 });

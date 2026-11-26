@@ -274,6 +274,28 @@ describe("the panel's sections inside the shell", () => {
     }
   });
 
+  it("never closes one section when another opens, and keeps both for the next block", () => {
+    const store = memoryStore();
+    const view = render(shellWith("section", store));
+    openTab("Style");
+    // From every section closed, so each open below is the author's own.
+    fireEvent.keyDown(screen.getByRole("button", { name: "Panel options" }), {
+      key: "Enter",
+    });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Collapse all" }));
+    fireEvent.click(header("Spacing"));
+    fireEvent.click(header("Background"));
+    expect(header("Spacing").getAttribute("aria-expanded")).toBe("true");
+    expect(header("Background").getAttribute("aria-expanded")).toBe("true");
+
+    view.rerender(shellWith("heading", store));
+    view.rerender(shellWith("section", store));
+    expect(header("Spacing").getAttribute("aria-expanded")).toBe("true");
+    expect(header("Background").getAttribute("aria-expanded")).toBe("true");
+    // CONTROL: a section the author left closed is still closed.
+    expect(header("Layout").getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("draws every section header as a button with its expanded state", () => {
     render(shellWith("button", memoryStore()));
     openTab("Advanced");
