@@ -28,13 +28,7 @@
  * @module image-binding-fallback
  */
 import { imageValueOf, type Binding } from "@nextlyhq/blocks-engine";
-import {
-  Input,
-  Popover,
-  PopoverAnchor,
-  PopoverContent,
-  PopoverTrigger,
-} from "@nextlyhq/ui";
+import { Input, Popover, PopoverAnchor, PopoverTrigger } from "@nextlyhq/ui";
 import { Images, Search, X } from "lucide-react";
 import * as React from "react";
 
@@ -44,6 +38,7 @@ import {
   type FoundMedia,
   type MediaPickerProps,
 } from "../inspector/content/content-controls";
+import { BuilderPopoverContent } from "../popups/builder-popover";
 
 /** What an image's Fallback row is given. */
 export interface ImageBindingFallbackProps {
@@ -201,7 +196,7 @@ export function ImageBindingFallback({
           </div>
         </PopoverAnchor>
         {searchMedia === undefined ? null : (
-          <PopoverContent
+          <BuilderPopoverContent
             align="end"
             className="nx-binding-popover nx-library-pick"
           >
@@ -215,7 +210,7 @@ export function ImageBindingFallback({
               }}
               onBrowse={Picker === undefined ? undefined : openDialog}
             />
-          </PopoverContent>
+          </BuilderPopoverContent>
         )}
       </Popover>
       <BrowseDialog

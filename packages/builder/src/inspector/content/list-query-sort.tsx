@@ -22,7 +22,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   Popover,
-  PopoverContent,
   PopoverTrigger,
   Select,
   SelectContent,
@@ -34,6 +33,7 @@ import { GripVertical, MoreHorizontal, Plus } from "lucide-react";
 import * as React from "react";
 
 import { ChoiceList } from "../../choice-list";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 
 import { LoopPicker } from "./collection-loop-controls";
 import type { LoopListField } from "./content-controls";
@@ -395,7 +395,7 @@ function AddSortButton({
           Add sort
         </Button>
       </PopoverTrigger>
-      <PopoverContent
+      <BuilderPopoverContent
         align="start"
         sideOffset={4}
         className="nx-font-pick__popover"
@@ -417,7 +417,7 @@ function AddSortButton({
           />
           {PUBLIC_ONLY}
         </div>
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

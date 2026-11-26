@@ -15,8 +15,9 @@
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { LeftPanel } from "@nextlyhq/builder";
 import type { EditorState } from "@nextlyhq/builder/shell";
+import { BuilderPopoverContent } from "@nextlyhq/builder/shell";
 import { navigateTo } from "@nextlyhq/plugin-sdk/admin";
-import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
+import { Popover, PopoverTrigger } from "@nextlyhq/ui";
 import { AlertTriangle, ArrowRight, MousePointer2 } from "lucide-react";
 import { useState, type JSX } from "react";
 
@@ -93,7 +94,7 @@ export function BindingsToFixChip({
           {label}
         </button>
       </PopoverTrigger>
-      <PopoverContent
+      <BuilderPopoverContent
         align="start"
         // Within the screen whatever its size: never wider than the viewport
         // allows, never taller than the room Radix measures below the chip,
@@ -153,7 +154,7 @@ export function BindingsToFixChip({
             <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
           </a>
         </div>
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

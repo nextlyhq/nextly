@@ -21,13 +21,14 @@ import type {
   SiteTextMap,
   SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
-import { Button, Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
+import { Button, Popover, PopoverTrigger } from "@nextlyhq/ui";
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import { ChoiceList } from "../../choice-list";
 import { FONT_ROLE_WORDS, noBoldWords } from "../../editor-words";
 import { CssHint, CssNamesLine } from "../../inspector/css-hint";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 
 import type { CatalogueAddRequest } from "./font-catalogue-view";
 import { Refusal, useRefusableWrite } from "./panel-actions";
@@ -288,7 +289,7 @@ function FontRoleRow({
           </PopoverTrigger>
         </CssHint>
         <CssNamesLine id={namesId} names={["font-family"]} />
-        <PopoverContent
+        <BuilderPopoverContent
           align="start"
           sideOffset={4}
           collisionPadding={8}
@@ -329,7 +330,7 @@ function FontRoleRow({
               </div>
             )}
           </div>
-        </PopoverContent>
+        </BuilderPopoverContent>
       </Popover>
     </div>
   );
