@@ -17,7 +17,10 @@ import { useVariablesStudio } from "./site-style-tokens-studio";
 export function FontRolesTab(): JSX.Element | null {
   const studio = useVariablesStudio();
   const fonts = useContext(FontChoicesContext);
-  if (studio?.tokens === undefined) return null;
+  if (studio === null) return null;
+  // Drawn while the site's variables are still being read, or could not be:
+  // the Fonts header and "Manage fonts…" show without the two rows, so the
+  // Fonts screen stays in reach and has a link to hand focus back to.
   return (
     <SiteFontRoles
       tokens={studio.tokens}

@@ -11,7 +11,11 @@
  * @module editor-words.surfaces.test
  */
 import { ShortcutProvider } from "@nextlyhq/ui";
-import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+import {
+  clearBlocks,
+  registerBlocks,
+  resolveSiteTokens,
+} from "@nextlyhq/blocks-engine";
 import {
   cleanup,
   fireEvent,
@@ -39,6 +43,7 @@ const { LayersPanel } = await import("./panels/layers/layers-panel");
 const { useEditorState } = await import("./editor-state");
 const { HelpDialog } = await import("./shell/help-dialog");
 const { FontsPanel } = await import("./panels/design/fonts-panel");
+const { SiteFontRoles } = await import("./panels/design/site-font-roles");
 const { SharedStylesPanel } = await import(
   "./panels/design/shared-styles-panel"
 );
@@ -178,6 +183,20 @@ describe("the editor's surfaces read the catalogue", () => {
         "No «sharedstyles» yet. Select a block and choose Save as shared style\u2026"
       )
     ).toBeTruthy();
+  });
+
+  it("heads Design › Type's fonts from it", () => {
+    render(
+      <SiteFontRoles
+        tokens={resolveSiteTokens()}
+        onChange={() => undefined}
+        readOnly={false}
+        faces={[]}
+        fromCode={[]}
+      />
+    );
+    expect(screen.getByRole("region", { name: "«fonts»" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "«fonts»" })).toBeTruthy();
   });
 
   it("titles the Help dialog from it", () => {

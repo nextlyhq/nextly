@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Design → Type opens with a "Fonts" header over the Body and Headings fonts, lined up with the tab's other headers, and "Manage fonts…" sits at its end instead of loose under the fonts. The "<font> has no Bold, so browsers draw a fake bold" line and its "Add Bold" button are gone; fonts and their weights are still added on the Fonts screen. `SiteFontRolesProps` no longer takes `onAddCut`.
+Design → Type opens with a "Fonts" header over the Body and Headings fonts, lined up with the tab's other headers, and "Manage fonts…" sits at its end instead of loose under the fonts. The "<font> has no Bold, so browsers draw a fake bold" line and its "Add Bold" button are gone; fonts and their weights are still added on the Fonts screen. `SiteFontRolesProps` no longer takes `onAddCut`, and its `tokens` may be `undefined` while the site's variables are read or could not be: the header and "Manage fonts…" still show then, without the two rows.

@@ -27,7 +27,7 @@ import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import { ChoiceList } from "../../choice-list";
-import { FONT_ROLE_WORDS } from "../../editor-words";
+import { EDITOR_WORDS, FONT_ROLE_WORDS } from "../../editor-words";
 import { CssHint, CssNamesLine } from "../../inspector/css-hint";
 import { BuilderPopoverContent } from "../../popups/builder-popover";
 
@@ -42,7 +42,12 @@ import {
 } from "./site-font-roles-model";
 
 export interface SiteFontRolesProps {
-  readonly tokens: SiteTokenSet;
+  /**
+   * The site's variables, or `undefined` while they are being read or when
+   * they could not be. Without them the header and "Manage fonts…" still
+   * show, so the Fonts screen stays in reach, and the two rows do not.
+   */
+  readonly tokens: SiteTokenSet | undefined;
   readonly onChange: (tokens: SiteTokenSet) => void;
   readonly readOnly: boolean;
   /** The Site text rows the site's code supplies. */
@@ -184,8 +189,6 @@ export function SiteFontRoles({
     () => roleFamilies(faces ?? [], fromCode),
     [faces, fromCode]
   );
-  const pick = (role: FontRole, stack: string | undefined): void =>
-    onChange(withFontRole(tokens, role, stack, supplied));
   return (
     <section
       className="nx-vars__group nx-font-roles"
@@ -194,7 +197,7 @@ export function SiteFontRoles({
       {/* The panel's own section header, so it lines up with the others. */}
       <div className="nx-vars__group-head">
         <h3 className="nx-vars__group-name" id={headingId}>
-          Fonts
+          {EDITOR_WORDS.fonts}
         </h3>
         {/* Shown read-only too: the Fonts screen is where a site's fonts are
             seen, as the link under the rows showed them before. The mark is
@@ -210,17 +213,23 @@ export function SiteFontRoles({
           </button>
         )}
       </div>
-      {(["body", "heading"] as const).map(role => (
-        <FontRoleRow
-          key={role}
-          role={role}
-          tokens={tokens}
-          choices={choicesFor(role, families)}
-          readOnly={readOnly}
-          onPick={stack => pick(role, stack)}
-          onManageFonts={onManageFonts}
-        />
-      ))}
+      {/* The rows need the site's variables; until they are read, or when
+          they cannot be, the header above is all that shows. */}
+      {tokens === undefined
+        ? null
+        : (["body", "heading"] as const).map(role => (
+            <FontRoleRow
+              key={role}
+              role={role}
+              tokens={tokens}
+              choices={choicesFor(role, families)}
+              readOnly={readOnly}
+              onPick={stack =>
+                onChange(withFontRole(tokens, role, stack, supplied))
+              }
+              onManageFonts={onManageFonts}
+            />
+          ))}
     </section>
   );
 }

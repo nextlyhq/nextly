@@ -217,6 +217,36 @@ describe("the Fonts header", () => {
     expect(onManageFonts).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the header and Manage fonts… while the site's variables are not there", () => {
+    // Being read, or failed to read: the rows wait, the way to the Fonts
+    // screen does not, and it is still where focus returns.
+    const onManageFonts = vi.fn();
+    render(
+      <SiteFontRoles
+        tokens={undefined}
+        onChange={() => undefined}
+        readOnly={false}
+        faces={undefined}
+        fromCode={[]}
+        onManageFonts={onManageFonts}
+      />
+    );
+    const section = screen.getByRole("region", { name: "Fonts" });
+    expect(
+      within(section).getByRole("heading", { name: "Fonts" })
+    ).toBeTruthy();
+    const manage = within(section).getByRole("button", {
+      name: "Manage fonts…",
+    });
+    expect(manage.getAttribute("data-fonts-manage")).toBe("");
+    fireEvent.click(manage);
+    expect(onManageFonts).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /^Body font,/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^Headings font,/ })
+    ).toBeNull();
+  });
+
   it("keeps the header, with no link, where nothing opens the Fonts screen", () => {
     render(<Hosted />);
     expect(screen.getByRole("heading", { name: "Fonts" })).toBeTruthy();
