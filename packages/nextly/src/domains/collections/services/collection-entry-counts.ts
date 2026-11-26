@@ -41,7 +41,7 @@ interface CountedCollection {
  * The entries in `tableName`, through `db`. The table's name is quoted as an identifier, so one
  * spelled with a hyphen is counted. A result with no readable count is a failure, never a zero.
  */
-export async function countEntries(
+async function countEntries(
   db: RunsStatements,
   tableName: string
 ): Promise<number> {

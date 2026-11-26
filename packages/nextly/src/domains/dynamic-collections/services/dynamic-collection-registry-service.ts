@@ -956,7 +956,7 @@ export function namedCollectionLockNames(
  * group's one name, a hash of the database, its kind and its slug, kept apart by a NUL as a
  * collection's are. Those two kinds had no hold under an earlier name, so none is taken beside it.
  */
-export function namedEntityLockNames(
+function namedEntityLockNames(
   database: string | null,
   entity: EntityRef
 ): string[] {
