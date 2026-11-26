@@ -16,6 +16,7 @@ import { LOCK } from "./support/locks";
 import {
   createRuntimeCollection,
   expectOk,
+  removeMigrationsOf,
   removeRuntimeCollection,
 } from "./support/runtime-collection";
 import { test } from "./support/test";
@@ -182,9 +183,12 @@ test.describe("moves between a host and a field group it uses", () => {
   });
 
   // In afterEach, so it runs when a test fails too; the users first, so each field group is free
-  // to go. The migration files these writes leave stay in the playground's ignored folder, as the
-  // outline spec explains: the running server's ledger records them as applied.
+  // to go. The migration files these writes leave are owed, not removed: the running server's
+  // ledger records them as applied, so they go when the run ends (`removeMigrationsOf`).
   test.afterEach(async ({ page }) => {
+    for (const slug of [single, c1, c2, second, fieldGroup]) {
+      await removeMigrationsOf(slug);
+    }
     await remove(page.request, `singles/${single}`);
     await removeRuntimeCollection(page.request, c1);
     await removeRuntimeCollection(page.request, c2);
