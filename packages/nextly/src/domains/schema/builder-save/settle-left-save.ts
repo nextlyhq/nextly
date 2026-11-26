@@ -60,7 +60,6 @@ import {
   snapshotPathOf,
 } from "../migrate-create/snapshot-io";
 import { assertWriterHold } from "../migrate-create/writer-hold";
-import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { collectionOwnTables } from "../services/field-column-descriptor";
 import { loadUiSchema } from "../ui-schema/loader";
@@ -73,6 +72,7 @@ import {
   companionDriftItems,
   fieldsNotServed,
   judgeLeftStop,
+  liveTables,
   type ServedComparison,
   restoreAside,
   setAside,
@@ -1343,14 +1343,13 @@ async function whereTablesStand(
       ...entityTables(record),
     ]),
   ];
-  const live =
-    tables.length === 0
-      ? { tables: [] }
-      : await introspectLiveSnapshot(
-          deps.adapter.getDrizzle(),
-          deps.adapter.getCapabilities().dialect,
-          tables
-        );
+  // As the save reads them, without what another owner built there (`liveTables`), but for what the
+  // history itself describes: neither end describes another owner's index, say, which the tables
+  // hold all the same. A record of those that cannot be read leaves the save as it is.
+  const live = await liveTables(deps, tables, {
+    describedIn: target === undefined ? [before] : [before, target],
+    subject: `The Builder save of the ${described(record)}, left part-way,`,
+  });
   // A table stands where a snapshot says only with its translations table as the snapshot has it:
   // there with the translated columns it records, or absent from an untranslated table. A save
   // whose main statements committed and whose translations table did not follow (not made, or not

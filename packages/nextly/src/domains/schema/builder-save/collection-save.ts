@@ -170,6 +170,7 @@ import {
   WRITER_HOLD_LOST_REASON,
 } from "../migrate-create/writer-hold";
 import { readRecordedElementsOn } from "../ownership/dependent-elements";
+import { describes } from "../ownership/recorded-drift";
 import {
   databaseRemovedElementsSources,
   fieldOfColumn,
@@ -4678,10 +4679,20 @@ function tablesChangedBy(
  * The tables of `names` the database has now, as the app's history would describe them: without
  * the elements another owner built there, which the owner record keeps (`withoutOthersElements`).
  * Compared with that history, such an element would otherwise read as drift.
+ *
+ * With `describedIn`, an element a record names is left out only where none of those snapshots
+ * describes one of its kind and name (`describes`): a settle comparing the tables with its history
+ * keeps what that history itself describes. The save's own callers pass none, as there a difference
+ * the history records is what stops a save planning a drop of a departed plugin's column. `subject`
+ * names what was not changed where the record cannot be read.
  */
-async function liveTables(
+export async function liveTables(
   deps: Pick<CollectionSaveDeps, "adapter">,
-  names: readonly string[]
+  names: readonly string[],
+  options: {
+    describedIn?: readonly NextlySchemaSnapshot[];
+    subject?: string;
+  } = {}
 ): Promise<NextlySchemaSnapshot> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const unique = [...new Set(names)];
@@ -4700,8 +4711,16 @@ async function liveTables(
       tables: snapshot.tables.filter(t => unique.includes(t.name)),
     },
     // A record that cannot be read refuses the save, never read as none.
-    await readingOthersElements(`The save of ${present.join(", ")}`, () =>
-      readRecordedElementsOn(deps.adapter, present)
+    (
+      await readingOthersElements(
+        options.subject ?? `The save of ${present.join(", ")}`,
+        () => readRecordedElementsOn(deps.adapter, present)
+      )
+    ).filter(
+      element =>
+        !(options.describedIn ?? []).some(snapshot =>
+          describes(snapshot, element.table, element)
+        )
     )
   );
 }
