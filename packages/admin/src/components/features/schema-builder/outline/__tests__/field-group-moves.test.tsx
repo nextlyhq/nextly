@@ -157,6 +157,38 @@ describe.each(EDITORS)("in $editor", ({ surface }) => {
       expect(probe.fields).toEqual(initial);
     });
 
+    // An open menu says what the rule says now: a refusal drawn while the users were being read is
+    // drawn again once they are. Broken, it keeps "could not be read" until the menu is reopened.
+    it("updates an open menu's refusal once the users have been read", async () => {
+      const probe = newProbe();
+      const initial = fieldsWithNotes();
+      const harness = (context: MoveContext) => (
+        <MoveHarness
+          initial={initial}
+          context={context}
+          fieldGroups={nestedFixtureFieldGroups()}
+          blockCatalogs={nestedFixtureBlockCatalogs()}
+          probe={probe}
+        />
+      );
+      const reading: MoveContext = {
+        ...contextIn(surface),
+        describeFieldGroup: () => ({ uses: null, complete: false }),
+      };
+      const { rerender } = render(harness(reading));
+      const user = userEvent.setup();
+      expect(await moveToOf(user, "seo/meta_title")).toBe(
+        `Meta title cannot be moved into or out of the field group seo: ${STAYS} Where else it is used could not be read.`
+      );
+
+      rerender(harness(contextIn(surface)));
+      const item = screen.getByRole("menuitem", { name: "Move to…" });
+      expect(
+        document.getElementById(item.getAttribute("aria-describedby") ?? "")
+          ?.textContent
+      ).toBe(OUT);
+    });
+
     // The nearest field group defines a row: a field of the field group placed inside another is
     // changed in the inner one's editor, and is refused naming it and its users.
     it("names the field group inside another that defines it, with that one's users", async () => {
