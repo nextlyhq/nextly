@@ -460,8 +460,9 @@ function InspectorTabList({
 }: {
   tabs: readonly InspectorTab[];
 }): React.JSX.Element {
-  // Compact underlined tabs at the start of the panel; the classes carry the
-  // inspector's own tab rules over the shared tabs'. The options menu is at
+  // One segmented bar across the start of the panel, drawn unlike the value
+  // choices below it; the classes carry the inspector's own tab rules over
+  // the shared tabs'. The options menu is at
   // the end of the search row below, after "Only changed", so the keyboard
   // meets the panel's head in the order it reads.
   return (
