@@ -1,0 +1,24 @@
+---
+title: COLLECTION_BEING_CHANGED
+description: "A change that deletes values lost its hold of the collection part way, so it stopped before its next statement."
+---
+
+## Cause
+
+A change that deletes values lost its hold of the collection part way, so it stopped before its next statement.
+
+A Schema Builder change that deletes stored values holds its collection from the moment it counts them until the change is recorded, so no write lands in between. Some of its statements run on other connections than the one holding the collection. Before each, the change asks whether its hold still stands; this one found it gone, because the connection holding it ended, so other writes could already go ahead. It sent nothing more.
+
+## Fix
+
+- Review the change in the Schema Builder: what it would delete may have changed while it was not held.
+- Then make it again.
+
+## Example
+
+```text
+✗ The change stopped before its next statement.
+  Why:  It no longer held its collection, so other writes could go ahead, and what it would delete was counted under a hold that is gone.
+  Next: Review the change and make it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/collection-being-changed  (COLLECTION_BEING_CHANGED)
+```

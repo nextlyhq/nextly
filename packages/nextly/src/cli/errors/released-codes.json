@@ -22,6 +22,7 @@
   "BUILD_MIGRATIONS_NOT_APPLIED": "`nextly build --strict` found migrations the database has not applied, or that failed.",
   "BUILD_STRICT_WARNINGS": "`nextly build --strict` found validation warnings, and `--strict` fails the build on any warning.",
   "CHECKSUM_MISMATCH": "A migration file no longer matches the checksum `migrate:create` recorded in its snapshot.",
+  "COLLECTION_BEING_CHANGED": "A change that deletes values lost its hold of the collection part way, so it stopped before its next statement.",
   "COMPONENT_MAP_OUT_OF_DATE": "`nextly generate:types --check` found the committed component map out of step with the configuration.",
   "CONFIG_IMPORT_NOT_FOUND": "The configuration file imports a file or package that could not be found.",
   "CONFIG_INVALID": "The configuration, or a definition it loads, declares something Nextly cannot use.",
