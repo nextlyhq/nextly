@@ -545,6 +545,13 @@ exports[`each code, as a command ends with it > BUILD_STRICT_WARNINGS 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/build-strict-warnings  (BUILD_STRICT_WARNINGS)"
 `;
 
+exports[`each code, as a command ends with it > BUILDER_DEFINITION_IGNORED 1`] = `
+"✗ The Schema Builder's definition file, \`ui-schema.json\`, is ignored by git.
+  Why:  \`migrate:check\` compares what the project commits with its migrations, and an ignored file is not committed, so the check would pass on one machine and fail on another.
+  Next: Commit \`ui-schema.json\`: remove the line in \`.gitignore\` that ignores it, then \`git add\` it.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-definition-ignored  (BUILDER_DEFINITION_IGNORED)"
+`;
+
 exports[`each code, as a command ends with it > BUILDER_DEFINITION_MISSING 1`] = `
 "✗ The newest migration snapshot records a Builder collection 'articles' that neither \`nextly.config.ts\` nor \`./ui-schema.json\` declares.
   Why:  \`./ui-schema.json\` is part of the code: \`migrate:create\` reads the Builder's entities from it. Without them, a migration written now would drop each one's table and its content.
@@ -778,6 +785,13 @@ exports[`each code, as a command ends with it > DATABASE_CATALOG_UNREADABLE 1`] 
   Docs: https://nextlyhq.com/docs/cli/errors/database-catalog-unreadable  (DATABASE_CATALOG_UNREADABLE)"
 `;
 
+exports[`each code, as a command ends with it > DATABASE_DIALECT_DIFFERS 1`] = `
+"✗ \`DATABASE_URL\` names a PostgreSQL database, and the migrations are for MySQL.
+  Why:  \`--record-snapshot\` records the translation tables of the database it reads, in a migration written for the migrations' dialect.
+  Next: Point \`DATABASE_URL\` at the MySQL database the migrations run on, or pass the \`--dialect\` they are for.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-dialect-differs  (DATABASE_DIALECT_DIFFERS)"
+`;
+
 exports[`each code, as a command ends with it > DATABASE_DIALECT_INVALID 1`] = `
 "✗ \`DB_DIALECT\` is \`mssql\`, which is not a database Nextly supports.
   Why:  Nextly runs on PostgreSQL, MySQL and SQLite.
@@ -854,11 +868,25 @@ exports[`each code, as a command ends with it > DEMOTE_PLUGIN_COLLECTION 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/demote-plugin-collection  (DEMOTE_PLUGIN_COLLECTION)"
 `;
 
+exports[`each code, as a command ends with it > DIALECT_NOT_STATED 1`] = `
+"✗ The command could not tell which database the migrations are for.
+  Why:  It reads no database, no migration file names its dialect yet, and neither \`DB_DIALECT\` nor \`DATABASE_URL\` is set.
+  Next: Pass \`--dialect\` with \`postgresql\`, \`mysql\` or \`sqlite\`, or set \`DB_DIALECT\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/dialect-not-stated  (DIALECT_NOT_STATED)"
+`;
+
 exports[`each code, as a command ends with it > DROP_OF_FOREIGN_TABLE 1`] = `
 "✗ A migration would drop a table that belongs to a different owner.
   Why:  In \`@acme/seo/20261020_120000_add_redirects\`, on \`dc_posts\`, which \`app\` holds. It has been refused, and nothing was applied.
   Next: Change only what this migration's owner holds: a change to another owner's table belongs in that owner's migrations.
   Docs: https://nextlyhq.com/docs/cli/errors/drop-of-foreign-table  (DROP_OF_FOREIGN_TABLE)"
+`;
+
+exports[`each code, as a command ends with it > ENTITIES_NOT_SYNCED 1`] = `
+"✗ \`db:sync\` could not add a column or create a table, so these entities are recorded failed: \`seo\` (priority: Duplicate column name 'priority').
+  Why:  The database refused the statement. Everything else was synced, and the steps over data an earlier release stored wait for a run that syncs every entity.
+  Next: Fix the cause, then run \`nextly db:sync\` again; it retries them.
+  Docs: https://nextlyhq.com/docs/cli/errors/entities-not-synced  (ENTITIES_NOT_SYNCED)"
 `;
 
 exports[`each code, as a command ends with it > FIELD_GROUP_BACKUP_NOT_CONFIRMED 1`] = `
@@ -2082,6 +2110,13 @@ exports[`each code, as a command ends with it > SETUP_TOKEN_SET_BY_ENV 1`] = `
   Why:  A token set by NEXTLY_SETUP_TOKEN is read from the environment, not stored in the install's database.
   Next: Change the variable where it is set.
   Docs: https://nextlyhq.com/docs/cli/errors/setup-token-set-by-env  (SETUP_TOKEN_SET_BY_ENV)"
+`;
+
+exports[`each code, as a command ends with it > SNAPSHOT_WITHOUT_ENTITIES 1`] = `
+"✗ The applied migration \`20261024_120000_make_author_required\` has a snapshot that records no entities, and the older \`20261020_120000_add_posts\` has one that does.
+  Why:  An earlier release's \`migrate:create\` wrote it. Its migration changed the tables after \`20261020_120000_add_posts\`, so judging the columns by \`20261020_120000_add_posts\` would convert them back.
+  Next: Run \`nextly migrate:create --name="<migration-name>"\`, then \`nextly migrate\`: the migration it writes records the entities as they are. Then run \`nextly repair-columns\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/snapshot-without-entities  (SNAPSHOT_WITHOUT_ENTITIES)"
 `;
 
 exports[`each code, as a command ends with it > SYNC_CONFIRMATION_REQUIRED 1`] = `

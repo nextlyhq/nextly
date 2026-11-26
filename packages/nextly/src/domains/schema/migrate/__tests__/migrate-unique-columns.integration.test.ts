@@ -657,38 +657,42 @@ describe.each(LOCK_DIALECTS)(
       expect(await isUnique("person")).toBe(false);
     }, 120_000);
 
-    it("makes a Single's one-to-one unique", async () => {
-      const tables = new DynamicCollectionSchemaService(undefined, dialect);
-      await run(
-        splitStatements([
-          tables.generateMigrationSQL(
-            SETTINGS,
-            [relationship("owner", "manyToOne")] as never,
-            { isSingle: true }
-          ),
-        ])
-      );
-      await adapter.insert("dynamic_singles", {
-        id: randomUUID(),
-        slug: "settings",
-        label: "settings",
-        tableName: SETTINGS,
-        fields: [relationship("owner", "oneToOne")],
-        source: "ui",
-        locked: false,
-        schemaHash: "test",
-        schemaVersion: 1,
-        migrationStatus: "applied",
-      } as never);
+    it.each(["ui", "code", "plugin:@acme/shop"])(
+      "makes a Single's one-to-one unique, whoever owns it: %s",
+      async source => {
+        const tables = new DynamicCollectionSchemaService(undefined, dialect);
+        await run(
+          splitStatements([
+            tables.generateMigrationSQL(
+              SETTINGS,
+              [relationship("owner", "manyToOne")] as never,
+              { isSingle: true }
+            ),
+          ])
+        );
+        await adapter.insert("dynamic_singles", {
+          id: randomUUID(),
+          slug: "settings",
+          label: "settings",
+          tableName: SETTINGS,
+          fields: [relationship("owner", "oneToOne")],
+          source,
+          locked: source !== "ui",
+          schemaHash: "test",
+          schemaVersion: 1,
+          migrationStatus: "applied",
+        } as never);
 
-      await migrate();
+        await migrate();
 
-      expect(
-        (await readUniqueColumns(adapter.getDrizzle(), dialect, SETTINGS)).has(
-          "owner"
-        )
-      ).toBe(true);
-    }, 120_000);
+        expect(
+          (
+            await readUniqueColumns(adapter.getDrizzle(), dialect, SETTINGS)
+          ).has("owner")
+        ).toBe(true);
+      },
+      120_000
+    );
 
     /** Every table of the database, as introspection reads it. */
     async function wholeDatabase() {

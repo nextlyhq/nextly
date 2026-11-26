@@ -943,6 +943,10 @@ export async function refuseWhileSaveLeftPartWay(args: {
 }): Promise<void> {
   const here = hostname();
   const database = databaseIdentity(args.databaseUrl, args.postgresSchema);
+  // A command run with no database named (`migrate:check` in CI, which needs none) cannot tell
+  // whose a marker is, so every marker of this host is taken as its database's.
+  const url = args.databaseUrl ?? process.env.DATABASE_URL;
+  const anyDatabase = url === undefined || url === "";
   const left: string[] = [];
   for (const marker of await readSaveMarkers(args.projectRoot)) {
     if ("unreadable" in marker) {
@@ -957,7 +961,9 @@ export async function refuseWhileSaveLeftPartWay(args: {
     // whose database could not be told (an adapter handed in) is taken as this one's: it refuses.
     if (
       record.host === here &&
-      (record.database === database || record.database === UNKNOWN_DATABASE)
+      (anyDatabase ||
+        record.database === database ||
+        record.database === UNKNOWN_DATABASE)
     ) {
       left.push(
         `${described(record)} (${relative(args.projectRoot, marker.file)})`

@@ -21,23 +21,8 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import {
-  datetime as mysqlDatetime,
-  mysqlTable,
-  varchar as mysqlVarchar,
-} from "drizzle-orm/mysql-core";
-import {
-  pgTable,
-  text as pgText,
-  timestamp as pgTimestamp,
-  varchar as pgVarchar,
-} from "drizzle-orm/pg-core";
-import {
-  integer as sqliteInteger,
-  sqliteTable,
-  text as sqliteText,
-} from "drizzle-orm/sqlite-core";
 
+import { loadedCore } from "../../../database/dialect-tables";
 import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
 
 /** The stamp table's columns: the composite key, and the timestamp itself. */
@@ -61,10 +46,11 @@ export function buildCompanionStampTable(
   dialect: SupportedDialect
 ): CompanionStampTable {
   if (dialect === "postgresql") {
+    const { pgTable, text, timestamp, varchar } = loadedCore("postgresql");
     const table = pgTable(companionTableName, {
-      _parent: pgText("_parent").notNull(),
-      _locale: pgVarchar("_locale", { length: 20 }).notNull(),
-      [COMPANION_UPDATED_AT_COLUMN]: pgTimestamp(COMPANION_UPDATED_AT_COLUMN, {
+      _parent: text("_parent").notNull(),
+      _locale: varchar("_locale", { length: 20 }).notNull(),
+      [COMPANION_UPDATED_AT_COLUMN]: timestamp(COMPANION_UPDATED_AT_COLUMN, {
         withTimezone: true,
       }),
     });
@@ -77,15 +63,13 @@ export function buildCompanionStampTable(
   }
 
   if (dialect === "mysql") {
+    const { datetime, mysqlTable, varchar } = loadedCore("mysql");
     const table = mysqlTable(companionTableName, {
-      _parent: mysqlVarchar("_parent", { length: 36 }).notNull(),
-      _locale: mysqlVarchar("_locale", { length: 20 }).notNull(),
-      [COMPANION_UPDATED_AT_COLUMN]: mysqlDatetime(
-        COMPANION_UPDATED_AT_COLUMN,
-        {
-          fsp: 3,
-        }
-      ),
+      _parent: varchar("_parent", { length: 36 }).notNull(),
+      _locale: varchar("_locale", { length: 20 }).notNull(),
+      [COMPANION_UPDATED_AT_COLUMN]: datetime(COMPANION_UPDATED_AT_COLUMN, {
+        fsp: 3,
+      }),
     });
     return {
       table,
@@ -95,10 +79,11 @@ export function buildCompanionStampTable(
     };
   }
 
+  const { integer, sqliteTable, text } = loadedCore("sqlite");
   const table = sqliteTable(companionTableName, {
-    _parent: sqliteText("_parent").notNull(),
-    _locale: sqliteText("_locale").notNull(),
-    [COMPANION_UPDATED_AT_COLUMN]: sqliteInteger(COMPANION_UPDATED_AT_COLUMN, {
+    _parent: text("_parent").notNull(),
+    _locale: text("_locale").notNull(),
+    [COMPANION_UPDATED_AT_COLUMN]: integer(COMPANION_UPDATED_AT_COLUMN, {
       mode: "timestamp",
     }),
   });

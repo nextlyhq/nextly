@@ -30,7 +30,6 @@ import {
   Label,
   Popover,
   PopoverAnchor,
-  PopoverContent,
   PopoverTrigger,
   Switch,
 } from "@nextlyhq/ui";
@@ -48,6 +47,7 @@ import {
 import * as React from "react";
 
 import type { EditorState } from "../../editor-state";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import { HeldByLock } from "../held-by-lock";
 import {
   lockViewOf,
@@ -598,7 +598,7 @@ function LinkControl({
       </PopoverAnchor>
       {/* Aligned to the control's right edge: the list is wider than the
           control column, and the inspector sits at the window's right edge. */}
-      <PopoverContent
+      <BuilderPopoverContent
         align="end"
         sideOffset={4}
         className="nx-link-pick__popover"
@@ -611,7 +611,7 @@ function LinkControl({
           entryLinks={entryLinks}
           onChoose={choose}
         />
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

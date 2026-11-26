@@ -11,7 +11,7 @@ import type { SQL } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { SQLiteDialect } from "drizzle-orm/sqlite-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { toDrizzleTable } from "../../../domains/schema/extension/compile";
@@ -23,6 +23,15 @@ import type {
 import { NextlyError } from "../../../errors/nextly-error";
 import { increment, incrementBy, isIncrement } from "../increment";
 import { createPluginDatabase } from "../plugin-database";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 const counters = defineTable("counters", {
   id: col.id(),

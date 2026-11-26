@@ -32,6 +32,7 @@ import {
   type EntryContentLimits,
   type PreviewedCollection,
   type PreviewedEntry,
+  BuilderPopoverContent,
 } from "@nextlyhq/builder/shell";
 import {
   formatWidgetTime,
@@ -49,7 +50,6 @@ import {
   CommandItem,
   CommandList,
   Popover,
-  PopoverContent,
   PopoverTrigger,
   Tooltip,
   TooltipContent,
@@ -587,7 +587,7 @@ function EntryPicker({
           <TooltipContent>{chip.title}</TooltipContent>
         )}
       </Tooltip>
-      <PopoverContent
+      <BuilderPopoverContent
         align="start"
         className="nx-preview-picker w-[26.25rem] max-w-[calc(100vw-2rem)] p-0"
         // Focus returned to the chip as the picker closes is not the author
@@ -597,7 +597,7 @@ function EntryPicker({
         {open ? (
           <PickerBody preview={preview} onDone={() => setOpen(false)} />
         ) : null}
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

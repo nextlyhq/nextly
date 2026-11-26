@@ -11,11 +11,14 @@ A migration file has no snapshot file beside it in `meta/`.
 
 `nextly repair-columns` stops where an applied migration newer than the newest applied snapshot has none. That snapshot is the definition last applied, and an older one would convert its columns back. A blank migration and a localization migration do not stop it.
 
+It also stops where no applied snapshot that records the entities is left in `meta/`, and the database records that snapshots were written for applied migrations `nextly migrate:create` wrote. The registry rows would stand in for what was applied, and a start can rewrite them from another configuration. Migrations written by hand, and those written before snapshots recorded the entities, do not stop it.
+
 A blank migration (`nextly migrate:create --blank`) has no snapshot by design, and `nextly migrate:check` accepts it. It recognises one by either of two lines in the file: the `-- Parent:` line, or the template's own line, `-- This is a blank migration file for custom SQL.`, in its header, above `-- UP`. A file with neither is held to its snapshot, and so is any file that has one. A localization migration (any file carrying `-- Generated: localization`) is also written without a snapshot, and `nextly migrate:check` passes it without checking it against one, so the check does not catch an edit to it.
 
 ## Fix
 
 - Restore the snapshot from version control if it was deleted.
+- For `nextly repair-columns`, where the snapshots were never committed: with the configuration as it was at the last `nextly migrate`, run `nextly migrate:create`, then `nextly migrate`, which records the entities as they are; then run `nextly repair-columns` again. Written from a configuration changed since, the migration describes tables the database does not have, and `nextly migrate` refuses it.
 - For SQL you wrote yourself, in a file no database has applied yet: re-create it with `nextly migrate:create --blank` and copy the SQL across, then delete the old file.
 - For SQL you wrote yourself, in a file a database has already applied: keep the file's name, since under a new one the database would run it again. Add the line `-- This is a blank migration file for custom SQL.` to its header. `nextly migrate` then stops on the edited file (`MIGRATION_TAMPERED`) until you accept the edit on every database that has applied it:
 

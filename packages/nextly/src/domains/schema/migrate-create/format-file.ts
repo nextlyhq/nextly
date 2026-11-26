@@ -33,6 +33,7 @@ import {
   type Deletion,
 } from "../migrate/data-loss-consent";
 import { BLANK_FILE_LINE } from "../migrate/history-line";
+import { GENERATED_FILE_LINE } from "../migrate/history-line-names";
 import { NO_TRANSACTION_MARKER } from "../migrate/split-sql";
 
 import { getDialectDisplayName } from "./dialect-name";
@@ -277,7 +278,7 @@ export function formatMigrationFile(args: FormatArgs): string {
   const downBody = downBodyOf(args);
 
   return `-- Migration: ${args.name}
-${destructiveLines(args.deletions ?? [])}${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}${answersHeaderLine(args.answersIn)}-- Generated at: ${now}
+${destructiveLines(args.deletions ?? [])}${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}${answersHeaderLine(args.answersIn)}${GENERATED_FILE_LINE} ${now}
 -- Dialect: ${getDialectDisplayName(args.dialect)}
 
 -- UP
@@ -303,7 +304,7 @@ export function formatSnapshotRecordFile(
   return `-- Migration: ${name}
 -- Generated: snapshot record
 ${SCOPED_ENTITIES_MARKER}
--- Generated at: ${now.toISOString()}
+${GENERATED_FILE_LINE} ${now.toISOString()}
 -- Dialect: ${getDialectDisplayName(dialect)}
 --
 -- Written by \`nextly migrate:create --record-snapshot\`. It changes nothing in
@@ -343,7 +344,7 @@ export function formatBlankFile(
 ): string {
   const outside = options.transaction === false;
   return `${outside ? `${NO_TRANSACTION_MARKER}\n` : ""}-- Migration: ${name}
--- Generated at: ${now.toISOString()}
+${GENERATED_FILE_LINE} ${now.toISOString()}
 -- Dialect: ${getDialectDisplayName(dialect)}
 ${options.line ?? ""}--
 ${BLANK_FILE_LINE}

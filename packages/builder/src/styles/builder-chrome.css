@@ -11,6 +11,7 @@
  * - base: why the sheet is compiled and what it leaves to the design system,
  *   the Tailwind layers and source scan, the shell's box model, the editor's
  *   tokens in light, dark and high contrast.
+ * - popups: every builder popup's size limits and inner scrolling.
  * - add-panel: the top bar's density, the Add panel and its popover, the
  *   Components panel, and the text kept for assistive technology only.
  * - inspector: the inspector's region, the block card, the editing bar with
@@ -66,6 +67,8 @@
  * holds every partial here to exactly one import.
  */
 @import "./base.css";
+
+@import "./popups.css";
 
 @import "./add-panel.css";
 

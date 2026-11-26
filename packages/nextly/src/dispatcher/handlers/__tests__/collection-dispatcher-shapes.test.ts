@@ -14,7 +14,15 @@
 //   respondBulk:     bulkDeleteEntries, bulkUpdateEntries,
 //                    bulkUpdateByQuery
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  beforeAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 // A registry write's transaction, and the schema version stored in it, are
 // the integration suite's subject (`schema-version-writers.integration.test.ts`):
@@ -126,6 +134,15 @@ import { dispatchCollections } from "../collection-dispatcher";
 // container, so these tests register one rather than stubbing the guard.
 import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 // Helper: build a ServiceContainer-shaped fake whose `collections`
 // service-object methods are individually mockable via vi.fn(). The

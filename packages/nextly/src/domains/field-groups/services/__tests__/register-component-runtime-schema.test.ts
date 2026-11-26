@@ -11,7 +11,16 @@
  * identically. The fallback is exercised here because it is the one that diverged: it registered
  * the main table alone while returning the same verdict as the branch that registered both.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 const mockGetSchemaRegistryFromDI = vi.fn();
 vi.mock("../../../dispatcher/helpers/di", () => ({

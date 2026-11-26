@@ -3,6 +3,7 @@ import * as path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { loadDialectTables } from "../database/dialect-tables";
 import {
   publishesPerLanguage,
   storesPerLanguage,
@@ -264,6 +265,8 @@ export class CollectionFileManager {
       );
 
       try {
+        // An adapter a script built for itself may have loaded no dialect.
+        await loadDialectTables(this.adapter.dialect);
         const metadata = await this.metadataFetcher(collectionName, executor);
         if (metadata && metadata.fields) {
           const dialect = this.adapter.dialect;
@@ -348,6 +351,10 @@ export class CollectionFileManager {
     executor?: unknown
   ): Promise<CompanionSchema | null> {
     if (!this.adapter || !this.metadataFetcher) return null;
+    // An adapter a script built for itself may have loaded no dialect. Loaded
+    // before the fields are read: from there to the table being kept is one
+    // step, so a table a save hands over meanwhile is never written over.
+    await loadDialectTables(this.adapter.dialect);
     const metadata = await this.metadataFetcher(collectionName, executor);
     // Only a collection whose translatable values live in a companion has one to load.
     if (!metadata || !storesPerLanguage(metadata)) return null;

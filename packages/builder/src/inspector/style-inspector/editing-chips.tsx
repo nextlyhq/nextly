@@ -25,10 +25,11 @@ import {
   DropdownMenuTrigger,
   Popover,
   PopoverAnchor,
-  PopoverContent,
 } from "@nextlyhq/ui";
 import { Check, ChevronDown, Lock } from "lucide-react";
 import * as React from "react";
+
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 
 /** One shared style the block wears, as the target menu lists it. */
 export interface EditingBarChip {
@@ -205,7 +206,7 @@ export function TargetChip({
         </DropdownMenuContent>
       </DropdownMenu>
       {apply.picker === undefined ? null : (
-        <PopoverContent
+        <BuilderPopoverContent
           side="bottom"
           align="start"
           // Kept clear of the window's edge.
@@ -220,7 +221,7 @@ export function TargetChip({
           }}
         >
           {apply.picker(() => setPicking(false))}
-        </PopoverContent>
+        </BuilderPopoverContent>
       )}
     </Popover>
   );

@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { unwrittenOver } from "../../pending/__tests__/helpers/unwritten-over";
 
 import { runChecks } from "../../../../cli/commands/migrate-check";
 import { defineCollection } from "../../../../collections/config/define-collection";
@@ -76,12 +77,10 @@ async function check(collection: ReturnType<typeof places>) {
   try {
     await runChecks({
       migrationsDir,
-      desiredSnapshot: buildDesiredSnapshotFromConfig(
-        entities(collection),
-        [],
-        [],
-        "postgresql"
-      ),
+      unwritten: unwrittenOver({
+        migrationsDir,
+        collections: entities(collection),
+      }),
       logger: {
         error: (m: string) => errors.push(m),
         success: () => {},
