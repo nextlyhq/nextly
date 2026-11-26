@@ -235,8 +235,19 @@ describe.each(LEFT_SAVE_SUITES.filter(suite => suite.perLanguage))(
         const before = await stored();
 
         for (const refused of await fromAnotherProcess([
-          { kind: "single-publish-all", via: "rest", slug: hero },
-          { kind: "single-publish-all", via: "api", slug: hero },
+          // Published over what stands, as the editor confirms it: no version to compare.
+          {
+            kind: "single-publish-all",
+            via: "rest",
+            slug: hero,
+            data: { _overwrite: true },
+          },
+          {
+            kind: "single-publish-all",
+            via: "api",
+            slug: hero,
+            data: { _overwrite: true },
+          },
         ])) {
           expectRefused(refused, "box");
         }

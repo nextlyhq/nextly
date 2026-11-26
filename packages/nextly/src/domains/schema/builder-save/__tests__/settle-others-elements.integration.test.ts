@@ -63,10 +63,10 @@ describe.each(LEFT_SAVE_SUITES)(
     const q = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
-    /** The save that renames `heading`, with `note` as `note` is: killed before its file ran. */
+    /** The rename of `heading`, the other fields as `kept`, killed before its file ran. */
     async function killRenameBeforeFile(
       t: TestNextly,
-      note: Field
+      kept: Field[] = [field("note")]
     ): Promise<void> {
       const schemaVersion = await versionOf(t);
       await killSave(
@@ -78,7 +78,7 @@ describe.each(LEFT_SAVE_SUITES)(
             "applySchemaChanges",
             { collectionName: slug },
             {
-              fields: [field("headline"), note],
+              fields: [field("headline"), ...kept],
               confirmed: true,
               schemaVersion,
               ...renameHeading(table),
@@ -139,7 +139,7 @@ describe.each(LEFT_SAVE_SUITES)(
     it("settles at the next start a save killed before its file ran, the plugin's index left as it is", async () => {
       const t = await boot();
       const index = await pluginIndex(t);
-      await killRenameBeforeFile(t, field("note"));
+      await killRenameBeforeFile(t);
 
       expect((await settle(t)).map(each => each.outcome)).toEqual(["none"]);
       expect(await recordStands(t)).toBe(false);
@@ -149,7 +149,7 @@ describe.each(LEFT_SAVE_SUITES)(
     it("settles it at the next save of the collection, which then applies, the plugin's index left as it is", async () => {
       const t = await boot();
       const index = await pluginIndex(t);
-      await killRenameBeforeFile(t, field("note"));
+      await killRenameBeforeFile(t);
 
       const saved = await dispatchCollections(
         {} as ServiceContainer,
@@ -172,24 +172,26 @@ describe.each(LEFT_SAVE_SUITES)(
     }, 300_000);
 
     // The control: an index the history describes is compared, whoever a record names as its owner.
+    // On a number field: on MySQL an index on a text field is refused at the next save of the
+    // collection, which reads Nextly's own prefix index as another under its name.
     it("settles a save over an index the history describes, and the index stays, though a record names it a plugin's", async () => {
       const t = await boot();
-      const indexed = { ...field("note"), index: true };
+      const indexed: Field = { name: "rank", type: "number", index: true };
       await dispatchCollections(
         {} as ServiceContainer,
         "applySchemaChanges",
         { collectionName: slug },
         {
-          fields: [field("heading"), indexed],
+          fields: [field("heading"), field("note"), indexed],
           confirmed: true,
           schemaVersion: await versionOf(t),
         }
       );
       const before = await indexes(t);
-      const described = before.find(name => name.includes("note"));
+      const described = before.find(name => name.includes("rank"));
       expect(described, JSON.stringify(before)).toBeDefined();
       // Named the plugin's once the save stands left: before, the save's own comparison leaves it out.
-      await killRenameBeforeFile(t, indexed);
+      await killRenameBeforeFile(t, [field("note"), indexed]);
       await pluginIndex(t, described!);
 
       expect((await settle(t)).map(each => each.outcome)).toEqual(["none"]);
@@ -198,7 +200,7 @@ describe.each(LEFT_SAVE_SUITES)(
 
     it("leaves the save as it is where the record of other owners' elements cannot be read, and the start goes on", async () => {
       const t = await boot();
-      await killRenameBeforeFile(t, field("note"));
+      await killRenameBeforeFile(t);
       vi.spyOn(SchemaOwnersRepository.prototype, "read").mockRejectedValue(
         new Error("the owner record is unreadable")
       );

@@ -306,7 +306,11 @@ async function apiOf(operation: Operation, target: string): Promise<Outcome> {
       // No Direct API publishes every language of a Single: its service does, as a plugin calls it.
       const published = await copy
         .getService("singleEntryService")
-        .publishAllLocales(target, { overrideAccess: true });
+        .publishAllLocales(target, {
+          overrideAccess: true,
+          // `_overwrite` or `_rev`, as the route reads them from its body.
+          data: operation.data ?? {},
+        });
       return {
         ...operation,
         ok: published.success,
