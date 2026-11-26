@@ -18,7 +18,7 @@ import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import {
   pgIndexes,
   TRANSLATION_PROVENANCE_INDEXES,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-postgres";
 
 import { TRANSLATION_PROVENANCE_TABLE } from "./table-name";
 import type {

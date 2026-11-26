@@ -33,11 +33,12 @@ import {
   STYLE_CATALOG,
   textStylesOf,
 } from "@nextlyhq/blocks-engine";
-import { Button, Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
+import { Button, Popover, PopoverTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { EDITOR_WORDS } from "../../editor-words";
 import { CssHint, CssNamesLine } from "../../inspector/css-hint";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import { sharedStyleName } from "../../styles/shared-style-library";
 import { lineHeightFromText } from "../../styles/style-folded";
 
@@ -217,7 +218,7 @@ function SiteTextRow({
         </CssHint>
       </div>
       <CssNamesLine id={namesId} names={cssNamesOf(row.role)} />
-      <PopoverContent
+      <BuilderPopoverContent
         side="right"
         align="start"
         sideOffset={12}
@@ -236,7 +237,7 @@ function SiteTextRow({
             classes={classes}
           />
         </CloseVariableEditor.Provider>
-      </PopoverContent>
+      </BuilderPopoverContent>
     </PopupRow>
   );
 }

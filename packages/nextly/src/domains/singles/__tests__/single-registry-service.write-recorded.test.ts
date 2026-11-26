@@ -94,6 +94,7 @@ function declared(
 ): CodeFirstSingleConfig {
   return {
     slug: "site-settings",
+    source: "code",
     label: "Site Settings",
     fields,
     description: "Global settings",
@@ -130,7 +131,8 @@ describe("toCodeFirstSingleConfig", () => {
       webhooks: false,
     } satisfies SingleConfig;
 
-    expect(toCodeFirstSingleConfig(single)).toEqual({
+    expect(toCodeFirstSingleConfig(single, "code")).toEqual({
+      source: "code",
       slug: "site-settings",
       label: "Site",
       fields: [{ name: "siteName", type: "text" }],
@@ -160,7 +162,8 @@ describe("toCodeFirstSingleConfig", () => {
       status: true,
     } satisfies SingleConfig;
 
-    expect(toCodeFirstSingleConfig(single)).toEqual({
+    expect(toCodeFirstSingleConfig(single, "code")).toEqual({
+      source: "code",
       slug: "header-nav_main",
       // Split on `-` only: an underscore stays inside its word.
       label: "Header Nav_main",
@@ -347,5 +350,163 @@ describe("SingleRegistryService.writeRecordedSingle", () => {
     expect("hooks" in data).toBe(false);
     expect("access" in data).toBe(false);
     expect("access_rules" in data).toBe(false);
+  });
+});
+
+describe("who owns a Single's row", () => {
+  let ctx: Ctx;
+
+  beforeEach(() => {
+    ctx = createCtx();
+    ctx.adapter.select.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    resetWebhookRecordingPolicy();
+  });
+
+  const PLUGIN = "plugin:@acme/shop" as const;
+  const written = () =>
+    ctx.adapter.update.mock.calls[0][1] as Record<string, unknown>;
+
+  it.each([
+    ["the app's own, now a plugin's", "code", PLUGIN],
+    ["a plugin's, now the app's own", PLUGIN, "code"],
+    ["a plugin's, now another plugin's", "plugin:@acme/old", PLUGIN],
+  ] as const)(
+    "moves with the declaration: %s, its owner alone",
+    async (_case, recorded, declares) => {
+      storedRow(ctx, dbRow({ source: recorded, locked: 0 }));
+      ctx.adapter.select.mockResolvedValue([
+        dbRow({ source: recorded, locked: 0 }),
+      ]);
+      ctx.adapter.update.mockResolvedValue([dbRow({ source: declares })]);
+
+      const result = await ctx.service.syncCodeFirstSingles([
+        declared({ source: declares }),
+      ]);
+
+      expect(result.updated).toEqual(["site-settings"]);
+      expect(written()).toMatchObject({ source: declares, locked: 1 });
+      // No column it stores changed, so nothing is left to migrate.
+      expect(written()).not.toHaveProperty("schema_version");
+      expect(written()).not.toHaveProperty("migration_status");
+    }
+  );
+
+  it("stays the Schema Builder's, and Nextly's own, under any declaration", async () => {
+    for (const recorded of ["ui", "built-in"]) {
+      const row = dbRow({ source: recorded });
+      storedRow(ctx, row);
+      ctx.adapter.select.mockResolvedValue([row]);
+
+      const result = await ctx.service.syncCodeFirstSingles([
+        declared({ source: PLUGIN }),
+      ]);
+
+      expect(result.unchanged).toEqual(["site-settings"]);
+    }
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+
+  it("moves even where the rest of the update is refused", async () => {
+    storedRow(ctx, dbRow({ source: "code" }));
+    ctx.adapter.select.mockResolvedValue([dbRow({ source: "code" })]);
+    // The owner's write lands; the one of the changed label does not.
+    ctx.adapter.update
+      .mockResolvedValueOnce([dbRow({ source: PLUGIN })])
+      .mockRejectedValueOnce(new Error("already exists"));
+
+    await ctx.service.syncCodeFirstSingles([
+      declared({ source: PLUGIN, label: "Another label" }),
+    ]);
+
+    expect(written()).toMatchObject({ source: PLUGIN, locked: 1 });
+    expect(written()).not.toHaveProperty("label");
+  });
+
+  it("is not written where the declaration already owns it", async () => {
+    storedRow(ctx, dbRow({ source: PLUGIN }));
+    ctx.adapter.select.mockResolvedValue([dbRow({ source: PLUGIN })]);
+
+    const result = await ctx.service.syncCodeFirstSingles([
+      declared({ source: PLUGIN }),
+    ]);
+
+    expect(result.unchanged).toEqual(["site-settings"]);
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+
+  it("is registered as the plugin's, and locked", async () => {
+    storedRow(ctx, null);
+    ctx.adapter.insert.mockResolvedValue(dbRow({ source: PLUGIN }));
+
+    await ctx.service.syncCodeFirstSingles([declared({ source: PLUGIN })]);
+
+    expect(ctx.adapter.insert.mock.calls[0][1]).toMatchObject({
+      source: PLUGIN,
+      locked: 1,
+    });
+  });
+
+  it.each([
+    ["code", 1],
+    [PLUGIN, 1],
+    ["ui", 0],
+    ["built-in", 0],
+  ] as const)(
+    "is locked by default where code or a plugin owns it: %s",
+    async (source, locked) => {
+      const row = {
+        slug: "site-settings",
+        label: "Site Settings",
+        tableName: "single_site_settings",
+        fields,
+        schemaHash: "hash",
+        source,
+      };
+      storedRow(ctx, null);
+      ctx.adapter.insert.mockResolvedValue(dbRow({ source }));
+      await ctx.service.registerSingle(row);
+
+      const tx = {
+        selectOne: vi.fn().mockResolvedValue(null),
+        insert: vi.fn().mockResolvedValue(dbRow({ source })),
+      };
+      await ctx.service.registerSingleInTransaction(tx as never, row);
+
+      for (const insert of [ctx.adapter.insert, tx.insert]) {
+        expect(insert.mock.calls[0][1]).toMatchObject({ source, locked });
+      }
+    }
+  );
+
+  it("is left as it is by migrate, which writes a plugin's locked row as the pipeline does", async () => {
+    storedRow(ctx, dbRow({ source: PLUGIN }));
+    ctx.adapter.update.mockResolvedValue([dbRow({ source: PLUGIN })]);
+
+    const outcome = await ctx.service.writeRecordedSingle(
+      declared({ source: "code", description: "Another description" }),
+      { source: "code", locked: true }
+    );
+
+    expect(outcome).toBe("updated");
+    expect(written()).not.toHaveProperty("source");
+  });
+
+  it("keeps a plugin's Single from a change outside code", async () => {
+    storedRow(ctx, dbRow({ source: PLUGIN }));
+
+    await expect(
+      ctx.service.updateSingle(
+        "site-settings",
+        { label: "Other" },
+        { source: "ui" }
+      )
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      publicMessage: expect.stringContaining("defined in code"),
+    });
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
   });
 });

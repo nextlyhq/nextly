@@ -5,6 +5,7 @@
 import type { Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
+import { dialectOption } from "../dialect-option";
 import { withDryRun } from "../dry-run";
 import { DATABASE_LINE, declareFirstLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
@@ -22,6 +23,8 @@ export function registerMigrateCreateCommand(program: Command): void {
       .argument("[name]", "Migration name (slug-cased, e.g., add_excerpt)")
       .option("--name <name>", "Migration name (alternate to positional arg)")
       .option("--blank", "Create an empty migration file for custom SQL", false)
+      // The SQL is the dialect's, which needs no database: from the history, the environment or here.
+      .addOption(dialectOption())
       // No `--non-interactive` of its own: the program's global one, with the
       // same spelling, is what `canPrompt` reads for this command's prompts.
       .option(

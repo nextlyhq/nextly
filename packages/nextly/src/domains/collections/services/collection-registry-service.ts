@@ -39,6 +39,7 @@ import { clearRegistryRowCache } from "../../dynamic-collections/services/collec
 import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+import { declarationTakesRow } from "../../schema/migrate/plugin/declared-owner";
 import { settingsOf } from "../../schema/migrate-create/entity-settings";
 import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-elements";
 import { DEMOTED_FROM_CODE } from "../../schema/pipeline/demoted-from-code";
@@ -70,6 +71,12 @@ export interface UpdateCollectionOptions {
    */
   handOver?: "builder";
   /**
+   * With `handOver`: the row is a plugin's by the plugin's legacy `collections` key, whose
+   * collection a demote may hand over as the app's own. Set by the demote, which refuses a
+   * collection a plugin contributes.
+   */
+  legacyPlugin?: true;
+  /**
    * Gives the row to the declaration the code-first sync writes (`source`) where the row records
    * another owner the declaration takes it from (`declarationClaims`): its source, lock and
    * config path written together, as a hand-over writes them. Set by the code-first sync alone,
@@ -89,7 +96,9 @@ function handsOverToBuilder(
 ): boolean {
   return (
     options?.handOver === "builder" &&
-    (existing.source === "code" || existing.source === "ui")
+    (existing.source === "code" ||
+      existing.source === "ui" ||
+      (options.legacyPlugin === true && isPipelineSource(existing.source)))
   );
 }
 
@@ -108,9 +117,10 @@ function declarationClaims(
   declared: CollectionSource,
   existing: Pick<DynamicCollectionRecord, "source" | "configPath">
 ): boolean {
-  if (existing.source === declared) return false;
-  if (isPipelineSource(existing.source)) return true;
-  return isHandedToBuilder(existing) && declared.startsWith("plugin:");
+  return (
+    declarationTakesRow(declared, existing) ||
+    (isHandedToBuilder(existing) && declared.startsWith("plugin:"))
+  );
 }
 
 /**
@@ -118,10 +128,11 @@ function declarationClaims(
  * Builder: its row is the Builder's and carries the hand-over's mark, and the entry is the app's
  * own. The sync then writes nothing to the row, in a real run and in the plan of one alike. A
  * collection made in the Builder carries no such mark, and a code entry under its address is
- * applied to it as before; so is a plugin's entry.
+ * applied to it as before; so is a plugin's entry, but one of its legacy `collections` key
+ * (`yieldsToBuilder`) leaves a handed-over record as the app's own entry does.
  */
 function builderOwnsDeclared(
-  config: Pick<CodeFirstCollectionConfig, "source">,
+  config: Pick<CodeFirstCollectionConfig, "source" | "yieldsToBuilder">,
   existing:
     | Pick<DynamicCollectionRecord, "source" | "configPath">
     | null
@@ -132,7 +143,7 @@ function builderOwnsDeclared(
   return (
     !!existing &&
     isHandedToBuilder(existing) &&
-    (config.source ?? "code") === "code"
+    ((config.source ?? "code") === "code" || config.yieldsToBuilder === true)
   );
 }
 
@@ -238,6 +249,12 @@ export interface CodeFirstCollectionConfig {
    * for plugin-contributed ones. Defaults to `"code"` when omitted.
    */
   source?: CollectionSource;
+  /**
+   * Whether a record a demote handed to the Schema Builder stays the Builder's under a plugin's
+   * declaration, as it does under the app's: a collection of the plugin's legacy `collections` key
+   * (`PluginEntitySources.legacyCollections`), which a demote can hand over.
+   */
+  yieldsToBuilder?: true;
 }
 
 /**
@@ -1309,7 +1326,14 @@ export class CollectionRegistryService extends BaseRegistryService<
    */
   async writeRecordedCollection(
     recorded: CodeFirstCollectionConfig,
-    origin: { source: CollectionSource; locked: boolean },
+    {
+      yieldsToBuilder,
+      ...origin
+    }: {
+      source: CollectionSource;
+      locked: boolean;
+      yieldsToBuilder?: true;
+    },
     options: RecordedWriteOptions<DynamicCollectionRecord> = {}
   ): Promise<"created" | "updated" | "unchanged"> {
     const existing =
@@ -1319,7 +1343,9 @@ export class CollectionRegistryService extends BaseRegistryService<
     // The Schema Builder's collection, still declared in code: its row is the Builder's to change,
     // as the code-first sync leaves it, so a recorded declaration is not written over it. A judged
     // write only answers, as the sync's plan does, and says nothing.
-    if (builderOwnsDeclared(origin, existing)) {
+    if (
+      builderOwnsDeclared({ source: origin.source, yieldsToBuilder }, existing)
+    ) {
       if (options.judgeOnly !== true)
         this.warnStillDeclaredInCode(recorded.slug);
       return "unchanged";

@@ -49,7 +49,10 @@ import {
   refuseRemovingOthersElements,
 } from "../../../domains/schema/ownership/removed-elements";
 import { describeHolder } from "../../../domains/schema/pipeline/schema-lock";
-import { snapshotFolderUnreadableError } from "../../../domains/schema/repair-columns/stop-errors";
+import {
+  snapshotFolderUnreadableError,
+  snapshotWithoutEntitiesError,
+} from "../../../domains/schema/repair-columns/stop-errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   appliedFilesMissing,
@@ -62,6 +65,7 @@ import {
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
   resolveModeRequired,
+  builderDefinitionIgnored,
   schemaChangeWithoutMigration,
   settingsChangeWithoutMigration,
   databaseBehindMigrations,
@@ -259,6 +263,12 @@ export const MIGRATION_CASES = {
       readingOthersElements("The database", () =>
         Promise.reject(new Error("no such table: nextly_schema_owners"))
       )
+    ),
+  // As `nextly repair-columns` stops on a newest applied snapshot an earlier release wrote.
+  SNAPSHOT_WITHOUT_ENTITIES: () =>
+    snapshotWithoutEntitiesError(
+      "20261024_120000_make_author_required",
+      "20261020_120000_add_posts"
     ),
   // As `nextly repair-columns` stops on a snapshots folder its user may not list.
   MIGRATION_SNAPSHOTS_UNREADABLE: () =>
@@ -632,6 +642,7 @@ export const MIGRATION_CASES = {
     ]),
   SETTINGS_CHANGE_WITHOUT_MIGRATION: () =>
     settingsChangeWithoutMigration(1, ["~ posts: labels.singular"]),
+  BUILDER_DEFINITION_IGNORED: () => builderDefinitionIgnored("ui-schema.json"),
   DATABASE_BEHIND_MIGRATIONS: () =>
     databaseBehindMigrations(2, [
       "- table dc_posts (created by 20261116_120000_000_create_posts)",

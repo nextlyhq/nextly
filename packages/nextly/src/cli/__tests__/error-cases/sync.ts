@@ -13,6 +13,7 @@ import {
   demoteCollectionNotFound,
   demoteLosesUniqueIndex,
   demotePluginCollection,
+  entitiesNotSynced,
   promoteCollectionNotFound,
   restoreCollectionRequired,
   restoreEntityRefusal,
@@ -52,6 +53,10 @@ function restoreRefusal(
 }
 
 export const SYNC_CASES = {
+  ENTITIES_NOT_SYNCED: () =>
+    entitiesNotSynced([
+      { slug: "seo", detail: "priority: Duplicate column name 'priority'" },
+    ]),
   PROMOTE_COLLECTION_NOT_FOUND: () => promoteCollectionNotFound("posts"),
   DEMOTE_COLLECTION_NOT_FOUND: () => demoteCollectionNotFound("posts"),
   DEMOTE_PLUGIN_COLLECTION: () =>

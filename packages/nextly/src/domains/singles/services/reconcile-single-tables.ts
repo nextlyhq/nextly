@@ -67,12 +67,14 @@ export function singleTableSources(
 ): Pick<SingleTableReconciler, "registeredSingles" | "existingTableNames"> {
   return {
     registeredSingles: async () =>
-      withoutRemovedFromCode(await registry.getAllSingles(), declaredSlugs).map(
-        r => ({
-          slug: r.slug,
-          tableName: r.tableName,
-        })
-      ),
+      withoutRemovedFromCode(
+        "single",
+        await registry.getAllSingles(),
+        declaredSlugs
+      ).map(r => ({
+        slug: r.slug,
+        tableName: r.tableName,
+      })),
     existingTableNames: async () => new Set(await listTables()),
   };
 }

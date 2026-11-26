@@ -29,7 +29,7 @@ import {
 import {
   NEXTLY_RELEASES_INDEXES,
   sqliteIndexes,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-sqlite";
 import type { VersionScopeKind } from "../versions/types";
 
 import type { ReleaseKind, ReleaseMemberAction, ReleaseState } from "./types";

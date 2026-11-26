@@ -126,6 +126,30 @@ describe("what an entity owns", () => {
     }
   });
 
+  it.each(["single", "fieldGroup"] as const)(
+    "keeps a plugin's %s only as a main table too, so its translations table is named on its own",
+    kind => {
+      const entity = (source: string) =>
+        coveredEntity({
+          kind,
+          slug: "x",
+          tableName: "t_x",
+          source,
+          fields: [],
+        });
+      expect(entity("code")).toMatchObject({ tables: ["t_x", "t_x_locales"] });
+      expect(entity("plugin:seo")).toMatchObject({
+        tables: ["t_x"],
+        excluded: true,
+      });
+      expect(
+        entityOwners([entity("plugin:seo") as CoveredEntity]).ownerOf(
+          "t_x_locales"
+        )
+      ).toBeUndefined();
+    }
+  );
+
   it("gives no entity a table that a plugin's entity has as its main table", () => {
     // The plugin's main table is spelled as `posts`' explicit junction table.
     const plugin = coveredEntity({

@@ -1,7 +1,16 @@
 import { getColumns } from "drizzle-orm";
-import { describe, it, expect } from "vitest";
+import { beforeAll, describe, it, expect } from "vitest";
 
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 describe("generateRuntimeSchema — localized collections", () => {
   it("omits localized fields from the main runtime table", () => {

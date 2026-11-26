@@ -13,6 +13,9 @@
 // database barrel do not have to know about it.
 
 import type { AnyRelations } from "drizzle-orm";
+import type * as MysqlCore from "drizzle-orm/mysql-core";
+import type * as PostgresCore from "drizzle-orm/pg-core";
+import type * as SqliteCore from "drizzle-orm/sqlite-core";
 
 import { NextlyError } from "../errors/nextly-error";
 import type * as MysqlTables from "../schemas/_dialect-bundles/mysql";
@@ -21,6 +24,7 @@ import type * as PostgresTables from "../schemas/_dialect-bundles/postgres";
 import type * as PostgresRelations from "../schemas/_dialect-bundles/postgres.relations";
 import type * as SqliteTables from "../schemas/_dialect-bundles/sqlite";
 import type * as SqliteRelations from "../schemas/_dialect-bundles/sqlite.relations";
+import type { sqliteTimestamp } from "../schemas/_internal/sqlite-timestamp";
 import type * as MysqlAudit from "../schemas/audit/mysql";
 import type * as PostgresAudit from "../schemas/audit/postgres";
 import type * as SqliteAudit from "../schemas/audit/sqlite";
@@ -47,13 +51,17 @@ export type DialectTables =
   | typeof SqliteTables;
 
 /**
- * A dialect's tables, the relations defined over them, its builders for
- * tables named at run time, and the modules declaring the columns of the core
- * tables a hook may extend.
+ * A dialect's drizzle core, its tables, the relations defined over them, its
+ * builders for tables named at run time, and the modules declaring the columns
+ * of the core tables a hook may extend.
+ *
+ * The core is here for the modules that build a table at run time: importing
+ * it themselves, they would bring all three into every process that loads them.
  */
 export type LoadedDialect =
   | {
       dialect: "postgresql";
+      core: typeof PostgresCore;
       tables: typeof PostgresTables;
       relations: typeof PostgresRelations;
       columnModules: {
@@ -66,6 +74,7 @@ export type LoadedDialect =
     }
   | {
       dialect: "mysql";
+      core: typeof MysqlCore;
       tables: typeof MysqlTables;
       relations: typeof MysqlRelations;
       columnModules: {
@@ -80,6 +89,7 @@ export type LoadedDialect =
     }
   | {
       dialect: "sqlite";
+      core: typeof SqliteCore;
       tables: typeof SqliteTables;
       relations: typeof SqliteRelations;
       columnModules: {
@@ -90,6 +100,7 @@ export type LoadedDialect =
       };
       builders: {
         buildDynamicFieldGroups: typeof buildDynamicFieldGroupsSqlite;
+        sqliteTimestamp: typeof sqliteTimestamp;
       };
     };
 
@@ -125,8 +136,9 @@ function loadable(dialect: string | undefined): LoadableDialect | undefined {
 async function importDialect(dialect: LoadableDialect): Promise<LoadedDialect> {
   switch (dialect) {
     case "postgresql": {
-      const [tables, relations, fieldGroups, audit, jobs, media, users] =
+      const [core, tables, relations, fieldGroups, audit, jobs, media, users] =
         await Promise.all([
+          import("drizzle-orm/pg-core"),
           import("../schemas/_dialect-bundles/postgres"),
           import("../schemas/_dialect-bundles/postgres.relations"),
           import("../schemas/dynamic-field-groups/postgres"),
@@ -139,11 +151,12 @@ async function importDialect(dialect: LoadableDialect): Promise<LoadedDialect> {
         buildDynamicFieldGroups: fieldGroups.buildDynamicFieldGroupsPg,
       };
       const columnModules = { audit, jobs, media, users };
-      return { dialect, tables, relations, builders, columnModules };
+      return { dialect, core, tables, relations, builders, columnModules };
     }
     case "mysql": {
-      const [tables, relations, fieldGroups, audit, jobs, media, users] =
+      const [core, tables, relations, fieldGroups, audit, jobs, media, users] =
         await Promise.all([
+          import("drizzle-orm/mysql-core"),
           import("../schemas/_dialect-bundles/mysql"),
           import("../schemas/_dialect-bundles/mysql.relations"),
           import("../schemas/dynamic-field-groups/mysql"),
@@ -156,24 +169,36 @@ async function importDialect(dialect: LoadableDialect): Promise<LoadedDialect> {
         buildDynamicFieldGroups: fieldGroups.buildDynamicFieldGroupsMysql,
       };
       const columnModules = { audit, jobs, media, users };
-      return { dialect, tables, relations, builders, columnModules };
+      return { dialect, core, tables, relations, builders, columnModules };
     }
     case "sqlite": {
-      const [tables, relations, fieldGroups, audit, jobs, media, users] =
-        await Promise.all([
-          import("../schemas/_dialect-bundles/sqlite"),
-          import("../schemas/_dialect-bundles/sqlite.relations"),
-          import("../schemas/dynamic-field-groups/sqlite"),
-          import("../schemas/audit/sqlite"),
-          import("../schemas/jobs/sqlite"),
-          import("../schemas/media/sqlite"),
-          import("../schemas/users/sqlite"),
-        ]);
+      const [
+        core,
+        tables,
+        relations,
+        fieldGroups,
+        audit,
+        jobs,
+        media,
+        users,
+        stamps,
+      ] = await Promise.all([
+        import("drizzle-orm/sqlite-core"),
+        import("../schemas/_dialect-bundles/sqlite"),
+        import("../schemas/_dialect-bundles/sqlite.relations"),
+        import("../schemas/dynamic-field-groups/sqlite"),
+        import("../schemas/audit/sqlite"),
+        import("../schemas/jobs/sqlite"),
+        import("../schemas/media/sqlite"),
+        import("../schemas/users/sqlite"),
+        import("../schemas/_internal/sqlite-timestamp"),
+      ]);
       const builders = {
         buildDynamicFieldGroups: fieldGroups.buildDynamicFieldGroupsSqlite,
+        sqliteTimestamp: stamps.sqliteTimestamp,
       };
       const columnModules = { audit, jobs, media, users };
-      return { dialect, tables, relations, builders, columnModules };
+      return { dialect, core, tables, relations, builders, columnModules };
     }
   }
 }
@@ -234,6 +259,23 @@ export function loadedDialect(dialect: string | undefined): LoadedDialect {
         `directly from an adapter package, or a read with no adapter, ` +
         `await loadDialectTables("${known}") first`,
     },
+  });
+}
+
+/** The drizzle core of a loaded dialect. */
+export function loadedCore(dialect: "postgresql"): typeof PostgresCore;
+export function loadedCore(dialect: "mysql"): typeof MysqlCore;
+export function loadedCore(dialect: "sqlite"): typeof SqliteCore;
+export function loadedCore(dialect: LoadableDialect) {
+  return loadedDialect(dialect).core;
+}
+
+/** The loaded SQLite builder of a timestamp the application stamps. */
+export function loadedSqliteTimestamp(): typeof sqliteTimestamp {
+  const found = loadedDialect("sqlite");
+  if (found.dialect === "sqlite") return found.builders.sqliteTimestamp;
+  throw NextlyError.internal({
+    logContext: { reason: "sqlite is loaded as another dialect" },
   });
 }
 

@@ -27,6 +27,9 @@ const SOURCE_LABELS: Record<EntitySource, string> = {
   "built-in": "Built in",
 };
 
+/** What the source of an entry a plugin contributes begins with; the plugin's name follows. */
+const PLUGIN_PREFIX = "plugin:";
+
 /** A source's on-screen name, for a filter option as for a cell. */
 export function sourceLabel(source: EntitySource): string {
   return SOURCE_LABELS[source];
@@ -40,16 +43,23 @@ const SOURCE_ICONS: Record<EntitySource, JSX.Element> = {
 
 /**
  * Where an entry comes from: the plugin that provides it, by name, or how the
- * site defined it. A row whose source is not recorded says so with a dash
- * rather than claiming "Unknown", which reads as a fault.
+ * site defined it. The name is the one the list gives, or the one the source
+ * records (`plugin:<name>`), as on a row whose plugin is no longer installed.
+ * A row whose source is not recorded says so with a dash rather than claiming
+ * "Unknown", which reads as a fault.
  */
 export function SourceCell({
   source,
-  pluginName,
+  pluginName: listed,
 }: {
   source?: string;
   pluginName?: string;
 }): JSX.Element {
+  const pluginName =
+    listed ??
+    (source?.startsWith(PLUGIN_PREFIX) === true
+      ? source.slice(PLUGIN_PREFIX.length)
+      : undefined);
   const known =
     source !== undefined && Object.hasOwn(SOURCE_LABELS, source)
       ? (source as EntitySource)

@@ -17,7 +17,10 @@
 // fallow-ignore-file code-duplication
 import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
-import { DASHBOARD_PINS_INDEXES, pgIndexes } from "../_internal/core-indexes";
+import {
+  DASHBOARD_PINS_INDEXES,
+  pgIndexes,
+} from "../_internal/core-indexes-postgres";
 import { users } from "../users/postgres";
 
 import { DASHBOARD_PINS_TABLE } from "./table-name";

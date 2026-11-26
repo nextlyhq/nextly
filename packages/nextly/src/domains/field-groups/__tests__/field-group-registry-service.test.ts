@@ -781,6 +781,7 @@ describe("FieldGroupRegistryService", () => {
 
       const result = await ctx.service.syncCodeFirstComponents([
         {
+          source: "code",
           slug: "hero",
           label: "Hero",
           fields: [{ name: "heading", type: "text" }],
@@ -807,7 +808,7 @@ describe("FieldGroupRegistryService", () => {
       ctx.adapter.tableExists.mockResolvedValue(true);
 
       await ctx.service.syncCodeFirstComponents([
-        { slug: "seo", label: "SEO", fields },
+        { source: "code", slug: "seo", label: "SEO", fields },
       ]);
 
       // 🔴 Asserted on the CALL, not on the result lists. The component ends up in `updated` or
@@ -841,7 +842,7 @@ describe("FieldGroupRegistryService", () => {
       vi.mocked(reconcileFieldGroup).mockClear();
 
       await ctx.service.syncCodeFirstComponents([
-        { slug: "seo", label: "SEO", fields },
+        { source: "code", slug: "seo", label: "SEO", fields },
       ]);
 
       expect(reconcileFieldGroup).not.toHaveBeenCalled();
@@ -857,6 +858,7 @@ describe("FieldGroupRegistryService", () => {
 
       const result = await ctx.service.syncCodeFirstComponents([
         {
+          source: "code",
           slug: "seo",
           label: "SEO",
           fields: [{ name: "metaTitle", type: "text" }],
@@ -880,7 +882,7 @@ describe("FieldGroupRegistryService", () => {
       });
 
       const result = await ctx.service.syncCodeFirstComponents([
-        { slug: "seo", label: "SEO", fields },
+        { source: "code", slug: "seo", label: "SEO", fields },
       ]);
 
       expect(result.unchanged).toEqual(["seo"]);
@@ -903,7 +905,7 @@ describe("FieldGroupRegistryService", () => {
       });
 
       const result = await ctx.service.syncCodeFirstComponents([
-        { slug: "seo", label: "SEO", fields },
+        { source: "code", slug: "seo", label: "SEO", fields },
       ]);
 
       expect(result.unchanged).toEqual(["seo"]);
@@ -915,7 +917,7 @@ describe("FieldGroupRegistryService", () => {
       ctx.adapter.selectOne.mockRejectedValue(new Error("db explode"));
 
       const result = await ctx.service.syncCodeFirstComponents([
-        { slug: "seo", label: "SEO", fields: [] },
+        { source: "code", slug: "seo", label: "SEO", fields: [] },
       ]);
 
       expect(result.errors).toHaveLength(1);
@@ -1166,7 +1168,13 @@ describe("FieldGroupRegistryService legacy table mismatch", () => {
     });
 
     const result = await ctx.service.syncCodeFirstComponents([
-      { slug: "seo", label: "SEO", fields, tableName: "seo_meta" },
+      {
+        source: "code",
+        slug: "seo",
+        label: "SEO",
+        fields,
+        tableName: "seo_meta",
+      },
     ]);
 
     expect(result.errors).toHaveLength(1);
@@ -1204,7 +1212,7 @@ describe("FieldGroupRegistryService legacy pointer repair", () => {
     ctx.adapter.update.mockResolvedValue([dbRow()]);
 
     const result = await ctx.service.syncCodeFirstComponents([
-      { slug: "seo", label: "SEO", fields },
+      { source: "code", slug: "seo", label: "SEO", fields },
     ]);
 
     expect(result.updated).toEqual(["seo"]);
@@ -1218,7 +1226,7 @@ describe("FieldGroupRegistryService legacy pointer repair", () => {
     ctx.adapter.tableExists.mockResolvedValue(true);
 
     const result = await ctx.service.syncCodeFirstComponents([
-      { slug: "seo", label: "SEO", fields },
+      { source: "code", slug: "seo", label: "SEO", fields },
     ]);
 
     expect(result.errors).toHaveLength(1);
@@ -1240,7 +1248,7 @@ describe("FieldGroupRegistryService case-differing pointers", () => {
     );
 
     const result = await ctx.service.syncCodeFirstComponents([
-      { slug: "seo", label: "SEO", fields },
+      { source: "code", slug: "seo", label: "SEO", fields },
     ]);
 
     expect(result.errors).toHaveLength(1);

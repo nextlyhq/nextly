@@ -18,7 +18,7 @@ import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import {
   sqliteIndexes,
   TRANSLATION_PROVENANCE_INDEXES,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-sqlite";
 
 import { TRANSLATION_PROVENANCE_TABLE } from "./table-name";
 import type {

@@ -38,7 +38,7 @@ import { pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 import {
   EXTERNAL_IDENTITIES_INDEXES,
   pgIndexes,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-postgres";
 import { users } from "../users/postgres";
 
 import { EXTERNAL_IDENTITIES_TABLE } from "./table-name";

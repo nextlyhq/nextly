@@ -5,7 +5,7 @@
  * runtime schema for every component the database knows about.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
@@ -19,6 +19,15 @@ import {
 } from "../storage/resolve-storage-names";
 
 import { registerComponentSchemas } from "./register-field-group-schemas";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 const silentLogger = {
   debug: vi.fn(),

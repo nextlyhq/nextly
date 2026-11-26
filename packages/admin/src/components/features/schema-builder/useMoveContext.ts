@@ -11,43 +11,24 @@
 import { useQueries } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import {
-  fieldGroupUsedByQuery,
-  type FieldGroupPlacement,
-} from "@admin/hooks/useFieldGroupUsedBy";
+import { fieldGroupUsedThroughQuery } from "@admin/hooks/useFieldGroupUsedBy";
 import { nameSurfaceOf } from "@admin/lib/builder/field-name-check";
 import {
   savedContainerIdsFrom,
   type MoveContext,
 } from "@admin/lib/builder/move-rule";
 import { heldNamesOf } from "@admin/lib/builder/move-words";
-import { fieldGroupFieldHolding } from "@admin/lib/builder/outline/move-targets";
+import {
+  fieldGroupFieldHolding,
+  fieldGroupOfRow,
+} from "@admin/lib/builder/outline/move-targets";
 import {
   flattenOutline,
-  type LoadedFieldGroup,
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
 
 import { pickerExcludedTypes, type BuilderConfig } from "./builder-config";
 import type { BuilderField } from "./types";
-
-/** What each kind of holder is called in a sentence. */
-const HOLDER_NOUNS: Record<FieldGroupPlacement["entityType"], string> = {
-  collection: "the collection",
-  single: "the Single",
-  fieldGroup: "the field group",
-};
-
-/** Each holder a field group's placements name, once, in the order first met. */
-function holders(placements: readonly FieldGroupPlacement[]): string[] {
-  return [
-    ...new Set(
-      placements.map(
-        each => `${HOLDER_NOUNS[each.entityType]} ${each.entitySlug}`
-      )
-    ),
-  ];
-}
 
 export function useMoveContext({
   config,
@@ -56,7 +37,6 @@ export function useMoveContext({
   saved,
   lifecycleEnabled,
   outline,
-  fieldGroups,
 }: {
   config: BuilderConfig;
   locked: boolean;
@@ -66,7 +46,6 @@ export function useMoveContext({
   /** Whether Draft/Published is on, as stored or as the pending settings set it. */
   lifecycleEnabled: boolean;
   outline: readonly OutlineNode[];
-  fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
 }): MoveContext {
   const byId = useMemo(
     () => new Map(flattenOutline(outline).map(node => [node.id, node])),
@@ -81,10 +60,12 @@ export function useMoveContext({
     ],
     [byId]
   );
+  // Every user of each, those reaching it through other field groups among them: the server walks
+  // the nesting, so a refusal names a Single using the field group through another one too.
   const usedBy = useQueries({
-    queries: used.map(slug => fieldGroupUsedByQuery(slug)),
+    queries: used.map(slug => fieldGroupUsedThroughQuery(slug)),
   });
-  const placements = new Map(
+  const uses = new Map(
     used.map((slug, at) => [slug, usedBy[at]?.data] as const)
   );
   const heldNames = useMemo(() => heldNamesOf(saved, fields), [saved, fields]);
@@ -105,14 +86,16 @@ export function useMoveContext({
     savedContainerIdsOf,
     excludedTypes: pickerExcludedTypes(config),
     describeFieldGroup: slug => {
-      const loaded = fieldGroups.get(slug);
-      const placed = placements.get(slug);
-      if (!loaded && !placed) return undefined;
-      return {
-        label: loaded?.label ?? slug,
-        usedBy: placed ? holders(placed) : [],
-      };
+      if (!uses.has(slug)) return undefined;
+      // Not read yet, or the read failed: the refusal says its users could not be read rather
+      // than naming none.
+      const answer = uses.get(slug);
+      return answer
+        ? { uses: answer.items, complete: answer.complete }
+        : { uses: null, complete: false };
     },
     fieldGroupFieldHolding: rowId => fieldGroupFieldHolding(byId, rowId),
+    fieldOfRow: rowId => byId.get(rowId)?.field,
+    fieldGroupOfRow: rowId => fieldGroupOfRow(byId, rowId),
   };
 }
