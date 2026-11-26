@@ -301,6 +301,23 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
 
     // The save judges the values of the structure, not the text each language keeps beside it, so a
     // change that stays translated there is open only where its pair keeps every value.
+    it("a text turned shared with any type: unavailable, in the save's words", async () => {
+      const turned = leaves("meta.note");
+      expect(
+        await inside(holding(TWO), ["meta", "note"], "code", {
+          as: { localized: false },
+        })
+      ).toMatchObject({
+        ...turned,
+        refusal: {
+          ...turned.refusal,
+          reason: expect.stringContaining(
+            "field 'meta.note' cannot change from text to code."
+          ),
+        },
+      });
+    });
+
     it("a text that stays translated is open only where every value is kept", async () => {
       const UNCHECKED = {
         blocked: "unjudged-inside",
@@ -354,7 +371,11 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         await inside(holding(TWO), ["meta", "note"], "richText", {
           layout: { perLanguage: false, fileRetypes: true },
         })
-      ).toMatchObject({ blocked: null, outcome: "converts" });
+      ).toMatchObject({
+        // Its values are on the structure there, and a text is no document until rewritten.
+        blocked: "needs-rewrite-inside",
+        outcome: null,
+      });
     });
 
     // Controls: what is not translated inside its container leaves nothing behind.
@@ -459,10 +480,14 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         if (defaultLocalizedForType(type)) continue;
         for (const to of ["text", "textarea", "richText", "email", "code"]) {
           const label = `${type} to ${to}`;
-          // What the pair alone answers, where nothing there is kept per language.
+          // What the pair alone answers, where nothing there is kept per language. A pair every value of
+          // which would need rewriting there is still one a value of the type can take.
           const alone = await picked(pick(type), to, { layout: EARLIER });
           const answer = await picked(pick(type), to);
-          if (alone?.blocked === null) {
+          if (
+            alone?.blocked === null ||
+            alone?.blocked === "needs-rewrite-inside"
+          ) {
             expect(answer, label).toMatchObject(joins());
             joining.add(type);
           } else {

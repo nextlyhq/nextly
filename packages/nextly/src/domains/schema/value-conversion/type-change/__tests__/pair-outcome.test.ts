@@ -12,7 +12,7 @@ import {
   fieldTypeOnDialect,
   type FieldTypeOnDialect,
 } from "../field-type";
-import { pairOutcome } from "../pair-outcome";
+import { pairOutcome, pairOutcomeHeldInJson } from "../pair-outcome";
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
@@ -82,9 +82,7 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
           dialect,
           "collection"
         );
-      return pairOutcome(typed(from, fromExtra), typed(to), {
-        heldInJson: true,
-      });
+      return pairOutcomeHeldInJson(typed(from, fromExtra), typed(to));
     };
 
     it("a change that would rewrite every value it holds needs a rewrite no save makes", () => {
@@ -263,14 +261,13 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
     expect(outcome("number", "json", FRACTION)).toBe(
       dialect === "mysql" ? "keeps" : "may-lose"
     );
+    // SQLite's decimal column holds an infinity too (`holdsNonFinite`), which JSON does not.
     expect(
       outcome("number", "json", {
         dbType: "decimal",
       } as Partial<FieldDefinition>)
-    ).toBe("keeps");
-    expect(outcome("number", "json", DECIMAL)).toBe(
-      dialect === "sqlite" ? "keeps" : "may-lose"
-    );
+    ).toBe(dialect === "sqlite" ? "may-lose" : "keeps");
+    expect(outcome("number", "json", DECIMAL)).toBe("may-lose");
   });
 
   // A checkbox holds two values and a choice its options, each judged: the mark says what the
