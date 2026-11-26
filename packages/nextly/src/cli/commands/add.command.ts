@@ -6,6 +6,7 @@
 import type { Command } from "commander";
 
 import { withDryRun } from "../dry-run";
+import { declareFirstLine, startLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /** What `nextly add` and `nextly plugins add` do, in their help. */
@@ -21,20 +22,27 @@ const collect = (value: string, previous: string[]): string[] => [
 /** Gives `command` the add command's arguments, options and action. */
 export function defineAddCommand(command: Command): Command {
   // `--dry-run` carries the one meaning and help line it has everywhere.
-  return withDryRun(command.description(ADD_DESCRIPTION))
-    .option(
-      "--option <name=value>",
-      "A value the plugin asks for at install; repeat for each",
-      collect,
-      []
-    )
-    .option("-D, --dev", "Install as a dev dependency", false)
-    .option(
-      "--skip-install",
-      "Skip the package-manager install: the package is installed already",
-      false
-    )
-    .action(lazyAction(async () => (await import("./add")).addAction));
+  return declareFirstLine(
+    withDryRun(command.description(ADD_DESCRIPTION))
+      .option(
+        "--option <name=value>",
+        "A value the plugin asks for at install; repeat for each",
+        collect,
+        []
+      )
+      .option("-D, --dev", "Install as a dev dependency", false)
+      .option(
+        "--skip-install",
+        "Skip the package-manager install: the package is installed already",
+        false
+      )
+      .action(lazyAction(async () => (await import("./add")).addAction)),
+    // A run installs the package first, unless it is told to skip that.
+    startLine("Reading the plugin to add...", {
+      untimed:
+        "installs a package before it connects, unless told to skip it, and a dry run does neither",
+    })
+  );
 }
 
 /** Register the `add` command with the program. */

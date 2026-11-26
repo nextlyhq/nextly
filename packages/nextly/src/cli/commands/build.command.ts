@@ -5,6 +5,7 @@
 import type { Command } from "commander";
 
 import { withDryRun } from "../dry-run";
+import { declareFirstLine, startLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -14,18 +15,25 @@ import { lazyAction } from "../lazy-action";
  */
 export function registerBuildCommand(program: Command): void {
   // `--dry-run` carries the one meaning and help line it has everywhere.
-  withDryRun(
-    program
-      .command("build")
-      .description("Production build - validate collections and generate files")
-  )
-    .option("--strict", "Fail on any validation warnings", false)
-    .option(
-      "--skip-migrations-check",
-      "Skip migration status verification",
-      false
+  declareFirstLine(
+    withDryRun(
+      program
+        .command("build")
+        .description(
+          "Production build - validate collections and generate files"
+        )
     )
-    .option("--no-types", "Skip TypeScript type generation")
-    .option("--no-zod", "Skip Zod validation schema generation")
-    .action(lazyAction(async () => (await import("./build")).buildAction));
+      .option("--strict", "Fail on any validation warnings", false)
+      .option(
+        "--skip-migrations-check",
+        "Skip migration status verification",
+        false
+      )
+      .option("--no-types", "Skip TypeScript type generation")
+      .option("--no-zod", "Skip Zod validation schema generation")
+      .action(lazyAction(async () => (await import("./build")).buildAction)),
+    // The build names its database only when it checks the migrations, which
+    // `--skip-migrations-check` leaves out.
+    startLine("Building...", "may connect")
+  );
 }

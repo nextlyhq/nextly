@@ -21,6 +21,7 @@ const base = {
   table: "dc_posts",
   dialect: "sqlite" as const,
   localized: false,
+  kind: "collection" as "collection" | "single" | "fieldGroup",
 };
 
 describe("planEntityMoves", () => {
@@ -40,6 +41,7 @@ describe("planEntityMoves", () => {
     );
     expect(planned.up.last).toEqual([]);
     // Down: the file re-adds the column first; the value comes back after it, and the key goes.
+    expect(planned.down.stops).toEqual([]);
     expect(planned.down.first).toEqual([]);
     expect(planned.down.last.join("\n")).toContain(
       `SET "subtitle" = json_extract`
@@ -57,7 +59,7 @@ describe("planEntityMoves", () => {
       after: [group("meta", [text("subtitle", { required: true })])],
       moves: [{ from: ["subtitle"], to: ["meta", "subtitle"] }],
     });
-    expect(planned.down.first.join("\n")).toContain(
+    expect(planned.down.stops.join("\n")).toContain(
       `"nextly_unfilled_subtitle" ("needs_a_value_subtitle" INTEGER NOT NULL)`
     );
     // An optional field asks for no such stop.
@@ -67,6 +69,7 @@ describe("planEntityMoves", () => {
       after: [group("meta", [text("subtitle")])],
       moves: [{ from: ["subtitle"], to: ["meta", "subtitle"] }],
     });
+    expect(optional.down.stops).toEqual([]);
     expect(optional.down.first).toEqual([]);
   });
 
@@ -96,6 +99,7 @@ describe("planEntityMoves", () => {
       after: [text("subtitle"), group("meta", [])],
       moves: [{ from: ["meta", "subtitle"], to: ["subtitle"] }],
     });
+    expect(planned.up.stops).toEqual([]);
     expect(planned.up.first).toEqual([]);
     expect(planned.up.last.join("\n")).toContain(
       `SET "subtitle" = json_extract`
@@ -233,7 +237,7 @@ describe("planEntityMoves", () => {
         after: [nameless([text("title")])],
         moves: [{ from: ["title"], to: ["title"] }],
       }).up
-    ).toEqual({ first: [], last: [] });
+    ).toEqual({ stops: [], first: [], last: [] });
   });
 
   it("refuses a move into a group that replaces a virtual group of its name, which made no column", () => {
@@ -679,26 +683,59 @@ describe("planEntityMoves", () => {
     ).not.toThrow();
   });
 
-  it("asks a field group's table nothing of title or slug, which are its fields' to take there", () => {
-    // A field group's table keeps its own columns (`_parent_id`, `_order`...), none named so.
-    const outOnto = (builtBy: "fieldGroup" | "collection") => () =>
+  it("asks a field group's table nothing of title or slug, whichever generator made it", () => {
+    // A field group's table keeps its own columns (`_parent_id`, `_order`...), none named so,
+    // whether the Builder made it or the code-first pipeline did.
+    const outOnto =
+      (
+        kind: "fieldGroup" | "collection",
+        builtBy: "fieldGroup" | "codeFirst" | "collection"
+      ) =>
+      () =>
+        planEntityMoves({
+          ...base,
+          kind,
+          builtBy,
+          before: [group("meta", [text("title")])],
+          after: [text("title"), group("meta", [])],
+          moves: [{ from: ["meta", "title"], to: ["title"] }],
+        });
+    expect(outOnto("fieldGroup", "fieldGroup")).not.toThrow();
+    expect(outOnto("fieldGroup", "codeFirst")).not.toThrow();
+    // A collection's table keeps its own title while no field takes it, whoever made it.
+    for (const builtBy of ["collection", "codeFirst"] as const) {
+      expect(outOnto("collection", builtBy), builtBy).toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                message: expect.stringContaining(
+                  "Every entry already keeps its own title"
+                ),
+              }),
+            ],
+          },
+        })
+      );
+    }
+  });
+
+  it("asks a Single's table nothing of created_by, a column only a collection's table keeps", () => {
+    const outOnto = (kind: "single" | "collection") => () =>
       planEntityMoves({
         ...base,
-        builtBy,
-        before: [group("meta", [text("title")])],
-        after: [text("title"), group("meta", [])],
-        moves: [{ from: ["meta", "title"], to: ["title"] }],
+        kind,
+        before: [group("meta", [text("createdBy")])],
+        after: [text("createdBy"), group("meta", [])],
+        moves: [{ from: ["meta", "createdBy"], to: ["createdBy"] }],
       });
-    expect(outOnto("fieldGroup")).not.toThrow();
-    // A Single's or a collection's table keeps its own title while no field takes it.
+    expect(outOnto("single")).not.toThrow();
     expect(outOnto("collection")).toThrow(
       expect.objectContaining({
         publicData: {
           errors: [
             expect.objectContaining({
-              message: expect.stringContaining(
-                "Every entry already keeps its own title"
-              ),
+              message: expect.stringContaining("created_by"),
             }),
           ],
         },
@@ -750,8 +787,10 @@ describe("planEntityMoves", () => {
       moves: [{ from: ["seoMeta", "summary"], to: ["seo_meta", "summary"] }],
     });
     expect([
+      ...planned.up.stops,
       ...planned.up.first,
       ...planned.up.last,
+      ...planned.down.stops,
       ...planned.down.first,
       ...planned.down.last,
     ]).toEqual([]);
@@ -910,10 +949,91 @@ describe("planEntityMoves", () => {
         moves: [],
       })
     ).toEqual({
-      up: { first: [], last: [] },
-      down: { first: [], last: [] },
+      up: { stops: [], first: [], last: [] },
+      down: { stops: [], first: [], last: [] },
       movedColumns: [],
       refilledColumns: [],
+    });
+  });
+});
+
+describe("every stop of a save's moves comes before any of its writes", () => {
+  const flag = {
+    name: "flag",
+    label: "flag",
+    type: "checkbox",
+  } as FieldDefinition;
+  const published = {
+    name: "published",
+    label: "published",
+    type: "date",
+  } as FieldDefinition;
+  const before = [
+    text("summary"),
+    group("meta", [text("code"), flag]),
+    group("seo", [text("tag")]),
+    published,
+  ];
+  const after = [
+    text("code", { unique: true }),
+    flag,
+    group("meta", [text("summary"), text("tag"), published]),
+    group("seo", []),
+  ];
+  const into = { from: ["summary"], to: ["meta", "summary"] };
+  const between = { from: ["seo", "tag"], to: ["meta", "tag"] };
+  const unique = { from: ["meta", "code"], to: ["code"] };
+  const checkbox = { from: ["meta", "flag"], to: ["flag"] };
+  const date = { from: ["published"], to: ["meta", "published"] };
+
+  /** What leads one way of the file, in order: the stops, then what the moves write first. */
+  const leading = (way: {
+    stops: readonly string[];
+    first: readonly string[];
+  }) => [...way.stops, ...way.first];
+  /** Where the last stop and the first write stand among `statements`. */
+  const order = (statements: readonly string[]) => {
+    const at = (is: RegExp) =>
+      statements.flatMap((statement, i) => (is.test(statement) ? [i] : []));
+    return {
+      lastStop: Math.max(
+        ...at(/nextly_(unkept|unfilled|repeated|unreadable_date)_/)
+      ),
+      firstWrite: Math.min(...at(/^UPDATE /)),
+    };
+  };
+
+  describe.each(["sqlite", "postgresql", "mysql"] as const)("%s", dialect => {
+    it.each([
+      ["a repeat's", [into, between, checkbox, date, unique]],
+      ["a checkbox's", [between, unique, date, into, checkbox]],
+      ["a date's", [into, unique, checkbox, between, date]],
+    ])("with %s stop last in the request", (_, moves) => {
+      const { up } = planEntityMoves({
+        ...base,
+        dialect,
+        before,
+        after,
+        moves,
+        mediaUses: { kind: "collection", slug: "posts" },
+      });
+      const { lastStop, firstWrite } = order(leading(up));
+      expect(lastStop).toBeGreaterThanOrEqual(0);
+      expect(lastStop).toBeLessThan(firstWrite);
+    });
+
+    it("on the way down", () => {
+      const { down } = planEntityMoves({
+        ...base,
+        dialect,
+        before,
+        after,
+        moves: [unique, between, checkbox, date, into],
+        mediaUses: { kind: "collection", slug: "posts" },
+      });
+      const { lastStop, firstWrite } = order(leading(down));
+      expect(lastStop).toBeGreaterThanOrEqual(0);
+      expect(lastStop).toBeLessThan(firstWrite);
     });
   });
 });

@@ -27,19 +27,33 @@ import {
   respondDoc,
   respondList,
   respondMutation,
+  type PaginationMeta,
 } from "../../api/response-shapes";
 import { withErrorHandler } from "../../api/with-error-handler";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { isErrorResponse, requireAnyPermission } from "../../auth/middleware";
 import type { AuthContext } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
-import { actorFromAuthContext } from "../../auth/request-actor";
+import {
+  actorFromAuthContext,
+  type RequestActor,
+} from "../../auth/request-actor";
 import { container } from "../../di/container";
-import { SYSTEM_READ_POLICY } from "../../domains/auth/system-write-policy";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+  type SystemPermission,
+} from "../../domains/auth/system-write-policy";
 import { brandSettingsUpdateSchema } from "../../domains/email/brand-settings";
 import { EmailDeliveryActivity } from "../../domains/email/delivery-activity";
 import { draftPreviewSchema } from "../../domains/email/draft-preview-request";
 import { toDescriptor } from "../../domains/email/provider-definition";
+import {
+  listSampleRecords,
+  loadSampleRecord,
+  type OwnerSampleRecords,
+  type SampleRecordCaller,
+} from "../../domains/email/sample-records";
 import { sendOutcomeMessage } from "../../domains/email/send-outcome";
 import type { EmailDeliveryService } from "../../domains/email/services/email-delivery-service";
 import { getEmailProviderRegistry } from "../../domains/email/services/email-provider-registry";
@@ -61,13 +75,19 @@ import type { EmailProviderService } from "../../services/email/email-provider-s
 import type { EmailService } from "../../services/email/email-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
 import { consoleLogger } from "../../shared/types";
-import { readAuthenticatedActor } from "../helpers/authenticated-actor";
+import {
+  readAuthenticatedActor,
+  readAuthenticatedScope,
+} from "../helpers/authenticated-actor";
+import { requireAuthenticatedUser } from "../helpers/authenticated-user";
 import {
   getAdapterFromDI,
   getEmailProviderServiceFromDI,
   getEmailTemplateServiceFromDI,
 } from "../helpers/di";
 import type { MethodHandler, Params } from "../types";
+
+import { readAccessCallerForDispatch } from "./read-access-caller";
 
 interface EmailProviderServices {
   providerService: EmailProviderService;
@@ -679,7 +699,66 @@ const EMAIL_TEMPLATE_METHODS: Record<
       return respondData(preview);
     },
   },
+  listSampleRecords: {
+    // The real records the template's owner offers for its test data, newest
+    // first, to a caller who may read what they are read from; `meta.label`
+    // says what they are ("A real order"). One page, never more.
+    execute: async (svc, p) => {
+      const { records, caller } = await sampleRecordsFor(svc, p.templateId);
+      const { label, items } = await listSampleRecords(records?.source, caller);
+      const meta: PaginationMeta & { label: string } = {
+        total: items.length,
+        page: 1,
+        limit: items.length,
+        totalPages: 1,
+        hasNext: false,
+        hasPrev: false,
+        label,
+      };
+      // A record's label is the loader's text, never re-read as a date.
+      const response = respondList(items, meta);
+      response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+      return response;
+    },
+  },
+  loadSampleRecord: {
+    // One record's values for the preview, by variable name. Read for this
+    // answer and kept nowhere.
+    execute: async (svc, p) => {
+      const { records, caller } = await sampleRecordsFor(svc, p.templateId);
+      const variables = await loadSampleRecord(records, p.recordId, caller);
+      // The values fill the preview exactly as the loader gave them: a date
+      // is never rewritten in the installation's timezone on the way.
+      const response = respondDoc({ id: p.recordId, variables });
+      response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+      return response;
+    },
+  },
 };
+
+/**
+ * The real records a template's running owner offers for its test data, and
+ * the caller as the access decision reads them, which the sample-records
+ * module asks before the owner's loader runs.
+ */
+async function sampleRecordsFor(
+  svc: EmailTemplateServices,
+  templateId: string
+): Promise<{
+  records: OwnerSampleRecords | undefined;
+  caller: SampleRecordCaller;
+}> {
+  const user = requireAuthenticatedUser();
+  const template = await svc.templateService.getTemplate(templateId);
+  return {
+    records: svc.templateService.ownerSampleRecords(template.slug),
+    caller: {
+      readCaller: readAccessCallerForDispatch(user),
+      userId: user.id,
+      scope: readAuthenticatedScope(),
+    },
+  };
+}
 
 /** Parse a request body, turning a schema refusal into the validation envelope. */
 /** A template's declared variables, checked where a save gives them. */
@@ -849,6 +928,53 @@ const EMAIL_DELIVERY_READS: Record<
     respondData({ ...(await activity.overdue()) }),
 };
 
+/**
+ * A person's actions on one queued email, by the method the route parser
+ * names: each asks its grant of `SYSTEM_WRITE_POLICY` before anything is
+ * read, and answers `{ message, item }`.
+ */
+const EMAIL_DELIVERY_ACTIONS: Record<
+  string,
+  {
+    grant: { readonly anyOf: readonly SystemPermission[] };
+    act: (
+      service: EmailService,
+      id: string,
+      actor: RequestActor
+    ) => Promise<Response>;
+  }
+> = {
+  retryQueuedEmail: {
+    grant: SYSTEM_WRITE_POLICY.emailDeliveries.retry,
+    act: async (service, id, actor) =>
+      respondMutation(
+        "Email will be tried again now.",
+        await service.retryQueued(id, { actor })
+      ),
+  },
+  cancelQueuedEmail: {
+    grant: SYSTEM_WRITE_POLICY.emailDeliveries.cancel,
+    act: async (service, id, actor) => {
+      // The service answers the state the email stood in before; the route
+      // answers what the cancel did: cancelled, or, for one whose attempt is
+      // with the provider, a request that takes effect only if it fails.
+      const before = await service.cancelQueued(id, {
+        userId: actor.type === "user" ? (actor.id ?? null) : null,
+        actor,
+      });
+      return before.state === "sending"
+        ? respondMutation(
+            "Cancel requested. It takes effect if the attempt being sent now fails.",
+            { id: before.id, state: "sending" }
+          )
+        : respondMutation("Email cancelled.", {
+            id: before.id,
+            state: "cancelled",
+          });
+    },
+  },
+};
+
 /** The method the route parser names the search by address with. */
 const SEARCH_BY_ADDRESS = "searchByAddress";
 /** The fields a search's body is read for; anything else is ignored. */
@@ -920,16 +1046,28 @@ export function handleEmailDeliveryRequest(
 ): Promise<Response> {
   return withErrorHandler(async (request: Request): Promise<Response> => {
     const read = EMAIL_DELIVERY_READS[method];
-    if (!read && method !== SEARCH_BY_ADDRESS) {
+    const action = EMAIL_DELIVERY_ACTIONS[method];
+    if (!read && !action && method !== SEARCH_BY_ADDRESS) {
       throw NextlyError.notFound({
         logContext: { service: "email", method },
       });
     }
+    // A precondition, before anything is read: an action asks its manage
+    // grant, every read the read grant.
     const auth = await requireAnyPermission(request, [
-      ...SYSTEM_READ_POLICY.emailDeliveries.read.anyOf,
+      ...(action
+        ? action.grant.anyOf
+        : SYSTEM_READ_POLICY.emailDeliveries.read.anyOf),
     ]);
     // Thrown, so the refusal has the envelope every other 401/403 has.
     if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+    if (action) {
+      return action.act(
+        container.get<EmailService>("emailService"),
+        params.queuedId ?? "",
+        actorFromAuthContext(auth)
+      );
+    }
     const adapter = getAdapterFromDI();
     if (!adapter) {
       throw NextlyError.internal({

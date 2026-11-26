@@ -241,8 +241,11 @@ export type Target = (typeof TARGETS)[number];
  * - `bulk`: the REST bulk routes by ids, which the admin's entry list sends
  *   its row and bulk Delete, Publish and Unpublish through, answered by the
  *   entry's own result among the items.
+ * - `sample`: the real records an email template's owner offers for its test
+ *   data (`GET /api/email-templates/[id]/sample-records`), from a template
+ *   whose records are read from the target.
  *
- * The last four were added after the others, and come last, so every column
+ * The last five were added after the others, and come last, so every column
  * already in the answers file keeps its place.
  */
 export const DOORS = [
@@ -260,6 +263,7 @@ export const DOORS = [
   "lock",
   "capabilities",
   "bulk",
+  "sample",
 ] as const;
 export type Door = (typeof DOORS)[number];
 
@@ -322,6 +326,12 @@ interface Reach {
 const READ: readonly Action[] = ["read"];
 /** What a resource's own routes do: read, create, update and delete. */
 const CRUD: readonly Action[] = ["read", "create", "update", "delete"];
+/**
+ * The email deliveries: the Activity's read, and the retry of one queued
+ * email, which is its one write (an update) and is made only through REST and
+ * the Direct API.
+ */
+const READ_RETRY: readonly Action[] = ["read", "update"];
 /** A user's writes, asked apart from the read the table asked first. */
 const USER_WRITES: readonly Action[] = ["create", "update", "delete"];
 const READ_UPDATE: readonly Action[] = ["read", "update"];
@@ -366,7 +376,7 @@ const REACH: Record<Door, Reach> = {
       "single-pub": PUBLISHING,
       roles: CRUD,
       providers: CRUD,
-      deliveries: READ,
+      deliveries: READ_RETRY,
     },
   },
   // Media, users, roles and email deliveries are read by the namespaces a principal cannot call
@@ -382,7 +392,7 @@ const REACH: Record<Door, Reach> = {
       users: READ,
       "single-pub": PUBLISHING,
       roles: READ,
-      deliveries: READ,
+      deliveries: READ_RETRY,
     },
     callersOf: {
       media: NOT_PRINCIPAL,
@@ -471,6 +481,15 @@ const REACH: Record<Door, Reach> = {
     callers: NOT_PRINCIPAL,
     targets: { collection: ["update", "delete", ...PUBLISHING] },
   },
+  // A template's real records are read from a collection or from users, and
+  // only by staff: the route refuses anyone not signed in before any
+  // decision, and a plugin's person never reaches the admin. Every staff
+  // caller who holds a target's read also holds `read-email-templates`, which
+  // the route asks first, so the answer is the target's read.
+  sample: {
+    callers: SIGNED_IN,
+    targets: { collection: READ, users: READ },
+  },
 };
 
 /** What each door asks without the access-control service. */
@@ -527,6 +546,7 @@ const REACH_BY_SETUP: Record<Setup, Partial<Record<Door, Reach>>> = {
     population: REACH.population,
     lock: REACH.lock,
     bulk: REACH.bulk,
+    sample: REACH.sample,
   },
 };
 
@@ -747,9 +767,9 @@ const SEEDED: Partial<Record<Target, readonly Action[]>> = {
   users: ["create", "read", "update", "delete"],
   roles: ["create", "read", "update", "delete"],
   providers: ["create", "read", "update", "delete"],
-  // The Activity is read only: `read-email-deliveries` is its one permission
-  // here (`manage-email-deliveries` cancels a queued email, and does not
-  // count as a read).
+  // `read-email-deliveries` reads the Activity. Its one write, a retry, has
+  // no permission of its own: `manage-email-deliveries` grants it
+  // (`MANAGED_WRITES`), and does not count as a read.
   deliveries: ["read"],
 };
 
@@ -772,10 +792,19 @@ const MANAGE_COUNTS_AS: readonly Action[] = [
   "delete",
 ];
 
+/**
+ * The writes a resource's `manage-` permission grants without counting as
+ * its read: a queued email's retry, granted by `manage-email-deliveries`
+ * alone. Extend an entry for another write or door.
+ */
+const MANAGED_WRITES: Partial<Record<Target, readonly Action[]>> = {
+  deliveries: ["update"],
+};
+
 const holdsManage = (caller: Caller, action: Action, target: Target) =>
-  MANAGED.includes(target) &&
-  MANAGE_COUNTS_AS.includes(action) &&
-  caller === "key-super-admin";
+  caller === "key-super-admin" &&
+  ((MANAGED.includes(target) && MANAGE_COUNTS_AS.includes(action)) ||
+    (MANAGED_WRITES[target]?.includes(action) ?? false));
 
 /** Whether the role screen grants the caller this action on this target. */
 function holdsPermission(caller: Caller, action: Action, target: Target) {
@@ -1017,8 +1046,34 @@ const CELL_DOORS: ReadonlySet<Door> = new Set<Door>(["capabilities", "widget"]);
  * The one answer as `door` gives it (see {@link YES_OR_NO_DOORS} and
  * {@link CELL_DOORS}).
  */
+/**
+ * The doors that hand what they read to code given no filter: an email
+ * template's records are read by its owner's loader, which would read past a
+ * rule's filter, so a read the filter limits is refused there.
+ */
+const WHOLE_READ_DOORS: ReadonlySet<Door> = new Set<Door>(["sample"]);
+
+/** The callers past every rule, whose read no filter limits. */
+const PAST_EVERY_RULE: readonly Caller[] = [
+  "super-admin",
+  "super-admin-inherited",
+  "key-super-admin",
+];
+
+/** Whether the row's read is one a rule's filter limits to some entries. */
+function readIsFiltered(row: Row): boolean {
+  return (
+    !PAST_EVERY_RULE.includes(row.caller) &&
+    rulesLet(row.rule, judgedAs(row.action), row.caller, row.target) ===
+      "matching"
+  );
+}
+
 export function oneAnswerAt(row: Row, door: Door): Verdict {
   const answer = oneAnswer(row);
+  if (WHOLE_READ_DOORS.has(door) && answer === "allow" && readIsFiltered(row)) {
+    return "refuse";
+  }
   if (answer !== "matching") return answer;
   if (CELL_DOORS.has(door)) return "allow";
   if (YES_OR_NO_DOORS.has(door)) {

@@ -1,7 +1,9 @@
 /**
- * `nextly upgrade` finds a password stored as given wherever its container is stored: under
- * `experimental.perLanguageStorage`, a translatable group of an entity that is not itself
- * translated lives on its per-language row, not on the main table, and is scanned there.
+ * `nextly upgrade` finds a password stored as given where its container keeps it under
+ * per-language storage. A group keeps one structure in every language: its shared values, a
+ * password among them (never translated), on the main table, and only its text, each language's,
+ * on the per-language row beside it. So a password stored as given is found on the main table,
+ * whatever the group's text does.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -31,11 +33,9 @@ describe.each(getConfiguredTestDialects())(
             slug: "pwnotes",
             fields: [
               text({ name: "title" }),
-              // Translatable, on a collection that is not: its values live per language only
-              // because of the setting.
+              // Its text kept per language beside its structure, its password in the structure.
               group({
                 name: "secret",
-                localized: true,
                 fields: [text({ name: "label" }), password({ name: "pin" })],
               }),
             ],
@@ -49,18 +49,18 @@ describe.each(getConfiguredTestDialects())(
       _resetPerLanguageStorage();
     });
 
-    it("counts a password stored as given in a container kept on the per-language row", async () => {
+    it("counts a password stored as given in a group whose text is kept per language", async () => {
       const created = await t.nextly.create({
         collection: "pwnotes",
         data: { title: "n", secret: { label: "a", pin: "x" } },
       });
       const id = (created.item as { id: string }).id;
-      // As an earlier release left it: the password as given, not hashed.
+      // As an earlier release left it: the password as given, not hashed, in the group's structure.
       const plain = { label: "a", pin: "stored-plain" };
       await t.adapter.update(
-        "dc_pwnotes_locales",
+        "dc_pwnotes",
         { secret: dialect === "sqlite" ? JSON.stringify(plain) : plain },
-        { and: [{ column: "_parent", op: "=", value: id }] }
+        { and: [{ column: "id", op: "=", value: id }] }
       );
 
       const counted = await countPasswordsStoredAsGiven({

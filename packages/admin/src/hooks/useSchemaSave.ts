@@ -25,6 +25,13 @@ import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { acknowledgedConversionsOf } from "@admin/lib/builder/brought-up-to-date";
+import {
+  type DraftMove,
+  draftMovesOf,
+  moveWithOtherChangeRefusal,
+  movesHints,
+  refusedMovesOf,
+} from "@admin/lib/builder/draft-moves";
 import type { PendingChange } from "@admin/lib/builder/pending-changes";
 import {
   draftRenamesOf,
@@ -33,10 +40,14 @@ import {
   withDecidedRenames,
 } from "@admin/lib/builder/rename-answers";
 import type { SettingChange } from "@admin/lib/builder/settings-changes";
-import type {
-  FieldResolution,
-  SchemaPreviewResponse,
-  SchemaRenameResolution,
+import { refusedTypeChangesOf } from "@admin/lib/builder/type-change-refusals";
+import {
+  type ConfirmedDeletion,
+  confirmedDeletionsOf,
+  type FieldResolution,
+  type SchemaPreviewResponse,
+  type SchemaRenameResolution,
+  type SchemaSaveHints,
 } from "@admin/services/schemaApi";
 import type { FieldDefinition } from "@admin/types/collection";
 
@@ -118,14 +129,21 @@ export interface UseSchemaSaveOptions {
   label: string;
   confirmation: SchemaChangeConfirmation;
   getValidatedFields: () => FieldDefinition[] | null;
-  preview: (fields: FieldDefinition[]) => Promise<SchemaPreviewResponse>;
+  /** `hints`: the fields the draft moves into or out of a group, sent on preview and apply alike. */
+  preview: (
+    fields: FieldDefinition[],
+    hints: SchemaSaveHints | undefined
+  ) => Promise<SchemaPreviewResponse>;
   apply: (
     fields: FieldDefinition[],
     schemaVersion: number,
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[],
     /** The keys of the conversions the reviewed preview listed, which its Save confirmed. */
-    acknowledgedConversions: string[]
+    acknowledgedConversions: string[],
+    hints: SchemaSaveHints | undefined,
+    /** The values of each field the reviewed preview removes, as it counted them, confirmed. */
+    confirmedDeletions: ConfirmedDeletion[]
   ) => Promise<SchemaApplyOutcome>;
   /**
    * The preview found nothing to migrate: persist the settings. Run at once
@@ -187,10 +205,66 @@ export interface UseSchemaSaveReturn {
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
   ) => void;
+  /**
+   * The server's refusals of the draft's moves and type changes, by field id, each with its message
+   * as written (`refusedMovesOf`, `refusedTypeChangesOf`): shown at each field's row while the draft
+   * is the one the server judged. Empty once the fields, or the settings sent with them, change.
+   */
+  refusedMoves: ReadonlyMap<string, string>;
 }
+
+/** No refused move, as one constant so the page's marks keep one value between renders. */
+const NO_REFUSED_MOVES: ReadonlyMap<string, string> = new Map();
 
 /** No pending change, as one constant so the callbacks keep their identity across renders. */
 const NO_PENDING_CHANGES: readonly PendingChange[] = [];
+
+/**
+ * The server's refusals of a draft's moves (`refusedMovesOf`) and of its type changes
+ * (`refusedTypeChangesOf`), kept with the draft and the settings they judged: an edit, an undo or a
+ * settings change since is judged afresh by the next save, so the refusals mark no field once the
+ * draft is another. A field refused for both shows its move's.
+ */
+function useMoveRefusals(
+  moves: readonly DraftMove[],
+  pendingChanges: readonly PendingChange[],
+  previewedWith: unknown
+): {
+  refusedMoves: ReadonlyMap<string, string>;
+  markRefusedMoves: (err: unknown) => void;
+  clearRefusedMoves: () => void;
+} {
+  const sentWith = JSON.stringify(previewedWith ?? null);
+  const [refused, setRefused] = useState<{
+    changes: readonly PendingChange[];
+    sentWith: string;
+    byField: ReadonlyMap<string, string>;
+  } | null>(null);
+  const markRefusedMoves = useCallback(
+    (err: unknown) => {
+      const byField = new Map([
+        ...refusedTypeChangesOf(err, pendingChanges),
+        ...refusedMovesOf(err, moves),
+      ]);
+      setRefused(
+        byField.size === 0
+          ? null
+          : { changes: pendingChanges, sentWith, byField }
+      );
+    },
+    [moves, pendingChanges, sentWith]
+  );
+  const clearRefusedMoves = useCallback(() => setRefused(null), []);
+  const judged =
+    refused !== null &&
+    refused.changes === pendingChanges &&
+    refused.sentWith === sentWith;
+  return {
+    refusedMoves: judged ? refused.byField : NO_REFUSED_MOVES,
+    markRefusedMoves,
+    clearRefusedMoves,
+  };
+}
 
 export function useSchemaSave({
   slug,
@@ -211,6 +285,20 @@ export function useSchemaSave({
   const draftRenames = useMemo(
     () => draftRenamesOf(pendingChanges),
     [pendingChanges]
+  );
+  // The saved fields the draft moves into or out of a group, read from the same pending changes:
+  // sent on the preview and the apply, so the migration the save writes keeps their values.
+  const { moves, withOtherChange } = useMemo(
+    () => draftMovesOf(pendingChanges),
+    [pendingChanges]
+  );
+  const hints = useMemo(() => movesHints(moves), [moves]);
+  const movesAny = moves.length > 0;
+  // The server's refusals of those moves, marked at each field while the draft is the one judged.
+  const { refusedMoves, markRefusedMoves, clearRefusedMoves } = useMoveRefusals(
+    moves,
+    pendingChanges,
+    previewedWith
   );
   // The entities the save creates first, by kind and address: part of what a review agrees to,
   // as the fields are, so a confirmation creates exactly the entities the review listed.
@@ -248,12 +336,19 @@ export function useSchemaSave({
 
       const fields = getValidatedFields();
       if (!fields) return;
+      // A field moved and renamed or retyped in one save cannot keep its values through both.
+      if (withOtherChange.length > 0) {
+        toast.error(moveWithOtherChangeRefusal(withOtherChange));
+        return;
+      }
 
+      // Each save is judged afresh: a move refused before may be accepted now.
+      clearRefusedMoves();
       // Busy until the preview is answered and acted on, so Discard all
       // cannot clear the editor while this save may still keep its values.
       confirmation.beginPreview();
       try {
-        const previewed = await preview(fields);
+        const previewed = await preview(fields, hints);
         if (!mounted.current) return;
         // A rename the preview does not offer as one would not keep the field's values with it, so
         // nothing is put in front of the person to confirm. Judged before a preview with no change
@@ -267,9 +362,11 @@ export function useSchemaSave({
           toast.error(renameNotOffered(missing));
           return;
         }
-        // Nothing to migrate, no setting changed and no field group to create: nothing to review.
+        // Nothing to migrate, no setting changed, no field group to create and no field moved:
+        // nothing to review. A move between two groups changes no column, yet its values move.
         if (
           !previewed.hasChanges &&
+          !movesAny &&
           settingChanges.length === 0 &&
           !createsAny
         ) {
@@ -278,11 +375,19 @@ export function useSchemaSave({
         }
         previewedFields.current.set(
           previewed,
-          JSON.stringify({ fields, previewedWith, settingChanges, creates })
+          JSON.stringify({
+            fields,
+            previewedWith,
+            settingChanges,
+            creates,
+            hints,
+          })
         );
         setReviewedSettingChanges(settingChanges);
         confirmation.request(previewed);
       } catch (err) {
+        // A refused move is marked at its field as well, where the toast's message is kept.
+        markRefusedMoves(err);
         toast.error(apiErrorMessage(err, "Failed to preview schema changes"));
       } finally {
         confirmation.endPreview();
@@ -300,6 +405,11 @@ export function useSchemaSave({
     settingChanges,
     createsAny,
     creates,
+    hints,
+    movesAny,
+    withOtherChange,
+    markRefusedMoves,
+    clearRefusedMoves,
   ]);
 
   const confirmApply = useCallback(
@@ -314,7 +424,13 @@ export function useSchemaSave({
       if (
         shown !== undefined &&
         shown !==
-          JSON.stringify({ fields, previewedWith, settingChanges, creates })
+          JSON.stringify({
+            fields,
+            previewedWith,
+            settingChanges,
+            creates,
+            hints,
+          })
       ) {
         confirmation.settle();
         toast.error(
@@ -325,8 +441,8 @@ export function useSchemaSave({
 
       // Only settings changed, or field groups to create: the review was of
       // them, and its confirmation creates the groups and saves the settings.
-      // Nothing is migrated, so nothing restarts.
-      if (!previewed.hasChanges) {
+      // Nothing is migrated, so nothing restarts. A save that moves a field is applied.
+      if (!previewed.hasChanges && !movesAny) {
         void (async () => {
           confirmation.beginApply();
           try {
@@ -368,7 +484,10 @@ export function useSchemaSave({
               previewed.renamed ?? []
             ),
             // Every conversion the dialog listed: its Save confirms them all.
-            acknowledgedConversionsOf(previewed)
+            acknowledgedConversionsOf(previewed),
+            hints,
+            // The counts the dialog showed for each field it removes: its Save confirms them.
+            confirmedDeletionsOf(previewed)
           );
           if (!result.success) {
             stopRestart(
@@ -390,6 +509,7 @@ export function useSchemaSave({
           // Landed: the groups the entity's picker made that no field uses go.
           fieldGroupsFirst?.letGoUnused?.();
         } catch (err) {
+          markRefusedMoves(err);
           // A refused apply names each field and why; its envelope's own message is only
           // "Validation failed.", which says neither.
           stopRestart(
@@ -416,8 +536,11 @@ export function useSchemaSave({
       onNoChanges,
       fieldGroupsFirst,
       creates,
+      hints,
+      movesAny,
+      markRefusedMoves,
     ]
   );
 
-  return { handleSave, confirmApply, reviewedSettingChanges };
+  return { handleSave, confirmApply, reviewedSettingChanges, refusedMoves };
 }

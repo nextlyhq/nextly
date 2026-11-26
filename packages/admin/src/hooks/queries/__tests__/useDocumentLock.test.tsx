@@ -719,12 +719,27 @@ describe("useDocumentLock", () => {
 
     await waitFor(() => expect(result.current.state.status).toBe("lost"));
 
-    // Nothing further is asked: the beat stopped with the claim.
-    const after = patch.mock.calls.length;
-    await act(async () => {
-      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS * 3);
-    });
-    expect(patch.mock.calls.length).toBe(after);
+    // Nothing is taken while it cannot be confirmed: each beat only claims
+    // back the claim it had, which displaces nobody, and the claim stays lost
+    // while the asks fail (see useDocumentLock.offline.test.tsx).
+    post.mockRejectedValue(new Error("offline"));
+    const after = {
+      patch: patch.mock.calls.length,
+      post: post.mock.calls.length,
+    };
+    for (let beat = 0; beat < 3; beat += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+      });
+    }
+    expect(patch).toHaveBeenCalledTimes(after.patch);
+    expect(post.mock.calls.slice(after.post)).toEqual(
+      Array.from({ length: 3 }, () => [
+        "/document-lock",
+        { ...ref, takeover: false, requestAccess: false, reclaimToken: "t1" },
+      ])
+    );
+    expect(result.current.state.status).toBe("lost");
   });
 
   it("holds the claim while failures stay inside the deadline", async () => {
@@ -901,6 +916,9 @@ describe("useDocumentLock", () => {
     // minutes ago, while another editor already holds the row.
     const { result } = renderHook(() => useDocumentLock(ref));
     await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    // Stalled both ways, so the claim lost at the deadline is not taken
+    // back on the beat after it either.
+    post.mockReturnValue(new Promise(() => {}));
 
     patch.mockReturnValue(new Promise(() => {}));
 
@@ -1045,6 +1063,9 @@ describe("useDocumentLock", () => {
     // its own interface says it is not.
     const { result } = renderHook(() => useDocumentLock(ref));
     await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    // Stalled both ways, so the claim lost at the deadline is not taken
+    // back on the beat after it either.
+    post.mockReturnValue(new Promise(() => {}));
 
     patch.mockReturnValue(new Promise(() => {}));
     const beats =
@@ -1286,6 +1307,9 @@ describe("useDocumentLock", () => {
     // only if the send time is what counted.
     const { result } = renderHook(() => useDocumentLock(ref));
     await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    // Stalled both ways, so the claim lost at the deadline is not taken
+    // back on the beat after it either.
+    post.mockReturnValue(new Promise(() => {}));
 
     let settleRenew: (value: unknown) => void = () => {};
     patch.mockReturnValueOnce(

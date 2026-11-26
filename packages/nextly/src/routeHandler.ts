@@ -74,6 +74,7 @@ import {
   renewLock,
 } from "./api/document-lock";
 import { buildErrorResponse } from "./api/error-response";
+import { handleFileRoute } from "./api/file-routes";
 import {
   getGeneralSettings,
   updateGeneralSettings,
@@ -161,6 +162,7 @@ import {
   widgetAudience,
   type WidgetAudience,
 } from "./domains/widgets/visibility";
+import { readableAttachedEntities } from "./domains/workflows/readable-attached";
 import { genericPublicMessage } from "./errors/error-codes";
 import { NextlyError } from "./errors/nextly-error";
 import { retryAfterHeader } from "./errors/retry-after";
@@ -433,6 +435,7 @@ async function handleApiKeyRequest(
  */
 const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
+  "files",
   "webhooks",
   "releases",
   "workflows",
@@ -695,12 +698,14 @@ async function handleSchemaRequest(
 /**
  * The collection entry methods whose dispatcher handler reads through the
  * query service's filtered read: a list, a count and a read by id, which
- * answers an entry outside a read rule's filter as missing.
+ * answers an entry outside a read rule's filter as missing, and what changed
+ * in a translation's source, which is asked through that read.
  */
 const FILTERED_READ_METHODS: ReadonlySet<string> = new Set([
   "listEntries",
   "countEntries",
   "getEntry",
+  "getEntrySourceChange",
 ]);
 
 /**
@@ -716,6 +721,7 @@ const FILTERED_WRITE_METHODS: ReadonlySet<string> = new Set([
   "discardWorkingDraft",
   "takeLiveSharedValues",
   "autosaveEntry",
+  "keepEntryTranslation",
   "bulkUpdateEntries",
   "bulkDeleteEntries",
   "bulkUpdateByQuery",
@@ -780,6 +786,10 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   "autosaveEntry",
   // Reading one back is a read of the entry's own content.
   "getEntryAutosave",
+  // What changed in a translated field's source is a read of the entry's own
+  // content; keeping its translation is authorized as an update of it.
+  "getEntrySourceChange",
+  "keepEntryTranslation",
 ]);
 
 /**
@@ -828,6 +838,9 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   "discardSingleWorkingDraft",
   // Taking the live shared values rewrites the pending change: an update too.
   "takeLiveSingleSharedValues",
+  // A read, named in the read branch below; keeping a translation is an update.
+  "getSingleSourceChange",
+  "keepSingleTranslation",
 ]);
 
 /**
@@ -877,6 +890,9 @@ const ROLE_AWARE_READ_METHODS = new Set([
   // A document's events run the same document gate, which reads roles.
   "listEntryEvents",
   "listSingleEvents",
+  // What changed in a field's source is read through the document's own read.
+  "getEntrySourceChange",
+  "getSingleSourceChange",
   // Where a field group is used, and the field-group list's use counts, name
   // only the collections and Singles the reader may read, by the read
   // decision that reads roles: without them a role-admitted owner is left out
@@ -1136,6 +1152,7 @@ async function resolveAuthorization(
         method === "getSingleVersion" ||
         method === "getSingleVersionDiff" ||
         method === "getSingleAutosave" ||
+        method === "getSingleSourceChange" ||
         method === "markSingleVersionSeen"
           ? "read"
           : "update";
@@ -1795,6 +1812,12 @@ async function serveServiceRequest(
   // which the read has no body for.
   if (service === "documentLock") {
     return handleDocumentLockRequest(req, method);
+  }
+
+  // A collection's private files: the handler recognises staff and the
+  // signed-in people the collection names, and boots the app itself.
+  if (service === "files") {
+    return handleFileRoute(req, method, routeParams ?? {});
   }
 
   // ==================== TRANSLATIONS DIRECT DISPATCH ====================
@@ -2567,6 +2590,9 @@ const SESSION_PRIVATE_METHODS = new Set([
   // the list nor the refusal is shared between callers.
   "listEntryEvents",
   "listSingleEvents",
+  // Which fields a caller may read decides what they are told of a source.
+  "getEntrySourceChange",
+  "getSingleSourceChange",
   // What a publish of every language would do is told only to a caller who
   // may publish, naming only the fields they may read.
   "previewPublishAllSingleLocales",
@@ -2669,6 +2695,12 @@ async function handleAdminMetaWorkspaceRequest(
   const { workspace } = await withCurrentLanguages(() =>
     buildAdminMeta(audience, offerTo)
   );
+  // The collections and Singles a workflow holds that this reader may read, by slug: the admin
+  // asks for a document's review state, and whether anything can wait for its reader, only where
+  // one can. Answered from the registered workflows with no read at all when none is attached.
+  workspace.workflowEntities = [
+    ...(await readableAttachedEntities(caller)),
+  ].sort();
   return withSessionCacheHeaders(respondAdminMeta(workspace));
 }
 

@@ -38,6 +38,10 @@ import { splitSqlStatements } from "../../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import type { RenameCandidate } from "../../../domains/schema/pipeline/pushschema-pipeline-interfaces";
 import { resolveCollectionTableName } from "../../../domains/schema/utils/resolve-table-name";
+import {
+  judgementIn,
+  refusalText,
+} from "../../../domains/schema/value-conversion/type-change/__tests__/helpers/judgement-in";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
@@ -317,6 +321,171 @@ describe.each(getConfiguredTestDialects())(
       const after = await prices(adapter);
       expect(Object.values(after).map(Number)).toEqual([12, 34]);
     }, 180_000);
+
+    /**
+     * The Builder dialog's judgement of `price` changing from text to number over `values`, on a
+     * site and a database of its own; the rows are masked as `judgementIn` names them.
+     */
+    async function dialogJudgement(
+      values: readonly string[],
+      lostValue: string
+    ): Promise<string> {
+      const site = await mkdtemp(join(tmpdir(), "migrate-type-change-dialog-"));
+      try {
+        const t = await createTestNextly({
+          adapter: (await open()) as never,
+          basePath: site,
+          collections: [],
+          db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION_FILE },
+        });
+        current = t;
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: "posts",
+            label: "Posts",
+            fields: [{ name: "price", type: "text" }],
+          }
+        );
+        let lost = "";
+        for (const price of values) {
+          const created = (await t.nextly.create({
+            collection: "posts",
+            data: { price },
+          } as never)) as unknown as { item: { id: unknown } };
+          if (price === lostValue) lost = String(created.item.id);
+        }
+        const answer = await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "posts" },
+          {
+            fields: [{ name: "price", type: "number" }],
+            confirmed: true,
+            schemaVersion: 1,
+          }
+        ).then(
+          async a =>
+            a instanceof Response ? ((await a.json()) as unknown) : a,
+          (error: unknown) => error
+        );
+        return judgementIn(refusalText(answer), lost);
+      } finally {
+        await current?.destroy();
+        current = undefined;
+        clearServices();
+        await rm(site, { recursive: true, force: true });
+      }
+    }
+
+    // The file is judged by the values the deployed database holds, in the words the Builder's
+    // dialog used for the same values: the same class, reasons and counts, rows by their own ids.
+    it("names the judgement the Builder's dialog gave the same values", async () => {
+      const ids = {
+        whole: "00000000-0000-4000-8000-000000000001",
+        fraction: "00000000-0000-4000-8000-000000000002",
+        word: "00000000-0000-4000-8000-000000000003",
+      };
+      const dialog = await dialogJudgement(["1", "1.5", "abc"], "abc");
+      expect(dialog).toMatch(/^blocked: /);
+      const adapter = await deployedHolding({
+        [ids.whole]: "1",
+        [ids.fraction]: "1.5",
+        [ids.word]: "abc",
+      });
+
+      const refused = await migrate();
+
+      expect(judgementIn(refusalText(refused), ids.word)).toBe(dialog);
+      expect(Object.values(await prices(adapter))).toEqual(["1", "1.5", "abc"]);
+    }, 240_000);
+
+    // A field kept inside a named group's JSON changes no column when its type changes: the file is
+    // judged by the values the group holds, as the Builder's save is, naming the field by its path.
+    it("refuses a file changing a group's field type over a value the new type cannot read", async () => {
+      const sqlFiles = () =>
+        readdirSync(join(project, "database", "history")).filter(file =>
+          file.endsWith(".sql")
+        );
+      const group = (price: string) => [
+        {
+          name: "details",
+          type: "group",
+          fields: [{ name: "price", type: price }],
+        },
+      ];
+      // In development, on a site of its own: a collection whose group's `price` is made a text,
+      // then a number over no values.
+      await rm(project, { recursive: true, force: true });
+      project = await mkdtemp(join(tmpdir(), "migrate-type-change-int-"));
+      current = await createTestNextly({
+        adapter: (await open()) as never,
+        basePath: project,
+        collections: [],
+        db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION_FILE },
+      });
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: "kits", label: "Kits", fields: group("text") }
+      );
+      const madeBefore = sqlFiles().length;
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "kits" },
+        { fields: group("number"), confirmed: true, schemaVersion: 1 }
+      );
+      await current.destroy();
+      current = undefined;
+      expect(sqlFiles().length).toBe(madeBefore + 1);
+      // Deployed: the create file, then entries development never held.
+      const adapter = await deployedHolding({});
+      for (const [id, price] of [
+        ["k1", "12"],
+        ["k2", "abc"],
+      ]) {
+        await adapter.executeQuery(
+          `INSERT INTO ${q("dc_kits")} (${q("id")}, ${q("slug")}, ${q("title")}, ${q("details")}) VALUES ('${id}', '${id}', 'T', '${JSON.stringify({ price })}')`
+        );
+      }
+
+      const refused = await migrate();
+
+      // "12" stays a text inside the JSON, which the number reads only once rewritten; "abc" no
+      // number reads.
+      expect(NextlyError.is(refused)).toBe(true);
+      const errors = (
+        refused as { publicData?: { errors?: { message: string }[] } }
+      ).publicData?.errors;
+      expect(errors).toEqual([
+        expect.objectContaining({
+          code: "TYPE_CHANGE_BLOCKED",
+          message: expect.stringMatching(
+            /^Collection 'kits' \(migration .+\.sql\): field 'details\.price' cannot change from text to number /
+          ),
+        }),
+      ]);
+      expect(errors?.[0]?.message).toContain(
+        "rewritten into its form, which a save does not do yet (1 row: id k1)"
+      );
+      expect(errors?.[0]?.message).toContain(
+        "values that are not a number would be cleared (1 row: id k2)"
+      );
+      const rows = (await adapter.executeQuery(
+        `SELECT ${q("id")} AS id, ${q("details")} AS details FROM ${q("dc_kits")} ORDER BY ${q("id")}`
+      )) as Array<{ details: unknown }>;
+      expect(
+        rows.map(row =>
+          typeof row.details === "string"
+            ? (JSON.parse(row.details) as unknown)
+            : row.details
+        )
+      ).toEqual([{ price: "12" }, { price: "abc" }]);
+    }, 240_000);
 
     /**
      * A hand-written migration, with no snapshot and no declared purpose, placed right after the
@@ -746,5 +915,180 @@ describe.each(getConfiguredTestDialects())(
       },
       240_000
     );
+
+    /**
+     * A site whose translated `notes` keeps `v` per language, made a text and then a number in the
+     * Schema Builder, deployed onto a database of its own up to the change: every file before the
+     * change's first, then `en` and `es` values the development database never held.
+     */
+    async function deployedTranslated(values: {
+      en: string;
+      es: string;
+    }): Promise<{ site: string; adapter: DrizzleAdapter; files: string[] }> {
+      const site = await mkdtemp(join(tmpdir(), "migrate-type-change-retype-"));
+      const localization = { locales: ["en", "es"], defaultLocale: "en" };
+      const history = join(site, "database", "history");
+      vi.stubEnv("NODE_ENV", "development");
+      current = await createTestNextly({
+        adapter: (await open()) as never,
+        basePath: site,
+        collections: [],
+        localization,
+        db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION_FILE },
+      });
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: "notes",
+          label: "Notes",
+          localized: true,
+          fields: [{ name: "v", type: "text", localized: true }],
+        }
+      );
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "notes" },
+        {
+          fields: [{ name: "v", type: "number", localized: true }],
+          confirmed: true,
+          schemaVersion: 1,
+          localized: true,
+        }
+      );
+      await current.destroy();
+      current = undefined;
+
+      const files = readdirSync(history)
+        .filter(file => file.endsWith(".sql"))
+        .sort();
+      // The change's first file: its translations column's, written ahead of its own.
+      const retypes = files.findIndex(file =>
+        /"kind":"retypes"/.test(readFileSync(join(history, file), "utf-8"))
+      );
+      expect(retypes).toBeGreaterThan(0);
+      const adapter = await open();
+      run.adapter = adapter;
+      run.config = defineConfig({
+        collections: [],
+        localization,
+        db: {
+          migrationsDir: history,
+          uiSchemaFile: join(site, "schema", "builder.json"),
+        },
+      } as never);
+      setNonInteractive(true);
+      expect(
+        await runMigrate(
+          {
+            cwd: site,
+            quiet: true,
+            throwOnFailure: true,
+            step: retypes,
+          } as never,
+          context
+        ).then(
+          () => "applied",
+          (error: unknown) => error
+        )
+      ).toBe("applied");
+      await adapter.executeQuery(
+        `INSERT INTO ${q("dc_notes")} (${q("id")}, ${q("slug")}, ${q("title")}) VALUES ('n1', 'n1', 'T')`
+      );
+      for (const [locale, value] of Object.entries(values)) {
+        await adapter.executeQuery(
+          `INSERT INTO ${q("dc_notes_locales")} (${q("_parent")}, ${q("_locale")}, ${q("v")}) VALUES ('n1', '${locale}', '${value}')`
+        );
+      }
+      return { site, adapter, files };
+    }
+
+    /** The type the database gives `column` of `table`, lower-cased. */
+    async function columnType(
+      adapter: DrizzleAdapter,
+      table: string,
+      column: string
+    ): Promise<string> {
+      const rows = (await adapter.executeQuery(
+        dialect === "sqlite"
+          ? `SELECT type AS t FROM pragma_table_info('${table}') WHERE name = '${column}'`
+          : `SELECT data_type AS t FROM information_schema.columns WHERE table_name = '${table}' AND column_name = '${column}'${dialect === "mysql" ? " AND table_schema = DATABASE()" : ""}`
+      )) as Array<{ t?: string; T?: string }>;
+      return String(rows[0]?.t ?? rows[0]?.T ?? "").toLowerCase();
+    }
+
+    // A translated field's type change takes its translations column to the new type in a file of
+    // its own, written ahead of the change's: deployed, each language's value reads as a number.
+    it("converts a translated field's translations column on deploy, every language read as a number", async () => {
+      const { site, adapter } = await deployedTranslated({
+        en: "12",
+        es: "34",
+      });
+      // The type change's files are marked as deleting data, as any type change's is: the deploy
+      // gives the consent naming both columns.
+      vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", "dc_notes.v,dc_notes_locales.v");
+
+      expect(
+        await runMigrate(
+          { cwd: site, quiet: true, throwOnFailure: true } as never,
+          context
+        ).then(
+          () => "applied",
+          (error: unknown) => error
+        )
+      ).toBe("applied");
+
+      expect(await columnType(adapter, "dc_notes_locales", "v")).not.toMatch(
+        /char|text/
+      );
+      const rows = (await adapter.executeQuery(
+        `SELECT ${q("_locale")} AS locale, ${q("v")} AS v FROM ${q("dc_notes_locales")} ORDER BY ${q("_locale")}`
+      )) as Array<{ locale: string; v: unknown }>;
+      expect(rows.map(row => [row.locale, Number(row.v)])).toEqual([
+        ["en", 12],
+        ["es", 34],
+      ]);
+      await rm(site, { recursive: true, force: true });
+    }, 240_000);
+
+    // Each language's value is judged before the change's first file: a value only `es` holds
+    // that no number reads refuses the run, naming that row, and the column keeps its type.
+    it("refuses a deploy over a value one language holds that no number reads, before any statement", async () => {
+      const { site, adapter } = await deployedTranslated({
+        en: "12",
+        es: "abc",
+      });
+      vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", "dc_notes.v,dc_notes_locales.v");
+
+      const refused = await runMigrate(
+        { cwd: site, quiet: true, throwOnFailure: true } as never,
+        context
+      ).then(
+        () => "applied",
+        (error: unknown) => error
+      );
+
+      expect(NextlyError.is(refused)).toBe(true);
+      const errors = (
+        refused as {
+          publicData?: {
+            errors?: { path: string; code: string; message: string }[];
+          };
+        }
+      ).publicData?.errors;
+      expect(errors).toEqual([
+        expect.objectContaining({
+          path: "fields.v",
+          code: "TYPE_CHANGE_LOSES_VALUES",
+          message: expect.stringMatching(/\bes\b/),
+        }),
+      ]);
+      expect(await columnType(adapter, "dc_notes_locales", "v")).toMatch(
+        /char|text/
+      );
+      await rm(site, { recursive: true, force: true });
+    }, 240_000);
   }
 );

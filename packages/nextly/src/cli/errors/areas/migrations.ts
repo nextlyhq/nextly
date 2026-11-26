@@ -5,27 +5,47 @@
  * @module cli/errors/areas/migrations
  */
 
+import {
+  perLanguageDriftNext,
+  perLanguageMoveWhy,
+  type PerLanguageMove,
+} from "../../../domains/i18n/per-language-move-guidance";
+import { builderMigrationRemedy } from "../../../domains/schema/migrate/builder-migration-remedy";
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
-import { dialectVariantOf } from "../../../domains/schema/migrate/dialect-variant";
+import {
+  dialectVariantOf,
+  migrationNameOf,
+} from "../../../domains/schema/migrate/dialect-variant";
 import { shellQuote } from "../../../domains/schema/migrate/drift-error";
 import {
   BLANK_FILE_LINE,
   HISTORY_FORKED_REASON,
-} from "../../../domains/schema/migrate/history-line";
+  MIGRATION_PLACE_STATED_TWICE_REASON,
+} from "../../../domains/schema/migrate/history-line-names";
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
-import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
 import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
+import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-repeats-advice";
 import {
   WRITER_HOLD_HELD_REASON,
   WRITER_HOLD_LOST_REASON,
   WRITER_NOT_WRITTEN_REASON,
   WRITER_START_MOVED_REASON,
-} from "../../../domains/schema/migrate-create/writer-hold";
+} from "../../../domains/schema/migrate-create/writer-hold-reasons";
+import {
+  APPLIED_MIGRATION_FILE_MISSING_REASON,
+  APPLIED_SNAPSHOT_INVALID_REASON,
+  APPLIED_SNAPSHOT_MISSING_REASON,
+  MIGRATION_SNAPSHOTS_UNREADABLE_REASON,
+} from "../../../domains/schema/repair-columns/stop-reasons";
 import { NextlyError } from "../../../errors/nextly-error";
-import { builderMigrationRemedy } from "../../utils/migration-discovery";
 import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-import { asSentence, deepestMessage, sentences } from "../messages";
+import {
+  asSentence,
+  contextParts,
+  deepestMessage,
+  sentences,
+} from "../messages";
 
 /**
  * A command's refusal once what the operator agreed to changed before it could act
@@ -530,6 +550,33 @@ function forkedHistoryParts(error: NextlyError): CliErrorParts {
     : { what: part("what"), why: part("why"), next: part("next") };
 }
 
+/**
+ * A migration whose files state different places, as the three parts it was built from
+ * (`placeStatedTwiceError`); the whole message stands where they are not there.
+ */
+function placeStatedTwiceParts(error: NextlyError): CliErrorParts {
+  return (
+    contextParts(error) ?? {
+      what: error.publicMessage,
+      why: "A migration has one place in the history, and its files state two.",
+      next: "Make the `-- Parent:` and `-- Merges:` lines the same in every file of the migration, or keep them in the base file alone.",
+    }
+  );
+}
+
+/**
+ * A refusal over what another owner built on the app's tables, as its three parts: its first
+ * sentence says what was refused, its last the step, and those between name each element.
+ */
+function refusalOverOthersElements(error: NextlyError): CliErrorParts {
+  const said = sentences(error.publicMessage);
+  return {
+    what: said[0] ?? error.publicMessage,
+    why: said.slice(1, -1).join(" "),
+    next: said.length > 1 ? said[said.length - 1] : "Run it again.",
+  };
+}
+
 /** A writer of migration files that another overtook, as its three parts. */
 function overtakenParts(error: NextlyError): CliErrorParts {
   return refusalParts(error, "Another run wrote a migration meanwhile.");
@@ -540,19 +587,27 @@ function overtakenParts(error: NextlyError): CliErrorParts {
  * (`notWrittenError`); the whole message stands where they are not there.
  */
 function notWrittenParts(error: NextlyError): CliErrorParts {
-  const parts = error.logContext?.parts as
-    | Partial<Record<"what" | "why" | "next", unknown>>
-    | undefined;
-  const { what, why, next } = parts ?? {};
-  return typeof what === "string" &&
-    typeof why === "string" &&
-    typeof next === "string"
-    ? { what, why, next }
-    : {
-        what: error.publicMessage,
-        why: "A file of the migration could not be moved to its name.",
-        next: "Check that the migrations folder can be written to, then run it again.",
-      };
+  return (
+    contextParts(error) ?? {
+      what: error.publicMessage,
+      why: "A file of the migration could not be moved to its name.",
+      next: "Check that the migrations folder can be written to, then run it again.",
+    }
+  );
+}
+
+/**
+ * What `nextly repair-columns` stopped on in the migration snapshots, as the parts the refusal was
+ * built from (`repair-columns/stop-errors`).
+ */
+function snapshotStopParts(error: NextlyError): CliErrorParts {
+  return (
+    contextParts(error) ?? {
+      what: "The migration snapshots could not be read.",
+      why: "They record what the database last had applied, and one of an applied migration could not be used.",
+      next: "Restore the migrations folder from version control, then run it again.",
+    }
+  );
 }
 
 export const MIGRATION_CODES = defineCodes({
@@ -569,6 +624,39 @@ export const MIGRATION_CODES = defineCodes({
         code: "CONFLICT",
         reason: HISTORY_FORKED_REASON,
         describe: forkedHistoryParts,
+      },
+    ],
+  },
+  FOREIGN_ELEMENT_REMOVED: {
+    cause:
+      "A change would remove an element another owner, such as a plugin, built on one of the app's tables, so it was refused and changed nothing.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "field-change-removes-others-elements",
+        describe: refusalOverOthersElements,
+      },
+    ],
+  },
+  OWNER_RECORD_UNREADABLE: {
+    cause:
+      "The record of what other owners built on the app's tables could not be read, so the command changed nothing.",
+    from: [
+      {
+        code: "SERVICE_UNAVAILABLE",
+        reason: "field-change-removes-others-elements-unreadable",
+        describe: refusalOverOthersElements,
+      },
+    ],
+  },
+  MIGRATION_PLACE_STATED_TWICE: {
+    cause:
+      "The files of one migration (its base file and a dialect's variant) state different places in the history, so the command refused and changed nothing.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: MIGRATION_PLACE_STATED_TWICE_REASON,
+        describe: placeStatedTwiceParts,
       },
     ],
   },
@@ -1275,13 +1363,44 @@ export const MIGRATION_CODES = defineCodes({
   },
   MISSING_SNAPSHOT: {
     cause: "A migration file has no snapshot file beside it in `meta/`.",
+    from: [
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: APPLIED_SNAPSHOT_MISSING_REASON,
+        describe: snapshotStopParts,
+      },
+    ],
   },
   INVALID_SNAPSHOT: {
     cause:
       "A migration's snapshot file is not valid JSON, or not a snapshot this version of Nextly reads.",
+    from: [
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: APPLIED_SNAPSHOT_INVALID_REASON,
+        describe: snapshotStopParts,
+      },
+    ],
   },
   MISSING_MIGRATION: {
     cause: "A snapshot file in `meta/` has no migration file beside it.",
+    from: [
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: APPLIED_MIGRATION_FILE_MISSING_REASON,
+        describe: snapshotStopParts,
+      },
+    ],
+  },
+  MIGRATION_SNAPSHOTS_UNREADABLE: {
+    cause: "The migration snapshots are there and could not be read from disk.",
+    from: [
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: MIGRATION_SNAPSHOTS_UNREADABLE_REASON,
+        describe: snapshotStopParts,
+      },
+    ],
   },
   SCHEMA_DRIFT: {
     cause:
@@ -1342,17 +1461,29 @@ export function migrationSnapshotMissing(
   sqlName: string,
   metaDir: string
 ): CliError {
-  // As `migrate:resolve` finds a file: a dialect's variant by the name its group shares. Quoted
-  // as one shell argument, since a hand-added file's name may hold a space or a quote.
-  const resolveName = shellQuote(
-    dialectVariantOf(sqlName)?.baseName ?? sqlName.replace(/\.sql$/, "")
-  );
+  // As `migrate:resolve` finds a file and migrate:check pairs it with a snapshot: a dialect's
+  // variant by the name its group shares.
+  const group = migrationNameOf(sqlName);
   return new CliError("MISSING_SNAPSHOT", {
     what: `\`${sqlName}\` has no paired snapshot file in ${metaDir}.`,
-    why: `Nothing is at \`${sqlName.replace(/\.sql$/, "")}.snapshot.json\`, which \`migrate:create\` writes beside every migration it generates, and the file does not say it is a blank migration, which has none; a migration generated before snapshots were written has none either.`,
-    // A file already applied keeps its name: under a new one the database would run it again.
-    next: `Restore the snapshot if it was deleted. For SQL you wrote yourself: if no database has applied the file, re-create it with \`nextly migrate:create --blank\` and copy the SQL across; if one has, add the line \`${BLANK_FILE_LINE}\` to its header instead, then accept the edit with \`nextly migrate:resolve --applied ${resolveName} --skip-verify\` on every database that has applied it. Otherwise delete the file.`,
+    why: `Nothing is at \`${group}.snapshot.json\`, which \`migrate:create\` writes beside every migration it generates, and the file does not say it is a blank migration, which has none; a migration generated before snapshots were written has none either.`,
+    next: snapshotMissingNext(sqlName, group),
   });
+}
+
+/**
+ * What to do about a file `migrationSnapshotMissing` names. A file already applied keeps its
+ * name: under a new one the database would run it again. A dialect's variant keeps its file
+ * too: `migrate:create --blank` writes a file every dialect runs, which one dialect's SQL is not.
+ */
+function snapshotMissingNext(sqlName: string, group: string): string {
+  // Quoted as one shell argument, since a hand-added file's name may hold a space or a quote.
+  const accept = `accept the edit with \`nextly migrate:resolve --applied ${shellQuote(group)} --skip-verify\` on every database that has applied it`;
+  const mark = `add the line \`${BLANK_FILE_LINE}\` to its header`;
+  if (dialectVariantOf(sqlName) !== undefined) {
+    return `Restore the snapshot if it was deleted. For SQL you wrote yourself for this dialect, ${mark}; if a database has applied the file, then ${accept}. Otherwise delete the file.`;
+  }
+  return `Restore the snapshot if it was deleted. For SQL you wrote yourself: if no database has applied the file, re-create it with \`nextly migrate:create --blank\` and copy the SQL across; if one has, ${mark} instead, then ${accept}. Otherwise delete the file.`;
 }
 
 /** A snapshot file that could not be read, in `SnapshotFileError`'s words. */
@@ -1384,11 +1515,23 @@ export function snapshotWithoutMigration(
 const CREATE_MIGRATION =
   'Run `nextly migrate:create --name="<migration-name>"` and commit the result.';
 
-/** Schema changes no migration holds, each as a line of the drift list. */
+/**
+ * Schema changes no migration holds, each as a line of the drift list. Where some are text-like
+ * fields moving to their per-language table (`moves`), the move is explained and the two safe
+ * ways forward replace the bare remedy, which would read as consent to drop the columns.
+ */
 export function schemaChangeWithoutMigration(
   count: number,
-  lines: readonly string[]
+  lines: readonly string[],
+  moves: readonly PerLanguageMove[] = []
 ): CliError {
+  if (moves.length > 0) {
+    return new CliError("SCHEMA_DRIFT", {
+      what: `${count} pending schema change(s) detected.`,
+      why: [...lines, perLanguageMoveWhy(moves)].join("\n"),
+      next: perLanguageDriftNext(moves, count, CREATE_MIGRATION),
+    });
+  }
   return new CliError("SCHEMA_DRIFT", {
     what: `${count} pending schema change(s) detected.`,
     why: lines.join("\n"),

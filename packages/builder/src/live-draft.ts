@@ -14,7 +14,9 @@
  *   not a value yet (`12p`, half a hex colour, an emptied field) writes
  *   nothing, so the document and the canvas keep the last value that was one.
  *   The field shows its own message as it does on blur, and leaving the field
- *   settles the text as before.
+ *   settles the text as before. A field may also take back what its
+ *   keystrokes wrote when the edit ends on refused text (`withdraw`), as a
+ *   colour field does.
  * - **The field's own writes leave its text alone.** The document answers a
  *   write in its own spelling (`24` is stored as `24px`), and a draft that
  *   followed it would move the caret and the text under the author's fingers.
@@ -27,7 +29,11 @@
 import { trimCssWhitespace } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { useFieldEdit, useTypedFieldEdit } from "./field-edit";
+import {
+  useDraftFieldEdit,
+  useFieldEdit,
+  useTypedFieldEdit,
+} from "./field-edit";
 import { joinTyping, typingEpoch } from "./typing-run";
 
 /** A field's draft over the stored value, written as it is typed. */
@@ -58,6 +64,13 @@ export interface LiveDraft {
    * last keystroke wrote takes the stored spelling ("24" shows as stored).
    */
   readonly end: () => void;
+  /**
+   * Take back what this stretch's keystrokes wrote, recording nothing, and
+   * keep the text shown: for an edit that ends on text the field refuses, so
+   * the document does not keep a value the field says it is not. Answers
+   * whether the document went back.
+   */
+  readonly withdraw: () => boolean;
 }
 
 /**
@@ -118,6 +131,10 @@ export function useLiveDraft(
   // Set without typing: a draft over the stored value, as every field's is.
   const setDraft = useFieldEdit(stored, show);
   const edit = useTypedFieldEdit();
+  // The edit while the text shown is a keystroke the field did not write (a
+  // colour name, which is written when the edit ends): a draft of the
+  // document's, so the page counts it as unsaved and a save writes it first.
+  const held = useDraftFieldEdit();
   const cancelTyping = React.useContext(TypingCancel);
   const stretch = React.useRef<Stretch>({
     run: null,
@@ -127,7 +144,16 @@ export function useLiveDraft(
     wrote: null,
     answered: null,
   }).current;
+  // The stored text a withdrawal puts back, which the draft does not follow:
+  // the refused text stays in the field for the author to correct.
+  const withdrawnTo = React.useRef<string | null>(null);
   React.useEffect(() => {
+    const kept = withdrawnTo.current;
+    withdrawnTo.current = null;
+    if (kept === stored) {
+      idle(stretch);
+      return;
+    }
     if (stretch.own) {
       stretch.own = false;
       stretch.answered = stored;
@@ -136,8 +162,9 @@ export function useLiveDraft(
     // Moved underneath the field, so what it was typing no longer applies.
     idle(stretch);
     edit.end();
+    held.end();
     show(stored);
-  }, [stored, stretch, edit]);
+  }, [stored, stretch, edit, held]);
   return React.useMemo(() => {
     // Escape mid-stretch: the document as it was before the first keystroke,
     // with nothing recorded, and the field showing it again.
@@ -164,11 +191,19 @@ export function useLiveDraft(
           stretch.epoch = typingEpoch();
           stretch.before = stored;
         }
-        edit.begin(putBack);
-        if (joinTyping(stretch.run, () => write(next))) {
+        const wrote = joinTyping(stretch.run, () => write(next));
+        if (wrote) {
           stretch.own = true;
           stretch.wrote = next;
           stretch.answered = null;
+        }
+        // Text the document does not hold is a draft until the edit ends.
+        if (wrote || next === stored) {
+          held.end();
+          edit.begin(putBack);
+        } else {
+          edit.end();
+          held.begin(putBack);
         }
       },
       join: write =>
@@ -180,9 +215,19 @@ export function useLiveDraft(
         }
         idle(stretch);
         edit.end();
+        held.end();
+      },
+      withdraw: () => {
+        const { run, wrote, before } = stretch;
+        // Nothing written, or the document already back where it began.
+        if (run === null || wrote === null) return false;
+        if (storedNow.current === before) return false;
+        if (cancelTyping?.(run) !== true) return false;
+        withdrawnTo.current = before;
+        return true;
       },
     };
-  }, [draft, setDraft, stored, stretch, edit, cancelTyping]);
+  }, [draft, setDraft, stored, stretch, edit, held, cancelTyping]);
 }
 
 /**

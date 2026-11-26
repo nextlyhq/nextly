@@ -41,6 +41,7 @@ import {
 } from "@admin/components/field-ui/settings-panel";
 import { Trash2 } from "@admin/components/icons";
 import { toSnakeName } from "@admin/lib/builder";
+import { changeTypeOffered } from "@admin/lib/builder/change-type";
 import {
   builderNameProblem,
   nameSurfaceOf,
@@ -66,6 +67,7 @@ import {
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 import { AdvancedTab } from "./builder-field-settings/AdvancedTab";
 import { RenameFieldAction } from "./builder-field-settings/RenameFieldAction";
+import { useOpenChangeType } from "./change-type-context";
 import { FieldErrorNotice } from "./FieldErrorNotice";
 import type { BuilderField } from "./types";
 
@@ -238,6 +240,8 @@ function panelStateOf(
   fieldTitle: string;
   /** Whether Rename… is offered: a saved, changeable field with a column of its own. */
   renamable: boolean;
+  /** Whether Change type… is offered (`changeTypeOffered`), as a row's menu asks it. */
+  typeChangeable: boolean;
   /** What the panel says beside a saved field's fixed name. */
   nameFixedReason: string;
 } {
@@ -257,13 +261,18 @@ function panelStateOf(
       fieldReadOnly,
       namedByHooks
     ),
+    typeChangeable: changeTypeOffered(field, fieldReadOnly),
     nameFixedReason: unavailable ?? RENAME_HOW,
   };
 }
 
-/** The panel's header actions: Rename… for a field it can rename, and Delete. */
+/**
+ * The panel's header actions: Change type… for a field whose type can change here, Rename… for a
+ * field it can rename, and Delete.
+ */
 function FieldActions({
   field,
+  typeChangeable,
   renamable,
   startRenaming,
   checkName,
@@ -272,6 +281,7 @@ function FieldActions({
   onDelete,
 }: {
   field: BuilderField;
+  typeChangeable: boolean;
   renamable: boolean;
   startRenaming: boolean;
   checkName: (name: string) => string | null;
@@ -279,8 +289,21 @@ function FieldActions({
   canDelete: boolean;
   onDelete: () => void;
 }): JSX.Element {
+  // The page's Change type…, where it offers one (`ChangeTypeProvider`).
+  const openChangeType = useOpenChangeType();
   return (
     <>
+      {typeChangeable && openChangeType && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-muted-foreground"
+          onClick={() => openChangeType(field.id)}
+        >
+          Change type…
+        </Button>
+      )}
       {renamable && (
         <RenameFieldAction
           field={field}
@@ -385,7 +408,7 @@ export function BuilderFieldSettings({
   );
 
   // Above the panel: where a read-only field is defined, and what the field lacks that the save
-  // would refuse it for.
+  // would refuse it for, or why the server refused its move.
   const definedAt = (
     <>
       <DefinedAt reason={reason} onOpenFieldGroup={onOpenFieldGroup} />
@@ -413,6 +436,7 @@ export function BuilderFieldSettings({
       actions={
         <FieldActions
           field={field}
+          typeChangeable={state.typeChangeable}
           renamable={state.renamable}
           startRenaming={rename?.asked === true}
           checkName={checkName}

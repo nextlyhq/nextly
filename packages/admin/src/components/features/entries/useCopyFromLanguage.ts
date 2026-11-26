@@ -23,6 +23,7 @@ import { useFormContext } from "react-hook-form";
 import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
+import { withTextFrom } from "./container-text";
 import { copiedValuesFor } from "./copied-values";
 import { useEntryLocale } from "./EntryLocaleContext";
 
@@ -81,6 +82,7 @@ export function useCopyFromLanguage(): CopyFromLanguage {
     locale,
     collectionLocalized,
     localizedFieldNames,
+    textContainers,
     fetchSourceValues,
     seedFromLocale,
     onSeedHandled,
@@ -99,8 +101,8 @@ export function useCopyFromLanguage(): CopyFromLanguage {
     enabled &&
     collectionLocalized &&
     !!fetchSourceValues &&
-    !!localizedFieldNames &&
-    localizedFieldNames.length > 0 &&
+    ((!!localizedFieldNames && localizedFieldNames.length > 0) ||
+      (!!textContainers && textContainers.length > 0)) &&
     sources.length > 0 &&
     !!form;
 
@@ -129,22 +131,39 @@ export function useCopyFromLanguage(): CopyFromLanguage {
     try {
       // The form supplies the read; it knows how this document is addressed.
       const source = await fetchSourceValues(pending);
-      const patch = pickLocalizedValues(source, localizedFieldNames);
-      const count = Object.keys(patch).length;
+      const patch = pickLocalizedValues(source, localizedFieldNames ?? []);
+      // The text inside each repeater's or group's rows, laid on this language's own rows by row
+      // id: the rows, their order and their shared values are every language's, never copied.
+      const containerPatch: Record<string, unknown> = {};
+      for (const field of textContainers ?? []) {
+        const name = (field as { name?: unknown }).name;
+        if (typeof name !== "string" || !(name in source)) continue;
+        const current: unknown = form.getValues(name);
+        const merged = withTextFrom(current, source[name], field, true);
+        if (JSON.stringify(merged) !== JSON.stringify(current)) {
+          containerPatch[name] = merged;
+        }
+      }
+      const count =
+        Object.keys(patch).length + Object.keys(containerPatch).length;
       if (count === 0) {
         toast.info(`${pendingLabel} has no content to copy.`);
         return;
       }
       // Fill the form (dirty, so the user can review then save — or discard to revert).
-      for (const [name, value] of Object.entries(patch)) {
+      for (const [name, value] of Object.entries({
+        ...patch,
+        ...containerPatch,
+      })) {
         form.setValue(name, value, { shouldDirty: true, shouldValidate: true });
       }
       // Noted, so the save says these were copied from that language
       // rather than written by the person.
       // With the version of the source the read gave, so the server can tell a copy of the source
-      // as it stands from one of a source that has moved since.
+      // as it stands from one of a source that has moved since. A container's copied text inside
+      // its rows is claimed too, so its rows' text is recorded as copied, row by row.
       copiedValuesFor(form.control).record(
-        patch,
+        { ...patch, ...containerPatch },
         pending,
         typeof source._rev === "string" ? source._rev : undefined
       );

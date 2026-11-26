@@ -68,7 +68,7 @@ export function useBuilderFieldActions(
       const userFields = builder.fields.filter(
         f => !f.isSystem && !builtInNames.includes(f.name)
       );
-      const validation = builder.validateFields(userFields);
+      const validation = builder.validateFields(userFields, saved);
       if (!validation.valid) {
         // `errorMessage` is optional on the result, so a validator reporting
         // invalid without saying why would raise an empty toast — a refusal the
@@ -79,13 +79,14 @@ export function useBuilderFieldActions(
         return null;
       }
       // The last gate before a save: a move the rule allowed (into a nameless
-      // group) can become a change of level later in the same draft, when that
-      // group is given a name. Judged here on the fields as they stand.
+      // group) can become a change of level into or out of repeating rows
+      // later in the same draft, when that group is given a name. Judged here
+      // on the fields as they stand.
       const off = saved ? savedFieldsOffTheirLevel(saved, userFields) : [];
       if (off.length > 0) {
         const names = off.map(field => field.label || field.name).join(", ");
         toast.error(
-          `${names} would move into or out of a group or repeating rows, which is not available yet: a save would not keep the values. Undo that change first.`
+          `${names} would move into or out of repeating rows, which is not available yet: a save would not keep the values. Undo that change first.`
         );
         return null;
       }

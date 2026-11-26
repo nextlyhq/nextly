@@ -37,6 +37,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { LoadConfigResult } from "../cli/utils/config-loader";
 import type { SchemaRegistry } from "../database/schema-registry";
+import { emitHeldBuilderWarning } from "../di/builder-problems-at-start";
 import type { FieldGroupNaming } from "../domains/field-groups/services/field-group-storage-names";
 import { perLanguageStorageEnabled } from "../domains/i18n/per-language-storage";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
@@ -155,6 +156,10 @@ export async function runBootTimeApplyIfDev(opts?: {
         `HMR fires, or you run \`nextly db:sync\`. ` +
         `Set NEXTLY_BOOT_APPLY_FAIL_LOUDLY=1 for full error details.`
     );
+  } finally {
+    // Where no reload read the definition file (a save left unsettled, a step that failed), what
+    // the start found in the Builder's rows is said here.
+    emitHeldBuilderWarning();
   }
 }
 
@@ -661,10 +666,10 @@ async function applyPendingMigrations(label: string): Promise<number> {
     });
     // Compiled from the same config the CLI compiles from; see
     // `MigrateCoreDeps.extensionSchema` for why it is passed, not read.
-    const { compileExtensionSchema } = await import(
-      "../domains/schema/extension/publish"
-    );
-    const extensionSchema = await compileExtensionSchema({
+    // A collection handed to the Schema Builder as its record has it, as this
+    // start's registration compiled its hooks.
+    const { compileForStart } = await import("../di/development-start-hooks");
+    const { schema: extensionSchema } = await compileForStart(drizzleAdapter, {
       dialect: drizzleAdapter.dialect,
       plugins: configResult.config.plugins ?? [],
       config: configResult.config,

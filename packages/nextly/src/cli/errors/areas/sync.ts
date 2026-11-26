@@ -79,6 +79,14 @@ export const SYNC_CODES = defineCodes({
     cause:
       "`db:sync --demote` names a collection that `nextly.config.ts` does not define.",
   },
+  DEMOTE_PLUGIN_COLLECTION: {
+    cause:
+      "`db:sync --demote` names a collection a plugin contributes, which stays the plugin's.",
+  },
+  DEMOTE_LOSES_UNIQUE_INDEX: {
+    cause:
+      "`db:sync --demote` names a collection with a unique index declared in `indexes`, which the Schema Builder cannot hold.",
+  },
   SYNC_CONFIRMATION_REQUIRED: {
     cause:
       "`db:sync --promote` or `--demote` has a confirmation to ask, no terminal is attached to ask it, and `--yes` was not given, so nothing was changed.",
@@ -174,6 +182,31 @@ export function demoteCollectionNotFound(slug: string): CliError {
     what: `Collection '${slug}' not found in nextly.config.ts collections.`,
     why: "`--demote` moves a collection defined in `nextly.config.ts` to the Schema Builder, and its `collections` array has none with this slug.",
     next: "Check the slug against the `collections` array in `nextly.config.ts`. A collection built in the Schema Builder is already there and needs no demotion.",
+  });
+}
+
+/** `db:sync --demote <slug>` for a slug a plugin contributes a collection under. */
+export function demotePluginCollection(slug: string, plugin: string): CliError {
+  return new CliError("DEMOTE_PLUGIN_COLLECTION", {
+    what: `Collection '${slug}' is contributed by the plugin '${plugin}', so it cannot be demoted.`,
+    why: "`--demote` hands a collection the app's own `nextly.config.ts` defines to the Schema Builder. A plugin registers its collections again at every start, so a plugin's collection stays the plugin's.",
+    next: `Leave '${slug}' to '${plugin}', and change it through that plugin's options.`,
+  });
+}
+
+/**
+ * `db:sync --demote <slug>` for a collection whose unique indexes, each by the fields it is declared
+ * on, the Schema Builder's record cannot hold.
+ */
+export function demoteLosesUniqueIndex(
+  slug: string,
+  indexes: readonly (readonly string[])[]
+): CliError {
+  const named = indexes.map(fields => `(${fields.join(", ")})`).join(" and ");
+  return new CliError("DEMOTE_LOSES_UNIQUE_INDEX", {
+    what: `Collection '${slug}' was not demoted: it would lose its unique index${indexes.length === 1 ? "" : "es"} on ${named}.`,
+    why: "The Schema Builder cannot hold an index declared in `indexes`. The next schema sync would drop it, and entries that repeat those values would be accepted from then on, unless another unique field refuses them.",
+    next: `Keep '${slug}' in code, or give the rule up first: take it out of \`indexes\` in \`nextly.config.ts\` (an index on one field can be \`unique: true\` on that field instead), then demote.`,
   });
 }
 

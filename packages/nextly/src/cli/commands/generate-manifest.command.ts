@@ -5,6 +5,7 @@
 import type { Command } from "commander";
 
 import { withDryRun } from "../dry-run";
+import { declareFirstLine, startLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -15,26 +16,30 @@ import { lazyAction } from "../lazy-action";
 export function registerGenerateManifestCommand(program: Command): void {
   // `--dry-run` carries the one meaning and help line it has everywhere;
   // `--check` stays the CI gate that exits non-zero on drift.
-  withDryRun(
-    program
-      .command("generate:manifest")
-      .description(
-        "Generate the block manifest from plugin declarations, or check it is current"
-      ),
-    // Each sets its own exit code, so the two together are refused.
-    { conflicts: ["check"] }
-  )
-    .option(
-      "-o, --output <path>",
-      "Types output path the manifest is written beside"
+  declareFirstLine(
+    withDryRun(
+      program
+        .command("generate:manifest")
+        .description(
+          "Generate the block manifest from plugin declarations, or check it is current"
+        ),
+      // Each sets its own exit code, so the two together are refused.
+      { conflicts: ["check"] }
     )
-    .option(
-      "--check",
-      "Write nothing; exit non-zero if the committed manifest is stale"
-    )
-    .action(
-      lazyAction(
-        async () => (await import("./generate-manifest")).generateManifestAction
+      .option(
+        "-o, --output <path>",
+        "Types output path the manifest is written beside"
       )
-    );
+      .option(
+        "--check",
+        "Write nothing; exit non-zero if the committed manifest is stale"
+      )
+      .action(
+        lazyAction(
+          async () =>
+            (await import("./generate-manifest")).generateManifestAction
+        )
+      ),
+    startLine("Generating the block manifest...", "no database")
+  );
 }

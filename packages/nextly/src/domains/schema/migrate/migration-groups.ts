@@ -7,11 +7,9 @@
  *
  * @module domains/schema/migrate/migration-groups
  */
-import { basename } from "node:path";
-
 import type { MigrationGroup } from "../../../cli/utils/migration-discovery";
 
-import { dialectVariantOf } from "./dialect-variant";
+import { dialectVariantOf, migrationNameOf } from "./dialect-variant";
 
 /** `files` grouped by base name, each group with its dialect variants. */
 export function groupMigrationFiles(
@@ -24,9 +22,8 @@ export function groupMigrationFiles(
   for (const file of sqlFiles) {
     // A dialect suffix (`.mysql.sql`) names a variant of its base's group;
     // read once, as the old-Builder reading reads it.
-    const variant = dialectVariantOf(file);
-    const baseName = variant?.baseName ?? basename(file, ".sql");
-    const dialect = variant?.dialect;
+    const baseName = migrationNameOf(file);
+    const dialect = dialectVariantOf(file)?.dialect;
 
     // Get or create the group for this base name
     let group = migrationGroups.get(baseName);

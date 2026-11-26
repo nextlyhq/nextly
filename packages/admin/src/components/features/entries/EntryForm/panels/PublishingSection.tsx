@@ -2,41 +2,33 @@
 
 /**
  * The panel's Publishing section: the release this document is scheduled in
- * and when, or that it is not scheduled.
+ * and when, drawn only while it is in one.
  *
  * Scheduling in Nextly is a release: a document goes live, or comes down, when
  * a release holding it falls due. So this reads the same answer the
  * scheduled-release banner reads, with the same request (`useReleasesContaining`
  * keyed by the same document), which the two share rather than ask twice.
  *
- * Shown only to someone who may read releases: the list is gated, and a
- * "Not scheduled" said without reading it would be a guess.
- *
- * Under "Not scheduled", the editor's own "Schedule publish…": the same action
- * the Publish split offers, run through the editor's action model, so it is
- * held for the same reasons and says why in the same words.
+ * Shown only to someone who may read releases: the list is gated. A document
+ * in no release draws no section at all, rather than a "Not scheduled" card on
+ * every document: scheduling is a row of the main button's menu, the one place
+ * it is offered, and the panel shows the time only once one is set.
  *
  * @module components/features/entries/EntryForm/panels/PublishingSection
  */
 
 import type { JSX } from "react";
-import { useId } from "react";
 
 import { SCHEDULE_OUTCOME_ATTRIBUTE } from "@admin/components/features/releases/dialog-opener";
 import {
   describeRelease,
   formatScheduledAt,
 } from "@admin/components/features/releases/release-schedule";
-import { SCHEDULE_PUBLISH_ACTION_ID } from "@admin/components/features/releases/schedule-publish";
-import { Button, Skeleton } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useReleasesContaining } from "@admin/hooks/queries/useReleasesContaining";
 import { useCan } from "@admin/hooks/useCan";
 import type { Release, ReleaseDocumentRef } from "@admin/types/releases";
-
-import { reasonFor } from "../DocumentActionBar";
-import { useDocumentActionsContext } from "../DocumentActionsContext";
 
 import { PanelSection } from "./PanelSection";
 
@@ -53,166 +45,42 @@ export function PublishingSection({
   document: ReleaseDocumentRef | undefined;
 }): JSX.Element | null {
   const canRead = useCan("read-content-releases");
-  const { data, isError, isPending } = useReleasesContaining(document, canRead);
+  const { data, isError } = useReleasesContaining(document, canRead);
   if (!canRead || document === undefined) return null;
+  const releases = data?.items ?? [];
+  // Nothing to say while the answer is out, or once it says no release holds
+  // the document. A lookup that failed is not an empty schedule, so it says
+  // so: silence would hide a pending change exactly when the admin cannot
+  // confirm it.
+  if (!isError && releases.length === 0) return null;
 
   return (
-    // Takes focus once a schedule made from its own offer lands: the offer
-    // goes with "Not scheduled.", and the section names the release next.
+    // Marked as the place that shows a schedule's outcome, which
+    // `focusAfterScheduling` moves focus to when the dialog's opener sits
+    // inside it.
     <PanelSection title="Publishing" focusTarget={SCHEDULE_OUTCOME_ATTRIBUTE}>
-      <PublishingBody
-        releases={data?.items}
-        isError={isError}
-        isPending={isPending}
-      />
-    </PanelSection>
-  );
-}
-
-/** "Not scheduled." over the offer to schedule, and the place both hold while the answer is out. */
-const NOT_SCHEDULED_LAYOUT = "flex flex-col items-start gap-2";
-
-function PublishingBody({
-  releases,
-  isError,
-  isPending,
-}: {
-  releases: Release[] | undefined;
-  isError: boolean;
-  isPending: boolean;
-}) {
-  // A lookup that failed is not an empty schedule: saying "Not scheduled"
-  // would hide a pending change exactly when the admin cannot confirm it.
-  if (isError) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Whether this is in a scheduled release could not be checked.
-      </p>
-    );
-  }
-  if (isPending || releases === undefined) {
-    // Laid out as the answer most documents get, "Not scheduled." over the
-    // offer to schedule: a bar on the sentence's line, and the offer's own
-    // button held unseen, so the sections under this one stay where they are
-    // when that answer lands.
-    return (
-      <div aria-busy="true" className={NOT_SCHEDULED_LAYOUT}>
-        <span className="sr-only">Checking releases</span>
-        {/* A div, not a paragraph: the bar is a block element, and a
-            paragraph around it is invalid HTML that React reports. */}
-        <div className="flex items-center text-sm">
-          {"\u200b"}
-          <Skeleton className="h-4 w-40" />
-        </div>
-        <ScheduleButton holdingPlace />
-      </div>
-    );
-  }
-  if (releases.length === 0) {
-    return (
-      <div className={NOT_SCHEDULED_LAYOUT}>
-        <p className="text-sm text-muted-foreground">Not scheduled.</p>
-        <ScheduleButton />
-      </div>
-    );
-  }
-  return (
-    // In the order they fall due, as the list answers them: the last row is
-    // the state the document ends in.
-    <ul className="flex flex-col gap-3">
-      {releases.map(release => (
-        <li key={release.id} className="flex flex-col gap-0.5">
-          <Link
-            href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
-            className="text-sm font-medium text-foreground underline-offset-2 hover:underline"
-          >
-            {release.title}
-          </Link>
-          <span className="text-xs text-muted-foreground">
-            {whenItHappens(release)}
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/**
- * "Schedule publish…", where the editor offers it: the action the page
- * contributed to the editor's model, run as the split's menu row runs it.
- * Held with its reason as visible text, as a menu row says it: a disabled
- * button's title reaches neither a keyboard nor a touch screen.
- */
-function ScheduleButton({
-  holdingPlace = false,
-}: {
-  /**
-   * Whether this only holds the button's place while the schedule is checked:
-   * the same button and the reason line under it, unseen and out of reach.
-   */
-  holdingPlace?: boolean;
-}) {
-  const reasonId = useId();
-  const documentActions = useDocumentActionsContext();
-  const action = documentActions?.actions.find(
-    each => each.id === SCHEDULE_PUBLISH_ACTION_ID
-  );
-  const binding = documentActions?.bindings[SCHEDULE_PUBLISH_ACTION_ID];
-  if (
-    documentActions === null ||
-    action === undefined ||
-    binding === undefined
-  ) {
-    return null;
-  }
-  const reason = reasonFor(action, binding);
-  if (holdingPlace) {
-    // The reason the offer is off is known before the schedule is (a
-    // colleague holds the document), and the answer draws it under the
-    // button: its place is held too, so the sections below stay put.
-    return (
-      <>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled
-          tabIndex={-1}
-          aria-hidden="true"
-          className="invisible"
-        >
-          {action.label}
-        </Button>
-        {reason === undefined ? null : (
-          <p
-            aria-hidden="true"
-            className="invisible text-xs text-muted-foreground"
-          >
-            {reason}
-          </p>
-        )}
-      </>
-    );
-  }
-  return (
-    <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={reason !== undefined}
-        onClick={() => void documentActions.run(SCHEDULE_PUBLISH_ACTION_ID)}
-        data-action={SCHEDULE_PUBLISH_ACTION_ID}
-        {...(reason === undefined ? {} : { "aria-describedby": reasonId })}
-      >
-        {action.label}
-      </Button>
-      {reason === undefined ? null : (
-        <p id={reasonId} className="text-xs text-muted-foreground">
-          {reason}
+      {isError ? (
+        <p className="text-sm text-muted-foreground">
+          Whether this is in a scheduled release could not be checked.
         </p>
+      ) : (
+        <ul className="flex flex-col gap-3">
+          {releases.map(release => (
+            <li key={release.id} className="flex flex-col gap-0.5">
+              <Link
+                href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
+                className="text-sm font-medium text-foreground underline-offset-2 hover:underline"
+              >
+                {release.title}
+              </Link>
+              <span className="text-xs text-muted-foreground">
+                {whenItHappens(release)}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
-    </>
+    </PanelSection>
   );
 }
 

@@ -51,6 +51,7 @@ import { dirname, relative, resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { refuseWhileSaveLeftPartWay } from "../../domains/schema/builder-save/save-in-progress";
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
@@ -181,6 +182,15 @@ export interface MigrateCreateCommandOptions {
    * @default false
    */
   acceptRenames?: boolean;
+
+  /**
+   * Only meaningful when the run cannot prompt (`canPrompt`), where a field that looks moved into
+   * or out of a group is otherwise declined: deleted at its old place and added empty at its new
+   * one. Carries every such field as a move, its values copied to the new place first. The column
+   * a move drops still needs the data-loss consent, as every drop does.
+   * @default false
+   */
+  acceptMoves?: boolean;
 
   /**
    * Generate a PLUGIN's migration module instead of the app's `.sql` file.
@@ -366,6 +376,8 @@ const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
   // `upgrade`'s localisation steps: two configured language codes that become one.
   "NEXTLY_LANGUAGE_CODES_COLLIDE",
   "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
+  // A column the upgrade moves held by an index on more than it: refused before anything changes.
+  "NEXTLY_UPGRADE_COLUMN_HELD",
   // `migrate:resolve`'s checks: the file, its snapshot, the live schema
   // against it, and the ledger's state for the mode asked for.
   "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
@@ -598,6 +610,52 @@ async function within<T>(
 }
 
 /**
+ * Refuses a change whose deletions take an element another owner built on the app's tables
+ * (`removed-elements.ts`), read from the database `DATABASE_URL` names, opened read-only as the
+ * deletion counts open it. Where no database is there to read, the run says the change was not
+ * checked here: `nextly migrate` checks the file against its own database before its first
+ * statement. A database that is there but whose record of other owners' elements cannot be read
+ * refuses, as everywhere else.
+ */
+async function refuseRemovingOthersElementsIn(
+  deletions: readonly Deletion[],
+  dialect: SupportedDialect,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  if (!deletions.some(deletion => deletion.core !== true)) return;
+  const opened = await openDryRunAdapter({ dialect }).catch(
+    (error: unknown): MissingDatabase => ({
+      missing: error instanceof Error ? error.message : String(error),
+    })
+  );
+  if ("missing" in opened) {
+    logger.warn(
+      `What this migration removes was not checked against what other owners built on its tables, because no database could be read (${opened.missing}). \`nextly migrate\` checks it before running the file.`
+    );
+    return;
+  }
+  try {
+    const { databaseRemovedElementsSources, refuseRemovingOthersElements } =
+      await import("../../domains/schema/ownership/removed-elements");
+    await refuseRemovingOthersElements({
+      deletions,
+      dialect,
+      entity: "The migration",
+      // The CLI adapter is the Drizzle adapter its factory made, as every command that reads with
+      // it treats it.
+      sources: databaseRemovedElementsSources(
+        opened as unknown as DrizzleAdapter,
+        dialect
+      ),
+      // The code-first change has the fields' columns: each column names its field.
+      fieldOf: (_table, column) => column,
+    });
+  } finally {
+    await opened.disconnect();
+  }
+}
+
+/**
  * The judge `generateMigration` calls with what the plan deletes, before it
  * writes anything: counted where the database can be read, then
  *
@@ -761,6 +819,19 @@ export async function runMigrateCreate(
   });
   held.enter();
   try {
+    // A Builder save this machine left part-way against this database refuses the command, a
+    // blank migration's included: what it would write from is not what the database holds. Asked
+    // once the folder is held, so a save that started while this waited for it is seen too.
+    // Another machine's or another database's is named only.
+    try {
+      await refuseWhileSaveLeftPartWay({
+        projectRoot: cwd,
+        postgresSchema: configResult.config.db.postgres?.schema,
+        notice: line => logger.warn(line),
+      });
+    } catch (error) {
+      exitWithError(logger, error);
+    }
     // Branches written without each other that change the same thing cannot
     // be recorded as merged; ones that change different things are, below.
     await refuseUnrecordableMerge(migrationsDir);
@@ -799,6 +870,13 @@ export async function runMigrateCreate(
     if (options.acceptRenames === true && !nonInteractive) {
       logger.warn(
         "--accept-renames has no effect in interactive mode. " +
+          "Pass --non-interactive to use it (typically only for CI)."
+      );
+    }
+    // The same for moves: at a terminal, each one is asked about.
+    if (options.acceptMoves === true && !nonInteractive) {
+      logger.warn(
+        "--accept-moves has no effect in interactive mode: each possible move is asked about. " +
           "Pass --non-interactive to use it (typically only for CI)."
       );
     }
@@ -905,13 +983,18 @@ export async function runMigrateCreate(
         permissions,
         nonInteractive,
         autoAcceptRenames: options.acceptRenames === true,
+        // Fields moved into or out of a group are looked for, and asked about as renames are.
+        codeMoves: { acceptAll: options.acceptMoves === true },
         recordSnapshot: options.recordSnapshot === true,
         liveCompanionColumns: live.read,
         liveUniqueIndexes: uniques.read,
         dryRun: options.dryRun === true,
         releaseHeldBack: options.releaseHeldBack === true,
-        judgeDeletions: deletions =>
-          judgeMigrationDeletions(deletions, {
+        judgeDeletions: async deletions => {
+          // What the change removes takes no element another owner built there, judged before
+          // the consent is asked for and before anything is written.
+          await refuseRemovingOthersElementsIn(deletions, dialect, logger);
+          return judgeMigrationDeletions(deletions, {
             consent,
             dialect,
             dryRun: options.dryRun === true,
@@ -920,7 +1003,8 @@ export async function runMigrateCreate(
             counted: listed => {
               counted = listed;
             },
-          }),
+          });
+        },
       });
     } catch (error) {
       // F11 PR 3 review fix #3: distinguish "operator cancelled prompt"

@@ -23,6 +23,7 @@ export {
   type HttpMethod,
   type HookHandler,
 } from "./collections/config/define-collection";
+export type { CollectionFilesConfig } from "./collections/config/collection-files";
 export type {
   PreviewViewport,
   PreviewViewportsDeclaration,

@@ -11,6 +11,7 @@
  */
 import { useEffect, useSyncExternalStore } from "react";
 
+import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import {
   useSidebarCollectionList,
@@ -87,7 +88,11 @@ function rememberedCollections(
   collections: readonly ApiCollection[],
   customGroups: AdminBranding["customGroups"]
 ): RememberedContentItem[] {
-  return groupCollections(collections, customGroups).flatMap(group =>
+  // As the live lists draw them: a collection removed from code is kept out
+  // of the everyday lists (it waits behind the Removed fold), so the menu drawn
+  // from memory while they load never lists it among the rest.
+  const kept = collections.filter(collection => !isRemovedFromCode(collection));
+  return groupCollections(kept, customGroups).flatMap(group =>
     group.items.flatMap(collection =>
       contentItem(
         collection.name,

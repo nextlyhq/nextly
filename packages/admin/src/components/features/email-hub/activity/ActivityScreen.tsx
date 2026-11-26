@@ -6,6 +6,8 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { AlertCircle } from "@admin/components/icons";
 import {
+  EMAIL_DELIVERY_CANCEL_PERMISSIONS,
+  EMAIL_DELIVERY_RETRY_PERMISSIONS,
   EMAIL_PROVIDER_READ_PERMISSIONS,
   EMAIL_TEMPLATE_READ_PERMISSIONS,
   EMAIL_TEMPLATE_UPDATE_PERMISSIONS,
@@ -90,6 +92,7 @@ export function ActivityScreen(): JSX.Element {
   };
   const overdue = useQueuedEmailOverdue();
   const lists = useActivityLists();
+  const queuedActions = useQueuedEmailGrants();
   const now = useTickingNow();
   const filtered = isFiltered(filter);
   const [open, setOpen] = useState<OpenActivity | null>(null);
@@ -155,9 +158,22 @@ export function ActivityScreen(): JSX.Element {
         names={lists.names}
         now={now}
         fixTemplateHref={lists.fixTemplateHref}
+        queuedActions={queuedActions}
       />
     </div>
   );
+}
+
+/**
+ * Whether the reader may try a queued email again or cancel it, by the grants the server asks
+ * for each: the sheet offers neither to a reader the server would refuse.
+ */
+function useQueuedEmailGrants(): { retry: boolean; cancel: boolean } {
+  const { hasPermission } = useCurrentUserPermissions();
+  return {
+    retry: holdsAny(hasPermission, EMAIL_DELIVERY_RETRY_PERMISSIONS),
+    cancel: holdsAny(hasPermission, EMAIL_DELIVERY_CANCEL_PERMISSIONS),
+  };
 }
 
 /**

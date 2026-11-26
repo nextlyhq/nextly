@@ -27,7 +27,10 @@ type FieldErrorKind =
   | "no-target"
   | "empty-container"
   | "bad-bound"
-  | "broken-condition";
+  | "broken-condition"
+  // The server refused the draft's move of the field: not one the save's own checks report, since
+  // the server judges the move again on every save.
+  | "refused-move";
 
 /** One field's error: what kind it is, and what to tell the person. */
 export interface BuilderFieldError {
@@ -207,6 +210,9 @@ function errorOf(field: BuilderField): BuilderFieldError | null {
   return null;
 }
 
+/** No refused move, as one constant so a caller passing none keeps one value. */
+const NO_REFUSED_MOVES: ReadonlyMap<string, string> = new Map();
+
 /**
  * Every field's error, by field id, at every depth.
  *
@@ -217,13 +223,20 @@ function errorOf(field: BuilderField): BuilderFieldError | null {
  * `sources` is the whole field tree, built-in fields included: a condition may
  * read a built-in field, which `fields` (the user's own) leaves out, so a
  * condition is judged against the tree it is read in.
+ *
+ * `refusedMoves` is the server's refusal of the draft's moves, by field id
+ * (`refusedMovesOf`): each marks its field too, unless the field has an error of
+ * its own, which is named first.
  */
 export function builderFieldErrors(
   fields: readonly BuilderField[],
-  sources: readonly BuilderField[] = fields
+  sources: readonly BuilderField[] = fields,
+  refusedMoves: ReadonlyMap<string, string> = NO_REFUSED_MOVES,
+  /** The fields as last saved, for a condition naming a saved dropdown's former option. */
+  saved: readonly BuilderField[] = []
 ): Map<string, BuilderFieldError> {
   const errors = new Map<string, BuilderFieldError>();
-  const broken = brokenConditions(sources);
+  const broken = brokenConditions(sources, saved);
   const walk = (list: readonly BuilderField[]): void => {
     for (const field of list) {
       const condition = broken.get(field.id);
@@ -244,6 +257,11 @@ export function builderFieldErrors(
     }
   };
   walk(fields);
+  for (const [fieldId, message] of refusedMoves) {
+    if (!errors.has(fieldId)) {
+      errors.set(fieldId, { kind: "refused-move", message });
+    }
+  }
   return errors;
 }
 
@@ -263,9 +281,17 @@ export function builderFieldErrors(
  */
 export function validateBuilderFields(
   userFields: BuilderField[],
-  sources: readonly BuilderField[] = userFields
+  sources: readonly BuilderField[] = userFields,
+  saved: readonly BuilderField[] = []
 ): FieldBuilderValidationResult {
-  const errors = [...builderFieldErrors(userFields, sources).values()];
+  const errors = [
+    ...builderFieldErrors(
+      userFields,
+      sources,
+      NO_REFUSED_MOVES,
+      saved
+    ).values(),
+  ];
   for (const kind of REPORT_ORDER) {
     const first = errors.find(error => error.kind === kind);
     if (first) return { valid: false, errorMessage: first.message };

@@ -442,7 +442,7 @@ function EditorBody<TFieldValues extends FieldValues>({
    * work the form's own values do not contain; this composes that half with the
    * form's own dirtiness, which is what a reading of the whole document needs.
    */
-  const savePoint = usePageSavePoint(pageState);
+  const savePoint = usePageSavePoint(pageState, mount.kept);
   const documentDirty = useDocumentDirty(
     control,
     hasUnsavedWork(pageState, inline, savePoint.savedAt)
@@ -1131,9 +1131,13 @@ function usePageChecking<TFieldValues extends FieldValues>({
  * reads.
  */
 function usePageSavePoint(
-  page: EditorMount["page"]
+  page: EditorMount["page"],
+  kept: EditorMount["kept"]
 ): ReturnType<typeof useSavePoint> {
-  const savePoint = useSavePoint(page);
+  // Started where a history kept across the read-only page left it, and
+  // kept with that history as the editor leaves.
+  const savePoint = useSavePoint(page, kept.savedAt);
+  kept.report(savePoint.savedAt);
   useDropKeptReadsOnSave();
   return savePoint;
 }

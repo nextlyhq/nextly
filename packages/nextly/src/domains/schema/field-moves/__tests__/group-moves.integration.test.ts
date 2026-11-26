@@ -50,6 +50,8 @@ import { marksNoTransaction } from "../../migrate/split-sql";
 import { parseSqlSections } from "../../migrate/sql-sections";
 import { withMigrateLock } from "../../pipeline/locks";
 
+import { rowAsText } from "./refused-moves-state";
+
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
 const SLUG = "gmv_posts";
@@ -224,6 +226,15 @@ function movedValues(holder: unknown): Record<string, unknown> {
  */
 const asJson = (values: Record<string, unknown>): unknown =>
   JSON.parse(JSON.stringify(values));
+
+/** The posts' registry row as stored, whole, which a refused save leaves as it was. */
+async function registryRow(t: TestNextly, slug = SLUG): Promise<string> {
+  const [row] = await run<Record<string, unknown>>(
+    t,
+    `SELECT * FROM dynamic_collections WHERE slug = '${slug}'`
+  );
+  return rowAsText(row);
+}
 
 /** How many migration files the saves have written so far. */
 async function filesWritten(): Promise<number> {
@@ -566,6 +577,100 @@ describe.each(getConfiguredTestDialects())(
       expect(
         ((await readAll(t)).get("one")?.meta as { summary?: unknown })?.summary
       ).toBe("Live");
+    });
+
+    // A draft holding the field with a null may be clearing it, which the move would drop as it
+    // drops an edit: refused the same way, as the file's own stop is.
+    it("refuses a move while a working draft holds the field cleared at its old place", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text" };
+      await createPosts(t, SLUG, { fields: [summary, group("meta", [NOTE])] });
+      const { item } = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "One", slug: "one", summary: "Live" },
+      });
+      const now = new Date();
+      await t.adapter.insert("nextly_versions", {
+        id: randomUUID(),
+        scopeKind: "collection",
+        scopeSlug: SLUG,
+        entryId: String((item as { id: unknown }).id),
+        versionNo: null,
+        status: "draft",
+        isAutosave: false,
+        snapshot: { title: "One", slug: "one", summary: null },
+        createdAt: now,
+        updatedAt: now,
+      });
+      const before = await readAll(t);
+      await expect(
+        save(
+          t,
+          [group("meta", [NOTE, summary])],
+          [{ from: ["summary"], to: ["meta", "summary"] }]
+        )
+      ).rejects.toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: expect.stringMatching(
+                  /^summary has unpublished changes in a working draft of 1 entry/
+                ),
+              }),
+            ],
+          },
+        })
+      );
+      expect(await readAll(t)).toEqual(before);
+    });
+
+    // A draft that clears the group clears the field inside it, which a move out of the group
+    // would drop: refused, as the file's own stop is.
+    it("refuses a move out of a group while a working draft clears that group", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text" };
+      await createPosts(t, SLUG, { fields: [group("meta", [NOTE, summary])] });
+      const { item } = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "One", slug: "one", meta: { summary: "Live" } },
+      });
+      const now = new Date();
+      await t.adapter.insert("nextly_versions", {
+        id: randomUUID(),
+        scopeKind: "collection",
+        scopeSlug: SLUG,
+        entryId: String((item as { id: unknown }).id),
+        versionNo: null,
+        status: "draft",
+        isAutosave: false,
+        snapshot: { title: "One", slug: "one", meta: null },
+        createdAt: now,
+        updatedAt: now,
+      });
+      const before = await readAll(t);
+      await expect(
+        save(
+          t,
+          [summary, group("meta", [NOTE])],
+          [{ from: ["meta", "summary"], to: ["summary"] }]
+        )
+      ).rejects.toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: expect.stringMatching(
+                  /^summary has unpublished changes in a working draft of 1 entry/
+                ),
+              }),
+            ],
+          },
+        })
+      );
+      expect(await readAll(t)).toEqual(before);
     });
 
     // MySQL's TIMESTAMP holds no year past 2038.
@@ -1517,6 +1622,456 @@ describe.each(getConfiguredTestDialects())(
       expect(upSql.indexOf("dynamic_collections")).toBeGreaterThan(copy);
     });
 
+    // Out of a group into a column its definition makes unique: the column is made unique, its
+    // repeats counted before anything is written and stopped over in the file on any other
+    // database.
+    describe("a unique field moved out of a group", () => {
+      const code: Field = { name: "code", type: "text" };
+      const uniqueCode: Field = { ...code, unique: true };
+      const GROUPED: Field[] = [group("meta", [NOTE, code])];
+      const ON_ROW: Field[] = [uniqueCode, group("meta", [NOTE])];
+      const OUT_OF_META = [{ from: ["meta", "code"], to: ["code"] }];
+
+      /** Entries holding `codes` in their group, one each. */
+      async function seedCodes(
+        t: TestNextly,
+        codes: readonly string[]
+      ): Promise<void> {
+        for (const [i, value] of codes.entries()) {
+          await t.nextly.create({
+            collection: SLUG,
+            data: { title: `P${i}`, slug: `p${i}`, meta: { code: value } },
+          });
+        }
+      }
+
+      it("is moved, its column unique: every value kept, and a repeat refused", async () => {
+        const t = await boot(dialect);
+        await createPosts(t, SLUG, { fields: GROUPED });
+        await seedCodes(t, ["a", "b"]);
+
+        await save(t, ON_ROW, OUT_OF_META);
+
+        const after = await readAll(t);
+        expect([...after.values()].map(item => item.code).sort()).toEqual([
+          "a",
+          "b",
+        ]);
+        await expect(
+          t.nextly.create({
+            collection: SLUG,
+            data: { title: "Again", slug: "again", code: "a" },
+          })
+        ).rejects.toThrow();
+      });
+
+      it("is refused, nothing changed, while two entries hold one value, naming the field and the count", async () => {
+        const t = await boot(dialect);
+        await createPosts(t, SLUG, { fields: GROUPED });
+        await seedCodes(t, ["a", "a", "b", "b", "c"]);
+        const before = await readAll(t);
+        const files = await migrationFiles();
+        const stated = await definition();
+        const columns = (await columnsOf(t)).sort();
+        const registry = await registryRow(t);
+
+        await expect(save(t, ON_ROW, OUT_OF_META)).rejects.toThrow(
+          expect.objectContaining({
+            publicData: {
+              errors: [
+                expect.objectContaining({
+                  code: "FIELD_MOVE_REFUSED",
+                  message:
+                    "code is unique where it moves to, and 2 of its values are held by more than one entry in the group it moves out of. Give each entry its own value, or clear the repeats, then move it.",
+                }),
+              ],
+            },
+          })
+        );
+
+        expect(await readAll(t)).toEqual(before);
+        expect(await migrationFiles()).toEqual(files);
+        expect(await definition()).toBe(stated);
+        expect((await columnsOf(t)).sort()).toEqual(columns);
+        expect(await registryRow(t)).toBe(registry);
+      });
+
+      // The save counted its own database; a deploy's may repeat a value that one never did. The file
+      // stops before it changes anything there.
+      it("stops a replay on a database whose entries repeat a value, before anything changes", async () => {
+        const first = await boot(dialect);
+        await createPosts(first, SLUG, { fields: GROUPED });
+        const created = await filesWritten();
+        await seedCodes(first, ["a", "b"]);
+        await save(first, ON_ROW, OUT_OF_META);
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await seedCodes(second, ["a", "a"]);
+        const groups = await storedGroups(second);
+        const columns = (await columnsOf(second)).sort();
+
+        await expect(migrateFolder(second)).rejects.toThrow(
+          /nextly_repeated_code\.two_entries_hold_one_code|two_entries_hold_one_code/
+        );
+
+        expect(await storedGroups(second)).toEqual(groups);
+        expect((await columnsOf(second)).sort()).toEqual(columns);
+      });
+
+      /**
+       * Entries whose group holds each of `held` at `field`, written into the group's JSON as
+       * given (`held` is JSON text), beside a note: forms the API would not write itself, which
+       * a database's own rows may still hold.
+       */
+      async function seedHeld(
+        t: TestNextly,
+        field: string,
+        held: readonly string[]
+      ): Promise<void> {
+        for (const [i, json] of held.entries()) {
+          await t.nextly.create({
+            collection: SLUG,
+            data: { title: `P${i}`, slug: `p${i}`, meta: { note: "n" } },
+          });
+          await run(
+            t,
+            `UPDATE ${q(TABLE)} SET ${q("meta")} = '{"note":"n","${field}":${json}}' WHERE ${q("slug")} = 'p${i}'`
+          );
+        }
+      }
+
+      // Values whose JSON differs but which the unique column stores as one value: compared as
+      // they arrive there, so the copy never meets a repeat part-way through the file.
+      const SAME_STORED = [
+        {
+          what: "one instant written at two offsets",
+          field: { name: "day", type: "date" },
+          held: ['"2026-07-17T10:00:00Z"', '"2026-07-17T12:00:00+02:00"'],
+        },
+        {
+          what: "one decimal written with and without its trailing zeros",
+          field: { name: "price", type: "number", dbType: "decimal" },
+          held: ["1", "1.00"],
+        },
+        {
+          what: "one whole number written as a number and as text",
+          field: { name: "rank", type: "number" },
+          held: ["1", '"1"'],
+        },
+        {
+          what: "one fraction written as a number and as text",
+          field: {
+            name: "ratio",
+            type: "number",
+            options: { format: "float" },
+          },
+          held: ["1.5", '"1.50"'],
+        },
+        {
+          what: "one text written as a number and as text",
+          field: { name: "label", type: "text" },
+          held: ["1", '"1"'],
+        },
+      ] as const;
+
+      it.each(SAME_STORED)(
+        "is refused while two entries hold $what, nothing changed",
+        async ({ field, held }) => {
+          const t = await boot(dialect);
+          await createPosts(t, SLUG, {
+            fields: [group("meta", [NOTE, field])],
+          });
+          await seedHeld(t, field.name, held);
+          const groups = await storedGroups(t);
+          const files = await migrationFiles();
+          const columns = (await columnsOf(t)).sort();
+          const registry = await registryRow(t);
+
+          await expect(
+            save(
+              t,
+              [{ ...field, unique: true }, group("meta", [NOTE])],
+              [{ from: ["meta", field.name], to: [field.name] }]
+            )
+          ).rejects.toThrow(
+            expect.objectContaining({
+              publicData: {
+                errors: [
+                  expect.objectContaining({
+                    code: "FIELD_MOVE_REFUSED",
+                    message: `${field.name} is unique where it moves to, and 1 of its values is held by more than one entry in the group it moves out of. Give each entry its own value, or clear the repeats, then move it.`,
+                  }),
+                ],
+              },
+            })
+          );
+
+          expect(await storedGroups(t)).toEqual(groups);
+          expect(await migrationFiles()).toEqual(files);
+          expect((await columnsOf(t)).sort()).toEqual(columns);
+          expect(await registryRow(t)).toBe(registry);
+        }
+      );
+
+      it("stops a replay on a database whose entries hold one instant at two offsets", async () => {
+        const day = { name: "day", type: "date" };
+        const first = await boot(dialect);
+        await createPosts(first, SLUG, {
+          fields: [group("meta", [NOTE, day])],
+        });
+        const created = await filesWritten();
+        await seedHeld(first, "day", ['"2026-07-17T10:00:00Z"']);
+        await save(
+          first,
+          [{ ...day, unique: true }, group("meta", [NOTE])],
+          [{ from: ["meta", "day"], to: ["day"] }]
+        );
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await seedHeld(second, "day", [
+          '"2026-07-17T10:00:00Z"',
+          '"2026-07-17T12:00:00+02:00"',
+        ]);
+        const groups = await storedGroups(second);
+        const columns = (await columnsOf(second)).sort();
+
+        await expect(migrateFolder(second)).rejects.toThrow(
+          /two_entries_hold_one_day/
+        );
+
+        expect(await storedGroups(second)).toEqual(groups);
+        expect((await columnsOf(second)).sort()).toEqual(columns);
+      });
+
+      // The new column takes its table's collation, not the server's: the count reads it where the
+      // values are, so a table in another collation is counted as its own column compares.
+      it.runIf(dialect === "mysql")(
+        "counts codes its table's own collation holds as one, whatever the server's default, nothing changed",
+        async () => {
+          const t = await boot(dialect);
+          await createPosts(t, SLUG, { fields: GROUPED });
+          // Ignores trailing spaces (PAD SPACE), where the server's default does not.
+          await run(
+            t,
+            `ALTER TABLE ${q(TABLE)} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+          );
+          await seedHeld(t, "code", ['"a"', '"a "']);
+          const groups = await storedGroups(t);
+          const files = await migrationFiles();
+          const columns = (await columnsOf(t)).sort();
+          const registry = await registryRow(t);
+
+          await expect(save(t, ON_ROW, OUT_OF_META)).rejects.toThrow(
+            expect.objectContaining({
+              publicData: {
+                errors: [
+                  expect.objectContaining({
+                    code: "FIELD_MOVE_REFUSED",
+                    message: expect.stringContaining(
+                      "1 of its values is held by more than one entry"
+                    ),
+                  }),
+                ],
+              },
+            })
+          );
+
+          expect(await storedGroups(t)).toEqual(groups);
+          expect(await migrationFiles()).toEqual(files);
+          expect((await columnsOf(t)).sort()).toEqual(columns);
+          expect(await registryRow(t)).toBe(registry);
+        }
+      );
+
+      it.runIf(dialect === "mysql")(
+        "moves codes a stricter collation of its table keeps apart, which the server's default would not",
+        async () => {
+          const t = await boot(dialect);
+          await createPosts(t, SLUG, { fields: GROUPED });
+          await run(
+            t,
+            `ALTER TABLE ${q(TABLE)} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`
+          );
+          await seedCodes(t, ["Code", "code"]);
+
+          await save(t, ON_ROW, OUT_OF_META);
+
+          const after = await readAll(t);
+          expect([...after.values()].map(item => item.code).sort()).toEqual([
+            "Code",
+            "code",
+          ]);
+        }
+      );
+
+      it.runIf(dialect === "mysql")(
+        "stops a replay on a database whose table's collation holds one code as two, before anything changes",
+        async () => {
+          const first = await boot(dialect);
+          await createPosts(first, SLUG, { fields: GROUPED });
+          const created = await filesWritten();
+          await seedCodes(first, ["a", "b"]);
+          await save(first, ON_ROW, OUT_OF_META);
+          await first.destroy();
+          instance = undefined;
+
+          const second = await boot(dialect);
+          await migrateFolder(second, created);
+          await run(
+            second,
+            `ALTER TABLE ${q(TABLE)} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+          );
+          await seedHeld(second, "code", ['"a"', '"a "']);
+          const groups = await storedGroups(second);
+          const columns = (await columnsOf(second)).sort();
+
+          await expect(migrateFolder(second)).rejects.toThrow(
+            /two_entries_hold_one_code/
+          );
+
+          expect(await storedGroups(second)).toEqual(groups);
+          expect((await columnsOf(second)).sort()).toEqual(columns);
+        }
+      );
+
+      // The limit of comparing by the table's `id` column: a table whose default collation was
+      // changed without converting its columns keeps the older one there, while the column the move
+      // adds takes the new default. What the comparison misses, the index refuses, part-way through
+      // the copy, with every value still in the group.
+      it.runIf(dialect === "mysql")(
+        "compares by the older collation where a table's default was changed without converting its columns, and the index refuses the copy with every value intact",
+        async () => {
+          const t = await boot(dialect);
+          await createPosts(t, SLUG, { fields: GROUPED });
+          await run(t, `ALTER TABLE ${q(TABLE)} COLLATE = utf8mb4_unicode_ci`);
+          await seedHeld(t, "code", ['"a"', '"a "']);
+          const groups = await storedGroups(t);
+
+          await expect(save(t, ON_ROW, OUT_OF_META)).rejects.toThrow(
+            /stopped part way/
+          );
+
+          expect(await storedGroups(t)).toEqual(groups);
+        }
+      );
+
+      // Every stop of a file comes before any move's writes, each way, so a run the file stops has
+      // changed nothing whatever ran it: one outside a transaction keeps every statement before it.
+      it("stops a replay before any move of the same save has written, whichever move is first", async () => {
+        const tag: Field = { name: "tag", type: "text" };
+        const summary: Field = { name: "summary", type: "text" };
+        const before = [
+          summary,
+          group("meta", [NOTE, code]),
+          group("seo", [NOTE, tag]),
+        ];
+        const after = [
+          uniqueCode,
+          group("meta", [NOTE, summary, tag]),
+          group("seo", [NOTE]),
+        ];
+        const moves = [
+          { from: ["summary"], to: ["meta", "summary"] },
+          { from: ["seo", "tag"], to: ["meta", "tag"] },
+          { from: ["meta", "code"], to: ["code"] },
+        ];
+        const first = await boot(dialect);
+        await createPosts(first, SLUG, { fields: before });
+        const created = await filesWritten();
+        const seedAll = async (t: TestNextly, codes: readonly string[]) => {
+          for (const [i, value] of codes.entries()) {
+            await t.nextly.create({
+              collection: SLUG,
+              data: {
+                title: `P${i}`,
+                slug: `p${i}`,
+                summary: `S${i}`,
+                meta: { note: "n", code: value },
+                seo: { note: "n", tag: `T${i}` },
+              },
+            });
+          }
+        };
+        await seedAll(first, ["a", "b"]);
+        await save(first, after, moves);
+        const { upSql, downSql } = parseSqlSections(await newestFile());
+        for (const [way, sql] of [
+          ["up", upSql],
+          ["down", downSql],
+        ] as const) {
+          const lastStop = Math.max(
+            -1,
+            ...[...sql.matchAll(/nextly_(repeated|unkept|unfilled)_/g)].map(
+              stop => stop.index
+            )
+          );
+          const firstWrite = sql.search(/^UPDATE /m);
+          expect(firstWrite, way).toBeGreaterThanOrEqual(0);
+          expect(lastStop, way).toBeLessThan(firstWrite);
+        }
+        expect(upSql).toContain("nextly_repeated_code");
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await seedAll(second, ["a", "a"]);
+        const rows = () =>
+          run(second, `SELECT * FROM ${q(TABLE)} ORDER BY ${q("slug")}`);
+        const stood = await rows();
+
+        // The file drops the column `summary` leaves, which the run asks consent for.
+        await expect(
+          migrateFolder(
+            second,
+            undefined,
+            resolveDataLossConsent({ flag: true, env: {} })
+          )
+        ).rejects.toThrow(/two_entries_hold_one_code/);
+
+        expect(await rows()).toEqual(stood);
+      });
+
+      // MySQL's text column folds case, as its database's default collation does; PostgreSQL's
+      // and SQLite's compare text as written, so there the two are two values and move.
+      it("counts two codes differing only in case as one where the column does", async () => {
+        const t = await boot(dialect);
+        await createPosts(t, SLUG, { fields: GROUPED });
+        await seedCodes(t, ["Code", "code"]);
+
+        const saving = save(t, ON_ROW, OUT_OF_META);
+        if (dialect === "mysql") {
+          await expect(saving).rejects.toThrow(
+            expect.objectContaining({
+              publicData: {
+                errors: [
+                  expect.objectContaining({
+                    code: "FIELD_MOVE_REFUSED",
+                    message: expect.stringContaining(
+                      "1 of its values is held by more than one entry"
+                    ),
+                  }),
+                ],
+              },
+            })
+          );
+          return;
+        }
+        await saving;
+        const after = await readAll(t);
+        expect([...after.values()].map(item => item.code).sort()).toEqual([
+          "Code",
+          "code",
+        ]);
+      });
+    });
+
     describe("a move that cannot keep its values is refused before anything is written", () => {
       /** The save refused, in its review and in its apply, and nothing about the database changed. */
       async function expectRefused(
@@ -1530,6 +2085,7 @@ describe.each(getConfiguredTestDialects())(
         const stated = await definition();
         const table = slug === SLUG ? TABLE : `dc_${slug}`;
         const columns = await columnsOf(t, table);
+        const registry = await registryRow(t, slug);
         const refusal = expect.objectContaining({
           publicData: {
             errors: [
@@ -1545,6 +2101,7 @@ describe.each(getConfiguredTestDialects())(
         expect(await migrationFiles()).toEqual(files);
         expect(await definition()).toBe(stated);
         expect((await columnsOf(t, table)).sort()).toEqual(columns.sort());
+        expect(await registryRow(t, slug)).toBe(registry);
       }
 
       it("a unique field, whose uniqueness a group's key cannot keep", async () => {
@@ -1558,6 +2115,72 @@ describe.each(getConfiguredTestDialects())(
           [...MOVED_FIELDS, group("meta", [NOTE, code])],
           [{ from: ["code"], to: ["meta", "code"] }],
           "cannot be kept unique"
+        );
+        expect(await readAll(t)).toEqual(before);
+      });
+
+      // Judged before the repeater: what stops it is the uniqueness its values would lose, which the
+      // repeater's own "not available yet" would not say. At any depth, the repeater is named.
+      it("a unique field into a repeater, and into a group inside one, naming the repeater", async () => {
+        const t = await boot(dialect);
+        const code: Field = { name: "code", type: "text", unique: true };
+        const items = (fields: Field[]): Field => ({
+          name: "items",
+          type: "repeater",
+          fields,
+        });
+        await createPosts(t, SLUG, {
+          fields: [code, ...OUTSIDE, items([group("row", [NOTE])])],
+        });
+        await seed(t);
+        const before = await readAll(t);
+        const message =
+          "code cannot be moved into the repeater items: a repeater keeps its values in one JSON value, which cannot be kept unique.";
+        await expectRefused(
+          t,
+          [...OUTSIDE, items([code, group("row", [NOTE])])],
+          [{ from: ["code"], to: ["items", "code"] }],
+          message
+        );
+        await expectRefused(
+          t,
+          [...OUTSIDE, items([group("row", [NOTE, code])])],
+          [{ from: ["code"], to: ["items", "row", "code"] }],
+          message
+        );
+        expect(await readAll(t)).toEqual(before);
+      });
+
+      // Each entry may hold several rows, and one field keeps one value: the move is refused, no row
+      // dropped, and a new field suggested.
+      it("a field out of a repeater whose entries hold several rows", async () => {
+        const t = await boot(dialect);
+        const label: Field = { name: "label", type: "text" };
+        const items = (fields: Field[]): Field => ({
+          name: "items",
+          type: "repeater",
+          fields,
+        });
+        await createPosts(t, SLUG, {
+          fields: [...OUTSIDE, items([label, NOTE])],
+        });
+        await t.nextly.create({
+          collection: SLUG,
+          data: {
+            title: "Rows",
+            slug: "rows",
+            items: [
+              { label: "First", note: "a" },
+              { label: "Second", note: "b" },
+            ],
+          },
+        });
+        const before = await readAll(t);
+        await expectRefused(
+          t,
+          [...OUTSIDE, label, items([NOTE])],
+          [{ from: ["items", "label"], to: ["label"] }],
+          "cannot be moved out of the repeating rows items: each entry may hold several rows of it, which one field cannot keep. Add a new field instead."
         );
         expect(await readAll(t)).toEqual(before);
       });

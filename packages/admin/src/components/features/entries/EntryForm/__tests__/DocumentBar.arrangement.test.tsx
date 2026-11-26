@@ -2,9 +2,11 @@
  * The document bar's arrangement, and that it draws no empty control.
  *
  * The bar is one sticky band: where the document stands at the left (status,
- * save state, language), every action at the right in one order (a feature's
- * controls, History, Preview, Save draft, the primary action, More, the panel
- * toggle). The title and the way back are not in it. And in every document
+ * save state, language), every action at the right in one row and one order
+ * (a feature's controls, History, the languages control, the one main button,
+ * More, the panel toggle). Saving, the preview and the document's other views
+ * are rows of the main button's menu. The title and the way back are not in
+ * it. And in every document
  * state, each button shows something: an icon, or words that are not hidden. A
  * button whose only content is a label hidden at narrow widths draws as an
  * empty bordered box.
@@ -186,7 +188,7 @@ describe("the document bar", () => {
     }
   );
 
-  it("draws its actions in one order: a feature's controls, History, Preview, Save draft, the primary action, More, then the panel toggle", () => {
+  it("draws its actions in one order: a feature's controls, History, the main button, More, then the panel toggle", () => {
     render(
       <Harness
         state={STATES[1]!}
@@ -197,9 +199,8 @@ describe("the document bar", () => {
     const order = [
       screen.getByRole("button", { name: "SEO check" }),
       screen.getByRole("button", { name: "History" }),
-      screen.getByRole("button", { name: /^preview$/i }),
-      screen.getByRole("button", { name: /^save draft$/i }),
       screen.getByRole("button", { name: /^publish$/i }),
+      screen.getByRole("button", { name: "More ways to publish" }),
       screen.getByRole("button", { name: "More actions" }),
       screen.getByRole("button", { name: /^(show|hide) document panel$/i }),
     ];
@@ -208,7 +209,32 @@ describe("the document bar", () => {
     for (let i = 1; i < order.length; i++) {
       expect(follows(order[i - 1]!, order[i]!)).toBe(true);
     }
-    expect(order[4]).toHaveAttribute("data-primary", "true");
+    expect(order[2]).toHaveAttribute("data-primary", "true");
+    // One main button: saving and the preview are not buttons beside it.
+    expect(
+      screen.queryByRole("button", { name: /^save draft$/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^preview$/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("holds saving, the preview and the share link on the main button's menu, the press not repeated", async () => {
+    const user = userEvent.setup();
+    render(<Harness state={STATES[1]!} preview share />);
+    await user.click(
+      screen.getByRole("button", { name: "More ways to publish" })
+    );
+    const rows = (await screen.findAllByRole("menuitem")).map(
+      row => row.textContent
+    );
+    expect(rows).toEqual(["Save draft", "Preview", "Share preview link…"]);
+    await user.click(
+      screen.getByRole("menuitem", { name: "Share preview link…" })
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Share a preview" })
+    ).toBeInTheDocument();
   });
 
   it("sticks to the top of the editor's scroll area", () => {
@@ -292,7 +318,22 @@ describe("the document bar", () => {
     }
   });
 
-  it("lets History's word step aside for its icon, as the preview's does, keeping its name and a tooltip", () => {
+  it("keeps History's word until the bar is narrower than the main button's cluster needs", () => {
+    // The header's cluster is History, at most one secondary step, the main
+    // button, More and the panel toggle: its word gives way only below 36rem of
+    // the bar's part after the trail, later than the supporting actions' 51rem,
+    // so a 1440px editor shows it beside a long trail as drawn.
+    render(<Harness state={STATES[1]!} />);
+    const history = screen.getByRole("button", { name: "History" });
+    const label = [...history.querySelectorAll("span")].find(
+      span => span.textContent === "History"
+    );
+    expect(label?.className).toContain("@max-[36rem]/toolbar:sr-only");
+    expect(label?.className).not.toContain("@max-[44rem]/toolbar:sr-only");
+    expect(label?.className).not.toContain("@max-[51rem]/toolbar:sr-only");
+  });
+
+  it("lets History's word step aside for its icon on a narrow bar, keeping its name and a tooltip", () => {
     // A narrow bar (history open beside it, say) has no width for every
     // label; History gives up its word like the other supporting action
     // rather than pushing the bar's content into itself.
@@ -307,50 +348,36 @@ describe("the document bar", () => {
     expect(hides(label!)).toBe(true);
   });
 
-  it("folds History, the preview and the panel toggle into the menu on a phone", async () => {
+  it("keeps History a button on a phone, by its icon, and folds only the panel toggle into More", async () => {
     const user = userEvent.setup();
     render(<Harness state={STATES[1]!} share panelMode="sheet" />);
-    // Out of the bar...
-    expect(
-      screen.queryByRole("button", { name: "History" })
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Preview options" })
-    ).not.toBeInTheDocument();
+    // History stays where the person can see which state the document is in,
+    // its word only spoken.
+    const history = screen.getByRole("button", { name: "History" });
+    expect(history.querySelector("svg")).not.toBeNull();
+    const word = [...history.querySelectorAll("span")].find(
+      span => span.textContent === "History"
+    );
+    expect(word?.className).toContain("sr-only");
     expect(
       screen.queryByRole("button", { name: /^(show|hide) document panel$/i })
     ).not.toBeInTheDocument();
 
-    // ...and into the menu, first, as rows.
     await user.click(screen.getByRole("button", { name: "More actions" }));
     const rows = (await screen.findAllByRole("menuitem")).map(
       row => row.textContent
     );
-    expect(rows.slice(0, 3)).toEqual([
-      "History",
-      "Share preview link…",
-      "Hide document panel",
-    ]);
-    await user.click(
-      screen.getByRole("menuitem", { name: "Share preview link…" })
-    );
-    // The same popover the wide control opens, hung from the row that stays
-    // on screen.
-    expect(
-      await screen.findByRole("heading", { name: "Share a preview" })
-    ).toBeInTheDocument();
+    expect(rows[0]).toBe("Hide document panel");
+    expect(rows).not.toContain("History");
   });
 
   it.each(["docked", "floating"] as const)(
-    "keeps History, the preview and the panel toggle in the bar where the panel is %s",
+    "keeps History and the panel toggle in the bar where the panel is %s",
     async mode => {
       const user = userEvent.setup();
       render(<Harness state={STATES[1]!} share panelMode={mode} />);
       expect(
         screen.getByRole("button", { name: "History" })
-      ).toBeInTheDocument();
-      expect(
-        screen.getByRole("button", { name: "Share preview link…" })
       ).toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: "Hide document panel" })
@@ -411,7 +438,7 @@ describe("the document bar", () => {
     // cluster must be able to break inside the row's width.
     render(<Harness state={STATES[1]!} />);
     const cluster = screen
-      .getByRole("button", { name: /^save draft$/i })
+      .getByRole("button", { name: /^publish$/i })
       .closest("div.ml-auto");
     expect(cluster?.className).toContain("flex-wrap");
     expect(cluster?.className).toContain("max-w-full");

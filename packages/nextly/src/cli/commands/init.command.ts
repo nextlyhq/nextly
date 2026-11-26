@@ -5,6 +5,7 @@
 import type { Command } from "commander";
 
 import { withDryRun } from "../dry-run";
+import { declareFirstLine, startLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -14,10 +15,13 @@ import { lazyAction } from "../lazy-action";
  */
 export function registerInitCommand(program: Command): void {
   // `--dry-run` carries the one meaning and help line it has everywhere.
-  withDryRun(
-    program.command("init").description("Initialize a new Nextly project")
-  )
-    .option("-y, --yes", "Skip prompts and use defaults", false)
-    .option("-f, --force", "Overwrite existing files", false)
-    .action(lazyAction(async () => (await import("./init")).initAction));
+  declareFirstLine(
+    withDryRun(
+      program.command("init").description("Initialize a new Nextly project")
+    )
+      .option("-y, --yes", "Skip prompts and use defaults", false)
+      .option("-f, --force", "Overwrite existing files", false)
+      .action(lazyAction(async () => (await import("./init")).initAction)),
+    startLine("Initializing the project...", "no database")
+  );
 }

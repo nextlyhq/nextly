@@ -16,6 +16,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { ServiceMap } from "../di/register";
 import type { ContentEventsNamespace } from "../direct-api/namespaces/content-events";
 import type { EmailDeliveriesNamespace } from "../direct-api/namespaces/email";
+import type { FilesNamespace } from "../direct-api/namespaces/files";
 import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type { JobsNamespace } from "../direct-api/namespaces/jobs";
 import type { NoticesNamespace } from "../direct-api/namespaces/notices";
@@ -24,6 +25,7 @@ import type {
   ApiKeysNamespace,
 } from "../direct-api/namespaces/rbac";
 import type { ReleasesNamespace } from "../direct-api/namespaces/releases";
+import type { TranslationsNamespace } from "../direct-api/namespaces/translations";
 import type { WorkflowsNamespace } from "../direct-api/namespaces/workflows";
 import type {
   AuthResult,
@@ -1136,6 +1138,12 @@ export interface Nextly {
   contentEvents: ContentEventsNamespace;
 
   /**
+   * @experimental A collection's private files: the checked download, for
+   * the caller named, refused exactly where REST would refuse them.
+   */
+  files: FilesNamespace;
+
+  /**
    * A person's own notices — read, count and mark read, for the person named.
    *
    * @example
@@ -1145,6 +1153,12 @@ export interface Nextly {
    * ```
    */
   notices: NoticesNamespace;
+
+  /**
+   * @experimental A translated field and its source: what changed in the source since the
+   * translation was made, and keeping the translation as it is.
+   */
+  translations: TranslationsNamespace;
 
   roles: {
     find: (args?: FindRolesArgs) => Promise<ListResult<Role>>;

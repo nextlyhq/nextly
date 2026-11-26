@@ -5,6 +5,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
   SelectOptions,
   SupportedDialect,
+  SqlParam,
   TransactionContext,
   WhereClause,
 } from "@nextlyhq/adapter-drizzle/types";
@@ -72,14 +73,18 @@ import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { resolveRequestedLocale } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
+  pruneOverlaysOfRemovedRows,
+  type SharedStructureWritten,
   splitLocalizedWrite,
   upsertCompanionRow,
+  withStructuresBefore,
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
   companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
 import {
   containedComponentResolver,
@@ -588,11 +593,18 @@ export class FieldGroupMutationService extends BaseService {
           params?: unknown[]
         ): Promise<T[]>;
       };
+      /** The transaction's own handle, which a container's component shape is read on. */
+      executor?: unknown;
     }
   ): Promise<{
     schema: ReturnType<typeof buildCompanionSchema>;
     main: Record<string, unknown>;
     companion: Record<string, unknown>;
+    /**
+     * The structures of the repeaters and groups keeping one structure in every language, as
+     * `main` puts them on the row, which every language's overlay is pruned against.
+     */
+    sharedStructures: SharedStructureWritten[];
     /** Whether the companion physically exists, so callers can reuse it without re-probing. */
     companionExists: boolean;
   }> {
@@ -601,6 +613,7 @@ export class FieldGroupMutationService extends BaseService {
         schema: null,
         main: data,
         companion: {},
+        sharedStructures: [],
         companionExists: false,
       };
     }
@@ -616,6 +629,7 @@ export class FieldGroupMutationService extends BaseService {
         schema: null,
         main: data,
         companion: {},
+        sharedStructures: [],
         companionExists: false,
       };
     // Resolve existence BEFORE splitting. Splitting first and then discovering the
@@ -677,19 +691,36 @@ export class FieldGroupMutationService extends BaseService {
           },
         });
       }
-      return { schema: null, main: data, companion: {}, companionExists };
+      return {
+        schema: null,
+        main: data,
+        companion: {},
+        sharedStructures: [],
+        companionExists,
+      };
     }
-    const { main, companion } = splitLocalizedWrite(
+    // A container placing a component is split by its component's fields, read on the write's
+    // own handle (`withComponentShapes`), as a collection's and a Single's write are: split by
+    // its own text alone, the component's text would stay in the shared structure, and a save in
+    // one language would overwrite what every language reads. The shapes go back with the schema,
+    // so what the caller prunes and reads goes by them too.
+    const localizedFields = await withComponentShapes(
+      schema.localizedFields,
+      tx?.executor
+    );
+    const shaped = { ...schema, localizedFields };
+    const { main, companion, sharedStructures } = splitLocalizedWrite(
       data,
-      schema.localizedFields
+      localizedFields
     );
     // The main row goes through serializeComponentRow, but the companion is upserted directly.
     // Serialize the companion values the same way so a JSON-backed localized field (richText/
     // group/json) is JSON-stringified and a Date is stored as text, not written as a raw object.
     return {
-      schema,
+      schema: shaped,
       main,
-      companion: this.serializeCompanionValues(companion, schema, meta.fields),
+      companion: this.serializeCompanionValues(companion, shaped, meta.fields),
+      sharedStructures,
       companionExists,
     };
   }
@@ -740,17 +771,48 @@ export class FieldGroupMutationService extends BaseService {
     writeAdapter: {
       dialect: SupportedDialect;
       executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
-    } = this.adapter
+    } = this.adapter,
+    overlays?: {
+      /** The structures the write put on the instance's row. */
+      written: readonly SharedStructureWritten[];
+      /** The instance's row before the write, which tells an instance inside that changed type. */
+      before?: Readonly<Record<string, unknown>>;
+      /** The write's transaction; left out, the pool. */
+      tx?: TransactionContext;
+    }
   ): Promise<void> {
-    if (Object.keys(companionData).length === 0) return;
-    const writeLocale = resolveRequestedLocale(this.localization!, locale);
-    await upsertCompanionRow(
-      writeAdapter,
-      schema.companionTableName,
-      instanceId,
-      writeLocale,
-      companionData
-    );
+    const writeLocale =
+      Object.keys(companionData).length > 0
+        ? resolveRequestedLocale(this.localization!, locale)
+        : undefined;
+    if (writeLocale !== undefined) {
+      await upsertCompanionRow(
+        writeAdapter,
+        schema.companionTableName,
+        instanceId,
+        writeLocale,
+        companionData
+      );
+    }
+    // A repeater's or group's structure is one for every language, so the translations of the rows
+    // the write removed go from every language's overlay with it, as a collection's do.
+    if (overlays && overlays.written.length > 0) {
+      await pruneOverlaysOfRemovedRows(
+        overlays.tx ?? {
+          getDrizzle: <T = unknown>() => this.adapter.getDrizzle<T>(),
+          execute: <T = unknown>(sql: string, params?: SqlParam[]) =>
+            this.adapter.executeQuery<T>(sql, params),
+        },
+        this.adapter.dialect,
+        {
+          companionTable: schema.table,
+          companionTableName: schema.companionTableName,
+          parentId: instanceId,
+          written: withStructuresBefore(overlays.written, overlays.before),
+          writtenLocales: writeLocale === undefined ? [] : [writeLocale],
+        }
+      );
+    }
   }
 
   /** Wrap a transaction context as a companion write adapter (raw execute within the tx). */
@@ -1227,11 +1289,8 @@ export class FieldGroupMutationService extends BaseService {
 
       // i18n: split translatable values out of the main comp_ write — they live on the
       // companion. `main === data` when the component isn't localized (unchanged path).
-      const { schema, main, companion } = await this.splitLocalizedComponent(
-        componentMeta,
-        data,
-        locale
-      );
+      const { schema, main, companion, sharedStructures } =
+        await this.splitLocalizedComponent(componentMeta, data, locale);
 
       let instanceId: string;
       if (existing.length > 0) {
@@ -1279,7 +1338,9 @@ export class FieldGroupMutationService extends BaseService {
           schema,
           instanceId,
           companion,
-          locale
+          locale,
+          this.adapter,
+          { written: sharedStructures, before: existing[0] }
         );
       }
       // The field groups placed directly in it, as rows whose parent is this one.
@@ -1366,15 +1427,16 @@ export class FieldGroupMutationService extends BaseService {
       }
 
       // i18n: split translatable values out of the main comp_ write (companion-owned).
-      const { schema, main, companion } = await this.splitLocalizedComponent(
-        componentMeta,
-        data,
-        locale,
-        // Never probe from in here: the answer was resolved before this transaction
-        // opened, because asking now would mean querying a possibly-absent relation,
-        // and on PostgreSQL that aborts the transaction outright.
-        { adapter: this.txWriteAdapter(tx) }
-      );
+      const { schema, main, companion, sharedStructures } =
+        await this.splitLocalizedComponent(
+          componentMeta,
+          data,
+          locale,
+          // Never probe from in here: the answer was resolved before this transaction
+          // opened, because asking now would mean querying a possibly-absent relation,
+          // and on PostgreSQL that aborts the transaction outright.
+          { adapter: this.txWriteAdapter(tx), executor: tx.getDrizzle() }
+        );
 
       let instanceId: string;
       if (existing.length > 0) {
@@ -1407,7 +1469,8 @@ export class FieldGroupMutationService extends BaseService {
           instanceId,
           companion,
           locale,
-          this.txWriteAdapter(tx)
+          this.txWriteAdapter(tx),
+          { written: sharedStructures, before: existing[0], tx }
         );
       }
       // The field groups placed directly in it, as rows whose parent is this one.
@@ -1497,11 +1560,8 @@ export class FieldGroupMutationService extends BaseService {
         // i18n: split translatable values out per instance (companion-owned). The
         // diff-by-id update keeps the instance id stable, so companion rows for OTHER
         // locales survive a re-save in one locale.
-        const { schema, main, companion } = await this.splitLocalizedComponent(
-          componentMeta,
-          instance,
-          locale
-        );
+        const { schema, main, companion, sharedStructures } =
+          await this.splitLocalizedComponent(componentMeta, instance, locale);
 
         const existingRow =
           instanceId && existingMap.has(instanceId)
@@ -1512,7 +1572,7 @@ export class FieldGroupMutationService extends BaseService {
         const written = await this.writeInstanceRow(this.adapter, undefined, {
           existing: existingRow,
           tableName,
-          split: { schema, main, companion },
+          split: { schema, main, companion, sharedStructures },
           componentFields,
           parent: { parentId, parentTable, fieldName },
           order: i,
@@ -1643,15 +1703,16 @@ export class FieldGroupMutationService extends BaseService {
         }
 
         // i18n: split translatable values out (companion-owned) per instance.
-        const { schema, main, companion } = await this.splitLocalizedComponent(
-          componentMeta,
-          instance,
-          locale,
-          // Never probe from in here: the answer was resolved before this transaction
-          // opened, because asking now would mean querying a possibly-absent relation,
-          // and on PostgreSQL that aborts the transaction outright.
-          { adapter: this.txWriteAdapter(tx) }
-        );
+        const { schema, main, companion, sharedStructures } =
+          await this.splitLocalizedComponent(
+            componentMeta,
+            instance,
+            locale,
+            // Never probe from in here: the answer was resolved before this transaction
+            // opened, because asking now would mean querying a possibly-absent relation,
+            // and on PostgreSQL that aborts the transaction outright.
+            { adapter: this.txWriteAdapter(tx), executor: tx.getDrizzle() }
+          );
 
         const existingRow =
           instanceId && existingMap.has(instanceId)
@@ -1665,12 +1726,13 @@ export class FieldGroupMutationService extends BaseService {
           {
             existing: existingRow,
             tableName,
-            split: { schema, main, companion },
+            split: { schema, main, companion, sharedStructures },
             componentFields,
             parent: { parentId, parentTable, fieldName },
             order: i,
             componentType: null,
             locale,
+            tx,
           }
         );
         await this.writeNestedInTx(
@@ -1816,11 +1878,8 @@ export class FieldGroupMutationService extends BaseService {
         const { meta, componentFields, instanceId, existingEntry } = prepared;
 
         // i18n: split translatable values out per instance using its own component meta.
-        const { schema, main, companion } = await this.splitLocalizedComponent(
-          meta,
-          instance,
-          locale
-        );
+        const { schema, main, companion, sharedStructures } =
+          await this.splitLocalizedComponent(meta, instance, locale);
 
         const existingRow =
           instanceId && existingEntry
@@ -1831,7 +1890,7 @@ export class FieldGroupMutationService extends BaseService {
         const written = await this.writeInstanceRow(this.adapter, undefined, {
           existing: existingRow,
           tableName: meta.tableName,
-          split: { schema, main, companion },
+          split: { schema, main, companion, sharedStructures },
           componentFields,
           parent: { parentId, parentTable, fieldName },
           order: i,
@@ -1995,15 +2054,16 @@ export class FieldGroupMutationService extends BaseService {
         }
 
         // i18n: split translatable values out per instance using its own component meta.
-        const { schema, main, companion } = await this.splitLocalizedComponent(
-          meta,
-          instance,
-          locale,
-          // Never probe from in here: the answer was resolved before this transaction
-          // opened, because asking now would mean querying a possibly-absent relation,
-          // and on PostgreSQL that aborts the transaction outright.
-          { adapter: this.txWriteAdapter(tx) }
-        );
+        const { schema, main, companion, sharedStructures } =
+          await this.splitLocalizedComponent(
+            meta,
+            instance,
+            locale,
+            // Never probe from in here: the answer was resolved before this transaction
+            // opened, because asking now would mean querying a possibly-absent relation,
+            // and on PostgreSQL that aborts the transaction outright.
+            { adapter: this.txWriteAdapter(tx), executor: tx.getDrizzle() }
+          );
 
         const existingRow =
           instanceId && existingEntry
@@ -2017,12 +2077,13 @@ export class FieldGroupMutationService extends BaseService {
           {
             existing: existingRow,
             tableName: meta.tableName,
-            split: { schema, main, companion },
+            split: { schema, main, companion, sharedStructures },
             componentFields,
             parent: { parentId, parentTable, fieldName },
             order: i,
             componentType,
             locale,
+            tx,
           }
         );
         await this.writeNestedInTx(
@@ -2230,7 +2291,7 @@ export class FieldGroupMutationService extends BaseService {
    * Returns the row it was written as, which the field groups placed in it name as their parent.
    */
   private async writeInstanceRow(
-    store: Pick<TransactionContext, "insert" | "update">,
+    store: Pick<TransactionContext, "insert" | "update" | "selectOne">,
     // The transaction's companion writer; omitted, the pooled adapter writes the companion row.
     companionWriter:
       | ReturnType<FieldGroupMutationService["txWriteAdapter"]>
@@ -2242,7 +2303,7 @@ export class FieldGroupMutationService extends BaseService {
         Awaited<
           ReturnType<FieldGroupMutationService["splitLocalizedComponent"]>
         >,
-        "schema" | "main" | "companion"
+        "schema" | "main" | "companion" | "sharedStructures"
       >;
       componentFields: FieldConfig[];
       parent: { parentId: string; parentTable: string; fieldName: string };
@@ -2250,10 +2311,22 @@ export class FieldGroupMutationService extends BaseService {
       // A zone's row records which field group it holds; a repeatable's table says so already.
       componentType: string | null;
       locale: string | undefined;
+      /** The write's transaction, which the overlays are pruned on; left out, the pool. */
+      tx?: TransactionContext;
     }
   ): Promise<{ id: string; tableName: string }> {
     const { existing, split, componentFields, order, componentType } = params;
     let written: { id: string; tableName: string };
+    // The structures the stored row holds before this write, of its containers: what a prune
+    // tells a component instance that changed type by. Read only for a row a container is
+    // written to.
+    const before =
+      existing && split.sharedStructures.length > 0
+        ? ((await store.selectOne<Record<string, unknown>>(existing.tableName, {
+            where: this.whereEq("id", existing.id),
+            columns: split.sharedStructures.map(written => written.column),
+          })) ?? undefined)
+        : undefined;
     if (existing) {
       const updateData = this.serializeComponentRow(
         split.main,
@@ -2290,7 +2363,12 @@ export class FieldGroupMutationService extends BaseService {
         written.id,
         split.companion,
         params.locale,
-        companionWriter
+        companionWriter,
+        {
+          written: split.sharedStructures,
+          before,
+          ...(params.tx ? { tx: params.tx } : {}),
+        }
       );
     }
     return written;

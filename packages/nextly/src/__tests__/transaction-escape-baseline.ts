@@ -137,6 +137,15 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     reason: PIPELINE,
   },
   {
+    // The same row count, on a field group's shared table: a removed plugin's
+    // column there, whose drop the push then leaves out.
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select comp_*",
+    witness:
+      "packages/nextly/src/domains/schema/ownership/__tests__/push-keeps-others-elements.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
     dialect: "mysql",
     key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
     witness:

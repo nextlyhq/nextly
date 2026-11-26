@@ -585,6 +585,58 @@ function parseRoleRoutes(
   return null;
 }
 
+/** One POST action on an entity's schema: the operation its permission is judged as, and its method. */
+type SchemaAction = { operation: ParsedRoute["operation"]; method: string };
+
+/** POST /api/collections/schema/{slug}/[action], by action. */
+const COLLECTION_SCHEMA_ACTIONS: Readonly<Record<string, SchemaAction>> = {
+  // Preview schema changes (dry-run diff).
+  preview: { operation: "single", method: "previewSchemaChanges" },
+  // What each other type would do to a saved field's values, as the Builder's type picker lists them.
+  "type-change-targets": { operation: "single", method: "typeChangeTargets" },
+  // Apply confirmed schema changes.
+  apply: { operation: "update", method: "applySchemaChanges" },
+};
+
+/** POST /api/singles/schema/[slug]/[action], by action: as a collection's, under the Single's names. */
+const SINGLE_SCHEMA_ACTIONS: Readonly<Record<string, SchemaAction>> = {
+  "type-change-targets": {
+    operation: "single",
+    method: "singleTypeChangeTargets",
+  },
+  preview: { operation: "single", method: "previewSingleSchemaChanges" },
+  apply: { operation: "update", method: "applySingleSchemaChanges" },
+};
+
+/**
+ * The route of a POST action on one entity's schema (`/schema/{slug}/{action}`) that `actions`
+ * names, with the entity's address in `param`; null for any other request. An action spelled like
+ * an inherited member (`toString`) is none of them.
+ */
+function schemaActionRoute(
+  service: ParsedRoute["service"],
+  actions: Readonly<Record<string, SchemaAction>>,
+  request: {
+    id: string | undefined;
+    subresource: string | undefined;
+    subId: string | undefined;
+    httpMethod: string;
+  },
+  target: { routeParams: Record<string, string>; param: string }
+): ParsedRoute | null {
+  const { id, subresource, subId, httpMethod } = request;
+  if (id !== "schema" || !subresource || subId === undefined) return null;
+  if (httpMethod !== "POST" || !Object.hasOwn(actions, subId)) return null;
+  const action = actions[subId];
+  target.routeParams[target.param] = subresource;
+  return {
+    service,
+    operation: action.operation,
+    method: action.method,
+    routeParams: target.routeParams,
+  };
+}
+
 function parseCollectionRoutes(
   id: string | undefined,
   subresource: string | undefined,
@@ -620,6 +672,18 @@ function parseCollectionRoutes(
     routeParams
   );
   if (bulkUpdateByQueryRoute) return bulkUpdateByQueryRoute;
+
+  // What changed in a translated field's source, and keeping its translation
+  // (more specific than getEntry/updateEntry)
+  const sourceReviewRoute = parseCollectionEntrySourceReviewRoute(
+    id,
+    subresource,
+    subId,
+    additionalParams,
+    httpMethod,
+    routeParams
+  );
+  if (sourceReviewRoute) return sourceReviewRoute;
 
   // Check for duplicate route (more specific)
   const duplicateRoute = parseCollectionEntryDuplicateRoute(
@@ -673,37 +737,15 @@ function parseCollectionRoutes(
     };
   }
 
-  // POST /api/collections/schema/{slug}/preview → preview schema changes (dry-run diff)
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "preview" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.collectionName = subresource;
-    return {
-      service: "collections",
-      operation: "single",
-      method: "previewSchemaChanges",
-      routeParams,
-    };
-  }
-
-  // POST /api/collections/schema/{slug}/apply → apply confirmed schema changes
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "apply" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.collectionName = subresource;
-    return {
-      service: "collections",
-      operation: "update",
-      method: "applySchemaChanges",
-      routeParams,
-    };
-  }
+  // POST /api/collections/schema/{slug}/{preview|type-change-targets|apply}: the Builder save's
+  // actions on one collection's schema (`COLLECTION_SCHEMA_ACTIONS`).
+  const schemaAction = schemaActionRoute(
+    "collections",
+    COLLECTION_SCHEMA_ACTIONS,
+    { id, subresource, subId, httpMethod },
+    { routeParams, param: "collectionName" }
+  );
+  if (schemaAction) return schemaAction;
 
   // GET /api/collections/schema/{slug}/delete-impact → what deleting the
   // collection takes with it, by plugin (a dry run the delete dialog asks)
@@ -962,6 +1004,64 @@ function parseCollectionEntryPublishAllRoute(
   }
 
   return null;
+}
+
+/**
+ * What one action on a translated field's source is, by its verb and URL token:
+ * reading what changed in it, admitted as a read of the document, and keeping
+ * the translation as it is, admitted as an update (@experimental).
+ */
+function sourceReviewAction(
+  httpMethod: string,
+  action: string | undefined
+): {
+  operation: OperationType;
+  entryMethod: string;
+  singleMethod: string;
+} | null {
+  if (httpMethod === "GET" && action === "source-change") {
+    return {
+      operation: "single",
+      entryMethod: "getEntrySourceChange",
+      singleMethod: "getSingleSourceChange",
+    };
+  }
+  if (httpMethod === "POST" && action === "keep-current") {
+    return {
+      operation: "update",
+      entryMethod: "keepEntryTranslation",
+      singleMethod: "keepSingleTranslation",
+    };
+  }
+  return null;
+}
+
+/**
+ * Parse the source review routes for a collection entry.
+ * GET /api/collections/{slug}/entries/{id}/source-change
+ * POST /api/collections/{slug}/entries/{id}/keep-current
+ */
+function parseCollectionEntrySourceReviewRoute(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  additionalParams: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (!id || subresource !== "entries" || !subId) return null;
+  // The route ends at the action: a path that goes on past it names nothing here.
+  if (additionalParams.length !== 1) return null;
+  const action = sourceReviewAction(httpMethod, additionalParams[0]);
+  if (action === null) return null;
+  routeParams.collectionName = id;
+  routeParams.entryId = subId;
+  return {
+    service: "collections",
+    operation: action.operation,
+    method: action.entryMethod,
+    routeParams,
+  };
 }
 
 /**
@@ -1552,6 +1652,30 @@ function parsePermissionRoutes(
   return null;
 }
 
+/**
+ * Parse the source review routes for a Single.
+ * GET /api/singles/{slug}/source-change
+ * POST /api/singles/{slug}/keep-current
+ */
+function parseSingleSourceReviewRoute(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (!id || subId) return null;
+  const action = sourceReviewAction(httpMethod, subresource);
+  if (action === null) return null;
+  routeParams.slug = id;
+  return {
+    service: "singles",
+    operation: action.operation,
+    method: action.singleMethod,
+    routeParams,
+  };
+}
+
 function parseSingleRoutes(
   id: string | undefined,
   subresource: string | undefined,
@@ -1684,37 +1808,15 @@ function parseSingleRoutes(
     };
   }
 
-  // POST /api/singles/schema/[slug]/preview → preview single schema changes (dry-run diff)
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "preview" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "singles",
-      operation: "single",
-      method: "previewSingleSchemaChanges",
-      routeParams,
-    };
-  }
-
-  // POST /api/singles/schema/[slug]/apply → apply confirmed single schema changes
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "apply" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "singles",
-      operation: "update",
-      method: "applySingleSchemaChanges",
-      routeParams,
-    };
-  }
+  // POST /api/singles/schema/[slug]/{type-change-targets|preview|apply}: the Builder save's actions
+  // on one Single's schema (`SINGLE_SCHEMA_ACTIONS`).
+  const schemaAction = schemaActionRoute(
+    "singles",
+    SINGLE_SCHEMA_ACTIONS,
+    { id, subresource, subId, httpMethod },
+    { routeParams, param: "slug" }
+  );
+  if (schemaAction) return schemaAction;
 
   // POST /api/singles/schema/address-check → what creating a Single under an address would
   // answer, asked before the create. Under the singles service, so the Single create's own
@@ -1780,7 +1882,9 @@ function parseComponentRoutes(
   }
 
   // GET /api/field-groups/[slug]/used-by → the fields that place the field
-  // group, and what holds each. Matched before the bare slug routes below,
+  // group, and what holds each; with `?through=field-groups`, then each holder
+  // reaching it through other field groups, with the chain (`via`). The query
+  // travels as a route param. Matched before the bare slug routes below,
   // which do not look at a subresource and would answer this as the field
   // group itself.
   if (id && subresource === "used-by" && !subId && httpMethod === "GET") {
@@ -1838,6 +1942,12 @@ const COMPONENT_SCHEMA_ROUTES: Readonly<Record<string, ComponentRoute>> = {
   "POST preview": {
     operation: "single",
     method: "previewComponentSchemaChanges",
+  },
+  // POST /api/field-groups/schema/[slug]/type-change-targets → the Builder type picker's answer for
+  // a saved field, as a collection's
+  "POST type-change-targets": {
+    operation: "single",
+    method: "componentTypeChangeTargets",
   },
   // POST /api/field-groups/schema/[slug]/apply → apply confirmed component schema changes
   "POST apply": { operation: "update", method: "applyComponentSchemaChanges" },
@@ -2152,10 +2262,14 @@ function emailTemplateSubresourceRoute(
  * - GET /api/email-templates/[id]/compare → the owner's changes since the override
  * - PATCH /api/email-templates/[id]/apply-update → apply a review of them
  * - PATCH /api/email-templates/[id]/undo-update → undo that review
+ * - GET /api/email-templates/[id]/sample-records → the real records its owner offers for its test data
+ * - GET /api/email-templates/[id]/sample-records/[recordId] → one record's values for the preview
  */
 function parseEmailTemplateRoutes(
   id: string | undefined,
   subresource: string | undefined,
+  subId: string | undefined,
+  extraSegments: readonly string[],
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
@@ -2191,6 +2305,19 @@ function parseEmailTemplateRoutes(
     return parsed(EMAIL_TEMPLATE_BRAND_ROUTES[httpMethod]);
   }
 
+  // The real records a template's owner offers, and one record's values. Both
+  // read, so the method-derived permission is `read-email-templates`; the
+  // handler then asks the caller may read what the records are read from.
+  if (subresource === "sample-records") {
+    if (httpMethod !== "GET" || extraSegments.length > 0) return null;
+    routeParams.templateId = id;
+    if (!subId) {
+      return parsed({ operation: "list", method: "listSampleRecords" });
+    }
+    routeParams.recordId = subId;
+    return parsed({ operation: "single", method: "loadSampleRecord" });
+  }
+
   const route = subresource
     ? emailTemplateSubresourceRoute(subresource, httpMethod)
     : EMAIL_TEMPLATE_ITEM_ROUTES[httpMethod];
@@ -2223,28 +2350,65 @@ const EMAIL_DELIVERY_READS: Record<string, string> = {
  * - GET /api/email-deliveries/overdue → whether queued email is overdue
  * - GET /api/email-deliveries/[id] → one delivery's detail and timeline
  * - GET /api/email-deliveries/queued/[id] → one queued email's detail
+ * - POST /api/email-deliveries/queued/[id]/retry → retry a queued email now
+ * - POST /api/email-deliveries/queued/[id]/cancel → cancel a queued email
  * - POST /api/email-deliveries/search → the merged Activity for one exact
  *   address, sent in the body so it is never in a URL, a log line or a
  *   browser's history
  */
+/** The queued-email actions a POST names, by their last segment. */
+const QUEUED_EMAIL_ACTIONS: Record<string, string> = {
+  retry: "retryQueuedEmail",
+  cancel: "cancelQueuedEmail",
+};
+
+/**
+ * What a POST under `/api/email-deliveries` names, or null for none:
+ * - the search, a read sent as a POST so its address is in the body;
+ * - `queued/[id]/retry` and `queued/[id]/cancel`, which act on one queued
+ *   email, asking `manage-email-deliveries`.
+ */
+function emailDeliveryPostMethod(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined
+): { operation: OperationType; method: string; queuedId?: string } | null {
+  if (id === "search" && subresource === undefined && subId === undefined) {
+    return { operation: "list", method: "searchByAddress" };
+  }
+  // Own keys only: a segment such as `constructor` names no action.
+  const action =
+    subId !== undefined && Object.hasOwn(QUEUED_EMAIL_ACTIONS, subId)
+      ? QUEUED_EMAIL_ACTIONS[subId]
+      : undefined;
+  if (id === "queued" && subresource && action) {
+    return { operation: "update", method: action, queuedId: subresource };
+  }
+  return null;
+}
+
 function parseEmailDeliveryRoutes(
   id: string | undefined,
   subresource: string | undefined,
   subId: string | undefined,
   httpMethod: string,
-  routeParams: Record<string, string>
+  routeParams: Record<string, string>,
+  additionalParams: readonly string[] = []
 ): ParsedRoute | null {
+  // No route here has a segment past its own: a longer path names none,
+  // rather than doing what the shorter one does.
+  if (additionalParams.length > 0) return null;
   const read = (operation: OperationType, method: string): ParsedRoute => ({
     service: "email",
     operation,
     method,
     routeParams,
   });
-  // The search is a read sent as a POST: its address is in the body.
   if (httpMethod === "POST") {
-    return id === "search" && subresource === undefined && subId === undefined
-      ? read("list", "searchByAddress")
-      : null;
+    const posted = emailDeliveryPostMethod(id, subresource, subId);
+    if (!posted) return null;
+    if (posted.queuedId !== undefined) routeParams.queuedId = posted.queuedId;
+    return read(posted.operation, posted.method);
   }
   // Every other route here is a read, and none has a segment past its id.
   if (httpMethod !== "GET" || subId !== undefined) return null;
@@ -3398,6 +3562,60 @@ function parseDocumentLockRoutes(
 }
 
 // ============================================================================
+// File Routes Parser
+// ============================================================================
+
+/**
+ * The file routes of a collection with `files` (@experimental):
+ *
+ *   POST /files/:slug/uploads               → startFileUpload
+ *   POST /files/:slug/uploads/:id/complete  → completeFileUpload
+ *   GET  /files/:slug/:id/download          → downloadFile
+ *
+ * Exact paths only: anything longer or of another method is no route, so a
+ * mistyped path 404s rather than being taken for a near one. The handler owns
+ * its authentication, which judges staff and signed-in people alike.
+ */
+function parseFileRoutes(
+  slug: string | undefined,
+  subresource: string | undefined,
+  uploadId: string | undefined,
+  rest: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (!slug || subresource === undefined) return null;
+  if (httpMethod === "GET") {
+    return uploadId === "download" && rest.length === 0
+      ? {
+          service: "files",
+          operation: "single",
+          method: "downloadFile",
+          routeParams: { ...routeParams, slug, fileId: subresource },
+        }
+      : null;
+  }
+  if (httpMethod !== "POST" || subresource !== "uploads") return null;
+  if (uploadId === undefined && rest.length === 0) {
+    return {
+      service: "files",
+      operation: "create",
+      method: "startFileUpload",
+      routeParams: { ...routeParams, slug },
+    };
+  }
+  if (uploadId !== undefined && rest.length === 1 && rest[0] === "complete") {
+    return {
+      service: "files",
+      operation: "update",
+      method: "completeFileUpload",
+      routeParams: { ...routeParams, slug, uploadId },
+    };
+  }
+  return null;
+}
+
+// ============================================================================
 // Schema Routes Parser
 // ============================================================================
 
@@ -3614,13 +3832,14 @@ export function parseRestRoute(
     );
     if (versionResult) return versionResult;
 
-    const result = parseSingleRoutes(
-      id,
-      subresource,
-      subId,
-      httpMethod,
-      routeParams
-    );
+    const result =
+      parseSingleSourceReviewRoute(
+        id,
+        subresource,
+        subId,
+        httpMethod,
+        routeParams
+      ) ?? parseSingleRoutes(id, subresource, subId, httpMethod, routeParams);
     if (result) return result;
   }
 
@@ -3652,6 +3871,8 @@ export function parseRestRoute(
     const result = parseEmailTemplateRoutes(
       id,
       subresource,
+      subId,
+      additionalParams,
       httpMethod,
       routeParams
     );
@@ -3665,7 +3886,8 @@ export function parseRestRoute(
       subresource,
       subId,
       httpMethod,
-      routeParams
+      routeParams,
+      additionalParams
     );
     if (result) return result;
   }
@@ -3738,6 +3960,19 @@ export function parseRestRoute(
   // Handle Webhook endpoint management
   if (resource === "webhooks") {
     const result = parseWebhookRoutes(
+      id,
+      subresource,
+      subId,
+      additionalParams,
+      httpMethod,
+      routeParams
+    );
+    if (result) return result;
+  }
+
+  // A collection's private files
+  if (resource === "files") {
+    const result = parseFileRoutes(
       id,
       subresource,
       subId,

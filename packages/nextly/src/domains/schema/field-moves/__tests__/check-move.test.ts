@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
-import { checkMove, placeOf } from "../check-move";
+import { checkMove, definitionRefusal, placeOf } from "../check-move";
 
 const text = (name: string, extra: Record<string, unknown> = {}) =>
   ({ name, label: name, type: "text", ...extra }) as FieldDefinition;
@@ -106,6 +106,159 @@ describe("checkMove", () => {
     expect(checked).toMatchObject({ ok: false, reason: "unique" });
     expect(checked.ok ? "" : checked.message).toMatch(
       /one JSON value, which cannot be kept unique/
+    );
+  });
+
+  // At any depth: the walk that finds the place a field moves to has no bound, so a field kept unique
+  // is refused however many containers deep the place is, and named by the first it enters.
+  it.each([
+    ...[1, 2, 3, 4, 5, 8, 16].map(depth => ["group", depth] as const),
+    ...[1, 2, 3, 4, 5, 8, 16].map(depth => ["repeater", depth] as const),
+  ])(
+    "refuses a field the database keeps unique into a %s, its containers %i deep, naming the outermost",
+    (outermost, depth) => {
+      const chain = Array.from({ length: depth }, (_, at) => ({
+        name: `level${at}`,
+        // The outermost is of the kind asked for; every container below it alternates.
+        type: at === 0 ? outermost : at % 2 === 0 ? "repeater" : "group",
+      }));
+      const nested = (inside: FieldDefinition[]): FieldDefinition[] =>
+        chain.reduceRight(
+          (fields, container) => [
+            { ...container, fields } as unknown as FieldDefinition,
+          ],
+          inside
+        );
+      const slug = text("slug", { unique: true });
+      const path = chain.map(({ name }) => name);
+      const checked = checkMove([slug, ...nested([])], nested([slug]), {
+        from: ["slug"],
+        to: [...path, "slug"],
+      });
+      expect(checked).toMatchObject({ ok: false, reason: "unique" });
+      expect(checked.ok ? "" : checked.message).toContain(
+        `slug cannot be moved into the ${outermost} level0: a ${outermost} keeps its values in one JSON value, which cannot be kept unique.`
+      );
+    }
+  );
+
+  // A field already inside a repeater is refused for its rows, whatever it is: taking its uniqueness
+  // away would not make the move possible, so the message never says it would.
+  it.each([
+    [
+      "out to the row",
+      ["items"],
+      ["slug"],
+      "out-of-repeater",
+      /cannot be moved out of the repeating rows items/,
+    ],
+    [
+      "into a group outside it",
+      ["items"],
+      ["meta", "slug"],
+      "out-of-repeater",
+      /cannot be moved out of the repeating rows items/,
+    ],
+    [
+      "into a group inside it",
+      ["items"],
+      ["items", "row", "slug"],
+      "within-repeater",
+      /^Moving slug within the repeating rows items is not available yet\./,
+    ],
+  ] as const)(
+    "refuses a unique field inside a repeater moved %s for its rows, not its uniqueness",
+    (_what, _from, to, reason, message) => {
+      const slug = text("slug", { unique: true });
+      const items = (inside: FieldDefinition[], row: FieldDefinition[]) =>
+        ({
+          name: "items",
+          type: "repeater",
+          fields: [...inside, group("row", row)],
+        }) as unknown as FieldDefinition;
+      const checked = checkMove(
+        [items([slug], []), group("meta", [])],
+        [
+          items(to[0] === "items" ? [] : [], to[0] === "items" ? [slug] : []),
+          ...(to[0] === "slug" ? [slug] : []),
+          group("meta", to[0] === "meta" ? [slug] : []),
+        ],
+        { from: ["items", "slug"], to: [...to] }
+      );
+      expect(checked).toMatchObject({ ok: false, reason });
+      expect(checked.ok ? "" : checked.message).toMatch(message);
+    }
+  );
+
+  // A container no move goes into or out of, or that stores nothing, refuses the move whatever the
+  // field is: taking its uniqueness away would not make the move possible, so the message never
+  // says it would, though the first container the move enters is a group.
+  it.each([
+    ["component", "field-group"],
+    ["fieldGroup", "field-group"],
+    ["blocks", "blocks"],
+    ["virtual", "no-column"],
+  ] as const)(
+    "refuses a unique field into a %s inside a group, and out of one into a group, for the container",
+    (type, reason) => {
+      const slug = text("slug", { unique: true });
+      const held = (...fields: FieldDefinition[]) =>
+        (type === "virtual"
+          ? group("inner", fields, { virtual: true })
+          : { name: "inner", type, fields }) as unknown as FieldDefinition;
+      const refusedFor = (
+        before: FieldDefinition[],
+        after: FieldDefinition[],
+        from: string[],
+        to: string[]
+      ) => {
+        const checked = checkMove(before, after, { from, to });
+        expect(checked).toMatchObject({ ok: false, reason });
+        expect(checked.ok ? "" : checked.message).not.toMatch(/unique/);
+      };
+      refusedFor(
+        [slug, group("meta", [held()])],
+        [group("meta", [held(slug)])],
+        ["slug"],
+        ["meta", "inner", "slug"]
+      );
+      refusedFor(
+        [held(slug), group("meta", [])],
+        [held(), group("meta", [slug])],
+        ["inner", "slug"],
+        ["meta", "slug"]
+      );
+    }
+  );
+
+  // Uniqueness is judged before the repeater: what stops the move is that its values would lose
+  // their uniqueness, which the repeater's own "not available yet" would not say.
+  it("refuses a field the database keeps unique into a repeater, naming the repeater", () => {
+    const items = (fields: FieldDefinition[]) =>
+      ({
+        name: "items",
+        label: "items",
+        type: "repeater",
+        fields,
+      }) as unknown as FieldDefinition;
+    const checked = checkMove(
+      [text("slug", { unique: true }), items([])],
+      [items([text("slug", { unique: true })])],
+      { from: ["slug"], to: ["items", "slug"] }
+    );
+    expect(checked).toMatchObject({ ok: false, reason: "unique" });
+    expect(checked.ok ? "" : checked.message).toBe(
+      "slug cannot be moved into the repeater items: a repeater keeps its values in one JSON value, which cannot be kept unique. It can be moved once it is no longer unique (a one-to-one changed to many-to-one, or its unique setting removed), as a change of its own."
+    );
+    // At any depth: into a group inside the repeater, the repeater is what it enters first.
+    const deep = checkMove(
+      [text("slug", { unique: true }), items([group("meta", [])])],
+      [items([group("meta", [text("slug", { unique: true })])])],
+      { from: ["slug"], to: ["items", "meta", "slug"] }
+    );
+    expect(deep).toMatchObject({ ok: false, reason: "unique" });
+    expect(deep.ok ? "" : deep.message).toMatch(
+      /^slug cannot be moved into the repeater items: a repeater keeps/
     );
   });
 
@@ -339,16 +492,18 @@ describe("checkMove", () => {
     });
   });
 
-  it("refuses a move out of a group into a unique field, whose values would arrive after the uniqueness", () => {
+  // Its column is made unique as the move fills it: the repeats are counted before anything is
+  // written, and the file stops over any the database it runs on holds (`repeatedValuesStop`).
+  it("plans a move out of a group into a unique field", () => {
     const checked = checkMove(
       [group("meta", [text("slug")])],
       [text("slug", { unique: true }), group("meta", [])],
       { from: ["meta", "slug"], to: ["slug"] }
     );
-    expect(checked).toMatchObject({ ok: false, reason: "unique" });
-    expect((checked as { message: string }).message).toMatch(
-      /Move it first, then make it unique as a change of its own/
-    );
+    expect(checked).toMatchObject({
+      ok: true,
+      move: { to: { kind: "column", column: "slug" } },
+    });
   });
 
   it("refuses a move into a group in the same save that takes the field's uniqueness away", () => {
@@ -391,6 +546,110 @@ describe("checkMove", () => {
     ).toMatchObject({ ok: false, reason: "out-of-repeater" });
   });
 
+  // The field group is named with every collection, Single and field group using it, directly or
+  // through another field group, as the save reads them (`fieldGroupUsers`).
+  it("names a field group's every user when it refuses a move into or out of it", () => {
+    const placed = {
+      name: "seo",
+      label: "SEO",
+      type: "component",
+      component: "seo_box",
+      fields: [],
+    } as unknown as FieldDefinition;
+    const holding = { ...placed, fields: [text("title")] } as FieldDefinition;
+    const checked = checkMove(
+      [text("title"), placed],
+      [holding],
+      { from: ["title"], to: ["seo", "title"] },
+      {
+        fieldGroupUsers: slug =>
+          slug === "seo_box"
+            ? {
+                uses: [
+                  { entityType: "collection", entitySlug: "posts" },
+                  { entityType: "collection", entitySlug: "articles" },
+                  { entityType: "fieldGroup", entitySlug: "card" },
+                  {
+                    entityType: "single",
+                    entitySlug: "home",
+                    via: ["card"],
+                  },
+                ],
+                complete: true,
+              }
+            : undefined,
+      }
+    );
+    expect(checked).toMatchObject({ ok: false, reason: "field-group" });
+    expect(checked.ok ? "" : checked.message).toBe(
+      "title cannot be moved into or out of the field group seo_box: a field group is changed only in its own editor. It is used by the collection posts, the collection articles, the field group card, the Single home (through card)."
+    );
+  });
+
+  // A blocks field holds blocks declared in code, not fields, so no path goes through it: a move
+  // naming one is refused saying that, where it would otherwise read as naming no field.
+  it("refuses a move into or out of a blocks field, which holds blocks declared in code", () => {
+    const body = {
+      name: "body",
+      label: "Body",
+      type: "blocks",
+    } as unknown as FieldDefinition;
+    const into = checkMove([text("title"), body], [body], {
+      from: ["title"],
+      to: ["body", "title"],
+    });
+    expect(into).toMatchObject({ ok: false, reason: "blocks" });
+    expect(into.ok ? "" : into.message).toBe(
+      "title cannot be moved into or out of Body: a blocks field holds blocks declared in code, not fields."
+    );
+    expect(
+      checkMove([body], [text("title"), body], {
+        from: ["body", "title"],
+        to: ["title"],
+      })
+    ).toMatchObject({ ok: false, reason: "blocks" });
+  });
+
+  // A host's stored definition holds a field group by reference, without its fields, so its paths
+  // go through the reference: refused for the field group, where they would read as naming no field.
+  it("refuses a move into or out of a field group held by reference, naming its users", () => {
+    const placed = {
+      name: "card",
+      label: "Card",
+      type: "component",
+      component: "card_box",
+    } as unknown as FieldDefinition;
+    const users = {
+      fieldGroupUsers: (slug: string) =>
+        slug === "card_box"
+          ? {
+              uses: [
+                { entityType: "collection" as const, entitySlug: "posts" },
+              ],
+              complete: false,
+            }
+          : undefined,
+    };
+    const out = checkMove(
+      [placed],
+      [text("summary"), placed],
+      { from: ["card", "summary"], to: ["summary"] },
+      users
+    );
+    expect(out).toMatchObject({ ok: false, reason: "field-group" });
+    expect(out.ok ? "" : out.message).toBe(
+      "summary cannot be moved into or out of the field group card_box: a field group is changed only in its own editor. It is used by the collection posts, and others you may not read."
+    );
+    expect(
+      checkMove(
+        [text("summary"), placed],
+        [placed],
+        { from: ["summary"], to: ["card", "summary"] },
+        users
+      )
+    ).toMatchObject({ ok: false, reason: "field-group" });
+  });
+
   it("refuses a move into a field group spelled either way", () => {
     for (const type of ["component", "fieldGroup"]) {
       const placed = {
@@ -414,15 +673,79 @@ describe("checkMove", () => {
   describe("in an entity kept per language", () => {
     const translated = { localized: true };
 
-    it("refuses a translated field into a group that keeps one value for every language", () => {
-      expect(
-        checkMove(
-          before,
-          after,
-          { from: ["title"], to: ["meta", "title"] },
-          translated
-        )
-      ).toMatchObject({ ok: false, reason: "translation-changes" });
+    // A group holding text keeps one structure in every language and each language's text beside
+    // it, which the move's statements do not carry: moving a text kept for each language into or
+    // out of it is refused, naming the field. Broken, the move carries the structure's values and
+    // leaves every language's text behind.
+    it("refuses a translated field into a group that keeps text inside, naming the field", () => {
+      const checked = checkMove(
+        before,
+        after,
+        { from: ["title"], to: ["meta", "title"] },
+        translated
+      );
+      expect(checked).toMatchObject({
+        ok: false,
+        reason: "translated-container",
+      });
+      expect(!checked.ok && checked.message).toMatch(/^title cannot be moved/);
+    });
+
+    it("refuses a field out of a group that keeps text inside, naming the field", () => {
+      const inside = [
+        text("title"),
+        group("box", [text("label"), text("note")]),
+      ];
+      const outside = [
+        text("title"),
+        text("label"),
+        group("box", [text("note")]),
+      ];
+      const checked = checkMove(
+        inside,
+        outside,
+        { from: ["box", "label"], to: ["label"] },
+        translated
+      );
+      expect(checked).toMatchObject({
+        ok: false,
+        reason: "translated-container",
+      });
+      expect(!checked.ok && checked.message).toMatch(
+        /^label cannot be moved into or out of box/
+      );
+    });
+
+    // Held once for every language in the structure the move carries, as a shared text is.
+    it("plans a number, and a shared text, into and out of a group that keeps text inside", () => {
+      for (const field of [
+        { name: "views", label: "views", type: "number" } as FieldDefinition,
+        text("views", { localized: false }),
+      ]) {
+        const onRow = [field, group("box", [text("note")])];
+        const grouped = [group("box", [text("note"), field])];
+        for (const [was, is, from, to] of [
+          [onRow, grouped, ["views"], ["box", "views"]],
+          [grouped, onRow, ["box", "views"], ["views"]],
+        ] as const) {
+          expect(checkMove(was, is, { from, to }, translated)).toMatchObject({
+            ok: true,
+            move: { perLanguage: false },
+          });
+        }
+      }
+    });
+
+    it("plans a field out of a group that keeps no text inside, which has nothing per language", () => {
+      const number = (name: string) =>
+        ({ name, label: name, type: "number" }) as FieldDefinition;
+      const checked = checkMove(
+        [text("title"), group("stats", [number("count"), number("total")])],
+        [text("title"), number("count"), group("stats", [number("total")])],
+        { from: ["stats", "count"], to: ["count"] },
+        translated
+      );
+      expect(checked).toMatchObject({ ok: true });
     });
 
     it("plans a translated field into a translated group, each language's value moving with it", () => {
@@ -451,5 +774,78 @@ describe("checkMove", () => {
         )
       ).toMatchObject({ ok: true, move: { perLanguage: false } });
     });
+  });
+});
+
+// What a road that would refuse a move for a reason of its own says first: only what the two field
+// lists decide alone, so a message never answers with a reason the road may know better.
+describe("definitionRefusal", () => {
+  const before = [
+    { name: "code", type: "text", unique: true },
+    { name: "tags", type: "text" },
+    { name: "label", type: "text" },
+    {
+      name: "items",
+      type: "repeater",
+      fields: [{ name: "note", type: "text" }],
+    },
+    { name: "meta", type: "group", fields: [{ name: "note", type: "text" }] },
+    { name: "page", type: "blocks" },
+    { name: "card", type: "component", component: "card" },
+  ] as unknown as FieldDefinition[];
+  const moved = (name: string, into: string) =>
+    before.map(field =>
+      (field as { name?: string }).name === into
+        ? {
+            ...field,
+            fields: [
+              ...((field as { fields?: object[] }).fields ?? []),
+              before.find(each => (each as { name?: string }).name === name),
+            ],
+          }
+        : (field as { name?: string }).name === name
+          ? undefined
+          : field
+    ) as unknown as FieldDefinition[];
+
+  it.each([
+    ["a field kept unique into a group", "code", "meta"],
+    ["a field kept unique into a repeater", "code", "items"],
+    ["a field into a repeater", "label", "items"],
+  ] as const)("says %s refused, for what it is", (_what, name, into) => {
+    expect(
+      definitionRefusal(before, moved(name, into).filter(Boolean) as never, {
+        from: [name],
+        to: [into, name],
+      })
+    ).toBeTypeOf("string");
+  });
+
+  it("says nothing of a move that is allowed, or is refused for a reason of another kind", () => {
+    const allowed = moved("tags", "meta").filter(Boolean) as never;
+    expect(
+      definitionRefusal(before, allowed, {
+        from: ["tags"],
+        to: ["meta", "tags"],
+      })
+    ).toBeUndefined();
+    // The same name at a place that does not exist is a save that does not match its fields.
+    expect(
+      definitionRefusal(before, before, {
+        from: ["gone"],
+        to: ["meta", "gone"],
+      })
+    ).toBeUndefined();
+  });
+
+  it("says a field group refused only with its users to name", () => {
+    const after = before;
+    const request = { from: ["label"], to: ["card", "label"] };
+    expect(definitionRefusal(before, after, request)).toBeUndefined();
+    expect(
+      definitionRefusal(before, after, request, {
+        fieldGroupUsers: () => ({ uses: [], complete: true }),
+      })
+    ).toMatch(/cannot be moved into or out of the field group card/);
   });
 });

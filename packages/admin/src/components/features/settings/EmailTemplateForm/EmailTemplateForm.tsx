@@ -35,6 +35,7 @@ import { SendTestDialog } from "./SendTestDialog";
 import { PreviewPane } from "./TemplatePreview";
 import { useDerivedTemplateState } from "./useDerivedTemplateState";
 import { useOwnershipActs, type OwnershipActs } from "./useOwnershipActs";
+import { useSampleEdits } from "./useSampleEdits";
 import { useTemplateVariables } from "./useTemplateVariables";
 import { useVariableInsertion } from "./useVariableInsertion";
 import { VariableChips } from "./VariablesRail";
@@ -165,6 +166,14 @@ function ContentColumn({
   );
 }
 
+/** The saved template's id: a template not yet created has none. */
+function savedIdOf(
+  mode: EmailTemplateFormProps["mode"],
+  template: EmailTemplateFormProps["template"]
+): string | undefined {
+  return mode === "edit" ? template?.id : undefined;
+}
+
 export function EmailTemplateForm({
   mode,
   template,
@@ -184,7 +193,6 @@ export function EmailTemplateForm({
   });
   const reveal = (panel: RevealRequest["panel"]) =>
     setRevealRequest(previous => ({ panel, seq: previous.seq + 1 }));
-  const [sampleOverride, setSampleOverride] = useState<string | null>(null);
   const [sendTestOpen, setSendTestOpen] = useState(false);
 
   // The row being edited keeps its kind; layouts are wrappers, not bodies.
@@ -300,9 +308,15 @@ export function EmailTemplateForm({
     [form, insertCodedVariable]
   );
 
+  // The declared variables, none while the form holds none.
+  const declaredVariables = useMemo(() => variables ?? [], [variables]);
+  const sampleEditing = useSampleEdits(
+    declaredVariables,
+    savedIdOf(mode, template)
+  );
   const derived = useDerivedTemplateState({
     variables,
-    sampleOverride,
+    sampleEdits: sampleEditing.sampleEdits,
     subject,
     htmlContent,
     plainTextContent,
@@ -321,7 +335,7 @@ export function EmailTemplateForm({
     // From address and Reply-To are always rendered by the Liquid engine,
     // even when the body is kept on the previous one.
     liquidSources: [fromOverride, replyTo],
-    declared: variables ?? [],
+    declared: declaredVariables,
     data: derived.sampleData,
     isLayoutRow,
     liquid: !keptOnOldEngine,
@@ -343,8 +357,8 @@ export function EmailTemplateForm({
   // What the editors complete: the declared variables, and the test data's
   // shape for their properties.
   const completion = useMemo(
-    () => ({ declared: variables ?? [], sample: derived.sampleData }),
-    [variables, derived.sampleData]
+    () => ({ declared: declaredVariables, sample: derived.sampleData }),
+    [declaredVariables, derived.sampleData]
   );
 
   const toggleSheet = (panel: SheetPanel) =>
@@ -433,7 +447,7 @@ export function EmailTemplateForm({
                 completion,
                 chips: (
                   <VariableChips
-                    declared={variables ?? []}
+                    declared={declaredVariables}
                     onInsert={insertVariable}
                   />
                 ),
@@ -454,11 +468,16 @@ export function EmailTemplateForm({
             isLayoutRow ? null : (
               <DataRail
                 sampleText={derived.sampleText}
-                onSampleChange={setSampleOverride}
-                onReset={() => setSampleOverride(null)}
+                sampleData={derived.sampleData}
+                variables={declaredVariables}
+                onFieldChange={sampleEditing.onFieldChange}
+                onJsonChange={sampleEditing.onJsonChange}
+                onReset={sampleEditing.onReset}
                 sampleError={derived.sampleError}
                 check={variableCheck}
                 onDeclare={owns ? declareVariable : undefined}
+                templateId={savedIdOf(mode, template)}
+                onRecord={sampleEditing.onRecord}
               />
             )
           }
@@ -470,7 +489,7 @@ export function EmailTemplateForm({
               isLayoutRow={isLayoutRow}
               providers={providersData?.data ?? []}
               layouts={layouts}
-              declared={variables ?? []}
+              declared={declaredVariables}
               onInsert={insertVariable}
               ownsContent={owns}
               carriesSecret={template?.carriesSecret === true}
@@ -505,6 +524,7 @@ export function EmailTemplateForm({
         <WorkbenchDialogs
           template={template}
           acts={acts}
+          source={derived.previewSource}
           onDiscardEdits={() => form.reset(templateToFormValues(template))}
         />
       ) : null}

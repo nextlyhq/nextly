@@ -250,6 +250,25 @@ const RESOURCE_REQUESTS: Partial<
 const ABSENT_ID = "00000000-0000-4000-8000-00000000abcd";
 
 /**
+ * A resource action made through a route of its own rather than
+ * `RESOURCE_REQUESTS`: the email deliveries' one write, the retry of a queued
+ * email, asked for one that does not exist.
+ */
+const RESOURCE_ACTION_REQUESTS: Partial<
+  Record<
+    Row["target"],
+    Partial<Record<Row["action"], { method: Method; segments: string[] }>>
+  >
+> = {
+  deliveries: {
+    update: {
+      method: "POST",
+      segments: ["email-deliveries", "queued", ABSENT_ID, "retry"],
+    },
+  },
+};
+
+/**
  * A resource route's answer: its gate's 401 or 403 as is, and `A` for a
  * request the gate let through, whatever the route then said about the
  * absent id or the empty body. A failure (5xx) or a limit (429) is kept.
@@ -257,10 +276,17 @@ const ABSENT_ID = "00000000-0000-4000-8000-00000000abcd";
 async function restResource(row: Row, headers: Record<string, string>) {
   const path = RESOURCE_PATHS[row.target];
   const asked = RESOURCE_REQUESTS[row.action];
-  if (!path || !asked)
+  const own = RESOURCE_ACTION_REQUESTS[row.target]?.[row.action];
+  if (!path || (!asked && !own))
     throw new Error(`no resource request for ${rowKey(row)}`);
-  const segments = asked.byId ? [path, ABSENT_ID] : [path];
-  const res = await request(asked.method, segments, headers, asked.body);
+  const res = own
+    ? await request(own.method, own.segments, headers)
+    : await request(
+        asked!.method,
+        asked!.byId ? [path, ABSENT_ID] : [path],
+        headers,
+        asked!.body
+      );
   const { status } = res;
   await noteResponse(res);
   if (status === 401 || status === 403 || status === 429 || status >= 500) {
@@ -438,10 +464,39 @@ const DIRECT_SYSTEM_READS: Partial<
   deliveries: (n, as) => n.emailDeliveries.find(as),
 };
 
+/**
+ * The Direct API writes of a target that is not an entry, by action: the
+ * retry of a queued email that does not exist, as the REST door asks it.
+ */
+const DIRECT_SYSTEM_WRITES: Partial<
+  Record<
+    Row["target"],
+    Partial<
+      Record<Row["action"], (n: Nextly, as: CheckedCaller) => Promise<unknown>>
+    >
+  >
+> = {
+  deliveries: {
+    update: (n, as) => n.email.retryQueued({ ...as, id: ABSENT_ID }),
+  },
+};
+
 async function direct(world: World, row: Row, who: CallerHandle) {
   const nextly = world.t.nextly;
   const as = directCaller(who);
-  const systemRead = DIRECT_SYSTEM_READS[row.target];
+  const systemWrite = DIRECT_SYSTEM_WRITES[row.target]?.[row.action];
+  if (systemWrite) {
+    // Never a principal, as the reads. The gate let it through when it
+    // answers anything but a refusal: a queued email that does not exist.
+    try {
+      await systemWrite(nextly, checkedCallerOf(who));
+    } catch (error) {
+      if ((error as { code?: unknown })?.code !== "NOT_FOUND") throw error;
+    }
+    return "A";
+  }
+  const systemRead =
+    row.action === "read" ? DIRECT_SYSTEM_READS[row.target] : undefined;
   if (systemRead) {
     // Never a principal: the table asks these reads of the callers REST names.
     await systemRead(nextly, checkedCallerOf(who));
@@ -1193,6 +1248,26 @@ async function bulkItemAnswer(
   };
 }
 
+/**
+ * The real records an email template offers for its test data, asked of the
+ * template whose records are read from the row's target, as the workbench
+ * asks: `A` where the route listed them, its status where it refused.
+ */
+async function sample(world: World, row: Row, who: CallerHandle) {
+  const id = world.sampleTemplates.get(targetSlug(row));
+  if (!id) throw new Error(`no template reads ${targetSlug(row)}`);
+  const res = await request(
+    "GET",
+    ["email-templates", id, "sample-records"],
+    who.headers
+  );
+  if (res.status !== 200) {
+    await noteResponse(res);
+    return String(res.status);
+  }
+  return "A";
+}
+
 const ADAPTERS: Record<
   Door,
   (world: World, row: Row, who: CallerHandle) => Promise<Answer | Attributed>
@@ -1211,6 +1286,7 @@ const ADAPTERS: Record<
   lock,
   capabilities,
   bulk,
+  sample,
 };
 
 /**

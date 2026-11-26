@@ -5,7 +5,9 @@
  * paint one document's comparison under another document's heading; send a
  * viewer who may only READ the document to a page their permission refuses; and
  * nest a second primary landmark inside the one the dashboard shell provides.
+ * The two versions are chosen by name in one card, "Compare" and "with".
  */
+import userEvent from "@testing-library/user-event";
 import { useEffect, useRef } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -66,6 +68,20 @@ vi.mock("../useMarkVersionSeen", () => ({ useMarkVersionSeen: vi.fn() }));
 
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (...a: unknown[]) => canMock(...a) as boolean,
+}));
+
+// Two languages configured, so whether the page offers Languages is the
+// document's to say.
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({
+    enabled: true,
+    defaultLocale: "en",
+    locales: [
+      { code: "en", label: "English" },
+      { code: "es", label: "Spanish" },
+    ],
+    getLocale: () => undefined,
+  }),
 }));
 
 vi.mock("@admin/lib/navigation", () => ({
@@ -134,38 +150,47 @@ describe("VersionComparePage — landmarks", () => {
   });
 });
 
-describe("VersionComparePage — the back control", () => {
-  it("returns to the document when the viewer can edit it", () => {
+describe("VersionComparePage — the way back", () => {
+  it("leads back to the document when the viewer can edit it", () => {
     canMock.mockReturnValue(true);
     render(
       <VersionComparePage
         scope={collection("e1")}
         documentHref="/admin/collections/posts/e1"
         readOnlyHref="/admin/collections/posts"
+        documentTitle="Launch notes"
+        listCrumb={{ label: "Posts", href: "/admin/collections/posts" }}
       />
     );
 
-    screen.getByRole("button", { name: "Back to the document" }).click();
-    expect(navigateMock).toHaveBeenCalledWith("/admin/collections/posts/e1");
+    const trail = screen.getByRole("navigation", { name: /breadcrumb/i });
+    expect(within(trail).getByRole("link", { name: "Posts" })).toHaveAttribute(
+      "href",
+      "/admin/collections/posts"
+    );
+    expect(
+      within(trail).getByRole("link", { name: "Launch notes" })
+    ).toHaveAttribute("href", "/admin/collections/posts/e1");
+    expect(within(trail).getByText("Compare")).toBeInTheDocument();
   });
 
   it("MUST NOT send a read-only viewer to a page their permission refuses", () => {
     // Reading a history needs `read-posts`; the editor needs `update-posts`. A
     // colleague can open a shared comparison, read it, and be sent to
-    // permission-denied by the one control always on screen.
+    // permission-denied by the one way back always on screen.
     canMock.mockReturnValue(false);
     render(
       <VersionComparePage
         scope={collection("e1")}
         documentHref="/admin/collections/posts/e1"
         readOnlyHref="/admin/collections/posts"
+        documentTitle="Launch notes"
       />
     );
 
-    screen.getByRole("button", { name: "Back" }).click();
-    expect(navigateMock).toHaveBeenCalledWith("/admin/collections/posts");
-    expect(navigateMock).not.toHaveBeenCalledWith(
-      "/admin/collections/posts/e1"
+    expect(screen.getByRole("link", { name: "Launch notes" })).toHaveAttribute(
+      "href",
+      "/admin/collections/posts"
     );
   });
 
@@ -220,9 +245,8 @@ describe("VersionComparePage — one comparison never paints under another", () 
 
 describe("VersionComparePage — why there is nothing to compare", () => {
   it("MUST NOT tell a document with no versions that it has one", () => {
-    // The rail says "No versions yet" in this state. The pane used to say
-    // "There is only one version so far" beside it, because both were derived
-    // from the same empty pair — two claims about the same document, one false.
+    // "There is only one version so far" was once said of an empty history,
+    // because both were derived from the same empty pair.
     useVersionsMock.mockReturnValue(listing([]));
 
     render(
@@ -233,13 +257,11 @@ describe("VersionComparePage — why there is nothing to compare", () => {
       />
     );
 
-    // Scoped to each surface, because the point is that they say DIFFERENT
-    // things: the rail reports the history, the pane reports the comparison.
     const pane = within(screen.getByRole("region", { name: "Comparison" }));
     expect(pane.queryByText(/only one version so far/)).not.toBeInTheDocument();
     expect(pane.getByText(/nothing to compare yet/i)).toBeInTheDocument();
-    // The rail still owns that message, and now owns it alone.
-    expect(screen.getByText("No versions yet")).toBeInTheDocument();
+    // With nothing to choose, the choice is not offered.
+    expect(screen.getByRole("combobox", { name: "with" })).toBeDisabled();
   });
 
   it("says a genuine single-version history is exactly that", () => {
@@ -258,7 +280,7 @@ describe("VersionComparePage — why there is nothing to compare", () => {
     expect(screen.getByText(/only one version so far/)).toBeInTheDocument();
   });
 
-  it("points at Load more when the predecessor is merely unfetched", () => {
+  it("points at Load older versions when the predecessor is merely unfetched", () => {
     // Neither "no versions" nor "only one version" is true here, and both send
     // the reader to the wrong conclusion about their own document.
     useVersionsMock.mockReturnValue(listing([row(9)], { hasNextPage: true }));
@@ -275,14 +297,17 @@ describe("VersionComparePage — why there is nothing to compare", () => {
     expect(
       screen.queryByText(/only one version so far/)
     ).not.toBeInTheDocument();
+    // And the control it points at is there.
+    expect(
+      screen.getByRole("button", { name: "Load older versions" })
+    ).toBeInTheDocument();
   });
 });
 
 describe("VersionComparePage — a failed history is not an empty one", () => {
-  it("does not tell the reader to save their first version when the read failed", () => {
+  it("does not call a history that failed to load an empty one", () => {
     // React Query clears `isLoading` on failure while the list stays empty, so
-    // the rail's empty state renders beside a pane correctly reporting that the
-    // history could not be loaded.
+    // an empty history's answer could stand beside the failure.
     useVersionsMock.mockReturnValue(
       listing([], { isError: true, data: undefined })
     );
@@ -295,7 +320,7 @@ describe("VersionComparePage — a failed history is not an empty one", () => {
       />
     );
 
-    expect(screen.queryByText("No versions yet")).not.toBeInTheDocument();
+    expect(screen.queryByText(/nothing to compare yet/i)).toBeNull();
     expect(
       screen.getByText("This document's history could not be loaded.")
     ).toBeInTheDocument();
@@ -314,32 +339,25 @@ describe("VersionComparePage — a failed history is not an empty one", () => {
       />
     );
 
-    expect(screen.getByText("No versions yet")).toBeInTheDocument();
+    expect(screen.getByText(/nothing to compare yet/i)).toBeInTheDocument();
   });
 });
 
-describe("VersionComparePage — choosing a row", () => {
+describe("VersionComparePage — choosing the two versions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     canMock.mockReturnValue(true);
-    useVersionsMock.mockReturnValue(listing([row(9), row(8)]));
+    useVersionsMock.mockReturnValue(listing([row(9), row(8), row(7)]));
   });
 
   /**
    * `navigateTo` skips a push only when its argument equals
    * `window.location.pathname`, and a target carrying `?from=&to=` never does.
-   * So choosing the row already on screen pushed another identical entry, and
-   * Back then walked through indistinguishable copies of one comparison
+   * So choosing the version already on screen pushed another identical entry,
+   * and Back then walked through indistinguishable copies of one comparison
    * before leaving the page — which reads as a stuck Back button.
    */
   it("does not push a second entry for the comparison already shown", async () => {
-    window.history.replaceState(
-      null,
-      "",
-      "/admin/collections/posts/e1/versions?from=8&to=9"
-    );
-
-    const user = (await import("@testing-library/user-event")).default.setup();
     render(
       <VersionComparePage
         scope={collection("e1")}
@@ -350,24 +368,23 @@ describe("VersionComparePage — choosing a row", () => {
       />
     );
 
-    await user.click(screen.getByRole("button", { name: /Version 9/ }));
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "with" }),
+      "9"
+    );
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Compare" }),
+      "8"
+    );
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
   /**
-   * The control, and it has to be capable of the other answer: a row naming a
-   * DIFFERENT pair still navigates. Without it the assertion above would pass
-   * on a page whose rows no longer do anything at all.
+   * The control, and it has to be capable of the other answer: a DIFFERENT
+   * pair still navigates. Without it the assertion above would pass on a page
+   * whose choices no longer do anything at all.
    */
-  it("still navigates when a different pair is chosen", async () => {
-    window.history.replaceState(
-      null,
-      "",
-      "/admin/collections/posts/e1/versions?from=8&to=9"
-    );
-    useVersionsMock.mockReturnValue(listing([row(9), row(8), row(7)]));
-
-    const user = (await import("@testing-library/user-event")).default.setup();
+  it("compares with the older version chosen, keeping the newer one", async () => {
     render(
       <VersionComparePage
         scope={collection("e1")}
@@ -378,8 +395,210 @@ describe("VersionComparePage — choosing a row", () => {
       />
     );
 
-    await user.click(screen.getByRole("button", { name: /Version 8/ }));
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Compare" }),
+      "7"
+    );
+    expect(navigateMock).toHaveBeenCalledWith(
+      versionsHref(collection("e1"), { from: 7, to: 9 })
+    );
+  });
+
+  it("keeps the older version when the newer one chosen pairs with it", async () => {
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        from={7}
+        to={8}
+      />
+    );
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "with" }),
+      "9"
+    );
+    expect(navigateMock).toHaveBeenCalledWith(
+      versionsHref(collection("e1"), { from: 7, to: 9 })
+    );
+  });
+
+  it("keeps the older version the page resolved when the address named none", async () => {
+    // The ordinary route names no pair: the page resolves one (here 9 and
+    // 10), and the Compare picker shows its older side, so choosing another
+    // version in "with" keeps that side rather than moving both.
+    useVersionsMock.mockReturnValue(listing([row(10), row(9), row(8)]));
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+      />
+    );
+    expect(screen.getByRole("combobox", { name: "Compare" })).toHaveValue("9");
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "with" }),
+      "8"
+    );
+    expect(navigateMock).toHaveBeenCalledWith(
+      versionsHref(collection("e1"), { from: 9, to: 8 })
+    );
+  });
+
+  it("asks for the version before when the newer one chosen is the older one shown", async () => {
+    // A version compared with itself says nothing.
+    useVersionsMock.mockReturnValue(listing([row(10), row(9), row(8)]));
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+      />
+    );
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "with" }),
+      "9"
+    );
+    expect(navigateMock).toHaveBeenCalledWith(
+      versionsHref(collection("e1"), { from: "previous", to: 9 })
+    );
+  });
+
+  it("swaps the two versions, so the change reads the other way", async () => {
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        from={7}
+        to={9}
+      />
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Swap the two versions" })
+    );
+    expect(navigateMock).toHaveBeenCalledWith(
+      versionsHref(collection("e1"), { from: 9, to: 7 })
+    );
+  });
+
+  it("swaps a pair the page resolved from the version before", async () => {
+    // The past version's Compare opens `from=previous`: the page draws two
+    // versions, and they can be swapped as any two can.
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        from="previous"
+        to={9}
+      />
+    );
+
+    const swap = screen.getByRole("button", { name: "Swap the two versions" });
+    expect(swap).toBeEnabled();
+    await userEvent.click(swap);
+    expect(navigateMock).toHaveBeenCalledWith(
+      versionsHref(collection("e1"), { from: 9, to: 8 })
+    );
+  });
+
+  it("does not offer the version on the other side as the older one", () => {
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        from={8}
+        to={9}
+      />
+    );
+
+    const older = within(screen.getByRole("combobox", { name: "Compare" }));
+    // A version compared with itself says nothing.
+    expect(older.queryByRole("option", { name: /^Version 9/ })).toBeNull();
+    expect(
+      older.getByRole("option", { name: /^Version 7/ })
+    ).toBeInTheDocument();
+  });
+
+  it("drops the address's language when the version chosen holds none", async () => {
+    useVersionsMock.mockReturnValue(
+      listing([row(9, null), row(8, "fr"), row(7, "fr")])
+    );
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        from={7}
+        to={8}
+        locale="fr"
+      />
+    );
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "with" }),
+      "9"
+    );
+    // The choice navigates, to the version before 9 in its own (no)
+    // language, and the address's earlier language goes with it.
     expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).toHaveBeenCalledWith(
+      versionsHref(collection("e1"), { from: "previous", to: 9 })
+    );
+    expect(String(navigateMock.mock.calls[0]?.[0])).not.toContain("locale=");
+  });
+
+  it("offers no numbered older version until the newer one's language is known", () => {
+    // The newer version lies beyond the loaded page and no comparison has
+    // been drawn yet: a number offered now could pair two languages.
+    useVersionsMock.mockReturnValue(
+      listing([row(9, "fr"), row(8, "de")], { hasNextPage: true })
+    );
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        from={19}
+        to={20}
+      />
+    );
+
+    const older = within(screen.getByRole("combobox", { name: "Compare" }));
+    expect(older.queryByRole("option", { name: /^Version 9/ })).toBeNull();
+    expect(older.queryByRole("option", { name: /^Version 8/ })).toBeNull();
+    // The baselines stay, since the server pairs them itself.
+    expect(
+      older.getByRole("option", { name: "Currently published" })
+    ).toBeInTheDocument();
+  });
+
+  it("offers older versions only in the newer one's language", () => {
+    useVersionsMock.mockReturnValue(
+      listing([row(9, "fr"), row(8, "de"), row(7, "fr")])
+    );
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        from={7}
+        to={9}
+      />
+    );
+
+    const older = within(screen.getByRole("combobox", { name: "Compare" }));
+    expect(
+      older.getByRole("option", { name: /^Version 7/ })
+    ).toBeInTheDocument();
+    // A pair across two languages is one the server refuses.
+    expect(older.queryByRole("option", { name: /^Version 8/ })).toBeNull();
   });
 });
 
@@ -391,13 +610,17 @@ describe("VersionComparePage — a failed next page", () => {
 
   /**
    * An infinite query flips to `isError` when a LATER page fails, while
-   * keeping the pages it already has. Passing that aggregate state to the rail
-   * discarded every row the reader already had — and the Load more control
-   * that would have retried it — for a failure that lost nothing.
+   * keeping the pages it already has. Treating that aggregate state as the
+   * history failing would discard every version the reader already had for a
+   * failure that lost nothing.
    */
-  it("keeps the rows it already has when another page fails to load", () => {
+  it("keeps the versions it already has when another page fails to load", () => {
     useVersionsMock.mockReturnValue(
-      listing([row(9), row(8)], { isError: true, hasNextPage: true })
+      listing([row(9), row(8)], {
+        isError: true,
+        isFetchNextPageError: true,
+        hasNextPage: true,
+      })
     );
 
     render(
@@ -408,18 +631,22 @@ describe("VersionComparePage — a failed next page", () => {
       />
     );
 
+    const newer = within(screen.getByRole("combobox", { name: "with" }));
     expect(
-      screen.getByRole("button", { name: /Version 9/ })
+      newer.getByRole("option", { name: /^Version 9/ })
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /Version 8/ })
+      newer.getByRole("option", { name: /^Version 8/ })
     ).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /Older versions could not be loaded/
+    );
   });
 
   /**
    * The control. A failure with NOTHING loaded is a genuine load failure and
-   * must still replace the rail — otherwise the assertion above would be
-   * satisfied by a rail that ignores errors entirely.
+   * must still be said as one — otherwise the assertion above would be
+   * satisfied by a page that ignores errors entirely.
    */
   it("still reports a failure that left nothing on screen", () => {
     useVersionsMock.mockReturnValue(listing([], { isError: true }));
@@ -433,8 +660,11 @@ describe("VersionComparePage — a failed next page", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: /Version/ })
+      screen.queryByRole("option", { name: /^Version/ })
     ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("This document's history could not be loaded.")
+    ).toBeInTheDocument();
   });
 });
 
@@ -471,7 +701,7 @@ describe("versionsHref — the address carries the language", () => {
   });
 });
 
-describe("VersionComparePage — selecting a row keeps the language", () => {
+describe("VersionComparePage — choosing a version keeps its language", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     canMock.mockReturnValue(true);
@@ -479,16 +709,15 @@ describe("VersionComparePage — selecting a row keeps the language", () => {
 
   /**
    * The address is what the page is named from, so a navigation that drops the
-   * locale sends the reader to a comparison headed in another language. The
-   * rail interleaves locales, so the row clicked is routinely not in the
-   * language currently on screen — which is why the SELECTED version's locale
-   * decides, rather than the one the current address happens to carry.
+   * locale sends the reader to a comparison headed in another language. A
+   * history with no language filter lists every language, so the version
+   * chosen is routinely not in the language on screen — which is why the
+   * CHOSEN version's locale decides, rather than the current address's.
    */
-  it("writes the selected version's locale into the address", async () => {
+  it("writes the chosen version's locale into the address", async () => {
     useVersionsMock.mockReturnValue(
       listing([row(9, "fr"), row(8, "fr"), row(7, "fr")])
     );
-    const user = (await import("@testing-library/user-event")).default.setup();
 
     render(
       <VersionComparePage
@@ -498,7 +727,10 @@ describe("VersionComparePage — selecting a row keeps the language", () => {
       />
     );
 
-    await user.click(screen.getByRole("button", { name: /Version 8/ }));
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "with" }),
+      "8"
+    );
     expect(navigateMock).toHaveBeenCalledTimes(1);
     expect(navigateMock.mock.calls[0]?.[0]).toContain("locale=fr");
   });
@@ -511,7 +743,6 @@ describe("VersionComparePage — selecting a row keeps the language", () => {
    */
   it("writes no locale for a document that has none", async () => {
     useVersionsMock.mockReturnValue(listing([row(9), row(8), row(7)]));
-    const user = (await import("@testing-library/user-event")).default.setup();
 
     render(
       <VersionComparePage
@@ -521,7 +752,10 @@ describe("VersionComparePage — selecting a row keeps the language", () => {
       />
     );
 
-    await user.click(screen.getByRole("button", { name: /Version 8/ }));
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "with" }),
+      "8"
+    );
     expect(navigateMock).toHaveBeenCalledTimes(1);
     expect(navigateMock.mock.calls[0]?.[0]).not.toContain("locale");
   });
@@ -557,5 +791,45 @@ describe("VersionComparePage — the language its address names", () => {
     ][];
     expect(calls.length).toBeGreaterThan(0);
     expect(calls[calls.length - 1][0].locale).toBeUndefined();
+  });
+});
+
+describe("VersionComparePage — whether it offers Languages", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    canMock.mockReturnValue(true);
+  });
+
+  it("offers Languages on a translated document, even when its versions loaded so far hold no language", () => {
+    // A page of shared-field saves carries no language to tell a translated
+    // document by; the document's own schema says.
+    useVersionsMock.mockReturnValue(listing([row(9), row(8)]));
+
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        entityLocalized
+      />
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: "Languages" })
+    ).toBeInTheDocument();
+  });
+
+  it("offers none on a document that is not translated, whatever its versions say", () => {
+    useVersionsMock.mockReturnValue(listing([row(9, "en"), row(8, "en")]));
+
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+      />
+    );
+
+    expect(screen.queryByRole("combobox", { name: "Languages" })).toBeNull();
   });
 });

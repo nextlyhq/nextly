@@ -3,6 +3,10 @@
  *
  * @module cli/__tests__/error-cases/schema
  */
+import {
+  rowsDivergedError,
+  rowsWithoutTableError,
+} from "../../../domains/schema/repair-columns/stop-errors";
 import { clearLeftoverStorage } from "../../../domains/schema/services/leftover-storage";
 import {
   assertAdapterPostgresSchema,
@@ -36,6 +40,26 @@ async function rejectedBy(fn: () => Promise<unknown>): Promise<unknown> {
 }
 
 export const SCHEMA_CASES = {
+  // As `nextly repair-columns` stops on a collection's row whose table name is empty.
+  REGISTRY_ROW_WITHOUT_TABLE: () =>
+    rowsWithoutTableError([
+      {
+        kind: "collection",
+        slug: "posts",
+        registryTable: "dynamic_collections",
+        codeOwned: false,
+      },
+    ]),
+  // As `nextly repair-columns` stops on a field group the admin may repair.
+  REGISTRY_ROW_DIVERGED: () =>
+    rowsDivergedError([
+      {
+        kind: "fieldGroup",
+        slug: "card",
+        registryTable: "dynamic_components",
+        codeOwned: false,
+      },
+    ]),
   // A Single created again after its first attempt was removed, whose field-group rows still name
   // its table as their parent. No table of its own stands, so no database is read: the rows found
   // elsewhere refuse the create before anything is dropped.
@@ -140,7 +164,7 @@ export const SCHEMA_CASES = {
     NextlyError.conflict({
       reason: "state",
       message:
-        'A Builder save was left part-way, so the database does not match its migrations yet: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio. To settle it, start the app in development (`next dev`) on this project: its start settles the save.',
+        'A Builder save was left part-way, so the database does not match its migrations yet: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio. To settle it, run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save.',
       logContext: {
         reason: "builder-save-left-part-way",
         saves: ["builder-save-in-progress:collection:posts"],

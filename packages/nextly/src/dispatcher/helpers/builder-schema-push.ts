@@ -59,6 +59,8 @@ import { getMigrationJournalFromDI } from "./di";
 export function builderSchemaPush(args: {
   dialect: SupportedDialect;
   db: unknown;
+  /** The adapter `db` belongs to, whose transaction a SQLite push takes. */
+  adapter: DrizzleAdapter;
   databaseName: string | undefined;
   slug: string;
   /** Recorded on the journal row, so the entity's history finds it under its own kind. */
@@ -84,6 +86,7 @@ export function builderSchemaPush(args: {
     preCleanupExecutor: new RealPreCleanupExecutor(),
     migrationJournal: getMigrationJournalFromDI() ?? noopMigrationJournal,
     notifier: getProductionNotifier(),
+    adapter: args.adapter,
   });
   const saveFields = args.fields;
   return desired =>
@@ -192,6 +195,32 @@ export async function pushAndReconcileCompanion(
     movedOnto(result, companion.tableName)
   );
   return result;
+}
+
+/**
+ * Refuse a Single's or field group's dialog save, before any statement on either road, where the
+ * companion reconcile that follows its main table's change would drop what another owner built on
+ * the translations table: the reconcile's own plan, judged first (`removed-elements.ts`).
+ */
+export async function refuseBuilderCompanionTakingOthersElements(
+  kind: "single" | "component",
+  companion: BuilderCompanionReconcile
+): Promise<void> {
+  if (kind === "single") {
+    const { refuseSingleCompanionTakingOthersElements } = await import(
+      "../../domains/singles/services/reconcile-single-companion"
+    );
+    await refuseSingleCompanionTakingOthersElements({
+      ...companion,
+      status: companion.status === true,
+      wasStatus: companion.wasStatus === true,
+    });
+    return;
+  }
+  const { refuseComponentCompanionTakingOthersElements } = await import(
+    "../../domains/field-groups/services/field-group-table-provisioning"
+  );
+  await refuseComponentCompanionTakingOthersElements(companion);
 }
 
 /**

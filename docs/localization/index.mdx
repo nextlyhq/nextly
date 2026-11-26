@@ -47,9 +47,12 @@ A locale is either a bare code or an object. The object form carries:
 
 ### Or keep the list out of your code
 
-Leave the `localization` block out, and the site's languages are stored in its database instead,
-managed through the languages API. The admin has no screen for them yet. A site starts with one
-language, English, and nothing is stored until a change is made.
+Leave the `localization` block out, and the site's languages are stored in its database instead.
+An admin manages them under **Settings → Languages** (`/admin/settings/languages`): adds, renames,
+reorders and removes languages, and makes one the default after reading what that changes. The
+languages API below does the same. A site starts with one language, English, and nothing is
+stored until a change is made. Where the `localization` block sets the languages, the same screen
+shows them read-only and says where they are set.
 
 | Request                                | What it does                                                                              |
 | -------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -100,8 +103,40 @@ A field's type decides whether it is translated when it sets no `localized` of i
 | `password`, and any virtual field               | Shared, whatever `localized` says                                                     |
 | A many-to-many `relationship`                   | Shared, whatever `localized` says: its links are kept in one table for every language |
 | A `component` reference                         | Decided by the component's own fields, whatever `localized` says on the reference     |
+| A `repeater` or `group`                         | One structure for every language, the fields inside translated row by row (below)     |
 
 Set `localized: true` to translate a field of another type, or `localized: false` to share a text field, as `externalId` does above. On a collection or Single that is not localized, the flag does nothing.
+
+### Repeaters, groups and components keep one structure
+
+A repeater, a group and a component field have one structure in every language: the same rows, in the same order, with the same shared values. Only the fields inside that are translated (by the table above) differ by language, and each row keeps its translations by its id:
+
+```ts
+import { defineCollection, number, repeater, text } from "nextly/config";
+
+export const Pages = defineCollection({
+  slug: "pages",
+  localized: true,
+  fields: [
+    repeater({
+      name: "slides",
+      fields: [
+        text({ name: "caption" }), // translated, row by row
+        number({ name: "rank" }), // shared by every language
+      ],
+    }),
+  ],
+});
+```
+
+- Reordering, adding or removing a row in any language does it in every language. Each row keeps its own translations, and a removed row's translations go with it.
+- A row that has no translation in a language reads that field from the [fallback chain](#fallback-chains), one field at a time.
+- The same holds at every depth: a repeater inside a group, and a component placed in a repeater's rows, are translated row by row with their container.
+- `localized: true` on a repeater, a group or a component field is refused when the configuration loads (`FIELD_STRUCTURE_NOT_TRANSLATABLE`), in your own config or a plugin's. Remove it from the container and mark the fields inside `localized: true` instead; `nextly migrate` keeps each language's values.
+
+In a held change, the structure is the shared part's and the text is each language's ([Publishing one language at a time](#publishing-one-language-at-a-time)). A reorder held in Spanish goes live with the next publish of any language. A caption edited in Spanish goes live only when Spanish is published.
+
+An earlier release let a repeater or group be translated as a whole, a separate structure per language. `nextly migrate` converts that content where every language has the default language's rows, ids, order and shared values. Where any language differs, it refuses and names each document and field, and `nextly migrate --dry-run` lists them the same way: make those languages' rows match the default language's, then run it again.
 
 ### When a field stops being translated
 

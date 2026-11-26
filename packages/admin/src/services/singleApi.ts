@@ -18,20 +18,9 @@ import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
 import { keepaliveOptions } from "../lib/api/keepalive";
 import { protectedApi } from "../lib/api/protectedApi";
-import type {
-  ActionResponse,
-  MutationResponse,
-} from "../lib/api/response-types";
-import {
-  everyLanguageBody,
-  type EveryLanguageVersion,
-} from "../lib/document-version";
+import type { MutationResponse } from "../lib/api/response-types";
 
 import { withListOwner, type ListOwner } from "./list-owner";
-import type {
-  PublishAllLanguageOutcome,
-  PublishAllPreview,
-} from "./publishAllPreview";
 import {
   publishPartsBody,
   type PublishPartsChoice,
@@ -39,11 +28,13 @@ import {
   type PublishPartsResult,
 } from "./publishParts";
 import {
-  acknowledgedConversionsBody,
+  applySchemaAt,
+  schemaPreviewFor,
   type FieldResolution,
   type SchemaApplyResponse,
   type SchemaPreviewResponse,
   type SchemaRenameResolution,
+  type SchemaSaveHints,
 } from "./schemaApi";
 
 /**
@@ -120,7 +111,8 @@ type SingleApiType = {
     slug: string,
     fields: unknown[],
     localized?: boolean,
-    status?: boolean
+    status?: boolean,
+    hints?: SchemaSaveHints
   ) => Promise<SchemaPreviewResponse>;
   readonly applySchemaChanges: (
     slug: string,
@@ -130,7 +122,8 @@ type SingleApiType = {
     renameResolutions?: SchemaRenameResolution[],
     localized?: boolean,
     status?: boolean,
-    acknowledgedConversions?: readonly string[]
+    acknowledgedConversions?: readonly string[],
+    hints?: SchemaSaveHints
   ) => Promise<SchemaApplyResponse>;
   readonly remove: (slug: string) => Promise<{ message: string }>;
   readonly getDocument: (
@@ -157,17 +150,6 @@ type SingleApiType = {
     data: Record<string, unknown>,
     options?: { locale?: string; keepalive?: boolean }
   ) => Promise<SingleDocument>;
-  readonly publishAllLocales: (
-    slug: string,
-    version?: EveryLanguageVersion
-  ) => Promise<{
-    id: string;
-    status?: string;
-    languages?: PublishAllLanguageOutcome[];
-  }>;
-  readonly previewPublishAllLocales: (
-    slug: string
-  ) => Promise<PublishAllPreview>;
   /** @experimental Until publishing per language is complete. */
   readonly publishParts: (
     slug: string,
@@ -255,27 +237,7 @@ export const singleApi: SingleApiType = {
    * Preview single schema changes — dry-run diff with rename candidates.
    * Mirrors schemaApi.preview() for collections.
    */
-  previewSchemaChanges: async (
-    slug: string,
-    fields: unknown[],
-    // i18n: mirrors schemaApi.preview — the preview collects the resolutions
-    // the apply runs with, so both have to diff against the same localization
-    // state or the apply can need a prompt the preview never showed.
-    localized?: boolean,
-    // The pending Draft/Published toggle, so a field taking one of the lifecycle's own names is
-    // refused when the same save turns the lifecycle on. Judged with, never applied: the settings
-    // save that follows the fields sets it. Undefined leaves the stored flag alone in charge.
-    status?: boolean
-  ): Promise<SchemaPreviewResponse> => {
-    return protectedApi.post<SchemaPreviewResponse>(
-      `/singles/schema/${slug}/preview`,
-      {
-        fields,
-        ...(localized !== undefined ? { localized } : {}),
-        ...(status !== undefined ? { status } : {}),
-      }
-    );
-  },
+  previewSchemaChanges: schemaPreviewFor("/singles/schema"),
 
   /**
    * Apply confirmed single schema changes via PushSchemaPipeline.
@@ -294,27 +256,21 @@ export const singleApi: SingleApiType = {
     // The pending Draft/Published toggle, judged with as the preview is (see above).
     status?: boolean,
     // The keys of the conversions the review listed and its Save confirmed.
-    acknowledgedConversions?: readonly string[]
-  ): Promise<SchemaApplyResponse> => {
-    const result = await protectedApi.post<
-      ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
-    >(`/singles/schema/${slug}/apply`, {
+    acknowledgedConversions?: readonly string[],
+    // The fields the save moves into or out of a group, as its preview sent them.
+    hints?: SchemaSaveHints
+  ): Promise<SchemaApplyResponse> =>
+    applySchemaAt(
+      `/singles/schema/${slug}`,
       fields,
-      confirmed: true,
-      schemaVersion,
-      resolutions,
-      renameResolutions,
-      ...(localized !== undefined ? { localized } : {}),
-      ...(status !== undefined ? { status } : {}),
-      ...acknowledgedConversionsBody(acknowledgedConversions),
-    });
-    return {
-      success: true,
-      message: result.message,
-      newSchemaVersion: result.newSchemaVersion,
-      toastSummary: result.toastSummary,
-    };
-  },
+      {
+        schemaVersion,
+        resolutions,
+        renameResolutions,
+        acknowledgedConversions,
+      },
+      { localized, status, hints }
+    ),
 
   /**
    * Remove a Single.
@@ -399,47 +355,6 @@ export const singleApi: SingleApiType = {
     );
     return result.item;
   },
-
-  /**
-   * Publish every language of a Single at once.
-   *
-   * Hits `POST /api/singles/{slug}/publish-all`, which moves the main status
-   * and every companion `_status` in one transaction — so the document is never
-   * observable with some languages live and others not.
-   */
-  publishAllLocales: async (
-    slug: string,
-    /**
-     * The version of every language, as a read of every language gives it: a
-     * publish of every language is refused when any of them changed since.
-     * Or the overwrite choice, from a caller refused that read.
-     */
-    version?: EveryLanguageVersion
-  ): Promise<{
-    id: string;
-    status?: string;
-    languages?: PublishAllLanguageOutcome[];
-  }> => {
-    // The route answers with the action envelope (`{ message, ...data }`)
-    // rather than a document, since publishing changes status and returns no
-    // content the editor did not already have. It carries each language's
-    // outcome, which the result message names language by language.
-    return protectedApi.post<{
-      message: string;
-      slug: string;
-      id: string;
-      status?: string;
-      languages?: PublishAllLanguageOutcome[];
-    }>(`/singles/${slug}/publish-all`, everyLanguageBody(version));
-  },
-
-  /**
-   * What publishing every language of a Single would do, language by
-   * language, without doing it: asked as the publish is, and writing nothing.
-   * Hits `GET /api/singles/{slug}/publish-all`.
-   */
-  previewPublishAllLocales: async (slug: string): Promise<PublishAllPreview> =>
-    protectedApi.get<PublishAllPreview>(`/singles/${slug}/publish-all`),
 
   /**
    * Publish or unpublish the parts of a Single a person chose: some of its languages, and

@@ -27,6 +27,7 @@ import {
   clearLiveSnapshots,
   setLiveSnapshot,
 } from "../../../../init/schema-snapshot-cache";
+import * as removedElements from "../../ownership/removed-elements";
 import type { NextlySchemaSnapshot, Operation } from "../diff/types";
 import {
   noopClassifier,
@@ -49,6 +50,26 @@ import type {
 
 import { PushSchemaPipeline, refusedByDatabase } from "../pushschema-pipeline";
 import type { DesiredSchema } from "../types";
+
+// The database here is a stub that answers no catalog question. What other owners built on the
+// tables a push removes from is read from it as nothing at all: the check itself is judged against
+// real databases by its integration tests (`ownership/__tests__`).
+vi.mock("../../ownership/removed-elements", async importOriginal => {
+  const original = await importOriginal<typeof removedElements>();
+  return {
+    ...original,
+    removedElementsSourcesOn: (): removedElements.RemovedElementsSources => ({
+      extensionSchema: () => Promise.resolve(null),
+      recordedElements: () => Promise.resolve([]),
+      indexColumns: () => Promise.resolve(new Map()),
+      indexNames: () => Promise.resolve(new Set()),
+      foreignKeyColumns: () => Promise.resolve(new Map()),
+      keysInto: () => Promise.resolve([]),
+      tableOwners: () => Promise.resolve(new Map()),
+      liveNames: table => Promise.resolve([table]),
+    }),
+  };
+});
 
 // =============================================================================
 // Test harness
@@ -210,6 +231,7 @@ function makePipeline(
       preCleanupExecutor: noopPreCleanupExecutor,
       migrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     },
     {
       _kitOverride: { pushSchema: pushSchemaImpl },

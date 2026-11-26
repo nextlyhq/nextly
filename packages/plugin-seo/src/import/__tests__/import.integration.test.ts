@@ -786,7 +786,8 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(applied.status, await applied.clone().text()).toBe(200);
     const after = await seoBySlug(t, "posts");
     expect(after.surfer).toMatchObject({
-      metaTitle: "",
+      // Cleared: the `seo` group stores a blank text as no text, which reads as none.
+      metaTitle: null,
       metaDescription: "A description of its own.",
       canonical: "https://rext.ai/elsewhere",
       noindex: true,

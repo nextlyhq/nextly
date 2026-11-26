@@ -43,7 +43,9 @@ import { uniqueTranslatedColumns } from "../../i18n/migration/companion-unique-i
 import {
   companionSpecShell,
   deriveCompanionSpec,
+  deriveCompanionTableSpec,
 } from "../../i18n/migration/derive-companion-spec";
+import { disableKeepingOverlaysRefusal } from "../../i18n/migration/disable-keeping-overlays";
 import { planFieldAddedToTranslationMigration } from "../../i18n/migration/field-added-to-translation";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
@@ -58,10 +60,15 @@ import {
 } from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import { copyLiveness } from "../../i18n/migration/generate-down";
+import { buildOverlaySeedStatements } from "../../i18n/migration/generate-up";
 import {
   planCompanionMigration,
   type CompanionMigrationPlan,
 } from "../../i18n/migration/plan-companion-migration";
+import {
+  fieldsTranslatedThrough,
+  planCompanionTypeChange,
+} from "../../i18n/migration/plan-companion-type-change";
 import {
   type FieldLeavesFile,
   type FieldLeavesMigrationPlan,
@@ -84,10 +91,18 @@ import {
   type WriteCompanionMigrationOpts,
 } from "../../i18n/migration/write-migration-file";
 import {
+  describePerLanguageMove,
+  type PerLanguageMove,
+} from "../../i18n/per-language-move-guidance";
+import {
   perLanguageStorageEnabled,
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import {
+  keepsTranslationsInside,
+  type StructuredField,
+} from "../../i18n/shared-structure";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import type { Deletion } from "../migrate/data-loss-consent";
 import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
@@ -146,6 +161,12 @@ import {
   type AppStreamSnapshots,
   type AppStreamTables,
 } from "./app-stream";
+import {
+  NO_CODE_MOVES,
+  planCodeMoves,
+  withoutMovedColumns,
+  type CodeMovesPlan,
+} from "./code-moves";
 import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
 import {
   describePermissionChange,
@@ -178,6 +199,7 @@ import {
   leftoverUniqueStatements,
   type LiveUniqueIndexes,
 } from "./leftover-unique-indexes";
+import { perLanguageMovesIn } from "./per-language-moves";
 import {
   fileStatements,
   judgedDeletions,
@@ -452,12 +474,23 @@ export interface GenerateArgs {
    * finish the earlier change; any other is written, its values copied into
    * a column that holds them. Without it, every joining field is judged as
    * joining for the first time, worded for code.
+   *
+   * The surface words the entity's refusals of fields leaving translation
+   * too, so a Schema Builder save names the Builder's steps for both.
    */
   joiningJudgement?: {
     slug: string;
     surface: TranslationSurface;
     retries: JoinRetries;
   };
+  /**
+   * `migrate:create`: look for fields moved into or out of a group since the latest snapshot's
+   * record of each declaration, ask about each (`planCodeMoves`), and carry the accepted ones'
+   * values in the file. Without a terminal, `acceptAll` (`--accept-moves`) answers every one;
+   * otherwise each is declined. Absent (a Schema Builder save, which is told its moves and hands
+   * their statements in as `appendedStatements`), none are looked for.
+   */
+  codeMoves?: { acceptAll: boolean };
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -976,7 +1009,8 @@ export async function generateMigration(
 
   // Taken once, here, so the table diff and every companion planner below
   // see the same fields (`withKeptScopeFieldsOf`).
-  const args = withKeptScopeFieldsOf(scoped, previous?.data.snapshot);
+  // Reassigned once below, where the moves made in code join the ones the caller gave.
+  let args = withKeptScopeFieldsOf(scoped, previous?.data.snapshot);
 
   // 2. Build desired snapshot from config. Localized collections omit their
   //    translatable columns here (they live in the companion `_locales` table).
@@ -988,8 +1022,24 @@ export async function generateMigration(
     previousContributions: previous?.data.contributions ?? {},
     desired: withTablesAsTheyStand(
       buildDesiredSnapshotFromConfig(
-        args.collections,
-        args.singles,
+        // A required container leaving whole translation is added nullable in this run, its
+        // rows filled after the migrations (`withStagedContainerColumns`).
+        args.collections.map(c =>
+          withStagedContainerColumns(
+            c,
+            "collection",
+            previous?.data.snapshot,
+            args.dialect
+          )
+        ),
+        args.singles.map(c =>
+          withStagedContainerColumns(
+            c,
+            "single",
+            previous?.data.snapshot,
+            args.dialect
+          )
+        ),
         args.components,
         args.dialect
       ),
@@ -1069,12 +1119,25 @@ export async function generateMigration(
 
   // 3. Diff.
   let operations = diffSnapshots(previousSnapshot, desiredSnapshot);
+  // The drops a companion file makes are stripped below; the refusal of an undeclared language
+  // names them as the moves they are, so it reads the diff as it stands here.
+  const diffed = operations;
 
   // 3a. On an ENABLE transition the diff wants to DROP the localized columns
   //     from the main table — but the companion migration already relocates them
   //     (create + seed + drop). Strip those drops so we don't drop twice.
   operations = stripRelocatedDrops(operations, companionPlans);
   refuseTurnOffBesideOtherChanges(operations, companionPlans);
+
+  // 3a'. Fields moved into or out of a group in code. The diff reads each as a delete and an add;
+  //      an accepted one is carried as the Schema Builder carries a move, its values copied to the
+  //      new place first, and from here on is a move as one the caller gave would be.
+  const codeMoves = await movesMadeInCode(args, {
+    entities,
+    previous: previous?.data.entities,
+    previousSnapshot,
+  });
+  args = withCodeMoves(args, codeMoves);
 
   // 3b. Fields that stop being translated while their entity stays translated. The diff above gives
   //     the main table their columns; these files move the values around that migration.
@@ -1086,6 +1149,7 @@ export async function generateMigration(
     companionHistory,
     args.onWarning ?? (() => {}),
     desiredSnapshot,
+    args.joiningJudgement,
     args.languageOrder
   );
 
@@ -1105,10 +1169,14 @@ export async function generateMigration(
   // them in Settings instead, which a migration file cannot depend on, since the database the
   // developer reaches is not the one the file runs against. So such a file is refused until the
   // config names its default.
-  refuseUndeclaredSeedLanguage(args.defaultLocale, {
-    seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
-    moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
-  });
+  refuseUndeclaredSeedLanguage(
+    args.defaultLocale,
+    {
+      seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
+      moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
+    },
+    () => perLanguageMovesIn(diffed, args, args.dialect)
+  );
 
   // 3d. Translated fields that become or stop being unique within each language. Their companion
   //     indexes are dropped before the main file and created after every other file.
@@ -1119,11 +1187,25 @@ export async function generateMigration(
     args.defaultLocale ?? "en"
   );
 
-  const hasCompanions =
-    companionPlans.length > 0 ||
-    fieldLeavesPlans.length > 0 ||
-    fieldJoinsPlans.length > 0 ||
-    uniquePlans.length > 0;
+  // 3d'. Fields translated before the change and after it whose translations column takes another
+  //      type on this database: that column takes it in a file of its own, ahead of the main file,
+  //      so `nextly migrate` judges each language's value before either runs.
+  const retypesPlans = planTranslatedTypeChanges(
+    entities,
+    previousSnapshot,
+    previous?.data.entities,
+    args.dialect,
+    args.defaultLocale
+  );
+
+  // Whether any companion file is written beside the main one.
+  const hasCompanions = [
+    companionPlans,
+    fieldLeavesPlans,
+    fieldJoinsPlans,
+    uniquePlans,
+    retypesPlans,
+  ].some(plans => plans.length > 0);
 
   // 3e. Settings: what the declarations say beyond their columns. A change to
   //     one alone changes no table, so without this the run returned "no
@@ -1160,6 +1242,7 @@ export async function generateMigration(
         ...companionPlans,
         ...fieldLeavesPlans.map(({ plan }) => plan.shared),
         ...fieldJoinsPlans.map(({ plan }) => plan),
+        ...retypesPlans.map(({ plan }) => plan),
       ].map(({ spec }) => spec.mainTable),
     ],
     hasSettingsChanges: changesBeyondTables,
@@ -1185,9 +1268,10 @@ export async function generateMigration(
     const detector = new RegexRenameDetector();
     // A joining field's main column goes to the companion, not to another main column, so its
     // drop is no rename source.
+    // A moved column's values travel with its move, so it is no rename source or target either.
     const candidates = detector.detect(
       operationsToJudge(
-        operations,
+        withoutMovedColumns(operations, codeMoves),
         fieldJoinsPlans.flatMap(({ plan }) =>
           plan.spec.columns.map(column => ({
             tableName: plan.spec.mainTable,
@@ -1518,6 +1602,16 @@ export async function generateMigration(
     ...fieldJoinsPlans.map(({ plan, entity }) => ({
       spec: plan.spec,
       kind: "joins" as const,
+      entity,
+      upSql: plan.upSql,
+      downSql: plan.downSql,
+    })),
+    //    - A translated field taking another type: its RETYPES file runs before the main file, so
+    //      the change is judged in every language before either runs, after a dropped per-language
+    //      index's file, which the column it retypes no longer carries.
+    ...retypesPlans.map(({ plan, entity }) => ({
+      spec: plan.spec,
+      kind: "retypes" as const,
       entity,
       upSql: plan.upSql,
       downSql: plan.downSql,
@@ -2301,16 +2395,29 @@ function buildDisableSpec(
  */
 function refuseUndeclaredSeedLanguage(
   defaultLocale: string | undefined,
-  planned: { seeds: boolean; moves: boolean }
+  planned: { seeds: boolean; moves: boolean },
+  // The text-like fields the diff moves to their per-language tables, named so the refusal reads
+  // as the move it is rather than as data loss, with the way to keep them where they are.
+  movesOf: () => PerLanguageMove[]
 ): void {
   if (defaultLocale !== undefined || !perLanguageStorageEnabled()) return;
   if (!planned.seeds && !planned.moves) return;
+  const moves = movesOf();
+  const named =
+    moves.length === 0
+      ? ""
+      : "These text-like fields would move: " +
+        moves.map(describePerLanguageMove).join("; ") +
+        ". Nothing is lost either way. Keep them on the main table by marking each one " +
+        "`localized: false` and running migrate:create again, or ";
   throw NextlyError.invalidInput({
     message:
       "This migration moves existing content into its per-language tables, which records the " +
-      "language that content is in, and the config declares none. Declare `localization` with " +
-      "its defaultLocale in the config, then run migrate:create again.",
-    logContext: { reason: "per-language-seed-language-undeclared" },
+      "language that content is in, and the config declares none. " +
+      (named === ""
+        ? "Declare `localization` with its defaultLocale in the config, then run migrate:create again."
+        : `${named}declare \`localization\` with its defaultLocale in the config to move them on purpose, then run migrate:create again.`),
+    logContext: { reason: "per-language-seed-language-undeclared", moves },
   });
 }
 
@@ -2397,6 +2504,55 @@ function planTranslatedUniqueMigrations(
   });
 }
 
+/** The key an entity's kind is recorded under in a snapshot's entity settings. */
+const SETTINGS_KEY: Record<I18nTransitionKind, keyof EntitySettingsRecord> = {
+  collection: "collections",
+  single: "singles",
+  fieldGroup: "fieldGroups",
+};
+
+/**
+ * The `retypes` file of each translated entity whose fields, translated before this change and
+ * after it under one name, have a translations column that takes another type on `dialect`. The
+ * fields before the change are the ones the previous snapshot records for the entity; one it
+ * records no fields for, or whose table it did not keep translated, has no file here.
+ */
+function planTranslatedTypeChanges(
+  entities: TaggedConfigEntity[],
+  previousSnapshot: NextlySchemaSnapshot,
+  previousEntities: EntitySettingsRecord | undefined,
+  dialect: SupportedDialect,
+  /** The site's default language, recorded in the file's header; English where none is declared. */
+  defaultLocale = "en"
+): {
+  entity: I18nTransitionKind;
+  plan: NonNullable<ReturnType<typeof planCompanionTypeChange>>;
+}[] {
+  if (previousEntities === undefined) return [];
+  return entities.flatMap(({ entity: c, kind }) => {
+    if (!storesPerLanguage(c)) return [];
+    const builtBy = columnOriginOf(c, kind);
+    const fields = fieldsTranslatedThrough({
+      previousTable: previousSnapshot.tables.find(t => t.name === c.tableName),
+      recorded: previousEntities[SETTINGS_KEY[kind]][c.slug]?.settings.fields,
+      next: c.fields,
+      translatedAfter: to => isFieldLocalized(to, true),
+      dialect,
+      builtBy,
+    });
+    const plan = planCompanionTypeChange({
+      slug: c.slug,
+      kind,
+      tableName: c.tableName,
+      dialect,
+      defaultLocale,
+      fields,
+      builtBy,
+    });
+    return plan === undefined ? [] : [{ entity: kind, plan }];
+  });
+}
+
 /** Pair an entity with the kind of list it came from, which its companion's marker is keyed by. */
 function tagged(
   entity: MinimalConfigEntity,
@@ -2457,7 +2613,52 @@ function planCompanionMigrations(
       continue;
     }
 
-    if (!spec) continue;
+    if (!spec) {
+      // An entity whose only per-language content is the text inside its containers: its
+      // translations table holds their overlays alone.
+      const prevMain = previousSnapshot.tables.find(
+        t => t.name === c.tableName
+      );
+      const existed =
+        previousTranslation(c, entityKind, previousSnapshot, history)
+          ?.companion ?? false;
+      if (!existed && overlayContainersOf(c).length > 0) {
+        // Created with its overlay columns, empty. Planned as a fresh table: the main table's
+        // container columns are its structure, never moved into it.
+        const tableSpec = deriveCompanionTableSpec({
+          builtBy: columnOriginOf(c, entityKind),
+          slug: c.slug,
+          kind: entityKind,
+          dbName: c.tableName,
+          fields: c.fields,
+          dialect,
+          defaultLocale,
+          collectionLocalized: true,
+          status: publishesPerLanguage(c),
+        });
+        if (tableSpec) {
+          const plan = planCompanionMigration({
+            spec: tableSpec,
+            prevMainColumnNames: [],
+            companionExisted: false,
+          });
+          if (plan.kind !== "none") {
+            entries.push({ spec: tableSpec, plan, entity: entityKind });
+          }
+        }
+        continue;
+      }
+      const overlaysOnly = overlaysEntryFor(
+        c,
+        entityKind,
+        prevMain,
+        dialect,
+        defaultLocale,
+        overlayRenamesOf(renames, c.tableName)
+      );
+      if (overlaysOnly) entries.push(overlaysOnly);
+      continue;
+    }
 
     const prevTable = previousSnapshot.tables.find(
       t => t.name === spec.mainTable
@@ -2526,10 +2727,20 @@ function planCompanionMigrations(
           joining,
           dialect,
           defaultLocale,
-          renames.get(c.tableName) ?? []
+          (renames.get(c.tableName) ?? []).filter(r => r.overlay !== true)
         )
       : undefined;
     if (adds) entries.push(adds);
+    // The overlay columns of its containers keeping text inside, after the table exists.
+    const overlays = overlaysEntryFor(
+      c,
+      entityKind,
+      prevTable,
+      dialect,
+      defaultLocale,
+      overlayRenamesOf(renames, c.tableName)
+    );
+    if (overlays) entries.push(overlays);
   }
   return entries;
 }
@@ -2626,6 +2837,24 @@ function withRestoredAs(
  * transition is emitted — that self-heals as soon as one migrate:create runs while the
  * entity is still localized.
  */
+/**
+ * Refuse, before any file is written, turning translation off for an entity whose repeaters or
+ * groups keep their text per language: the containers with an overlay column in the previous
+ * snapshot (`overlayColumns`), by the rule every road that turns translation off keeps
+ * (`disableKeepingOverlaysRefusal`).
+ */
+function refuseDisableKeepingOverlays(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  prevMain: TableSpec
+): void {
+  const refusal = disableKeepingOverlaysRefusal(
+    { kind, slug: entity.slug },
+    prevMain.overlayColumns ?? []
+  );
+  if (refusal) throw refusal;
+}
+
 function disableEntryFor(
   c: MinimalConfigEntity,
   entityKind: I18nTransitionKind,
@@ -2638,6 +2867,7 @@ function disableEntryFor(
 ): CompanionPlanEntry | undefined {
   const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
   if (prevMain?.localized !== true) return undefined;
+  refuseDisableKeepingOverlays(c, entityKind, prevMain);
   // Turning translation off moves every translated field out of it at once, so each is judged as
   // a field leaving translation alone is (`refusalsForFieldsLeavingTranslation`): one whose shared
   // column is shaped otherwise than its translated one is refused before any file is written. The
@@ -2802,6 +3032,21 @@ function addsEntryFor(
 interface CompanionRename {
   from: string;
   to: string;
+  /** A container's overlay column, which the overlays file renames (`overlaysEntryFor`). */
+  overlay?: true;
+}
+
+/**
+ * Every pair of a column `recorded` names that `now` does not and one `now` names that `recorded`
+ * does not: the renames a run may be making.
+ */
+function renamePairs(
+  recorded: readonly string[],
+  now: readonly string[]
+): { from: string; to: string }[] {
+  const gone = recorded.filter(c => !now.includes(c));
+  const added = now.filter(c => !recorded.includes(c));
+  return gone.flatMap(from => added.map(to => ({ from, to })));
 }
 
 /** Two SQL texts as one, with the statement breakpoint between them. */
@@ -2844,6 +3089,12 @@ function companionRenameStatements(
  * storage changes too (its kind, length or precision, against the column as
  * the history records it) is refused, as the Builder's own path refuses it
  * (`refusalsForTranslatedFieldRenamedAndReshaped`).
+ *
+ * A container keeping its text inside is a candidate the same way, by its overlay column
+ * (`overlayColumns`), paired only with another container's: renamed, its structure column on the
+ * main table follows the main-table rename, and its overlay keeps every language's text under the
+ * new name rather than leaving it in a column no read names. An overlay holds JSON on either side,
+ * so it is never refused as reshaped.
  */
 async function companionRenameDecisions(
   entities: readonly TaggedConfigEntity[],
@@ -2853,11 +3104,20 @@ async function companionRenameDecisions(
 ): Promise<Map<string, CompanionRename[]>> {
   const byTable = new Map<string, CompanionRename[]>();
   for (const { entity, kind } of entities) {
-    if (entity.localized !== true) continue;
-    const recorded = previous.tables.find(
+    // Every entity keeping its values per language, a translated one or, under per-language
+    // storage, one that is not (`storesPerLanguage`): its containers keep their text in overlay
+    // columns all the same, and a rename that left one behind would drop every language's text.
+    if (!storesPerLanguage(entity)) continue;
+    const previousTable = previous.tables.find(
       t => t.name === entity.tableName
-    )?.localizedColumns;
-    if (recorded === undefined) continue;
+    );
+    if (
+      previousTable?.localizedColumns === undefined &&
+      previousTable?.overlayColumns === undefined
+    ) {
+      continue;
+    }
+    const recorded = previousTable.localizedColumns ?? [];
     // Each translated field's column as the config now describes it, by name.
     const described = new Map(
       entity.fields
@@ -2872,23 +3132,27 @@ async function companionRenameDecisions(
         })
     );
     const now = [...described.keys()];
-    const gone = recorded.filter(c => !now.includes(c));
-    const added = now.filter(c => !recorded.includes(c));
-    if (gone.length === 0 || added.length === 0) continue;
+    // The overlay columns, apart: one is paired only with another, never with a text's column.
+    const recordedOverlays = previousTable.overlayColumns ?? [];
+    const overlaysNow = overlayColumnsOf(entity, kind, args.dialect);
+    const pairs = [
+      ...renamePairs(recorded, now),
+      ...renamePairs(recordedOverlays, overlaysNow),
+    ];
+    if (pairs.length === 0) continue;
+    const overlayTargets = new Set(overlaysNow);
     const table = `${entity.tableName}_locales`;
-    const candidates = gone.flatMap(from =>
-      added.map(
-        (to): RenameCandidate => ({
-          tableName: table,
-          fromColumn: from,
-          toColumn: to,
-          fromType: "text",
-          toType: "text",
-          typesCompatible: true,
-          preservesValues: true,
-          defaultSuggestion: "rename",
-        })
-      )
+    const candidates = pairs.map(
+      ({ from, to }): RenameCandidate => ({
+        tableName: table,
+        fromColumn: from,
+        toColumn: to,
+        fromType: "text",
+        toType: "text",
+        typesCompatible: true,
+        preservesValues: true,
+        defaultSuggestion: "rename",
+      })
     );
     const used = new Set<string>();
     const accepted: CompanionRename[] = [];
@@ -2901,13 +3165,22 @@ async function companionRenameDecisions(
       if (used.has(`to:${candidate.toColumn}`)) continue;
       used.add(`from:${candidate.fromColumn}`);
       used.add(`to:${candidate.toColumn}`);
-      accepted.push({ from: candidate.fromColumn, to: candidate.toColumn });
+      accepted.push({
+        from: candidate.fromColumn,
+        to: candidate.toColumn,
+        ...(overlayTargets.has(candidate.toColumn) ? { overlay: true } : {}),
+      });
     }
     const recordedColumns = history.columns.get(
       companionHistoryKey(kind, entity.slug, entity.tableName)
     );
-    const reshaped = accepted.find(r =>
-      storageDiffers(recordedColumns?.get(r.from), described.get(r.to)?.column)
+    const reshaped = accepted.find(
+      r =>
+        r.overlay !== true &&
+        storageDiffers(
+          recordedColumns?.get(r.from),
+          described.get(r.to)?.column
+        )
     );
     refuseMigration(
       entity,
@@ -2948,6 +3221,8 @@ function planFieldsLeavingTranslation(
   history: TranslationRecords,
   warn: (message: string) => void,
   desiredSnapshot: NextlySchemaSnapshot,
+  /** The caller's judgement of one entity, whose surface its refusals are worded for. */
+  judgement: GenerateArgs["joiningJudgement"],
   languageOrder?: readonly string[]
 ): FieldLeavesEntry[] {
   const entries: FieldLeavesEntry[] = [];
@@ -2971,7 +3246,14 @@ function planFieldsLeavingTranslation(
     const desiredMain = desiredSnapshot.tables.find(
       t => t.name === c.tableName
     );
-    assertFieldsMayLeaveTranslation(entry, leaving, previousColumns, dialect);
+    assertFieldsMayLeaveTranslation(
+      entry,
+      leaving,
+      previousColumns,
+      dialect,
+      // A Schema Builder save's entity is worded for the Builder; any other, for code.
+      judgement?.slug === c.slug ? judgement.surface : "code"
+    );
     const held = heldSettingsOf(
       c.tableName,
       leaving.map(l => l.column.name),
@@ -3213,8 +3495,12 @@ function fieldsLeavingTranslationIn(
   if (!storesPerLanguage(c)) return [];
   const previous = previousTranslation(c, kind, previousSnapshot, history);
   if (!previous || previous.columns.size === 0) return [];
+  const overlays = new Set(overlayContainersOf(c));
   return c.fields.flatMap(field => {
     if (isFieldLocalized(field, true)) return [];
+    // A repeater or group translated whole before keeps its column there as its overlay: it keeps
+    // one structure in every language now, and the upgrade converts what it holds. It never leaves.
+    if (overlays.has(field)) return [];
     const column = fieldToLocalizedColumnSpec(
       field,
       dialect,
@@ -3451,6 +3737,75 @@ function requiredAgain(
   return generateStatements(ops, dialect, previousSnapshot.tables);
 }
 
+/**
+ * The moves made in code since the latest snapshot, asked about and planned (`planCodeMoves`), for
+ * a run that looks for them (`codeMoves`); none for any other.
+ */
+async function movesMadeInCode(
+  args: GenerateArgs,
+  run: {
+    entities: readonly TaggedConfigEntity[];
+    previous: EntitySettingsRecord | undefined;
+    previousSnapshot: NextlySchemaSnapshot;
+  }
+): Promise<CodeMovesPlan> {
+  const asked = args.codeMoves;
+  if (asked === undefined) return NO_CODE_MOVES;
+  return planCodeMoves({
+    entities: run.entities,
+    previous: run.previous,
+    previousTables: new Set(run.previousSnapshot.tables.map(t => t.name)),
+    dialect: args.dialect,
+    originOf: columnOriginOf,
+    // Loaded only when there is something to ask, as the rename question is.
+    decide: async candidates => {
+      const { promptMoves } = await import("./prompt-moves");
+      return promptMoves(candidates, {
+        nonInteractive: args.nonInteractive,
+        autoAccept: asked.acceptAll,
+      });
+    },
+    interactive: args.nonInteractive !== true,
+    warn: args.onWarning ?? (() => {}),
+  });
+}
+
+/** `args` with the moves made in code beside the ones its caller gave, where there are any. */
+function withCodeMoves(args: GenerateArgs, moves: CodeMovesPlan): GenerateArgs {
+  const { up, down } = moves.appended;
+  const statements =
+    up.first.length + up.last.length + down.first.length + down.last.length;
+  if (
+    statements === 0 &&
+    moves.valueMoves.length === 0 &&
+    moves.refilledColumns.length === 0
+  ) {
+    return args;
+  }
+  const given = args.appendedStatements;
+  // The caller's statements keep their place around the moves': first ones first, last ones last.
+  const joined = (
+    mine: AddedStatements,
+    theirs: AddedStatements | undefined
+  ) => ({
+    first: [...(theirs?.first ?? []), ...mine.first],
+    last: [...mine.last, ...(theirs?.last ?? [])],
+  });
+  return {
+    ...args,
+    appendedStatements: {
+      up: joined(up, given?.up),
+      down: joined(down, given?.down),
+    },
+    valueMoves: [...(args.valueMoves ?? []), ...moves.valueMoves],
+    refilledColumns: [
+      ...(args.refilledColumns ?? []),
+      ...moves.refilledColumns,
+    ],
+    valuesMovedIn: [...(args.valuesMovedIn ?? []), ...moves.valuesMovedIn],
+  };
+}
+
 /** The tables whose values the caller's appended statements move (`valuesMovedIn`). */
 function valuesMovedIn(
   args: Pick<GenerateArgs, "valuesMovedIn">
@@ -3593,7 +3948,9 @@ function assertFieldsMayLeaveTranslation(
   { entity: c, kind }: TaggedConfigEntity,
   leaving: readonly LeavingField[],
   previousColumns: ReadonlyMap<string, LocalizedColumnSpec> | undefined,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /** Whose steps the refusal names: the Schema Builder's, or the config's and its CLI's. */
+  surface: TranslationSurface
 ): void {
   const refusals = refusalsForFieldsLeavingTranslation({
     leaving: new Set(leaving.map(l => l.field.name)),
@@ -3601,7 +3958,7 @@ function assertFieldsMayLeaveTranslation(
     ...(previousColumns ? { previousColumns } : {}),
     dialect,
     builtBy: columnOriginOf(c, kind),
-    surface: "code",
+    surface,
   });
   refuseMigration(c, refusals);
 }
@@ -3744,12 +4101,141 @@ function withLocalizedMarker(
   }).map(c =>
     c.kind === undefined ? c.column : { column: c.column, kind: c.kind }
   );
+  const overlays = overlayColumnsOf(entity, kind, dialect);
   return {
     ...table,
     localized: true,
     ...(spec ? { localizedColumns: spec.columns.map(c => c.name) } : {}),
     ...(unique.length > 0 ? { uniqueLocalizedColumns: unique } : {}),
+    ...(overlays.length > 0 ? { overlayColumns: overlays } : {}),
   };
+}
+
+/**
+ * The containers of `entity` with an overlay column on its translations table: each repeater or
+ * group keeping one structure in every language with text inside (`keepsTranslationsInside`), by
+ * the same rule the runtime builds that table by (`deriveCompanionTableSpec`), a field group's too.
+ */
+function overlayContainersOf(
+  entity: MinimalConfigEntity
+): MinimalConfigEntity["fields"] {
+  return entity.fields.filter(field =>
+    keepsTranslationsInside(field as StructuredField, true)
+  );
+}
+
+/** The overlay columns `entity`'s translations table holds, by name. */
+function overlayColumnsOf(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  dialect: SupportedDialect
+): string[] {
+  return overlayContainersOf(entity).flatMap(field => {
+    const column = fieldToLocalizedColumnSpec(
+      field,
+      dialect,
+      columnOriginOf(entity, kind)
+    );
+    return column ? [column.name] : [];
+  });
+}
+
+/**
+ * The file adding the overlay columns `entity`'s translations table gains in this run: each
+ * container that keeps text inside now and had no overlay column in the previous snapshot
+ * (`overlayColumns`). Planned as a field added to translation is
+ * (`planFieldAddedToTranslationMigration`), then each column seeded for the default language
+ * from the main table: a container already holding text there (its entity turning translation
+ * on, or a container starting to keep its text apart) has it copied whole into the default
+ * language's overlay, which every read takes as that language's text (`overlayOf`), so no
+ * language's first save leaves it without its text. Undefined when there is none.
+ *
+ * A container renamed (`renamed`) has its overlay column renamed, first, rather than a new one
+ * added: every language's text is under the new name once the file has run.
+ */
+function overlaysEntryFor(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  prevTable: TableSpec | undefined,
+  dialect: SupportedDialect,
+  defaultLocale: string,
+  renamed: readonly CompanionRename[] = []
+): CompanionPlanEntry | undefined {
+  // An overlay already there, or a column the container held when it was translated whole, which
+  // stays as its overlay (`fieldsLeavingTranslationIn` leaves it in place), or one a rename brings.
+  const there = new Set([
+    ...(prevTable?.overlayColumns ?? []),
+    ...(prevTable?.localizedColumns ?? []),
+    ...renamed.map(r => r.to),
+  ]);
+  const builtBy = columnOriginOf(entity, kind);
+  const added = overlayContainersOf(entity).filter(field => {
+    const column = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+    return column != null && !there.has(column.name);
+  });
+  if (added.length === 0 && renamed.length === 0) return undefined;
+  const renames = companionRenameStatements(
+    `${entity.tableName}_locales`,
+    renamed,
+    dialect
+  );
+  const planned = planFieldAddedToTranslationMigration({
+    slug: entity.slug,
+    kind,
+    tableName: entity.tableName,
+    dialect,
+    defaultLocale,
+    status: publishesPerLanguage(entity),
+    recorded: entity.fields.filter(f => isFieldLocalized(f, true)),
+    added,
+    builtBy,
+  });
+  // Renames alone: the file holds them and nothing else.
+  if (added.length === 0) {
+    return {
+      spec: planned.spec,
+      plan: {
+        kind: "adds",
+        spec: planned.spec,
+        upSql: renames.up,
+        downSql: renames.down,
+      },
+      entity: kind,
+    };
+  }
+  // Seeded only from a container whose column the main table already had: one new in this run
+  // has nothing there to copy.
+  const onMain = new Set(prevTable?.columns.map(column => column.name) ?? []);
+  const columns = added.flatMap(field => {
+    const column = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+    return column && onMain.has(column.name) ? [column.name] : [];
+  });
+  const seed = buildOverlaySeedStatements(planned.spec, columns, {
+    status: planned.spec.status === true,
+  });
+  // The renames first, so a column added beside them is added to the table as it stands once they
+  // ran; the down undoes them last.
+  return {
+    spec: planned.spec,
+    plan: {
+      kind: "adds",
+      spec: planned.spec,
+      upSql: joinSql(
+        renames.up,
+        [planned.upSql, ...seed.map(statement => `${statement};`)].join("\n\n")
+      ),
+      downSql: joinSql(planned.downSql, renames.down),
+    },
+    entity: kind,
+  };
+}
+
+/** The renames of overlay columns accepted for `tableName`'s translations table. */
+function overlayRenamesOf(
+  renames: ReadonlyMap<string, readonly CompanionRename[]>,
+  tableName: string
+): CompanionRename[] {
+  return (renames.get(tableName) ?? []).filter(r => r.overlay === true);
 }
 
 /**
@@ -3840,6 +4326,48 @@ function stripRelocatedDrops(
     }
     return true;
   });
+}
+
+/**
+ * `entity` with each required repeater or group that was translated whole before, and so had no
+ * column on its main table, made optional for this run's main table: the column that now holds its
+ * one structure is added nullable, since the rows already there get their structure only from
+ * `nextly migrate`'s data step after the migrations, and a NOT NULL column added to rows that have
+ * no value is refused. The next run, which finds the column there and the container no longer
+ * translated whole, makes it required as declared. Nothing changes without a previous snapshot.
+ */
+function withStagedContainerColumns(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  existing: NextlySchemaSnapshot | undefined,
+  dialect: SupportedDialect
+): MinimalConfigEntity {
+  const previous = existing?.tables.find(t => t.name === entity.tableName);
+  if (!previous?.localizedColumns?.length) return entity;
+  const wasTranslated = new Set(previous.localizedColumns);
+  const onMain = new Set(previous.columns.map(column => column.name));
+  const staged = new Set(
+    overlayContainersOf(entity).filter(field => {
+      if (field.required !== true) return false;
+      const column = fieldToLocalizedColumnSpec(
+        field,
+        dialect,
+        columnOriginOf(entity, kind)
+      );
+      return (
+        column != null &&
+        wasTranslated.has(column.name) &&
+        !onMain.has(column.name)
+      );
+    })
+  );
+  if (staged.size === 0) return entity;
+  return {
+    ...entity,
+    fields: entity.fields.map(field =>
+      staged.has(field) ? { ...field, required: false } : field
+    ),
+  };
 }
 
 /**

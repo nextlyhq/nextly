@@ -1,0 +1,445 @@
+// The text inside a repeater's or group's rows, in the editor (`container-text`).
+//
+// A repeater or group keeps one structure in every language, so copying from another language
+// copies the text inside onto the rows this language already has, by row id. The broken copies
+// these separate: rows matched by position (a reorder hands one row's text to another), the
+// source's rows copied whole (its order and shared values replacing this language's), and an
+// empty source text blanking a translation.
+
+import { describe, expect, it } from "vitest";
+
+import {
+  holdsTranslatedText,
+  sourceValueAt,
+  textContainersOf,
+  withTextFrom,
+} from "../container-text";
+
+const SLIDES = {
+  type: "repeater",
+  name: "slides",
+  fields: [
+    { type: "text", name: "caption" },
+    { type: "number", name: "rank" },
+    {
+      type: "repeater",
+      name: "items",
+      fields: [{ type: "text", name: "label" }],
+    },
+  ],
+};
+
+describe("holdsTranslatedText", () => {
+  it("names a repeater or group holding text inside, at any depth", () => {
+    expect(holdsTranslatedText(SLIDES, true)).toBe(true);
+    expect(
+      holdsTranslatedText(
+        {
+          type: "group",
+          name: "outer",
+          fields: [{ type: "repeater", name: "inner", fields: SLIDES.fields }],
+        },
+        true
+      )
+    ).toBe(true);
+  });
+
+  it("does not name a container of shared values only, nor a document that is not translated, nor a plain field", () => {
+    expect(
+      holdsTranslatedText(
+        {
+          type: "group",
+          name: "stats",
+          fields: [{ type: "number", name: "views" }],
+        },
+        true
+      )
+    ).toBe(false);
+    expect(holdsTranslatedText(SLIDES, false)).toBe(false);
+    expect(holdsTranslatedText({ type: "text", name: "title" }, true)).toBe(
+      false
+    );
+  });
+});
+
+describe("textContainersOf", () => {
+  // A group with no name only lays fields out: a container inside it is a top-level field of the
+  // document, as storage and the form address it. Kept as the wrapper instead, it is skipped for
+  // having no name, and copying the document from another language leaves its text behind.
+  it("finds a container laid out by a group with no name, never the group itself", () => {
+    const title = { type: "text", name: "title" };
+    const layout = { type: "group", fields: [SLIDES, title] };
+    expect(textContainersOf([layout, title], true)).toEqual([SLIDES]);
+    // The control: a container at the top level is found as it is.
+    expect(textContainersOf([SLIDES, title], true)).toEqual([SLIDES]);
+  });
+
+  // A group with no name saying it is not translated shares every field it lays out, as storage
+  // keeps them: a container inside it holds no language's text, so copying from another language
+  // leaves it alone.
+  it("finds no container laid out by a group with no name that says it is not translated", () => {
+    const shared = { type: "group", localized: false, fields: [SLIDES] };
+    expect(textContainersOf([shared], true)).toEqual([]);
+  });
+});
+
+describe("withTextFrom", () => {
+  it("lays each row's text from the source row with the same id, keeping this language's rows, order and shared values", () => {
+    const current = [
+      { id: "r2", caption: "segundo", rank: 20, items: [] },
+      { id: "r1", caption: "", rank: 10, items: [{ id: "i1", label: "" }] },
+    ];
+    // The source holds the rows in another order, with shared values of its own.
+    const source = [
+      {
+        id: "r1",
+        caption: "first",
+        rank: 1,
+        items: [{ id: "i1", label: "apple" }],
+      },
+      { id: "r2", caption: "second", rank: 2, items: [] },
+    ];
+
+    expect(withTextFrom(current, source, SLIDES, true)).toEqual([
+      { id: "r2", caption: "second", rank: 20, items: [] },
+      {
+        id: "r1",
+        caption: "first",
+        rank: 10,
+        items: [{ id: "i1", label: "apple" }],
+      },
+    ]);
+  });
+
+  it("keeps a row's own text where the source has no such row, or holds nothing there", () => {
+    const current = [
+      { id: "r1", caption: "primero", rank: 1, items: [] },
+      { id: "r3", caption: "tercero", rank: 3, items: [] },
+    ];
+    const source = [{ id: "r1", caption: "  ", rank: 1, items: [] }];
+
+    expect(withTextFrom(current, source, SLIDES, true)).toEqual(current);
+  });
+
+  it("lays a group's text from the source, keeping its shared values", () => {
+    const seo = {
+      type: "group",
+      name: "seo",
+      fields: [
+        { type: "text", name: "headline" },
+        { type: "number", name: "weight" },
+      ],
+    };
+    expect(
+      withTextFrom(
+        { headline: "", weight: 9 },
+        { headline: "Read me", weight: 5 },
+        seo,
+        true
+      )
+    ).toEqual({ headline: "Read me", weight: 9 });
+  });
+});
+
+// A component placed in a container's rows holds its values inline in the row, its text translated
+// with the row: the API hands its fields with it (`componentFields`).
+describe("a component inside a container's rows", () => {
+  const PANELS = {
+    type: "repeater",
+    name: "panels",
+    fields: [
+      { type: "number", name: "position" },
+      {
+        type: "component",
+        name: "cards",
+        repeatable: true,
+        componentFields: [
+          { type: "text", name: "label" },
+          { type: "number", name: "size" },
+        ],
+      },
+    ],
+  };
+
+  it("names the container as holding translated text", () => {
+    expect(holdsTranslatedText(PANELS, true)).toBe(true);
+  });
+
+  it("lays each instance's text from the source instance with the same id", () => {
+    const current = [
+      {
+        id: "p1",
+        position: 1,
+        cards: [
+          { id: "c2", label: "", size: 20 },
+          { id: "c1", label: "", size: 10 },
+        ],
+      },
+    ];
+    const source = [
+      {
+        id: "p1",
+        position: 9,
+        cards: [
+          { id: "c1", label: "one", size: 1 },
+          { id: "c2", label: "two", size: 2 },
+        ],
+      },
+    ];
+
+    expect(withTextFrom(current, source, PANELS, true)).toEqual([
+      {
+        id: "p1",
+        position: 1,
+        cards: [
+          { id: "c2", label: "two", size: 20 },
+          { id: "c1", label: "one", size: 10 },
+        ],
+      },
+    ]);
+  });
+
+  // A single component offering several types: its text comes only from the same instance.
+  const SLOTS = {
+    type: "group",
+    name: "slot",
+    fields: [
+      {
+        type: "component",
+        name: "lead",
+        componentSchemas: {
+          hero: { fields: [{ type: "text", name: "title" }] },
+          cta: { fields: [{ type: "text", name: "title" }] },
+        },
+      },
+    ],
+  };
+
+  it("copies a single instance's text only from the source instance of the same type", () => {
+    const source = { lead: { _componentType: "hero", title: "Hello" } };
+
+    // Changed to another component here: nothing of the source's hero lands in it.
+    expect(
+      withTextFrom(
+        { lead: { _componentType: "cta", title: "" } },
+        source,
+        SLOTS,
+        true
+      )
+    ).toEqual({ lead: { _componentType: "cta", title: "" } });
+    // The same component: its text is copied.
+    expect(
+      withTextFrom(
+        { lead: { _componentType: "hero", title: "" } },
+        source,
+        SLOTS,
+        true
+      )
+    ).toEqual({ lead: { _componentType: "hero", title: "Hello" } });
+  });
+
+  // A list offering several types: an instance that kept its id but changed type here is another
+  // component, so it takes nothing from the source's instance of the earlier type, even where both
+  // types name a translated field alike.
+  const ZONE = {
+    type: "group",
+    name: "zone",
+    fields: [
+      {
+        type: "component",
+        name: "blocks",
+        repeatable: true,
+        componentSchemas: {
+          hero: { fields: [{ type: "text", name: "title" }] },
+          cta: { fields: [{ type: "text", name: "title" }] },
+        },
+      },
+    ],
+  };
+
+  it("copies a list instance's text only from the source instance of the same type", () => {
+    const source = {
+      blocks: [
+        { id: "b1", _componentType: "hero", title: "Hello" },
+        { id: "b2", _componentType: "cta", title: "Buy" },
+      ],
+    };
+    expect(
+      withTextFrom(
+        {
+          blocks: [
+            { id: "b1", _componentType: "cta", title: "" },
+            { id: "b2", _componentType: "cta", title: "" },
+          ],
+        },
+        source,
+        ZONE,
+        true
+      )
+    ).toEqual({
+      blocks: [
+        { id: "b1", _componentType: "cta", title: "" },
+        { id: "b2", _componentType: "cta", title: "Buy" },
+      ],
+    });
+  });
+});
+
+describe("sourceValueAt", () => {
+  const source = {
+    slides: [
+      { id: "a", caption: "first" },
+      { id: "b", caption: "second" },
+    ],
+    plain: [{ caption: "only" }],
+  };
+
+  it("reads a row on the path by its id, wherever the form has moved it", () => {
+    const target = { slides: [{ id: "b" }, { id: "a" }] };
+    expect(sourceValueAt(source, target, "slides.0.caption")).toBe("second");
+    expect(sourceValueAt(source, target, "slides.1.caption")).toBe("first");
+  });
+
+  // A row with no unique id keeps its text shared in storage: it has no source text of its own,
+  // and filling it would write the source's text into every language.
+  it("reads no source text for a row with no unique id, nor where the source holds no list there", () => {
+    expect(
+      sourceValueAt(source, { plain: [{ caption: "" }] }, "plain.0.caption")
+    ).toBeUndefined();
+    expect(
+      sourceValueAt(
+        {
+          lines: [
+            { id: 7, caption: "seven" },
+            { id: 7, caption: "again" },
+          ],
+        },
+        { lines: [{ id: 7 }, { id: 7 }] },
+        "lines.1.caption"
+      )
+    ).toBeUndefined();
+    // A numeric id, unique in its list, is a key as storage takes it.
+    expect(
+      sourceValueAt(
+        { lines: [{ id: 7, caption: "seven" }] },
+        { lines: [{ id: 7 }] },
+        "lines.0.caption"
+      )
+    ).toBe("seven");
+    expect(
+      sourceValueAt(
+        { slides: "none" },
+        { slides: [{ id: "a" }] },
+        "slides.0.caption"
+      )
+    ).toBeUndefined();
+    // A row the source does not hold has no source text.
+    expect(
+      sourceValueAt(source, { slides: [{ id: "new" }] }, "slides.0.caption")
+    ).toBeUndefined();
+  });
+
+  // An instance that kept its id but changed type is another component: the source's instance of
+  // the earlier type is not its source, even for a field both types name alike.
+  it("reads no source text for an instance whose component type differs from the source's", () => {
+    const blocks = {
+      blocks: [{ id: "b1", _componentType: "hero", title: "Hello" }],
+    };
+    expect(
+      sourceValueAt(
+        blocks,
+        { blocks: [{ id: "b1", _componentType: "cta" }] },
+        "blocks.0.title"
+      )
+    ).toBeUndefined();
+    // The control: the same type reads its source text.
+    expect(
+      sourceValueAt(
+        blocks,
+        { blocks: [{ id: "b1", _componentType: "hero" }] },
+        "blocks.0.title"
+      )
+    ).toBe("Hello");
+  });
+});
+
+describe("a shared layout group inside a container", () => {
+  // A group with no name saying it is not translated shares the fields it lays out, at any depth:
+  // copying the container's text from another language leaves them as this language holds them.
+  const CARD = {
+    type: "group",
+    name: "card",
+    fields: [
+      { type: "text", name: "label" },
+      {
+        type: "group",
+        localized: false,
+        fields: [{ type: "text", name: "code" }],
+      },
+    ],
+  };
+
+  it("copies the container's text and leaves the shared group's fields alone", () => {
+    expect(
+      withTextFrom(
+        { label: "", code: "own" },
+        { label: "Label", code: "theirs" },
+        CARD,
+        true
+      )
+    ).toEqual({ label: "Label", code: "own" });
+  });
+});
+
+describe("withTextFrom, field by field", () => {
+  const CARD = {
+    type: "group",
+    name: "card",
+    fields: [
+      { type: "text", name: "title" },
+      { type: "number", name: "size" },
+      { type: "text", name: "code", localized: false },
+    ],
+  };
+
+  it("takes a translated value from the source, and keeps every other field's own", () => {
+    expect(
+      withTextFrom(
+        { title: "", size: 1, code: "x" },
+        { title: "Hello", size: 9, code: "y" },
+        CARD,
+        true
+      )
+    ).toEqual({ title: "Hello", size: 1, code: "x" });
+  });
+});
+
+describe("a container saying it is not translated", () => {
+  const SHARED = {
+    type: "group",
+    name: "settings",
+    localized: false,
+    fields: [{ type: "text", name: "visibility" }],
+  };
+
+  // Storage keeps it whole, the same in every language: no badge, nothing to copy.
+  it("holds no translated text and takes none from another language", () => {
+    expect(holdsTranslatedText(SHARED, true)).toBe(false);
+    expect(
+      withTextFrom({ visibility: "" }, { visibility: "private" }, SHARED, true)
+    ).toEqual({ visibility: "" });
+    const PAGE = {
+      type: "group",
+      name: "page",
+      fields: [{ type: "text", name: "heading" }, SHARED],
+    };
+    expect(
+      withTextFrom(
+        { heading: "", settings: { visibility: "" } },
+        { heading: "Hello", settings: { visibility: "private" } },
+        PAGE,
+        true
+      )
+    ).toEqual({ heading: "Hello", settings: { visibility: "" } });
+  });
+});

@@ -61,7 +61,15 @@ export const UPGRADE_CONSENT: readonly string[] = [
   "dc_form_submission_resends_locales.requested_by",
 ];
 
+/** Why the table keeping the source text of translations is created. */
+const TRANSLATION_SOURCES_KEPT =
+  "The source text each translation is made from is kept from the first translation saved after the upgrade. The table is new, so nothing an installation held lives in it.";
+
 export const ALLOWED_OPERATIONS: readonly AllowedOperation[] = [
+  {
+    operation: "create table nextly_translation_sources",
+    reason: TRANSLATION_SOURCES_KEPT,
+  },
   {
     operation:
       "add column dc_form_submission_resends.notification: text not null",

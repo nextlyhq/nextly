@@ -45,7 +45,11 @@ jobs:
   release:
     name: Version & Publish
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Sized around `release:verify`, which waits up to thirty minutes for the
+    # largest package to become readable after the publish (SETTLE_BUDGET_MS in
+    # scripts/release/lib.mjs), plus the install and a build that may miss the
+    # cache before it.
+    timeout-minutes: 60
 
     # Block publishing from forks, and run on a push only for the Version
     # Packages merge (see `on:` above).

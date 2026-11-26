@@ -44,6 +44,7 @@ import { RoleMutationService } from "../domains/auth/services/role/role-mutation
 import { RoleQueryService } from "../domains/auth/services/role/role-query-service";
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { isMissingTable } from "../domains/field-groups/migration/session";
+import { readPresetGrantsRelease } from "../domains/meta/preset-grants-release";
 import type { MetaService } from "../domains/meta/services/meta-service";
 import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";
@@ -247,8 +248,11 @@ interface PublicRoleDeps {
   adapter: DrizzleAdapter;
   logger: Logger;
   meta: MetaService;
-  /** The roles the app and its plugins declare, and the plugins' public grants. */
-  config: Pick<NextlyServiceConfig, "roles"> & {
+  /**
+   * The roles the app and its plugins declare, the plugins' public grants, and
+   * the collections, to know which hold private files.
+   */
+  config: Pick<NextlyServiceConfig, "roles" | "collections"> & {
     plugins?: PluginDefinition[];
   };
   /** Every collection's and Single's slug, as the registry holds them. */
@@ -276,6 +280,11 @@ function publicRoleSteps(deps: PublicRoleDeps): {
         meta,
         publicRoleMade: () => publicRoleMade(meta),
         seededBefore: () => presetRoleExists(adapter),
+        // Since 0.0.2-alpha.75 `nextly migrate` makes the preset roles too,
+        // with this record, so a preset role alone no longer says an older
+        // release seeded the database.
+        presetGrantsRecorded: async () =>
+          (await readPresetGrantsRelease(meta)) !== undefined,
       }),
     make: () => {
       const roles = new RoleMutationService(adapter, logger);
@@ -638,8 +647,9 @@ async function seedEverything(): Promise<void> {
 }
 
 /**
- * Whether a boot's seeding has run on this database: a preset role exists,
- * as every boot's seeding makes them and nothing else does.
+ * Whether seeding has run on this database: a preset role exists, as every
+ * start's seeding makes them, and so does `nextly migrate` since
+ * 0.0.2-alpha.75 (which also records `preset_grants_release`).
  */
 async function presetRoleExists(adapter: DrizzleAdapter): Promise<boolean> {
   const { roles } = getDialectTables();
@@ -710,6 +720,10 @@ function publicGrantSeeding(
         (await grants.listRolePermissions(roleId)).map(({ action, resource }) =>
           permissionSlug(action, resource)
         )
+      ),
+    holdsFiles: slug =>
+      (deps.config.collections ?? []).some(
+        collection => collection.slug === slug && collection.files !== undefined
       ),
     declared: () => collectPublicGrants(deps.config.plugins ?? []),
     addOnce: (roleId, wanted, pick) =>

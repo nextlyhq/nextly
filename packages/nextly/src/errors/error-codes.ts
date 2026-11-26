@@ -64,6 +64,11 @@ export const NEXTLY_ERROR_STATUS = {
   // allocation already answer and which a retry keys on: this one must never
   // be retried, since the same version stays out of date.
   STALE_VERSION: 409,
+  // A write or a schema change that waited the hold's 30 seconds for another change of the same
+  // collection (a collection delete, a Builder save deleting a field's values) and was refused
+  // before anything changed. Its own code beside CONFLICT so a caller, a release run among them,
+  // can tell the refusal is safe to try again once the other change ends.
+  COLLECTION_BEING_CHANGED: 409,
   // An update that must say which version of a document it was made from, or
   // that it overwrites whatever is stored, and said neither: 428, Precondition
   // Required. Its own code beside STALE_VERSION: nothing is out of date, the
@@ -132,6 +137,9 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_LEGACY_BOOKKEEPING_DETECTED: 409,
   NEXTLY_UPGRADE_TABLE_NAME_COLLISION: 409,
   NEXTLY_UPGRADE_IN_PROGRESS: 409,
+  // A column the upgrade moves to the translations table is held by something a drop of it would
+  // break or silently change: an index on more columns than it, or one on part of it.
+  NEXTLY_UPGRADE_COLUMN_HELD: 409,
   // Plan C2 — nextly migrate phases.
   NEXTLY_MIGRATE_LOCK_BUSY: 409,
   // A schema change waited for a table another database session holds, past

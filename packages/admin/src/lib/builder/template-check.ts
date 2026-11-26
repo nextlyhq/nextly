@@ -106,8 +106,11 @@ const CLASH_WORDS: Record<SiblingClashKind, string> = {
   "same-column": "a name that becomes the same column",
 };
 
-/** The fields that hold fields of their own. */
-const CONTAINER_TYPES: ReadonlySet<string> = new Set(["group", "repeater"]);
+/** The fields that hold fields of their own: a template's are checked inside them, and a type change keeps them between the two. */
+export const CONTAINER_TYPES: ReadonlySet<string> = new Set([
+  "group",
+  "repeater",
+]);
 
 // Where a field's key comes from, for the readers that list a template's
 // fields by the keys this check names them by.

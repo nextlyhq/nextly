@@ -14,6 +14,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { getStaticRelations } from "../../../database/static-relations";
 import { NextlyError } from "../../../errors";
@@ -66,7 +67,12 @@ import {
 } from "../failure";
 import { describeProviderFailure } from "../provider-definition";
 import { cancelQueuedEmailAsPerson } from "../queued-cancel";
+import {
+  recordQueuedEmailActivity,
+  type QueuedEmailOperation,
+} from "../queued-email-activity";
 import { warnAboutLateQueuedEmail } from "../queued-email-warning";
+import { retryQueuedEmailAsPerson } from "../queued-retry";
 import {
   type QueuedEmail,
   type QueuedEmailState,
@@ -81,6 +87,7 @@ import {
   recipientDigesterOf,
 } from "../queued-send-changes";
 import { type QueuedEmailStatus, readQueuedEmails } from "../queued-send-read";
+import { secretsOfTemplate, withoutSecrets } from "../secret-values";
 import {
   assertIdempotencyKey,
   CORE_KEY_SCOPE,
@@ -307,6 +314,8 @@ interface DispatchContext {
   templateSlug?: string;
   /** The template version sent, `none`, or undefined when not known. */
   templateVersion?: DeliveryTemplateVersion;
+  /** The send's secrets, blanked out of a provider's failure wherever it is written. */
+  secrets: readonly string[];
   /** The queued email this send is an attempt of. */
   queuedId?: string;
   person: PrincipalRef | null;
@@ -580,6 +589,12 @@ export class EmailService extends BaseService {
   private queuedAttempt?: string;
   /** Set on the view a template send sends through. */
   private sendingVersion?: DeliveryTemplateVersion;
+  /**
+   * The secrets a send of a template that carries one holds, set on the view
+   * it sends through: blanked out of a provider's failure before it is
+   * stored or logged.
+   */
+  private sendingSecrets: readonly string[] = [];
 
   constructor(
     adapter: DrizzleAdapter,
@@ -743,10 +758,12 @@ export class EmailService extends BaseService {
 
   /** This service, recording `version` as the template version it sends. */
   private sendingTemplate(
-    version: DeliveryTemplateVersion | undefined
+    version: DeliveryTemplateVersion | undefined,
+    secrets: readonly string[]
   ): EmailService {
     const view = Object.create(this) as EmailService;
     view.sendingVersion = version;
+    view.sendingSecrets = secrets;
     return view;
   }
 
@@ -876,7 +893,7 @@ export class EmailService extends BaseService {
       message: Parameters<EmailService["send"]>[0],
       version: DeliveryTemplateVersion | undefined
     ) => {
-      const sender = this.sendingTemplate(version);
+      const sender = this.sendingTemplate(version, secrets);
       return observe ? sender.send(message, observe) : sender.send(message);
     };
 
@@ -906,6 +923,11 @@ export class EmailService extends BaseService {
     // A test of the editor's draft sends the stored template it was edited
     // from, with the unsaved fields over it.
     if (dbTemplate && draft) dbTemplate = withDraft(dbTemplate, draft);
+    // A template that carries a link or code: its variables are the secret's
+    // values, kept out of a provider's failure wherever it is written. Read
+    // from the stored template, which its owner marks, whichever version
+    // sends.
+    const secrets = secretsOfTemplate(dbTemplate, variables);
 
     if (
       dbTemplate &&
@@ -1358,6 +1380,7 @@ export class EmailService extends BaseService {
         this.sendingVersion ??
         (options.templateSlug === undefined ? "none" : undefined),
       queuedId: this.queuedAttempt,
+      secrets: this.sendingSecrets,
       person,
       resolvedAttachments,
       keyed: claimed?.keyed,
@@ -1693,7 +1716,7 @@ export class EmailService extends BaseService {
       // the action that have already gone out, and would tell an auth flow to
       // withhold a token for a mail that was sent.
       if (state.verdict !== undefined) {
-        const outcome = this.acceptedDespite(error, context.providerType, {
+        const outcome = this.acceptedDespite(error, context, {
           verdict: state.verdict,
           dispatched: state.dispatched,
         });
@@ -1895,7 +1918,7 @@ export class EmailService extends BaseService {
    */
   private acceptedDespite(
     error: unknown,
-    providerType: string,
+    context: Pick<DispatchContext, "providerType" | "secrets">,
     state: { verdict: boolean; dispatched?: SendOutcome }
   ): SendOutcome {
     // The diagnostic is isolated because the thing it is describing may be
@@ -1906,8 +1929,8 @@ export class EmailService extends BaseService {
     try {
       this.logger.error("email.after_send_failed", {
         event: "email.after_send_failed",
-        provider: providerType,
-        ...describeProviderFailure(error),
+        provider: context.providerType,
+        ...failureWithout(error, context.secrets),
       });
     } catch {
       // Nowhere left to report it: the reporter is what failed. The send
@@ -1968,7 +1991,7 @@ export class EmailService extends BaseService {
         //
         // The cause is not lost -- the log line below records it, which is
         // where a provider's own diagnostic belongs.
-        error: describeProviderFailure(error).message,
+        error: failureWithout(error, context.secrets).message,
         // The provider's answer, structured: its kind and status, which say
         // what to do about it without any of its text.
         failure: deliveryFailureOf(failure),
@@ -1994,7 +2017,7 @@ export class EmailService extends BaseService {
         // an SMTP status line, an API error code -- is moved onto `cause` when
         // its failure is normalised, so a log reading only `message` records
         // the generic sentence and loses the one fact worth having.
-        ...describeProviderFailure(error),
+        ...failureWithout(error, context.secrets),
       });
     } catch {
       // Nowhere left to report it: the reporter is what failed. The failure
@@ -2128,9 +2151,73 @@ export class EmailService extends BaseService {
    */
   async cancelQueued(
     id: string,
-    by: { userId: string | null }
+    by: { userId: string | null; actor?: RequestActor | null }
   ): Promise<{ id: string; state: string }> {
-    return cancelQueuedEmailAsPerson(this.adapter, id, by.userId);
+    const result = await cancelQueuedEmailAsPerson(this.adapter, id, by.userId);
+    // One in flight keeps its state: its message is cleared, as a request
+    // that takes effect if that attempt fails.
+    const inFlight = result.state === "sending";
+    await this.recordQueuedActivity(
+      inFlight ? "cancel-request" : "cancel",
+      id,
+      inFlight ? ["message"] : ["state", "message"],
+      by.actor
+    );
+    return result;
+  }
+
+  /**
+   * @experimental Retry the queued email `id` now, as a person: one waiting
+   * or retrying is attempted now, and one failed with its message still held
+   * waits again with a new job due now (`queued-retry`). Whoever calls this
+   * has been judged already: the Direct API and the REST route ask
+   * `manage-email-deliveries` first.
+   *
+   * @throws {NextlyError} `NOT_FOUND` for no such email; `CONFLICT` for one
+   *   being sent now, already sent or cancelled, or whose message was cleared.
+   */
+  async retryQueued(
+    id: string,
+    by: { actor?: RequestActor | null }
+  ): Promise<{ id: string; state: string }> {
+    const retried = await retryQueuedEmailAsPerson(this.adapter, id, {
+      userId: by.actor?.type === "user" ? (by.actor.id ?? null) : null,
+    });
+    // The fields the retry itself says it changed.
+    await this.recordQueuedActivity(
+      "retry",
+      id,
+      retried.changedFields,
+      by.actor
+    );
+    return { id: retried.id, state: retried.state };
+  }
+
+  /**
+   * The activity entry for a person's retry or cancel, after the action has
+   * committed: a failure to record it is logged, never turned into a failure
+   * of an action that already happened.
+   */
+  private async recordQueuedActivity(
+    operation: QueuedEmailOperation,
+    queuedId: string,
+    changedFields: readonly string[],
+    actor: RequestActor | null | undefined
+  ): Promise<void> {
+    try {
+      await recordQueuedEmailActivity({
+        operation,
+        queuedId,
+        changedFields,
+        actor,
+      });
+    } catch (error) {
+      this.logger.error("Failed to record a queued email's activity", {
+        operation,
+        queuedId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -2904,4 +2991,24 @@ function pluginPersonToRecord(value: unknown): PrincipalRef {
     ],
     logContext: { operation: "email.send" },
   });
+}
+
+/**
+ * A provider's failure as it is stored and logged, with the send's secrets
+ * blanked out of its message and its cause: a provider whose error quotes
+ * the message it was handed must not put a live link on the delivery record
+ * or in the log.
+ */
+function failureWithout(
+  error: unknown,
+  secrets: readonly string[]
+): ReturnType<typeof describeProviderFailure> {
+  const described = describeProviderFailure(error);
+  if (secrets.length === 0) return described;
+  return described.cause === undefined
+    ? { message: withoutSecrets(described.message, secrets) }
+    : {
+        message: withoutSecrets(described.message, secrets),
+        cause: withoutSecrets(described.cause, secrets),
+      };
 }

@@ -44,7 +44,6 @@ import {
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { useEditorRevealHold } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { toast } from "@admin/components/ui";
-import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
@@ -58,7 +57,6 @@ import {
 import { documentApiAddress } from "@admin/hooks/useEntryJSON";
 import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
@@ -78,6 +76,8 @@ import { EntryLocaleProvider } from "../EntryLocaleContext";
 import { DocumentLanguagePanel } from "../LanguagePanel";
 import { PreviewPanes } from "../PreviewMode/PreviewPanes";
 import { previewRevisionOf } from "../PreviewMode/previewRevision";
+import { smartPublishHandler } from "../publish-parts/smart-publish-handler";
+import type { SmartPublish } from "../publish-parts/useSmartPublish";
 import { isRemovedFromCode } from "../removed-from-code-notice";
 import { RemovedFromCodeNotice } from "../RemovedFromCodeNotice";
 import { storedStampOf } from "../review/review-words";
@@ -143,7 +143,7 @@ import { EntryMetaStrip } from "./EntryMetaStrip";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { PanelSectionsAboveForm } from "./panels";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
-import { readerStatusWrite, statusWritesHeld } from "./reader-status-write";
+import { readerStatusWrite } from "./reader-status-write";
 import type { RecoveryPointState } from "./SaveStateIndicator";
 import { deleteHeld, submitHeld } from "./submit-outcome";
 import { TitlePillProvider } from "./title-in-view";
@@ -302,6 +302,11 @@ export interface EntryFormProps {
    * (publishing chosen parts) that must be refused when the document changed since it opened.
    */
   shownCopy?: ShownCopyHandle;
+  /**
+   * What the page's Publish runs on a document with several languages: one
+   * click, or the choice of what goes live. Absent, Publish is one click.
+   */
+  smartPublish?: SmartPublish;
 }
 
 // ============================================================================
@@ -405,6 +410,7 @@ export function EntryForm({
   documentBanner,
   documentView,
   shownCopy,
+  smartPublish,
 }: EntryFormProps): JSX.Element {
   /*
    * Whether the preview pane is open, and when the document last saved.
@@ -529,18 +535,14 @@ export function EntryForm({
     defaultLocale,
     enabled: localizationEnabled,
   } = useLocalization();
-  // The entry's own publish-every-language mutation, handed to the shared
-  // availability rule through the locale context. Called unconditionally with
-  // the resolved slug; the seam below is what decides whether the action is
-  // offered, so a create form supplies none and nothing renders.
   // Where the entry's recovery points are recorded: a write made outside a save
   // waits for one on its way.
   const recordingsOf = documentRecordingKey(
     autosaveScopeFor("collection", collection.name, entry?.id)
   );
-  // The copy on screen, read as the editor reads it, so a publish of every
-  // language, or of chosen parts from the page, is refused when that language
-  // changed since it opened, and waits for the copy's recordings on their way.
+  // The copy on screen, read as the editor reads it, so a publish of chosen
+  // parts from the page is refused when that language changed since it opened,
+  // and waits for the copy's recordings on their way.
   const shownCopyOf = useCallback(
     (): ShownCopy => ({
       version: versionStartedFrom(),
@@ -557,46 +559,6 @@ export function EntryForm({
       shownCopy.current = null;
     };
   }, [shownCopy, shownCopyOf]);
-  const publishAllEntryLocales = usePublishAllLocales({
-    collectionSlug: collection.slug ?? collection.name,
-    shown: shownCopyOf,
-  });
-  // Publishing every language waits for the entry's recordings in flight.
-  const { run: runAfterRecordings, pending: publishAllPending } =
-    useAfterRecordings(recordingsOf, publishAllEntryLocales.isPending);
-
-  // Publish-every-language rides the same kind of seam `fetchSourceValues`
-  // does, and its ABSENCE is what keeps the action off a create form: there is
-  // no saved entry to publish until one exists.
-  const publishAllLanguages = useMemo(() => {
-    const entryId = entry?.id ?? undefined;
-    if (!entryId) return undefined;
-    return {
-      slug: collection.slug ?? collection.name,
-      // After this entry's recordings in flight land, as a save waits.
-      publish: () =>
-        runAfterRecordings(() => publishAllEntryLocales.mutate(entryId)),
-      pending: publishAllPending,
-      preview: () =>
-        entryApi.previewPublishAllLocales(
-          collection.slug ?? collection.name,
-          entryId
-        ),
-      previewKey: [
-        "publish-all-preview",
-        "collection",
-        collection.slug ?? collection.name,
-        entryId,
-      ],
-    };
-  }, [
-    entry?.id,
-    collection.slug,
-    collection.name,
-    publishAllEntryLocales,
-    runAfterRecordings,
-    publishAllPending,
-  ]);
 
   const translationMode = useTranslationSource({
     fields: getCollectionFields(collection),
@@ -631,7 +593,6 @@ export function EntryForm({
       collectionSlug,
       entry?.id ?? undefined
     ),
-    publishAllLanguages,
   });
 
   // Get all fields. Title and slug are extracted as system fields rendered in
@@ -1007,13 +968,6 @@ export function EntryForm({
   // collection removed from code, whose publish the server refuses as it
   // refuses a save.
   const statusWriteHold = writesHeld || removedFromCode;
-  // Publishing every language changes only each language's status, so a
-  // reader whose document nothing else holds is still offered it.
-  const publishAllHeld = statusWritesHeld({
-    editsHeld,
-    refused: readOnlyForReader,
-    writesHeld: statusWriteHold,
-  });
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
   // A refused publish's recovery holds them too, until its reloaded entry is
@@ -1372,6 +1326,19 @@ export function EntryForm({
     currentDirty: () => form.formState.isDirty,
     ...(onViewApi === undefined ? {} : { onViewApi }),
     ...storingHandlers(handleSubmit),
+    // Where the page publishes more than the language on screen, its Publish
+    // runs in place of the plain one, through the same submit.
+    ...smartPublishHandler(smartPublish, {
+      submit: handleSubmit,
+      published: editedStatus.status === "published",
+      draftsEnabled: collection.draftsEnabled === true,
+      // A user who may not change the document has nothing of their own to
+      // store: their Publish is a write of the status alone.
+      unsaved: () => mayEdit && (hasUnsavedWork || form.formState.isDirty),
+      form,
+      fields: getCollectionFields(collection),
+      localized: collection.localized === true,
+    }),
     onCancel: handleCancel,
     // No handler, no Delete: the action bar draws no action it cannot run.
     // A plugin's replacement keeps the row (and its permission and holds),
@@ -1925,17 +1892,11 @@ export function EntryForm({
                                             }
                                             locale={locale}
                                             onLocaleChange={switchLocale}
-                                            hasStatus={hasStatus}
                                             sharedChangesPending={
                                               entry?._sharedChangesPending ===
                                               true
                                             }
                                             actionsDisabled={contentHeld}
-                                            // Publishing every language is a write
-                                            // too, so a recovery holds it as well.
-                                            publishAllDisabled={
-                                              publishAllHeld || recovering
-                                            }
                                             // A reader may still open the other languages.
                                             navigationDisabled={navigationHeld}
                                           />
@@ -2039,11 +2000,6 @@ export function EntryForm({
                                           ? {}
                                           : { onLocaleChange: switchLocale })}
                                         actionsDisabled={contentHeld}
-                                        // Publishing every language is a write
-                                        // too, so a recovery holds it as well.
-                                        publishAllDisabled={
-                                          publishAllHeld || recovering
-                                        }
                                         // A reader may still open the other languages.
                                         navigationDisabled={navigationHeld}
                                         pluginSections={pluginSurfaces.sections}

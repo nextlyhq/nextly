@@ -9,8 +9,10 @@
  */
 import { sql } from "drizzle-orm";
 
+import { isVirtualField } from "../../../../collections/fields/virtual";
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import { addressableFields } from "../../../../shared/addressable-fields";
 import {
   isFieldLocalized,
   resolveLocalizedFieldNames,
@@ -18,6 +20,7 @@ import {
 import { ddlType } from "../../../i18n/migration/ddl-types";
 import { fieldToLocalizedColumnSpec } from "../../../i18n/migration/field-to-column-spec";
 import { storesPerLanguage } from "../../../i18n/per-language-storage";
+import { keepsTranslationsInside } from "../../../i18n/shared-structure";
 import { querySqlRows } from "../../pipeline/classifier/count-helpers";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
@@ -30,16 +33,19 @@ import type { RowKey } from "../types";
 
 import {
   columnDescriptorAt,
+  fieldTypeInJson,
   type FieldTypeOnDialect,
   fieldTypeOnDialect,
 } from "./field-type";
 import {
+  collectNestedTypeChange,
   FIRST_KEYS,
   fieldAccepts,
   judgeStoredTypeChange,
   type StoredTypeChangeJudgement,
   uniqueValues,
 } from "./judge-stored";
+import { nestedValues, type NestedStep } from "./nested-values";
 
 /** One field whose type a save changes, read as the rules read both types on one database. */
 export interface FieldTypeChange {
@@ -49,6 +55,87 @@ export interface FieldTypeChange {
   from: FieldDefinition;
   fromType: FieldTypeOnDialect;
   toType: FieldTypeOnDialect;
+  /**
+   * Where the field is held inside a JSON value: a named group's or a repeater's field, kept in its
+   * container's column (`container`, the field on the row holding it, before and after), at
+   * `path` from it. Its type is read as a value held inside JSON is (`fieldTypeInJson`), and a
+   * refusal names it by `label`, its path (`details.price`). Absent for a field kept on the row.
+   */
+  within?: {
+    container: { from: FieldDefinition; to: FieldDefinition };
+    path: readonly NestedStep[];
+    label: string;
+  };
+}
+
+/** How a refusal and a consent name a change's field: its path where it is held inside JSON. */
+function changedFieldName(change: FieldTypeChange): string {
+  return change.within?.label ?? change.to.name;
+}
+
+/** The field types that hold their own fields inside one JSON value of the row. */
+const CONTAINERS = new Set(["group", "repeater"]);
+
+/**
+ * A container field's own fields that hold a value, by name, a group with no name inside it read
+ * through. A virtual field, or a container's whole subtree when it is virtual, a group with no name
+ * included, stores nothing, as a virtual field on the row has no column.
+ */
+function containedFields(field: FieldDefinition): FieldDefinition[] {
+  return (
+    addressableFields((field as { fields?: unknown }).fields, {
+      descendInto: container =>
+        !isVirtualField({
+          virtual: container.virtual,
+          options: container.options,
+        }),
+    }) as unknown as FieldDefinition[]
+  ).filter(inner => !isVirtualField(inner));
+}
+
+/**
+ * The type changes of the fields a pair of containers holds, the same kind before and after (a
+ * group stays a group, a repeater a repeater), paired by name, at any depth: each field held inside
+ * JSON whose type, as a value held there reads (`fieldTypeInJson`), changes, a container held there
+ * that changes kind included.
+ */
+function nestedTypeChangesOf(
+  container: { from: FieldDefinition; to: FieldDefinition },
+  from: FieldDefinition,
+  to: FieldDefinition,
+  path: readonly NestedStep[],
+  args: { dialect: SupportedDialect; builtBy: ColumnOrigin }
+): FieldTypeChange[] {
+  if (!CONTAINERS.has(from.type) || from.type !== to.type) return [];
+  const here = [...path, { name: to.name, repeated: to.type === "repeater" }];
+  const before = new Map(containedFields(from).map(f => [f.name, f]));
+  return containedFields(to).flatMap(inner => {
+    const was = before.get(inner.name);
+    if (was === undefined) return [];
+    // A container that stays the same kind keeps its fields where they were, each asked in turn;
+    // one that changes kind, or a field that becomes or stops being one, is a change of its own,
+    // as a container on the row is.
+    if (CONTAINERS.has(inner.type) && was.type === inner.type) {
+      return nestedTypeChangesOf(container, was, inner, here, args);
+    }
+    const fromType = fieldTypeInJson(was, args.dialect, args.builtBy);
+    const toType = fieldTypeInJson(inner, args.dialect, args.builtBy);
+    if (sameType(fromType, toType)) return [];
+    const at = [...here, { name: inner.name, repeated: false }];
+    return [
+      {
+        to: inner,
+        from: was,
+        fromType,
+        toType,
+        within: {
+          container,
+          path: at,
+          label: at.map(step => step.name).join("."),
+        },
+      },
+    ];
+  });
 }
 
 /**
@@ -99,12 +186,12 @@ export function fieldTypeChangesOf(args: {
   builtByBefore?: ColumnOrigin;
   /** Whether the fields are kept on a field group's row (`columnDescriptorAt`). */
   componentRow?: boolean;
+  /**
+   * Whether the changes of fields held inside a named group's or a repeater's JSON are asked too
+   * (`within`): a caller that judges each change by its own column reading leaves them out.
+   */
+  nested?: boolean;
 }): FieldTypeChange[] {
-  const at = {
-    builtBy: args.builtBy,
-    ...(args.componentRow === true ? { componentRow: true } : {}),
-  };
-  const atBefore = { ...at, builtBy: args.builtByBefore ?? args.builtBy };
   const oldNameOf = new Map(
     [...(args.renamed ?? new Map<string, string>())].map(([from, to]) => [
       to,
@@ -119,27 +206,54 @@ export function fieldTypeChangesOf(args: {
   for (const to of fieldsStoredOnRow(args.next)) {
     const from = byName.get(oldNameOf.get(to.name) ?? to.name);
     if (from === undefined) continue;
-    const columnBefore = columnDescriptorAt(from, args.dialect, atBefore);
-    const columnAfter = columnDescriptorAt(to, args.dialect, at);
-    if (columnBefore === null || columnAfter === null) continue;
-    const fromType = fieldTypeOnDialect(
-      from,
-      args.dialect,
-      atBefore.builtBy,
-      atBefore
-    );
-    const toType = fieldTypeOnDialect(to, args.dialect, args.builtBy, at);
-    // Where the entity changes owner, one field type is made as two columns (the Builder's
-    // unbounded text, code's bounded one on MySQL): the column the new owner makes is a change too,
-    // which the judgement of its values, reading each one's bound, then weighs.
-    const columnChanges =
-      args.builtByBefore !== undefined &&
-      columnBefore.dialectType !== columnAfter.dialectType;
-    if (!sameType(fromType, toType) || columnChanges) {
-      changes.push({ to, from, fromType, toType });
+    const onRow = columnTypeChangeOf(from, to, args);
+    if (onRow === null) continue;
+    if (onRow.change !== undefined) changes.push(onRow.change);
+    // A container's fields keep their values inside its column, which their type does not
+    // change: each is asked by its own type, as a value held inside JSON reads it.
+    if (args.nested === true) {
+      changes.push(...nestedTypeChangesOf({ from, to }, from, to, [], args));
     }
   }
   return changes;
+}
+
+/**
+ * `from` becoming `to` as their columns read them: null where either has no column (a drop or an
+ * add, which the save asks about as such), otherwise the type change, if the save makes one.
+ */
+function columnTypeChangeOf(
+  from: FieldDefinition,
+  to: FieldDefinition,
+  args: Parameters<typeof fieldTypeChangesOf>[0]
+): { change: FieldTypeChange | undefined } | null {
+  const at = {
+    builtBy: args.builtBy,
+    ...(args.componentRow === true ? { componentRow: true } : {}),
+  };
+  const atBefore = { ...at, builtBy: args.builtByBefore ?? args.builtBy };
+  const columnBefore = columnDescriptorAt(from, args.dialect, atBefore);
+  const columnAfter = columnDescriptorAt(to, args.dialect, at);
+  if (columnBefore === null || columnAfter === null) return null;
+  const fromType = fieldTypeOnDialect(
+    from,
+    args.dialect,
+    atBefore.builtBy,
+    atBefore
+  );
+  const toType = fieldTypeOnDialect(to, args.dialect, args.builtBy, at);
+  // Where the entity changes owner, one field type is made as two columns (the Builder's
+  // unbounded text, code's bounded one on MySQL): the column the new owner makes is a change too,
+  // which the judgement of its values, reading each one's bound, then weighs.
+  const columnChanges =
+    args.builtByBefore !== undefined &&
+    columnBefore.dialectType !== columnAfter.dialectType;
+  return {
+    change:
+      !sameType(fromType, toType) || columnChanges
+        ? { to, from, fromType, toType }
+        : undefined,
+  };
 }
 
 /** One field's type change judged over the values its column holds. */
@@ -149,8 +263,9 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
   result: StoredTypeChangeJudgement;
   /**
    * The field is kept per language before the save and after it (`translatedAfter`), and its
-   * column in the entity's translations table takes another type: a column a type change leaves in
-   * the old type, values or none (`typeChangeRefusals`). A field the save stops translating, or
+   * column in the entity's translations table takes another type that the save's or file's own
+   * statements do not give it (`retyped`): a column a type change leaves in the old type, values or
+   * none (`typeChangeRefusals`). A field the save stops translating, or
    * whose entity it stops translating, is not: its values leave that table, and the save's own
    * check of a field leaving translation answers for them. Nor is one whose translations column
    * keeps its type (a long text becoming code), which that column holds as it is.
@@ -186,57 +301,119 @@ export async function judgeFieldTypeChanges(args: {
   translated?: ReadonlySet<string>;
   /** The names of the fields kept per language after the save: none where absent. */
   translatedAfter?: ReadonlySet<string>;
+  /** The fields whose translations column the road's own statements retype (`retypedTranslations`). */
+  retyped?: ReadonlySet<string>;
   changes: readonly FieldTypeChange[];
 }): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
   const columnsOf = liveColumnReader(args.db, args.dialect);
   const textOf = tableTextReader(args.db, args.dialect);
   for (const change of args.changes) {
-    const held = await whereHeld(change, args, columnsOf);
-    if (held === undefined) continue;
-    const { table, column } = held;
-    const perLanguage = table === args.translationsTable;
-    const text = await textOf(table);
-    // A unique MySQL text compares values by its collation, which only the database can weigh:
-    // the readings are gathered and weighed after the scan instead of compared as they come.
-    const collated =
-      text !== undefined &&
-      change.to.unique === true &&
-      COLLATED_FAMILIES.has(change.toType.family);
-    const readings: { key: RowKey; readsAs: string }[] = [];
-    const judgedHere = await judgeStoredTypeChange({
-      db: args.db,
-      dialect: args.dialect,
-      table,
-      column,
-      keyedBy: perLanguage ? "translation" : "id",
-      from: change.fromType,
-      // A MySQL text column counts its bytes in the table's character set, which a column the
-      // change converts takes.
-      to: withCharset(change.toType, text?.charset),
-      accepts: fieldAccepts(change.toType, change.to),
-      // A unique field holds each value once: two that read as one value of the new type block.
-      unique: change.to.unique === true && !collated,
-      ...(collated
-        ? { onReading: (key, readsAs) => readings.push({ key, readsAs }) }
-        : {}),
-    });
-    const result =
-      collated && text !== undefined
-        ? withRepeats(
-            judgedHere,
-            await repeatsByCollation(args.db, readings, text)
-          )
-        : judgedHere;
-    judged.push({
-      ...change,
-      table,
-      column,
-      result,
-      ...(perLanguage ? translationsTableFlags(change, args) : {}),
-    });
+    // A field held inside JSON is read from its container's column.
+    const one =
+      change.within === undefined
+        ? await judgeOnRow(change, args, columnsOf, textOf)
+        : await judgeNestedChange(change, change.within, args, columnsOf);
+    if (one !== undefined) judged.push(one);
   }
   return judged;
+}
+
+/** What `judgeFieldTypeChanges` is asked: the entity's tables and the changes. */
+type JudgeArgs = Parameters<typeof judgeFieldTypeChanges>[0];
+
+/**
+ * A change of a field kept on the row, judged over its column (`judgeFieldTypeChanges`).
+ * Undefined where neither table holds its column.
+ */
+async function judgeOnRow(
+  change: FieldTypeChange,
+  args: JudgeArgs,
+  columnsOf: (table: string) => Promise<ReadonlySet<string>>,
+  textOf: (table: string) => Promise<TableText | undefined>
+): Promise<JudgedFieldTypeChange | undefined> {
+  const held = await whereHeld(change, args, columnsOf);
+  if (held === undefined) return undefined;
+  const { table, column } = held;
+  const perLanguage = table === args.translationsTable;
+  const text = await textOf(table);
+  // A unique MySQL text compares values by its collation, which only the database can weigh:
+  // the readings are gathered and weighed after the scan instead of compared as they come.
+  const collated =
+    text !== undefined &&
+    change.to.unique === true &&
+    COLLATED_FAMILIES.has(change.toType.family);
+  const readings: { key: RowKey; readsAs: string }[] = [];
+  const judgedHere = await judgeStoredTypeChange({
+    db: args.db,
+    dialect: args.dialect,
+    table,
+    column,
+    keyedBy: perLanguage ? "translation" : "id",
+    from: change.fromType,
+    // A MySQL text column counts its bytes in the table's character set, which a column the
+    // change converts takes.
+    to: withCharset(change.toType, text?.charset),
+    accepts: fieldAccepts(change.toType, change.to),
+    // A unique field holds each value once: two that read as one value of the new type block.
+    unique: change.to.unique === true && !collated,
+    ...(collated
+      ? { onReading: (key, readsAs) => readings.push({ key, readsAs }) }
+      : {}),
+  });
+  const result =
+    collated && text !== undefined
+      ? withRepeats(
+          judgedHere,
+          await repeatsByCollation(args.db, readings, text)
+        )
+      : judgedHere;
+  return {
+    ...change,
+    table,
+    column,
+    result,
+    ...(perLanguage ? translationsTableFlags(change, args) : {}),
+  };
+}
+
+/**
+ * A change of a field held inside its container's JSON, judged over each row's values of it there
+ * (`nestedValues`, `collectNestedTypeChange`), read from the container's column. Its container's
+ * column keeps its type, so nothing of the translations table's flags applies. Undefined where
+ * neither table holds it.
+ */
+async function judgeNestedChange(
+  change: FieldTypeChange,
+  within: NonNullable<FieldTypeChange["within"]>,
+  args: JudgeArgs,
+  columnsOf: (table: string) => Promise<ReadonlySet<string>>
+): Promise<JudgedFieldTypeChange | undefined> {
+  const held = await whereHeld(
+    { ...change, ...within.container },
+    args,
+    columnsOf
+  );
+  if (held === undefined) return undefined;
+  const { table, column } = held;
+  return {
+    ...change,
+    table,
+    column,
+    result: await collectNestedTypeChange(
+      change.fromType,
+      change.toType,
+      nestedValues({
+        db: args.db,
+        dialect: args.dialect,
+        table,
+        column,
+        keyedBy: table === args.translationsTable ? "translation" : "id",
+        path: within.path,
+      }),
+      fieldAccepts(change.toType, change.to)
+    ),
+  };
 }
 
 /**
@@ -250,6 +427,7 @@ function translationsTableFlags(
     dialect: SupportedDialect;
     builtBy: ColumnOrigin;
     translatedAfter?: ReadonlySet<string>;
+    retyped?: ReadonlySet<string>;
   }
 ): Pick<
   JudgedFieldTypeChange,
@@ -257,7 +435,10 @@ function translationsTableFlags(
 > {
   if (args.translatedAfter === undefined) return {};
   if (args.translatedAfter.has(change.to.name)) {
-    return translationsColumnChanges(change.from, change.to, args.builtBy)
+    // A column the save's or file's own statements give the new type is no column left behind:
+    // its values are judged in each language, as the entity's own column's are.
+    return translationsColumnChanges(change.from, change.to, args.builtBy) &&
+      args.retyped?.has(change.to.name) !== true
       ? { changesTranslationsColumn: true }
       : {};
   }
@@ -544,8 +725,8 @@ function refusalOf(
 ): TypeChangeRefusal | null {
   const { judgement } = change.result;
   const blocked = judgement.class === "blocked";
-  const lossy =
-    judgement.class === "lossy" && !acknowledged.has(change.to.name);
+  const name = changedFieldName(change);
+  const lossy = judgement.class === "lossy" && !acknowledged.has(name);
   const translated = change.changesTranslationsColumn === true;
   const leaving = change.leavesWithEntity === true;
   if (!blocked && !lossy && !translated && !leaving) return null;
@@ -557,18 +738,27 @@ function refusalOf(
   });
   const values = blocked || lossy ? ` (${describeClassed(judgement)})` : "";
   return {
-    path: change.to.name,
+    path: name,
     code:
       blocked || translated || leaving
         ? "TYPE_CHANGE_BLOCKED"
         : "TYPE_CHANGE_LOSES_VALUES",
     message: [
-      `${entity}: field '${change.to.name}' cannot change from ${change.from.type} to ${change.to.type}${values}.`,
+      `${entity}: field '${name}' cannot change from ${change.from.type} to ${change.to.type}${values}.`,
       ...why,
       "A new field of the new type keeps the old values beside the new ones.",
     ].join(" "),
   };
 }
+
+/**
+ * Why a change of a field kept per language is refused where its translations column would keep its
+ * old type (`changesTranslationsColumn`), in the save's words: the Schema Builder's type picker
+ * shows the same sentence for a type it offers as unavailable, so the two cannot say different
+ * things.
+ */
+export const TRANSLATIONS_COLUMN_KEEPS_ITS_TYPE =
+  "It is kept per language, in a translations table whose column a type change does not convert, so the change can't be deployed yet.";
 
 /**
  * Why a refused change can't go ahead as it stands, beyond its values' own reasons: its translations
@@ -581,11 +771,7 @@ function refusalReasons(of: {
   rewritten: boolean;
 }): string[] {
   const why: string[] = [];
-  if (of.translated) {
-    why.push(
-      "It is kept per language, in a translations table whose column a type change does not convert, so the change can't be deployed yet."
-    );
-  }
+  if (of.translated) why.push(TRANSLATIONS_COLUMN_KEEPS_ITS_TYPE);
   if (of.leaving) {
     why.push(
       "Its entity stops being translated in the same save, which moves each language's value out of the translations table as it is stored: turn off translation and save first, then change the field's type."
@@ -620,7 +806,7 @@ export function pendingMigrationRefusal(
   if (changes.length === 0) return null;
   if (DEFINITION_APPLIED.has(String(migrationStatus))) return null;
   return {
-    path: changes[0].to.name,
+    path: changedFieldName(changes[0]),
     code: "TYPE_CHANGE_BLOCKED",
     message: `Finish the pending migration of ${entity} first, then change the field's type.`,
   };
@@ -689,6 +875,12 @@ export interface EntityTypeChangeInput {
   translatedBefore?: ReadonlySet<string>;
   /** The fields translated after the save (`perLanguageAfter`). */
   translatedAfter?: ReadonlySet<string>;
+  /**
+   * The fields, by their new name, whose translations column the road's own statements give the
+   * new type: the save's file's or the deployed change's `retypes` statements. A translated change
+   * is refused for its column only where it is not among them (`changesTranslationsColumn`).
+   */
+  retypedTranslations?: ReadonlySet<string>;
   /** The fields as the database holds them before the save: the registry row's. */
   previous: readonly FieldDefinition[];
   /** The fields as the save leaves them. */
@@ -727,8 +919,11 @@ export async function fieldTypeChangeRefusals(
       ? { builtByBefore: entity.builtByBefore }
       : {}),
     ...(entity.componentRow === true ? { componentRow: true } : {}),
-  }).filter(change => entity.ignore?.has(change.to.name) !== true);
+    nested: true,
+  }).filter(change => entity.ignore?.has(changedFieldName(change)) !== true);
   if (changes.length === 0) return [];
+  const held = textHeldPerLanguageRefusals(entity, changes);
+  if (held.length > 0) return held;
   const pending =
     entity.migrationStatus === undefined
       ? null
@@ -751,10 +946,53 @@ export async function fieldTypeChangeRefusals(
       ...(entity.translatedAfter !== undefined
         ? { translatedAfter: entity.translatedAfter }
         : {}),
+      ...(entity.retypedTranslations !== undefined
+        ? { retyped: entity.retypedTranslations }
+        : {}),
       changes,
     }),
     entity.acknowledged
   );
+}
+
+/**
+ * The refusal of each change that turns a translated text inside a repeater or group keeping its
+ * text per language (`keepsTranslationsInside`) into a type that is not translated, on an entity
+ * with a translations table. Each language's text is in the container's overlay column there, and
+ * a value of the new type is read from the structure alone, so the change judged over the
+ * structure finds nothing to lose and leaves every language's text behind: hidden, then lost at
+ * that language's next write. Refused until the overlays are converted with it, as a move into or
+ * out of such a container is. A change between two translated types keeps the text where it is
+ * read, and a field there that keeps no text (shared, or not text), is judged as before.
+ */
+function textHeldPerLanguageRefusals(
+  entity: EntityTypeChangeInput,
+  changes: readonly FieldTypeChange[]
+): TypeChangeRefusal[] {
+  if (entity.translationsTable === undefined) return [];
+  return changes.flatMap(change => {
+    const container = change.within?.container.from;
+    if (
+      container === undefined ||
+      !keepsTranslationsInside(container, true) ||
+      !isFieldLocalized(change.from, true) ||
+      isFieldLocalized(change.to, true)
+    ) {
+      return [];
+    }
+    const name = changedFieldName(change);
+    return [
+      {
+        path: name,
+        code: "TYPE_CHANGE_BLOCKED" as const,
+        message: [
+          `${entity.label}: field '${name}' cannot change from ${change.from.type} to ${change.to.type}.`,
+          `It is held inside '${container.name}', which keeps the text inside it for each language, and the change would leave each language's text in the old form. This is not available yet.`,
+          "A new field of the new type keeps the old values beside the new ones.",
+        ].join(" "),
+      },
+    ];
+  });
 }
 
 /** A refusal as a validation error lists it: by the field's path under `fields`. */

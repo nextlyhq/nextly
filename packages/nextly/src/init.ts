@@ -94,6 +94,7 @@ import {
   ensureHmrListener,
   consumeHmrReloadFlag,
   markHmrReloadInFlight,
+  stopHmrListener,
 } from "./runtime/hmr-listener";
 import { consoleLogger } from "./shared/types";
 
@@ -264,8 +265,13 @@ function buildNextlyInstance(
     releases: directAPI.releases,
     // A subject's content events, forwarded for the same reason.
     contentEvents: directAPI.contentEvents,
+    // A collection's private files, the checked download, for the same reason.
+    files: directAPI.files,
     // A person's own notices, forwarded for the same reason.
     notices: directAPI.notices,
+
+    // A translated field and its source, forwarded for the same reason.
+    translations: directAPI.translations,
     // Review state under a workflow, and the email delivery log, forwarded
     // for the same reason.
     workflows: directAPI.workflows,
@@ -291,6 +297,9 @@ function buildNextlyInstance(
 
     // Shutdown method
     shutdown: async () => {
+      // A Nextly shut down applies no config edit: its start watched the
+      // config, and the next start watches it again.
+      stopHmrListener();
       // Loaded on use, as the boot loads it: see `getNextly` below.
       const { shutdownServices } = await import("./di/register");
       await shutdownServices();

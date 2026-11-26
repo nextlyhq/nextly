@@ -56,6 +56,7 @@ import {
   type BrandSettingsUpdate,
 } from "../brand-settings";
 import type { DraftPreview } from "../draft-preview-request";
+import type { OwnerSampleRecords } from "../sample-records";
 import {
   changedTemplateFields,
   recordTemplateActivity,
@@ -209,6 +210,22 @@ const NEW_TEMPLATE_DEFAULTS = {
   attachments: null,
   description: null,
 };
+
+/**
+ * A written draft's code, as its blocks compile through the same step a
+ * render and a conversion to code take, so what an editor shows is what
+ * converting would store. Nothing for a coded draft.
+ */
+function writtenSource(draft: TemplateFields): Pick<DraftPreview, "source"> {
+  if (draft.format !== "written" || !draft.blocks) return {};
+  const compiled = fromBlocks(draft);
+  return {
+    source: {
+      html: compiled.htmlContent,
+      text: compiled.plainTextContent ?? "",
+    },
+  };
+}
 
 function orDefault<K extends keyof typeof NEW_TEMPLATE_DEFAULTS>(
   data: CreateEmailTemplateInput,
@@ -627,6 +644,22 @@ export class EmailTemplateService extends BaseService {
   /** What sends a template, as its running owner says; empty when it says nothing. */
   ownerSentBy(slug: string): string[] {
     return [...(this.registry.owned.get(slug)?.sentBy ?? [])];
+  }
+
+  /**
+   * @experimental The real records a template's test data can be filled
+   * from, as its running owner offers them, with the names of the variables
+   * that owner declares in code; undefined when it offers none. Both come from
+   * one registration, and a site's own declarations add no name: what an
+   * owner's loader may hand over is its owner's to say.
+   */
+  ownerSampleRecords(slug: string): OwnerSampleRecords | undefined {
+    const entry = this.registry.owned.get(slug);
+    if (!entry?.sampleRecords) return undefined;
+    return {
+      source: entry.sampleRecords,
+      declared: (entry.defaults.variables ?? []).map(variable => variable.name),
+    };
   }
   /** Where the switch to Liquid, and the templates kept off it, are recorded. */
   private readonly meta: MetaService;
@@ -2603,6 +2636,7 @@ export class EmailTemplateService extends BaseService {
       from: draft.fromOverride
         ? previewFrom(draft.fromOverride, sampleData)
         : null,
+      ...writtenSource(draft),
     };
   }
 

@@ -46,8 +46,20 @@ export interface PendingChange {
   type: string;
   /** For a type change, the type as saved. */
   previousType?: string;
+  /**
+   * For a type change, the field's path as the draft places it: the names of the fields holding
+   * it, outermost first, then its own name. The save's refusal of the change names it so.
+   */
+  path?: string[];
   /** For an added or deleted container, how many fields it holds, at any depth. */
   inside?: number;
+  /**
+   * For a move into or out of a field that holds others (a group): its path as saved and as the
+   * draft places it, each the names of the fields holding it, outermost first, then its own name.
+   * Absent for a move among its siblings, which changes no field's place in the stored values.
+   */
+  movedFrom?: string[];
+  movedTo?: string[];
 }
 
 /** How a row of the outline shows its field's pending changes. */
@@ -289,17 +301,126 @@ function savedAsRenamed(
 }
 
 /**
+ * The path of the field `id` in `placements`: the names of the fields holding it, outermost first,
+ * then its own name. A holder with no name (a layout group) stores nothing of its own, so it is no
+ * step of the path.
+ */
+function pathOf(id: string, placements: Map<string, Placement>): string[] {
+  const path: string[] = [];
+  for (
+    let at: string | null = id;
+    at !== null;
+    at = placements.get(at)?.parentId ?? null
+  ) {
+    const name = placements.get(at)?.field.name ?? "";
+    if (at === id || name !== "") path.unshift(name);
+  }
+  return path;
+}
+
+/** A field's path as saved and its path in the draft. */
+interface MovedPaths {
+  movedFrom: string[];
+  movedTo: string[];
+}
+
+/** The ids of the named holders above a field, outermost first: the groups its values are in. */
+function namedHoldersOf(
+  id: string,
+  placements: Map<string, Placement>
+): string[] {
+  const holders: string[] = [];
+  for (
+    let at: string | null = placements.get(id)?.parentId ?? null;
+    at !== null;
+    at = placements.get(at)?.parentId ?? null
+  ) {
+    if ((placements.get(at)?.field.name ?? "") !== "") holders.unshift(at);
+  }
+  return holders;
+}
+
+/**
+ * A field's paths as saved and in the draft, where the named groups holding it are others: a move
+ * into or out of a named group, or a layout group above it given a name or losing one, which
+ * changes where its values are stored though its holder is the same. A move into or out of a
+ * layout group keeps the path, and a named group renamed keeps its fields' values in its own
+ * column, so neither is one.
+ */
+function movedPathsOf(
+  id: string,
+  before: Map<string, Placement>,
+  after: Map<string, Placement>
+): MovedPaths | undefined {
+  // A layout group stores nothing of its own: each field it holds is moved on its own.
+  if ((after.get(id)?.field.name ?? "") === "") return undefined;
+  if (
+    namedHoldersOf(id, before).join("\u0000") ===
+    namedHoldersOf(id, after).join("\u0000")
+  ) {
+    return undefined;
+  }
+  const movedFrom = pathOf(id, before);
+  const movedTo = pathOf(id, after);
+  return movedFrom.join("\u0000") === movedTo.join("\u0000")
+    ? undefined
+    : { movedFrom, movedTo };
+}
+
+/** Whether `inner` is `outer` followed by more names. */
+const startsWith = (inner: readonly string[], outer: readonly string[]) =>
+  outer.every((name, at) => inner[at] === name);
+
+/**
+ * Each saved field moved to another storage level (`movedPathsOf`), less those a moved named group
+ * above them carries: the group's value holds theirs, so a field standing where it stood inside the
+ * group moves with it, and a move of its own would overlap the group's, which the server refuses.
+ * A field that also moves inside the group is its own move.
+ */
+function storageMovesOf(
+  ids: readonly string[],
+  before: Map<string, Placement>,
+  after: Map<string, Placement>
+): Map<string, MovedPaths> {
+  const moved = new Map<string, MovedPaths>();
+  for (const id of ids) {
+    const paths = movedPathsOf(id, before, after);
+    if (paths) moved.set(id, paths);
+  }
+  const carriedBy = (paths: MovedPaths, holder: MovedPaths | undefined) =>
+    holder !== undefined &&
+    startsWith(paths.movedFrom, holder.movedFrom) &&
+    startsWith(paths.movedTo, holder.movedTo) &&
+    paths.movedFrom.slice(holder.movedFrom.length).join("\u0000") ===
+      paths.movedTo.slice(holder.movedTo.length).join("\u0000");
+  const carried = (id: string, paths: MovedPaths) => {
+    for (
+      let at = after.get(id)?.parentId ?? null;
+      at !== null;
+      at = after.get(at)?.parentId ?? null
+    ) {
+      if (carriedBy(paths, moved.get(at))) return true;
+    }
+    return false;
+  };
+  return new Map([...moved].filter(([id, paths]) => !carried(id, paths)));
+}
+
+/**
  * What changed in a field that was saved and is still here. `followed` is the field as saved with
- * the draft's renames carried through its condition, which its settings are compared with.
+ * the draft's renames carried through its condition, which its settings are compared with. A move
+ * to another storage level carries its paths (`movedPaths`).
  */
 function changesOfKept(
   field: BuilderField,
   was: BuilderField,
   moved: boolean,
-  followed: BuilderField = was
+  followed: BuilderField = was,
+  movedPaths?: MovedPaths,
+  path?: string[]
 ): PendingChange[] {
   const changes: PendingChange[] = [];
-  if (moved) changes.push(changeOf("moved", field));
+  if (moved) changes.push(changeOf("moved", field, movedPaths));
   if ((was.name ?? "") !== (field.name ?? "")) {
     changes.push(
       changeOf("renamed", field, {
@@ -311,7 +432,12 @@ function changesOfKept(
     );
   }
   if (was.type !== field.type) {
-    changes.push(changeOf("typeChanged", field, { previousType: was.type }));
+    changes.push(
+      changeOf("typeChanged", field, {
+        previousType: was.type,
+        ...(path ? { path } : {}),
+      })
+    );
   }
   if (settingsSignatureOf(followed) !== settingsSignatureOf(field)) {
     changes.push(changeOf("settings", field));
@@ -338,16 +464,30 @@ export function pendingChanges(
   );
 
   const followed = savedAsRenamed(baseline, before, after);
+  const storageMoves = storageMovesOf(
+    currentOrder.filter(field => before.has(field.id)).map(field => field.id),
+    before,
+    after
+  );
 
   const changes: PendingChange[] = [];
   for (const field of currentOrder) {
     const was = before.get(field.id)?.field;
     if (was !== undefined) {
-      const moved =
-        before.get(field.id)?.parentId !== after.get(field.id)?.parentId ||
-        movedInPlace.has(field.id);
+      const holderChanged =
+        before.get(field.id)?.parentId !== after.get(field.id)?.parentId;
+      const movedPaths = storageMoves.get(field.id);
       changes.push(
-        ...changesOfKept(field, was, moved, followed.get(field.id) ?? was)
+        ...changesOfKept(
+          field,
+          was,
+          holderChanged ||
+            movedInPlace.has(field.id) ||
+            movedPaths !== undefined,
+          followed.get(field.id) ?? was,
+          movedPaths,
+          pathOf(field.id, after)
+        )
       );
     } else if (!underAny(field.id, after, added)) {
       // A field added inside an added field comes with it.

@@ -47,6 +47,7 @@ import {
   resolveCompanionSchemaReadiness,
   type CompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
 import { directFieldGroupFields } from "../field-group-write-access";
 import {
@@ -593,8 +594,13 @@ export class FieldGroupQueryService extends BaseService {
       language => language.dataArray.length > 0
     );
     if (joined) {
-      // Read with the instances, so there is nothing left to query.
-      const { localizedFields } = joined.plan.companion;
+      // Read with the instances, so there is nothing left to query but a container's component
+      // shape: one placing a component is put back by that component's fields, read on this
+      // read's own handle (`withComponentShapes`), as its write split it.
+      const localizedFields = await withComponentShapes(
+        joined.plan.companion.localizedFields,
+        executor ?? this.adapter.getDrizzle()
+      );
       for (const { dataArray } of languages) {
         fillCompanionFields({
           rows: dataArray,

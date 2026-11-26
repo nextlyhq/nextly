@@ -87,6 +87,7 @@ import {
   resolveKnownTableColumns,
   resolveTableColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
+import { registerStoredFileDeletion } from "../domains/files/delete-stored-file";
 import { stopGrantsExpiryRetry } from "../domains/flush-content-change";
 import type {
   LanguageAddressRule,
@@ -143,6 +144,7 @@ import {
   holdRecordedAtStart,
   registryRows,
 } from "../domains/schema/pipeline/recorded-fields";
+import { configTheCodeOwns } from "../domains/schema/pipeline/registered-collections";
 import type {
   DesiredCollection,
   DesiredSchema,
@@ -370,11 +372,17 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
 import { readProxyTrustSettings } from "../utils/proxy-trust";
 
+import { warnOfBuilderProblemsAtStart } from "./builder-problems-at-start";
 import {
   container,
   type Container,
   type RestoredRegistrations,
 } from "./container";
+import {
+  compiledForNow,
+  compileForStart,
+  type StartSchema,
+} from "./development-start-hooks";
 import {
   takesDevelopmentStartHold,
   withDevelopmentStartSchemaLock,
@@ -1119,14 +1127,25 @@ async function registerServicesOnce(
     structure,
     "before migrations at start"
   );
+  // The cache handlers read expiries from this adapter's ledger, and writes
+  // made outside a request record theirs into it, for every instance. A
+  // stored page is served only once it is published, so it is published as
+  // soon as nothing this start does can expire a tag first: here, where the
+  // app does not opt into migrations at start, and after them where it does,
+  // below. The steps between change no content, and each of their round trips
+  // held the admin page's first byte.
+  const ledgerAt = ledgerPublicationOf(structure, config);
+  publishLedgerIfAt("before the schema reads", ledgerAt, adapter);
   await refuseUnmigratedDatabaseInBuildPhase(adapter);
 
-  const bootExtensionSchema = await prepareBootSchema(
+  const bootSchema = await prepareBootSchema(
     adapter,
     transformedConfig,
     transformedPlugins,
     resolvedLogger
   );
+
+  let bootExtensionSchema = bootSchema.schema;
 
   // Before the migrations and the hold below, and touching no database: the
   // schema lock writes its rows through the table resolver this sets.
@@ -1167,11 +1186,10 @@ async function registerServicesOnce(
         },
       })
   );
-  // The cache handlers read expiries from this adapter's ledger, and writes
-  // made outside a request record theirs into it, for every instance. After
-  // the migrations at start, which record theirs through the ledger they lend
-  // themselves, on their own transaction, as `nextly migrate` does.
-  installTagExpiryLedger(adapter);
+  // After the migrations at start where they run, which record their
+  // expiries through the ledger they lend themselves, on their own
+  // transaction, as `nextly migrate` does.
+  publishLedgerIfAt("after migrations at start", ledgerAt, adapter);
 
   // A run that failed before it set the database up leaves it as it was.
   await refuseDatabaseNotSetUp(adapter, structure, "after migrations at start");
@@ -1226,6 +1244,9 @@ async function registerServicesOnce(
     adapter,
     resolvedLogger,
     async () => {
+      // Before anything below reads it: a Schema Builder save the hold waited
+      // for may have changed the records the schema hooks were compiled by.
+      bootExtensionSchema = await bootSchema.now();
       const completeness = { complete: true };
       const registry = await initializeSchemaRegistry(
         adapter,
@@ -1342,7 +1363,8 @@ async function registerServicesOnce(
       const { mediaStorage, storage } = registerBootMediaStorage(
         storagePlugins,
         resolvedLogger,
-        resolvedBasePath
+        resolvedBasePath,
+        transformedConfig.collections ?? []
       );
 
       // Before any schema work, a database laid out for the other choice of the setting is refused:
@@ -1436,6 +1458,13 @@ async function registerServicesOnce(
         // A production start adds no plugin field to a Builder entity, neither
         // its column nor its registry row: the entity is served as migrated.
         materialize: !structure.productionStart,
+        // A development start's own reload warns from the definition file, so
+        // the start speaks at once only where that reload is not to come.
+        ...(options.start === true && {
+          warnOfBuilderProblems: bootApplyEnabled()
+            ? ("unless-reloaded" as const)
+            : ("now" as const),
+        }),
       });
 
       // A production start writes no registry row, no permission and no
@@ -2024,7 +2053,11 @@ async function prepareBootSchema(
   transformedConfig: NextlyServiceConfig,
   transformedPlugins: PluginDefinition[],
   logger: Logger
-): Promise<ExtensionSchema | undefined> {
+): Promise<{
+  schema: ExtensionSchema | undefined;
+  /** The schema as it is now, published again if it is another (`compiledForNow`). */
+  now(): Promise<ExtensionSchema | undefined>;
+}> {
   // The dialect is read defensively because an adapter that cannot report one
   // is a boot that is going to fail regardless, and it must fail at the step
   // that actually needs a database rather than here. Only the CAPABILITY read
@@ -2041,7 +2074,9 @@ async function prepareBootSchema(
   // report one still fails at the step that needs a database rather than
   // here — which is also after the widget reset, the ordering that reset
   // relies on.
-  if (bootDialect === undefined) return undefined;
+  if (bootDialect === undefined) {
+    return { schema: undefined, now: () => Promise.resolve(undefined) };
+  }
 
   publishBootPostgresSchema(adapter, bootDialect, transformedConfig, logger);
   // Before first-run setup and the development push, either of which would
@@ -2071,7 +2106,7 @@ async function prepareBootSchema(
   })
     ? await declaredFieldGroupStorage(adapter, transformedConfig.fieldGroups)
     : undefined;
-  return compileAndPublishExtensionSchema({
+  const input = {
     ...(fieldGroups === undefined
       ? {}
       : {
@@ -2090,7 +2125,23 @@ async function prepareBootSchema(
     // before the push applies anything.
     server: adapter.getCapabilities(),
     logger,
-  });
+  };
+  // With a collection handed to the Schema Builder as its record has it, in development.
+  const publish = async (compiled: StartSchema): Promise<StartSchema> => {
+    await compileAndPublishExtensionSchema(input, () =>
+      Promise.resolve(compiled.schema)
+    );
+    return compiled;
+  };
+  let compiled = await publish(await compileForStart(adapter, input));
+  return {
+    schema: compiled.schema,
+    async now() {
+      const current = await compiledForNow(adapter, input, compiled);
+      if (current !== compiled) compiled = await publish(current);
+      return compiled.schema;
+    },
+  };
 }
 
 /**
@@ -2244,6 +2295,11 @@ async function reconcileBuilderTargets<T>(
      * serves each entity as the database holds it.
      */
     materialize: boolean;
+    /**
+     * When a start says what is wrong in the Builder's definitions it serves
+     * (`warnOfBuilderProblemsAtStart`); absent for a command's registration.
+     */
+    warnOfBuilderProblems?: "now" | "unless-reloaded";
   }
 ): Promise<T> {
   const { adapter, logger, transformedConfig } = args;
@@ -2262,14 +2318,30 @@ async function reconcileBuilderTargets<T>(
   // The configuration's addresses, judged by the one address rule before the boot writes
   // anything. Only an address no registry row holds, and whose table does not exist yet, is new
   // and judged, against every address used; an existing entity keeps its address, whatever the
-  // rule now says of it.
-  await assertConfiguredAddresses(transformedConfig, builderEntities, table =>
+  // rule now says of it. A collection a demote handed to the Schema Builder is judged by its
+  // record alone: the code entry still in the configuration is ignored, as the schema roads ignore
+  // it (`configTheCodeOwns`), so an edit to it cannot stop the start.
+  const configuredByCode = configTheCodeOwns(
+    transformedConfig,
+    builderEntities.collections
+  );
+  // From the rows just read, so nothing is read for it; it warns and never refuses. A collection
+  // handed to the Schema Builder is the Builder's, whatever code entry is still there.
+  if (args.warnOfBuilderProblems !== undefined) {
+    warnOfBuilderProblemsAtStart({
+      entities: builderEntities,
+      code: configuredByCode,
+      logger,
+      when: args.warnOfBuilderProblems,
+    });
+  }
+  await assertConfiguredAddresses(configuredByCode, builderEntities, table =>
     tableExistsAtStart(adapter, table)
   );
   // Their sibling fields, by the one sibling rule and as early: a pair an entity's registry row
   // does not hold is new and refused; one it holds keeps working.
   await assertConfiguredSiblingFields(
-    transformedConfig,
+    configuredByCode,
     builderEntities,
     table => adapter.tableExists(table)
   );
@@ -2896,12 +2968,22 @@ async function recordBootParticipation(
 function registerBootMediaStorage(
   storagePlugins: NextlyServiceConfig["storagePlugins"],
   logger: Logger,
-  basePath: string
+  basePath: string,
+  collections: ReadonlyArray<{ slug: string; files?: unknown }>
 ): { mediaStorage: MediaStorage; storage: IStorageAdapter | null } {
+  // A collection with `files` keeps private files: its storage is routed fail
+  // closed, and the start is refused here, before anything is served, when
+  // that storage cannot keep files private (no storage plugin takes the
+  // collection, or its plugin has a public URL in front of it).
+  const privateCollections = collections
+    .filter(collection => collection.files !== undefined)
+    .map(collection => collection.slug);
   const mediaStorage = initializeMediaStorage({
     plugins: storagePlugins,
     local: { uploadDir: join(basePath, "public", "uploads") },
+    privateCollections,
   });
+  for (const slug of privateCollections) mediaStorage.getPrivateFiles(slug);
   logStorageConfiguration(mediaStorage, storagePlugins, logger);
   container.registerSingleton<MediaStorage>("mediaStorage", () => mediaStorage);
 
@@ -3098,6 +3180,35 @@ async function withStartRegistrationsSetAside<T>(
   } finally {
     container.restore(setAside);
   }
+}
+
+/** Where in a start the cache tag expiry ledger is published. */
+type LedgerPublication =
+  | "before the schema reads"
+  | "after migrations at start";
+
+/**
+ * Where this start publishes the ledger: after the migrations at start where
+ * the app opts into them, as they record their own expiries; before the
+ * schema reads otherwise, as nothing before the registry is read can expire a
+ * tag then.
+ */
+function ledgerPublicationOf(
+  structure: StartStructure,
+  config: NextlyServiceConfig
+): LedgerPublication {
+  return structure.migratesAtStart || config.db?.runMigrationsOnBoot === true
+    ? "after migrations at start"
+    : "before the schema reads";
+}
+
+/** Publishes `adapter`'s ledger when `at` is where this start publishes it. */
+function publishLedgerIfAt(
+  at: LedgerPublication,
+  publication: LedgerPublication,
+  adapter: DrizzleAdapter
+): void {
+  if (at === publication) installTagExpiryLedger(adapter);
 }
 
 /**
@@ -3416,6 +3527,9 @@ function registerGlobalHooks(
   );
   hookRegistry.register("beforeCreate", "*", sanitizationHandler);
   hookRegistry.register("beforeUpdate", "*", sanitizationHandler);
+  // A private file's bytes go with its entry: deleting the entry first would
+  // leave them in storage with nothing pointing at them.
+  registerStoredFileDeletion(hookRegistry);
   logger.info?.(
     `Input sanitization hook registered (enabled: ${transformedConfig.security?.sanitization?.enabled !== false})`
   );

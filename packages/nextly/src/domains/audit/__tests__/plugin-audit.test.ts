@@ -28,6 +28,28 @@ describe("collectPluginAuditKinds", () => {
     expect(kinds().has(`${SLUG}.identity-linked`)).toBe(true);
   });
 
+  it("REFUSES a kind core writes itself, even under the plugin's own prefix", () => {
+    // A plugin whose slug is `file` would otherwise pass the prefix check with
+    // `file.downloaded`, and its rows would read as core's download records.
+    let caught: unknown;
+    try {
+      collectPluginAuditKinds("file", [{ kind: "file.downloaded" }], "file");
+    } catch (err) {
+      caught = err;
+    }
+    expect(NextlyError.is(caught)).toBe(true);
+    expect((caught as NextlyError).logContext).toMatchObject({
+      reason: "plugin-audit-kind-reserved",
+      auditKind: "file.downloaded",
+    });
+    // Control: another kind under the same prefix is the plugin's.
+    expect(
+      collectPluginAuditKinds("file", [{ kind: "file.indexed" }]).has(
+        "file.indexed"
+      )
+    ).toBe(true);
+  });
+
   it("REFUSES a kind outside the prefix, naming the plugin and the kind", () => {
     // Dropping it booted the application with `ctx.audit` present and every
     // write of that kind discarded at runtime, so the operator was missing the

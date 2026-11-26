@@ -76,6 +76,15 @@ const inReview: PartReview = {
   reviewedVersionNo: null,
 };
 
+/** The language on screen, drafting with no step this reviewer holds. */
+const enDrafting: PartReview = {
+  ...inReview,
+  part: "en",
+  stage: "drafting",
+  stageLabel: "Drafting",
+  steps: [],
+};
+
 /** A refusal as `fetcher` throws it: the parsed `{ error }` envelope. */
 function refused(
   status: number,
@@ -95,14 +104,16 @@ beforeEach(() => {
     attached: true,
     review: {
       workflow: { slug: "review", label: "Review" },
-      parts: [inReview],
+      parts: [enDrafting, inReview],
       mayPublishWithoutReview: false,
     },
   });
 });
 
 async function panel(): Promise<HTMLElement> {
-  render(<ReviewSection document={post} />);
+  // English on screen, drafting: the header moves it, so the panel offers the
+  // shared fields' steps, which wait in another stage.
+  render(<ReviewSection document={post} locale="en" />);
   return screen.findByRole("region", { name: "Review" });
 }
 

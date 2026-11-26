@@ -100,9 +100,11 @@ import { runAsCaller, withLanguagesPinned } from "./namespaces/helpers";
 import {
   createAccessNamespace,
   createApiKeysNamespace,
+  createFilesNamespace,
   createContentEventsNamespace,
   createJobsNamespace,
   createNoticesNamespace,
+  createTranslationsNamespace,
   createVersionsNamespace,
   createWorkflowsNamespace,
   createReleasesNamespace,
@@ -119,9 +121,11 @@ import {
   createUsersNamespace,
   type AccessNamespace,
   type ApiKeysNamespace,
+  type FilesNamespace,
   type ContentEventsNamespace,
   type JobsNamespace,
   type NoticesNamespace,
+  type TranslationsNamespace,
   type VersionsNamespace,
   type WorkflowsNamespace,
   type ReleasesNamespace,
@@ -320,6 +324,8 @@ export class Nextly implements NextlyContext {
   public readonly releases: ReleasesNamespace;
   /** A person's own notices. */
   public readonly notices: NoticesNamespace;
+  /** @experimental A translated field and its source. */
+  public readonly translations: TranslationsNamespace;
   /** A document's history: list, read, compare, name, restore. */
   public readonly versions: VersionsNamespace;
   /** A subject's content events: a document's or a release's. */
@@ -328,6 +334,8 @@ export class Nextly implements NextlyContext {
   public readonly workflows: WorkflowsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;
+  /** @experimental A collection's private files: the checked download. */
+  public readonly files: FilesNamespace;
 
   /**
    * Create a new Nextly instance.
@@ -367,12 +375,14 @@ export class Nextly implements NextlyContext {
     this.jobs = withLanguagesPinned(createJobsNamespace());
     this.releases = withLanguagesPinned(createReleasesNamespace(this));
     this.notices = withLanguagesPinned(createNoticesNamespace());
+    this.translations = withLanguagesPinned(createTranslationsNamespace(this));
     this.versions = withLanguagesPinned(createVersionsNamespace(this));
     this.contentEvents = withLanguagesPinned(
       createContentEventsNamespace(this)
     );
     this.workflows = withLanguagesPinned(createWorkflowsNamespace(this));
     this.principals = createNextlyPrincipals();
+    this.files = withLanguagesPinned(createFilesNamespace());
 
     // The instance its callers reach: only the collection and Single
     // operations may be made as a plugin-defined person, and every other
@@ -1175,6 +1185,11 @@ export const nextly = {
       (await requireNextlyOnceStarted()).jobs.queue(args),
   },
 
+  files: {
+    download: async args =>
+      (await requireNextlyOnceStarted()).files.download(args),
+  } satisfies FilesNamespace,
+
   principals: {
     fromRequest: async (request: Request, kind: string) =>
       (await requireNextlyOnceStarted()).principals.fromRequest(request, kind),
@@ -1190,6 +1205,13 @@ export const nextly = {
     markRead: async (args: Parameters<NoticesNamespace["markRead"]>[0]) =>
       (await requireNextlyOnceStarted()).notices.markRead(args),
   },
+
+  translations: {
+    sourceChange: async args =>
+      (await requireNextlyOnceStarted()).translations.sourceChange(args),
+    keepCurrent: async args =>
+      (await requireNextlyOnceStarted()).translations.keepCurrent(args),
+  } satisfies TranslationsNamespace,
 
   contentEvents: {
     list: async args =>

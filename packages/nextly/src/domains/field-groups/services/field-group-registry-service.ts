@@ -1512,6 +1512,45 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   }
 
   /**
+   * The collections and Singles that place the field group `componentSlug` INLINE: inside a named
+   * repeater or group, where its instances are held in the container's own value rather than in
+   * the field group's table (`fieldGroupPlacements`, the one walk of where a field list places
+   * field groups). A placement at an entity's own level, even inside a nameless group, is direct
+   * and not listed. Reads every stored field list as the delete's check does, and fails as it does.
+   */
+  async findInlinePlacements(componentSlug: string): Promise<
+    {
+      entityType: "collection" | "single";
+      entitySlug: string;
+      fieldPath: string;
+    }[]
+  > {
+    const { readFieldOwners } = await import(
+      "../../collections/services/collection-dependents"
+    );
+    const { fieldGroupPlacements } = await import(
+      "../storage/field-group-placements"
+    );
+    const owners = await readFieldOwners(this.adapter, {
+      fieldGroupRegistryName: () => this.resolveRegistryTableName(),
+    });
+    return owners.flatMap(owner => {
+      const { entityType, entitySlug } = owner;
+      if (entityType === "fieldGroup") return [];
+      return fieldGroupPlacements(owner.fields)
+        .filter(
+          placement =>
+            !placement.direct && placement.slugs.includes(componentSlug)
+        )
+        .map(placement => ({
+          entityType,
+          entitySlug,
+          fieldPath: placement.path,
+        }));
+    });
+  }
+
+  /**
    * Find every field of a Collection, Single or other Component that places
    * the Component `componentSlug`, at any depth inside repeaters and groups.
    *

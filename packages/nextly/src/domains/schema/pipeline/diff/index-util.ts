@@ -124,10 +124,12 @@ export function resolveDeclaredIndexName<
   if (field !== undefined) {
     // A localized field's column lives in the migration-owned `_locales`
     // table, so an index on it here would name a column this table lacks.
+    // Every text field is kept per language by default, so a key that is
+    // never translated is named with the fix: keeping it on this table.
     if (localizedNames.has(fieldName)) {
       return {
         kind: "refused",
-        message: `Index names the localized field "${fieldName}", whose column lives in the companion "_locales" table.`,
+        message: `Index names the localized field "${fieldName}", whose column lives in the companion "_locales" table. Mark "${fieldName}" localized: false if it is a key that is never translated, which keeps its column on this table.`,
       };
     }
     if (!fieldProducesColumn(field)) {

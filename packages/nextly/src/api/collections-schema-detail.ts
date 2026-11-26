@@ -25,6 +25,7 @@ import type { FieldConfig } from "@nextly/collections";
 
 import { COLLECTION_DEFINITION_PERMISSIONS } from "../auth/collection-definition-policy";
 import { getService } from "../di";
+import { refuseFieldGroupFieldsChangedInHost } from "../domains/field-groups/field-group-fields-read-only";
 import { withSchemaChangeExcluded } from "../domains/schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import {
@@ -357,6 +358,13 @@ export const PATCH = withErrorHandler(
           // A field name the collection already holds keeps working whatever its case; one this
           // save creates is the Builder's own.
           assertBuilderFieldNames(body.fields, existing?.fields ?? []);
+          // A field group's fields are changed only in its own editor: compared with each field
+          // group as stored while the lock is held.
+          await refuseFieldGroupFieldsChangedInHost(
+            body.fields,
+            getService("fieldGroupRegistryService"),
+            () => existing?.fields
+          );
         }
         if (hasOverrides) {
           updateData.admin = {

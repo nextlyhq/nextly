@@ -9,7 +9,7 @@
  * @module domains/schema/migrate/plugin/plugin-schema-version
  */
 import { scopeLedgerRows } from "../../events/ledger-scope";
-import { appliedFilenames } from "../../events/newest-event";
+import { appliedPluginModules } from "../../events/newest-event";
 import type { SchemaEventRow } from "../../events/schema-events-repository";
 import type { OwnerRecord } from "../../ownership/owner-registry";
 
@@ -23,7 +23,7 @@ import { qualifiedFilename } from "./plugin-migration";
  * several modules, and modules can be reverted out of order, so counting would
  * describe something the ledger does not.
  *
- * "Still applied" is `appliedFilenames` — the newest event per filename. A
+ * "Still applied" is `appliedPluginModules` — the newest event per filename. A
  * rollback is recorded by INSERTING a `rolled_back` event after the `applied`
  * one, so a filter for `applied` rows kept the module this command had just
  * reverted, and the owner rows then held the version of a module whose tables
@@ -34,7 +34,7 @@ export function pluginSchemaVersionFromLedger(
   plugin: string,
   migrations: ReadonlyArray<{ name: string; schemaVersion: number }>
 ): number | null {
-  const applied = appliedFilenames(scopeLedgerRows(rows, plugin));
+  const applied = appliedPluginModules(scopeLedgerRows(rows, plugin));
   let version: number | null = null;
   for (const module of migrations) {
     if (!applied.has(qualifiedFilename(plugin, module.name))) continue;
