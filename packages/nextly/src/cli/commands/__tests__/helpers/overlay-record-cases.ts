@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -378,6 +379,32 @@ export function overlayRecordCases(
         return found;
       }
 
+      /** The Schema Builder collection's registry row with the group's own flag taken off. */
+      async function withoutRegistryFlag(): Promise<void> {
+        // The commands' connection registers no tables, so the row is read and written by statements.
+        const adapter = (await open()) as unknown as DrizzleAdapter;
+        const rows = await adapter.queryStatement<{ fields: unknown }>(
+          sql`SELECT ${sql.identifier("fields")} AS ${sql.identifier("fields")} FROM ${sql.identifier("dynamic_collections")} WHERE ${sql.identifier("slug")} = ${BUILT}`
+        );
+        expect(rows).toHaveLength(1);
+        const raw = rows[0]?.fields;
+        const fields = (typeof raw === "string" ? JSON.parse(raw) : raw) as {
+          name: string;
+          localized?: boolean;
+        }[];
+        const box = fields.find(field => field.name === "box");
+        expect(box?.localized).toBe(false);
+        delete box?.localized;
+        const update = sql`UPDATE ${sql.identifier("dynamic_collections")} SET ${sql.identifier("fields")} = ${JSON.stringify(fields)} WHERE ${sql.identifier("slug")} = ${BUILT}`;
+        // A statement that returns no rows: SQLite's driver runs it, the others execute it.
+        const db = adapter.getDrizzle() as {
+          run?: (query: unknown) => unknown;
+          execute?: (query: unknown) => Promise<unknown>;
+        };
+        if (dialect === "sqlite") db.run?.(update);
+        else await db.execute?.(update);
+      }
+
       /** A project whose history and database `migrate:create` and `nextly migrate` made. */
       async function migrateTheProject(config: unknown): Promise<void> {
         const own =
@@ -617,6 +644,8 @@ export function overlayRecordCases(
             expect(box?.localized).toBe(false);
             delete box?.localized;
           });
+          // And in the registry, whose row an earlier release wrote with no flag on the group.
+          await withoutRegistryFlag();
           await writeFile(file, builtWith("translated"));
           expect(await builtColumns()).not.toContain("box");
         }, 120_000);
