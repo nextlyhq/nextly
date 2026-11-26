@@ -319,12 +319,13 @@ export async function postDeleted(
 
 /**
  * Stores a capture of `ids` waiting on `file`, as a run leaves one, whose event cannot be written:
- * its slug is longer than an event holds. Taken before any other of the test's.
+ * its slug is longer than an event holds. Taken before any other of the test's, or at `seq`.
  */
 export async function storeUnrecordableCapture(
   file: string,
   direction: "up" | "down",
-  ids: readonly string[]
+  ids: readonly string[],
+  seq = 0
 ): Promise<void> {
   const hash = (said: string) =>
     createHash("sha256").update(said).digest("hex").slice(0, 32);
@@ -339,7 +340,7 @@ export async function storeUnrecordableCapture(
         slug,
         table: "gt_not_there",
         direction,
-        seq: 0,
+        seq,
         at: 0,
         final: true,
         whole: true,

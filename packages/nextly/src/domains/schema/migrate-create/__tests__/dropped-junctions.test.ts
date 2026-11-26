@@ -52,6 +52,46 @@ const judged = (over: Partial<Args> = {}) =>
 const NONE = { up: [], down: [] };
 
 describe("a removed entity's many-to-many tables", () => {
+  it("on PostgreSQL go where only a table of another case is kept", () => {
+    const links = manyToMany("people", "people", { junctionTable: "Links" });
+    const { up } = judged({
+      previousEntities: {
+        collections: { events: recorded([links]), people: PEOPLE },
+        singles: {},
+        fieldGroups: {},
+      } as never,
+      remaining: {
+        collections: [
+          {
+            slug: "people",
+            tableName: "dc_people",
+            fields: [
+              manyToMany("events", "events", { junctionTable: "links" }),
+            ],
+          },
+        ],
+        singles: [],
+      },
+    });
+
+    expect(up.map(each => each.statement)).toEqual([
+      'DROP TABLE IF EXISTS "Links"',
+    ]);
+  });
+
+  it("stay, with nothing to make again, where their recorded actions take no link table", () => {
+    const legacy = manyToMany("people", "people", { onDelete: "set null" });
+    const { up, down } = judged({
+      previousEntities: {
+        collections: { events: recorded([legacy]), people: PEOPLE },
+        singles: {},
+        fieldGroups: {},
+      } as never,
+    });
+
+    expect({ up, down }).toEqual(NONE);
+  });
+
   it("go, and come back with both keys", () => {
     const { up, down } = judged();
 
@@ -86,8 +126,9 @@ describe("a removed entity's many-to-many tables", () => {
       { droppedAlready: new Set(["dc_events_dc_people_people"]) },
     ],
     [
-      "a remaining collection's field names it too",
+      "a remaining collection's field names it too, in another case on MySQL",
       {
+        dialect: "mysql",
         remaining: {
           collections: [
             {
@@ -298,3 +339,66 @@ describe.each(DIALECTS)(
     });
   }
 );
+
+describe("a scoped run that removes a collection", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "nextly-junctions-scoped-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps a link table a collection outside its scope names too", async () => {
+    const entity = (
+      slug: string,
+      fields: MinimalConfigEntity["fields"]
+    ): MinimalConfigEntity => ({
+      slug,
+      tableName: `dc_${slug}`,
+      fields,
+      settings: { source: "builder", settings: { slug, fields } as never },
+    });
+    const shared = (target: string) =>
+      manyToMany("links", target, {
+        junctionTable: "links",
+      }) as MinimalConfigEntity["fields"][number];
+    const people = entity("people", [shared("events")]);
+    const events = entity("events", [shared("people")]);
+    const run = (
+      step: number,
+      collections: MinimalConfigEntity[],
+      scoped: boolean
+    ) =>
+      generateMigration({
+        name: `step_${step}`,
+        dialect: "postgresql",
+        migrationsDir: dir,
+        collections,
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        ...(scoped
+          ? {
+              scope: {
+                kind: "collection" as const,
+                slug: "events",
+                tables: new Set(["dc_events"]),
+              },
+            }
+          : {}),
+        now: new Date(Date.UTC(2026, 10, 6, 12, step)),
+      });
+    await run(1, [people, events], false);
+
+    const result = await run(2, [people], true);
+
+    const { upSql } = parseSqlSections(
+      await readFile(result!.sqlPath, "utf-8")
+    );
+    expect(upSql).toMatch(/DROP TABLE.*"dc_events"/);
+    expect(upSql).not.toMatch(/DROP TABLE[^;]*"links"/);
+  });
+});

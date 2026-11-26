@@ -60,6 +60,28 @@ import {
 
 /** The config the commands load, set by each step before it runs them. */
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
+
+/** Whether the run's next check of the schema lock finds it lost, as a run whose lease lapsed. */
+const lock = vi.hoisted(() => ({ lost: false }));
+vi.mock(
+  "../../../domains/schema/pipeline/schema-lock",
+  async importOriginal => {
+    const original =
+      await importOriginal<
+        typeof import("../../../domains/schema/pipeline/schema-lock")
+      >();
+    return {
+      ...original,
+      assertSchemaLockHeld: async () => {
+        if (lock.lost) {
+          lock.lost = false;
+          throw original.lostLockError("nextly migrate");
+        }
+        await original.assertSchemaLockHeld();
+      },
+    };
+  }
+);
 vi.mock("../../utils/config-loader", async importOriginal => ({
   ...(await importOriginal<typeof import("../../utils/config-loader")>()),
   loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
@@ -413,6 +435,24 @@ describeEachDialect("a removal in code, however its run stops", dialect => {
       await project.adapter.executeQuery(`DROP USER '${user}'@'%'`);
     }
   }
+
+  it.each(dialect === "mysql" ? STAYING : [])(
+    "sends no drop where the lock was lost while its documents were read, %s",
+    async how => {
+      const gone = await removalWritten(dialect);
+      if (how === "outside a transaction") edited("remove", outsideTransaction);
+
+      const failed = await withStopPoints(
+        point => {
+          if (point === "collection gt_posts: captured") lock.lost = true;
+        },
+        () => migrate(gone)
+      );
+
+      expect(failed, "applied").toMatch(/lock/i);
+      expect(await stands(POSTS)).toBe(true);
+    }
+  );
 
   it.each(dialect === "mysql" ? STAYING : [])(
     "says so once where the account may not lock tables, and ends each document once, %s",
@@ -859,6 +899,24 @@ describeEachDialect("a collection migrate:down drops", dialect => {
 });
 
 describeEachDialect("captures that cannot be recorded", dialect => {
+  it("refuse a run where a DOWN's waits behind an UP's of the same entity", async () => {
+    await started(dialect);
+    // A file recorded applied, so its UP capture is recorded, and fails, before the DOWN one.
+    const applied = basename(pathOf("start"));
+    await storeUnrecordableCapture(applied, "up", ["u1"]);
+    // Taken after the UP's, so it waits behind it rather than failing first on its own.
+    await storeUnrecordableCapture(applied, "down", ["d1"], 1);
+    const gone = appConfig({ posts: "removed", pagesNamePosts: false });
+    expect((await migrateCreate(gone, "remove")).refused).toBeUndefined();
+
+    const refused = await migrate(gone);
+
+    expect(refused, "applied").toMatch(/could not be recorded/);
+    expect(await stands(POSTS)).toBe(true);
+    expect(await captures()).toBe(4);
+    await forgetUnrecordableCapture();
+  });
+
   it("refuse a rollback of the file they wait on, and are kept", async () => {
     const gone = await removalWritten(dialect);
     expect(await stoppedAt(gone, point => point === "files recorded")).toMatch(

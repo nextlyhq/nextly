@@ -78,6 +78,7 @@ export function droppedJunctions(args: {
 }): DroppedJunctions {
   const { dialect, previous, previousEntities } = args;
   if (previousEntities === undefined) return { up: [], down: [] };
+  const keyOf = (name: string) => tableNameKey(name, dialect);
   const kept = keptTables(args);
   const tables = new Set(previous.tables.map(table => table.name));
   const targets = new Map(
@@ -92,16 +93,21 @@ export function droppedJunctions(args: {
   for (const { table, fields } of removedEntities(args, previousEntities)) {
     for (const field of fields.filter(each => usesJunctionTable(each))) {
       const shape = service.junctionShape(table, field, targets);
-      const key = shape.table.toLowerCase();
+      const key = keyOf(shape.table);
       // Once each, however many fields name it, and never one that is another's too.
       if (kept.has(key)) continue;
       kept.add(key);
+      const again = tables.has(shape.targetTable)
+        ? madeAgain(service, table, field, targets)
+        : [];
+      // A table its DOWN could not make again (actions an earlier release recorded, which a link
+      // table no longer takes) is left where it is, as before, rather than lost to a rollback.
+      if (again === undefined) continue;
       up.push({
         links: [table, shape.targetTable],
         statement: `DROP TABLE IF EXISTS ${quoteIdent(shape.table, dialect)}`,
       });
-      if (!tables.has(shape.targetTable)) continue;
-      down.push(...madeAgain(service, table, field, targets));
+      down.push(...again);
     }
   }
   return { up, down };
@@ -130,11 +136,20 @@ export function junctionDropsPlaced(
   return out;
 }
 
-/** The tables, lower-cased, no drop here may name. */
+/**
+ * A table's name as the database tells it from another: as written on PostgreSQL, whose names a
+ * generated statement quotes, lower-cased where the database compares names without case.
+ */
+function tableNameKey(name: string, dialect: SupportedDialect): string {
+  return dialect === "postgresql" ? name : name.toLowerCase();
+}
+
+/** The tables, by `tableNameKey`, no drop here may name. */
 function keptTables({
   previous,
   remaining,
   droppedAlready,
+  dialect,
 }: Parameters<typeof droppedJunctions>[0]): Set<string> {
   return new Set(
     [
@@ -147,7 +162,7 @@ function keptTables({
         ),
       ]),
       ...droppedAlready,
-    ].map(name => name.toLowerCase())
+    ].map(name => tableNameKey(name, dialect))
   );
 }
 
@@ -183,13 +198,16 @@ function fieldsOf(entry: RecordedEntitySettings): FieldDefinition[] {
   return Array.isArray(fields) ? (fields as unknown as FieldDefinition[]) : [];
 }
 
-/** The statements that make a many-to-many table again, with its keys and indexes. */
+/**
+ * The statements that make a many-to-many table again, with its keys and indexes; undefined where
+ * the field's recorded actions are ones no link table takes.
+ */
 function madeAgain(
   service: DynamicCollectionSchemaService,
   table: string,
   field: FieldDefinition,
   targets: ReadonlyMap<string, string>
-): string[] {
+): string[] | undefined {
   try {
     return service
       .generateJunctionTable(table, field, targets)
@@ -197,8 +215,7 @@ function madeAgain(
       .map(statement => statement.trim().replace(/;$/, ""))
       .filter(statement => statement !== "");
   } catch (error) {
-    // A field whose actions no many-to-many table can hold never had one made.
-    if (NextlyError.is(error)) return [];
+    if (NextlyError.is(error)) return undefined;
     throw error;
   }
 }

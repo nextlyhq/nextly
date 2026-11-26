@@ -108,7 +108,7 @@ import type { Deletion } from "../migrate/data-loss-consent";
 import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
 import { mergedBy } from "../migrate/history-line";
 import { compareMigrationBaseNames } from "../migrate/migration-order";
-import { tablesDroppedIn } from "../ownership/drop-guard";
+import { storedNamesDroppedIn } from "../migrate/stored-names";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -1446,7 +1446,11 @@ export async function generateMigration(
     operations,
     previous: previousSnapshot,
     previousEntities: previous?.data.entities,
-    remaining: { collections: args.collections, singles: args.singles },
+    // Every entity declared, not only a scoped run's: a link table another one names stays.
+    remaining: {
+      collections: requested.collections,
+      singles: requested.singles,
+    },
     droppedAlready: tablesDroppedByCaller(args),
     dialect: args.dialect,
   });
@@ -4766,7 +4770,7 @@ function tablesDroppedByCaller(args: GenerateArgs): Set<string> {
   const up = args.appendedStatements?.up;
   return new Set(
     [...(up?.first ?? []), ...(up?.last ?? [])].flatMap(statement =>
-      tablesDroppedIn(statement, args.dialect)
+      storedNamesDroppedIn(statement, args.dialect)
     )
   );
 }

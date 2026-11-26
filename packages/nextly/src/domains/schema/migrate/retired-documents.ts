@@ -48,7 +48,6 @@ import { contentEventsTables } from "../../../schemas/content-events";
 import { recordWriteEvent } from "../../content-events/write-event";
 import { migrationStanding } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
-import { tablesDroppedIn } from "../ownership/drop-guard";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectTableNames } from "../pipeline/diff/introspect-live";
 import { assertSchemaLockHeld } from "../pipeline/schema-lock";
@@ -57,6 +56,7 @@ import type { MigrationUnit } from "./migration-transaction";
 import type { RetiredEntity } from "./retired-entities";
 import type { HeldWork, TableHold, UnitConnection } from "./retirement-hold";
 import { endsTheRun, reachStopPoint } from "./stop-points";
+import { storedNamesDroppedIn } from "./stored-names";
 
 /** Every capture's `nextly_meta` keys start with this. */
 const KEY_PREFIX = "retired_documents:";
@@ -179,10 +179,15 @@ export function retirementCheckpoint(
   if (entities.length === 0) return RETIRES_NOTHING;
   const held = inTransaction && dialect !== "mysql";
   const namedAt = statements.map(
-    statement => new Set(tablesDroppedIn(statement, dialect))
+    statement => new Set(storedNamesDroppedIn(statement, dialect))
   );
+  // By the spelling the database keeps: on PostgreSQL `posts` is not `"Posts"`, elsewhere it is.
   const droppedAt = namedAt.map(names =>
-    entities.filter(({ table }) => names.has(table.toLowerCase()))
+    entities.filter(({ table }) =>
+      [...names].some(
+        name => tableKey(name, dialect) === tableKey(table, dialect)
+      )
+    )
   );
   /** The captures of `retired` at the statement at `at`, as their heads name them. */
   const headsOf = (retired: readonly RetiredEntity[], at: number) =>
@@ -255,6 +260,9 @@ export function retirementCheckpoint(
     ): HeldWork =>
     async held_ => {
       await capture(held_, index, dialect !== "mysql");
+      // The capture may have taken long: a run that lost the lock meanwhile sends no drop. MySQL's
+      // commits as it runs, so this is the last moment to refuse it there.
+      await assertSchemaLockHeld();
       await send(held_.send);
       for (const head of headsAt(index)) {
         await reachStopPoint(`${head.kind} ${head.slug}: dropped`);
@@ -533,7 +541,15 @@ export async function recordRetiredDocumentEvents(
   const unfinished = await finishCaptures(run, heads);
   for (const { head } of heads) {
     const name = `${head.kind} ${head.slug}`;
-    if (waiting.has(name)) continue;
+    if (waiting.has(name)) {
+      // Kept, and answered under its own direction, so a pass it blocks is refused by it too.
+      result.failed.push({
+        name,
+        direction: head.direction,
+        reason: "an earlier capture of it could not be recorded",
+      });
+      continue;
+    }
     const settled =
       unfinished.get(capturePrefix(head)) ?? (await trySettling(run, head));
     if (typeof settled === "object") {

@@ -400,9 +400,9 @@ export async function droppedRegistryRowStands(args: {
 }
 
 /**
- * The collections and Singles an applied migration dropped whose slug no collection or Single is
- * registered under, the two sharing the permissions of a slug. One that cannot be read counts as
- * registered.
+ * The collections and Singles an applied migration dropped whose registry row is gone. A permission
+ * the slug's other entity still declares is kept by the newest record (`leftoverOrphanScopeOf`). One
+ * whose registry cannot be read counts as registered.
  */
 export async function droppedAndUnregistered(args: {
   adapter: DrizzleAdapter;
@@ -413,10 +413,7 @@ export async function droppedAndUnregistered(args: {
   for (const kind of ["collection", "single"] as const) {
     for (const slug of dropped[kind]) {
       if (isReservedResourceSlug(slug)) continue;
-      if (await registryHolds(args.adapter, "collection", "slug", slug)) {
-        continue;
-      }
-      if (await registryHolds(args.adapter, "single", "slug", slug)) continue;
+      if (await registryHolds(args.adapter, kind, "slug", slug)) continue;
       gone[kind].add(slug);
     }
   }

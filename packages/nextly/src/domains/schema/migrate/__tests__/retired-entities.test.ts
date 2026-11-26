@@ -199,6 +199,42 @@ describe("what a file retires", () => {
     });
   });
 
+  describe("on PostgreSQL, where the entity's table is spelled in capitals", () => {
+    const upper = (statements: string[], dialect: Dialect = "postgresql") =>
+      retirementsOf({
+        before: snapshot({ posts: "dc_Posts", pages: "dc_pages" }),
+        after: AFTER,
+        statements,
+        dialect,
+        matches: false,
+      });
+    const UPPER = { ...POSTS, table: "dc_Posts" };
+
+    it("is retired by a drop that quotes it", () => {
+      expect(upper(['DROP TABLE "dc_Posts" CASCADE'])).toEqual({
+        retired: [UPPER],
+        unsettled: [],
+      });
+    });
+
+    it("is not taken for the lower-case table an unquoted drop names", () => {
+      expect(upper(["DROP TABLE dc_posts", 'DROP TABLE "dc_posts"'])).toEqual({
+        retired: [],
+        unsettled: [UPPER],
+      });
+    });
+
+    it.each(["mysql", "sqlite"] as const)(
+      "is retired on %s by a drop in any case",
+      dialect => {
+        expect(upper(["DROP TABLE dc_posts"], dialect)).toEqual({
+          retired: [UPPER],
+          unsettled: [],
+        });
+      }
+    );
+  });
+
   it("takes no comment, index or longer name for the table", () => {
     expect(
       judged([

@@ -80,12 +80,17 @@ describe("a dropped collection or Single nothing is registered under", () => {
     ).toEqual(["notes"]);
   });
 
+  it("is named where only a Single of the slug is", async () => {
+    expect(
+      await goneIn({ dynamic_collections: [], dynamic_singles: ["notes"] })
+    ).toEqual(["notes"]);
+  });
+
   it.each([
     [
       "a collection is",
       { dynamic_collections: ["notes"], dynamic_singles: [] },
     ],
-    ["a Single is", { dynamic_collections: [], dynamic_singles: ["notes"] }],
     [
       "the registry cannot be read",
       { dynamic_collections: undefined, dynamic_singles: [] },

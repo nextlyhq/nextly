@@ -27,12 +27,12 @@ import {
   computeMigrationHash,
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
-import { tablesDroppedIn } from "../ownership/drop-guard";
 
 import type { CoveredEntity } from "./entity-coverage";
 import { RECORDED_KINDS } from "./registry-history";
 import { statementTokens } from "./split-sql";
 import { renamesIn } from "./statement-targets";
+import { storedNamesDroppedIn } from "./stored-names";
 
 /** A collection or Single, with the main table its documents are in. */
 export interface RetiredEntity {
@@ -192,7 +192,13 @@ function fateOf(
   let dropped = false;
   let renamed = false;
   for (const statement of statements) {
-    if (tablesDroppedIn(statement, dialect).includes(name)) {
+    // On PostgreSQL by the spelling the catalog keeps; elsewhere without regard to case, as before.
+    const drops = storedNamesDroppedIn(statement, dialect);
+    if (
+      dialect === "postgresql"
+        ? drops.includes(table)
+        : drops.some(each => each.toLowerCase() === name)
+    ) {
       dropped = true;
       continue;
     }
