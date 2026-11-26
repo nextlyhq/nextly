@@ -32,6 +32,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineFieldGroup, text } from "../../../../config";
+import { _resetPerLanguageStorage } from "../../../i18n/per-language-storage";
 import {
   nothingUnwritten,
   unwrittenChangeLines,
@@ -166,6 +167,22 @@ describe("a project starting from the blog template's snapshot", () => {
     expect(unwrittenChangeLines(changes)).toEqual([]);
     expect(nothingUnwritten(changes)).toBe(true);
     expect([...reached].sort()).toEqual(["nextly", "nextly/config"]);
+  });
+
+  // The Navigation's only text is inside its repeaters, so its translations table would hold their
+  // overlays alone, and the template's migration makes none: `nextly migrate` does.
+  it("names nothing for the template as shipped on per-language storage, as every installation runs, but a notice", async () => {
+    _resetPerLanguageStorage();
+    const changes = await unwrittenChangesOf(asked(await blog()));
+
+    expect(unwrittenChangeLines(changes)).toEqual([]);
+    expect(changes.besideNotRecorded).toEqual([
+      {
+        kind: "translations table",
+        table: "single_navigation",
+        overlays: true,
+      },
+    ]);
   });
 
   it("names a field added to a collection and one added to a Single", async () => {

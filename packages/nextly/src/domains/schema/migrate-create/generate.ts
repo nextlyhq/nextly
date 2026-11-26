@@ -111,6 +111,12 @@ import type { Deletion } from "../migrate/data-loss-consent";
 import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
 import { mergedBy } from "../migrate/history-line";
 import { compareMigrationBaseNames } from "../migrate/migration-order";
+import {
+  nothingToWrite,
+  pendingChangesOf,
+  recordsForTheFirstTime,
+  SETTINGS_NOT_RECORDED_NOTICE,
+} from "../pending/pending-changes";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -548,6 +554,13 @@ export interface GenerateArgs {
    */
   dryRun?: boolean;
   /**
+   * Plan the run to report what it would write, without the refusals that stop writing its file
+   * (an unrecorded translation, translation turned off beside other changes, a moved value's
+   * undeclared language): the changes they concern are still planned and named, and
+   * `migrate:create` refuses them when it writes.
+   */
+  reportOnly?: boolean;
+  /**
    * Decides whether the deletions the plan makes (`plannedDeletions`) may be written, called once
    * the plan is final and before any file is written, a dry run's included. `migrate:create` lists
    * them, counts them where it can read the database, and asks or refuses as the data-loss consent
@@ -596,7 +609,7 @@ export interface GenerateResult {
 }
 
 /** The table an operation acts on (for correlating metadata upserts). */
-function operationTableName(op: Operation): string {
+export function operationTableName(op: Operation): string {
   switch (op.type) {
     case "add_table":
       return op.table.name;
@@ -1007,14 +1020,13 @@ async function renameDecisions(
 }
 
 /**
- * Run the migrate:create orchestration. Returns null if no operations
- * remain (config matches latest snapshot; the CLI exits 0 for that).
+ * What one run of `migrate:create` plans before it asks about a rename or writes a file: the latest
+ * snapshot and the configuration's desired one, the diff between them with every companion,
+ * translation and move file planned around it, and the settings and permissions that change. One
+ * computation, so a report of the changes not yet in a migration names what this run would write.
+ * Null where a `--record-snapshot` run has nothing to record.
  */
-export async function generateMigration(
-  requested: GenerateArgs
-): Promise<GenerateResult | null> {
-  // Before anything is planned: a writer another has overtaken stops here.
-  await refuseStaleStart(requested);
+export async function planRun(requested: GenerateArgs) {
   // Scoped, every planner below sees the scoped entity alone.
   const scoped = withScopedEntities(requested);
   const metaDir = resolve(scoped.migrationsDir, "meta");
@@ -1046,6 +1058,8 @@ export async function generateMigration(
     previous: previous?.data.snapshot ?? EMPTY_SNAPSHOT,
     previousContributions: previous?.data.contributions ?? {},
     desired: withTablesAsTheyStand(
+      // Read beside the tables the last migration left: a field group's discriminator is the column
+      // its table was recorded with, which its name alone cannot say.
       buildDesiredSnapshotFromConfig(
         // A container keeping one structure has its main column nullable however it is declared
         // (`buildDesiredTableFromFields`), so one leaving whole translation is added to rows that
@@ -1053,7 +1067,10 @@ export async function generateMigration(
         args.collections,
         args.singles,
         args.components,
-        args.dialect
+        args.dialect,
+        previous?.data.snapshot,
+        // Held-back fields were kept above, and released where asked (`withKeptScopeFieldsOf`).
+        { keepHeldBack: false }
       ),
       args.tablesAsTheyStand
     ),
@@ -1101,7 +1118,9 @@ export async function generateMigration(
     ...args.singles.map(e => tagged(e, "single")),
     ...args.components.map(e => tagged(e, "fieldGroup")),
   ];
-  refuseUnrecordedTranslations(args, { snapshotSays, signOfTranslation });
+  if (args.reportOnly !== true) {
+    refuseUnrecordedTranslations(args, { snapshotSays, signOfTranslation });
+  }
   // What the snapshot this run writes says of each translated table's companion: read from the
   // database for `--record-snapshot`, carried forward otherwise (`writtenTranslations`).
   const written = await writtenTranslations(args, {
@@ -1139,7 +1158,9 @@ export async function generateMigration(
   //     from the main table — but the companion migration already relocates them
   //     (create + seed + drop). Strip those drops so we don't drop twice.
   operations = stripRelocatedDrops(operations, companionPlans);
-  refuseTurnOffBesideOtherChanges(operations, companionPlans);
+  if (args.reportOnly !== true) {
+    refuseTurnOffBesideOtherChanges(operations, companionPlans);
+  }
 
   // 3a'. Fields moved into or out of a group in code. The diff reads each as a delete and an add;
   //      an accepted one is carried as the Schema Builder carries a move, its values copied to the
@@ -1181,14 +1202,16 @@ export async function generateMigration(
   // them in Settings instead, which a migration file cannot depend on, since the database the
   // developer reaches is not the one the file runs against. So such a file is refused until the
   // config names its default.
-  refuseUndeclaredSeedLanguage(
-    args.defaultLocale,
-    {
-      seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
-      moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
-    },
-    () => perLanguageMovesIn(diffed, args, args.dialect)
-  );
+  if (args.reportOnly !== true) {
+    refuseUndeclaredSeedLanguage(
+      args.defaultLocale,
+      {
+        seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
+        moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
+      },
+      () => perLanguageMovesIn(diffed, args, args.dialect)
+    );
+  }
 
   // 3d. Translated fields that become or stop being unique within each language. Their companion
   //     indexes are dropped before the main file and created after every other file.
@@ -1241,11 +1264,76 @@ export async function generateMigration(
   // What a run writes a file for even when no table changes. A move of values is a change of its
   // own though no table's shape changes with it: a field's values moved between two groups,
   // whose columns both stand.
-  const changesBeyondTables = changesBeyondTablesOf(
-    hasSettingsChanges,
+  const changesBeyondTables =
+    hasSettingsChanges || changedPermissions.length > 0 || movesValues(args);
+  return {
+    args,
+    metaDir,
+    now,
+    diffed,
+    previous,
+    stream,
+    previousSnapshot,
+    desiredSnapshot,
+    entities,
+    written,
+    companionPlans,
+    codeMoves,
+    operations,
+    fieldLeavesPlans,
+    fieldJoinsPlans,
+    uniquePlans,
+    retypesPlans,
+    hasCompanions,
+    settingsRecord,
+    changedSettings,
+    permissionRecord,
     changedPermissions,
-    args
-  );
+    changesBeyondTables,
+    movesValues: movesValues(args),
+    fieldGroupNaming,
+  };
+}
+
+/** What `planRun` plans for a run that writes something. */
+export type PlannedRun = NonNullable<Awaited<ReturnType<typeof planRun>>>;
+
+/**
+ * Run the migrate:create orchestration. Returns null if no operations
+ * remain (config matches latest snapshot; the CLI exits 0 for that).
+ */
+export async function generateMigration(
+  requested: GenerateArgs
+): Promise<GenerateResult | null> {
+  // Before anything is planned: a writer another has overtaken stops here.
+  await refuseStaleStart(requested);
+  const planned = await planRun(requested);
+  if (planned === null) return null;
+  let { operations } = planned;
+  const {
+    args,
+    metaDir,
+    now,
+    previous,
+    stream,
+    previousSnapshot,
+    desiredSnapshot,
+    entities,
+    written,
+    companionPlans,
+    codeMoves,
+    fieldLeavesPlans,
+    fieldJoinsPlans,
+    uniquePlans,
+    retypesPlans,
+    hasCompanions,
+    settingsRecord,
+    changedSettings,
+    permissionRecord,
+    changedPermissions,
+    changesBeyondTables,
+    fieldGroupNaming,
+  } = planned;
 
   // Not the per-language unique indexes: a snapshot from before the record has none of them, so
   // each reads as new, and recording them is the record's own work. Counted, they would leave a
@@ -1275,8 +1363,12 @@ export async function generateMigration(
     record,
   });
   if (recorded !== undefined) return recorded;
-  if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
-    return null;
+  // Nothing to write: the same answer every report of the changes not yet in a migration reads.
+  const pending = pendingChangesOf(planned);
+  if (nothingToWrite(pending)) return null;
+  // Settings an earlier snapshot never recorded are recorded now, as `migrate:check` says.
+  if (recordsForTheFirstTime(pending)) {
+    args.onWarning?.(SETTINGS_NOT_RECORDED_NOTICE);
   }
 
   // 4-6. Rename detection + prompt + apply — only meaningful when the main table
@@ -2502,6 +2594,11 @@ interface CompanionPlanEntry {
    */
   entity: I18nTransitionKind;
   /**
+   * Whether the file holds nothing but the columns a repeater's or group's text is kept in: added to
+   * a translations table, or the table of an entity whose only text per language is in there.
+   */
+  overlays?: true;
+  /**
    * A DISABLE's unique indexes on the restored columns, which it creates itself once the values
    * are back (`settingsAfterRestore`): the main migration's `add_index` for each is left out, as
    * its `add_column` is (`stripRelocatedDrops`).
@@ -2713,7 +2810,12 @@ function planCompanionMigrations(
             companionExisted: false,
           });
           if (plan.kind !== "none") {
-            entries.push({ spec: tableSpec, plan, entity: entityKind });
+            entries.push({
+              spec: tableSpec,
+              plan,
+              entity: entityKind,
+              overlays: true,
+            });
           }
         }
         continue;
@@ -3884,16 +3986,6 @@ function valuesMovedIn(
 }
 
 /** Whether the caller's appended statements move any table's values. */
-function changesBeyondTablesOf(
-  hasSettingsChanges: boolean,
-  changedPermissions: readonly unknown[],
-  args: Pick<GenerateArgs, "valuesMovedIn">
-): boolean {
-  return (
-    hasSettingsChanges || changedPermissions.length > 0 || movesValues(args)
-  );
-}
-
 function movesValues(args: Pick<GenerateArgs, "valuesMovedIn">): boolean {
   return valuesMovedIn(args).length > 0;
 }
@@ -4307,6 +4399,7 @@ function overlaysEntryFor(
       downSql: joinSql(planned.downSql, renames.down),
     },
     entity: kind,
+    ...(renamed.length === 0 ? { overlays: true as const } : {}),
   };
 }
 
@@ -4428,10 +4521,21 @@ export function buildDesiredSnapshotFromConfig(
    * holds back from a type switched off keeps its column while these have it
    * (`kept-scope-fields.ts`). Omitted, nothing held back is kept.
    */
-  existing?: NextlySchemaSnapshot
+  existing?: NextlySchemaSnapshot,
+  /**
+   * Whether a field a plugin's scope holds back keeps its column from `existing`. A caller that keeps
+   * them itself, and releases them when asked (`withKeptScopeFieldsOf`), reads `existing` for the
+   * field groups' discriminators alone.
+   */
+  options: { keepHeldBack?: boolean } = {}
 ): NextlySchemaSnapshot {
   const tables: TableSpec[] = [];
-  const kept = columnsByTable(existing ?? { tables: [] }, dialect);
+  const kept = columnsByTable(
+    options.keepHeldBack === false
+      ? { tables: [] }
+      : (existing ?? { tables: [] }),
+    dialect
+  );
   // Each field group's discriminator, read off the table as the last migration recorded it: the
   // storage migration renames a group's column whatever its table is called, so the name alone
   // cannot say which one an existing table has (`chooseTypeColumns`).

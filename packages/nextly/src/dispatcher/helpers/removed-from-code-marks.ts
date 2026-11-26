@@ -13,7 +13,7 @@
  *
  * Every other entity's body is left exactly as it was, so a client that never
  * heard of the mark reads what it always read; absent means not removed.
- * Builder and plugin entities are never removed from code.
+ * A Builder entity is never removed from code, and nor is a plugin's collection.
  *
  * @module dispatcher/helpers/removed-from-code-marks
  */

@@ -32,6 +32,7 @@ import type { LoadConfigResult } from "../utils/config-loader";
 
 import type { ResolvedDevOptions } from "./db-sync";
 import {
+  claimDeclaredOwners,
   ensureLocalizedCompanions,
   publishExtensionSchema,
   syncCollections,
@@ -46,6 +47,7 @@ async function pushEntities(
   options: ResolvedDevOptions,
   context: CommandContext
 ): Promise<void> {
+  await claimDeclaredOwners(configResult, adapter, context);
   await syncCollections(configResult, adapter, options, context);
   await syncSingles(configResult, adapter, options, context);
   await syncComponents(configResult, adapter, options, context);

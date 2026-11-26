@@ -83,12 +83,16 @@ export async function throwawayDatabase(
 
 export async function openSyncTarget(
   dir: string,
-  dialect: TestDialect
+  dialect: TestDialect,
+  /** A database the test already holds, which it drops itself; a new one where left out. */
+  existing?: string
 ): Promise<SyncTarget> {
   const own =
-    dialect === "sqlite"
-      ? { url: `file:${join(dir, "test.db")}`, drop: async () => {} }
-      : await throwawayDatabase(dialect);
+    existing !== undefined
+      ? { url: existing, drop: async () => {} }
+      : dialect === "sqlite"
+        ? { url: `file:${join(dir, "test.db")}`, drop: async () => {} }
+        : await throwawayDatabase(dialect);
   // The command reads its connection from the environment as well.
   if (dialect !== "sqlite") process.env.DATABASE_URL = own.url;
   // From here a failure still drops the database it was given, since the

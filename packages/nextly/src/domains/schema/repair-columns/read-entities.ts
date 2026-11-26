@@ -864,9 +864,10 @@ export async function readRepairEntities(args: {
   /** The app's column overrides, as the configuration declares them. */
   overrides?: RepairOverrides;
   /**
-   * Refuses where the folder lacks an app migration the database has applied, whose snapshot is
-   * the definition last applied: the app's history check, which the caller has. It is handed the
-   * names the configuration and the manifest declare, which tell an old Schema Builder file.
+   * Refuses where the app's history does not hold: the folder lacks a migration the database has
+   * applied, or an attempt at one may have stopped part-way. The caller has the checks. It is
+   * handed the names the configuration and the manifest declare, which tell an old Schema Builder
+   * file.
    */
   checkHistory?: (declared: DeclaredNames) => Promise<void>;
 }): Promise<RepairEntity[]> {

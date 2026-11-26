@@ -1,0 +1,29 @@
+---
+title: BUILDER_DEFINITION_IGNORED
+description: "The Schema Builder's definition file is one git ignores, so `migrate:check` cannot tell the changes not yet in a migration from what the project commits."
+---
+
+## Cause
+
+The Schema Builder's definition file is one git ignores, so `migrate:check` cannot tell the changes not yet in a migration from what the project commits.
+
+The Schema Builder writes each collection, Single and field group it saves into the definition file (`db.uiSchemaFile`, `./ui-schema.json` by default). `nextly migrate:check` reports the changes not yet in a migration from what the project commits: the configuration, that file and the migrations folder. A file git ignores is not committed, so the same project would pass the check on the machine that holds the file and fail it in CI, which does not. `nextly migrate:check` refuses instead, naming the file, whether or not the checkout holds it: a CI checkout of a project that ignores the file never does.
+
+`nextly migrate:create` writes the migration from the file where it is there, and warns, naming it.
+
+## Fix
+
+- Remove the line in `.gitignore` that ignores the definition file.
+- Run `git add` on the file and commit it with your migrations. It is part of the code.
+- Run `nextly migrate:check` again.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ The Schema Builder's definition file, `ui-schema.json`, is ignored by git.
+  Why:  `migrate:check` compares what the project commits with its migrations, and an ignored file is not committed, so the check would pass on one machine and fail on another.
+  Next: Commit `ui-schema.json`: remove the line in `.gitignore` that ignores it, then `git add` it.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-definition-ignored  (BUILDER_DEFINITION_IGNORED)
+```

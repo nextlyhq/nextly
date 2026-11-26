@@ -545,6 +545,13 @@ exports[`each code, as a command ends with it > BUILD_STRICT_WARNINGS 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/build-strict-warnings  (BUILD_STRICT_WARNINGS)"
 `;
 
+exports[`each code, as a command ends with it > BUILDER_DEFINITION_IGNORED 1`] = `
+"✗ The Schema Builder's definition file, \`ui-schema.json\`, is ignored by git.
+  Why:  \`migrate:check\` compares what the project commits with its migrations, and an ignored file is not committed, so the check would pass on one machine and fail on another.
+  Next: Commit \`ui-schema.json\`: remove the line in \`.gitignore\` that ignores it, then \`git add\` it.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-definition-ignored  (BUILDER_DEFINITION_IGNORED)"
+`;
+
 exports[`each code, as a command ends with it > BUILDER_DEFINITION_MISSING 1`] = `
 "✗ The newest migration snapshot records a Builder collection 'articles' that neither \`nextly.config.ts\` nor \`./ui-schema.json\` declares.
   Why:  \`./ui-schema.json\` is part of the code: \`migrate:create\` reads the Builder's entities from it. Without them, a migration written now would drop each one's table and its content.
@@ -778,6 +785,13 @@ exports[`each code, as a command ends with it > DATABASE_CATALOG_UNREADABLE 1`] 
   Docs: https://nextlyhq.com/docs/cli/errors/database-catalog-unreadable  (DATABASE_CATALOG_UNREADABLE)"
 `;
 
+exports[`each code, as a command ends with it > DATABASE_DIALECT_DIFFERS 1`] = `
+"✗ \`DATABASE_URL\` names a PostgreSQL database, and the migrations are for MySQL.
+  Why:  \`--record-snapshot\` records the translation tables of the database it reads, in a migration written for the migrations' dialect.
+  Next: Point \`DATABASE_URL\` at the MySQL database the migrations run on, or pass the \`--dialect\` they are for.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-dialect-differs  (DATABASE_DIALECT_DIFFERS)"
+`;
+
 exports[`each code, as a command ends with it > DATABASE_DIALECT_INVALID 1`] = `
 "✗ \`DB_DIALECT\` is \`mssql\`, which is not a database Nextly supports.
   Why:  Nextly runs on PostgreSQL, MySQL and SQLite.
@@ -852,6 +866,13 @@ exports[`each code, as a command ends with it > DEMOTE_PLUGIN_COLLECTION 1`] = `
   Why:  \`--demote\` hands a collection the app's own \`nextly.config.ts\` defines to the Schema Builder. A plugin registers its collections again at every start, so a plugin's collection stays the plugin's.
   Next: Leave 'posts' to '@acme/forms', and change it through that plugin's options.
   Docs: https://nextlyhq.com/docs/cli/errors/demote-plugin-collection  (DEMOTE_PLUGIN_COLLECTION)"
+`;
+
+exports[`each code, as a command ends with it > DIALECT_NOT_STATED 1`] = `
+"✗ The command could not tell which database the migrations are for.
+  Why:  It reads no database, no migration file names its dialect yet, and neither \`DB_DIALECT\` nor \`DATABASE_URL\` is set.
+  Next: Pass \`--dialect\` with \`postgresql\`, \`mysql\` or \`sqlite\`, or set \`DB_DIALECT\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/dialect-not-stated  (DIALECT_NOT_STATED)"
 `;
 
 exports[`each code, as a command ends with it > DROP_OF_FOREIGN_TABLE 1`] = `

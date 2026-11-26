@@ -717,6 +717,7 @@ export async function desiredSchemaForSync(
       desiredCollections,
       async () =>
         withoutRemovedFromCode(
+          "collection",
           await registeredCollections,
           declaredCollections
         ),
@@ -727,6 +728,7 @@ export async function desiredSchemaForSync(
       async () =>
         registriesPresent
           ? withoutRemovedFromCode(
+              "single",
               await singleRegistry.getAllSingles(),
               declaredSingles
             )

@@ -28,7 +28,7 @@ import { mysqlTable, varchar, text, datetime } from "drizzle-orm/mysql-core";
 import {
   EXTERNAL_IDENTITIES_INDEXES,
   mysqlIndexes,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-mysql";
 import { users } from "../users/mysql";
 
 import { EXTERNAL_IDENTITIES_TABLE } from "./table-name";

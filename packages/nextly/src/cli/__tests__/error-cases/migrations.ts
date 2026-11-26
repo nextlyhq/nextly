@@ -72,6 +72,7 @@ import {
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
   resolveModeRequired,
+  builderDefinitionIgnored,
   schemaChangeWithoutMigration,
   settingsChangeWithoutMigration,
   databaseBehindMigrations,
@@ -642,6 +643,7 @@ export const MIGRATION_CASES = {
     ]),
   SETTINGS_CHANGE_WITHOUT_MIGRATION: () =>
     settingsChangeWithoutMigration(1, ["~ posts: labels.singular"]),
+  BUILDER_DEFINITION_IGNORED: () => builderDefinitionIgnored("ui-schema.json"),
   // The refusals `nextly migrate` makes of the field-group transition, built as it throws them.
   FIELD_GROUP_STORAGE_NOT_MIGRATED: () =>
     fieldGroupStorageNotMigratedError(

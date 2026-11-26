@@ -11,7 +11,10 @@
 import type { BuildColumns } from "drizzle-orm";
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 
-import { NEXTLY_JOBS_INDEXES, sqliteIndexes } from "../_internal/core-indexes";
+import {
+  NEXTLY_JOBS_INDEXES,
+  sqliteIndexes,
+} from "../_internal/core-indexes-sqlite";
 
 import type { JobState } from "./types";
 

@@ -56,6 +56,36 @@ describe("CollectionFileManager.loadCompanionSchema (i18n M4)", () => {
     expect(first!.table).toBe(second!.table);
   });
 
+  // A save hands over the table it made at any point of a read that is making
+  // its own from the fields as they were. Whichever comes first, the save's is
+  // the one kept: made in one step with the look for one, the read's is either
+  // not made or written over.
+  it("never puts a companion made from older fields over a refreshed one", async () => {
+    for (let turns = 0; turns < 12; turns += 1) {
+      const fm = localizedFm();
+      const saved = { savedTable: turns };
+      let refreshed = Promise.resolve();
+      fm.setMetadataFetcher(async () => {
+        refreshed = (async () => {
+          for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
+          fm.refreshSchema("dc_pages_locales", saved);
+        })();
+        return {
+          fields: [
+            { name: "body", type: "longText", localized: true },
+          ] as never,
+          tableName: "dc_pages",
+          localized: true,
+        };
+      });
+      await fm.loadCompanionSchema("pages");
+      await refreshed;
+      // Kept once made, so the next read shows which one was.
+      const after = await fm.loadCompanionSchema("pages");
+      expect({ turns, table: after?.table }).toEqual({ turns, table: saved });
+    }
+  });
+
   it("returns null for a non-localized collection", async () => {
     const fm = makeFileManager();
     fm.setAdapter({ dialect: "sqlite" } as unknown as DrizzleAdapter);

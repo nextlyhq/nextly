@@ -594,7 +594,7 @@ const settingsLike = await nextly.findSingles({ search: "settings" });
 
 | Argument          | Type                                                            | Default | Description                                  |
 | ----------------- | --------------------------------------------------------------- | ------- | -------------------------------------------- |
-| `source`          | `"code" \| "ui" \| "built-in"`                                  | —       | Filter by definition source.                 |
+| `source`          | `"code" \| "ui" \| "built-in" \| "plugin:<name>"`               | —       | Filter by definition source.                 |
 | `migrationStatus` | `"synced" \| "pending" \| "generated" \| "applied" \| "failed"` | —       | Filter by current schema state.              |
 | `locked`          | `boolean`                                                       | —       | Return only locked or only unlocked singles. |
 | `search`          | `string`                                                        | —       | Substring match on slug or label.            |

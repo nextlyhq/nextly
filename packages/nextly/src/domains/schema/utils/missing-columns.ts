@@ -297,7 +297,10 @@ async function getExistingColumns(
       params.push(tableName);
       break;
     case "mysql":
-      sql = `SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`;
+      // The alias matters: MySQL 8's information_schema names the column
+      // COLUMN_NAME without it, however the query spells it, so every column
+      // read as missing and was added again.
+      sql = `SELECT column_name AS column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`;
       params.push(tableName);
       break;
     case "sqlite":

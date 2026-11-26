@@ -119,6 +119,7 @@ import { topoSortPlugins } from "../../plugins/topo-sort";
 import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import type { CommandContext } from "../context";
 import { projectPath, reportDryRun } from "../dry-run";
+import { databaseDialectDiffers } from "../errors/areas/database";
 import {
   consentTookTheName,
   migrationCreateCancelled,
@@ -128,6 +129,7 @@ import {
   recordSnapshotNeedsAppMigration,
 } from "../errors/areas/migrate-create";
 import {
+  type CliError,
   configDeclarationError,
   exitWithError,
   toCliError,
@@ -135,15 +137,13 @@ import {
 import {
   type CLIDatabaseAdapter,
   createCliAdapter,
+  detectDialectFromUrl,
   getDialectDisplayName,
   type MissingDatabase,
   openDryRunAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
-import {
-  requireDatabaseEnv,
-  loadConfigOrExit,
-} from "../utils/command-prerequisites";
+import { loadConfigOrExit } from "../utils/command-prerequisites";
 import { bundleAndRequire } from "../utils/config-bundler";
 import { loadConfig } from "../utils/config-loader";
 import {
@@ -153,6 +153,7 @@ import {
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import { formatDuration } from "../utils/logger";
+import { readWithoutDatabase } from "../utils/project-dialect";
 
 import { commandRun } from "./command-run";
 import { isPluginDefinition } from "./plugin-definition-shape";
@@ -162,6 +163,9 @@ import { isPluginDefinition } from "./plugin-definition-shape";
 // ============================================================================
 
 export interface MigrateCreateCommandOptions {
+  /** The dialect the migration is written for, where nothing else says (`projectDialect`). */
+  dialect?: SupportedDialect;
+
   /**
    * Migration name (required for non-blank). Slug-cased; the timestamp
    * prefix is added automatically.
@@ -272,7 +276,9 @@ interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
  */
 function recordModeReader(
   recording: boolean | undefined,
-  dryRun: boolean | undefined
+  dryRun: boolean | undefined,
+  /** The dialect the migrations are for, which the database is opened as (`readWithoutDatabase`). */
+  dialect: SupportedDialect
 ): {
   read?: (tableName: string) => Promise<readonly string[]>;
   close: () => Promise<void>;
@@ -283,7 +289,10 @@ function recordModeReader(
   let adapter: Promise<CLIDatabaseAdapter | MissingDatabase> | undefined;
   return {
     read: async tableName => {
-      adapter ??= dryRun === true ? openDryRunAdapter() : createCliAdapter();
+      adapter ??=
+        dryRun === true
+          ? openDryRunAdapter({ dialect })
+          : createCliAdapter({ dialect });
       const opened = await adapter;
       if ("missing" in opened) return [];
       const { companionColumnNames } = await import(
@@ -299,6 +308,31 @@ function recordModeReader(
       if (opened && !("missing" in opened)) await opened.disconnect();
     },
   };
+}
+
+/**
+ * `--record-snapshot` reads the translations tables of the database `DATABASE_URL` names, and
+ * records them in a migration written for `dialect`: one whose scheme names another database
+ * would record that database's tables, so it is refused before anything is read. A URL whose
+ * scheme names none is opened as `dialect`, and its driver says whether it is one. A dry run
+ * reports the refusal instead, as it reports every other the real run would make.
+ */
+function refuseRecordingAnotherDialect(
+  options: Pick<ResolvedMigrateCreateOptions, "recordSnapshot" | "dryRun">,
+  dialect: SupportedDialect,
+  logger: CommandContext["logger"]
+): void {
+  if (options.recordSnapshot !== true) return;
+  const url = process.env.DATABASE_URL;
+  const named = url ? detectDialectFromUrl(url) : undefined;
+  if (named === undefined || named === dialect) return;
+  const refusal = databaseDialectDiffers(dialect, named);
+  // A dry run reports what the real run would refuse, and exits 0.
+  if (options.dryRun === true) {
+    reportDryRun(logger, { changes: [], refusals: [dryRunLineOf(refusal)] });
+    process.exit(0);
+  }
+  exitWithError(logger, refusal);
 }
 
 /**
@@ -354,6 +388,10 @@ function reachableDatabase(dialect: SupportedDialect): {
 async function databaseFieldGroupNaming(
   dialect: SupportedDialect
 ): Promise<FieldGroupNaming | undefined> {
+  // A URL whose scheme names another database is not the one this migration is for.
+  const url = process.env.DATABASE_URL;
+  const named = url ? detectDialectFromUrl(url) : undefined;
+  if (named !== undefined && named !== dialect) return undefined;
   const database = reachableDatabase(dialect);
   try {
     const adapter = await database.open();
@@ -462,10 +500,14 @@ export function dryRunRefusalOf(error: unknown): string | undefined {
     )
   ) {
     // As the real run prints it: the CLI error it maps to, with its code.
-    const printed = toCliError(error);
-    return `${printed.what} ${printed.why} ${printed.next} (${printed.code})`;
+    return dryRunLineOf(toCliError(error));
   }
   return error.publicMessage;
+}
+
+/** The refusal a dry run reports for `error`, in the words the real run ends with. */
+function dryRunLineOf(error: CliError): string {
+  return `${error.what} ${error.why} ${error.next} (${error.code})`;
 }
 
 /**
@@ -827,12 +869,6 @@ export async function runMigrateCreate(
 
   logger.header("Migrate Create");
 
-  // F11 PR 3: dialect comes from DATABASE_URL (no DB connection needed —
-  // we just need to know which SQL flavor to emit). validateDatabaseEnv
-  // handles the parsing without opening a connection.
-  const dbValidation = requireDatabaseEnv(logger);
-  const dialect = dbValidation.dialect;
-
   // Resolve the migration name. --name flag takes precedence over the
   // positional argument. Required for non-blank invocations.
   const name =
@@ -873,8 +909,6 @@ export async function runMigrateCreate(
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
-  logger.keyValue("Dialect", getDialectDisplayName(dialect));
-
   // A real run holds the project's migration files from here, its first read
   // of the folder, to its files' write, questions included, so no other
   // writer reads the same snapshot or writes beside it. A dry run writes
@@ -886,6 +920,21 @@ export async function runMigrateCreate(
   });
   held.enter();
   try {
+    // The SQL to write is the dialect's, which needs no database: from `--dialect`, the migration
+    // history or the environment, read without connecting. Read once the folder is held, so the
+    // history is the one this run writes after, not one another writer has since added to.
+    const definitionFile = configResult.config.db.uiSchemaFile;
+    const { dialect, definitionPresent, definitionIgnored } =
+      await readWithoutDatabase({
+        flag: options.dialect,
+        projectRoot: cwd,
+        migrationsDir,
+        definitionFile,
+        logger,
+      });
+    logger.keyValue("Dialect", getDialectDisplayName(dialect));
+    refuseRecordingAnotherDialect(options, dialect, logger);
+
     // A Builder save this machine left part-way against this database refuses the command, a
     // blank migration's included: what it would write from is not what the database holds. Asked
     // once the folder is held, so a save that started while this waited for it is seen too.
@@ -914,6 +963,15 @@ export async function runMigrateCreate(
         options.dryRun === true
       );
       return;
+    }
+
+    // What the run writes from is what the project commits: a Builder definition file git
+    // ignores is named, though the run goes on, since the developer writing the migration has it.
+    // A blank migration reads no definition, so it is named only here.
+    if (definitionPresent && definitionIgnored) {
+      logger.warn(
+        `The Schema Builder's definition file, ${definitionFile}, is ignored by git, so the migration is written from a file the project does not commit, and \`migrate:check\` refuses it. Commit ${definitionFile}.`
+      );
     }
 
     // The data-loss consent, read before anything is planned, so a malformed
@@ -1027,7 +1085,11 @@ export async function runMigrateCreate(
 
     // `--record-snapshot` records which fields are translated as the database holds them, so it reads
     // the translations tables, connecting only once it has one to check. Every other run stays offline.
-    const live = recordModeReader(options.recordSnapshot, options.dryRun);
+    const live = recordModeReader(
+      options.recordSnapshot,
+      options.dryRun,
+      dialect
+    );
     // An older unique index a field that stops being unique leaves holding its column is read from
     // the database, and only then (`uniqueIndexReader`).
     const uniques = uniqueIndexReader(dialect);

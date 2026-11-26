@@ -6,7 +6,7 @@
 //
 // The util is a pure free function over (adapter, logger, tableName,
 // fields, options). Tests use a fake adapter that records SQL + returns
-// scripted column lists.
+// scripted column lists, its rows keyed as each dialect's driver keys them.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -19,14 +19,29 @@ interface FakeAdapter {
   executeQuery: <T>(sql: string, params?: unknown[]) => Promise<T[]>;
 }
 
+/**
+ * The key the driver gives the one column of a catalogue query's rows: its alias where it has one.
+ * Without one, MySQL 8 gives an `information_schema` column its upper-case name however the query
+ * spells it, PostgreSQL the lower-case one, and SQLite's pragma calls it `name`.
+ */
+function catalogueKey(
+  dialect: "postgresql" | "mysql" | "sqlite",
+  sql: string
+): string {
+  if (dialect === "sqlite") return "name";
+  const selected = /^\s*SELECT\s+(\w+)(?:\s+AS\s+(\w+))?\s+FROM/i.exec(sql);
+  if (selected === null) throw new Error(`not a catalogue query: ${sql}`);
+  const [, column, alias] = selected;
+  if (alias !== undefined) return alias;
+  return dialect === "mysql" ? column.toUpperCase() : column.toLowerCase();
+}
+
 function makeAdapter(opts: {
   dialect: "postgresql" | "mysql" | "sqlite";
   existingColumns?: string[];
-  introspectShape?: "column_name" | "name";
   alterShouldThrow?: boolean;
 }): { adapter: FakeAdapter; calls: { sql: string; params?: unknown[] }[] } {
   const calls: { sql: string; params?: unknown[] }[] = [];
-  const introspectKey = opts.introspectShape ?? "column_name";
   const cols = opts.existingColumns ?? [];
 
   const adapter: FakeAdapter = {
@@ -38,9 +53,8 @@ function makeAdapter(opts: {
         sql.includes("information_schema.columns") ||
         sql.startsWith("PRAGMA")
       ) {
-        return cols.map(
-          c => ({ [introspectKey]: c }) as Record<string, unknown>
-        ) as T[];
+        const key = catalogueKey(opts.dialect, sql);
+        return cols.map(c => ({ [key]: c }) as Record<string, unknown>) as T[];
       }
       // ALTER TABLE statement.
       if (opts.alterShouldThrow) {
@@ -136,7 +150,6 @@ describe("addMissingColumnsForFields", () => {
     const { adapter, calls } = makeAdapter({
       dialect: "sqlite",
       existingColumns: ["id", "title"],
-      introspectShape: "name",
     });
     const fields: FieldConfig[] = [
       { name: "title", type: "text" } as FieldConfig,
@@ -181,27 +194,30 @@ describe("addMissingColumnsForFields", () => {
     expect(alter?.sql).toBe(`ALTER TABLE "dc_posts" ADD COLUMN "title" TEXT`);
   });
 
-  it("skips columns that already exist (idempotent)", async () => {
-    const { adapter, calls } = makeAdapter({
-      dialect: "postgresql",
-      existingColumns: ["id", "title", "excerpt"],
-    });
-    const fields: FieldConfig[] = [
-      { name: "title", type: "text" } as FieldConfig,
-      { name: "excerpt", type: "text" } as FieldConfig,
-    ];
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "skips columns that already exist (idempotent), on %s",
+    async dialect => {
+      const { adapter, calls } = makeAdapter({
+        dialect,
+        existingColumns: ["id", "title", "excerpt"],
+      });
+      const fields: FieldConfig[] = [
+        { name: "title", type: "text" } as FieldConfig,
+        { name: "excerpt", type: "text" } as FieldConfig,
+      ];
 
-    const added = await addMissingColumnsForFields(
-      adapter as unknown as Parameters<typeof addMissingColumnsForFields>[0],
-      fakeLogger,
-      "dc_posts",
-      fields,
-      { timestamps: false, builtBy: "codeFirst" }
-    );
+      const added = await addMissingColumnsForFields(
+        adapter as unknown as Parameters<typeof addMissingColumnsForFields>[0],
+        fakeLogger,
+        "dc_posts",
+        fields,
+        { timestamps: false, builtBy: "codeFirst" }
+      );
 
-    expect(added).toEqual([]);
-    expect(calls.find(c => c.sql.startsWith("ALTER TABLE"))).toBeUndefined();
-  });
+      expect(added).toEqual([]);
+      expect(calls.find(c => c.sql.startsWith("ALTER TABLE"))).toBeUndefined();
+    }
+  );
 
   it("includes timestamp columns when options.timestamps is not false", async () => {
     // Timestamps don't have column defs (set to "" in the map), so they
@@ -299,7 +315,6 @@ describe("addMissingColumnsForFields", () => {
       const { adapter, calls } = makeAdapter({
         dialect,
         existingColumns: ["id"],
-        introspectShape: dialect === "sqlite" ? "name" : "column_name",
       });
       await addMissingColumnsForFields(
         adapter as unknown as Parameters<typeof addMissingColumnsForFields>[0],
