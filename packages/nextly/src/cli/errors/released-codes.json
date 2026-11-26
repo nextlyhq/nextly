@@ -14,6 +14,7 @@
   "BUILDER_MIGRATION_SNAPSHOT_MISSING": "A migration file the Schema Builder wrote has no snapshot beside it, so `nextly migrate` does not apply it.",
   "BUILDER_RELATION_TARGET_UNKNOWN": "A relationship field in `ui-schema.json` names a collection that neither file declares.",
   "BUILDER_SAVE_EARLIER_LEFT": "A Builder save was refused, because an earlier Builder save was left part-way and is not settled.",
+  "BUILDER_SAVE_FIELD_UNSETTLED": "A write or read of entries was refused, because a Builder save left part-way changed a field it reaches and is not settled.",
   "BUILDER_SAVE_LEFT_PART_WAY": "A Builder save was left part-way, so the command refused: the project's migrations do not describe the database until the save is settled.",
   "BUILDER_SAVE_RECORD_UNREADABLE": "A Builder save was refused, because the record that an earlier save of the same entity was in progress cannot be read.",
   "BUILDER_SLUG_COLLISION": "An entity in `ui-schema.json` has the slug of a collection in `nextly.config.ts`.",

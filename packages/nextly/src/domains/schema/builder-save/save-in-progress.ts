@@ -47,6 +47,7 @@ import { hostname } from "node:os";
 import { dirname, join, relative } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { like, type SQL } from "drizzle-orm";
 import { z } from "zod";
 
@@ -125,6 +126,21 @@ const savedRecord = z.object({
    * before that step wrote anything from a save that landed whole. Absent from a one-step save.
    */
   stepFrom: z.number().int().nonnegative().optional(),
+  /**
+   * The fields the save renames, as the stopped-save judgement reads them: a settle after the
+   * process stopped judges each change it asked for from the live tables. Absent from a record
+   * written before it was kept, and from a save that renames nothing.
+   */
+  renamed: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
+  /**
+   * Whether the save's files carry statements of its own beyond the schema change: its own row
+   * changes (a fill, a delete of the rows a required field has no value for, a moved field's
+   * values), a junction table's or a key's. Such a save stopped inside a file on MySQL is never
+   * judged from its tables, whose shape says nothing of rows changed, and never settled as none of
+   * it. The registry row and the stored schema version every file writes are not counted. Absent
+   * from a record written before it was kept, which is judged the same way.
+   */
+  ownStatements: z.boolean().optional(),
 });
 type SaveInProgress = z.infer<typeof savedRecord>;
 
@@ -341,6 +357,10 @@ export async function recordSaveStarted(args: {
   filesAt?: string;
   /** Whether the save applies its own files (in development) rather than leaving them. */
   applies?: boolean;
+  /** The fields the save renames (`SaveInProgress.renamed`). */
+  renamed?: ReadonlyArray<{ from: string; to: string }>;
+  /** Whether the save's files carry statements of its own (`SaveInProgress.ownStatements`). */
+  ownStatements?: boolean;
   /** The database the save writes to (`savedDatabase`); unknown where not given. */
   database: string | undefined;
   /** The save's log, which a try after the first is noticed in while the database is busy. */
@@ -373,6 +393,12 @@ export async function recordSaveStarted(args: {
       : { startedFrom: args.startedFrom }),
     ...(args.filesAt === undefined ? {} : { filesAt: args.filesAt }),
     ...(args.applies === undefined ? {} : { applies: args.applies }),
+    ...(args.renamed === undefined || args.renamed.length === 0
+      ? {}
+      : { renamed: args.renamed.map(r => ({ from: r.from, to: r.to })) }),
+    ...(args.ownStatements === undefined
+      ? {}
+      : { ownStatements: args.ownStatements }),
   };
   const meta = new MetaService(args.adapter, consoleLogger);
   const key = saveInProgressKey(args.kind, args.slug);
@@ -649,6 +675,33 @@ async function joinedStep(
 }
 
 /**
+ * The record of a save the process left part-way, as the settle that writes for it amends it: the
+ * files it writes in the stopped one's place, and the definition and moment they are of, said
+ * before they are written (`StartedSave.rewriting`), so a settle stopped itself leaves a record the
+ * next one judges against what is there. The settle clears the record itself once it is done.
+ */
+export function standingRecordHandle(
+  adapter: DrizzleAdapter,
+  projectRoot: string,
+  record: LeftSave
+): Pick<StartedSave, "filesWritten" | "rewriting"> {
+  const entry: MadeRecord = {
+    adapter,
+    projectRoot,
+    record,
+    ending: "open",
+    registryWritesBefore: undefined,
+  };
+  const meta = new MetaService(adapter, consoleLogger);
+  return startedSaveOf(
+    entry,
+    meta,
+    saveInProgressKey(record.kind, record.slug),
+    "later"
+  );
+}
+
+/**
  * What a save's step tells the record `entry` holds. A first step says how the save ended; a
  * later step (`joinedStep`) cannot withdraw a save its first step applied, so its withdrawal leaves
  * the ending as it was.
@@ -861,11 +914,12 @@ async function clearRecords(
 }
 
 /**
- * The way out of a record left by a save that ended, which nothing clears by itself yet: the row
- * and the marker, removed by hand once the save is known to have finished.
+ * The way out of a record a start may not settle: what its log names, put right first, since a record
+ * cleared by hand leaves nothing to say of it; the row and the marker, removed by hand, only where it
+ * names nothing and the save is known to have finished.
  */
 function clearByHand(projectRoot: string, record: SaveInProgress): string {
-  return `Once you have checked that the save finished and no Builder save is running, remove the row "${saveInProgressKey(record.kind, record.slug)}" from the nextly_meta table and the file ${relative(projectRoot, markerPath(projectRoot, record))}.`;
+  return `A development start settles it, or its log names what keeps it from being settled: put that right, and start again. Only where it names nothing to put right, and once you have checked that the save finished and no Builder save is running, remove the row "${saveInProgressKey(record.kind, record.slug)}" from the nextly_meta table and the file ${relative(projectRoot, markerPath(projectRoot, record))}.`;
 }
 
 /** A marker as read: the record, or why it could not be read. */
@@ -922,7 +976,7 @@ function unreadableRecordStep(key: string): string {
 }
 
 const SETTLES =
-  "run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save";
+  "run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save, or names what keeps it from being settled";
 
 /**
  * Refuse while the project's markers record a save left part-way on this host against this
@@ -994,28 +1048,66 @@ interface RecordRows {
 export async function readSavesInProgress(
   adapter: DrizzleAdapter
 ): Promise<ReadRow[]> {
-  const table = loadedDialect(adapter.getCapabilities().dialect).tables
-    .nextlyMeta;
-  const rows = await adapter
-    .getDrizzle<RecordRows>()
+  return readStandingSaves(
+    adapter.getDrizzle(),
+    adapter.getCapabilities().dialect
+  );
+}
+
+/**
+ * Every record standing, in one read through `db` (the adapter's handle, or an open transaction's,
+ * so a write already inside one reads on its own connection). None in the common case.
+ */
+export async function readStandingSaves(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<ReadRow[]> {
+  const table = loadedDialect(dialect).tables.nextlyMeta;
+  const rows = await (db as RecordRows)
     .select({ key: table.key, value: table.value })
     .from(table)
     .where(like(table.key, `${KEY_PREFIX}%`));
-  return rows.map(({ key, value }) => {
-    try {
-      const parsed = savedRecord.safeParse(
-        typeof value === "string" ? JSON.parse(value) : value
-      );
-      return parsed.success
-        ? { key, record: parsed.data }
-        : { key, unreadable: "it is not a save's record" };
-    } catch (error) {
-      return {
-        key,
-        unreadable: error instanceof Error ? error.message : String(error),
-      };
-    }
-  });
+  return rows.map(readRowOf);
+}
+
+/**
+ * Of the records standing (`readStandingSaves`), those over one entity's entries: its own,
+ * undefined where none stands, and every field group's, since a field group's save changes the
+ * component tables an entity's entries reach.
+ */
+export function savesStandingOver(
+  rows: readonly ReadRow[],
+  kind: SaveInProgressKind,
+  slug: string
+): {
+  own: ReadRow | undefined;
+  fieldGroups: Array<{ slug: string; row: ReadRow }>;
+} {
+  const key = saveInProgressKey(kind, slug);
+  const groupKey = saveInProgressKey("fieldGroup", "");
+  return {
+    own: rows.find(row => row.key === key),
+    fieldGroups: rows
+      .filter(row => row.key.startsWith(groupKey))
+      .map(row => ({ slug: row.key.slice(groupKey.length), row })),
+  };
+}
+
+/** A record's row parsed: its record, or why it could not be read. */
+function readRowOf({ key, value }: { key: string; value: unknown }): ReadRow {
+  try {
+    const parsed = savedRecord.safeParse(
+      typeof value === "string" ? JSON.parse(value) : value
+    );
+    return parsed.success
+      ? { key, record: parsed.data }
+      : { key, unreadable: "it is not a save's record" };
+  } catch (error) {
+    return {
+      key,
+      unreadable: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 /** A record's row as read: the record, or why it could not be read, by its key. */
@@ -1038,26 +1130,45 @@ export async function refuseWhileSaveInProgress(
      */
     allow?: ReadonlySet<string>;
     /**
-     * Given a line for each record of another host's save made outside development, which does
-     * not refuse: that save changed no table here, and its files are on its own host.
+     * Given a line for each record of another host's save made outside development whose files
+     * are not here (`filesHere`), which does not refuse: that save changed no table here, and its
+     * files are on its own host.
      */
     notice?: (line: string) => void;
+    /**
+     * Whether another host's save made outside development has files in this project's migration
+     * folder (`saveFilesPresent`): where hosts share the folder, they are a part of a change that
+     * save never finished, which a run would apply, so such a record refuses. Absent, every such
+     * record is a notice.
+     */
+    filesHere?: (record: SaveInProgress) => Promise<boolean>;
   } = {}
 ): Promise<void> {
   // A database with no meta table yet (a first run) holds no record.
   if (!(await adapter.tableExists("nextly_meta"))) return;
   const here = hostname();
-  const rows = (await readSavesInProgress(adapter)).filter(row => {
-    if (!("record" in row)) return true;
-    if (options.allow?.has(row.record.id) === true) return false;
+  const rows: ReadRow[] = [];
+  for (const row of await readSavesInProgress(adapter)) {
+    if (!("record" in row)) {
+      rows.push(row);
+      continue;
+    }
+    if (options.allow?.has(row.record.id) === true) continue;
     if (row.record.applies === false && row.record.host !== here) {
+      if (
+        options.filesHere !== undefined &&
+        (await options.filesHere(row.record))
+      ) {
+        rows.push(row);
+        continue;
+      }
       options.notice?.(
         `${described(row.record)} was made outside development and is recorded as left part-way; it is settled by \`nextly migrate\` on that machine.`
       );
-      return false;
+      continue;
     }
-    return true;
-  });
+    rows.push(row);
+  }
   if (rows.length === 0) return;
   // A row that cannot be read still stands for a save: it refuses, named by its key.
   const named = rows.map(row =>

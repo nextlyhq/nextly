@@ -85,6 +85,8 @@ import { DrizzleStatementExecutor } from "../../services/drizzle-statement-execu
 import { calculateSchemaHash } from "../../services/schema-hash";
 import { loadUiSchema } from "../../ui-schema/loader";
 import { judgeStoppedSave } from "../stopped-save";
+import { settleLeftSaves } from "../settle-left-save";
+import { settleRegistryWriter } from "../settle-registry";
 
 // The judgement of what a stopped save applied, watched as it runs: a save that rolled back whole
 // must never reach it.
@@ -607,13 +609,19 @@ describe.each(getConfiguredTestDialects())(
   (dialect: TestDialect) => {
     const history = () => join(basePath, HISTORY);
 
-    /** Boot in development, as the Builder runs, over the shared folder. */
-    async function boot(): Promise<TestNextly> {
+    /**
+     * Boot in development, as the Builder runs, over the shared folder: on the earlier layout, or
+     * with `perLanguage` keeping translatable values per language, as every installation does.
+     */
+    async function boot({
+      perLanguage = false,
+    }: { perLanguage?: boolean } = {}): Promise<TestNextly> {
       vi.stubEnv("NODE_ENV", "development");
       current = await createTestNextly({
         dialect,
         basePath,
         db: { migrationsDir: HISTORY, uiSchemaFile: DEFINITION },
+        ...(perLanguage ? { perLanguageStorage: true } : {}),
       });
       return current;
     }
@@ -1005,6 +1013,60 @@ describe.each(getConfiguredTestDialects())(
           "the save again"
         ).toBeUndefined();
         await expectTurnedOnWhole(t);
+      },
+      300_000
+    );
+
+    // Where values are kept per language a save that stops while its process lives is not judged: it
+    // is left as it stopped, its file as written and recorded nowhere, for `nextly migrate:resolve`.
+    // Asked of the roads that settle such a stop at all there: the update a push applies, and the
+    // Single schema save. The Builder's own apply hands no settle where the registry row is written
+    // after the file.
+    it
+      .runIf(dialect === "mysql")
+      .each(["a collection's update (the push)", "the Single schema save"])(
+      "%s, kept per language, stopped at its second addition while its process lives, is not judged: its file stays as written",
+      async name => {
+        const path = PATHS.find(each => each.name === name)!;
+        // Shared, so the save changes the main table alone, in one file.
+        const shared = (field: string) => ({
+          ...text(field),
+          localized: false,
+        });
+        const t = await boot({ perLanguage: true });
+        await path.create(t, [shared("heading")]);
+        const folderBefore = filesBelow(history());
+        const failed = failStatement(t, adding(path.table, "beta"));
+        vi.mocked(judgeStoppedSave).mockClear();
+
+        const outcome = await outcomeOf(
+          path.save(t, [shared("heading"), shared("alpha"), shared("beta")])
+        );
+
+        expect(failed(), "no statement adding `beta` was met").toBe(1);
+        expect(outcome.failed, "the save was reported as going through").toBe(
+          true
+        );
+        expect(
+          await liveColumns(t, path.table),
+          "the first addition stayed"
+        ).toContain("alpha");
+        expect(
+          vi.mocked(judgeStoppedSave),
+          "what applied was judged"
+        ).not.toHaveBeenCalled();
+        const written = filesBelow(history()).filter(
+          file => file.endsWith(".sql") && !folderBefore.includes(file)
+        );
+        expect(written, "the save's one file").toHaveLength(1);
+        const up = readFileSync(join(history(), written[0]!), "utf8").split(
+          "-- DOWN"
+        )[0]!;
+        expect(up, "both additions, as it was written").toMatch(/alpha/);
+        expect(up, "both additions, as it was written").toMatch(/beta/);
+        expect(await appliedFiles(t), "recorded applied").not.toContain(
+          written[0]
+        );
       },
       300_000
     );
@@ -1708,6 +1770,94 @@ describe.each(getConfiguredTestDialects())(
           300_000
         );
       }
+    );
+
+    // A delete of the rows a field made required has no value for runs as a row change on MySQL,
+    // which commits it before the next schema statement runs. Where that statement then fails, the
+    // rows are gone and the table's shape is as it was: the runner recorded a statement it made
+    // durable, so the save is kept as partly applied, never withdrawn, and the next start's settle
+    // keeps its file and its record rather than reading the unchanged shape as nothing applied.
+    it.runIf(dialect === "mysql")(
+      "a collection save whose delete committed before its schema statement failed keeps its file through the next start's settle",
+      async () => {
+        const path = PATHS[0]!;
+        const t = await boot();
+        await path.create(t, [text("heading"), text("note")]);
+        await path.store?.(t, { heading: "Kept", note: "n" });
+        await path.store?.(t, { heading: "Deleted" });
+        const folderBefore = filesBelow(history());
+        // The statement making `note` required, which runs after the delete: MySQL commits the
+        // delete before it runs any schema statement, and the statement then fails.
+        const failed = failStatement(t, /EXECUTE nextly_ddl/, 1, true);
+
+        const outcome = await outcomeOf(
+          dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: path.slug },
+            {
+              fields: [
+                text("heading"),
+                { name: "note", type: "text", required: true },
+              ],
+              confirmed: true,
+              schemaVersion: await versionOf(t, path.registry, path.slug),
+              eventResolutions: [
+                {
+                  kind: "delete_nonconforming",
+                  eventId: `add_not_null_with_nulls:${path.table}.note`,
+                },
+              ],
+            }
+          )
+        );
+
+        expect(failed(), "no statement making `note` required was met").toBe(1);
+        vi.restoreAllMocks();
+        vi.stubEnv("NODE_ENV", "development");
+        expect(outcome.failed).toBe(true);
+        // The staging: the delete committed before the schema statement failed.
+        const rows = await t.adapter.executeQuery<{ heading: string }>(
+          `SELECT heading FROM ${path.table} ORDER BY heading`
+        );
+        expect(
+          (rows as Array<{ heading: string }>).map(r => r.heading),
+          "the delete did not commit before `note` was made required"
+        ).toEqual(["Kept"]);
+        const sql = filesBelow(history()).filter(
+          f => f.endsWith(".sql") && !folderBefore.includes(f)
+        );
+        expect(sql, "the save's files").toHaveLength(1);
+        const applied = await appliedFiles(t);
+        const record = await recordOf(t, path);
+        expect(record, "the failed save's record").toBeDefined();
+
+        // The next development start, over the same database and folder.
+        const settled = await settleLeftSaves({
+          adapter: t.adapter as unknown as DrizzleAdapter,
+          projectRoot: basePath,
+          migrationsDir: history(),
+          logger: { info: () => undefined, warn: () => undefined },
+          writeRegistry: settleRegistryWriter(
+            t.adapter as unknown as DrizzleAdapter
+          ),
+        });
+
+        expect(settled.map(s => s.outcome)).not.toContain("none");
+        // Left as it stands, its record kept for a settle that can tell what its rows did.
+        expect(settled.find(s => s.slug === path.slug)?.outcome).toBe("left");
+        expect(await recordOf(t, path), "its record stays").toEqual(record);
+        expect(
+          filesBelow(history()).filter(
+            f => f.endsWith(".sql") && !folderBefore.includes(f)
+          ),
+          "the file the delete ran from"
+        ).toEqual(sql);
+        expect(await appliedFiles(t), "nothing recorded applied").toEqual(
+          applied
+        );
+      },
+      300_000
     );
 
     // A fill runs as a row change on MySQL, which commits as it runs: rows it filled before a

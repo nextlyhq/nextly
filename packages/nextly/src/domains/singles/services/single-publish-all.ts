@@ -135,6 +135,11 @@ import {
   isCompanionReady,
 } from "../../i18n/runtime/companion-readiness";
 import { withComponentShapesOf } from "../../i18n/runtime/component-shapes";
+import {
+  compareBeforeTransaction,
+  refuseWriteOverLeftSave,
+  writtenKeys,
+} from "../../schema/builder-save/left-save-fields";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { partsTogether, type ChangedParts } from "../../versions/changed-parts";
 import {
@@ -508,6 +513,13 @@ export class SinglePublishAllService extends BaseService {
     // Refused first when the Single is removed from code, before any hook or
     // read of its document, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("single", slug);
+    // Compared before the transaction opens, where a Builder save left part-way stands: the
+    // drafts this promotes are judged inside it, on what this finds (`promotePendingChanges`).
+    await compareBeforeTransaction({
+      adapter: this.adapter,
+      kind: "single",
+      slug,
+    });
     this.logger.debug("Publishing all languages of a Single", { slug });
 
     // A refusal inside the transaction (the languages going live changed under
@@ -2827,6 +2839,16 @@ export class SinglePublishAllService extends BaseService {
         componentFields
       );
       delete main.status;
+      // A promoted draft's values as they are written: a field a Builder save left part-way holds
+      // is refused before anything of the publish is read or written, the structures it reads next
+      // among them, whose columns the save may have changed.
+      await refuseWriteOverLeftSave({
+        adapter: this.adapter,
+        kind: "single",
+        slug: plan.slug,
+        data: writtenKeys({ ...main, ...companionValues }),
+        tx: tx.getDrizzle(),
+      });
       // The structures the row holds before this change goes live, of the
       // containers it rewrites: what tells a component instance that changed
       // type. Read only where the change puts a container's structure down.

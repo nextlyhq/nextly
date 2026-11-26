@@ -111,6 +111,7 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
+import { refuseReadOverLeftSave } from "../../schema/builder-save/left-save-fields";
 import {
   fieldsStoredOnRow,
   junctionLinkColumnsOf,
@@ -2079,6 +2080,16 @@ export class CollectionRelationshipService extends BaseService {
       return [];
     }
 
+    // A target a Builder save left part-way stands over is read as its tables hold it: its running
+    // table is brought to them first, and the read is refused where what they hold is not known
+    // (`refuseReadOverLeftSave`).
+    if (!isSystemEntity(targetCollection)) {
+      await refuseReadOverLeftSave({
+        adapter: this.adapter,
+        kind: "collection",
+        slug: targetCollection,
+      });
+    }
     const schema = isSystemEntity(targetCollection)
       ? getSystemEntityTable(targetCollection)
       : await this.fileManager.loadDynamicSchema(targetCollection);
@@ -3254,6 +3265,8 @@ export class CollectionRelationshipService extends BaseService {
       // A rule that could not run never answered: the request ends with
       // that, not with related entries missing from the map.
       rethrowIfRuleCouldNotRun(error);
+      // Nor does a target a Builder save left part-way holds: its refusal is the answer.
+      if (NextlyError.isCode(error, "BUILDER_SAVE_FIELD_UNSETTLED")) throw error;
       this.logger.error(
         `Failed to batch fetch entries for ${targetCollection}`,
         { error: error }
@@ -3349,6 +3362,8 @@ export class CollectionRelationshipService extends BaseService {
       // A rule that could not run never answered: the request ends with
       // that, not with every source relating to nothing.
       rethrowIfRuleCouldNotRun(error);
+      // Nor does a target a Builder save left part-way holds: its refusal is the answer.
+      if (NextlyError.isCode(error, "BUILDER_SAVE_FIELD_UNSETTLED")) throw error;
       this.logger.error("Failed to batch fetch manyToMany relations", {
         error: error,
       });

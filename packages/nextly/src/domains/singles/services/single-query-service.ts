@@ -194,6 +194,11 @@ import {
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
 import {
+  refuseReadOverLeftSave,
+  refuseWriteOverLeftSave,
+  writtenKeys,
+} from "../../schema/builder-save/left-save-fields";
+import {
   fieldsStoredOnRow,
   getColumnDescriptor,
   isTextStorageKind,
@@ -1526,6 +1531,13 @@ export class SingleQueryService extends BaseService {
     this.logger.debug("Getting Single document", {
       slug,
       locale: options.locale,
+    });
+    // A read that needs a column a Builder save left part-way moved is answered with that save's
+    // refusal, never a database error.
+    await refuseReadOverLeftSave({
+      adapter: this.adapter,
+      kind: "single",
+      slug,
     });
 
     // ONE instant for this read. Both visibility checks below resolve releases
@@ -3215,6 +3227,15 @@ export class SingleQueryService extends BaseService {
       document,
       localizedDefaults,
     } = options?.draft ?? (await this.buildDefaultDocument(singleMeta));
+    // The document as first written, its defaults: a field a Builder save left part-way holds is
+    // refused before it is inserted, as a write that set it would be.
+    await refuseWriteOverLeftSave({
+      adapter: this.adapter,
+      kind: "single",
+      slug: singleMeta.slug,
+      data: writtenKeys({ ...snakeCaseDefaults, ...localizedDefaults }),
+      creates: true,
+    });
     const id = snakeCaseDefaults.id as string;
     const status = (document as { status?: string }).status;
 

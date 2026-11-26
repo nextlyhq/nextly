@@ -32,7 +32,11 @@ import {
   markedForSchemaLock,
 } from "../pipeline/schema-lock";
 
-import { commitsOnMysql } from "./mysql-implicit-commit";
+import {
+  commitsOnMysql,
+  durableRowsOf,
+  runsAnotherStatementOnMysql,
+} from "./mysql-implicit-commit";
 import { requiredColumnCheckpoint } from "./required-column-guard";
 import { leadingWords } from "./split-sql";
 import {
@@ -693,6 +697,16 @@ async function executeTolerated(
   }
 }
 
+/** MySQL's ER_PARSE_ERROR: the server could not read the statement, so it ran none of it. */
+const MYSQL_PARSE_ERROR = { code: "ER_PARSE_ERROR", errno: 1064 };
+
+function isMysqlParseError(error: unknown): boolean {
+  return causeChain(error).some(
+    ({ code, errno }) =>
+      code === MYSQL_PARSE_ERROR.code || errno === MYSQL_PARSE_ERROR.errno
+  );
+}
+
 /** MySQL's ER_LOCK_DEADLOCK: the transaction was rolled back whole, the deadlock's victim. */
 const MYSQL_DEADLOCK = { code: "ER_LOCK_DEADLOCK", errno: 1213 };
 
@@ -909,6 +923,10 @@ async function runUnitStatements(
           from,
           statements.length
         );
+        // On MySQL, the statements an implicit commit made durable with rows among them: a
+        // statement that fails after them reports the unit partly applied, with them, as a unit
+        // run outside a transaction reports its own (`durableRowsOf`).
+        const durable = durableRowsOf(dialect, statements, from);
         for (const [offset, statement] of statements.slice(from).entries()) {
           const index = from + offset;
           // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
@@ -923,13 +941,34 @@ async function runUnitStatements(
           await bound?.beforeStatement?.();
           await sqliteWaitLeft(statement => tx.execute(statement));
           bound?.onSend?.(index);
-          await executeTolerated(
-            tx,
-            sent(statement),
-            statement,
-            dialect,
-            bound
-          );
+          durable.starting(statement, index);
+          try {
+            await executeTolerated(
+              tx,
+              sent(statement),
+              statement,
+              dialect,
+              bound
+            );
+          } catch (error) {
+            // MySQL never ran a statement it could not parse, so nothing of it was committed. A
+            // statement that runs another could have, before the one that failed to parse.
+            if (
+              isMysqlParseError(error) &&
+              !runsAnotherStatementOnMysql(statement)
+            ) {
+              durable.unread();
+            }
+            throw afterDurableRows(
+              durable.kept(),
+              unit,
+              index,
+              statements.length,
+              error,
+              dialect
+            );
+          }
+          durable.ran(statement, index);
           outside = await reopenAfterMysqlImplicitCommit(tx, dialect, bound, {
             statement,
             index,
@@ -1178,9 +1217,30 @@ export function partiallyAppliedAdvice(source: string): string {
 }
 
 /**
+ * The failure of a statement of a unit run in a transaction on MySQL, where `kept` statements
+ * before it were made durable with rows among them (`durableRowsOf`): reported partly applied, as
+ * `partialFailure` reports a unit run outside a transaction. A wait the try ended (`endedWaiting`)
+ * is the try's to judge and passes as it is, as does any failure with no durable rows before it.
+ */
+function afterDurableRows(
+  kept: number | undefined,
+  unit: MigrationUnit,
+  index: number,
+  total: number,
+  error: unknown,
+  dialect: SupportedDialect
+): unknown {
+  if (kept === undefined || kept === 0) return error;
+  if (endedWaiting(error, dialect, true)) return error;
+  return partialFailure(unit, index, total, error, kept);
+}
+
+/**
  * The error for a unit run outside a transaction whose statement at `index`
  * failed: which statement, how many before it stayed applied, and what to
- * do about them.
+ * do about them. `committed`, where given, is a unit run in a transaction on
+ * MySQL, whose first `committed` statements, rows changed among them, an
+ * implicit commit made durable (`afterDurableRows`).
  *
  * The database's own reason is kept out of the public message — a driver's
  * text can carry identifiers and values from the statement — and travels in
@@ -1190,7 +1250,8 @@ function partialFailure(
   unit: MigrationUnit,
   index: number,
   total: number,
-  error: unknown
+  error: unknown,
+  committed?: number
 ): NextlyError {
   const { source } = unit;
   const reason = error instanceof Error ? error.message : String(error);
@@ -1199,17 +1260,25 @@ function partialFailure(
       ? "Finish or reverse them by hand before running it again."
       : partiallyAppliedAdvice(source);
   const kept =
-    index === 0
-      ? "No statement before it had run, so it can run again once the cause is fixed."
-      : `The ${String(index)} statement(s) before it stayed applied, and were not undone. ${advice}`;
+    committed !== undefined
+      ? `Its first ${String(committed)} statement(s), which change rows, stayed applied, and were not undone. ${advice}`
+      : index === 0
+        ? "No statement before it had run, so it can run again once the cause is fixed."
+        : `The ${String(index)} statement(s) before it stayed applied, and were not undone. ${advice}`;
+  // In a transaction on MySQL, a schema statement committed what ran before it as it began.
+  const ran =
+    committed === undefined
+      ? `${source} ran outside a transaction, and its statement ${String(index + 1)} of ${String(total)} failed.`
+      : `${source} ran in a transaction, which MySQL committed as a schema statement began, and its statement ${String(index + 1)} of ${String(total)} failed.`;
   return new NextlyError({
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
-    publicMessage: `${source} ran outside a transaction, and its statement ${String(index + 1)} of ${String(total)} failed. ${kept}`,
+    publicMessage: `${ran} ${kept}`,
     logMessage: `${source}: statement ${String(index + 1)} of ${String(total)} failed: ${reason}`,
     logContext: {
       source,
       failedStatement: index + 1,
       statements: total,
+      ...(committed === undefined ? {} : { statementsKept: committed }),
       reason: "partially-applied",
     },
     ...(error instanceof Error ? { cause: error } : {}),

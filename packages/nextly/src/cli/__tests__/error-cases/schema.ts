@@ -3,6 +3,7 @@
  *
  * @module cli/__tests__/error-cases/schema
  */
+import { heldFieldsRefusal } from "../../../domains/schema/builder-save/left-save-fields";
 import {
   rowsDivergedError,
   rowsWithoutTableError,
@@ -164,7 +165,7 @@ export const SCHEMA_CASES = {
     NextlyError.conflict({
       reason: "state",
       message:
-        'A Builder save was left part-way, so the database does not match its migrations yet: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio. To settle it, run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save.',
+        'A Builder save was left part-way, so the database does not match its migrations yet: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio. To settle it, run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save, or names what keeps it from being settled.',
       logContext: {
         reason: "builder-save-left-part-way",
         saves: ["builder-save-in-progress:collection:posts"],
@@ -181,6 +182,10 @@ export const SCHEMA_CASES = {
         saves: ["collection:posts"],
       },
     }),
+  // As a write of entries is refused over a field a Builder save left part-way holds, from the
+  // refusal's own builder.
+  BUILDER_SAVE_FIELD_UNSETTLED: () =>
+    heldFieldsRefusal("collection", "posts", ["heading"]),
   // As a Builder save is refused over an earlier save's record that cannot be read.
   BUILDER_SAVE_RECORD_UNREADABLE: () =>
     NextlyError.conflict({

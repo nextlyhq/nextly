@@ -71,7 +71,7 @@ function pluginElementsOn(
 }
 
 /** Whether a snapshot of the file describes an element of that kind and name on `table`. */
-function describes(
+export function describes(
   snapshot: NextlySchemaSnapshot,
   table: string,
   element: { kind: ElementKind; name: string }

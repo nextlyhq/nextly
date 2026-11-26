@@ -328,6 +328,12 @@ import {
 import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import { sameSharedStructure } from "../../i18n/shared-structure";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import {
+  compareBeforeTransaction,
+  refuseReadOverLeftSave,
+  refuseWriteOverLeftSave,
+  writtenKeys,
+} from "../../schema/builder-save/left-save-fields";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import {
   fieldsStoredOnRow,
@@ -7127,6 +7133,13 @@ export class CollectionMutationService extends BaseService {
       // Refused first when the collection is removed from code, before any
       // read of the entry, so a refused write changes nothing.
       await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+      // And where a Builder save left part-way holds the field it rewrites.
+      await refuseWriteOverLeftSave({
+        adapter: this.adapter,
+        kind: "collection",
+        slug: params.collectionName,
+        data: { [request.field]: true },
+      });
       check = versionCheckFor(versionBodyOf(request), { exempt: false });
       const { collection, fields, tableName } =
         await this.readCollectionWriteMeta(params.collectionName);
@@ -7994,6 +8007,7 @@ export class CollectionMutationService extends BaseService {
     }
     const given = args.check.kind === "judge" ? args.check.given : undefined;
     await this.writeRowAndTranslation(tx, {
+      collectionName: params.collectionName,
       tableName,
       entryId: params.entryId,
       columns,
@@ -9167,6 +9181,15 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // Refused too, with nothing written, where a Builder save left part-way holds a field the
+    // write sets.
+    await refuseWriteOverLeftSave({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: params.collectionName,
+      data: body,
+      creates: true,
+    });
     // A publish made without review, and why, read off the body for the publish gate and never
     // stored; see updateEntry.
     const withoutReview = withoutReviewOfBody(body);
@@ -9733,6 +9756,16 @@ export class CollectionMutationService extends BaseService {
       await this.entryTransaction(
         params.collectionName,
         async tx => {
+          // The row as it is written, its defaults and what the hooks added included: a field a
+          // Builder save left part-way holds is refused before it is inserted.
+          await this.refuseLeftSaveWriteInTransaction(
+            tx,
+            params.collectionName,
+            writtenKeys({
+              ...entryData,
+              ...(localizedWrite?.companionData ?? {}),
+            })
+          );
           const rawEntry = await tx.insert<unknown>(tableName, entryData, {
             returning: "*",
           });
@@ -11419,6 +11452,13 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code: publishing or
     // withdrawing every language is a write to the entry like any other.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // Compared before the transaction opens, where a Builder save left part-way stands: the
+    // drafts it promotes are judged inside it, on what this finds (`writeRowAndTranslation`).
+    await compareBeforeTransaction({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: params.collectionName,
+    });
     // Judged against the version the caller read, when it sent one, as a save
     // is: a publish from an out-of-date view would put live what the publisher
     // never saw. Decided first thing in the `try` below, so a version that is
@@ -12167,6 +12207,7 @@ export class CollectionMutationService extends BaseService {
               ),
               async () => {
                 await this.writeRowAndTranslation(tx, {
+                  collectionName: params.collectionName,
                   tableName,
                   entryId: params.entryId,
                   columns: promoted.columns,
@@ -15214,6 +15255,8 @@ export class CollectionMutationService extends BaseService {
   private async writeRowAndTranslation(
     tx: TransactionContext,
     args: {
+      /** The collection written, whose left Builder save may hold a field written here. */
+      collectionName: string;
       tableName: string;
       entryId: string;
       /**
@@ -15275,6 +15318,17 @@ export class CollectionMutationService extends BaseService {
       };
     }
   ): Promise<PartState | undefined> {
+    // A field a Builder save left part-way holds is refused before anything of the row is
+    // written, whichever road brought the values: a caller's body, a draft a publish promotes, a
+    // rewrite. A key whose value is `undefined` is not written, so it sets nothing.
+    await this.refuseLeftSaveWriteInTransaction(
+      tx,
+      args.collectionName,
+      writtenKeys({
+        ...args.columns,
+        ...(args.translation?.companionData ?? {}),
+      })
+    );
     const claim =
       args.translation && args.judge
         ? await refuseIfLanguageMoved(
@@ -17382,6 +17436,14 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", rawParams.collectionName);
+    // Refused too, with nothing written, where a Builder save left part-way holds a field the
+    // write sets.
+    await refuseWriteOverLeftSave({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: rawParams.collectionName,
+      data: body,
+    });
     // {@link EVERY_LOCALE} is a SWEEP INSTRUCTION, not a write locale, and the
     // body of this method must never see it as one. Resolved here, once, so the
     // fourteen places below that read `params.locale` keep receiving a real
@@ -19374,6 +19436,7 @@ export class CollectionMutationService extends BaseService {
           // the draft it promotes.
           if (!storeAsWorkingDraft) {
             languageBefore = await this.writeRowAndTranslation(tx, {
+              collectionName: params.collectionName,
               tableName,
               entryId: params.entryId,
               columns,
@@ -22270,6 +22333,12 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // The row is read, through this process's tables, to be removed: readied as any read is.
+    await refuseReadOverLeftSave({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: params.collectionName,
+    });
     // Set once the outbox event is appended (below); lets the catch report a
     // committed-but-hook-failed delete as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
@@ -22819,6 +22888,26 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Refuses a write in a caller's transaction that sets a field a Builder save left part-way holds,
+   * read on that transaction, before anything of the write runs (`refuseWriteOverLeftSave`).
+   */
+  private async refuseLeftSaveWriteInTransaction(
+    tx: TransactionContext,
+    collectionName: string,
+    body: Record<string, unknown>,
+    { creates = false }: { creates?: boolean } = {}
+  ): Promise<void> {
+    await refuseWriteOverLeftSave({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: collectionName,
+      data: body,
+      tx: tx.getDrizzle(),
+      creates,
+    });
+  }
+
+  /**
    * The one create implementation. Both transaction entry points delegate here,
    * so a create is shaped, authorized, written and recorded the same way
    * whichever one a caller reached for.
@@ -22854,6 +22943,13 @@ export class CollectionMutationService extends BaseService {
       undefined
     );
     if ("refused" in provenance) return provenance.refused;
+    // A field a Builder save left part-way holds is refused before anything is written.
+    await this.refuseLeftSaveWriteInTransaction(
+      tx,
+      params.collectionName,
+      body,
+      { creates: true }
+    );
     // A publish made without review, and why, read off the body for the publish gate and never
     // stored; see createEntry.
     const withoutReview = withoutReviewOfBody(body);
@@ -23296,6 +23392,15 @@ export class CollectionMutationService extends BaseService {
       // transaction already holds it.
       await this.holdForEntryWrite(tx, params.collectionName);
       const undoesAlone = takesSavepoints(tx);
+      // The row as it is written, its defaults and what the hooks added included; see createEntryInParts.
+      await this.refuseLeftSaveWriteInTransaction(
+        tx,
+        params.collectionName,
+        writtenKeys({
+          ...entryData,
+          ...(localizedWrite?.companionData ?? {}),
+        })
+      );
       const { entry, createEffects } = await underSavepoint(tx, async () => {
         // Insert using transaction context
         const entry = await tx.insert<unknown>(tableName, entryData, {
@@ -23771,6 +23876,12 @@ export class CollectionMutationService extends BaseService {
       body
     );
     if ("success" in versionCheck) return versionCheck;
+    // And so is one setting a field a left Builder save holds; see createEntryWrite.
+    await this.refuseLeftSaveWriteInTransaction(
+      tx,
+      params.collectionName,
+      body
+    );
     // A publish made without review, read off the body for the publish gate; see updateEntry.
     const withoutReview = withoutReviewOfBody(body);
     // What the write claims about where its translated values came from,
@@ -25585,6 +25696,12 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code; see createEntryWrite.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
       executor: tx.getDrizzle(),
+    });
+    // The row is read, through this process's tables, to be removed: readied as any read is.
+    await refuseReadOverLeftSave({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: params.collectionName,
     });
     // True only in the window between the row delete and the outbox insert: a
     // failure there has left this shared transaction with a delete but no event,

@@ -13,12 +13,17 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { isProductionRuntime } from "../../../shared/builder-refusal";
 import type { BusyTableBounds } from "../busy-table/bounds";
 import { commandWriterHold } from "../migrate-create/writer-hold";
 import { withMigrateLock } from "../pipeline/locks";
 
 import { refuseWhileSaveInProgress } from "./save-in-progress";
-import { settleLeftSaves, type SettleDeps } from "./settle-left-save";
+import {
+  saveFilesPresent,
+  settleLeftSaves,
+  type SettleDeps,
+} from "./settle-left-save";
 import { settleRegistryWriter } from "./settle-registry";
 
 /** Where `nextly migrate` runs, as its settle needs it. */
@@ -75,6 +80,7 @@ export async function settleBeforeMigrate(
   await refuseWhileSaveInProgress(args.adapter, {
     allow: pending,
     notice: line => args.logger.warn(line),
+    filesHere: record => saveFilesPresent(args, record),
   });
   return {
     pending,
@@ -87,13 +93,14 @@ export async function settleBeforeMigrate(
  * after the settle above let the lock go refuses the run as one standing before it would.
  */
 export function recheckBeforeFiles(
-  args: Pick<MigrateSettleArgs, "adapter" | "logger">,
+  args: Pick<MigrateSettleArgs, "adapter" | "logger" | "migrationsDir">,
   settled: MigrateSettled
 ): () => Promise<void> {
   return () =>
     refuseWhileSaveInProgress(args.adapter, {
       allow: settled.pending,
       notice: line => args.logger.warn(line),
+      filesHere: record => saveFilesPresent(args, record),
     });
 }
 
@@ -136,6 +143,12 @@ async function settleHeld(args: MigrateSettleArgs, only?: ReadonlySet<string>) {
           logger: args.logger,
           keepPending: true,
           byFiles: true,
+          // A save stopped inside its file on MySQL is settled here as a development start settles
+          // it, the file written for what applied, the stopped one kept set aside, never removed.
+          // In production the folder is a deployed one, written under no running server: the save
+          // stays, and the run refuses over it, naming it.
+          stopsLeft: isProductionRuntime(),
+          keepsStoppedAside: true,
           ...(only === undefined ? {} : { only }),
           writeRegistry: settleRegistryWriter(args.adapter),
         }),

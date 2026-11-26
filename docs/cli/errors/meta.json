@@ -17,6 +17,7 @@
     "builder-migration-snapshot-missing",
     "builder-relation-target-unknown",
     "builder-save-earlier-left",
+    "builder-save-field-unsettled",
     "builder-save-left-part-way",
     "builder-save-record-unreadable",
     "builder-slug-collision",

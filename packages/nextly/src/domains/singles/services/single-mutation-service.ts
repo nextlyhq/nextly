@@ -227,6 +227,10 @@ import {
   splitSharedStructure,
 } from "../../i18n/shared-structure";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import {
+  refuseWriteOverLeftSave,
+  writtenKeys,
+} from "../../schema/builder-save/left-save-fields";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
@@ -2631,6 +2635,14 @@ export class SingleMutationService extends BaseService {
     // Refused first when the Single is removed from code, before any hook or
     // read of its document, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("single", slug);
+    // Refused too, with nothing written, where a Builder save left part-way holds a field the
+    // write sets.
+    await refuseWriteOverLeftSave({
+      adapter: this.adapter,
+      kind: "single",
+      slug,
+      data,
+    });
     // Judged against the version the caller read, when it sent one: decided
     // here, before the version and `_overwrite` are dropped below. A release
     // run's own write is exempt, and nothing a caller sends can make it so.
@@ -3913,6 +3925,19 @@ export class SingleMutationService extends BaseService {
             if (committed) {
               existingDoc = committed;
             } else {
+              // The document as first written, its defaults included: a field a Builder save
+              // left part-way holds is refused before it is inserted.
+              await refuseWriteOverLeftSave({
+                adapter: this.adapter,
+                kind: "single",
+                slug,
+                data: writtenKeys({
+                  ...pendingAutoCreateValues,
+                  ...pendingLocalizedDefaults,
+                }),
+                tx: tx.getDrizzle(),
+                creates: true,
+              });
               existingDoc = await tx.insert<SingleDocument>(
                 singleMeta.tableName,
                 pendingAutoCreateValues,
@@ -4803,6 +4828,17 @@ export class SingleMutationService extends BaseService {
             }
           }
           const savedBy = actorForWrite(options.actor, options.user);
+          // The row as it is written, what the hooks added and a promoted draft included: a field
+          // a Builder save left part-way holds is refused before anything of it is written.
+          if (!holdEdit) {
+            await refuseWriteOverLeftSave({
+              adapter: this.adapter,
+              kind: "single",
+              slug,
+              data: writtenKeys(mainPayload),
+              tx: tx.getDrizzle(),
+            });
+          }
           const rows = holdEdit
             ? [existingDoc]
             : await tx.update<SingleDocument>(
@@ -5420,6 +5456,14 @@ export class SingleMutationService extends BaseService {
             );
             // Set only for an overwrite of the language this save judges.
             languageBefore = before;
+            // Its translated values too; see the main row above.
+            await refuseWriteOverLeftSave({
+              adapter: this.adapter,
+              kind: "single",
+              slug,
+              data: writtenKeys(companionData),
+              tx: tx.getDrizzle(),
+            });
             await writeCompanionValues({
               tx,
               dialect: this.adapter.dialect,
@@ -7084,6 +7128,13 @@ export class SingleMutationService extends BaseService {
       // Refused first when the Single is removed from code, before any read
       // of its document, so a refused write changes nothing.
       await refuseWriteIfRemovedFromCode("single", slug);
+      // And where a Builder save left part-way holds the field it rewrites.
+      await refuseWriteOverLeftSave({
+        adapter: this.adapter,
+        kind: "single",
+        slug,
+        data: { [call.request.field]: true },
+      });
       check = versionCheckFor(versionBodyOf(call.request), { exempt: false });
       const singleMeta = await resolveSingleForRequest(
         this.adapter,
