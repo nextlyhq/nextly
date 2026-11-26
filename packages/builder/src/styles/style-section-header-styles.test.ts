@@ -713,11 +713,22 @@ describe("the inspector's Content, Style and Advanced tabs", () => {
     );
   });
 
-  it("outlines the open tab in forced colours", () => {
+  it("outlines the open tab in forced colours, leaving its focus ring to focus", () => {
     // Forced colours drop the surface and the shadow; the outline is named in
-    // a system colour so the open tab stays marked.
+    // a system colour so the open tab stays marked, and gives way to the 2px
+    // focus ring while the tab has keyboard focus.
     expect(FLAT).toContain(
-      '@media (forced-colors: active) { .nx-inspector__tab[data-state="active"] { outline: 1px solid CanvasText; outline-offset: -1px; } }'
+      '@media (forced-colors: active) { .nx-inspector__tab[data-state="active"]:not(:focus-visible) { outline: 1px solid CanvasText; outline-offset: -1px; } }'
+    );
+  });
+
+  it("places a tab's match count from its label, not from the equal-width tab", () => {
+    expect(ruleBody(".nx-inspector__tab-label")).toContain(
+      "position: relative"
+    );
+    expect(ruleBody(".nx-inspector__tab")).not.toContain("position: relative");
+    expect(ruleBody(".nx-inspector__tab-count")).toContain(
+      "position: absolute"
     );
   });
 });

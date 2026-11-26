@@ -615,8 +615,6 @@
  * tall as the track inside it, so the whole share answers a click.
  */
 .nx-inspector__tab {
-  /* The match count is set over the label's end. */
-  position: relative;
   flex: 1 1 0;
   min-width: 0;
   height: auto;
@@ -633,6 +631,15 @@
 
 .nx-inspector__tab:hover {
   color: var(--nx-foreground);
+}
+
+/*
+ * The label and its match count, which is set over the label's end: the
+ * label, not the equal-width tab, is what the count is placed from, so it
+ * sits beside its own tab's words, never over the next tab.
+ */
+.nx-inspector__tab-label {
+  position: relative;
 }
 
 /*
@@ -655,9 +662,12 @@
   outline-offset: 1px;
 }
 
-/* Forced colours drop the surface and the shadow: the open tab is outlined. */
+/*
+ * Forced colours drop the surface and the shadow: the open tab is outlined,
+ * except while it has keyboard focus, which keeps its own 2px ring.
+ */
 @media (forced-colors: active) {
-  .nx-inspector__tab[data-state="active"] {
+  .nx-inspector__tab[data-state="active"]:not(:focus-visible) {
     outline: 1px solid CanvasText;
     outline-offset: -1px;
   }

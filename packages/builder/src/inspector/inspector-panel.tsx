@@ -486,8 +486,11 @@ function InspectorTabs({
           value={tab.value}
           className="nx-inspector__tab"
         >
-          {tab.label}
-          <TabCount tab={tab.value} />
+          {/* The count is placed from the label, not the equal-width tab. */}
+          <span className="nx-inspector__tab-label">
+            {tab.label}
+            <TabCount tab={tab.value} />
+          </span>
         </TabsTrigger>
       ))}
     </TabsList>
