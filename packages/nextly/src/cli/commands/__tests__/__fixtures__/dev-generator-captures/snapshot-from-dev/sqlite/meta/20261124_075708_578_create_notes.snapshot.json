@@ -1,0 +1,206 @@
+{
+  "entities": {
+    "collections": {
+      "rtl_notes": {
+        "settings": {
+          "admin": {
+            "pagination": {
+              "defaultLimit": 10,
+              "limits": [
+                10,
+                25,
+                50,
+                100
+              ]
+            }
+          },
+          "fields": [
+            {
+              "label": "Slug",
+              "localized": false,
+              "name": "slug",
+              "required": true,
+              "type": "text",
+              "unique": true
+            },
+            {
+              "name": "title",
+              "type": "text"
+            },
+            {
+              "name": "heading",
+              "type": "text"
+            },
+            {
+              "name": "note",
+              "type": "text"
+            }
+          ],
+          "labels": {
+            "plural": "Rtl Notes",
+            "singular": "Rtl Notes"
+          },
+          "slug": "rtl_notes",
+          "timestamps": true
+        },
+        "source": "code"
+      }
+    },
+    "fieldGroups": {},
+    "singles": {}
+  },
+  "migration": "20261124_075708_578_create_notes",
+  "migrationHash": "e37bd764a9ec6ccb1edffa4c118c9f60134848efbb94f064ca102a17b4df095c",
+  "parent": null,
+  "permissions": {
+    "app": {},
+    "collections": {
+      "rtl_notes": {
+        "create-rtl_notes": {
+          "action": "create",
+          "danger": false,
+          "description": "Permission to create rtl_notes",
+          "group": null,
+          "name": "Create Rtl_notes",
+          "resource": "rtl_notes"
+        },
+        "delete-rtl_notes": {
+          "action": "delete",
+          "danger": false,
+          "description": "Permission to delete rtl_notes",
+          "group": null,
+          "name": "Delete Rtl_notes",
+          "resource": "rtl_notes"
+        },
+        "publish-rtl_notes": {
+          "action": "publish",
+          "danger": false,
+          "description": "Permission to publish rtl_notes",
+          "group": null,
+          "name": "Publish Rtl_notes",
+          "resource": "rtl_notes"
+        },
+        "read-rtl_notes": {
+          "action": "read",
+          "danger": false,
+          "description": "Permission to read rtl_notes",
+          "group": null,
+          "name": "Read Rtl_notes",
+          "resource": "rtl_notes"
+        },
+        "unpublish-rtl_notes": {
+          "action": "unpublish",
+          "danger": false,
+          "description": "Permission to unpublish rtl_notes",
+          "group": null,
+          "name": "Unpublish Rtl_notes",
+          "resource": "rtl_notes"
+        },
+        "update-rtl_notes": {
+          "action": "update",
+          "danger": false,
+          "description": "Permission to update rtl_notes",
+          "group": null,
+          "name": "Update Rtl_notes",
+          "resource": "rtl_notes"
+        }
+      }
+    },
+    "plugins": {},
+    "singles": {}
+  },
+  "snapshot": {
+    "tables": [
+      {
+        "columns": [
+          {
+            "name": "_changed_at",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "name": "_changed_by_id",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "_changed_by_kind",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "_changed_by_principal_kind",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "default": "1",
+            "name": "_revision",
+            "nullable": false,
+            "type": "integer"
+          },
+          {
+            "default": "(strftime('%s', 'now'))",
+            "name": "created_at",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "name": "created_by",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "id",
+            "nullable": false,
+            "primaryKey": true,
+            "type": "text"
+          },
+          {
+            "name": "slug",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "default": "(strftime('%s', 'now'))",
+            "name": "updated_at",
+            "nullable": true,
+            "type": "integer"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "created_at"
+            ],
+            "name": "idx_dc_rtl_notes_created_at",
+            "unique": false
+          },
+          {
+            "columns": [
+              "created_by"
+            ],
+            "name": "idx_dc_rtl_notes_created_by",
+            "unique": false
+          },
+          {
+            "columns": [
+              "slug"
+            ],
+            "name": "idx_dc_rtl_notes_slug",
+            "unique": true
+          }
+        ],
+        "localized": true,
+        "localizedColumns": [
+          "heading",
+          "note",
+          "title"
+        ],
+        "name": "dc_rtl_notes"
+      }
+    ]
+  },
+  "translatedFieldsRecorded": true,
+  "version": 1
+}

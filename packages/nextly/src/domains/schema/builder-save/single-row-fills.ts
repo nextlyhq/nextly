@@ -90,6 +90,10 @@ function singleRowFills(args: {
  * themselves, whose answer wins. The push takes the person's answers, with a required field's
  * fill given as an answer would be, since the push asks only a required field's rows; an optional
  * field's fill reaches the row by the file alone.
+ *
+ * A field whose values are kept per language has no column on the main row: its fill gives the
+ * document's default-language row in the translations table the default, in the file and after
+ * the push alike (`perLanguageSettleStatements`), and is never one of the push's own answers.
  */
 export function dialogRowAnswers(args: {
   /** The Single as stored before the save: its table and its fields. */
@@ -122,7 +126,7 @@ export function dialogRowAnswers(args: {
     })
   );
   // A translated field's values live in the translations table, one row per language, so the
-  // main row takes no fill for it.
+  // push's answers, asked of the main row's columns, take no fill for it.
   const translated = new Set(
     resolveLocalizedFieldNames([...args.fields], args.translatedAfter)
   );
@@ -138,7 +142,6 @@ export function dialogRowAnswers(args: {
     // Only an answer the person gave, in either shape, never a member every object inherits
     // (`constructor`).
     fill =>
-      !translated.has(fill.field) &&
       !Object.hasOwn(answered, fill.field) &&
       !answeredColumns.has(toSnakeCase(fill.field))
   );
@@ -153,7 +156,8 @@ export function dialogRowAnswers(args: {
   // rows), so it leaves a unique field to the person, as before the row was filled; the file
   // fills it, since one row cannot repeat a value.
   const onPush = rowFills.filter(
-    fill => byName.get(fill.field)?.unique !== true
+    fill =>
+      !translated.has(fill.field) && byName.get(fill.field)?.unique !== true
   );
   const pushAnswers: Record<string, LegacyFieldResolution> = {
     ...Object.fromEntries(

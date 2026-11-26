@@ -1,9 +1,11 @@
 /**
  * What a deleted entity leaves in the tables every entity shares, removed by
  * `nextly migrate` once the entity is gone: its field-group values (rows of
- * the shared `comp_*` tables whose parent is the entity's table) and its
+ * the shared `comp_*` tables whose parent is the entity's table), its
  * translation rows outside its translations table (archived translations,
- * translation provenance and its translation transition record).
+ * translation provenance and its translation transition record) and its
+ * documents' review states, which no foreign key ties to them and which would
+ * otherwise be followed as a document's that is there.
  *
  * The Builder's delete in development removes these before it drops the
  * entity's tables. A deployed database receives the delete as a migration
@@ -23,9 +25,11 @@
  * @module domains/schema/migrate/dropped-entity-leftovers
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
+import { REVIEW_STATES_TABLE } from "../../../schemas/review-states";
 import type { Logger } from "../../../shared/types";
 import { teardownAdapterIn } from "../../collections/services/teardown-adapter-in-transaction";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
@@ -37,6 +41,7 @@ import {
   removeEntityTranslationRows,
 } from "../../i18n/migration/entity-translation-rows";
 import { dropTranslationsTable } from "../../i18n/migration/teardown-entity-i18n";
+import { deleteEntityReviewStates } from "../../workflows/review-state-repository";
 import { recordedEntityTable } from "../migrate-create/dropped-translations";
 import type {
   EntitySettingsRecord,
@@ -46,7 +51,12 @@ import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import { readForeignKeyTargets } from "../pipeline/live-table-facts";
 import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 
-import { droppedEntities, RECORDED_KINDS } from "./registry-history";
+import {
+  droppedEntities,
+  noSlugs,
+  RECORDED_KINDS,
+  type SlugsByKind,
+} from "./registry-history";
 import { endsTheRun, reachStopPoint } from "./stop-points";
 
 /** One dropped entity whose leftovers may remain, with every table it was recorded with. */
@@ -110,6 +120,8 @@ export async function removeDroppedEntityLeftovers(args: {
     await assertSchemaLockHeld();
     await ensureI18nArchive(adapter, adapter.dialect);
   }
+  // Asked before the transactions: a statement naming a missing table aborts one on PostgreSQL.
+  const reviewed = await adapter.tableExists(REVIEW_STATES_TABLE);
   for (const entity of gone) {
     await assertSchemaLockHeld();
     const word = KIND_WORDS[entity.kind];
@@ -151,8 +163,10 @@ export async function removeDroppedEntityLeftovers(args: {
         await reachStopPoint(
           `${entity.kind} ${entity.slug}: removed translationRows`
         );
+        const reviews = reviewed ? await removeReviewStates(tx, entity) : 0;
         return {
           values,
+          reviews,
           translations:
             translations.archiveRowsPurged +
             translations.provenanceRowsPurged +
@@ -162,14 +176,16 @@ export async function removeDroppedEntityLeftovers(args: {
       });
       // The entity's transaction has committed (`stop-points.ts`).
       await reachStopPoint(`${entity.kind} ${entity.slug}: removed leftovers`);
-      if (removed.values + removed.translations + dropped.length === 0) {
-        continue;
-      }
+      const rows = removed.values + removed.translations + removed.reviews;
+      if (rows + dropped.length === 0) continue;
       removedFrom.push(
         removedLine(word, entity.slug, [
           ...droppedParts(dropped),
           plural(removed.values, "field group value"),
           plural(removed.translations, "translation row"),
+          ...(removed.reviews > 0
+            ? [plural(removed.reviews, "review state")]
+            : []),
         ])
       );
     } catch (error) {
@@ -189,6 +205,15 @@ export async function removeDroppedEntityLeftovers(args: {
     }
   }
   return { removed: removedFrom, left };
+}
+
+/** Removes the review state of every document of a dropped collection or Single, as each one's delete does. */
+async function removeReviewStates(
+  tx: TransactionContext,
+  { kind, slug }: DroppedEntity
+): Promise<number> {
+  if (kind === "fieldGroup") return 0;
+  return deleteEntityReviewStates(tx, { scopeKind: kind, scopeSlug: slug });
 }
 
 /**
@@ -354,6 +379,45 @@ export function tablesHeldBy(record: EntitySettingsRecord): Set<string> {
     }
   }
   return tables;
+}
+
+/**
+ * Whether a registry row of an entity an applied migration dropped still stands: its removal was
+ * stopped, and a registry write owes it. One that cannot be read is not counted.
+ */
+export async function droppedRegistryRowStands(args: {
+  adapter: DrizzleAdapter;
+  chain: readonly EntitySettingsRecord[];
+}): Promise<boolean> {
+  const dropped = droppedEntities(args.chain);
+  for (const [kind] of RECORDED_KINDS) {
+    for (const slug of dropped[kind]) {
+      if (await readRegistryHolds(args.adapter, kind, "slug", slug))
+        return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The collections and Singles an applied migration dropped whose registry row is gone. A permission
+ * the slug's other entity still declares is kept by the newest record (`leftoverOrphanScopeOf`). One
+ * whose registry cannot be read counts as registered.
+ */
+export async function droppedAndUnregistered(args: {
+  adapter: DrizzleAdapter;
+  chain: readonly EntitySettingsRecord[];
+}): Promise<SlugsByKind> {
+  const dropped = droppedEntities(args.chain);
+  const gone = noSlugs();
+  for (const kind of ["collection", "single"] as const) {
+    for (const slug of dropped[kind]) {
+      if (isReservedResourceSlug(slug)) continue;
+      if (await registryHolds(args.adapter, kind, "slug", slug)) continue;
+      gone[kind].add(slug);
+    }
+  }
+  return gone;
 }
 
 /**
