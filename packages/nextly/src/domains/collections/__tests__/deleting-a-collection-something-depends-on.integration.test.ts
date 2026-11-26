@@ -34,6 +34,7 @@ import { dispatchCollections } from "../../../dispatcher/handlers/collection-dis
 import { NextlyError } from "../../../errors/nextly-error";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { definePlugin } from "../../../plugins/plugin-context";
+import { col } from "../../schema/extension/dsl";
 import {
   createTestNextly,
   type TestDialect,
@@ -809,6 +810,45 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     expectNamesTheMarker(refusal.publicMessage, before.indexes);
     expect(await markerState(t)).toEqual(before);
     expect(await tagsState(t, false)).toEqual(INTACT);
+  }, 120_000);
+
+  it("prunes a removed plugin's collection on whose table the same plugin added a hidden column and index, dropping them with it", async () => {
+    // The plugin that declares TAGS adds the column and index to it too: they are its own, and
+    // go with its collection. Another owner's on the same table refuses (the case above).
+    current = await createTestNextly({
+      dialect,
+      plugins: [
+        definePlugin({
+          name: "@t/dep-tags-and-marker",
+          version: "1.0.0",
+          nextly: ">=0.0.0",
+          contributes: {
+            collections: [plainTags],
+            schema: {
+              extend: [
+                ({ schema }) => {
+                  schema.extendTable(TAGS_TABLE, {
+                    columns: {
+                      [MARKER_COLUMN]: col.shortText({ nullable: true }),
+                    },
+                    indexes: [{ columns: [MARKER_COLUMN] }],
+                  });
+                },
+              ],
+            },
+          },
+        }),
+      ],
+    });
+    await current.nextly.create({ collection: TAGS, data: { label: "kept" } });
+    // The control: the column and index are there, recorded as the plugin's.
+    expect((await markerState(current)).indexes).toHaveLength(1);
+
+    const result = await prune(current, []);
+
+    expect([...result.dropped]).toEqual([TAGS]);
+    expect(await current.adapter.tableExists(TAGS_TABLE)).toBe(false);
+    expect(await registryOf(current).getCollectionBySlug(TAGS)).toBeNull();
   }, 120_000);
 
   it("prunes orphans that point only at each other, dropping every one", async () => {

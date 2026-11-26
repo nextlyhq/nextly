@@ -197,7 +197,6 @@ const pluggedWith = (withPlugin: boolean, withCode: boolean) =>
 const CONTRIBUTED = {
   column: "mko_stamp",
   enumColumn: "mko_stage",
-  later: "mko_later",
   groupIndex: "idx_mko_rank",
   userColumn: "mko_note",
 };
@@ -206,9 +205,7 @@ const CONTRIBUTED = {
  * The plugin, adding to a collection's table, a field group's and a core table, as its schema hook
  * declares it: hidden columns, the check an enum column implies, and indexes.
  */
-const contributing = (
-  adds: { stamp?: boolean; later?: boolean } = { stamp: true }
-) =>
+const contributing = (adds: { stamp?: boolean } = { stamp: true }) =>
   definePlugin({
     name: PLUGIN,
     version: "1.0.0",
@@ -221,9 +218,6 @@ const contributing = (
               columns: {
                 ...(adds.stamp === true
                   ? { [CONTRIBUTED.column]: col.shortText({ nullable: true }) }
-                  : {}),
-                ...(adds.later === true
-                  ? { [CONTRIBUTED.later]: col.shortText({ nullable: true }) }
                   : {}),
                 [CONTRIBUTED.enumColumn]: col.enum(["open", "done"], {
                   nullable: true,
@@ -263,6 +257,41 @@ const extendedWith = (plugin: ReturnType<typeof contributing> | undefined) =>
         ],
       }),
     ],
+    db: { migrationsDir: "./migrations" },
+  });
+
+/** A plugin adding a hidden column to the collection's table while the table is there. */
+const whileThere = definePlugin({
+  name: PLUGIN,
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  contributes: {
+    schema: {
+      extend: [
+        ({ schema }) => {
+          if (schema.getTable(TABLE) === undefined) return;
+          schema.extendTable(TABLE, {
+            columns: { mko_note: col.shortText({ nullable: true }) },
+          });
+        },
+      ],
+    },
+  },
+});
+
+/** The app's configuration with that plugin or not, and with the collection or not. */
+const holdingWith = (withPlugin: boolean, withCollection: boolean) =>
+  defineConfig({
+    ...(withPlugin ? { plugins: [whileThere] } : {}),
+    collections: withCollection
+      ? [
+          defineCollection({
+            slug: SLUG,
+            access: { read: () => true },
+            fields: [text({ name: "title" })],
+          }),
+        ]
+      : [],
     db: { migrationsDir: "./migrations" },
   });
 
@@ -1238,35 +1267,6 @@ describe.each(getConfiguredTestDialects())(
       expect(await writtenAt(url)).toEqual(written);
     });
 
-    it("nextly migrate keeps the row of a declared column no file has made yet, and of what a removed plugin left; it drops the row of what is in neither", async () => {
-      const url = await emptyDatabase();
-      use(url);
-      wentThrough(
-        await migrateCreate("add_posts", extendedWith(contributing()))
-      );
-      wentThrough(await migrate(extendedWith(contributing())));
-      const names = async () =>
-        (await pluginRows(url)).map(row => row.elementName);
-
-      // Declared, and no file made it: the row says whose it will be.
-      wentThrough(
-        await migrate(extendedWith(contributing({ stamp: true, later: true })))
-      );
-      expect((await shapeOf(url, TABLE)).columns).not.toContain(
-        CONTRIBUTED.later
-      );
-      expect(await names()).toContain(CONTRIBUTED.later);
-
-      // Declared no more, and never made.
-      wentThrough(await migrate(extendedWith(contributing())));
-      expect(await names()).not.toContain(CONTRIBUTED.later);
-
-      // The plugin gone from the configuration, its parts still there.
-      wentThrough(await migrate(extendedWith(undefined)));
-      expect(await names()).toContain(CONTRIBUTED.column);
-      expect((await shapeOf(url, TABLE)).columns).toContain(CONTRIBUTED.column);
-    });
-
     it("nextly migrate applies a file dropping a column the plugin stopped declaring from the app's own table, and drops its row", async () => {
       const url = await emptyDatabase();
       use(url);
@@ -1334,6 +1334,26 @@ describe.each(getConfiguredTestDialects())(
         expect(ran.said).toContain(part);
       }
       expect(await shapeOf(url, TABLE)).toEqual(before);
+    });
+
+    it("migrate:create refuses removing a collection whole while a removed plugin's column is on its table, writing nothing", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      wentThrough(await migrateCreate("add_posts", holdingWith(true, true)));
+      wentThrough(await migrate(holdingWith(true, true)));
+      const written = files();
+
+      const created = await migrateCreate(
+        "remove_posts",
+        holdingWith(false, false)
+      );
+
+      expect(created.code, created.said).not.toBe(undefined);
+      for (const part of [PLUGIN, "mko_note", TABLE]) {
+        expect(created.said).toContain(part);
+      }
+      expect(files()).toEqual(written);
+      expect((await shapeOf(url, TABLE)).columns).toContain("mko_note");
     });
 
     it("migrate:create writes the file and says it was not checked where no database is there", async () => {

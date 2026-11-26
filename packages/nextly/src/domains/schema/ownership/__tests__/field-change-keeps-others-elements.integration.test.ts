@@ -49,6 +49,7 @@ import {
   readIndexNames,
 } from "../../pipeline/live-table-facts";
 import { junctionTableNameFor } from "../../services/field-column-descriptor";
+import { col } from "../../extension/dsl";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 import { CollectionRegistryService } from "../../../collections/services/collection-registry-service";
 import { definePlugin } from "../../../../plugins/plugin-context";
@@ -1037,6 +1038,136 @@ describe.each(getConfiguredTestDialects())(
       expectNamesTheElement(refused, { field: "code", kind: "index", table });
       expect((refused as NextlyError).publicMessage).toContain(index);
       expect(await indexesOf(t, table)).toContain(index);
+    });
+
+    // A collection pushed with a plugin's hidden column and its index, handed to the Builder, the
+    // plugin then removed. With no migration history the Builder brings the table up to date as
+    // one an earlier version made, and offers to remove the column and its index. They are the
+    // plugin's, not the app's: neither the save as sent nor the same save with every conversion
+    // confirmed may remove them, and each answer names the plugin.
+    it("never removes a removed plugin's column as a table an earlier version made, its conversions confirmed or not", async () => {
+      const slug = "fco_converted";
+      const table = `dc_${slug}`;
+      const index = "idx_fco_converted_marker";
+      const url = await databaseFor(dialect);
+      const coded = defineCollection({
+        slug,
+        fields: [number({ name: "code" })],
+      });
+      const adding = definePlugin({
+        name: PLUGIN,
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          schema: {
+            extend: [
+              ({ schema }) => {
+                // Only while the table is there, as a hook over another owner's table does.
+                if (schema.getTable(table) === undefined) return;
+                schema.extendTable(table, {
+                  columns: { [MARKER]: col.shortText({ nullable: true }) },
+                  indexes: [{ columns: [MARKER], name: index }],
+                });
+              },
+            ],
+          },
+        },
+      });
+      const pushed = await startWith(dialect, url, {
+        collections: [coded],
+        plugins: [adding],
+      });
+      await pushed.nextly.create({ collection: slug, data: { code: 1 } });
+      await pushed.adapter.executeQuery(
+        `UPDATE ${q(table)} SET ${q(MARKER)} = 'kept by the plugin'`
+      );
+      const markerOf = async (t: TestNextly) => ({
+        columns: await columnsOf(t, table),
+        indexes: await indexesOf(t, table),
+        values: (
+          await t.adapter.executeQuery<{ v: unknown }>(
+            `SELECT ${q(MARKER)} AS v FROM ${q(table)}`
+          )
+        ).map(row => row.v),
+        files: await filesWritten(),
+      });
+      const before = await markerOf(pushed);
+      // The controls: the push made both, and recorded them as the plugin's.
+      expect(before.columns).toContain(MARKER);
+      expect(before.indexes).toContain(index);
+      expect(before.values).toEqual(["kept by the plugin"]);
+      expect(
+        (
+          await new SchemaOwnersRepository(
+            (pushed.adapter as unknown as DrizzleAdapter).getDrizzle(),
+            dialect
+          ).read([table])
+        )
+          .map(row => `${row.ownerId}:${row.elementKind}:${row.elementName}`)
+          .sort()
+      ).toEqual([`${PLUGIN}:column:${MARKER}`, `${PLUGIN}:index:${index}`]);
+      expect(
+        await demoteCollection({
+          collection: coded as never,
+          logger: createLogger({ quiet: true }),
+          registry: new CollectionRegistryService(
+            pushed.adapter as unknown as DrizzleAdapter,
+            createLogger({ quiet: true }) as never
+          ),
+          adapter: pushed.adapter as unknown as DrizzleAdapter,
+          confirm: async () => true,
+        })
+      ).toBe("demoted");
+      await pushed.destroy();
+
+      const t = await start(dialect, url);
+      clearRegistryRowCache();
+      const fields = [
+        ...(
+          (
+            await t
+              .getService("collectionRegistryService")
+              .getCollectionBySlug(slug)
+          )?.fields ?? []
+        ).map(field => ({ ...field }) as Field),
+        { name: "rank", type: "number" },
+      ];
+      const save = async (extra: Record<string, unknown>) =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: slug },
+          {
+            fields,
+            confirmed: true,
+            schemaVersion: await schemaVersionOf(
+              t,
+              "dynamic_collections",
+              slug
+            ),
+            ...extra,
+          }
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+      const asSent = await save({});
+      expect(NextlyError.is(asSent), String(asSent)).toBe(true);
+      expect((asSent as NextlyError).publicMessage).toContain(PLUGIN);
+      expect(await markerOf(t)).toEqual(before);
+
+      // Every conversion an earlier save could have offered for the table: its index, by the
+      // table's name, and its column.
+      const confirmed = await save({
+        acknowledgedConversions: [table, MARKER],
+      });
+      expectNamesTheElement(confirmed, {
+        field: MARKER,
+        kind: "column",
+        table,
+      });
+      expect(await markerOf(t)).toEqual(before);
     });
   }
 );
