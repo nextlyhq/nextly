@@ -223,10 +223,10 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
         kind: Kind,
         linked: string[]
       ): Promise<void> {
-        const tag = (await t.nextly.create({
+        const tag = await t.nextly.create({
           collection: TAGS,
           data: { title: "t" },
-        } as never)) as { item: { id: unknown } };
+        } as never);
         linked.push(String(tag.item.id));
         if (kind === "Single") {
           const saved = await (
