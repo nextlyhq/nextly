@@ -166,7 +166,9 @@ function walkLinkValue(
   if (typeof value === "number") {
     const id = String(value);
     const next = visitLinkId(id, collection, fieldPath, walk);
-    return next === id ? value : next;
+    if (next === id) return value;
+    // A number stays a number when what replaces it is one too.
+    return /^\d+$/.test(next) ? Number(next) : next;
   }
   if (Array.isArray(value)) {
     return mapItems(value, item =>
@@ -202,7 +204,11 @@ function visitAddress(url: string, fieldPath: string, walk: Walk): string {
   );
 }
 
-/** Every `src` in a rich-text tree, at any depth: image and gallery nodes. */
+/**
+ * Every `src` in a rich-text tree, at any depth (image and gallery nodes),
+ * and every link `url` that names a media item by its route; any other link
+ * names a page, not a file.
+ */
 function walkRichText(value: unknown, fieldPath: string, walk: Walk): unknown {
   if (Array.isArray(value)) {
     return mapItems(value, item => walkRichText(item, fieldPath, walk));
@@ -211,7 +217,9 @@ function walkRichText(value: unknown, fieldPath: string, walk: Walk): unknown {
   let out = value;
   for (const [key, child] of Object.entries(value)) {
     const next =
-      key === "src" && typeof child === "string"
+      typeof child === "string" &&
+      (key === "src" ||
+        (key === "url" && mediaIdOfRouteAddress(child) !== undefined))
         ? visitAddress(child, fieldPath, walk)
         : walkRichText(child, fieldPath, walk);
     out = withKey(out, key, next);
@@ -253,14 +261,26 @@ function walkJsonAddresses(
 }
 
 /**
- * The nodes of a block document that keeps no `assets.mediaIds`: addresses
- * under `src` or `url`, and every other id-shaped string but a node's own
- * `id`, as a likely media item's.
+ * Which strings in a block document's nodes are media items' ids: those its
+ * `assets.mediaIds` lists, where it has the list, which is derived from its
+ * nodes for exactly this; else any id-shaped string, as a likely one.
  */
-function walkUnlistedBlockNodes(
+interface NodeMediaIds {
+  is(value: string): boolean;
+  inferred: boolean;
+}
+
+/**
+ * A block document's nodes: addresses under `src` or `url`, and every other
+ * string that is a media item's id (`ids`) but a node's own `id`. A node holds
+ * its media by id in its props and its bindings' fallbacks, so these move
+ * with the list.
+ */
+function walkBlockNodes(
   value: unknown,
   key: string | null,
   inNode: boolean,
+  ids: NodeMediaIds,
   fieldPath: string,
   walk: Walk
 ): unknown {
@@ -268,20 +288,20 @@ function walkUnlistedBlockNodes(
     if (key === "src" || key === "url") {
       return visitAddress(value, fieldPath, walk);
     }
-    if ((inNode && key === "id") || !MEDIA_ID_SHAPE.test(value)) return value;
+    if ((inNode && key === "id") || !ids.is(value)) return value;
     return (
       walk.answer({
         kind: "link",
         fieldPath,
         collection: MEDIA_COLLECTION,
         id: value,
-        inferred: true,
+        ...(ids.inferred ? { inferred: true as const } : {}),
       }) ?? value
     );
   }
   if (Array.isArray(value)) {
     return mapItems(value, item =>
-      walkUnlistedBlockNodes(item, null, false, fieldPath, walk)
+      walkBlockNodes(item, null, false, ids, fieldPath, walk)
     );
   }
   if (!isRecord(value)) return value;
@@ -291,15 +311,22 @@ function walkUnlistedBlockNodes(
     out = withKey(
       out,
       childKey,
-      walkUnlistedBlockNodes(child, childKey, isNode, fieldPath, walk)
+      walkBlockNodes(child, childKey, isNode, ids, fieldPath, walk)
     );
   }
   return out;
 }
 
+/** Any id-shaped string, for a document that keeps no list. */
+const LIKELY_MEDIA_IDS: NodeMediaIds = {
+  is: value => MEDIA_ID_SHAPE.test(value),
+  inferred: true,
+};
+
 /**
- * A block document: the media its `assets.mediaIds` lists, and the addresses
- * its nodes hold; one with no list has its nodes read for ids as well.
+ * A block document: the media its `assets.mediaIds` lists, and in its nodes
+ * the addresses they hold and the ids of the media the list names; one with
+ * no list has its nodes read for every id-shaped string.
  */
 function walkBlockDocument(
   document: Record<string, unknown>,
@@ -318,16 +345,21 @@ function walkBlockDocument(
       "assets",
       withKey(assets, "mediaIds", mediaIds)
     );
+    // The list as stored, so a node's id is matched against what it named.
+    const listed = new Set(
+      assets.mediaIds.filter((id): id is string => typeof id === "string")
+    );
+    const ids: NodeMediaIds = { is: value => listed.has(value), inferred: false };
     return withKey(
       withAssets,
       "nodes",
-      walkJsonAddresses(document.nodes, null, fieldPath, walk)
+      walkBlockNodes(document.nodes, null, false, ids, fieldPath, walk)
     );
   }
   return withKey(
     document,
     "nodes",
-    walkUnlistedBlockNodes(document.nodes, null, false, fieldPath, walk)
+    walkBlockNodes(document.nodes, null, false, LIKELY_MEDIA_IDS, fieldPath, walk)
   );
 }
 

@@ -143,7 +143,8 @@ describe("relationships", () => {
       ],
       expanded: { id: NEW_B, title: "Bea" },
       built: NEW_C,
-      numbered: "8",
+      // A number stays a number.
+      numbered: 8,
     });
   });
 
@@ -199,8 +200,10 @@ describe("rich text", () => {
             { src: "https://elsewhere.example/c.png" },
           ],
         },
-        // A link names a page, not a file.
+        // A link names a page, not a file...
         { type: "link", url: "https://example.com/about", children: [] },
+        // ...unless it names a media item by its route.
+        { type: "link", url: `/api/media/${C}/raw`, children: [] },
       ],
     },
   };
@@ -218,6 +221,12 @@ describe("rich text", () => {
         kind: "address",
         fieldPath: "body",
         url: "https://elsewhere.example/c.png",
+      },
+      {
+        kind: "address",
+        fieldPath: "body",
+        url: `/api/media/${C}/raw`,
+        mediaId: C,
       },
     ]);
   });
@@ -243,6 +252,9 @@ describe("rich text", () => {
       ],
     });
     expect(rewritten.root.children[2]).toEqual(body.root.children[2]);
+    expect(rewritten.root.children[3]).toMatchObject({
+      url: `/api/media/${NEW_C}/raw`,
+    });
   });
 });
 
@@ -256,7 +268,16 @@ describe("JSON and block documents", () => {
     listed: {
       formatVersion: 1,
       assets: { mediaIds: [A] },
-      nodes: [{ id: NODE_ID, type: "image", props: { src: "/uploads/b.png" } }],
+      nodes: [
+        {
+          id: NODE_ID,
+          type: "image",
+          // A node holds the media the list names by id, in its props and
+          // its bindings' fallbacks; an id the list does not name is not one.
+          props: { src: "/uploads/b.png", image: A, other: B },
+          bindings: { image: { fallback: A } },
+        },
+      ],
     },
     unlisted: {
       formatVersion: 1,
@@ -269,6 +290,8 @@ describe("JSON and block documents", () => {
     expect(listContentReferences(fields, values)).toEqual([
       { kind: "link", fieldPath: "listed", collection: "media", id: A },
       { kind: "address", fieldPath: "listed", url: "/uploads/b.png" },
+      { kind: "link", fieldPath: "listed", collection: "media", id: A },
+      { kind: "link", fieldPath: "listed", collection: "media", id: A },
       // A node's own id is never taken for a media item's.
       {
         kind: "link",
@@ -291,7 +314,14 @@ describe("JSON and block documents", () => {
       listed: {
         formatVersion: 1,
         assets: { mediaIds: [NEW_A] },
-        nodes: [{ id: NODE_ID, type: "image", props: { src: "/files/b.png" } }],
+        nodes: [
+          {
+            id: NODE_ID,
+            type: "image",
+            props: { src: "/files/b.png", image: NEW_A, other: B },
+            bindings: { image: { fallback: NEW_A } },
+          },
+        ],
       },
       unlisted: {
         formatVersion: 1,
