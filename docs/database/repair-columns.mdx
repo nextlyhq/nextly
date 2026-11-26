@@ -176,6 +176,15 @@ npx nextly repair-columns --json
 
 Where more than one holds, 1 comes first, then 3, then 2.
 
+## Where no snapshot says what was applied
+
+A project whose migrations were all written before snapshots recorded the entities (before `0.0.2-alpha.73`) has no snapshot that says what each entity last had applied. The command then reads each entity's registry row, which a start can rewrite from another configuration without changing a table:
+
+- Once `nextly migrate` of `0.0.2-alpha.75` or later has run, the database keeps the registry rows as they stood then. A row that differs from them is not trusted: its entity's columns are reported as `pending a migration`, and none is converted. Run `nextly migrate:create`, then `nextly migrate`: the snapshot it writes says what was applied.
+- Before that, nothing can tell a rewritten row. The command says so once, on standard error, and goes on. Run `nextly migrate` first.
+
+Where the database records that snapshots were written for migrations `nextly migrate:create` wrote, and none that records the entities is left in `meta/`, the command stops with [`MISSING_SNAPSHOT`](/docs/cli/errors/missing-snapshot). Where the newest applied snapshot records no entities and an older one does, it stops with [`SNAPSHOT_WITHOUT_ENTITIES`](/docs/cli/errors/snapshot-without-entities).
+
 ## If it stops
 
 The command stops in these cases, naming what it found and how to put it right:
@@ -187,6 +196,7 @@ The command stops in these cases, naming what it found and how to put it right:
 - [`MISSING_MIGRATION`](/docs/cli/errors/missing-migration)
 - [`MIGRATION_MISSING`](/docs/cli/errors/migration-missing)
 - [`MISSING_SNAPSHOT`](/docs/cli/errors/missing-snapshot)
+- [`SNAPSHOT_WITHOUT_ENTITIES`](/docs/cli/errors/snapshot-without-entities)
 - [`NEXTLY_MIGRATION_PARTIALLY_APPLIED`](/docs/cli/errors/nextly-migration-partially-applied)
 - [`NEXTLY_MIGRATE_LOCK_BUSY`](/docs/cli/errors/nextly-migrate-lock-busy)
 
