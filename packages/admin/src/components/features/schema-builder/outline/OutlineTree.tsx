@@ -24,6 +24,7 @@ import { isPendingDelete } from "@admin/lib/builder/outline/pending-rows";
 import { AddPlace, withAddPlaces, type AddPlaceItem } from "./AddPlace";
 import type { OutlineActions } from "./outline-types";
 import { OutlineRow } from "./OutlineRow";
+import { menuMoveRefusal } from "./OutlineRowMenu";
 
 /** Where a pointer's add place puts the new field. */
 function positionOf(place: AddPlaceItem): FieldInsertPosition {
@@ -112,6 +113,11 @@ export function OutlineTree({
               onToggle={onToggle}
               registerRow={registerRow}
               menuOpen={menuFor === node.id}
+              // Judged here, where each change to what the rule reads redraws the tree: the row
+              // itself is memoized, and its menu would keep what it said when it opened.
+              menuMoveRefusal={
+                menuFor === node.id ? menuMoveRefusal(node, actions) : undefined
+              }
               actions={actions}
             />
           );

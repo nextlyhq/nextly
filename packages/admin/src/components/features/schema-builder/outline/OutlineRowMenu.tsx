@@ -54,13 +54,31 @@ function fieldGroupOf(
   return null;
 }
 
+/**
+ * Why a row stays where it is when the move rule refuses moving it at all, wherever to: a field
+ * group's own field, which changes only in its field group's editor. Undefined for any other row,
+ * or a move the rule would allow. The tree asks it for the row whose menu is open, each time it
+ * draws, so an open menu says what the rule says now.
+ */
+export function menuMoveRefusal(
+  node: OutlineNode,
+  actions: OutlineActions
+): string | undefined {
+  if (!isFieldGroupOwnRow(node)) return undefined;
+  const verdict = actions.judgeMoveTo(node.id, {});
+  return verdict.allowed ? undefined : verdict.message;
+}
+
 export function OutlineRowMenu({
   node,
   open,
+  moveRefusal,
   actions,
 }: {
   node: OutlineNode;
   open: boolean;
+  /** Why the row stays where it is, while its menu is open (`menuMoveRefusal`). */
+  moveRefusal?: string;
   actions: OutlineActions;
 }): JSX.Element {
   const { id, field, readOnly } = node;
@@ -111,12 +129,7 @@ export function OutlineRowMenu({
           </DropdownMenuItem>
         )}
         {readOnly ? (
-          <ReadOnlyItems
-            node={node}
-            readOnly={readOnly}
-            open={open}
-            actions={actions}
-          />
+          <ReadOnlyItems readOnly={readOnly} refused={moveRefusal} />
         ) : (
           <EditableItems node={node} actions={actions} />
         )}
@@ -127,28 +140,17 @@ export function OutlineRowMenu({
 
 /**
  * What a read-only row's menu says after its other items: why it stays as it is. A field group's
- * own field also offers Move to…, disabled, described by the move rule's reason it stays, so a
- * person who looks for it learns why.
+ * own field also offers Move to…, disabled, described by the move rule's reason it stays
+ * (`refused`), so a person who looks for it learns why.
  */
 function ReadOnlyItems({
-  node,
   readOnly,
-  open,
-  actions,
+  refused,
 }: {
-  node: OutlineNode;
   readOnly: NonNullable<OutlineNode["readOnly"]>;
-  open: boolean;
-  actions: OutlineActions;
+  refused: string | undefined;
 }): JSX.Element {
   const reasonId = useId();
-  // Asked only while the menu is open: the rule's reason a field group's own field stays, whatever
-  // place it is moved to.
-  const stays =
-    open && isFieldGroupOwnRow(node)
-      ? actions.judgeMoveTo(node.id, {})
-      : undefined;
-  const refused = stays && !stays.allowed ? stays.message : undefined;
   return (
     <>
       <DropdownMenuSeparator />

@@ -51,6 +51,12 @@ type Props = {
   registerRow: (id: string, element: HTMLElement | null) => void;
   /** Whether the row's menu is open; it opens from its "⋯" or by key. */
   menuOpen: boolean;
+  /**
+   * While the menu is open, why the row stays where it is when the move rule refuses moving it at
+   * all (a field group's own field). Given as a prop, judged afresh by the tree, so an open menu
+   * says what the rule says now, the users of a field group read since it opened among it.
+   */
+  menuMoveRefusal?: string;
   /** What the row's menu can do; the same object for every row. */
   actions: OutlineActions;
 };
@@ -350,7 +356,7 @@ function RowItem({
 }
 
 function OutlineRowView(props: Props): JSX.Element {
-  const { row, draggable, menuOpen, actions } = props;
+  const { row, draggable, menuOpen, menuMoveRefusal, actions } = props;
   // What a drag of the row says it is called: a field group's own field is no field of the
   // entity's, which is where the drag's sentences look a field up, so it carries its own words.
   const sortable = useSortable({
@@ -375,7 +381,12 @@ function OutlineRowView(props: Props): JSX.Element {
       <RowItem {...props} />
       {/* A deleted row offers nothing to do to it until it is back. */}
       {!isPendingDelete(row.node) && (
-        <OutlineRowMenu node={row.node} open={menuOpen} actions={actions} />
+        <OutlineRowMenu
+          node={row.node}
+          open={menuOpen}
+          moveRefusal={menuMoveRefusal}
+          actions={actions}
+        />
       )}
     </div>
   );
