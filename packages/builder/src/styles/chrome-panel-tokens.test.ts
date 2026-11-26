@@ -366,3 +366,66 @@ describe("a picture's frame", () => {
     }
   });
 });
+
+/*
+ * The popups the Add surfaces open: the in-place picker and a tile's card.
+ * Both are portalled out of the chrome into the shell's overlay host, so the
+ * editor tokens they paint with must be ones the host's `.nx-builder-tokens`
+ * scope declares: a token declared only under the chrome resolves to nothing
+ * there, and the picker painted with it was see-through.
+ */
+describe("the popups the Add surfaces open", () => {
+  const ADD_POPUPS = [".nx-insert-picker", ".nx-insert-popover"];
+
+  /** Every rule as its selector and body. */
+  const RULES = [...CHROME.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(match => ({
+    selector: (match[1] ?? "").replace(/\s+/g, " ").trim(),
+    body: match[2] ?? "",
+  }));
+
+  /** The editor tokens a scope declares, from every rule listing it. */
+  const declaredUnder = (scope: string): Set<string> => {
+    const names = new Set<string>();
+    for (const rule of RULES) {
+      const listed = rule.selector.split(",").map(part => part.trim());
+      if (!listed.includes(scope)) continue;
+      for (const name of declarations(rule.body).keys()) names.add(name);
+    }
+    return names;
+  };
+
+  it("reads only editor tokens the overlay host's scope declares", () => {
+    const declared = declaredUnder(".nx-builder-tokens");
+    const read = new Set<string>();
+    for (const rule of RULES) {
+      if (!ADD_POPUPS.some(popup => rule.selector.includes(popup))) continue;
+      for (const match of rule.body.matchAll(/var\((--nx-builder-[\w-]+)/g)) {
+        read.add(match[1] ?? "");
+      }
+    }
+    // The control: the picker does paint with editor tokens.
+    expect(read.has("--nx-builder-panel")).toBe(true);
+    expect([...read].filter(name => !declared.has(name))).toEqual([]);
+  });
+
+  it.each(["light", "dark"] as const)(
+    "paints both on an opaque panel surface in the %s theme",
+    theme => {
+      for (const [selector, prelude] of [
+        [".nx-insert-picker", /^\.nx-insert-picker\.nx-insert-picker\s*\{/m],
+        [".nx-insert-popover", /^\.nx-insert-popover\.nx-insert-popover\s*\{/m],
+      ] as const) {
+        const background = /background:\s*([^;]+);/.exec(
+          ruleBody(CHROME, prelude)
+        )?.[1];
+        expect(background, selector).toBeDefined();
+        // Resolved through the tokens to the theme's own surface colour,
+        // which a see-through value never reaches.
+        expect(lightness(background ?? "", theme), selector).toBeGreaterThan(
+          0.1
+        );
+        expect(background, selector).not.toMatch(/transparent/);
+      }
+    }
+  );
+});

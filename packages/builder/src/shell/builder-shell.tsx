@@ -582,11 +582,16 @@ export function BuilderShell({
                * what `inert` follows, and nothing here creates a containing
                * block, so the fixed-position content each overlay renders is
                * still positioned against the viewport.
+               *
+               * It is also the editor's token scope for what it holds: outside
+               * the chrome, `var(--nx-builder-panel)` and the other editor
+               * tokens resolve to nothing, and a popup painted with them (the
+               * Add picker) is see-through over the page beneath it.
                */}
               <div
                 ref={setOverlayHost}
                 data-slot="builder-overlay-host"
-                className="absolute h-0 w-0"
+                className="nx-builder-tokens absolute h-0 w-0"
               />
               {/*
                * `null` until the host mounts, which `usePortalContainer` reads

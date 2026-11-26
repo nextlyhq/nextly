@@ -258,7 +258,7 @@
 }
 
 /*
- * Tiles, three to a row.
+ * Tiles, two to a row.
  *
  * The count comes from the panel as `--nx-insert-columns` rather than being
  * spelled here, so the layout has one source.
@@ -276,8 +276,8 @@
  *
  * `minmax(0, 1fr)` rather than `1fr`. A grid track's default minimum is its
  * content, so a block whose name has no break opportunity — a plugin naming
- * one "CollectionLoop" — would push its column wider than a third and squeeze
- * the other two rather than wrapping.
+ * one "CollectionLoop" — would push its column wider than half and squeeze
+ * the other rather than wrapping.
  */
 .nx-insert-panel [cmdk-group-items] {
   display: grid;
@@ -288,17 +288,20 @@
 
 .nx-insert-panel__label {
   display: block;
+  min-width: 0;
   font-size: 0.71875rem;
   font-weight: 500;
   line-height: 1.2;
-  text-align: center;
-  color: var(--nx-foreground);
+  text-align: inherit;
+  color: inherit;
   /*
-   * Broken anywhere rather than at spaces only. A tile is about 86px at the
-   * panel's default width, which is narrower than several block names, and a
-   * name that cannot break overflows its tile instead of wrapping inside it.
+   * Broken between words only: "Table of" over "contents", never "Table of
+   * conten" over "ts". Two to a row leaves each name room for its longest
+   * word at the panel's narrowest width.
    */
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: manual;
 }
 
 /*
@@ -438,12 +441,13 @@
  */
 .nx-insert-panel [cmdk-item][data-refused="true"] {
   border-style: dashed;
-  color: var(--nx-muted-foreground);
+  color: var(--nx-foreground);
   cursor: not-allowed;
 }
 
-.nx-insert-panel [cmdk-item][data-refused="true"] .nx-block-icon {
-  opacity: 0.45;
+.nx-insert-panel [cmdk-item][data-refused="true"] > .nx-block-icon {
+  color: var(--nx-muted-foreground);
+  background: var(--nx-muted);
 }
 
 .nx-insert-panel [cmdk-item][data-refused="true"]:hover,
@@ -455,6 +459,36 @@
 
 .nx-insert-panel .nx-block-icon {
   flex: none;
+}
+
+/*
+ * A block's tile: its mark to the left of its name, in a row. Only a tile
+ * with a mark: a saved section's tile draws its picture above its name, in
+ * the column every tile above lays out.
+ */
+.nx-insert-panel [cmdk-item]:has(> .nx-block-icon) {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0.375rem 0.5rem;
+  text-align: start;
+}
+
+/* The mark in a soft square of the accent, the size of the name's two lines. */
+.nx-insert-panel [cmdk-item] > .nx-block-icon {
+  display: grid;
+  place-items: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 0.375rem;
+  color: var(--nx-primary);
+  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
+}
+
+.nx-insert-panel [cmdk-item] > .nx-block-icon svg {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 /*
