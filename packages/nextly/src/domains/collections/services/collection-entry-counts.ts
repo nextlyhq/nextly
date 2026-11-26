@@ -5,9 +5,11 @@
  *
  * @module domains/collections/services/collection-entry-counts
  */
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { type SQL, sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { mysqlTableStandsQuery } from "../../schema/builder-save/deletion-counts";
 
 /** How many entries of `collection` the person confirmed deleting, as its review showed them. */
 export interface ConfirmedEntries {
@@ -86,11 +88,16 @@ export async function reviewedEntries(
  * through `db`, the delete's transaction once it holds the registry rows, so no entry write lands
  * between this count and the removal. Without confirmed counts (a caller that sends none) nothing
  * is compared, as before.
+ *
+ * On MySQL a delete stopped part way keeps the table drops that ran, with every registry row still
+ * there: a collection whose table no longer stands holds no entries to count, so it is passed over,
+ * and the delete sent again finishes.
  */
 export async function refuseEntriesChanged(
   db: RunsStatements,
   collections: readonly CountedCollection[],
-  confirmed: readonly ConfirmedEntries[] | undefined
+  confirmed: readonly ConfirmedEntries[] | undefined,
+  dialect: SupportedDialect
 ): Promise<void> {
   if (confirmed === undefined) return;
   const confirmedOf = new Map(
@@ -102,6 +109,12 @@ export async function refuseEntriesChanged(
     confirmedCount: number;
   }> = [];
   for (const { slug, tableName } of collections) {
+    if (dialect === "mysql") {
+      const [stands] = await db.queryStatement<{ count: unknown }>(
+        mysqlTableStandsQuery(tableName)
+      );
+      if (Number(stands?.count) === 0) continue;
+    }
     const counted = await countEntries(db, tableName);
     const confirmedCount = confirmedOf.get(slug) ?? 0;
     if (counted !== confirmedCount) {

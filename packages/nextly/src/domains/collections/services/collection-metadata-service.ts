@@ -2123,7 +2123,8 @@ export class CollectionMetadataService extends BaseService {
                 slug,
                 tableName: collection.tableName,
               })),
-              confirmedEntries
+              confirmedEntries,
+              this.dialect
             );
             // The plugins' handlers next: what they remove is plain rows, so
             // here, before any DDL, a handler that throws rolls the whole

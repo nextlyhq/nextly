@@ -226,6 +226,15 @@ async function columnStands(
 }
 
 /**
+ * The query answering whether `table` stands, on MySQL: how many tables of that name the database
+ * holds, 0 or 1. MySQL is the one database where a change stopped part way keeps what ran, each table
+ * drop committing as it runs, so a table a change was to remove may already be gone.
+ */
+export function mysqlTableStandsQuery(table: string): SQL {
+  return sql`SELECT COUNT(*) AS ${sql.identifier("count")} FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${table}`;
+}
+
+/**
  * Whether `table` still stands, read through `db` on MySQL, as `columnStands` reads a column; a
  * link table dropped by an earlier try's statements took its links with it. Elsewhere, and where
  * the lookup fails, it is taken to stand, so it is counted.
@@ -237,9 +246,7 @@ async function tableStands(
 ): Promise<boolean> {
   if (dialect !== "mysql") return true;
   try {
-    const result = await (db as Executes).execute(
-      sql`SELECT COUNT(*) AS ${sql.identifier("count")} FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${table}`
-    );
+    const result = await (db as Executes).execute(mysqlTableStandsQuery(table));
     const [rows] = result as [Array<{ count: unknown }>];
     return Number(rows[0]?.count) > 0;
   } catch {
