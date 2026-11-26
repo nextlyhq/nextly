@@ -208,11 +208,13 @@ describe.each(getConfiguredTestDialects())(
      */
     async function pass(
       storage: IStorageAdapter,
-      budget: number = PER_PASS
+      budget: number = PER_PASS,
+      options: { startAt?: number; db?: TestNextly["adapter"] } = {}
     ): Promise<void> {
-      let now = 0;
+      const startAt = options.startAt ?? 0;
+      let now = startAt;
       const job = createMediaHashBackfillJob({
-        db: () => t.adapter,
+        db: () => options.db ?? t.adapter,
         storage: () => storage,
         logger,
         clock: () => now++,
@@ -221,8 +223,8 @@ describe.each(getConfiguredTestDialects())(
         jobId: randomUUID(),
         attempt: 1,
         user: null,
-        now: new Date(0),
-        deadline: new Date(budget),
+        now: new Date(startAt),
+        deadline: new Date(startAt + budget),
       } as unknown as JobContext;
       await job.handler(null, context);
     }
@@ -422,6 +424,62 @@ describe.each(getConfiguredTestDialects())(
       const report = await readMediaHashBackfillReport(t.adapter);
       expect(report?.unreadableCount ?? 0).toBe(0);
       expect(report?.finishedAt ?? null).toBeNull();
+    });
+
+    it("fails the job, giving up on nothing, when the database refuses a fingerprint", async () => {
+      const adapter = await adapterFor("local");
+      const records = await earlierLibrary(adapter, 5);
+      let refusals = 0;
+      // The database refuses the first write of a fingerprint, as under a
+      // lock timeout; every other statement goes through.
+      const refusing = Object.create(t.adapter) as TestNextly["adapter"];
+      refusing.update = (async (
+        ...args: Parameters<typeof t.adapter.update>
+      ) => {
+        if (args[0] === "media" && refusals === 0) {
+          refusals += 1;
+          throw new Error("lock wait timeout exceeded");
+        }
+        return t.adapter.update(...args);
+      }) as typeof t.adapter.update;
+
+      await expect(
+        pass(counted(adapter, "local").storage, PER_PASS, { db: refusing })
+      ).rejects.toThrow("lock wait timeout exceeded");
+      expect(
+        (await readMediaHashBackfillReport(t.adapter))?.unreadableCount ?? 0
+      ).toBe(0);
+
+      await passesUntilFinished(counted(adapter, "local").storage);
+
+      const filled = await hashes();
+      for (const record of records) {
+        expect(filled.get(record.id)).toBe(contentHashOf(record.bytes));
+      }
+      expect(await readMediaHashBackfillReport(t.adapter)).toMatchObject({
+        hashed: 5,
+        unreadableCount: 0,
+      });
+    });
+
+    it("looks again a day after finishing, and fills a record an older release wrote since", async () => {
+      const adapter = await adapterFor("local");
+      await earlierLibrary(adapter, 3);
+      const { storage } = counted(adapter, "local");
+      await passesUntilFinished(storage);
+      const later = await earlierRecord(adapter, "written-later");
+      const day = 24 * 60 * 60 * 1000;
+
+      // Within the day: the finished walk is left alone.
+      await pass(storage, PER_PASS, { startAt: day / 2 });
+      expect((await hashes()).get(later.id) ?? null).toBeNull();
+
+      // A day on: it counts, finds the record, and walks again.
+      await pass(storage, PER_PASS, { startAt: day + 1_000 });
+      expect((await hashes()).get(later.id)).toBe(contentHashOf(later.bytes));
+      const report = await readMediaHashBackfillReport(t.adapter);
+      expect(report).toMatchObject({ hashed: 4, unreadableCount: 0 });
+      expect(report?.finishedAt).toEqual(expect.any(String));
     });
 
     it("goes round again for a record written behind its place", async () => {

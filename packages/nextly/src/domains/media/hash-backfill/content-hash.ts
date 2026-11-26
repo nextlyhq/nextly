@@ -118,7 +118,36 @@ function wholeReadOptions(
   };
 }
 
-/** The hash of every chunk of `stream`, stopped and refused at `deadline`. */
+/** What `withinTime` answers for a promise still pending when time ran out. */
+const TIMED_OUT: unique symbol = Symbol("timed out");
+
+/**
+ * `pending`, or `TIMED_OUT` once `ms` milliseconds pass first. The timer is
+ * unreferenced and cleared, so it never keeps a process alive.
+ */
+async function withinTime<T>(
+  pending: Promise<T>,
+  ms: number
+): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<typeof TIMED_OUT>(resolve => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([pending, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The hash of every chunk of `stream`, stopped and refused at `deadline`.
+ *
+ * Each read is raced against the time left, not only checked between
+ * chunks: storage that answers and then stalls mid-body leaves a read
+ * pending with no chunk to wake the check, and only the race ends it.
+ */
 async function hashOfStream(
   stream: ReadableStream<Uint8Array>,
   filePath: string,
@@ -128,13 +157,24 @@ async function hashOfStream(
   const hash = createHash("sha256");
   const reader = stream.getReader();
   for (;;) {
-    if (deadline !== undefined && clock() >= deadline) {
-      await reader.cancel();
+    const left = deadline === undefined ? undefined : deadline - clock();
+    // Checked before each read as well as raced during it: a read that
+    // answers at once would beat a timer of no time left.
+    if (left !== undefined && left <= 0) {
+      await reader.cancel().catch(() => undefined);
       throw pastDeadline(filePath);
     }
-    const { done, value } = await reader.read();
-    if (done) return hash.digest("hex");
-    hash.update(value);
+    const read = reader.read();
+    const next = left === undefined ? await read : await withinTime(read, left);
+    if (next === TIMED_OUT) {
+      // The read left pending settles when the stream is cancelled; its
+      // outcome no longer matters to anyone.
+      void read.catch(() => undefined);
+      await reader.cancel().catch(() => undefined);
+      throw pastDeadline(filePath);
+    }
+    if (next.done) return hash.digest("hex");
+    hash.update(next.value);
   }
 }
 

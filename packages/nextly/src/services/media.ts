@@ -124,10 +124,25 @@ type BulkDeleteOutcome = BulkOutcome<{
 
 /**
  * A media row as the table holds it. One stored before image sizes were
- * removed may still carry `sizes`, which only the removal of its files reads:
- * every row this service hands back goes through `withoutStoredSizes`.
+ * removed may still carry `sizes`, which only the removal of its files reads;
+ * every row carries its file's `sha256`. Every row this service hands back
+ * goes through `handedBack`.
  */
-type StoredMediaRow = Media & { sizes?: unknown };
+type StoredMediaRow = Media & { sizes?: unknown; sha256?: unknown };
+
+/**
+ * A stored row as this service hands it back: the `Media` shape, without the
+ * retired `sizes` (`withoutStoredSizes`) and without the file's fingerprint.
+ * The media events carry the fingerprint, as they carry the whole stored row;
+ * `Media` does not declare it, so a caller's typed result matches what it
+ * receives.
+ */
+function handedBack<T extends { sizes?: unknown; sha256?: unknown }>(
+  row: T
+): Omit<T, "sizes" | "sha256"> {
+  const { sha256: _fingerprint, ...rest } = withoutStoredSizes(row);
+  return rest;
+}
 
 export class MediaService extends BaseService {
   // Lazy-initialized to avoid capturing a stale MediaStorage singleton
@@ -466,7 +481,7 @@ export class MediaService extends BaseService {
         success: true,
         statusCode: 200,
         message: `Found ${results.length} media file(s)`,
-        data: (results as StoredMediaRow[]).map(row => withoutStoredSizes(row)),
+        data: (results as StoredMediaRow[]).map(row => handedBack(row)),
         meta: {
           total,
           page,
@@ -514,7 +529,7 @@ export class MediaService extends BaseService {
         success: true,
         statusCode: 200,
         message: "Media retrieved successfully",
-        data: withoutStoredSizes(result[0] as StoredMediaRow),
+        data: handedBack(result[0] as StoredMediaRow),
       };
     } catch (error) {
       this.logger.error("[MediaService] Get media error", { error: error });
@@ -552,7 +567,7 @@ export class MediaService extends BaseService {
         success: true,
         statusCode: 200,
         message: "Media retrieved successfully",
-        data: rows.map((row: StoredMediaRow) => withoutStoredSizes(row)),
+        data: rows.map((row: StoredMediaRow) => handedBack(row)),
       };
     } catch (error) {
       this.logger.error("[MediaService] Get media by ids error", { error });
@@ -765,7 +780,7 @@ export class MediaService extends BaseService {
         success: true,
         statusCode: 201,
         message: "Media uploaded successfully",
-        data: mediaRecord as unknown as Media,
+        data: handedBack(mediaRecord) as unknown as Media,
       };
     } catch (error) {
       this.logger.error("[MediaService] Upload media error", { error: error });
@@ -898,7 +913,7 @@ export class MediaService extends BaseService {
         success: true,
         statusCode: 200,
         message: "Media updated successfully",
-        data: updatedRow,
+        data: handedBack(updatedRow),
       };
     } catch (error) {
       this.logger.error("[MediaService] Update media error", { error: error });

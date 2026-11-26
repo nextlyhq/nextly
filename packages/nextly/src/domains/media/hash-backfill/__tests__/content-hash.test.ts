@@ -139,6 +139,29 @@ describe("hashOfStoredFile", () => {
     expect(cancelled).toBe(true);
   });
 
+  it("stops a stream that stalls mid-body at its deadline, though no chunk comes", async () => {
+    // One chunk, then nothing: storage that answered and then stalled. A
+    // check made only between chunks would wait on the read for ever.
+    let cancelled = false;
+    const stalled = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const startedAt = Date.now();
+
+    await expect(
+      hashOfStoredFile({ readStream: async () => stalled }, "media/stuck.mp4", {
+        deadline: startedAt + 50,
+      })
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(cancelled).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
   it("answers null when nothing is stored at the path", async () => {
     expect(
       await hashOfStoredFile({ readStream: async () => null }, "gone.bin")

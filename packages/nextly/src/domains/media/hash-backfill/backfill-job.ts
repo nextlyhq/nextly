@@ -17,22 +17,24 @@
  * which the same `nextly_meta` row keeps: how many files were hashed, how
  * many could not be read, and the first of those by name. A read that fails
  * stops the pass where it is, and the next pass tries that file again: an
- * outage of the storage or the database never passes over the files it
- * touches. Only a file whose read fails on `MAX_TRIES` passes in a row is
- * given up on and named. A storage that cannot read files back at all fails
- * the job, and names nothing.
+ * outage of the storage never passes over the files it touches. Only a file
+ * whose read fails on `MAX_TRIES` passes in a row is given up on and named.
+ * A write of a fingerprint the database refuses, and a storage that cannot
+ * read files back at all, fail the job instead, and name nothing.
  *
  * At the end of the walk, records still without a fingerprint that the
  * report does not explain (written behind the walk's place while it ran, by
  * an older release mid-deploy, say) send it round again from the start, up
  * to `MAX_LAPS` times. Then the report is marked finished and logged, and
  * later passes read only that row: a missing file is not read again on every
- * pass for ever. Records written after the walk carry their fingerprint from
- * their upload, and an export computes one for any record still without
- * (`hash-when-missing`).
+ * pass for ever. Once a day a finished walk counts the records without a
+ * fingerprint, and starts again when there are more than its report explains
+ * (an older release still writing them, say). Records written after the walk
+ * carry their fingerprint from their upload, and an export computes one for
+ * any record still without (`hash-when-missing`).
  *
  * Idempotent: each record's fingerprint is written only while it has none
- * and still names the file that was read (`mediaHashWhenMissing`), so a pass
+ * and still names the file that was read (`keepMediaHash`), so a pass
  * delivered twice, or one racing a Replace, writes nothing wrong.
  *
  * @module domains/media/hash-backfill/backfill-job
@@ -46,7 +48,7 @@ import { defineJob, type JobDefinition } from "../../jobs/job-registry";
 import { errorForLog } from "../remove-stored-files";
 
 import type { StoredFileReading } from "./content-hash";
-import { mediaHashWhenMissing } from "./hash-when-missing";
+import { hashOfRecordFile, keepMediaHash } from "./hash-when-missing";
 
 /** The slug the job is registered and kept queued under. */
 export const MEDIA_HASH_BACKFILL_JOB = "nextly:media-hash-backfill";
@@ -65,6 +67,14 @@ const MAX_TRIES = 3;
  * reads the files the one before could not, once more.
  */
 const MAX_LAPS = 3;
+
+/**
+ * How long a finished walk waits before it looks again for records without a
+ * fingerprint the report does not explain: those an older release wrote
+ * after the walk finished, during a rolling deploy, say. Once a day keeps the
+ * look to one count of the table per day.
+ */
+const RECHECK_AFTER_MS = 24 * 60 * 60 * 1000;
 
 /**
  * How many unreadable files the report names; the count covers them all. A
@@ -107,7 +117,10 @@ const reportSchema = z.object({
 export type MediaHashBackfillReport = z.infer<typeof reportSchema>;
 
 /** The database the job reads and writes. */
-type BackfillDb = Pick<DrizzleAdapter, "select" | "update" | "upsert">;
+type BackfillDb = Pick<
+  DrizzleAdapter,
+  "select" | "update" | "upsert" | "count"
+>;
 
 /** What the job needs, resolved when a pass runs rather than when it is built. */
 export interface MediaHashBackfillDeps {
@@ -201,12 +214,12 @@ async function unexplainedRemain(
   db: BackfillDb,
   report: MediaHashBackfillReport
 ): Promise<boolean> {
-  const left = await db.select<{ id: string }>("media", {
-    columns: ["id"],
+  // Counted in the database: a library with a great many missing files would
+  // otherwise read that many rows here.
+  const left = await db.count("media", {
     where: { and: [{ column: "sha256", op: "IS NULL" }] },
-    limit: report.unreadableCount + 1,
   });
-  return left.length > report.unreadableCount;
+  return left > report.unreadableCount;
 }
 
 /** What one pass works with, resolved once at its start. */
@@ -232,15 +245,10 @@ async function hashOne(
   const { report } = pass;
   let hash: string | null;
   try {
-    hash = await mediaHashWhenMissing(
-      {
-        db: pass.db,
-        storage: pass.storage(),
-        deadline: pass.deadline,
-        clock: pass.clock,
-      },
-      item
-    );
+    hash = await hashOfRecordFile(pass.storage(), item, {
+      deadline: pass.deadline,
+      clock: pass.clock,
+    });
   } catch (error) {
     // A storage that cannot read files back cannot hash any: the job
     // fails, and no file is named for it.
@@ -259,8 +267,15 @@ async function hashOne(
     noteUnreadable(report, item, "error");
     return movePast(report, item);
   }
-  if (hash === null) noteUnreadable(report, item, "missing");
-  else report.hashed += 1;
+  if (hash === null) {
+    noteUnreadable(report, item, "missing");
+  } else {
+    // Outside the read's retries: a write the database refuses fails the
+    // job, and the next run reads and keeps this file again, rather than
+    // giving up on a file that read well.
+    await keepMediaHash(pass.db, item, hash);
+    report.hashed += 1;
+  }
   return movePast(report, item);
 }
 
@@ -298,6 +313,30 @@ async function endOfWalk(pass: PassContext): Promise<"again" | "finished"> {
 }
 
 /**
+ * Whether a finished walk starts again: once `RECHECK_AFTER_MS` has passed
+ * since it finished, and only when records without a fingerprint remain
+ * that the report does not explain. When none do, the finish is stamped
+ * anew, so the next look is a day later; when some do, a fresh walk begins,
+ * keeping the count of files hashed.
+ */
+async function reopened(
+  db: BackfillDb,
+  report: MediaHashBackfillReport,
+  clock: () => number
+): Promise<boolean> {
+  const finishedAt = Date.parse(report.finishedAt ?? "");
+  if (clock() - finishedAt < RECHECK_AFTER_MS) return false;
+  if (!(await unexplainedRemain(db, report))) {
+    report.finishedAt = new Date(clock()).toISOString();
+    await writeReport(db, report);
+    return false;
+  }
+  Object.assign(report, { ...freshReport(), hashed: report.hashed });
+  await writeReport(db, report);
+  return true;
+}
+
+/**
  * One pass: hash records from where the last pass stopped until the walk
  * reaches the end, half the time to `deadline` is spent, or a read fails.
  * Answers the report as it stands at the end of the pass.
@@ -309,7 +348,9 @@ async function runMediaHashBackfillPass(
   const clock = deps.clock ?? Date.now;
   const db = deps.db();
   const report = (await readMediaHashBackfillReport(db)) ?? freshReport();
-  if (report.finishedAt !== null) return report;
+  if (report.finishedAt !== null && !(await reopened(db, report, clock))) {
+    return report;
+  }
 
   let storage: StoredFileReading | undefined;
   const pass: PassContext = {

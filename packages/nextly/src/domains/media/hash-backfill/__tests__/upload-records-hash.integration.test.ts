@@ -200,14 +200,12 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
-    it("sends the hash in the media.uploaded event", async () => {
+    it("sends the hash in the media.uploaded event, and leaves it out of what the service returns", async () => {
       await storage("local");
       const bytes = pdfDocument(randomUUID());
+      const service = new MediaService(t.adapter, silent as never);
 
-      const result = await new MediaService(
-        t.adapter,
-        silent as never
-      ).uploadMedia(
+      const result = await service.uploadMedia(
         {
           file: bytes,
           filename: "doc.pdf",
@@ -236,6 +234,16 @@ describe.each(getConfiguredTestDialects())(
       expect((envelope.data as { sha256?: string }).sha256).toBe(
         contentHashOf(bytes)
       );
+
+      // What the service returns is the `Media` shape, which does not declare
+      // the fingerprint: the upload's result and a read of the same record.
+      // The control: the row itself does hold it.
+      expect((await storedRow(t, result.data!.id)).sha256).toBe(
+        contentHashOf(bytes)
+      );
+      expect(result.data).not.toHaveProperty("sha256");
+      const read = await service.getMediaById(result.data!.id);
+      expect(read.data).not.toHaveProperty("sha256");
     });
   }
 );
