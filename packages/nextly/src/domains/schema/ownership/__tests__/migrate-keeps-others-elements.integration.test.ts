@@ -205,7 +205,9 @@ const CONTRIBUTED = {
  * The plugin, adding to a collection's table, a field group's and a core table, as its schema hook
  * declares it: hidden columns, the check an enum column implies, and indexes.
  */
-const contributing = (adds: { stamp?: boolean } = { stamp: true }) =>
+const contributing = (
+  adds: { stamp?: boolean; onCore?: boolean } = { stamp: true }
+) =>
   definePlugin({
     name: PLUGIN,
     version: "1.0.0",
@@ -228,11 +230,13 @@ const contributing = (adds: { stamp?: boolean } = { stamp: true }) =>
             schema.extendTable(GROUP_TABLE, {
               indexes: [{ columns: ["rank"], name: CONTRIBUTED.groupIndex }],
             });
-            schema.extendTable("users", {
-              columns: {
-                [CONTRIBUTED.userColumn]: col.shortText({ nullable: true }),
-              },
-            });
+            if (adds.onCore !== false) {
+              schema.extendTable("users", {
+                columns: {
+                  [CONTRIBUTED.userColumn]: col.shortText({ nullable: true }),
+                },
+              });
+            }
           },
         ],
       },
@@ -302,6 +306,41 @@ const stoppedDeclaring = definePlugin({
   nextly: ">=0.0.0",
   contributes: { schema: { extend: [() => {}] } },
 });
+
+/** The plugin's next version, still configured, with no schema declaration at all. */
+const withoutSchema = definePlugin({
+  name: PLUGIN,
+  version: "2.0.0",
+  nextly: ">=0.0.0",
+});
+
+/** Another plugin, which keeps declaring a schema: a hidden column of its own on the collection's table. */
+const OTHER_COLUMN = "mko_other";
+const otherDeclaring = definePlugin({
+  name: "@test/mko-other",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  contributes: {
+    schema: {
+      extend: [
+        ({ schema }) => {
+          schema.extendTable(TABLE, {
+            columns: { [OTHER_COLUMN]: col.shortText({ nullable: true }) },
+          });
+        },
+      ],
+    },
+  },
+});
+
+/**
+ * The two ways a configured plugin comes to declare no schema: beside another plugin that still
+ * declares one, and with nothing left declaring a schema at all, so none is compiled.
+ */
+const NO_SCHEMA_FORMS = [
+  { form: "another plugin still declaring a schema", others: [otherDeclaring] },
+  { form: "nothing declaring a schema", others: [] },
+];
 
 /** A column of the plugin's own, and the index on it. */
 const MARKER = "marker";
@@ -1325,6 +1364,80 @@ describe.each(getConfiguredTestDialects())(
         CONTRIBUTED.column
       );
     });
+
+    /**
+     * A database `nextly migrate` set up with what `contributing` adds to the app's collection and
+     * field group, and `others` beside it, and the configuration once the plugin's next version
+     * declares no schema: the plugin and `others` still configured. Nothing on a core table: the core
+     * reconcile judges a core table's columns itself, before the app's files run.
+     */
+    async function setUpThenWithoutSchema(others: readonly unknown[]) {
+      const url = await emptyDatabase();
+      use(url);
+      const before = {
+        ...extendedWith(undefined),
+        plugins: [contributing({ stamp: true, onCore: false }), ...others],
+      };
+      wentThrough(await migrateCreate("add_posts", before));
+      wentThrough(await migrate(before));
+      // The control: the plugin's parts are there, the check on its enum column among them.
+      const shape = await shapeOf(url, TABLE);
+      expect(shape.columns).toContain(CONTRIBUTED.column);
+      expect(shape.columns).toContain(CONTRIBUTED.enumColumn);
+      expect(await enumCheck(url)).not.toBe("");
+      expect((await pluginRows(url)).length).toBeGreaterThan(0);
+      return {
+        url,
+        after: {
+          ...extendedWith(undefined),
+          plugins: [withoutSchema, ...others],
+        },
+      };
+    }
+
+    /** What the plugin added is gone, and what the app and `others` declare is there. */
+    async function partsRemoved(url: string, others: readonly unknown[]) {
+      const shape = await shapeOf(url, TABLE);
+      expect(shape.columns).not.toContain(CONTRIBUTED.column);
+      expect(shape.columns).not.toContain(CONTRIBUTED.enumColumn);
+      expect(shape.indexes).not.toContain(DECLARED_INDEX);
+      expect(shape.columns).toContain("code");
+      if (others.length > 0) expect(shape.columns).toContain(OTHER_COLUMN);
+      expect((await shapeOf(url, GROUP_TABLE)).indexes).not.toContain(
+        CONTRIBUTED.groupIndex
+      );
+      expect(await pluginRows(url)).toEqual([]);
+    }
+
+    it.each(NO_SCHEMA_FORMS)(
+      "migrate:create and nextly migrate remove what a still-configured plugin added once its next version declares no schema, with the data-loss consent ($form)",
+      async ({ others }) => {
+        const { url, after } = await setUpThenWithoutSchema(others);
+        const written = files();
+
+        const created = await migrateCreate("plugin_parts_go", after);
+
+        wentThrough(created);
+        expect(files()).toHaveLength(written.length + 1);
+        wentThrough(await migrate(after));
+        await partsRemoved(url, others);
+      }
+    );
+
+    it.each(NO_SCHEMA_FORMS)(
+      "nextly migrate applies a file, written where no database was read, removing what a still-configured plugin added once its next version declares no schema ($form)",
+      async ({ others }) => {
+        const { url, after } = await setUpThenWithoutSchema(others);
+
+        use(absentDatabase());
+        wentThrough(await migrateCreate("plugin_parts_go", after));
+        use(url);
+        const ran = await migrate(after);
+
+        wentThrough(ran);
+        await partsRemoved(url, others);
+      }
+    );
 
     it("migrate:create refuses removing a field a removed plugin's index stands on, put there by migrate alone, writing nothing", async () => {
       const url = await emptyDatabase();
