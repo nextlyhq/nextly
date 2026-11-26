@@ -13,7 +13,10 @@
  * or a checked-out Builder manifest removes, and every column a table rename moves. A record of
  * what was applied that cannot be read (a migration snapshot, or a registry row naming no table)
  * is a run that could not run. So is a checkout without a migration the database has applied: its
- * snapshot is the definition last applied, and an older one would convert columns back.
+ * snapshot is the definition last applied, and an older one would convert columns back. So is an
+ * attempt at a migration that is unresolved and may have stopped part-way. A dry run names the run
+ * that holds the schema lock instead, while one does, as the attempt may be its own; `--apply` waits
+ * for the lock and judges the attempt under it.
  *
  * Without `--apply` it changes nothing: no table, row, registry entry or ledger row, and it never
  * takes the schema lock, only reads who holds it. With `--apply` it takes the schema lock, converts
@@ -47,7 +50,10 @@ import {
   type BusyTableBounds,
 } from "../../domains/schema/busy-table/bounds";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
-import type { ClearingQuestion } from "../../domains/schema/repair-columns/apply";
+import type {
+  ClearingQuestion,
+  EntitiesRead,
+} from "../../domains/schema/repair-columns/apply";
 import { describeKey } from "../../domains/schema/repair-columns/report";
 import type { RepairColumnsDocument } from "../../domains/schema/repair-columns/report-json";
 import type { TableWaits } from "../../domains/schema/repair-columns/table-wait";
@@ -178,7 +184,7 @@ async function report(
     { dryRunReport },
     { applyRepairs },
     { compileExtensionSchema },
-    { assertAppliedFilesPresent },
+    { assertAppliedFilesPresent, refuseUnresolvedAppAttempts },
   ] = await Promise.all([
     import("../../domains/schema/repair-columns/read-entities"),
     import("../../domains/schema/repair-columns/run-report"),
@@ -214,8 +220,14 @@ async function report(
     // A checkout older than the database holds no snapshot of what was last applied, so it is
     // refused as `nextly migrate` refuses it. The declared names tell an old Schema Builder file,
     // as they do there.
-    const checkHistory = (declared: DeclaredNames) =>
-      assertAppliedFilesPresent({
+    // So is an attempt at a migration that may have stopped part-way: what of it ran is in the
+    // database and in no snapshot, and a conversion would undo it. Asked in the order
+    // `nextly migrate` asks them.
+    const checkHistory = async (
+      declared: DeclaredNames,
+      read: EntitiesRead
+    ) => {
+      const history = {
         adapter,
         db: adapter.getDrizzle(),
         dialect,
@@ -223,8 +235,17 @@ async function report(
         logger,
         declared,
         command: "nextly repair-columns",
-      });
-    const readEntities = (waits: TableWaits | undefined) =>
+      };
+      await assertAppliedFilesPresent(history);
+      // A read made only to ask, before the lock, waits for a migration still running as the lock
+      // does; its attempt is judged under the lock.
+      if (read.beforeLock === true) return;
+      await refuseUnresolvedAppAttempts(history);
+    };
+    const readEntities = (
+      waits: TableWaits | undefined,
+      read: EntitiesRead = {}
+    ) =>
       readRepairEntities({
         ...(overrides !== undefined ? { overrides } : {}),
         adapter,
@@ -235,7 +256,7 @@ async function report(
         projectRoot,
         ...(deferredExtends !== undefined ? { deferredExtends } : {}),
         migrationsDir,
-        checkHistory,
+        checkHistory: declared => checkHistory(declared, read),
         logger: { debug, info: debug, warn: debug, error: debug },
         ...(waits === undefined ? {} : { waits }),
       });
