@@ -11,7 +11,10 @@
 import { scopeLedgerRows } from "../../events/ledger-scope";
 import { appliedPluginModules } from "../../events/newest-event";
 import type { SchemaEventRow } from "../../events/schema-events-repository";
-import type { OwnerRecord } from "../../ownership/owner-registry";
+import {
+  carriedByPlugin,
+  type OwnerRecord,
+} from "../../ownership/owner-registry";
 
 import { qualifiedFilename } from "./plugin-migration";
 
@@ -59,8 +62,10 @@ export async function recordPluginSchemaVersionFromLedger(deps: {
     upsert(rows: readonly OwnerRecord[]): Promise<void>;
   };
 }): Promise<void> {
+  // Only the rows its own modules carry: what it added to an entity's table rides the app's
+  // migrations, which no version of the plugin's describes.
   const mine = (await deps.owners.read()).filter(
-    row => row.ownerId === deps.plugin
+    row => row.ownerId === deps.plugin && carriedByPlugin(row, deps.plugin)
   );
   if (mine.length === 0) return;
   const version = pluginSchemaVersionFromLedger(

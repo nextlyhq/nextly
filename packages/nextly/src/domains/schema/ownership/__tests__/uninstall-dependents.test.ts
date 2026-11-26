@@ -14,6 +14,7 @@ import { compileExtensionSchema } from "../../extension/publish";
 import type { SchemaOwner } from "../../extension/types";
 import { enumCheckName } from "../../extension/enum-check";
 import type { ExtensionSchemaRecord } from "../dependent-elements";
+import { ownerRowsToRecord } from "../kept-elements";
 import type { OwnerRecord } from "../owner-registry";
 import { planUninstall } from "../uninstall-plan";
 import {
@@ -194,6 +195,45 @@ describe("findUninstallDependents", () => {
         table: "users",
       }),
     ]);
+  });
+
+  it("does not count an index on a column it added that the app's migrations carry, which the uninstall leaves in place", async () => {
+    // The column as a push records it on an entity's or a core table: the plugin's, carried by the
+    // app's migrations, so none of the plugin's DOWNs drops it and the index on it stays usable.
+    const [carried] = ownerRowsToRecord(
+      [
+        {
+          table: "users",
+          elementKind: "column",
+          elementName: "fx_handle",
+          owner: FX,
+        },
+      ],
+      new Set(),
+      []
+    );
+    expect(carried?.migratedBy).toBe("app");
+    const found = await find(
+      [row({}), carried!],
+      sources({
+        extension: schema({
+          entityIndexes: new Map([
+            [
+              "users",
+              [
+                {
+                  name: "idx_users_handle",
+                  columns: ["fx_handle"],
+                  unique: false,
+                },
+              ],
+            ],
+          ]) as ExtensionSchemaRecord["entityIndexes"],
+        }),
+      })
+    );
+    // The case above is its control: the same column carried by the plugin's own modules counts.
+    expect(found).toEqual([]);
   });
 
   it("counts a recorded element there whose columns nothing can describe", async () => {

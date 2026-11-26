@@ -11,15 +11,18 @@
  * never declared them, and their contributor is not there to decide.
  *
  * So the push records who added each element (`ownerRowsToRecord`), as
- * `nextly migrate` does, and keeps the elements whose recorded owner no longer
- * declares any schema (`keptElements`): they are added to the desired state
+ * `nextly migrate` does, and keeps the elements whose recorded owner the
+ * configuration no longer lists (`keptElements`): they are added to the desired state
  * as the database has them, so no route plans their drop. A plugin removed
- * from the configuration keeps what it added, as it keeps its tables, until
- * `nextly plugins uninstall` removes them or the plugin returns.
+ * from the configuration keeps what it added, as it keeps its tables, until it
+ * returns, or is put back and uninstalled: the uninstall leaves in place what
+ * the app's migrations carry and forgets that it was the plugin's, so the app's
+ * next change removes it with the data-loss consent.
  *
  * A contributor that is still configured and stops declaring one of its
  * elements has removed it, and the push drops that one (it is the
- * contributor's own change). The app is always configured.
+ * contributor's own change), whether or not it still declares a schema. The
+ * app is always configured.
  *
  * What the push would still change of a kept owner's element — another owner
  * declaring an element of the same name with a different shape — is refused
@@ -136,26 +139,18 @@ function hiddenColumnElements(
 }
 
 /**
- * The owners the configuration still has a schema declaration from, as owner
- * rows spell them: the app always, and every plugin that declares a table or
- * adds an element to one.
+ * The owners the configuration still has, as owner rows spell them: the app always, and every
+ * plugin it lists (`configuredPluginNames`), whatever the plugin declares.
  *
- * A plugin that declares nothing any more is read as removed. Its tables are
- * already kept (the push manages only the tables the configuration declares),
- * and its elements on other owners' tables are kept the same way.
+ * A plugin the configuration no longer lists is read as removed. Its tables are already kept (the
+ * push manages only the tables the configuration declares), and its elements on other owners'
+ * tables are kept the same way. One still listed that declares no schema any more has removed what
+ * it added, as one that stops declaring an element has.
  */
-export function declaringOwners(
-  schema: ContributionSource | null | undefined,
-  dialect: SupportedDialect
+export function configuredOwners(
+  configuredPlugins: ReadonlySet<string>
 ): Set<string> {
-  const owners = new Set<string>(["app"]);
-  for (const owner of schema?.owners.values() ?? []) {
-    owners.add(ownerIdOf(owner));
-  }
-  for (const element of contributedElements(schema, dialect)) {
-    owners.add(ownerIdOf(element.owner));
-  }
-  return owners;
+  return new Set(["app", ...configuredPlugins]);
 }
 
 /**
@@ -224,7 +219,7 @@ function byName(snapshot: NextlySchemaSnapshot): Map<string, TableSpec> {
 
 /**
  * The elements the push keeps: each one an owner row records for a plugin
- * that declares no schema any more, that the database has on a table the
+ * the configuration no longer lists, that the database has on a table the
  * push manages, and that the desired state leaves out.
  *
  * A dimension the desired table does not track (`undefined`) plans no drop,
@@ -255,8 +250,8 @@ export function keptElements(input: {
 }
 
 /**
- * The elements the owner rows record for a plugin that declares no schema
- * any more: what a push neither drops nor changes.
+ * The elements the owner rows record for a plugin the configuration no longer
+ * lists: what a push neither drops nor changes.
  */
 function removedOwnersElements(
   rows: readonly OwnerRecord[],
@@ -434,7 +429,7 @@ function keptElementRefusal(
 
 /**
  * Refuse a push that would drop, rename or change an element an owner row
- * records for a plugin that declares no schema any more.
+ * records for a plugin the configuration no longer lists.
  *
  * The kept elements are already in the desired state, so what reaches here
  * is a change another owner's declaration plans for one: a field of the same
@@ -623,7 +618,7 @@ export function assertNoContributedOwnerChange(
 export interface PushElementOwners {
   /** Every owner row, as it stands once the push has recorded its own. */
   rows: OwnerRecord[];
-  /** The owners the configuration still declares schema for. */
+  /** The owners the configuration still has (`configuredOwners`). */
   declaring: Set<string>;
   /**
    * Writes what `rows` already counts: retires the rows it left out and records the new ones, on
@@ -652,6 +647,8 @@ export async function pushElementOwners(input: {
   db: unknown;
   dialect: SupportedDialect;
   schema: ContributionSource | null;
+  /** The plugins the configuration lists, whatever each declares (`configuredPluginNames`). */
+  configuredPlugins: ReadonlySet<string>;
   /** The tables the push introspected (`live` holds the ones that exist). */
   managedTables: readonly string[];
   live: NextlySchemaSnapshot;
@@ -685,7 +682,7 @@ export async function pushElementOwners(input: {
   }
   if (!exists) return undefined;
   const repository = new SchemaOwnersRepository(input.db, input.dialect);
-  const declaring = declaringOwners(input.schema, input.dialect);
+  const declaring = configuredOwners(input.configuredPlugins);
   // A record there that cannot be read refuses the change, never read as no element at all.
   let rows = await readingOthersElements("The change", () => repository.read());
   if (!input.record) return { rows, declaring, write: () => Promise.resolve() };
@@ -694,7 +691,7 @@ export async function pushElementOwners(input: {
   const managed = new Set(input.managedTables.map(t => t.toLowerCase()));
   const retired = retiredElementRows({
     rows: rows.filter(row => managed.has(row.tableName.toLowerCase())),
-    declared: groupByTable(contributed),
+    declared: contributedByTable(contributed),
     live: input.live,
   });
   const gone = new Set(retired.map(row => ownerRecordKey(row)));
@@ -723,8 +720,11 @@ export async function pushElementOwners(input: {
   return { rows: [...rows, ...added], declaring, write };
 }
 
-/** Contributed elements grouped by table, as `retiredElementRows` reads them. */
-function groupByTable(
+/**
+ * Contributed elements grouped by table, as `retiredElementRows` reads them: what the configuration
+ * declares, which the push and `nextly migrate` retire rows against alike.
+ */
+export function contributedByTable(
   contributed: readonly ContributedElement[]
 ): Map<string, Array<Omit<ContributedElement, "table">>> {
   const out = new Map<string, Array<Omit<ContributedElement, "table">>>();

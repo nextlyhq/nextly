@@ -33,6 +33,7 @@ import {
   type DataLossConsent,
 } from "../../../domains/schema/migrate/data-loss-consent";
 import type { PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
+import { ownerRowsToRecord } from "../../../domains/schema/ownership/kept-elements";
 import { assertBootPluginsInstalled } from "../../../domains/schema/ownership/plugin-install-gate";
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
 import {
@@ -43,6 +44,7 @@ import type {
   Operation,
   TableSpec,
 } from "../../../domains/schema/pipeline/diff/types";
+import { readIndexNames } from "../../../domains/schema/pipeline/live-table-facts";
 import { MYSQL_MIGRATE_LOCK_NAME } from "../../../domains/schema/pipeline/locks";
 import { generateStatements } from "../../../domains/schema/pipeline/sql-templates";
 import {
@@ -602,6 +604,52 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await exists("lc__notes")).toBe(true);
       expect(await exists("lc__tags")).toBe(true);
+    });
+
+    it("drops what its own modules made and leaves the index the app's migrations carry, forgetting both", async () => {
+      await install();
+      // An index of the plugin's on an app's table, recorded as a push records what a plugin adds
+      // to an entity's or a core table: the app's migrations carry it, so no DOWN of the plugin's
+      // drops it.
+      await handle.adapter.executeQuery(
+        `CREATE TABLE ${q("app_entries")} (${q("id")} VARCHAR(36))`
+      );
+      await handle.adapter.executeQuery(
+        `CREATE INDEX ${q("lc_idx_on_entries")} ON ${q("app_entries")} (${q("id")})`
+      );
+      await new SchemaOwnersRepository(db(), dialect).upsert(
+        ownerRowsToRecord(
+          [
+            {
+              table: "app_entries",
+              elementKind: "index",
+              elementName: "lc_idx_on_entries",
+              owner: { kind: "plugin", id: PLUGIN },
+            },
+          ],
+          new Set(),
+          []
+        )
+      );
+      // The controls: the plugin's own tables, made by its modules, are there.
+      expect(await exists("lc__notes")).toBe(true);
+      expect(await exists("lc__tags")).toBe(true);
+
+      await uninstall(false);
+
+      expect(await exists("lc__notes")).toBe(false);
+      expect(await exists("lc__tags")).toBe(false);
+      expect([
+        ...(await readIndexNames(db(), dialect, "app_entries")),
+      ]).toContain("lc_idx_on_entries");
+      expect(
+        (await new SchemaOwnersRepository(db(), dialect).read()).filter(
+          row => row.ownerId === PLUGIN
+        )
+      ).toEqual([]);
+      await expect(boot()).rejects.toMatchObject({
+        code: "PLUGIN_SCHEMA_UNINSTALLED",
+      });
     });
 
     it("keeps its records while an index it added to the app's table survives its DOWNs, and forgets it once that is dropped", async () => {

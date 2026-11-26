@@ -27,12 +27,16 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../../../__tests__/helpers/fresh-database";
+import { demoteCollection } from "../../../../cli/commands/db-sync-demote";
+import { createLogger } from "../../../../cli/utils/logger";
+import { defineCollection, number, text } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
   createTestNextly,
+  type CreateTestNextlyOptions,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
@@ -45,7 +49,10 @@ import {
   readIndexNames,
 } from "../../pipeline/live-table-facts";
 import { junctionTableNameFor } from "../../services/field-column-descriptor";
+import { col } from "../../extension/dsl";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
+import { CollectionRegistryService } from "../../../collections/services/collection-registry-service";
+import { definePlugin } from "../../../../plugins/plugin-context";
 import { ownerRowsToRecord } from "../kept-elements";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
 
@@ -124,7 +131,7 @@ afterEach(async () => {
   }
 });
 
-/** A database of the test's own: a SQLite file in its folder, or a scratch database. */
+/** A database both starts reach: a SQLite file in the test's folder, or a scratch database. */
 async function databaseFor(dialect: TestDialect): Promise<string> {
   if (dialect === "sqlite") return `file:${join(basePath, "app.db")}`;
   const scratch = await createScratchDatabase(dialect, "fco");
@@ -145,6 +152,27 @@ async function start(dialect: TestDialect, url: string): Promise<TestNextly> {
     basePath,
     db: DB,
     localization: LOCALIZATION,
+  });
+  return instance;
+}
+
+/** An app with `collections` and `plugins` declared, on a database its later starts reach. */
+async function startWith(
+  dialect: TestDialect,
+  url: string,
+  declared: Pick<CreateTestNextlyOptions, "collections" | "plugins">
+): Promise<TestNextly> {
+  vi.stubEnv("DB_DIALECT", dialect);
+  vi.stubEnv("DATABASE_URL", url);
+  _resetEnvCache();
+  const adapter = await createAdapter({ type: dialect, url } as Parameters<
+    typeof createAdapter
+  >[0]);
+  instance = await createTestNextly({
+    adapter: adapter as never,
+    basePath,
+    db: DB,
+    ...declared,
   });
   return instance;
 }
@@ -925,6 +953,222 @@ describe.each(getConfiguredTestDialects())(
         "could not be read"
       );
       expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
+    });
+
+    // The one road found by which another owner's part comes onto a table the Builder owns: a
+    // collection declared in code, a plugin's hook indexing its column, recorded by the push, then
+    // handed to the Builder (`nextly db:sync --demote`), its entry and the plugin removed from the
+    // configuration. The row is the push's, not the test's.
+    it("refuses removing a field a removed plugin's index stands on, once its collection is handed to the Builder", async () => {
+      const slug = "fco_handed";
+      const table = `dc_${slug}`;
+      const index = "idx_fco_handed_code";
+      const url = await databaseFor(dialect);
+      const coded = defineCollection({
+        slug,
+        fields: [text({ name: "note" }), number({ name: "code" })],
+      });
+      const declaring = definePlugin({
+        name: PLUGIN,
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          schema: {
+            extend: [
+              ({ schema }) => {
+                schema.extendTable(table, {
+                  indexes: [{ columns: ["code"], name: index }],
+                });
+              },
+            ],
+          },
+        },
+      });
+      const pushed = await startWith(dialect, url, {
+        collections: [coded],
+        plugins: [declaring],
+      });
+      const owners = new SchemaOwnersRepository(
+        (pushed.adapter as unknown as DrizzleAdapter).getDrizzle(),
+        dialect
+      );
+      // The controls: the index is there, and the row names the plugin's.
+      expect(await indexesOf(pushed, table)).toContain(index);
+      expect(
+        (await owners.read([table])).map(
+          row => `${row.ownerId}:${row.elementName}`
+        )
+      ).toContain(`${PLUGIN}:${index}`);
+      expect(
+        await demoteCollection({
+          collection: coded as never,
+          logger: createLogger({ quiet: true }),
+          registry: new CollectionRegistryService(
+            pushed.adapter as unknown as DrizzleAdapter,
+            createLogger({ quiet: true }) as never
+          ),
+          adapter: pushed.adapter as unknown as DrizzleAdapter,
+          confirm: async () => true,
+        })
+      ).toBe("demoted");
+      await pushed.destroy();
+
+      const t = await start(dialect, url);
+      clearRegistryRowCache();
+      const registered = await t
+        .getService("collectionRegistryService")
+        .getCollectionBySlug(slug);
+      const refused = await dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: slug },
+        {
+          fields: (registered?.fields ?? [])
+            .map(field => ({ ...field }) as Field)
+            .filter(field => field.name !== "code"),
+          confirmed: true,
+          schemaVersion: await schemaVersionOf(t, "dynamic_collections", slug),
+          ...dropping("code"),
+        }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expectNamesTheElement(refused, { field: "code", kind: "index", table });
+      expect((refused as NextlyError).publicMessage).toContain(index);
+      expect(await indexesOf(t, table)).toContain(index);
+    });
+
+    // A collection pushed with a plugin's hidden column and its index, handed to the Builder, the
+    // plugin then removed. With no migration history the Builder brings the table up to date as one
+    // an earlier version made. The column and its index are the plugin's, not the app's: the save
+    // neither offers them for removal nor removes them, and goes through, keeping them and the value.
+    it("keeps a removed plugin's column and index when the Builder brings a table no history records up to date", async () => {
+      const slug = "fco_converted";
+      const table = `dc_${slug}`;
+      const index = "idx_fco_converted_marker";
+      const url = await databaseFor(dialect);
+      const coded = defineCollection({
+        slug,
+        fields: [number({ name: "code" })],
+      });
+      const adding = definePlugin({
+        name: PLUGIN,
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          schema: {
+            extend: [
+              ({ schema }) => {
+                // Only while the table is there, as a hook over another owner's table does.
+                if (schema.getTable(table) === undefined) return;
+                schema.extendTable(table, {
+                  columns: { [MARKER]: col.shortText({ nullable: true }) },
+                  indexes: [{ columns: [MARKER], name: index }],
+                });
+              },
+            ],
+          },
+        },
+      });
+      const pushed = await startWith(dialect, url, {
+        collections: [coded],
+        plugins: [adding],
+      });
+      await pushed.nextly.create({ collection: slug, data: { code: 1 } });
+      await pushed.adapter.executeQuery(
+        `UPDATE ${q(table)} SET ${q(MARKER)} = 'kept by the plugin'`
+      );
+      const markerOf = async (t: TestNextly) => ({
+        columns: await columnsOf(t, table),
+        indexes: await indexesOf(t, table),
+        values: (
+          await t.adapter.executeQuery<{ v: unknown }>(
+            `SELECT ${q(MARKER)} AS v FROM ${q(table)}`
+          )
+        ).map(row => row.v),
+        files: await filesWritten(),
+      });
+      const before = await markerOf(pushed);
+      // The controls: the push made both, and recorded them as the plugin's.
+      expect(before.columns).toContain(MARKER);
+      expect(before.indexes).toContain(index);
+      expect(before.values).toEqual(["kept by the plugin"]);
+      expect(
+        (
+          await new SchemaOwnersRepository(
+            (pushed.adapter as unknown as DrizzleAdapter).getDrizzle(),
+            dialect
+          ).read([table])
+        )
+          .map(row => `${row.ownerId}:${row.elementKind}:${row.elementName}`)
+          .sort()
+      ).toEqual([`${PLUGIN}:column:${MARKER}`, `${PLUGIN}:index:${index}`]);
+      expect(
+        await demoteCollection({
+          collection: coded as never,
+          logger: createLogger({ quiet: true }),
+          registry: new CollectionRegistryService(
+            pushed.adapter as unknown as DrizzleAdapter,
+            createLogger({ quiet: true }) as never
+          ),
+          adapter: pushed.adapter as unknown as DrizzleAdapter,
+          confirm: async () => true,
+        })
+      ).toBe("demoted");
+      await pushed.destroy();
+
+      const t = await start(dialect, url);
+      clearRegistryRowCache();
+      const fields = [
+        ...(
+          (
+            await t
+              .getService("collectionRegistryService")
+              .getCollectionBySlug(slug)
+          )?.fields ?? []
+        ).map(field => ({ ...field }) as Field),
+        { name: "rank", type: "number" },
+      ];
+      const save = async (extra: Record<string, unknown>) =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: slug },
+          {
+            fields,
+            confirmed: true,
+            schemaVersion: await schemaVersionOf(
+              t,
+              "dynamic_collections",
+              slug
+            ),
+            ...extra,
+          }
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+      const saved = await save({});
+
+      expect(saved, String(saved)).toBeUndefined();
+      const after = await markerOf(t);
+      expect(after.columns).toContain("rank");
+      expect(after.columns).toContain(MARKER);
+      expect(after.indexes).toContain(index);
+      expect(after.values).toEqual(before.values);
+      // No file the save wrote takes either away.
+      const written = after.files.filter(
+        ([name]) => !before.files.some(([was]) => was === name)
+      );
+      expect(written.length).toBeGreaterThan(0);
+      for (const [, content] of written) {
+        const up = content.split("-- DOWN")[0] ?? "";
+        expect(up).not.toMatch(new RegExp(`DROP[^;]*${MARKER}`, "i"));
+        expect(up).not.toContain(index);
+      }
     });
   }
 );

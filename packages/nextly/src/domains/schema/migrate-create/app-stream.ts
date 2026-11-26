@@ -84,6 +84,12 @@ export interface AppStreamTables {
     source: EntityContributionSource;
     dialect: SupportedDialect;
   };
+  /**
+   * The extension schema the stream was compiled from, for the command's other questions of the
+   * same configuration (which plugins it names, what each declares): none where nothing declares
+   * one. Kept in memory with the stream, and written nowhere.
+   */
+  extensionSchema?: ExtensionSchema;
 }
 
 /** An empty stream, for a configuration that declares no extension schema. */
@@ -305,6 +311,7 @@ export async function compileAppStreamTables(input: {
     contributed,
     baselines,
     entityContributions: { source: schema, dialect: input.dialect },
+    extensionSchema: schema,
   };
 }
 

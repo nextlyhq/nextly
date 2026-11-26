@@ -43,9 +43,12 @@ function sources(live: {
   /** A table's live spellings, where the database spells it other than the change does. */
   liveNames?: Record<string, string[]>;
   schema?: ExtensionSchemaRecord | null;
+  /** The plugins the configuration lists; none unless given. */
+  configured?: readonly string[];
 }): RemovedElementsSources {
   return {
     extensionSchema: () => Promise.resolve(live.schema ?? null),
+    configuredPlugins: () => Promise.resolve(new Set(live.configured ?? [])),
     // Matched by folded name, as the owner rows a push has read are (`removedElementsSourcesOn`).
     recordedElements: tables =>
       Promise.resolve(
@@ -107,6 +110,15 @@ async function judged(
     throw error;
   }
 }
+
+/** A compiled schema declaring nothing. */
+const DECLARING_NOTHING = {
+  specs: [],
+  owners: new Map(),
+  entityColumns: new Map(),
+  entityIndexes: new Map(),
+  elementOwners: new Map(),
+} as unknown as ExtensionSchemaRecord;
 
 const recordedIndex: ElementOnTable = {
   owner: PLUGIN,
@@ -228,16 +240,96 @@ describe("a key pointing at several removed columns", () => {
     }
   });
 
-  it("goes with them where every one is its owner's", async () => {
+  it("goes with them where every one is its owner's, a plugin still configured, a schema compiled or none", async () => {
+    for (const schema of [DECLARING_NOTHING, null]) {
+      const refused = await judged(
+        columns("extra"),
+        sources({
+          schema,
+          configured: [PLUGIN.id],
+          recorded: [ownKey, ownColumn],
+          keysInto: [{ ...key, referencesColumns: ["extra"] }],
+        })
+      );
+
+      expect(refused).toBeUndefined();
+    }
+  });
+
+  it("is refused where its owner is no longer configured: an app's change removes nothing of a plugin's", async () => {
+    for (const schema of [DECLARING_NOTHING, null]) {
+      const refused = await judged(
+        columns("extra"),
+        sources({
+          schema,
+          recorded: [ownKey, ownColumn],
+          keysInto: [{ ...key, referencesColumns: ["extra"] }],
+        })
+      );
+
+      expect(refused?.publicMessage).toContain('fk "fk_refs"');
+      expect(refused?.publicMessage).toContain(PLUGIN.id);
+    }
+  });
+});
+
+describe("a change that drops an entity's table whole", () => {
+  const recordedColumn: ElementOnTable = {
+    owner: PLUGIN,
+    kind: "column",
+    name: "plugin_note",
+    table: TABLE,
+  };
+  const dropped: Deletion[] = [{ kind: "table", table: TABLE }];
+
+  it("takes with it what a configured plugin added there and no longer declares", async () => {
+    expect(
+      await judged(
+        dropped,
+        sources({
+          schema: DECLARING_NOTHING,
+          configured: [PLUGIN.id],
+          recorded: [recordedColumn],
+        })
+      )
+    ).toBeUndefined();
+  });
+
+  it("is refused over what a plugin no longer configured added there", async () => {
     const refused = await judged(
-      columns("extra"),
+      dropped,
+      sources({ schema: DECLARING_NOTHING, recorded: [recordedColumn] })
+    );
+    expect(refused?.publicMessage).toContain(PLUGIN.id);
+    expect(refused?.publicMessage).toContain("plugin_note");
+  });
+
+  it("is refused over what a configured plugin still declares there", async () => {
+    const declaring = {
+      ...DECLARING_NOTHING,
+      entityColumns: new Map([
+        [
+          TABLE,
+          [
+            {
+              name: "plugin_note",
+              kind: "shortText",
+              nullable: true,
+              contributedBy: PLUGIN,
+            },
+          ],
+        ],
+      ]),
+    } as unknown as ExtensionSchemaRecord;
+    const refused = await judged(
+      dropped,
       sources({
-        recorded: [ownKey, ownColumn],
-        keysInto: [{ ...key, referencesColumns: ["extra"] }],
+        schema: declaring,
+        configured: [PLUGIN.id],
+        recorded: [recordedColumn],
       })
     );
-
-    expect(refused).toBeUndefined();
+    expect(refused?.publicMessage).toContain(PLUGIN.id);
   });
 });
 

@@ -68,6 +68,35 @@ export function activeExtensionSchema(): ExtensionSchema | null {
 }
 
 /**
+ * The names of the plugins a configuration lists, every one, whatever it declares: what tells a
+ * plugin still configured, which removes its own parts with a change, from one gone from the
+ * configuration, whose parts a change keeps. The same list `nextly migrate` reads as its declared
+ * plugins (`pluginMigrationArgs`).
+ */
+export function configuredPluginNames(
+  plugins: readonly { readonly name: string }[]
+): ReadonlySet<string> {
+  return new Set(plugins.map(plugin => plugin.name));
+}
+
+/**
+ * The plugins the running configuration lists (`configuredPluginNames`), published with its
+ * extension schema at boot and on each reload, and kept where nothing declares a schema and none is
+ * compiled. Empty until a configuration is published: no plugin is then read as configured.
+ */
+const configured = processGlobal("activeConfiguredPlugins", () => ({
+  names: new Set<string>() as ReadonlySet<string>,
+}));
+
+export function setActiveConfiguredPlugins(names: ReadonlySet<string>): void {
+  configured.names = names;
+}
+
+export function getActiveConfiguredPlugins(): ReadonlySet<string> {
+  return configured.names;
+}
+
+/**
  * The columns contributed to `tableName` that must never reach an entry.
  *
  * A contributed column is on the table and in the runtime Drizzle object, so

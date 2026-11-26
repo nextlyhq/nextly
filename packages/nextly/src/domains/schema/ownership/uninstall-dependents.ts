@@ -57,7 +57,11 @@ import {
   type ElementOnTable,
   type ExtensionSchemaRecord,
 } from "./dependent-elements";
-import { ownerRecordKey, type OwnerRecord } from "./owner-registry";
+import {
+  carriedByPlugin,
+  ownerRecordKey,
+  type OwnerRecord,
+} from "./owner-registry";
 import type { UninstallDependent } from "./uninstall-plan";
 
 /** How the refusal names a kind of element. */
@@ -636,7 +640,7 @@ async function onItsContributedColumns(
   live: () => Promise<readonly LiveTable[]>,
   found: Found
 ): Promise<void> {
-  const contributed = contributedColumnsOf(input.owned, own);
+  const contributed = contributedColumnsOf(input.owned, own, input.pluginName);
   if (contributed.length === 0) return;
   // Loaded when asked, as `elementsAddedTo` loads it: the index naming rule
   // lives beside the compiler, which nothing else here needs.
@@ -812,7 +816,7 @@ async function liveKeysPointingIn(
   live: () => Promise<readonly LiveTable[]>,
   found: Found
 ): Promise<void> {
-  const contributed = contributedColumnsOf(input.owned, own);
+  const contributed = contributedColumnsOf(input.owned, own, input.pluginName);
   if (own.size === 0 && contributed.length === 0) return;
   const pointing = keysPointingIn(liveKeysOf(await live()), own, contributed);
   if (pointing.length === 0) return;
@@ -860,13 +864,21 @@ function liveKeysOf(tables: readonly LiveTable[]): LiveForeignKey[] {
   );
 }
 
-/** The plugin's column rows on other owners' tables: the columns it contributed. */
+/**
+ * The plugin's column rows on other owners' tables that its DOWNs drop: the columns it contributed
+ * that its own modules carry. One the app's migrations carry (on an entity's or a core table) stays
+ * when the plugin is uninstalled, so what stands on it loses nothing.
+ */
 function contributedColumnsOf(
   owned: readonly OwnerRecord[],
-  own: ReadonlySet<string>
+  own: ReadonlySet<string>,
+  pluginName: string
 ): OwnerRecord[] {
   return owned.filter(
-    row => row.elementKind === "column" && !own.has(row.tableName)
+    row =>
+      row.elementKind === "column" &&
+      !own.has(row.tableName) &&
+      carriedByPlugin(row, pluginName)
   );
 }
 

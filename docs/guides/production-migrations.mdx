@@ -1855,7 +1855,10 @@ on PostgreSQL and MySQL. If `onUninstall` drops or renames one of the tables
 the DOWNs are to drop, the uninstall stops before the first DOWN
 (`tables-changed-by-hook`). If a table is still there after the DOWNs ran,
 the plugin is not recorded as uninstalled (`tables-left-by-down`); drop the
-table and run the uninstall again.
+table and run the uninstall again. A column or index the plugin added to a
+collection's, Single's, field group's or core table is the exception: the app's
+migrations carry it, so no DOWN drops it, and the uninstall leaves it in place
+and forgets that it was the plugin's.
 
 `plugins install` holds the migrate lock from its first migration until
 `onInstall` returns, and `plugins uninstall` from its final decision until the

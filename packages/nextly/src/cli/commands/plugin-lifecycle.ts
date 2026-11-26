@@ -33,6 +33,7 @@ import { qualifiedFilename } from "../../domains/schema/migrate/plugin/plugin-mi
 import { tablesLeftInPlace } from "../../domains/schema/ownership/drop-guard";
 import { assertDependenciesInstalled } from "../../domains/schema/ownership/install-plan";
 import {
+  carriedByPlugin,
   createOwnerRegistry,
   ELEMENT_NOUNS,
   type OwnerRecord,
@@ -1012,10 +1013,18 @@ export function previewPluginUninstall(
           },
       { action: "record", target: `${plugin.name} as ${plan.finalState}` },
     ];
+    const leftLine =
+      plan.finalState === "uninstalled"
+        ? leftInPlaceLine(
+            await elementsLeftInPlace(plugin, plan, decided.owned, deps),
+            false
+          )
+        : undefined;
     return {
       changes,
       notes: [
         ...consentNote(planned),
+        ...(leftLine === undefined ? [] : [leftLine]),
         ...(decided.found?.state === "uninstalled"
           ? []
           : [
@@ -1172,6 +1181,8 @@ function uninstallDeletions(
         row =>
           row.elementKind === "column" &&
           row.ownerId === plugin.name &&
+          // A column the app's migrations carry is dropped by none of its DOWNs.
+          carriedByPlugin(row, plugin.name) &&
           !dropped.has(row.tableName)
       )
       .map(row => ({
@@ -1332,6 +1343,11 @@ async function executeUninstall(
   }
   await assertTablesDropped(plugin, plan, deps);
   await assertElementsDropped(plugin, plan, owned, deps);
+  // Read while the plugin's rows still say whose these are; they go with its records below.
+  const left =
+    plan.finalState === "uninstalled"
+      ? await elementsLeftInPlace(plugin, plan, owned, deps)
+      : [];
 
   // A full uninstall leaves nothing of the plugin behind but the record that
   // it was uninstalled; keeping the data keeps its rows, marked orphaned.
@@ -1347,6 +1363,8 @@ async function executeUninstall(
       ? `${plugin.name} uninstalled; its tables were kept and are now orphaned.`
       : `${plugin.name} uninstalled and its tables dropped.`
   );
+  const leftLine = leftInPlaceLine(left, true);
+  if (leftLine !== undefined) deps.logger.info(leftLine);
   deps.logger.info(
     `Remove "${plugin.name}" from your config to finish. Until you do, boot will refuse to start.`
   );
@@ -1491,6 +1509,46 @@ async function liveElementsItAdded(
   owned: readonly OwnerRecord[],
   deps: Pick<PluginLifecycleDeps, "liveElements">
 ): Promise<AddedElement[]> {
+  // What it added to an entity's or a core table rides the app's migrations: none of its DOWNs
+  // drops it, so the uninstall leaves it in place rather than waiting for it to go.
+  return liveAddedElements(plugin, plan, owned, deps, true);
+}
+
+/**
+ * What the plugin added to an entity's or a core table that is there now: the app's migrations
+ * carry it, so no DOWN of the plugin's drops it and the uninstall leaves it in place. Named after
+ * the uninstall and in its dry run, so the operator knows what is left (`leftInPlaceLine`).
+ */
+function elementsLeftInPlace(
+  plugin: LifecyclePlugin,
+  plan: UninstallPlan,
+  owned: readonly OwnerRecord[],
+  deps: Pick<PluginLifecycleDeps, "liveElements">
+): Promise<AddedElement[]> {
+  return liveAddedElements(plugin, plan, owned, deps, false);
+}
+
+/** The line naming what a full uninstall leaves in place, or none where it leaves nothing. */
+function leftInPlaceLine(
+  left: readonly AddedElement[],
+  done: boolean
+): string | undefined {
+  if (left.length === 0) return undefined;
+  const them = left.length === 1 ? "it" : "them";
+  return `${done ? "Left" : "Leaves"} in place, as the app's migrations carry ${them}: ${left.map(describeAdded).join(", ")}.`;
+}
+
+/**
+ * The plugin's element rows on tables a full uninstall does not drop, that the database still has:
+ * those its own modules carry (`ownStream`), or those the app's migrations carry.
+ */
+async function liveAddedElements(
+  plugin: LifecyclePlugin,
+  plan: UninstallPlan,
+  owned: readonly OwnerRecord[],
+  deps: Pick<PluginLifecycleDeps, "liveElements">,
+  ownStream: boolean
+): Promise<AddedElement[]> {
   const dropped = new Set(plan.tablesDropped);
   const added = owned.flatMap((row): AddedElement[] => {
     const kind = row.elementKind ?? "table";
@@ -1498,6 +1556,7 @@ async function liveElementsItAdded(
       kind === "table" ||
       row.ownerKind !== "plugin" ||
       row.ownerId !== plugin.name ||
+      carriedByPlugin(row, plugin.name) !== ownStream ||
       dropped.has(row.tableName)
     ) {
       return [];

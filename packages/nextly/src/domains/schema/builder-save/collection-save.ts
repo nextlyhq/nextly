@@ -1776,9 +1776,13 @@ async function adoptionFor(
     return null;
   }
   const dialect = deps.adapter.getCapabilities().dialect;
-  const live = (
-    await introspectLiveSnapshot(deps.adapter.getDrizzle(), dialect, [table])
-  ).tables.find(t => t.name === table);
+  // Without what other owners built there (`liveTable`): a plugin's recorded column or index is
+  // not the app's to bring up to date, and read as part of the table it would be offered for
+  // removal as something an earlier version left. No snapshot describes this table, so none of
+  // those elements is one its history has.
+  const live = (await liveTable(deps, table)).tables.find(
+    t => t.name === table
+  );
   if (live === undefined) return null;
   const kind = kindOf(save);
   const inputs = await appMigrationInputs({

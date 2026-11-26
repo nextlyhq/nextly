@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { SchemaEventRow } from "../../events/schema-events-repository";
+import { ownerRowsToRecord } from "../kept-elements";
 import type { OwnerRecord } from "../owner-registry";
 import {
   assertBootPluginsInstalled,
@@ -249,6 +250,35 @@ describe("assertBootPluginsInstalled", () => {
         production: false,
         readLifecycleEvents: async () => [lifecycleRow("auth", "installed", 1)],
         readOwners: async () => [ownerRow("seo", "uninstalled")],
+      })
+    ).rejects.toMatchObject({ code: "PLUGIN_SCHEMA_UNINSTALLED" });
+  });
+
+  it("does not take the rows of what a plugin added to a collection's table for its install", async () => {
+    const added = ownerRowsToRecord(
+      [
+        {
+          table: "dc_posts",
+          elementKind: "column",
+          elementName: "seo_score",
+          owner: { kind: "plugin", id: "seo" },
+        },
+      ],
+      new Set(),
+      []
+    );
+    const events = {
+      readLifecycleEvents: async () => [lifecycleRow("auth", "installed", 1)],
+    };
+    await expect(
+      boot({ ...events, readOwners: async () => added })
+    ).rejects.toMatchObject({ code: "PLUGIN_NOT_INSTALLED" });
+    // CONTROL: the same row, marked as an uninstall that kept the data marks it, is read.
+    await expect(
+      boot({
+        ...events,
+        readOwners: async () =>
+          added.map(row => ({ ...row, state: "orphaned" as const })),
       })
     ).rejects.toMatchObject({ code: "PLUGIN_SCHEMA_UNINSTALLED" });
   });

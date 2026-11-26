@@ -84,6 +84,20 @@ export interface OwnerRegistry {
 }
 
 /**
+ * Whether the plugin's own migration modules carry the table or element a row names: its stream is
+ * the plugin's. What a plugin adds to a collection's, Single's, field group's or core table rides
+ * the app's migrations instead (`ownerRowsToRecord`), so no module of the plugin, and no DOWN, makes
+ * or drops it, and no version of the plugin's describes it. The one reading of that, for every
+ * reader that asks what a plugin's own modules account for.
+ */
+export function carriedByPlugin(
+  row: Pick<OwnerRecord, "migratedBy">,
+  pluginName: string
+): boolean {
+  return row.migratedBy === `plugin:${pluginName}`;
+}
+
+/**
  * The composite identity an owner row is keyed by: its table, element kind
  * and element name. A table-level row and an element row on the same table
  * are different claims.

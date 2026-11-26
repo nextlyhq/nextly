@@ -29,6 +29,7 @@ import {
   migrationChecksum,
   type PluginMigration,
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
+import { ownerRowsToRecord } from "../../../domains/schema/ownership/kept-elements";
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
 import { assertPluginSchemaVersionsUsable } from "../../../domains/schema/ownership/schema-version-check";
 import {
@@ -297,6 +298,41 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(row?.ownerId).toBe("olda");
       expect(await ledgerFor("newb")).toEqual([]);
+    });
+
+    it("stamps no version on what the plugin added to an entity's table, which the app's migrations carry", async () => {
+      // As a push records it: the plugin's column on a collection's table, the app's stream's.
+      await owners().upsert(
+        ownerRowsToRecord(
+          [
+            {
+              table: "dc_stamped",
+              elementKind: "column",
+              elementName: "stampb_marker",
+              owner: { kind: "plugin", id: "stampb" },
+            },
+          ],
+          new Set(),
+          []
+        )
+      );
+      // A module that leaves the plugin owning no table moves its schema version onto the rows it
+      // has; its own modules carry none of these.
+      const blank = buildBlankPluginMigration({
+        pluginName: "stampb",
+        schemaVersion: 1,
+        name: "backfill",
+        now: new Date(Date.UTC(2026, 9, 8, 11, 0, 0)),
+        tablesByDialect: { postgresql: [], mysql: [], sqlite: [] },
+        existing: [],
+      });
+      await runPhase("stampb", [blank]);
+
+      expect(
+        (await owners().read())
+          .filter(row => row.ownerId === "stampb")
+          .map(row => [row.tableName, row.migratedBy, row.schemaVersion])
+      ).toEqual([["dc_stamped", "app", null]]);
     });
 
     it("passes the boot gate for a plugin whose modules own no table", async () => {

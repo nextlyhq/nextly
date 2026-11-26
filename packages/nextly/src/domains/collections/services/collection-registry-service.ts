@@ -479,6 +479,18 @@ function isPipelineSource(source: CollectionSource | undefined): boolean {
   return source === "code" || (!!source && source.startsWith("plugin:"));
 }
 
+/** `{ plugin }` where a plugin is named, nothing otherwise. */
+function withPlugin(plugin: string | undefined): { plugin?: string } {
+  return plugin === undefined ? {} : { plugin };
+}
+
+/** The plugin a registry row's `source` names (`plugin:<name>`), or none for any other source. */
+function pluginOfSource(source: string | null | undefined): string | undefined {
+  return source?.startsWith("plugin:") === true
+    ? source.slice("plugin:".length)
+    : undefined;
+}
+
 /**
  * What a code-first sync does with one collection (`codeFirstSyncStep`), with the record it acts
  * on when the registry holds one, the schema hash it records and the table it addresses.
@@ -1108,6 +1120,8 @@ export class CollectionRegistryService extends BaseRegistryService<
       collections.push({
         slug,
         tables: collectionOwnTables(record.tableName, record.fields ?? []),
+        // A plugin's collection: what the same plugin added to its tables goes with it.
+        ...withPlugin(pluginOfSource(record.source)),
       });
     }
     await assertNothingDependsOn(

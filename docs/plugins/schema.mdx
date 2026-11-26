@@ -378,7 +378,9 @@ refusal names each one and its owner. Remove them in their owner's code and migr
 uninstall with `--keep-data`, which drops nothing. A full uninstall also deletes the
 plugin's settings (secrets included), its owner records and its migration history, so a
 later install starts from nothing. It forgets them only once its DOWNs have removed
-everything it added to other owners' tables; if one is left, it keeps them and refuses
+everything they carry of what it added to other owners' tables (a column or index it added to
+a collection's, Single's, field group's or core table rides the app's migrations, so no DOWN
+drops it: the uninstall leaves it in place and forgets it was the plugin's); if one is left, it keeps them and refuses
 (`PLUGIN_UNINSTALL_IRREVERSIBLE`), and before anything runs when no applied module is left to remove it: drop what it names and run the uninstall again. Every other refusal comes before anything runs. After an
 uninstall, with or without `--keep-data`, the boot refuses the plugin while it is
 still listed (`PLUGIN_SCHEMA_UNINSTALLED`): remove it from the config, or install it

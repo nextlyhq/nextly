@@ -271,8 +271,10 @@ import {
   readLiveTables,
 } from "../../domains/schema/ownership/drop-guard";
 import {
+  carriedByPlugin,
   createOwnerRegistry,
   ownerRecordKey,
+  type OwnerRecord,
 } from "../../domains/schema/ownership/owner-registry";
 import { withoutRecordedPluginElements } from "../../domains/schema/ownership/recorded-drift";
 import {
@@ -2178,12 +2180,15 @@ async function recordElementOwners(
   deps: MigrateCoreDeps,
   contributors?: ReadonlySet<string>
 ): Promise<void> {
-  const elementOwners = deps.extensionSchema?.elementOwners;
-  if (elementOwners === undefined || elementOwners.size === 0) return;
+  const schema = deps.extensionSchema;
+  if (schema === undefined) return;
   const { SchemaOwnersRepository: OwnersRepo } = await import(
     "../../domains/schema/ownership/schema-owners-repository"
   );
   const owners = new OwnersRepo(deps.db, deps.dialect);
+  await recordEntityElementOwners(schema, deps.dialect, owners, contributors);
+  const elementOwners = schema.elementOwners;
+  if (elementOwners.size === 0) return;
   // A plugin's applied schema version is the highest on any of its rows, and
   // a plugin that only contributes elements has no rows but these. Written as
   // `null`, its version never existed — the boot gate judged it behind after
@@ -2238,6 +2243,49 @@ async function recordElementOwners(
       }))
     );
   }
+}
+
+/**
+ * The rows of what the configuration adds to a collection's, Single's, field group's or core
+ * table, written as the development push writes them (`ownerRowsToRecord`): the contributor's,
+ * carried by the app's migrations, with no version, since no module of a plugin carries them. Only
+ * an element no row names yet is written, so a row an earlier run or a push wrote keeps its owner
+ * and its version. Without them, a database `nextly migrate` alone set up had no record that a
+ * plugin built there, and once the plugin left the configuration nothing kept a change from taking
+ * it. `contributors`, when given, keeps those plugins' elements only.
+ */
+async function recordEntityElementOwners(
+  schema: ExtensionSchema,
+  dialect: SupportedDialect,
+  owners: {
+    read(tables?: readonly string[]): Promise<OwnerRecord[]>;
+    upsert(rows: readonly OwnerRecord[]): Promise<void>;
+  },
+  contributors: ReadonlySet<string> | undefined
+): Promise<void> {
+  const { contributedElements, ownerRowsToRecord } = await import(
+    "../../domains/schema/ownership/kept-elements"
+  );
+  // The extension tables' elements are recorded below with their contributor's stream and version.
+  const onEntities = contributedElements(
+    { ...schema, elementOwners: new Map() },
+    dialect
+  ).filter(element =>
+    ofContributors(
+      element.owner.kind,
+      element.owner.kind === "plugin" ? element.owner.id : "",
+      contributors
+    )
+  );
+  if (onEntities.length === 0) return;
+  const tables = [...new Set(onEntities.map(element => element.table))];
+  await owners.upsert(
+    ownerRowsToRecord(
+      onEntities,
+      new Set(schema.owners.keys()),
+      await owners.read(tables)
+    )
+  );
 }
 
 /**
@@ -2333,9 +2381,16 @@ async function retireElementOwners(
   if (elementRows.length === 0) return;
   const tables = [...new Set(elementRows.map(row => row.tableName))];
   const live = await introspectLiveSnapshot(deps.db, deps.dialect, tables);
+  const { contributedByTable, contributedElements } = await import(
+    "../../domains/schema/ownership/kept-elements"
+  );
+  // Everything the configuration declares, on extension and entity tables alike, as the push
+  // retires against it: a declared element whose column no file has made yet keeps its row.
   const retired = retiredElementRows({
     rows: elementRows,
-    declared: deps.extensionSchema?.elementOwners ?? new Map(),
+    declared: contributedByTable(
+      contributedElements(deps.extensionSchema, deps.dialect)
+    ),
     live,
   });
   for (const row of retired) {
@@ -2618,8 +2673,9 @@ export async function runPluginPhase(
       // here, and needs nothing: the boot gate reads the applied version
       // from the ledger.
       if (tables.length === 0) {
+        // The rows its own modules carry: what it added to an entity's table rides the app's.
         const existing = (await store.read()).filter(
-          row => row.ownerId === pluginName
+          row => row.ownerId === pluginName && carriedByPlugin(row, pluginName)
         );
         if (existing.length > 0) {
           await store.upsert(
@@ -2955,6 +3011,9 @@ async function runMigrationStreams(
     ...(deps.extensionSchema === undefined
       ? {}
       : { extensionSchema: deps.extensionSchema }),
+    ...(deps.declaredPlugins === undefined
+      ? {}
+      : { configuredPlugins: deps.declaredPlugins }),
   });
   return { pluginModulesApplied, applied };
 }
@@ -5519,6 +5578,12 @@ export async function runFileMigrations(args: {
    * the app's tables, read by the check that a file removes none of it.
    */
   extensionSchema?: ExtensionSchema;
+  /**
+   * Every plugin the configuration lists, whatever it declares (`MigrateCoreDeps.declaredPlugins`):
+   * a plugin among them removes its own parts with a file, one not among them is gone and removes
+   * nothing. None given, no plugin is read as configured.
+   */
+  configuredPlugins?: ReadonlySet<string>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -5627,6 +5692,7 @@ export async function runFileMigrations(args: {
       db,
       dialect,
       extensions: args.extensionSchema ?? null,
+      configuredPlugins: args.configuredPlugins ?? new Set(),
       rows: fileOwnerRows,
     }),
   });

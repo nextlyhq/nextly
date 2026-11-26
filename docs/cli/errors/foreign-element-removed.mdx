@@ -7,11 +7,12 @@ description: "A change would remove an element another owner, such as a plugin, 
 
 A change would remove an element another owner, such as a plugin, built on one of the app's tables, so it was refused and changed nothing.
 
-A plugin can add an index or a foreign key to a collection's, Single's or field group's table. Removing a field, moving it into a group, or turning translation on where that moves the field's column takes the column off that table. Where an index or foreign key of another owner stands on the column, or the change removes a whole table it is on, such as a many-to-many's join table, the change would take it too. `nextly migrate:create` refuses before it writes anything, and `nextly migrate` refuses before the run's first file, naming the field, the owner, and the element and its table. The same is refused by a Schema Builder save and a development push.
+A plugin can add a hidden column or an index to a collection's, Single's or field group's table, and point a foreign key of one of its own tables at a column there. Removing a field, moving it into a group, or turning translation on where that moves the field's column takes the column off that table. Where an index or foreign key of another owner stands on the column, or the change removes a whole table it is on, such as a many-to-many's join table, the change would take it too. `nextly migrate:create` refuses before it writes anything, and `nextly migrate` refuses before the run's first file, naming the field, the owner, and the element and its table. The same is refused by a Schema Builder save and a development push.
 
 ## Fix
 
-- Remove the element first, as its owner: take the index or foreign key out of the plugin, or uninstall the plugin, and apply that. Then run the command again.
+- Remove the element first, as its owner: take the index or foreign key out of the plugin and apply that. Then run the command again.
+- If the plugin is no longer in the config, put it back, uninstall it with `nextly plugins uninstall <plugin>`, and take it out of the config again. The uninstall leaves what the app's migrations carry in place and forgets that it was the plugin's, so the command then removes it with the field, asking for the data-loss consent.
 - Or leave the field where it is.
 - If the file was written earlier and the plugin added the element since, remove the change from the config, or write the file again, so that the element keeps its column.
 
