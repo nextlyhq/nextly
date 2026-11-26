@@ -430,10 +430,6 @@ export function typeChangeTargets(args: {
 }
 
 /**
- * A field as the change would save it. Of its settings, those the rules read are parsed here; a
- * choice's options are a list, a relationship's an object, and each is read as far as it is one.
- */
-/**
  * The widest bounded text column any supported database makes: PostgreSQL's `varchar` limit. A width
  * past it is no column a save could make, and a candidate stating one would have a text that long
  * made to judge it, so it is refused as the request's own error.
@@ -448,6 +444,10 @@ const StatedWidth = z
   })
   .optional();
 
+/**
+ * A field as the change would save it. Of its settings, those the rules read are parsed here; a
+ * choice's options are a list, a relationship's an object, and each is read as far as it is one.
+ */
 const CandidateField = z.looseObject({
   hasMany: z.boolean().nullish(),
   unique: z.boolean().nullish(),
