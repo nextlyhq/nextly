@@ -38,7 +38,15 @@ import {
 /** The props the general popover content takes. */
 export type BuilderPopoverContentProps = React.ComponentPropsWithoutRef<
   typeof PopoverContent
->;
+> & {
+  /**
+   * Which anchor the popup is open beside, for one that stays open while
+   * its anchor moves to another control (a preview beside the highlighted
+   * row): a change places it again beside the new one. A popup opened from
+   * one control leaves it out.
+   */
+  anchorKey?: string;
+};
 
 /** The popover's own default distance from its anchor, stated so it is known. */
 const SIDE_OFFSET = 4;
@@ -157,6 +165,7 @@ export const BuilderPopoverContent: React.ForwardRefExoticComponent<
       collisionPadding = EDGE_GAP,
       // Asked off, the popup stays on its side even without room there.
       avoidCollisions = true,
+      anchorKey,
       ...props
     },
     forwardedRef
@@ -179,11 +188,17 @@ export const BuilderPopoverContent: React.ForwardRefExoticComponent<
     });
     asked.current = { side, align, sideOffset, keepSide, collisionPadding };
 
+    // The anchor the popup was last placed beside.
+    const placedBeside = React.useRef(anchorKey);
+    const askedAnchor = React.useRef(anchorKey);
+    askedAnchor.current = anchorKey;
+
     const place = React.useCallback((): void => {
-      const node = content.current;
-      if (node === null) return;
+      const element = content.current;
+      if (element === null) return;
+      placedBeside.current = askedAnchor.current;
       const { collisionPadding: padding, ...where } = asked.current;
-      const next = nextPlace(node, now.current, where, padding);
+      const next = nextPlace(element, now.current, where, padding);
       // Nothing to measure from: shown where the popover put it.
       setHeld(
         next ?? {
@@ -192,6 +207,12 @@ export const BuilderPopoverContent: React.ForwardRefExoticComponent<
         }
       );
     }, []);
+
+    // Closed, the content goes while this stays mounted with its popover:
+    // the next opening is placed afresh, from wherever it opens.
+    React.useLayoutEffect(() => {
+      if (node === null) setHeld(null);
+    }, [node]);
 
     // Once, when the popover first has the popup beside its anchor: until
     // then it keeps the popup off the page with a translate of -200%.
@@ -217,6 +238,16 @@ export const BuilderPopoverContent: React.ForwardRefExoticComponent<
       watch.observe(wrapper, { attributes: true, attributeFilter: ["style"] });
       return () => watch.disconnect();
     }, [isHeld, node, place]);
+
+    // Placed again beside a new anchor, once the popover has moved it there
+    // (it keeps the held place against the new anchor until then).
+    React.useEffect(() => {
+      if (!isHeld || placedBeside.current === anchorKey) return;
+      const view = content.current?.ownerDocument.defaultView;
+      if (view === null || view === undefined) return;
+      const frame = view.requestAnimationFrame(place);
+      return () => view.cancelAnimationFrame(frame);
+    }, [anchorKey, isHeld, place]);
 
     // Placed again only when the window changes size; nothing else moves it.
     React.useEffect(() => {

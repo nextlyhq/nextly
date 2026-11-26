@@ -132,18 +132,28 @@ function Popup({
   rows,
   side = "right",
   align = "start",
+  open = true,
+  anchorKey,
 }: {
   as: Content;
   rows: number;
   side?: "top" | "right" | "bottom" | "left";
   align?: "start" | "center" | "end";
+  open?: boolean;
+  anchorKey?: string;
 }): React.JSX.Element {
   return (
     <>
       <header className="nx-builder-topbar" />
-      <Popover open>
+      <Popover open={open}>
         <PopoverAnchor virtualRef={{ current: anchor }} />
-        <Content side={side} align={align} sideOffset={12} collisionPadding={8}>
+        <Content
+          side={side}
+          align={align}
+          sideOffset={12}
+          collisionPadding={8}
+          {...(anchorKey === undefined ? {} : { anchorKey })}
+        >
           {Array.from({ length: rows }, (_, row) => (
             <p key={row}>Row {row}</p>
           ))}
@@ -254,6 +264,45 @@ describe("a builder popup while it is open", () => {
       left: before.left,
       top: before.top - 100,
     });
+  });
+
+  it("is placed afresh when it is opened again from somewhere else", async () => {
+    // Raised to fit, low in the window: 171 px above its row.
+    const view = await opened(BuilderPopoverContent);
+    expect(placedAt(wrapper()).top).toBe(anchorBox.top - 171);
+
+    view.rerender(<Popup as={BuilderPopoverContent} rows={3} open={false} />);
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="popover-content"]')).toBeNull()
+    );
+    anchorBox = { ...anchorBox, top: 100 };
+    view.rerender(<Popup as={BuilderPopoverContent} rows={3} />);
+
+    await waitFor(() =>
+      expect(content().getAttribute("data-nx-popup")).toBe("held")
+    );
+    expect(placedAt(wrapper()).top).toBe(100);
+  });
+
+  it("is placed again beside a new anchor it is told it moved to", async () => {
+    const view = render(
+      <Popup as={BuilderPopoverContent} rows={3} anchorKey="first" />
+    );
+    await waitFor(() =>
+      expect(content().getAttribute("data-nx-popup")).toBe("held")
+    );
+    expect(placedAt(wrapper()).top).toBe(anchorBox.top - 171);
+
+    anchorBox = { ...anchorBox, top: 100 };
+    view.rerender(
+      <Popup as={BuilderPopoverContent} rows={3} anchorKey="second" />
+    );
+    await scrolled();
+    await act(async () => {
+      await new Promise(done => requestAnimationFrame(() => done(null)));
+    });
+
+    await waitFor(() => expect(placedAt(wrapper()).top).toBe(100));
   });
 
   it("is placed again when the window is resized", async () => {

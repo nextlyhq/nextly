@@ -194,6 +194,8 @@ export function TilePopover({
         sideOffset={8}
         // Never flipped back over the tiles where the right has no room.
         avoidCollisions={false}
+        // Placed again beside each tile the highlight moves to.
+        anchorKey={entry.id}
         aria-hidden="true"
         className="nx-insert-popover"
         // Focus stays in the search, where typing and the arrow keys work.

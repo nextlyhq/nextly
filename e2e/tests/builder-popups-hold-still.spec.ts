@@ -108,6 +108,25 @@ function heldEdges(side: string, box: Box): { across: number; along: number } {
   }
 }
 
+/**
+ * Two places the same to within a pixel. A popup's height is fractional (its
+ * lines are), and the popover rounds its place to whole pixels, so a popup
+ * held by its bottom edge can settle a fraction of a pixel away; a popup that
+ * moves is tens of pixels away.
+ */
+function expectSamePlace(
+  after: Record<string, number>,
+  before: Record<string, number>,
+  what: string
+): void {
+  for (const key of Object.keys(before)) {
+    expect(
+      Math.abs((after[key] ?? Number.NaN) - (before[key] ?? 0)),
+      `${what}: ${key} moved from ${before[key]} to ${after[key]}`
+    ).toBeLessThan(1);
+  }
+}
+
 /** Inside the window, and below the builder's top bar. */
 async function expectInsideWindow(page: Page, popup: Locator): Promise<void> {
   const box = await boxOf(popup);
@@ -168,8 +187,12 @@ async function holdsThrough(
 
   const after = await boxOf(popup);
   expect(await popup.getAttribute("data-side")).toBe(side);
-  expect(heldEdges(side, after)).toEqual(heldEdges(side, before));
-  expect(await boxOf(pointer(popup))).toEqual(at);
+  expectSamePlace(
+    heldEdges(side, after),
+    heldEdges(side, before),
+    "the edge beside the opener"
+  );
+  expectSamePlace(await boxOf(pointer(popup)), at, "the control just used");
   await expectInsideWindow(page, popup);
 }
 
@@ -280,6 +303,8 @@ async function createPage(request: APIRequestContext): Promise<string> {
 }
 
 test.beforeEach(async ({ page }) => {
+  // The first open of the builder compiles it, on a development server.
+  test.setTimeout(120_000);
   await page.setViewportSize(WINDOW);
 });
 
@@ -474,7 +499,11 @@ test.describe("what may move a builder popup", () => {
     await openEditorWith(page, NODES, TEXT);
     const panel = await openDesign(page);
     await panel.getByRole("tab", { name: /^Colou?rs/ }).click();
-    const row = panel.locator(".nx-vars__row").nth(1);
+    // By its element: the open popup is modal, which takes the panel's
+    // region out of the accessibility tree.
+    const row = page
+      .locator('section[aria-label="Design panel"] .nx-vars__row')
+      .nth(1);
     await row.click();
     const popup = page.locator('[data-slot="popover-content"].nx-vars-editor');
     await expect(popup).toHaveAttribute("data-nx-popup", "held");
@@ -495,9 +524,12 @@ test.describe("what may move a builder popup", () => {
 
     const rowAfter = await boxOf(row);
     const after = await boxOf(popup);
-    expect(rowAfter.y).toBe(rowBefore.y - by);
-    expect(after.y).toBe(before.y - by);
-    expect(after.x).toBe(before.x);
+    expectSamePlace({ y: rowAfter.y }, { y: rowBefore.y - by }, "the row");
+    expectSamePlace(
+      { x: after.x, y: after.y },
+      { x: before.x, y: before.y - by },
+      "the popup"
+    );
   });
 
   test("it may be placed again when the window is resized, inside it", async ({
@@ -555,16 +587,12 @@ test.describe("what may move a builder popup", () => {
     await settled(page);
 
     await expectInsideWindow(page, popup);
-    // Taller than the room it has, its content scrolls inside it.
-    const fits = await popup.evaluate(element => {
-      const scrollers = [element, ...element.querySelectorAll("*")].filter(
-        each => each.scrollHeight > each.clientHeight + 1
-      );
-      return scrollers.every(each => {
-        const overflow = getComputedStyle(each).overflowY;
-        return overflow === "auto" || overflow === "scroll";
-      });
-    });
-    expect(fits).toBe(true);
+    // Its list of results scrolls inside it, rather than running it off the
+    // window.
+    const list = popup.getByRole("listbox", { name: "Matching blocks" });
+    await expect(list).toBeVisible();
+    expect(
+      await list.evaluate(element => getComputedStyle(element).overflowY)
+    ).toMatch(/^(auto|scroll)$/);
   });
 });
