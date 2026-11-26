@@ -441,7 +441,7 @@ describe("the savepoint a transaction takes", () => {
     expect(listTables).not.toHaveBeenCalled();
   });
 
-  it("a settled process meeting a rollback keeps its error, and follows the names once it has ended", async () => {
+  it("a settled process meeting a rollback is refused to retry, and follows the names once it has ended", async () => {
     held = {
       dynamic_field_groups: ["id"],
       comp_hero: ["id", "_component_type"],
@@ -449,7 +449,9 @@ describe("the savepoint a transaction takes", () => {
     registered = { fg_hero: "_field_group_type" };
     const adapter = adapterOf("postgresql");
     const error = missingTable.postgresql("fg_hero");
-    expect(await failing(adapter, error)).toBe(error);
+    // It took no savepoint, so its transaction cannot be asked; only a rollback moves storage
+    // under it, and it is told to retry, as a save the migration meets going up is.
+    expect(await failing(adapter, error)).toMatchObject(MOVING);
     expect(registerComponentRuntimeSchema).not.toHaveBeenCalled();
     await adapter.rolledBack();
     expect(
@@ -709,8 +711,8 @@ describe("lookingUpRegistry", () => {
     registered = { fg_hero: "_field_group_type" };
     held = { dynamic_components: ["id"] };
     const registry = lookupOf("postgresql", "dynamic_components");
-    await expect(run(adapter, registry, txOf().handle)).rejects.toThrow(
-      /dynamic_field_groups/
+    await expect(run(adapter, registry, txOf().handle)).rejects.toMatchObject(
+      MOVING
     );
 
     inFlow = undefined;
