@@ -271,6 +271,7 @@ import {
   readLiveTables,
 } from "../../domains/schema/ownership/drop-guard";
 import {
+  carriedByPlugin,
   createOwnerRegistry,
   ownerRecordKey,
   type OwnerRecord,
@@ -2672,8 +2673,9 @@ export async function runPluginPhase(
       // here, and needs nothing: the boot gate reads the applied version
       // from the ledger.
       if (tables.length === 0) {
+        // The rows its own modules carry: what it added to an entity's table rides the app's.
         const existing = (await store.read()).filter(
-          row => row.ownerId === pluginName
+          row => row.ownerId === pluginName && carriedByPlugin(row, pluginName)
         );
         if (existing.length > 0) {
           await store.upsert(
