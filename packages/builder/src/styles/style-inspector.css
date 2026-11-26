@@ -590,8 +590,8 @@
 
 /*
  * Content, Style and Advanced as one segmented bar across the panel: three
- * views of one block, on a muted track, the open one raised on the panel's
- * own surface at 600. Kept unlike a value's segments below (Fill / Fit /
+ * views of one block, on a muted track, the open one raised on the page's
+ * background at 600, as the Add panel's Blocks and Sections are drawn. Kept unlike a value's segments below (Fill / Fit /
  * Fixed) on every count an author sees: taller, on a track where they are
  * clear, and the open tab raised where a chosen value is filled with the
  * text colour. Unlayered, so these outrank the shared tabs' own utilities.
@@ -607,7 +607,9 @@
   /* The builder's border token, which a request for more contrast promotes. */
   border: 1px solid var(--nx-builder-border);
   border-radius: var(--radius-md);
-  background: var(--nx-builder-well);
+  /* Muted, so the open tab's background stands out in either scheme: white
+     on grey in light, black on grey in dark. */
+  background: var(--nx-muted);
 }
 
 /*
@@ -643,7 +645,7 @@
 }
 
 /*
- * The open tab raised on the panel's surface with a hairline and a soft
+ * The open tab raised on the page's background with a hairline and a soft
  * shadow, its words in the panel's own text colour at 600, never the accent,
  * which measured 4.09:1 as text on the panel surface, under the 4.5:1 text
  * this size needs.
@@ -651,7 +653,7 @@
 .nx-inspector__tab[data-state="active"] {
   color: var(--nx-builder-text, var(--nx-foreground));
   font-weight: 600;
-  background: var(--nx-builder-surface-raised);
+  background: var(--nx-background);
   box-shadow:
     0 0 0 1px var(--nx-builder-border),
     0 1px 2px color-mix(in srgb, var(--nx-shadow-color) 10%, transparent);

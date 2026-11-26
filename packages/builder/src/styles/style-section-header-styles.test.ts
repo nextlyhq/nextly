@@ -667,7 +667,7 @@ describe("the inspector's Content, Style and Advanced tabs", () => {
     expect(list).toContain("padding: 0.125rem");
     // The builder's border token, which more contrast promotes.
     expect(list).toContain("border: 1px solid var(--nx-builder-border)");
-    expect(list).toContain("background: var(--nx-builder-well)");
+    expect(list).toContain("background: var(--nx-muted)");
     // Each tab an equal share of the bar.
     const tab = ruleBody(".nx-inspector__tab");
     expect(tab).toContain("flex: 1 1 0");
@@ -678,7 +678,7 @@ describe("the inspector's Content, Style and Advanced tabs", () => {
       "color: var(--nx-builder-text, var(--nx-foreground))"
     );
     expect(active).toContain("font-weight: 600");
-    expect(active).toContain("background: var(--nx-builder-surface-raised)");
+    expect(active).toContain("background: var(--nx-background)");
     expect(active).toContain("box-shadow: 0 0 0 1px var(--nx-builder-border)");
     expect(ruleBody(".nx-inspector__tab:focus-visible")).toContain(
       "outline: 2px solid var(--nx-ring)"
