@@ -379,7 +379,7 @@ function expressionTexts(node, read, bindings, depth = 0) {
     // `Normal ${on ? "flow" : "position"}` reads "Normal flow". The strings
     // inside count as read only when the template is read this way.
     const inside = new Set();
-    const joined = joinings(
+    const joined = spread(
       node.quasis.flatMap((quasi, at) => {
         const own = [quasi.value.cooked ?? ""];
         const expression = node.expressions[at];
@@ -390,11 +390,9 @@ function expressionTexts(node, read, bindings, depth = 0) {
         ];
       })
     );
-    if (joined !== null) {
-      for (const string of inside) read.add(string);
-      read.add(node);
-      return joined;
-    }
+    for (const string of inside) read.add(string);
+    read.add(node);
+    return joined;
   }
   if (node.type === "Identifier" && depth < MOST_BINDING_STEPS) {
     // A constant the file binds once: `const label = "token"`, drawn as
@@ -550,17 +548,24 @@ function joinings(parts) {
  * beside the fixed text around it.
  */
 function partLines(parts) {
+  return spread(parts).map(tidy);
+}
+
+/**
+ * The texts a run of parts can read, untidied: every combination up to
+ * `MOST_COMBINATIONS`, and past it one text per branch of each varying
+ * part, with every other varying part read as `{…}`.
+ */
+function spread(parts) {
   const joined = joinings(parts);
-  if (joined !== null) return joined.map(tidy);
+  if (joined !== null) return joined;
   const line = (at, text) =>
-    tidy(
-      parts
-        .map((part, i) => {
-          if (i === at) return text;
-          return part.length > 1 ? "{…}" : part[0];
-        })
-        .join("")
-    );
+    parts
+      .map((part, i) => {
+        if (i === at) return text;
+        return part.length > 1 ? "{…}" : part[0];
+      })
+      .join("");
   const varying = parts.flatMap((part, at) => (part.length > 1 ? [at] : []));
   return varying.flatMap(at => parts[at].map(text => line(at, text)));
 }
@@ -836,19 +841,37 @@ export const READER_FILES = [
 
 /**
  * Whether the reader or the rules differ from `ref`, counting changes not
- * yet committed. A change that reads text anew re-reads today's showings
- * (one text becomes another, a newly visible showing joins), and those
- * entries are judged in its review, in the list's own diff, rather than
- * refused as additions.
+ * yet committed. A change that reads text anew re-reads today's showings:
+ * one text becomes another, and a newly visible showing joins.
  */
-export function readerChangedSince(root, ref) {
+function readerChangedSince(root, ref) {
+  return changedSince(root, ref, READER_FILES);
+}
+
+/** Whether any of `files` differs from `ref`, counting uncommitted changes. */
+function changedSince(root, ref, files) {
   try {
-    git(root, ["diff", "--quiet", ref, "--", ...READER_FILES]);
+    git(root, ["diff", "--quiet", ref, "--", ...files]);
     return false;
   } catch (error) {
     if (error?.status === 1) return true;
     throw error;
   }
+}
+
+/**
+ * The entries added to the list since `ref` that the list refuses. Every
+ * addition is refused, except in a change to the reader or the rules, where
+ * an addition in a file that change left as it was can only come from the
+ * new reading. An addition in a file the change also edits is refused all
+ * the same, so new wording cannot join the list beside a reader change.
+ */
+export function refusedAdditions(root, ref, base, pending) {
+  const added = addedPending(base, pending);
+  if (!readerChangedSince(root, ref)) return added;
+  return added.filter(entry =>
+    changedSince(root, ref, [entry.slice(0, entry.indexOf(": "))])
+  );
 }
 
 /** Allowed places and rules that no longer hold a finding to allow. */

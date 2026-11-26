@@ -52,7 +52,7 @@ import {
   findRetired,
   pendingAt,
   pendingBase,
-  readerChangedSince,
+  refusedAdditions,
   repoPath,
   retiredIn,
   shippedFiles,
@@ -309,15 +309,15 @@ describe("the retired words", () => {
     expect(stalePending(findings, PENDING)).toEqual([]);
   });
 
-  it("add no text to the list still to rename, unless the change reads text anew", () => {
+  it("add no text to the list still to rename, beyond what a new reading re-reads", () => {
     // Held to the base commit's copy; null only where that commit has no
     // list yet, which is the change that adds it. A change to the reader or
-    // the rules re-reads today's showings, so its entries are judged in its
-    // review instead.
+    // the rules may re-read entries only in files it leaves as they were.
     const ref = pendingBase(ROOT);
     const base = pendingAt(ROOT, ref);
-    const added = base === null ? [] : addedPending(base, PENDING);
-    expect(readerChangedSince(ROOT, ref) ? [] : added).toEqual([]);
+    expect(
+      base === null ? [] : refusedAdditions(ROOT, ref, base, PENDING)
+    ).toEqual([]);
   });
 
   it("allow no place that no longer says the word", () => {
@@ -469,6 +469,9 @@ describe("the retired words", () => {
         // A phrase held in a constant is read once, where it is drawn.
         'const phrase = "Edit breakpoints";',
         "const Y2 = () => <p>{phrase}</p>;",
+        // Past the cap on combinations (here 128), each branch is still read
+        // beside the template's own text.
+        'const Y3 = () => <p>{`Normal ${a ? "flow" : "position"} ${b ? "1" : "2"} ${c ? "1" : "2"} ${d ? "1" : "2"} ${e ? "1" : "2"} ${f ? "1" : "2"} ${g ? "1" : "2"}`}</p>;',
       ].join("\n"),
       "probe.tsx"
     );
@@ -505,6 +508,7 @@ describe("the retired words", () => {
       "Normal flow",
       "token",
       "Edit breakpoints",
+      "Normal flow {…} {…} {…} {…} {…} {…}",
     ]);
   });
 
