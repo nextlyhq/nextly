@@ -307,18 +307,27 @@ const isPath = (address: string) =>
   address.startsWith("/") && !address.startsWith("//");
 
 /**
- * Whether two addresses name the same file: alike in full, or, where either
- * is a path on the site, alike in path and query, since a route often states
- * its picture at the full address of the path the media library keeps.
+ * Whether two addresses name the same file: alike in full, or alike in path
+ * and query where one is a path on the site and the other a full address on
+ * one of the site's own origins, since a route often states its picture at
+ * the full address of the path the media library keeps. A full address on
+ * any other origin is another site's file, whatever its path.
  */
-function sameAddress(one: string, other: string): boolean {
+function sameAddress(
+  one: string,
+  other: string,
+  siteOrigins: readonly string[]
+): boolean {
   const base = "https://site.invalid";
   try {
     const a = new URL(one, base);
     const b = new URL(other, base);
-    return isPath(one) || isPath(other)
-      ? a.pathname + a.search === b.pathname + b.search
-      : a.href === b.href;
+    if (isPath(one) === isPath(other)) return a.href === b.href;
+    const full = isPath(one) ? b : a;
+    return (
+      siteOrigins.includes(full.origin) &&
+      a.pathname + a.search === b.pathname + b.search
+    );
   } catch {
     return false;
   }
@@ -354,11 +363,12 @@ async function ownPictures(
 async function atStoredSize(
   ctx: PluginContext,
   document: Readonly<Record<string, unknown>>,
-  image: PageMetadataImage
+  image: PageMetadataImage,
+  siteOrigins: readonly string[]
 ): Promise<PageMetadataImage> {
   if (!hasImage(image)) return image;
   const own = (await ownPictures(ctx, document)).find(picture =>
-    sameAddress(picture.url, image.url)
+    sameAddress(picture.url, image.url, siteOrigins)
   );
   if (own?.width === undefined || own.height === undefined) return image;
   const alt = image.alt ?? own.alt;
@@ -422,13 +432,16 @@ export async function levelsOf(
   const content = await contentLevel(ctx, document, !higherImage);
   // Only the image that wins is checked against the page's own pictures:
   // the page's own share image is one already, read with its stored size.
+  // The site's own origins, which a full address must be on to name one of
+  // the page's pictures stored by path.
+  const siteOrigins = productionAddressesOf(rules.productionAddresses);
   const codeImage = input.code.image;
   const code =
     hasImage(page.image) || codeImage === undefined
       ? input.code
       : {
           ...input.code,
-          image: await atStoredSize(ctx, document, codeImage),
+          image: await atStoredSize(ctx, document, codeImage, siteOrigins),
         };
   const designImage = input.derived.image;
   const template =
@@ -436,7 +449,7 @@ export async function levelsOf(
       ? input.derived
       : {
           ...input.derived,
-          image: await atStoredSize(ctx, document, designImage),
+          image: await atStoredSize(ctx, document, designImage, siteOrigins),
         };
   const address = await addressOf(
     ctx,

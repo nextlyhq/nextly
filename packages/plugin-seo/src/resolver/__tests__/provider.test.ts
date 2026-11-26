@@ -427,30 +427,44 @@ describe("what the answer depends on", () => {
     });
   });
 
-  it("knows the page's picture by its path, with the media item's alt where the route gives none", async () => {
-    const answer = await resolveSeo(
+  /** The site served at `https://example.com`, as its settings say. */
+  const onExample = () =>
+    Promise.resolve({
+      ...RULES,
+      productionAddresses: ["https://example.com"],
+    });
+  /** A page whose cover is stored by path, its route naming `url` at 1200 × 630. */
+  const coverStatedAt = (url: string) =>
+    resolveSeo(
       context({
         f1: { url: "/media/cover.jpg", width: 800, height: 600, alt: "Desk" },
       }),
       entryInput(
         "pages",
         { slug: "a", coverImage: "f1" },
-        {
-          code: {
-            image: {
-              url: "https://example.com/media/cover.jpg",
-              width: 1200,
-              height: 630,
-            },
-          },
-        }
-      )
+        { code: { image: { url, width: 1200, height: 630 } } }
+      ),
+      onExample
     );
+
+  it("knows the page's picture by its path on the site, with the media item's alt where the route gives none", async () => {
+    const answer = await coverStatedAt("https://example.com/media/cover.jpg");
     expect(answer.image?.value).toEqual({
       url: "https://example.com/media/cover.jpg",
       width: 800,
       height: 600,
       alt: "Desk",
+    });
+  });
+
+  it("takes a picture at the same path on another site as that site's own", async () => {
+    const answer = await coverStatedAt(
+      "https://elsewhere.example/media/cover.jpg"
+    );
+    expect(answer.image?.value).toEqual({
+      url: "https://elsewhere.example/media/cover.jpg",
+      width: 1200,
+      height: 630,
     });
   });
 
