@@ -59,12 +59,19 @@ function picker(page: Page) {
   return page.getByRole("dialog", { name: "Add a block" });
 }
 
-/** A computed colour's alpha: 0 for see-through, 1 for solid. */
+/**
+ * A computed colour's alpha: 0 for see-through, 1 for solid. The browser
+ * reports a colour in the space it was written in, `rgba(0, 0, 0, 0)` for
+ * none and `lab(…)` or `oklch(…)` for the tokens, with any alpha after a `/`.
+ */
 function alphaOf(colour: string): number {
-  const parts = /rgba?\(([^)]*)\)/.exec(colour)?.[1]?.split(/[\s,/]+/);
-  if (parts === undefined) throw new Error(`not an rgb colour: ${colour}`);
-  const alpha = parts.filter(part => part !== "")[3];
-  return alpha === undefined ? 1 : Number(alpha);
+  if (colour === "transparent") return 0;
+  const inner = /^[a-z]+\(([^)]*)\)$/.exec(colour.trim())?.[1];
+  if (inner === undefined) throw new Error(`not a colour: ${colour}`);
+  if (inner.includes("/")) return Number(inner.split("/")[1]?.trim());
+  const parts = inner.split(/[\s,]+/).filter(part => part !== "");
+  // The legacy comma form carries alpha as a fourth value.
+  return parts.length === 4 ? Number(parts[3]) : 1;
 }
 
 const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
