@@ -77,6 +77,15 @@ describe("a copy asked for before the address record is ready", () => {
       {} as PluginContext
     );
     expect(answer).toBeUndefined();
+    // Before anything has started too: the Proxy never holds it for the start.
+    expect(handler.claims?.(new Request("https://acme.example/guide.md"))).toBe(
+      false
+    );
+    expect(handler.claims?.(new Request("https://acme.example/hello.md"))).toBe(
+      true
+    );
+    // Not held for the record either: nothing is read before it passes.
+    expect(record.holdersRead).toBe(0);
   });
 
   it("passes to the site where copies are switched off", async () => {

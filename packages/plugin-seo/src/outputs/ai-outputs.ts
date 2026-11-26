@@ -945,6 +945,16 @@ function copyAskedFor(
     : undefined;
 }
 
+/** Whether the site's code builds a page at `url`, as its build names them. */
+function builtAt(
+  config: Pick<AiOutputsConfig, "codeRoutes">,
+  url: URL
+): boolean {
+  return (config.codeRoutes?.() ?? []).some(
+    route => route.path === url.pathname
+  );
+}
+
 /**
  * How long a request at a copy's own address waits for the address record
  * to catch up. A catch-up with nothing to do takes a few reads; one still
@@ -980,8 +990,13 @@ export function plainCopyProxyHandler(
     name: "plain-text-copies",
     // A copy's own address is served by no page, so a Proxy still starting
     // waits for the start rather than send it on to be answered not found.
-    // A page's own address, asked for by `Accept`, is the page's to answer.
-    claims: request => copyAskedFor(request)?.atPage === false,
+    // A page's own address, asked for by `Accept`, is the page's to answer,
+    // and so is a page the site's code builds at a copy's address, which the
+    // build names before anything has started.
+    claims: request => {
+      const asked = copyAskedFor(request);
+      return asked?.atPage === false && !builtAt(config, asked.url);
+    },
     async handle(request, ctx) {
       const asked = copyAskedFor(request);
       if (asked === undefined) return;
@@ -997,7 +1012,7 @@ export function plainCopyProxyHandler(
       // Nor is a copy's address where copies are switched off.
       if (!addressRecordReady()) {
         retryFailedCatchUp();
-        if (atPage) return;
+        if (atPage || builtAt(config, url)) return;
         const rules = await config.readRules(ctx, undefined);
         if (rules.plainTextCopies !== true) return;
         if (!(await addressRecordReadyWithin(COPY_RECORD_WAIT_MS))) {
