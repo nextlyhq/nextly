@@ -10,8 +10,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import type { TestNextly } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
+import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
+import { resolveVersionsConfig } from "../../../versions/resolve-config";
 import type { LeftSave } from "../save-in-progress";
 import { fieldsNotServedOf } from "../settle-left-save";
 import {
@@ -57,6 +60,9 @@ describe.each(LEFT_SAVE_SUITES.filter(suite => suite.perLanguage))(
       fromAnotherProcess,
       databaseError,
       expectRefused,
+      hero,
+      afterStatement,
+      dropsColumn,
     } = leftSaveSuite({ dialect, perLanguage });
 
     const box: Field = { name: "box", type: "group", fields: [text("label")] };
@@ -157,6 +163,86 @@ describe.each(LEFT_SAVE_SUITES.filter(suite => suite.perLanguage))(
         }
         expectRefused(rest!, "box");
         expectRefused(api!, "box");
+      },
+      600_000
+    );
+
+    // Publishing every language writes a Single's held draft live, and reads first the structure each
+    // container it puts down has now. Where a left save's drop of that container committed, the
+    // column is gone: the publish is refused by name before that read, never with a database error.
+    it.runIf(dialect === "mysql")(
+      "refuses publishing every language of a Single whose held draft holds a group a committed drop removed, naming it, over REST and its service, with nothing written",
+      async () => {
+        const t = await boot({ translatable: true });
+        const card: Field = {
+          name: "box",
+          type: "group",
+          fields: [text("label"), { name: "size", type: "number" }],
+        };
+        await dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: hero,
+            label: hero,
+            status: true,
+            fields: [field("note"), card],
+          }
+        );
+        // Kept as a Single demoted from code keeps its drafts: each live document's edits held.
+        await t.adapter.executeQuery(
+          `UPDATE dynamic_singles SET versions = '${JSON.stringify(resolveVersionsConfig({ drafts: true }))}' WHERE slug = '${hero}'`
+        );
+        clearRegistryRowCache();
+        await t.nextly.updateSingle({
+          slug: hero,
+          data: {
+            note: "n",
+            box: { label: "live", size: 1 },
+            status: "published",
+            _overwrite: true,
+          },
+        } as never);
+        await t.nextly.updateSingle({
+          slug: hero,
+          data: { box: { label: "held", size: 2 }, _overwrite: true },
+        } as never);
+        const schemaVersion = await versionOf(t, "dynamic_singles", hero);
+        await killSave(t, afterStatement(dropsColumn("box")), () =>
+          dispatchSingles(
+            "applySingleSchemaChanges",
+            { slug: hero },
+            {
+              fields: [field("note")],
+              confirmed: true,
+              schemaVersion,
+              resolutions: { box: { action: "confirm_drop" } },
+              confirmedDeletions: [{ field: "box", count: 1 }],
+            }
+          )
+        );
+        // The structure's column is gone from the main table; its text's stays on the translations one.
+        const [{ standing }] = (await t.adapter.executeQuery(
+          `SELECT COUNT(*) AS standing FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'single_${hero}' AND column_name = 'box'`
+        )) as unknown as [{ standing: unknown }];
+        expect(Number(standing), `killed at ${killedAt}`).toBe(0);
+        const stored = async () => ({
+          main: await t.adapter.executeQuery(`SELECT * FROM single_${hero}`),
+          languages: await t.adapter.executeQuery(
+            `SELECT * FROM single_${hero}_locales ORDER BY _locale`
+          ),
+        });
+        const before = await stored();
+
+        for (const refused of await fromAnotherProcess([
+          { kind: "single-publish-all", via: "rest", slug: hero },
+          { kind: "single-publish-all", via: "api", slug: hero },
+        ])) {
+          expectRefused(refused, "box");
+        }
+        expect(await stored(), "nothing of either publish written").toEqual(
+          before
+        );
       },
       600_000
     );

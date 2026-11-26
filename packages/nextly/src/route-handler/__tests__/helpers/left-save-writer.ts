@@ -7,7 +7,7 @@
  * `left-save-holds-writes.integration.test.ts` through `tsx`, so this process runs the source,
  * not a build. Arguments: the dialect, the database URL, the app's folder, the collection's slug,
  * and the operations as JSON: `{ kind: "write" | "read" | "update" | "single-write" |
- * "single-read"; via: "rest" | "api"; data?; id?; slug?; depth? }`, an update naming the entry it
+ * "single-read" | "single-publish-all"; via: "rest" | "api"; data?; id?; slug?; depth? }`, an update naming the entry it
  * changes, `slug` another collection or a Single to send it to, a read's `depth` how far it
  * populates relationships, and `locale` the language it is sent in. The site's languages are the
  * environment's (`NEXTLY_TEST_LOCALES`, the default one first). A read may filter: `query` as REST
@@ -36,6 +36,7 @@ type Operation = {
     | "update"
     | "single-write"
     | "single-read"
+    | "single-publish-all"
     | "delete"
     | "registry-moved"
     | "pause"
@@ -217,6 +218,12 @@ function restOf(operation: Operation, target: string): Promise<Response> {
       return send("PATCH", `/singles/${target}`, operation.data);
     case "single-read":
       return send("GET", `/singles/${target}`);
+    case "single-publish-all":
+      return send(
+        "POST",
+        `/singles/${target}/publish-all`,
+        operation.data ?? {}
+      );
     case "delete":
       return send(
         "DELETE",
@@ -295,6 +302,18 @@ async function apiOf(operation: Operation, target: string): Promise<Outcome> {
     case "single-write":
       await copy.nextly.updateSingle({ slug: target, data } as never);
       return { ...operation, ok: true };
+    case "single-publish-all": {
+      // No Direct API publishes every language of a Single: its service does, as a plugin calls it.
+      const published = await copy
+        .getService("singleEntryService")
+        .publishAllLocales(target, { overrideAccess: true });
+      return {
+        ...operation,
+        ok: published.success,
+        ...(published.code === undefined ? {} : { code: published.code }),
+        message: published.message ?? "",
+      };
+    }
     case "single-read":
       return {
         ...operation,

@@ -106,6 +106,7 @@ export type Outcome = {
     | "update"
     | "single-write"
     | "single-read"
+    | "single-publish-all"
     | "delete"
     | "registry-moved"
     | "pause"
