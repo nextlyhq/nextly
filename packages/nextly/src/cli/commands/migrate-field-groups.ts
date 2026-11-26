@@ -31,6 +31,8 @@
  * @module cli/commands/migrate-field-groups
  */
 
+import { resolve } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
@@ -124,6 +126,20 @@ export async function runMigrateFieldGroups(
         ...getFieldGroupRegistryAliases(dialect),
       });
       drizzleAdapter.setTableResolver(schemaRegistry);
+
+      // A preview too: it names what a real run would do, and this one would refuse.
+      if (direction === "down") {
+        const { refuseRollbackUnderCurrentHistory } = await import(
+          "../../domains/schema/migrate/field-group-rollback"
+        );
+        await refuseRollbackUnderCurrentHistory({
+          adapter: drizzleAdapter,
+          migrationsDir: resolve(
+            options.cwd ?? process.cwd(),
+            configResult.config.db.migrationsDir
+          ),
+        });
+      }
 
       const { runFieldGroupMigration } = await import(
         "../../domains/field-groups/migration/run"

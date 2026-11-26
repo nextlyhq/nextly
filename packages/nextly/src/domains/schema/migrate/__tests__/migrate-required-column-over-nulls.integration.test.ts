@@ -152,7 +152,7 @@ describe.each(LOCK_DIALECTS)(
         ["dynamic_collections", "posts", POSTS, [...field("subtitle"), seo]],
         ["dynamic_collections", "pages", PAGES, [...field("subtitle"), seo]],
         ["dynamic_singles", "settings", SETTINGS, [...field("tagline"), seo]],
-        ["dynamic_components", "seo", SEO, field("meta_title")],
+        ["dynamic_field_groups", "seo", SEO, field("meta_title")],
       ] as const) {
         await adapter.insert(registry, {
           // The registries key rows by UUID on PostgreSQL.

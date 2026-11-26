@@ -50,8 +50,8 @@ const KINDS = [
   {
     kind: "field group",
     slug: "bf_seo",
-    table: "comp_bf_seo",
-    registry: "dynamic_components",
+    table: "fg_bf_seo",
+    registry: "dynamic_field_groups",
     seed: seedBuilderComponent,
   },
 ] as const;

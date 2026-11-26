@@ -52,6 +52,7 @@ import {
   findRetired,
   pendingAt,
   pendingBase,
+  refusedAdditions,
   repoPath,
   retiredIn,
   shippedFiles,
@@ -308,11 +309,15 @@ describe("the retired words", () => {
     expect(stalePending(findings, PENDING)).toEqual([]);
   });
 
-  it("add no text to the list still to rename", () => {
+  it("add no text to the list still to rename, beyond what a new reading re-reads", () => {
     // Held to the base commit's copy; null only where that commit has no
-    // list yet, which is the change that adds it.
-    const base = pendingAt(ROOT, pendingBase(ROOT));
-    expect(base === null ? [] : addedPending(base, PENDING)).toEqual([]);
+    // list yet, which is the change that adds it. A change to the reader or
+    // the rules may re-read entries only in files it leaves as they were.
+    const ref = pendingBase(ROOT);
+    const base = pendingAt(ROOT, ref);
+    expect(
+      base === null ? [] : refusedAdditions(ROOT, ref, base, PENDING)
+    ).toEqual([]);
   });
 
   it("allow no place that no longer says the word", () => {
@@ -453,6 +458,20 @@ describe("the retired words", () => {
         // A native field's value, which the field draws.
         'const R = () => <input value="token" />;',
         'const S = () => <textarea defaultValue="colour" />;',
+        // A fragment's text runs on in the line, as an inline element's does.
+        "const W = () => <p>Normal <>flow</></p>;",
+        // A choice inside a template in an element's text, beside the
+        // template's own text.
+        'const X = () => <p>{`Normal ${c ? "flow" : "position"}`}</p>;',
+        // A constant the file binds once, drawn by its name.
+        'const lone = "token";',
+        "const Y = () => <p>{lone}</p>;",
+        // A phrase held in a constant is read once, where it is drawn.
+        'const phrase = "Edit breakpoints";',
+        "const Y2 = () => <p>{phrase}</p>;",
+        // Past the cap on combinations (here 128), each branch is still read
+        // beside the template's own text.
+        'const Y3 = () => <p>{`Normal ${a ? "flow" : "position"} ${b ? "1" : "2"} ${c ? "1" : "2"} ${d ? "1" : "2"} ${e ? "1" : "2"} ${f ? "1" : "2"} ${g ? "1" : "2"}`}</p>;',
       ].join("\n"),
       "probe.tsx"
     );
@@ -485,6 +504,11 @@ describe("the retired words", () => {
       "Normal flow",
       "token",
       "colour",
+      "Normal flow",
+      "Normal flow",
+      "token",
+      "Edit breakpoints",
+      "Normal flow {…} {…} {…} {…} {…} {…}",
     ]);
   });
 
@@ -564,6 +588,12 @@ describe("the retired words", () => {
         'const T = () => <input type="hidden" value="token" />;',
         'const U = () => <input type="checkbox" value="viewport" />;',
         'const V = () => <Select value="inspector" />;',
+        // A membership check's value is matched, not drawn.
+        'const known = allowed.includes("Design tokens") || names.has("Normal flow");',
+        // A name the file binds twice is not followed: which one is drawn
+        // is not known from the name.
+        'const twice = "token";',
+        "function Z(twice) { return <p>{twice}</p>; }",
       ].join("\n"),
       "probe.tsx"
     );

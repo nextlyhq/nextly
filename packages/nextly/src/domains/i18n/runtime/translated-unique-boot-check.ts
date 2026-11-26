@@ -105,6 +105,13 @@ export async function warnAboutUnindexedTranslatedUnique(
   stored: readonly StoredLocalizableEntity[] = []
 ): Promise<void> {
   const configured = new Set<string>();
+  // A field group's translations table as the registry stores it, which is under `fg_<slug>` on a
+  // site on the current names, and which no configuration names.
+  const groupCompanions = new Map(
+    stored.flatMap(entity =>
+      entity.kind === "fieldGroup" ? [[entity.slug, entity.companionTable]] : []
+    )
+  );
   for (const [kind, entities, tableNameOf] of localizableConfigEntities(
     config
   )) {
@@ -115,7 +122,9 @@ export async function warnAboutUnindexedTranslatedUnique(
       const missing = await unindexedFields(
         adapter,
         entity.fields ?? [],
-        `${tableNameOf(entity)}_locales`,
+        (kind === "fieldGroup"
+          ? groupCompanions.get(entity.slug)
+          : undefined) ?? `${tableNameOf(entity)}_locales`,
         "codeFirst"
       );
       warnFor(

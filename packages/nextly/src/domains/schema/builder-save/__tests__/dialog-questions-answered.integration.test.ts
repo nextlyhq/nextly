@@ -132,7 +132,7 @@ const KINDS: Kind[] = [
   },
   {
     name: "a field group",
-    table: "comp_meta",
+    table: "fg_meta",
     create: (_t, fields) =>
       dispatchComponents(
         "createComponent",
@@ -143,7 +143,7 @@ const KINDS: Kind[] = [
     seed: async (t, views) => {
       await exec(
         t,
-        `INSERT INTO comp_meta (id, _parent_id, _parent_table, _parent_field, _order, heading, views) VALUES ('kept-1', 'parent-1', 'dc_parent', 'meta', 0, 'Hello', '${views}')`
+        `INSERT INTO fg_meta (id, _parent_id, _parent_table, _parent_field, _order, heading, views) VALUES ('kept-1', 'parent-1', 'dc_parent', 'meta', 0, 'Hello', '${views}')`
       );
     },
     save: async (t, fields, answers) =>
@@ -153,7 +153,7 @@ const KINDS: Kind[] = [
         {
           fields,
           confirmed: true,
-          schemaVersion: await versionOf(t, "dynamic_components", "meta"),
+          schemaVersion: await versionOf(t, "dynamic_field_groups", "meta"),
           ...answers,
         }
       ),
@@ -371,7 +371,7 @@ for (const dialect of getConfiguredTestDialects()) {
       );
       await exec(
         t,
-        `INSERT INTO comp_meta (id, _parent_id, _parent_table, _parent_field, _order, heading, related) VALUES ('kept-1', 'parent-1', 'dc_parent', 'meta', 0, 'Hello', '["tag-1"]')`
+        `INSERT INTO fg_meta (id, _parent_id, _parent_table, _parent_field, _order, heading, related) VALUES ('kept-1', 'parent-1', 'dc_parent', 'meta', 0, 'Hello', '["tag-1"]')`
       );
     });
 
@@ -386,7 +386,7 @@ for (const dialect of getConfiguredTestDialects()) {
         await readTableDefinition(
           statement => exec(t, statement),
           (t.adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
-          "comp_meta"
+          "fg_meta"
         )
       ).columns.map(column => column.name);
     const save = async (answers: Answers) =>
@@ -396,7 +396,7 @@ for (const dialect of getConfiguredTestDialects()) {
         {
           fields: intoGroup,
           confirmed: true,
-          schemaVersion: await versionOf(t, "dynamic_components", "meta"),
+          schemaVersion: await versionOf(t, "dynamic_field_groups", "meta"),
           ...answers,
         }
       );
@@ -411,7 +411,7 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await columns()).toContain("related");
       const held = await exec<{ related: unknown }>(
         t,
-        "SELECT related FROM comp_meta"
+        "SELECT related FROM fg_meta"
       );
       // PostgreSQL hands the list back parsed; SQLite and MySQL as its text.
       expect(
@@ -426,7 +426,7 @@ for (const dialect of getConfiguredTestDialects()) {
         eventResolutions: [
           {
             kind: "confirm_drop",
-            eventId: "destructive_drop:comp_meta.related",
+            eventId: "destructive_drop:fg_meta.related",
           },
         ],
       });
@@ -820,7 +820,6 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(confirmed.refused).toBeUndefined();
       expect(await companionColumns()).not.toContain("teaser");
     }, 60_000);
-
   });
 }
 
@@ -976,7 +975,7 @@ for (const dialect of getConfiguredTestDialects()) {
 
     it("keeps the rows the field had in its first field group's table", async () => {
       const rows = async () =>
-        (await exec<{ line: unknown }>(t, "SELECT line FROM comp_card")).map(
+        (await exec<{ line: unknown }>(t, "SELECT line FROM fg_card")).map(
           row => String(row.line)
         );
       expect(await rows()).toEqual(["kept"]);
@@ -1030,7 +1029,7 @@ for (const dialect of getConfiguredTestDialects()) {
       );
       await exec(
         t,
-        `INSERT INTO comp_meta (id, _parent_id, _parent_table, _parent_field, _order, heading, views, note) VALUES ('kept-1', 'parent-1', 'dc_parent', 'meta', 0, 'Hello', '7', 'n')`
+        `INSERT INTO fg_meta (id, _parent_id, _parent_table, _parent_field, _order, heading, views, note) VALUES ('kept-1', 'parent-1', 'dc_parent', 'meta', 0, 'Hello', '7', 'n')`
       );
     });
 
@@ -1047,7 +1046,7 @@ for (const dialect of getConfiguredTestDialects()) {
         {
           fields: after,
           confirmed: true,
-          schemaVersion: await versionOf(t, "dynamic_components", "meta"),
+          schemaVersion: await versionOf(t, "dynamic_field_groups", "meta"),
           ...extra,
         }
       );
@@ -1056,7 +1055,7 @@ for (const dialect of getConfiguredTestDialects()) {
         await readTableDefinition(
           statement => exec(t, statement),
           (t.adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
-          "comp_meta"
+          "fg_meta"
         )
       ).columns.map(column => column.name);
 

@@ -138,7 +138,7 @@ const ROADS = [
   },
   {
     road: "a field group's dialog save",
-    registry: "dynamic_components",
+    registry: "dynamic_field_groups",
     create: () =>
       dispatchComponents(
         "createComponent",
@@ -158,7 +158,7 @@ const ROADS = [
   },
   {
     road: "a field group's own route",
-    registry: "dynamic_components",
+    registry: "dynamic_field_groups",
     create: () =>
       dispatchComponents(
         "createComponent",

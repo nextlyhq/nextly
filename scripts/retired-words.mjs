@@ -10,8 +10,9 @@
  * Read from the AST, so comments are never findings, the way the builder's
  * and the plugin's own word tests read their screens. A string is read where
  * an author could see it: string literals, template text, an element's own
- * line (`New {…}` for `New {labels.singular}`, with a string or each branch
- * of a choice in it read in place) and the attributes that are
+ * line (`New {…}` for `New {labels.singular}`, with a string, each branch of
+ * a choice, a template's text, a fragment's text and a constant the file
+ * binds once read in place) and the attributes that are
  * drawn or spoken (`title`, `placeholder`, `aria-label`…). Skipped, by PLACE
  * and never by word:
  *
@@ -33,8 +34,8 @@
  * shown text: under a shown key or attribute, as a branch of a choice inside
  * a shown template or an element's text (`{n === 1 ? "colour" : "colours"}`),
  * or as a lone word anywhere in a words module (`*-words.ts`), which holds
- * nothing but shown words. A string compared or matched in a `case` is code
- * everywhere.
+ * nothing but shown words. A string compared, matched in a `case`, or looked
+ * for by a membership check (`names.has("Normal flow")`) is code everywhere.
  *
  * Plain JavaScript, so it loads under the scripts suite with no build.
  *
@@ -314,7 +315,27 @@ function isCompared(node, parent) {
   return (
     (parent?.type === "BinaryExpression" &&
       /^(?:===|!==|==|!=|in)$/.test(parent.operator)) ||
-    (parent?.type === "SwitchCase" && parent.test === node)
+    (parent?.type === "SwitchCase" && parent.test === node) ||
+    isMembershipArgument(node, parent)
+  );
+}
+
+/** The methods that ask whether a list, set or string holds a value. */
+const MEMBERSHIP_METHOD =
+  /^(?:includes|has|indexOf|lastIndexOf|startsWith|endsWith)$/;
+
+/**
+ * The value a membership check looks for, which is matched, not drawn:
+ * `allowed.includes("Design tokens")`, `names.has("Normal flow")`.
+ */
+function isMembershipArgument(node, parent) {
+  return (
+    parent?.type === "CallExpression" &&
+    parent.arguments[0] === node &&
+    parent.callee.type === "MemberExpression" &&
+    !parent.callee.computed &&
+    parent.callee.property.type === "Identifier" &&
+    MEMBERSHIP_METHOD.test(parent.callee.property.name)
   );
 }
 
@@ -352,7 +373,35 @@ function isInline(node) {
  * (`{kind === "data" ? "data" : "content"}`), and `{…}` for anything else.
  * The strings it reads go into `read`, since the line has read them.
  */
-function expressionTexts(node, read) {
+function expressionTexts(node, read, bindings, depth = 0) {
+  if (node.type === "TemplateLiteral" && node.expressions.length > 0) {
+    // Each interpolation's texts joined with the template's own text, so
+    // `Normal ${on ? "flow" : "position"}` reads "Normal flow". The strings
+    // inside count as read only when the template is read this way.
+    const inside = new Set();
+    const joined = spread(
+      node.quasis.flatMap((quasi, at) => {
+        const own = [quasi.value.cooked ?? ""];
+        const expression = node.expressions[at];
+        if (expression === undefined) return [own];
+        return [
+          own,
+          [...new Set(expressionTexts(expression, inside, bindings, depth))],
+        ];
+      })
+    );
+    for (const string of inside) read.add(string);
+    read.add(node);
+    return joined;
+  }
+  if (node.type === "Identifier" && depth < MOST_BINDING_STEPS) {
+    // A constant the file binds once: `const label = "token"`, drawn as
+    // `{label}`, reads "token".
+    const bound = bindings.get(node.name);
+    if (bound !== undefined) {
+      return expressionTexts(bound, read, bindings, depth + 1);
+    }
+  }
   const raw = stringText(node);
   if (raw !== null) {
     read.add(node);
@@ -360,14 +409,14 @@ function expressionTexts(node, read) {
   }
   if (node.type === "ConditionalExpression") {
     return [
-      ...expressionTexts(node.consequent, read),
-      ...expressionTexts(node.alternate, read),
+      ...expressionTexts(node.consequent, read, bindings, depth),
+      ...expressionTexts(node.alternate, read, bindings, depth),
     ];
   }
   if (node.type === "LogicalExpression") {
     return [
-      ...expressionTexts(node.left, read),
-      ...expressionTexts(node.right, read),
+      ...expressionTexts(node.left, read, bindings, depth),
+      ...expressionTexts(node.right, read, bindings, depth),
     ];
   }
   if (
@@ -376,31 +425,119 @@ function expressionTexts(node, read) {
     node.type === "TSSatisfiesExpression" ||
     node.type === "TSNonNullExpression"
   ) {
-    return expressionTexts(node.expression, read);
+    return expressionTexts(node.expression, read, bindings, depth);
   }
   return ["{…}"];
 }
 
+/** How many constants deep a name is followed to its value. */
+const MOST_BINDING_STEPS = 4;
+
+/** The names a binding pattern declares: `{ a, b: [c] }` declares a and c. */
+function patternNames(pattern) {
+  if (pattern === null || pattern === undefined) return [];
+  if (pattern.type === "Identifier") return [pattern.name];
+  if (pattern.type === "ObjectPattern") {
+    return pattern.properties.flatMap(property =>
+      patternNames(
+        property.type === "RestElement" ? property.argument : property.value
+      )
+    );
+  }
+  if (pattern.type === "ArrayPattern")
+    return pattern.elements.flatMap(patternNames);
+  if (pattern.type === "AssignmentPattern") return patternNames(pattern.left);
+  if (pattern.type === "RestElement") return patternNames(pattern.argument);
+  if (pattern.type === "TSParameterProperty") {
+    return patternNames(pattern.parameter);
+  }
+  return [];
+}
+
+const FUNCTION_NODE =
+  /^(?:FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|TSDeclareFunction)$/;
+
+/**
+ * The names a file binds once, with `const`, to a value, by name. A name the
+ * file binds anywhere else as well (a parameter, an import, a function or
+ * another declaration) is left out: which binding an element reads is then
+ * not known from its name alone.
+ */
+function constantBindings(program) {
+  const values = new Map();
+  const counts = new Map();
+  const declare = name => counts.set(name, (counts.get(name) ?? 0) + 1);
+  walk(program, (node, ancestors) => {
+    if (node.type === "VariableDeclarator") {
+      for (const name of patternNames(node.id)) declare(name);
+      if (
+        node.id.type === "Identifier" &&
+        node.init &&
+        ancestors.at(-1)?.kind === "const"
+      ) {
+        values.set(node.id.name, node.init);
+      }
+    } else if (FUNCTION_NODE.test(node.type)) {
+      if (node.id) declare(node.id.name);
+      for (const param of node.params) {
+        for (const name of patternNames(param)) declare(name);
+      }
+    } else if (node.type === "CatchClause") {
+      for (const name of patternNames(node.param)) declare(name);
+    } else if (/^Import(?:Default|Namespace)?Specifier$/.test(node.type)) {
+      declare(node.local.name);
+    } else if (node.type === "ClassDeclaration" && node.id) {
+      declare(node.id.name);
+    }
+  });
+  for (const name of values.keys()) {
+    if (counts.get(name) !== 1) values.delete(name);
+  }
+  return values;
+}
+
 /**
  * One run of an element's children as parts of a line, each part the texts
- * it can draw: text, an expression's texts, and an inline element's own
- * parts in its place, so "Normal <b>flow</b>" and `Normal {"flow"}` both
- * read "Normal flow". Any other element breaks the line.
+ * it can draw: text, an expression's texts, and an inline element's or a
+ * fragment's own parts in its place, so "Normal <b>flow</b>",
+ * "Normal <>flow</>" and `Normal {"flow"}` all read "Normal flow". Any other
+ * element breaks the line.
  */
-function elementParts(children, read) {
+function elementParts(children, read, bindings) {
   return children.flatMap(child => {
     if (child.type === "JSXText") return [[child.value]];
     if (child.type === "JSXExpressionContainer") {
       if (child.expression.type === "JSXEmptyExpression") return [];
-      return [[...new Set(expressionTexts(child.expression, read))]];
+      return [[...new Set(expressionTexts(child.expression, read, bindings))]];
     }
-    if (isInline(child)) return elementParts(child.children, read);
+    if (runsOn(child)) return elementParts(child.children, read, bindings);
     return [[" "]];
   });
 }
 
+/**
+ * Whether a child's text runs on in its parent's line: an inline element,
+ * or a fragment, which draws its children where it stands.
+ */
+function runsOn(node) {
+  return isInline(node) || node.type === "JSXFragment";
+}
+
 /** The most lines one element's choices are read as, every combination. */
 const MOST_COMBINATIONS = 64;
+
+/**
+ * Every text a run of parts joins into, one text from each part in turn, or
+ * null past `MOST_COMBINATIONS`.
+ */
+function joinings(parts) {
+  const count = parts.reduce((total, part) => total * part.length, 1);
+  if (count > MOST_COMBINATIONS) return null;
+  return parts.reduce(
+    (lines, part) => lines.flatMap(line => part.map(text => `${line}${text}`)),
+    [""]
+  );
+}
 
 /**
  * The lines a run of parts can read: every combination of its parts'
@@ -411,25 +548,24 @@ const MOST_COMBINATIONS = 64;
  * beside the fixed text around it.
  */
 function partLines(parts) {
-  const combinations = parts.reduce((count, part) => count * part.length, 1);
-  if (combinations <= MOST_COMBINATIONS) {
-    return parts
-      .reduce(
-        (lines, part) =>
-          lines.flatMap(line => part.map(text => `${line}${text}`)),
-        [""]
-      )
-      .map(tidy);
-  }
+  return spread(parts).map(tidy);
+}
+
+/**
+ * The texts a run of parts can read, untidied: every combination up to
+ * `MOST_COMBINATIONS`, and past it one text per branch of each varying
+ * part, with every other varying part read as `{…}`.
+ */
+function spread(parts) {
+  const joined = joinings(parts);
+  if (joined !== null) return joined;
   const line = (at, text) =>
-    tidy(
-      parts
-        .map((part, i) => {
-          if (i === at) return text;
-          return part.length > 1 ? "{…}" : part[0];
-        })
-        .join("")
-    );
+    parts
+      .map((part, i) => {
+        if (i === at) return text;
+        return part.length > 1 ? "{…}" : part[0];
+      })
+      .join("");
   const varying = parts.flatMap((part, at) => (part.length > 1 ? [at] : []));
   return varying.flatMap(at => parts[at].map(text => line(at, text)));
 }
@@ -454,11 +590,11 @@ function stringText(node) {
  * null where it draws only `{…}`, or where it is an inline element read as
  * part of its parent's line. The strings its lines read go into `read`.
  */
-function elementLines(node, ancestors, read) {
+function elementLines(node, ancestors, read, bindings) {
   if (node.type !== "JSXElement" && node.type !== "JSXFragment") return null;
   const parent = ancestors.at(-1);
   if (
-    isInline(node) &&
+    runsOn(node) &&
     (parent?.type === "JSXElement" || parent?.type === "JSXFragment")
   ) {
     return null;
@@ -466,7 +602,7 @@ function elementLines(node, ancestors, read) {
   const own = new Set();
   const lines = [
     ...new Set(
-      partLines(elementParts(node.children, own)).filter(
+      partLines(elementParts(node.children, own, bindings)).filter(
         line => line.replace(/\{…\}/g, "").trim() !== ""
       )
     ),
@@ -483,14 +619,18 @@ function elementLines(node, ancestors, read) {
  * dropped, since they are never drawn.
  */
 function shownReadings(source, fileName) {
+  // Each reading keeps the string it came from, so a string an element's
+  // line read in place (a constant declared above the element, say) is
+  // dropped once the walk is done rather than read again alone.
   const readings = [];
-  // The strings an element's line has read in place, not read again alone.
   const read = new Set();
   const wordsModule = WORDS_MODULE.test(fileName.split("\\").join("/"));
-  walk(parseSource(source, fileName).program, (node, ancestors) => {
-    const lines = elementLines(node, ancestors, read);
+  const { program } = parseSource(source, fileName);
+  const bindings = constantBindings(program);
+  walk(program, (node, ancestors) => {
+    const lines = elementLines(node, ancestors, read, bindings);
     if (lines !== null) {
-      readings.push(lines);
+      readings.push({ node: null, lines });
       return;
     }
     if (read.has(node)) return;
@@ -508,9 +648,11 @@ function shownReadings(source, fileName) {
     const shownPlace = inShownPlace(node, ancestors);
     if (!shownPlace && (LOG_TAG.test(text) || CSS_TEXT.test(text))) return;
     if (notShown(node, ancestors)) return;
-    readings.push([text]);
+    readings.push({ node, lines: [text] });
   });
-  return readings;
+  return readings
+    .filter(reading => reading.node === null || !read.has(reading.node))
+    .map(reading => reading.lines);
 }
 
 /** The texts an author could read in one source file, in source order. */
@@ -685,6 +827,51 @@ function git(root, args) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+/**
+ * The files that decide how shown text is read: this reader and the rules.
+ * A change to either reads today's text anew, so its pending entries may
+ * change with it.
+ */
+export const READER_FILES = [
+  "scripts/retired-words.mjs",
+  "packages/builder/src/glossary/retired-words.ts",
+];
+
+/**
+ * Whether the reader or the rules differ from `ref`, counting changes not
+ * yet committed. A change that reads text anew re-reads today's showings:
+ * one text becomes another, and a newly visible showing joins.
+ */
+function readerChangedSince(root, ref) {
+  return changedSince(root, ref, READER_FILES);
+}
+
+/** Whether any of `files` differs from `ref`, counting uncommitted changes. */
+function changedSince(root, ref, files) {
+  try {
+    git(root, ["diff", "--quiet", ref, "--", ...files]);
+    return false;
+  } catch (error) {
+    if (error?.status === 1) return true;
+    throw error;
+  }
+}
+
+/**
+ * The entries added to the list since `ref` that the list refuses. Every
+ * addition is refused, except in a change to the reader or the rules, where
+ * an addition in a file that change left as it was can only come from the
+ * new reading. An addition in a file the change also edits is refused all
+ * the same, so new wording cannot join the list beside a reader change.
+ */
+export function refusedAdditions(root, ref, base, pending) {
+  const added = addedPending(base, pending);
+  if (!readerChangedSince(root, ref)) return added;
+  return added.filter(entry =>
+    changedSince(root, ref, [entry.slice(0, entry.indexOf(": "))])
+  );
 }
 
 /** Allowed places and rules that no longer hold a finding to allow. */

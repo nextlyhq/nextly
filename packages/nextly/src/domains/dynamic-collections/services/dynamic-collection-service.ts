@@ -2395,9 +2395,10 @@ export class DynamicCollectionService extends BaseService {
   async holdCollectionsIn(
     tx: TransactionContext,
     slugs: readonly string[],
-    strength: "share" | "update"
+    strength: "share" | "update",
+    options?: { waitMs?: number }
   ): ReturnType<DynamicCollectionRegistryService["holdCollectionsIn"]> {
-    return this.registryService.holdCollectionsIn(tx, slugs, strength);
+    return this.registryService.holdCollectionsIn(tx, slugs, strength, options);
   }
 
   /** Remove a collection's registry row inside `tx`; forget it once `tx` commits. */

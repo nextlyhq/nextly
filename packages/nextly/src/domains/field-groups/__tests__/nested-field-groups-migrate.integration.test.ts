@@ -73,7 +73,7 @@ const config = defineConfig({
   fieldGroups,
   db: { migrationsDir: "./migrations" },
 });
-const TABLES = [...LEVELS.map(slug => `comp_${slug}`), "dc_mpages"];
+const TABLES = [...LEVELS.map(slug => `fg_${slug}`), "dc_mpages"];
 
 let dir: string;
 let instance: TestNextly | undefined;

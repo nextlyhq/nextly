@@ -31,6 +31,8 @@ const READERS: Record<string, string> = {
   "cli/commands/build.ts": "reads through `readableMigrationFiles`",
   "cli/commands/migrate-fresh.ts":
     "its dry run lists the files through `discoverMigrationGroups` with the dialect and declared names `nextly migrate` reads them with",
+  "domains/schema/migrate/field-group-rollback.ts":
+    "reads through `discoverMigrationGroups`; their ledger rows are no history (`readOldBuilderLedger`)",
   "domains/schema/migrate/pending-entities.ts":
     "reads through `discoverMigrationGroups`",
   "domains/schema/migrate/old-builder-ledger.ts":
@@ -72,6 +74,9 @@ const MARKS: Record<string, { reads: string } | { without: string }> = {
   "cli/commands/migrate-fresh.ts": {
     without:
       "it empties the ledger before its run, so its dry run lists the files as a run on an empty ledger reads them",
+  },
+  "domains/schema/migrate/field-group-rollback.ts": {
+    reads: "readOldBuilderLedger(",
   },
   "domains/schema/migrate/pending-entities.ts": {
     without:

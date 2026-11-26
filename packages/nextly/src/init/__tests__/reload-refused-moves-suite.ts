@@ -9,6 +9,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MIGRATION_TARGET } from "../../domains/field-groups/migration/target";
 import {
   configOf,
   ENTITY_KINDS,
@@ -27,7 +28,6 @@ import {
 } from "../../domains/schema/field-moves/__tests__/refused-code-moves";
 import { databaseState } from "../../domains/schema/field-moves/__tests__/refused-moves-state";
 import { getService } from "../../di/service-access";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -98,7 +98,7 @@ export function describeRefusedReloads(loaded: { config: unknown }): void {
           registries: [
             { table: "dynamic_collections", slugs: [PEOPLE, POSTS] },
             { table: "dynamic_singles", slugs: [HOME] },
-            { table: STORAGE_FORMAT.registryTable, slugs: [FRAME] },
+            { table: MIGRATION_TARGET.registryTable, slugs: [FRAME] },
           ],
           migrations: "migrations-not-written-by-the-push",
         });

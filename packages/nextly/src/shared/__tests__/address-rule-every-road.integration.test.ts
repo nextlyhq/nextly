@@ -50,7 +50,7 @@ import {
 } from "../../plugins/test-nextly";
 import { DynamicCollectionRegistryService } from "../../domains/dynamic-collections/services/dynamic-collection-registry-service";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../domains/field-groups/migration/target";
 import type { ServiceContainer } from "../../services";
 import { judgeAddress } from "../address-rule";
 import { consoleLogger } from "../types";
@@ -135,7 +135,7 @@ const REFUSED = ["admin", "select", "accounts", "a".repeat(51), "posts-"];
 const REGISTRY = {
   collection: "dynamic_collections",
   single: "dynamic_singles",
-  fieldGroup: STORAGE_FORMAT.registryTable,
+  fieldGroup: MIGRATION_TARGET.registryTable,
 } as const;
 
 /** Where the app under test keeps its files: the Builder writes its migrations below it. */
@@ -163,7 +163,7 @@ async function stateOf(
     `SELECT slug FROM ${REGISTRY[kind]}`
   );
   const tables = await Promise.all(
-    ["dc_team_updates", "single_team_updates", "comp_team_updates"].map(t =>
+    ["dc_team_updates", "single_team_updates", "fg_team_updates"].map(t =>
       adapter.tableExists(t)
     )
   );
@@ -556,7 +556,7 @@ for (const dialect of getConfiguredTestDialects()) {
           const t = await boot();
           await create("team-updates");
 
-          expect(await t.adapter.tableExists("comp_team_updates")).toBe(true);
+          expect(await t.adapter.tableExists("fg_team_updates")).toBe(true);
           expect(await writeAndRead(t)).toBe("hello");
 
           const before = await stateOf(t.adapter as never, "fieldGroup");
@@ -581,7 +581,7 @@ for (const dialect of getConfiguredTestDialects()) {
         });
         const t = await boot({ fieldGroups: [teamUpdates] });
 
-        expect(await t.adapter.tableExists("comp_team_updates")).toBe(true);
+        expect(await t.adapter.tableExists("fg_team_updates")).toBe(true);
         expect(await writeAndRead(t)).toBe("hello");
 
         const before = await stateOf(database.adapter, "fieldGroup");

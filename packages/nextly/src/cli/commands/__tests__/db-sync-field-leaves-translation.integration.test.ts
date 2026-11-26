@@ -165,7 +165,7 @@ async function recordedTranslated(
 }
 
 const GROUP = "dbsleavegrp";
-const GROUP_TABLE = `comp_${GROUP}`;
+const GROUP_TABLE = `fg_${GROUP}`;
 
 /** A translated field group whose `body` is translated, or shared and Required. */
 const groupConfigWith = (localized: boolean): LoadConfigResult["config"] =>
@@ -305,6 +305,33 @@ describe("db:sync making a translated field shared (sqlite)", () => {
       )
     ).find(c => c.name === "body");
     expect(body?.notnull).toBe(1);
+  });
+  // The write-back after a stop judges the group at its stored table too: left recorded shared, a
+  // rerun would find nothing to move, and the values would stay where nothing reads them.
+  it("moves a field group's values on a rerun after a move that stopped part-way", async () => {
+    await sync(groupConfigWith(true));
+    await insertRow(GROUP_TABLE, { id: "g1" });
+    await query(
+      `INSERT INTO "${GROUP_TABLE}_locales" ("_parent", "_locale", "body") VALUES ('g1', 'en', 'Hello'), ('g1', 'es', 'Hola')`
+    );
+    await ensureI18nArchive(target!.adapter, "sqlite");
+    await query(
+      `CREATE TRIGGER "refuse_archive" BEFORE INSERT ON "nextly_i18n_archive" BEGIN SELECT RAISE(ABORT, 'archive refused'); END`
+    );
+
+    await expect(sync(groupConfigWith(false))).rejects.toThrow(
+      /were not moved \(see above\)/
+    );
+    expect(await columnsOf(`${GROUP_TABLE}_locales`)).toContain("body");
+
+    await query(`DROP TRIGGER "refuse_archive"`);
+    await sync(groupConfigWith(false));
+
+    expect(
+      await query(`SELECT "body" FROM "${GROUP_TABLE}" WHERE "id" = 'g1'`)
+    ).toEqual([{ body: "Hello" }]);
+    expect(await archived()).toEqual([{ locale: "es", value: "Hola" }]);
+    expect(await columnsOf(`${GROUP_TABLE}_locales`)).not.toContain("body");
   });
   // Each entity's translations column is dropped on its own: one whose drop went through has
   // moved, and stays recorded shared; only the one whose drop failed is written back translated.

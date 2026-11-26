@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database";
 import { createAdapter } from "../../../database/factory";
 import { clearServices, shutdownServices } from "../../../di/register";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { databaseState } from "../../../domains/schema/field-moves/__tests__/refused-moves-state";
 import {
@@ -42,7 +43,6 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
@@ -177,7 +177,7 @@ export function describeRefusedCodeMoves(loaded: { config: unknown }): void {
           registries: [
             { table: "dynamic_collections", slugs: [PEOPLE, POSTS] },
             { table: "dynamic_singles", slugs: [HOME] },
-            { table: STORAGE_FORMAT.registryTable, slugs: [FRAME] },
+            { table: MIGRATION_TARGET.registryTable, slugs: [FRAME] },
           ],
           migrations: join(dir, "migrations"),
         });

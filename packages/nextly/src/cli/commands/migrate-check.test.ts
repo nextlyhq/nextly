@@ -976,7 +976,7 @@ describe("runChecks (F11 PR 4)", () => {
           "20260101_120000_001_initial.snapshot.json"
         ),
         JSON.stringify({
-          version: 2,
+          version: 3,
           migrationHash: "a".repeat(64),
           snapshot: { tables: [] },
         }),
@@ -995,7 +995,7 @@ describe("runChecks (F11 PR 4)", () => {
         expect.stringContaining("(INVALID_SNAPSHOT)")
       );
       expect(printed).toHaveBeenCalledWith(
-        expect.stringContaining("expected version: 1, got 2")
+        expect.stringContaining("expected version: 1 or 2, got 3")
       );
     });
   });

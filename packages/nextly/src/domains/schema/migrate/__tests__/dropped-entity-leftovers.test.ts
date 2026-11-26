@@ -42,6 +42,27 @@ describe("the tables a dropped entity was recorded with", () => {
     expect(recordedTablesOf(chain, "single", "notes")).toEqual([]);
   });
 
+  // The record does not say which names its history is on, so a table under either counts as the
+  // group's: a group whose `fg_` table still stands is not taken as gone.
+  it("names a field group's table under both of its names, and only the one it states", () => {
+    const groups = (fieldGroups: EntitySettingsRecord["fieldGroups"]) => ({
+      ...recordOf({}),
+      fieldGroups,
+    });
+    const chain = [
+      groups({ card: { source: "code", settings: { fields: [] } as never } }),
+    ];
+    expect(recordedTablesOf(chain, "fieldGroup", "card")).toEqual([
+      "comp_card",
+      "fg_card",
+    ]);
+    expect([...tablesHeldBy(chain[0]!)]).toEqual(["comp_card", "fg_card"]);
+    const named = groups({
+      card: { source: "code", settings: { dbName: "cards" } as never },
+    });
+    expect(recordedTablesOf([named], "fieldGroup", "card")).toEqual(["cards"]);
+  });
+
   it("holds every table the newest record's entities name, whoever named it before", () => {
     // `posts` now uses the table `notes` was dropped with.
     const newest = recordOf({
