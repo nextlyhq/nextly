@@ -54,6 +54,7 @@ import {
 import type { RefObject } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { offersRichTextFeature } from "../rich-text-features";
 import { OPEN_BUTTON_GROUP_DIALOG_COMMAND } from "../RichTextButtonGroupPlugin";
 import { OPEN_BUTTON_LINK_DIALOG_COMMAND } from "../RichTextButtonLinkPlugin";
 import { INSERT_COLLAPSIBLE_COMMAND } from "../RichTextCollapsiblePlugin";
@@ -150,12 +151,10 @@ export function useToolbarState(
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
-  // Check if a feature is enabled
+  // Check if a feature is enabled, by the reading the editor's own plugins
+  // share, so the two never disagree about whether a field offers links.
   const hasFeature = useCallback(
-    (feature: string): boolean => {
-      if (features.length === 0) return true;
-      return features.includes(feature);
-    },
+    (feature: string): boolean => offersRichTextFeature(features, feature),
     [features]
   );
 

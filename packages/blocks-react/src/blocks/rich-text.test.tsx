@@ -168,6 +168,33 @@ describe("core/rich-text", () => {
     });
   });
 
+  describe("whether it is interactive", () => {
+    const passage = (link: { isUnlinked?: boolean }): RichTextBlockProps => ({
+      content: {
+        root: {
+          type: "root",
+          children: [
+            {
+              type: "paragraph",
+              children: [
+                { type: "autolink", url: "https://example.com/a", ...link },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    it("is interactive while an address the editor linked is a link, and not once the author unlinked it", () => {
+      expect(richText.contentModel?.(passage({}))).toEqual({
+        is: ["flow", "interactive"],
+      });
+      expect(richText.contentModel?.(passage({ isUnlinked: true }))).toEqual({
+        is: ["flow"],
+      });
+    });
+  });
+
   describe("what an editor is told the prop IS", () => {
     it("declares the type through the shared constant", () => {
       // Spelled here and read elsewhere, the two would agree until one moved.

@@ -7,9 +7,15 @@ import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { TablePlugin } from "@lexical/react/LexicalTablePlugin";
 import { TableNode } from "@lexical/table";
+import { $isLinkNode, TOGGLE_LINK_COMMAND } from "@lexical/link";
 import {
+  $createParagraphNode,
+  $createTextNode,
   $getRoot,
+  $isElementNode,
+  $isTextNode,
   $nodesOfType,
+  PASTE_COMMAND,
   type Klass,
   type LexicalCommand,
   type LexicalEditor,
@@ -124,9 +130,11 @@ function CommandBridgePlugin({
 function Harness({
   initial,
   readOnly = false,
+  field = FIELD,
 }: {
   initial: SerializedEditorState | null;
   readOnly?: boolean;
+  field?: RichTextFieldConfig;
 }) {
   const form = useForm<{ body: unknown }>({
     defaultValues: { body: initial },
@@ -138,7 +146,7 @@ function Harness({
       <TooltipProvider>
         <RichTextInput
           name="body"
-          field={FIELD}
+          field={field}
           control={form.control}
           readOnly={readOnly}
         />
@@ -207,6 +215,236 @@ describe("RichTextInput — external value sync", () => {
     // The editor is still alive: a follow-up valid value loads normally.
     await user.click(screen.getByText("switch-es"));
     expect(await screen.findByText("Cuerpo espanol")).toBeInTheDocument();
+  });
+});
+
+/** The editor RichTextInput mounted on `element`, its editable root. */
+function editorOn(element: HTMLElement): LexicalEditor {
+  const editor = (element as HTMLElement & { __lexicalEditor?: LexicalEditor })
+    .__lexicalEditor;
+  if (editor === undefined) throw new Error("no editor is mounted here");
+  return editor;
+}
+
+/** Replace the document with one paragraph of `text`, as typing would. */
+function typeText(editor: LexicalEditor, text: string): void {
+  editor.update(
+    () => {
+      const paragraph = $createParagraphNode();
+      paragraph.append($createTextNode(text));
+      $getRoot().clear().append(paragraph);
+    },
+    { discrete: true }
+  );
+}
+
+/**
+ * Run `command` and commit what it changed before returning: a command sent
+ * on its own commits on a later tick.
+ */
+function dispatchNow<T>(
+  editor: LexicalEditor,
+  command: LexicalCommand<T>,
+  payload: T
+): void {
+  editor.update(() => void editor.dispatchCommand(command, payload), {
+    discrete: true,
+  });
+}
+
+/** Select the whole of the document's first text. */
+function selectAll(editor: LexicalEditor): void {
+  editor.update(
+    () => {
+      const text = $getRoot().getFirstDescendant();
+      if ($isTextNode(text)) text.select(0, text.getTextContentSize());
+    },
+    { discrete: true }
+  );
+}
+
+/**
+ * Write `text`, select it, and paste `url` over it, as the clipboard hands a
+ * paste to the editor. jsdom has no ClipboardEvent or DragEvent, and Lexical's
+ * paste handlers know an event by its constructor's name, so stand-ins of
+ * those names carry the text for the length of the paste.
+ */
+function pasteOverAll(editor: LexicalEditor, text: string, url: string): void {
+  const Stub = {
+    ClipboardEvent: class extends Event {
+      constructor(
+        readonly clipboardData: {
+          types: string[];
+          files: File[];
+          items: DataTransferItem[];
+          getData: (type: string) => string;
+        }
+      ) {
+        super("paste");
+      }
+    },
+  }.ClipboardEvent;
+  vi.stubGlobal("ClipboardEvent", Stub);
+  vi.stubGlobal("DragEvent", { DragEvent: class extends Event {} }.DragEvent);
+  try {
+    typeText(editor, text);
+    selectAll(editor);
+    dispatchNow(
+      editor,
+      PASTE_COMMAND,
+      // The stand-in has the members the handlers read.
+      new Stub({
+        types: ["text/plain"],
+        files: [],
+        items: [],
+        getData: type => (type === "text" || type === "text/plain" ? url : ""),
+      }) as unknown as ClipboardEvent
+    );
+  } finally {
+    vi.unstubAllGlobals();
+  }
+}
+
+/** Each link the document holds, by kind, address and text. */
+function linksIn(
+  editor: LexicalEditor
+): { type: string; url: string; text: string }[] {
+  return editor.getEditorState().read(() => {
+    const found: { type: string; url: string; text: string }[] = [];
+    const walk = (node: LexicalNode): void => {
+      if ($isLinkNode(node)) {
+        found.push({
+          type: node.getType(),
+          url: node.getURL(),
+          text: node.getTextContent(),
+        });
+      }
+      if ($isElementNode(node)) node.getChildren().forEach(walk);
+    };
+    walk($getRoot());
+    return found;
+  });
+}
+
+describe("RichTextInput — links made from addresses in the text", () => {
+  it("links web and email addresses as they are typed, and stores them as links", async () => {
+    render(<Harness initial={doc("")} />);
+    const editor = editorOn(await screen.findByLabelText("body"));
+
+    typeText(
+      editor,
+      "Meet at https://www.example.org/groups/open-source/ or www.example.com, mail me@example.com today"
+    );
+
+    expect(linksIn(editor)).toEqual([
+      {
+        type: "autolink",
+        url: "https://www.example.org/groups/open-source/",
+        text: "https://www.example.org/groups/open-source/",
+      },
+      {
+        type: "autolink",
+        url: "https://www.example.com",
+        text: "www.example.com",
+      },
+      {
+        type: "autolink",
+        url: "mailto:me@example.com",
+        text: "me@example.com",
+      },
+    ]);
+    // What the form stores is the link node, which every renderer draws.
+    const stored = JSON.stringify(editor.getEditorState().toJSON());
+    expect(stored).toContain('"type":"autolink"');
+  });
+
+  it("makes no link by itself on a field whose toolbar leaves links out", async () => {
+    render(
+      <Harness
+        initial={doc("")}
+        field={{ ...FIELD, features: ["bold", "italic"] }}
+      />
+    );
+    const editor = editorOn(await screen.findByLabelText("body"));
+
+    typeText(
+      editor,
+      "Meet at https://www.example.org/groups/open-source/ today"
+    );
+
+    expect(linksIn(editor)).toEqual([]);
+  });
+
+  it("keeps an address the author unlinks as words, stored as the renderers read it", async () => {
+    render(<Harness initial={doc("")} />);
+    const editor = editorOn(await screen.findByLabelText("body"));
+    typeText(editor, "see https://example.com/a today");
+
+    // Select the linked address, then take the link off as the toolbar does.
+    editor.update(
+      () => {
+        const link = $getRoot().getFirstDescendant()?.getNextSibling();
+        const words = $isElementNode(link) ? link.getFirstChild() : null;
+        if ($isTextNode(words)) words.select(0, words.getTextContentSize());
+      },
+      { discrete: true }
+    );
+    dispatchNow(editor, TOGGLE_LINK_COMMAND, null);
+
+    // The node stays, marked unlinked, so typing does not link it again;
+    // every renderer draws that as the words alone.
+    const stored = JSON.stringify(editor.getEditorState().toJSON());
+    expect(stored).toContain(
+      '"type":"autolink","version":1,"rel":null,"target":null,"title":null,"url":"https://example.com/a","isUnlinked":true'
+    );
+  });
+
+  it("leaves text that is not an address as text", async () => {
+    render(<Harness initial={doc("")} />);
+    const editor = editorOn(await screen.findByLabelText("body"));
+
+    typeText(editor, "Version 1.2 ships soon, see javascript:alert(1) nowhere");
+
+    expect(linksIn(editor)).toEqual([]);
+  });
+
+  it("links selected text to an address pasted over it", async () => {
+    render(<Harness initial={doc("")} />);
+    const editor = editorOn(await screen.findByLabelText("body"));
+    const url = "https://events.example.org/2026/builders-day";
+    pasteOverAll(editor, "Hack day", url);
+
+    expect(linksIn(editor)).toEqual([{ type: "link", url, text: "Hack day" }]);
+  });
+
+  it("makes no link of a paste on a field whose toolbar leaves links out", async () => {
+    render(
+      <Harness
+        initial={doc("")}
+        field={{ ...FIELD, features: ["bold", "italic"] }}
+      />
+    );
+    const editor = editorOn(await screen.findByLabelText("body"));
+    pasteOverAll(editor, "Hack day", "https://events.example.org/2026/");
+
+    expect(linksIn(editor)).toEqual([]);
+  });
+
+  it("refuses to link text to a script address", async () => {
+    render(<Harness initial={doc("")} />);
+    const editor = editorOn(await screen.findByLabelText("body"));
+    typeText(editor, "Hack day");
+
+    selectAll(editor);
+    dispatchNow(editor, TOGGLE_LINK_COMMAND, "javascript:alert(1)");
+    expect(linksIn(editor)).toEqual([]);
+
+    // The control: the same command links a web address.
+    selectAll(editor);
+    dispatchNow(editor, TOGGLE_LINK_COMMAND, "https://example.com/");
+    expect(linksIn(editor)).toEqual([
+      { type: "link", url: "https://example.com/", text: "Hack day" },
+    ]);
   });
 });
 

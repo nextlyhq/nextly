@@ -104,3 +104,8 @@ export {
   type FieldStoragePrimitive,
   type StorageFieldType,
 } from "./binding-vocabulary";
+
+// Which stored rich-text nodes are links a reader follows. One predicate with
+// no imports, so a reader that may not load the root (a plugin, through the
+// SDK) asks the same rule the renderers do.
+export { isFollowedLink } from "./rich-text-link";

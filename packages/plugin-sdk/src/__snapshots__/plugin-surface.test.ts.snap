@@ -479,6 +479,7 @@ exports[`plugin-sdk public export surface > \`./blocks\` surface is unchanged 1`
   "defineBlock (value)",
   "defineNamedQuery (value)",
   "defineStarterPage (value)",
+  "isFollowedLink (value)",
   "param (value)",
 ]
 `;
