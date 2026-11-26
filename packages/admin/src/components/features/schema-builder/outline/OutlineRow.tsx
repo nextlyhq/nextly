@@ -16,6 +16,7 @@ import type { JSX, ReactNode } from "react";
 import { memo } from "react";
 
 import { ChevronDown, ChevronRight } from "@admin/components/icons";
+import { fieldSubject } from "@admin/lib/builder/builder-announcements";
 import {
   describeReadOnly,
   type OutlineNode,
@@ -350,7 +351,13 @@ function RowItem({
 
 function OutlineRowView(props: Props): JSX.Element {
   const { row, draggable, menuOpen, actions } = props;
-  const sortable = useSortable({ id: row.node.id, disabled: !draggable });
+  // What a drag of the row says it is called: a field group's own field is no field of the
+  // entity's, which is where the drag's sentences look a field up, so it carries its own words.
+  const sortable = useSortable({
+    id: row.node.id,
+    disabled: !draggable,
+    data: { spoken: fieldSubject(row.node.field) },
+  });
   return (
     <div
       role="none"

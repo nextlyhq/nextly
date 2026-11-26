@@ -73,7 +73,12 @@ export function describeReadOnly(reason: ReadOnlyReason): string {
  * refused with that reason, rather than left out as a row defined in code is.
  */
 export function isFieldGroupOwnRow(node: OutlineNode): boolean {
-  return !node.own && node.readOnly?.kind === "field-group";
+  // An entry of a field accepting several field groups stands for one of them and is no field.
+  return (
+    !node.own &&
+    node.readOnly?.kind === "field-group" &&
+    node.container !== "field-group-entry"
+  );
 }
 
 /**

@@ -18,7 +18,10 @@ import {
   type MoveContext,
 } from "@admin/lib/builder/move-rule";
 import { heldNamesOf } from "@admin/lib/builder/move-words";
-import { fieldGroupFieldHolding } from "@admin/lib/builder/outline/move-targets";
+import {
+  fieldGroupFieldHolding,
+  fieldGroupOfRow,
+} from "@admin/lib/builder/outline/move-targets";
 import {
   flattenOutline,
   type OutlineNode,
@@ -93,5 +96,6 @@ export function useMoveContext({
     },
     fieldGroupFieldHolding: rowId => fieldGroupFieldHolding(byId, rowId),
     fieldOfRow: rowId => byId.get(rowId)?.field,
+    fieldGroupOfRow: rowId => fieldGroupOfRow(byId, rowId),
   };
 }

@@ -66,6 +66,11 @@ export interface MoveContext {
   describeFieldGroup?: (slug: string) => FieldGroupUsers | undefined;
   /** For a field group's own row, the field it stands for: the field a move out of it names. */
   fieldOfRow?: (rowId: string) => BuilderField | undefined;
+  /**
+   * For a field group's own row, the field group defining it: the nearest one, so a field of a
+   * field group inside another, or of one entry of a field accepting several, names its own.
+   */
+  fieldGroupOfRow?: (rowId: string) => string | undefined;
   /** Types the surface does not take, wherever they go. */
   excludedTypes?: readonly string[];
   /**
@@ -283,7 +288,12 @@ function containerRefusal(
     );
   }
   if (isFieldGroupFieldType(container.type)) {
-    return fieldGroupRefusal(field, container, ctx);
+    return fieldGroupRefusal(
+      field,
+      fieldGroupSlugsOf(container),
+      called(container),
+      ctx
+    );
   }
   if (container.type !== "group" && container.type !== "repeater") {
     return refuse("not-a-container", `${called(container)} holds no fields.`);
@@ -308,30 +318,43 @@ function containerRefusal(
  */
 function notAmongTheFields(fieldId: string, ctx: MoveContext): MoveVerdict {
   const holder = ctx.fieldGroupFieldHolding?.(fieldId);
-  return holder
-    ? fieldGroupRefusal(ctx.fieldOfRow?.(fieldId), holder, ctx)
-    : refuse("not-found", "That field is no longer here.");
+  if (!holder) return refuse("not-found", "That field is no longer here.");
+  // The field group defining the row, which is where it is changed: for a field of a field group
+  // placed inside another, or of one entry of a field accepting several, not the field using it.
+  const defining = ctx.fieldGroupOfRow?.(fieldId);
+  return fieldGroupRefusal(
+    ctx.fieldOfRow?.(fieldId),
+    defining === undefined ? fieldGroupSlugsOf(holder) : [defining],
+    called(holder),
+    ctx
+  );
+}
+
+/** The field groups a field using them names: the one it uses, or each it accepts. */
+function fieldGroupSlugsOf(field: BuilderField): string[] {
+  const { single, many } = extractFieldGroupReferences(field);
+  return [...(single === undefined ? [] : [single]), ...(many ?? [])];
 }
 
 /** Said in place of a field group's users while the list of them has not been read. */
 const USERS_UNREAD = "Where else it is used could not be read.";
 
 /**
- * The refusal of moving `moved` into or out of the field group `fieldGroup` places, in the words
- * the server refuses the same move with (`checkMove`'s field-group refusal): the moved field, the
- * field group by its slug, why, then every user by the clause both read (`fieldGroupUsersClause`).
- * Only the clause can be shared: the server's sentence is not published, so it is written again
- * here, and a test holds the two to one fixture. While a list of users has not been read, or could
- * not be, the refusal says so rather than naming fewer users than there are.
+ * The refusal of moving `moved` into or out of the field groups `slugs`, in the words the server
+ * refuses the same move with (`checkMove`'s field-group refusal): the moved field, the field group
+ * by its slug, why, then every user by the clause both read (`fieldGroupUsersClause`). Only the
+ * clause can be shared: the server's sentence is not published, so it is written again here, and a
+ * test holds the two to one fixture. While a list of users has not been read, or could not be, the
+ * refusal says so rather than naming fewer users than there are. `unnamed` is said for a field
+ * group that names none.
  */
 function fieldGroupRefusal(
   moved: BuilderField | undefined,
-  fieldGroup: BuilderField,
+  slugs: readonly string[],
+  unnamed: string,
   ctx: MoveContext
 ): MoveVerdict {
-  const { single, many } = extractFieldGroupReferences(fieldGroup);
-  const slugs = [...(single === undefined ? [] : [single]), ...(many ?? [])];
-  const name = slugs.length > 0 ? slugs.join(" or ") : called(fieldGroup);
+  const name = slugs.length > 0 ? slugs.join(" or ") : unnamed;
   const users = slugs.flatMap(slug => {
     const described = ctx.describeFieldGroup?.(slug);
     if (described === undefined) return [];
