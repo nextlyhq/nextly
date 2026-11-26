@@ -341,6 +341,7 @@ function refusalByTranslation(
     field: FieldDefinition;
     dialect: SupportedDialect;
     builtBy: ColumnOrigin;
+    componentRow?: boolean;
     inJson?: boolean;
     translatedInside?: TranslatedInside;
     layout?: TranslationLayout;
