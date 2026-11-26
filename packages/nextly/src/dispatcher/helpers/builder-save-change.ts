@@ -25,6 +25,7 @@ import type {
   CollectionSavePreview,
 } from "../../domains/schema/builder-save/collection-save";
 import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
+import { writerAppliesHere } from "../../domains/schema/builder-save/entity-save-deps";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
@@ -72,9 +73,7 @@ export function builderSaveDeps(): CollectionSaveDeps | undefined {
     ...setup,
     adapter,
     logger: getLoggerFromDI() ?? consoleLogger,
-    // Development records each file applied, as the Builder does for a
-    // collection; elsewhere the deploy's `nextly migrate` applies them.
-    applies: process.env.NODE_ENV === "development",
+    applies: writerAppliesHere(),
   };
 }
 

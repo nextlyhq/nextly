@@ -17,10 +17,22 @@ import {
 } from "../type-change-targets";
 
 /** A collection's save retypes a translations column in its file; a Single's and a field group's do not. */
-const COLLECTION: TranslationLayout = { perLanguage: true, fileRetypes: true };
-const SINGLE: TranslationLayout = { perLanguage: true, fileRetypes: false };
+const COLLECTION: TranslationLayout = {
+  perLanguage: true,
+  fileRetypes: true,
+  converts: false,
+};
+const SINGLE: TranslationLayout = {
+  perLanguage: true,
+  fileRetypes: false,
+  converts: false,
+};
 /** The earlier layout, where nothing is kept per language: the pair's own rule alone answers. */
-const EARLIER: TranslationLayout = { perLanguage: false, fileRetypes: true };
+const EARLIER: TranslationLayout = {
+  perLanguage: false,
+  fileRetypes: true,
+  converts: false,
+};
 
 describe.each(["postgresql", "mysql", "sqlite"] as const)(
   "the type picker on an entity stored per language (%s)",
@@ -106,6 +118,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         targetOf({ type: "text" }, "number", {
           perLanguage: false,
           fileRetypes: true,
+          converts: false,
         })
       ).toMatchObject(open);
     });
@@ -317,7 +330,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       ).toMatchObject({ blocked: null, outcome: "may-lose" });
       expect(
         await inside(holding(TWO), ["meta", "note"], "richText", {
-          layout: { perLanguage: false, fileRetypes: true },
+          layout: { perLanguage: false, fileRetypes: true, converts: false },
         })
       ).toMatchObject({ blocked: null, outcome: "converts" });
     });

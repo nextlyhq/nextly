@@ -140,7 +140,7 @@ describe("the route's answer for a field found by its path", () => {
         ],
         dialect: "postgresql",
         builtBy: "collection",
-        layout: { perLanguage: false, fileRetypes: true },
+        layout: { perLanguage: false, fileRetypes: true, converts: false },
       })[0]?.outcome;
     // Several numbers becoming one text loses all but one; written as a list of texts, each is kept.
     expect(targetOf(true)).toBe("converts");
@@ -176,7 +176,7 @@ describe("the route's answer for a field found by its path", () => {
         ],
         dialect: "postgresql",
         builtBy: "collection",
-        layout: { perLanguage: false, fileRetypes: true },
+        layout: { perLanguage: false, fileRetypes: true, converts: false },
       })[0]?.outcome;
     expect(targetOf(["a", "b"])).toBe("keeps");
     expect(targetOf(["a"])).toBe("may-lose");
@@ -338,7 +338,7 @@ describe("the route's answer for a field found by its path", () => {
         fields: [{ name: "summary", type: "text" }] as FieldDefinition[],
         body: { field: ["summary"], type: "textarea" },
         builtBy: "collection",
-        layout: { perLanguage: false, fileRetypes: true },
+        layout: { perLanguage: false, fileRetypes: true, converts: false },
       })
     ).toThrow(expect.objectContaining({ code: "CONFLICT" }));
   });
@@ -372,7 +372,7 @@ describe("the route's answer for a field found by its path", () => {
           candidates: [{ type: "textarea" }],
         },
         builtBy: "collection",
-        layout: { perLanguage: true, fileRetypes: true },
+        layout: { perLanguage: true, fileRetypes: true, converts: false },
       });
     };
 
@@ -568,7 +568,7 @@ describe("the route's answer for a field found by its path", () => {
         candidates: [{ type: "number" }],
       },
       builtBy: "collection",
-      layout: { perLanguage: false, fileRetypes: true },
+      layout: { perLanguage: false, fileRetypes: true, converts: false },
     });
     const body = (await response.json()) as {
       items: { type: string; outcome: string | null }[];

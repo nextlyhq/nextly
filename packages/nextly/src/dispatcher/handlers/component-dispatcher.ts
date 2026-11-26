@@ -48,6 +48,7 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
+import { writerAppliesHere } from "../../domains/schema/builder-save/entity-save-deps";
 import {
   FirstQuestionWatch,
   landingPush,
@@ -535,7 +536,9 @@ export const COMPONENTS_METHODS: Record<
         throw NextlyError.notFound({ message: "Field group not found" });
       }
       refuseChangeDefinedInCode(component, "component", slug);
-      // A field group's save is applied by its push, which retypes no translations column.
+      // A field group's save is applied by its push, which retypes no translations column; where its
+      // writer applies its files, the save converts a translated field's values itself, and that
+      // retypes the column.
       return respondTypeChangeTargets({
         fields: (component.fields ?? []) as unknown as FieldDefinition[],
         body,
@@ -544,6 +547,7 @@ export const COMPONENTS_METHODS: Record<
         layout: {
           perLanguage: storesPerLanguage(component),
           fileRetypes: false,
+          converts: container.has("builderSaveSetup") && writerAppliesHere(),
         },
       });
     },

@@ -64,6 +64,7 @@ import {
   deletionHoldOf,
 } from "../../domains/schema/builder-save/deletion-counts";
 import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
+import { writerAppliesHere } from "../../domains/schema/builder-save/entity-save-deps";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
@@ -1009,6 +1010,7 @@ const COLLECTIONS_METHODS: Record<
         layout: {
           perLanguage: storesPerLanguage(collection),
           fileRetypes: container.has("builderSaveSetup"),
+          converts: container.has("builderSaveSetup") && writerAppliesHere(),
         },
       });
     },
@@ -2437,7 +2439,7 @@ async function writerSaveOf(change: WriterChange): Promise<
       ...setup,
       adapter,
       logger,
-      applies: process.env.NODE_ENV === "development",
+      applies: writerAppliesHere(),
     },
     save: await withMoves(save, change.moves, adapter),
     fields,

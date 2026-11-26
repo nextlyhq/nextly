@@ -12,6 +12,15 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { BuilderSaveSetup, CollectionSaveDeps } from "./collection-save";
 
 /**
+ * Whether a Builder save's writer applies its files here: development runs each file and records it
+ * applied; elsewhere the deploy's `nextly migrate` does. The one answer every writer's dependencies
+ * take (`CollectionSaveDeps.applies`), and the type picker asks of what a save would do.
+ */
+export function writerAppliesHere(): boolean {
+  return process.env.NODE_ENV === "development";
+}
+
+/**
  * The writer's dependencies for a service's save, or undefined where no
  * writer is set up or no adapter is registered: the service then makes its
  * change alone, as before the writer.
@@ -26,8 +35,6 @@ export function entitySaveDeps(
     ...setup,
     adapter,
     logger,
-    // Development runs each file and records it applied, as the Builder does
-    // for a collection; elsewhere the deploy's `nextly migrate` does.
-    applies: process.env.NODE_ENV === "development",
+    applies: writerAppliesHere(),
   };
 }

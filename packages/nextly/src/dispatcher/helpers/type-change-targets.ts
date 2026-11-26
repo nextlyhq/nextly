@@ -45,6 +45,7 @@ import {
   fieldTypeOnDialect,
 } from "../../domains/schema/value-conversion/type-change/field-type";
 import {
+  convertsByValue,
   TRANSLATIONS_COLUMN_KEEPS_ITS_TYPE,
   translationsColumnChanges,
 } from "../../domains/schema/value-conversion/type-change/field-type-changes";
@@ -122,6 +123,12 @@ export interface TranslationLayout {
    * field group's are applied by their push, which changes no translations column's type.
    */
   fileRetypes: boolean;
+  /**
+   * Whether the save writes a converted field's values itself (`EntityTypeChangeInput.rewrites`): a
+   * writer that applies its files here (`writerAppliesHere`). The conversion then gives a translated
+   * field's translations column its new type on every database the file deploys to.
+   */
+  converts: boolean;
 }
 
 function wordsOf(refusal: LeavingTranslationRefusal): TypeChangeRefusalWords {
@@ -140,7 +147,9 @@ function translationRefusal(args: {
   to: FieldDefinition;
   dialect: SupportedDialect;
   builtBy: ColumnOrigin;
+  componentRow?: boolean;
   fileRetypes: boolean;
+  converts: boolean;
 }): { blocked: TypeChangeBlock; refusal: TypeChangeRefusalWords } | null {
   const oldFields = [args.from];
   const newFields = [args.to];
@@ -177,10 +186,19 @@ function translationRefusal(args: {
       dialect: args.dialect,
       builtBy: args.builtBy,
     }).length > 0;
+  // As the save judges it (`translationsTableFlags`): a pair the save converts value by value is no
+  // column left behind, on any entity, as the conversion retypes it.
+  const convertedBySave =
+    args.converts &&
+    convertsByValue(args.from, args.to, args.dialect, {
+      builtBy: args.builtBy,
+      ...(args.componentRow === true ? { componentRow: true } : {}),
+    });
   if (
     staysTranslated &&
     translationsColumnChanges(args.from, args.to, args.builtBy) &&
-    !retypedByFile
+    !retypedByFile &&
+    !convertedBySave
   ) {
     return {
       blocked: "translations-column",
@@ -343,7 +361,9 @@ function refusalByTranslation(
     to: candidate,
     dialect: args.dialect,
     builtBy: args.builtBy,
+    ...(args.componentRow === true ? { componentRow: true } : {}),
     fileRetypes: args.layout.fileRetypes,
+    converts: args.layout.converts,
   });
 }
 
