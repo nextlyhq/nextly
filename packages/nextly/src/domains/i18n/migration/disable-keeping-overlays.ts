@@ -45,6 +45,35 @@ export function disableKeepingOverlaysRefusal(
 }
 
 /**
+ * The refusal of a change that makes a shared field inside a repeater or group of `entity`
+ * translated (`fieldsTurningTranslatedInside`), naming each by path, or `undefined` where there is
+ * none. Its value is stored on the structure, every language's: read as text from then on, the
+ * first save in one language would take it for that language alone, and every other language
+ * would read none.
+ */
+export function fieldTurningTranslatedRefusal(
+  entity: { kind: I18nTransitionKind; slug: string },
+  fields: readonly string[]
+): NextlyError | undefined {
+  if (fields.length === 0) return undefined;
+  const named = fields.map(name => `"${name}"`).join(", ");
+  return NextlyError.invalidInput({
+    message:
+      `This change to the ${KIND_NAMES[entity.kind]} "${entity.slug}" isn't supported yet: ` +
+      `${named} inside a repeater or group would become translated, and the value each entry ` +
+      `holds there is shared by every language; the first save in one language would take it for ` +
+      `that language alone, and every other language would lose it. Nothing was changed. To go on ` +
+      `today, add a new translated field beside it and copy the values in.`,
+    logContext: {
+      reason: "container-field-turning-translated",
+      entity: entity.slug,
+      kind: entity.kind,
+      fields: [...fields],
+    },
+  });
+}
+
+/**
  * The refusal of a change that leaves a repeater or group of `entity` keeping its text per
  * language with nothing inside it translated any more (its last translated field made shared, or
  * the container itself marked `localized: false`), naming each such container in `containers`, or

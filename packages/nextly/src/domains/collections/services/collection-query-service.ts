@@ -3416,6 +3416,8 @@ export class CollectionQueryService extends BaseService {
      * sees the grant, so the waiver does not travel.
      */
     hooksWaived?: boolean;
+    /** The language the version is spelled for, where it is not the read's own. */
+    revisionLocale?: string;
     /** Translation counters the read already took (`attachDocumentVersions`). */
     knownLanguages?: {
       revisions: ReadonlyMap<string, ReadonlyMap<string, number>>;
@@ -3733,7 +3735,7 @@ export class CollectionQueryService extends BaseService {
     attachDocumentVersions(finalData, {
       stored: storedRevisions,
       localization: this.localization,
-      locale: params.locale,
+      locale: params.revisionLocale ?? params.locale,
       known: params.knownLanguages,
     });
 
@@ -4191,6 +4193,8 @@ export class CollectionQueryService extends BaseService {
     sourceLocales?: boolean;
     /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
     translations?: "all";
+    /** The language the version is spelled for, where it is not the read's own (`readOfEveryLanguage`). */
+    revisionLocale?: string;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -4659,7 +4663,7 @@ export class CollectionQueryService extends BaseService {
         localeChain !== null &&
         chainCoversVersion(localeChain, {
           localization: this.localization,
-          locale: params.locale,
+          locale: params.revisionLocale ?? params.locale,
         });
       const knownFirst = countersWithContent
         ? undefined
@@ -4919,6 +4923,7 @@ export class CollectionQueryService extends BaseService {
         rows: expandedEntries,
         hooksWaived,
         knownLanguages,
+        revisionLocale: params.revisionLocale,
         collectionName: params.collectionName,
         // The collection record this read was planned from, so a `dbName`
         // collection's contributed columns are found under its real table.
@@ -5903,6 +5908,8 @@ export class CollectionQueryService extends BaseService {
     sourceLocales?: boolean;
     /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
     translations?: "all";
+    /** The language the version is spelled for, where it is not the read's own (`readOfEveryLanguage`). */
+    revisionLocale?: string;
     /**
      * Attach `_details`: where the site serves the entry, and who made and
      * changed it (`entryDetails`). Who is personal data, so the route asks
@@ -6131,7 +6138,7 @@ export class CollectionQueryService extends BaseService {
         companion &&
         chainCoversVersion(localeChain, {
           localization: this.localization,
-          locale: params.locale,
+          locale: params.revisionLocale ?? params.locale,
         }) &&
         companionReady
           ? localeChain
@@ -6721,6 +6728,7 @@ export class CollectionQueryService extends BaseService {
         rows: [expandedEntry],
         hooksWaived,
         knownLanguages,
+        revisionLocale: params.revisionLocale,
         // afterRead handlers on a read by id receive the document itself.
         single: true,
         collectionName: params.collectionName,

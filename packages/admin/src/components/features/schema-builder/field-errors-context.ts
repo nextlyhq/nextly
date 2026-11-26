@@ -10,6 +10,7 @@
  */
 import { createContext, useContext, useMemo } from "react";
 
+import { useSavedFields } from "@admin/components/field-ui/settings-panel/saved-fields-context";
 import {
   builderFieldErrors,
   type BuilderFieldError,
@@ -34,13 +35,15 @@ export function useBuilderFieldErrors(
   fields: readonly BuilderField[]
 ): ReadonlyMap<string, BuilderFieldError> {
   const refusedMoves = useContext(RefusedMovesContext);
+  const saved = useSavedFields();
   return useMemo(
     () =>
       builderFieldErrors(
         fields.filter(field => !field.isSystem),
         fields,
-        refusedMoves
+        refusedMoves,
+        saved
       ),
-    [fields, refusedMoves]
+    [fields, refusedMoves, saved]
   );
 }

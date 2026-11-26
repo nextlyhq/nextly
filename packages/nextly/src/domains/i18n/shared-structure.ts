@@ -299,6 +299,85 @@ export function componentFieldsChangingTranslation(
   );
 }
 
+/**
+ * The fields inside an entity's repeaters and groups, at any depth, that a change makes translated
+ * where they were shared, by path (`slides.rank`): each field kept by name in a container kept by
+ * name, of the same kind, that already kept its text per language before the change. Its value
+ * stored on the structure, every language's, would be read as one language's text from then on.
+ * A container inside one kept, shared whole before, is read as having kept no text, so each text
+ * the change translates inside it is named too (`slides.details.label`). A field added holds no
+ * stored value yet; an entity's container that starts keeping text has its overlay seeded from the
+ * structure, so neither is named.
+ */
+export function fieldsTurningTranslatedInside(
+  before: readonly StructuredField[],
+  after: readonly StructuredField[]
+): string[] {
+  // A level's fields by name, a group with no name read through, as `shapeOfLevel` reads it.
+  const named = (fields: readonly StructuredField[] | undefined) => {
+    const out = new Map<string, StructuredField>();
+    const visit = (level: readonly StructuredField[]) => {
+      for (const field of level) {
+        if (typeof field.name === "string" && field.name !== "") {
+          out.set(field.name, field);
+        } else if (field.type === "group" && field.fields) {
+          visit(field.fields);
+        }
+      }
+    };
+    visit(fields ?? []);
+    return out;
+  };
+  const found: string[] = [];
+  const walk = (
+    was: SharedStructureShape,
+    now: SharedStructureShape,
+    fieldsBefore: readonly StructuredField[] | undefined,
+    fieldsAfter: readonly StructuredField[] | undefined,
+    path: string
+  ): void => {
+    const earlier = named(fieldsBefore);
+    for (const [name, field] of named(fieldsAfter)) {
+      const prior = earlier.get(name);
+      if (prior === undefined) continue;
+      // Own entries only: a field named like an object's built-ins (`constructor`) is no shape.
+      const nestedWas = Object.hasOwn(was.inner, name)
+        ? was.inner[name]
+        : undefined;
+      const nestedNow = Object.hasOwn(now.inner, name)
+        ? now.inner[name]
+        : undefined;
+      if (
+        isStructureContainer(field) &&
+        prior.type === field.type &&
+        nestedNow !== undefined
+      ) {
+        // A container inside with no shape before was shared whole (`localized: false`, or it held
+        // nothing translatable): it kept no text per language, so every text inside it now is new.
+        walk(
+          nestedWas ?? { kind: nestedNow.kind, texts: [], inner: {} },
+          nestedNow,
+          prior.fields,
+          field.fields,
+          `${path}.${name}`
+        );
+      } else if (!was.texts.includes(name) && now.texts.includes(name)) {
+        found.push(`${path}.${name}`);
+      }
+    }
+  };
+  const earlier = named(before);
+  for (const [name, field] of named(after)) {
+    const prior = earlier.get(name);
+    if (prior === undefined || prior.type !== field.type) continue;
+    const was = sharedStructureShape(prior);
+    const now = sharedStructureShape(field);
+    if (was === null || now === null) continue;
+    walk(was, now, prior.fields, field.fields, name);
+  }
+  return found.sort();
+}
+
 /** The components a field places: one, or a dynamic zone's several; none for any other field. */
 function componentSlugsOf(field: StructuredField): string[] {
   const { single, many } = extractFieldGroupReferences(field);

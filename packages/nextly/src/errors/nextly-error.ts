@@ -613,13 +613,18 @@ export class NextlyError extends Error {
 
   static validation(opts: {
     errors: ValidationPublicData["errors"];
+    /** See {@link ValidationPublicData.described}. */
+    described?: ValidationPublicData["described"];
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "VALIDATION_ERROR",
       publicMessage: "Validation failed.",
-      publicData: { errors: opts.errors },
+      publicData: {
+        errors: opts.errors,
+        ...(opts.described === undefined ? {} : { described: opts.described }),
+      },
       cause: opts.cause,
       logContext: opts.logContext,
     });

@@ -80,7 +80,8 @@ const HELP_LINKS = [
   {
     id: "discord",
     label: "Discord",
-    href: "https://discord.gg/hJUg9AZMn",
+    // The community server's invite, the same link nextlyhq.com carries.
+    href: "https://discord.gg/t2qN6H5tMj",
     icon: Discord,
   },
 ] as const;

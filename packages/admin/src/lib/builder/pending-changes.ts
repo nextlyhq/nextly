@@ -46,6 +46,11 @@ export interface PendingChange {
   type: string;
   /** For a type change, the type as saved. */
   previousType?: string;
+  /**
+   * For a type change, the field's path as the draft places it: the names of the fields holding
+   * it, outermost first, then its own name. The save's refusal of the change names it so.
+   */
+  path?: string[];
   /** For an added or deleted container, how many fields it holds, at any depth. */
   inside?: number;
   /**
@@ -411,7 +416,8 @@ function changesOfKept(
   was: BuilderField,
   moved: boolean,
   followed: BuilderField = was,
-  movedPaths?: MovedPaths
+  movedPaths?: MovedPaths,
+  path?: string[]
 ): PendingChange[] {
   const changes: PendingChange[] = [];
   if (moved) changes.push(changeOf("moved", field, movedPaths));
@@ -426,7 +432,12 @@ function changesOfKept(
     );
   }
   if (was.type !== field.type) {
-    changes.push(changeOf("typeChanged", field, { previousType: was.type }));
+    changes.push(
+      changeOf("typeChanged", field, {
+        previousType: was.type,
+        ...(path ? { path } : {}),
+      })
+    );
   }
   if (settingsSignatureOf(followed) !== settingsSignatureOf(field)) {
     changes.push(changeOf("settings", field));
@@ -474,7 +485,8 @@ export function pendingChanges(
             movedInPlace.has(field.id) ||
             movedPaths !== undefined,
           followed.get(field.id) ?? was,
-          movedPaths
+          movedPaths,
+          pathOf(field.id, after)
         )
       );
     } else if (!underAny(field.id, after, added)) {
