@@ -19,6 +19,7 @@ import {
   type PluginContext,
   type PublicAddressType,
   type PluginProxyHandler,
+  type ProxyAnswer,
 } from "@nextlyhq/plugin-sdk";
 
 import {
@@ -977,6 +978,35 @@ function copyNotReady(): Response {
 }
 
 /**
+ * What a request for a copy is answered with while the address record catches
+ * up, or `"ready"` once the record is ready to answer it. A page may not hold
+ * its address yet. A copy's own address waits for the record, up to a limit:
+ * on a server that has only just started, the catch-up is still running when
+ * the first request comes, and the site serves no page there. Past the
+ * limit, or after a catch-up that failed, it is asked to come back rather
+ * than answered not found, which a reader may keep, and a failed catch-up is
+ * tried again. Never held: a page's own address asked for by `Accept`, which
+ * the page answers; a page the site's code builds; and a copy's address
+ * where copies are switched off.
+ */
+async function waitForRecord(
+  ctx: PluginContext,
+  url: URL,
+  atPage: boolean,
+  config: AiOutputsConfig
+): Promise<ProxyAnswer | undefined | "ready"> {
+  retryFailedCatchUp();
+  if (atPage || builtAt(config, url)) return undefined;
+  const rules = await config.readRules(ctx, undefined);
+  if (rules.plainTextCopies !== true) return undefined;
+  if (await addressRecordReadyWithin(COPY_RECORD_WAIT_MS)) return "ready";
+  // A page of the site at this address, one built in code or one the record
+  // already holds, is served there as ever.
+  if ((await copiesTaken(ctx, [url.href], config)).size > 0) return undefined;
+  return { response: copyNotReady() };
+}
+
+/**
  * The Proxy handler that answers a request for a page's plain-text copy:
  * a GET or HEAD of an address ending in `.md`, or of a page's own address
  * whose `Accept` header asks for Markdown over HTML. Every other request
@@ -1001,26 +1031,9 @@ export function plainCopyProxyHandler(
       const asked = copyAskedFor(request);
       if (asked === undefined) return;
       const { url, atPage } = asked;
-      // While the address record catches up, a page may not hold its address
-      // yet. A copy's own address waits for it, up to a limit: on a server
-      // that has only just started, the catch-up is still running when the
-      // first request comes, and the site serves no page there. Past the
-      // limit, or after a catch-up that failed, it is asked to come back
-      // rather than answered not found, which a reader may keep, and a
-      // failed catch-up is tried again. A page's own address, asked for by
-      // `Accept`, is never held: it passes to the page, which answers it.
-      // Nor is a copy's address where copies are switched off.
       if (!addressRecordReady()) {
-        retryFailedCatchUp();
-        if (atPage || builtAt(config, url)) return;
-        const rules = await config.readRules(ctx, undefined);
-        if (rules.plainTextCopies !== true) return;
-        if (!(await addressRecordReadyWithin(COPY_RECORD_WAIT_MS))) {
-          // A page of the site at this address, one built in code or one
-          // the record already holds, is served there as ever.
-          if ((await copiesTaken(ctx, [url.href], config)).size > 0) return;
-          return { response: copyNotReady() };
-        }
+        const waited = await waitForRecord(ctx, url, atPage, config);
+        if (waited !== "ready") return waited;
       }
       const copy = await plainCopyAt(ctx, url, config, atPage);
       if (copy === null) return;
