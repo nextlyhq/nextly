@@ -36,7 +36,7 @@ import {
 
 import { declarationsText } from "../../inspector/code-hints";
 
-import { drawsBold, roleStack, siteFamilies } from "./font-library";
+import { roleStack, siteFamilies } from "./font-library";
 
 /** The two site-wide fonts. */
 export type FontRole = "body" | "heading";
@@ -599,61 +599,4 @@ export function firstFamily(stack: string): string | undefined {
     return undefined;
   }
   return reading.parts[0]?.part.name.toLowerCase();
-}
-
-/** The cut a heading is missing, and how to add it where it can be. */
-export interface MissingBold {
-  /** The family, as first written. */
-  readonly family: string;
-  /**
-   * What to ask the catalogue for, for a family the site got from it; absent
-   * for an uploaded one, which only a new file can give a bold.
-   */
-  readonly add?: {
-    readonly id: string;
-    readonly weights: readonly number[];
-    readonly styles: readonly ("normal" | "italic")[];
-    readonly subsets: readonly string[];
-  };
-}
-
-/** The catalogue request that adds a family's bold, where it came from one. */
-function boldRequest(faces: readonly FontFaceDef[]): MissingBold["add"] {
-  const id = faces.find(face => face.source?.kind === "google")?.source?.id;
-  if (id === undefined) return undefined;
-  const subsets = [
-    ...new Set(
-      faces.flatMap(face =>
-        face.source?.subset === undefined ? [] : [face.source.subset]
-      )
-    ),
-  ];
-  return {
-    id,
-    weights: [700],
-    styles: ["normal"],
-    subsets: subsets.length === 0 ? ["latin"] : subsets,
-  };
-}
-
-/**
- * The family headings are drawn in with no face at 600 or heavier, so a
- * browser thickens a lighter one for every bold heading; `undefined` when
- * they have a bold, or are not drawn in one of the site's families.
- *
- * Headings drawn in the Body font ("Same as body") are judged by it.
- */
-export function missingBold(
-  tokens: SiteTokenSet,
-  families: readonly RoleFamily[]
-): MissingBold | undefined {
-  const heading = fontRoleSetting(tokens, "heading");
-  const drawn =
-    heading.kind === "unset" ? fontRoleSetting(tokens, "body") : heading;
-  if (drawn.kind !== "set") return undefined;
-  const key = firstFamily(drawn.stack);
-  const family = families.find(each => each.family.toLowerCase() === key);
-  if (family === undefined || drawsBold(family.faces)) return undefined;
-  const add = boldRequest(family.faces);
-  return { family: family.family, ...(add === undefined ? {} : { add }) };
 }
