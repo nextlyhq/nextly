@@ -134,6 +134,7 @@ import {
   type ToolbarScreen,
   unionRect,
 } from "./toolbar-actions";
+import { useLookBeneath } from "./toolbar-beneath";
 import { isTurnIntoAction } from "./turn-into-verb";
 import { EDITING_ATTRIBUTE } from "./use-inline-text";
 
@@ -809,6 +810,7 @@ export function BlockToolbar({
   }, [measure, hidden, selectedId, canvasFrame]);
 
   const hovered = useHoveredBlock();
+  const lookBeneath = useLookBeneath(selectedIds, document);
 
   useScrollClearance(bar, hidden, placement, canvasFrame);
   const typingAside = useTypingAside(
@@ -964,6 +966,9 @@ export function BlockToolbar({
               } as React.CSSProperties)
         }
         onKeyDown={onKeyDown}
+        // A block the bar covers whole is reached by coming onto the bar from
+        // anywhere but the selection (`toolbar-beneath`).
+        onPointerEnter={lookBeneath}
       >
         <BarLockControl
           lock={lock}

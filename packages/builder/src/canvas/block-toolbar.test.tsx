@@ -1547,6 +1547,52 @@ describe("BlockToolbar", () => {
       expect(bar.hasAttribute("data-faded")).toBe(false);
       expect(bar.hasAttribute("data-lets-through")).toBe(false);
     });
+
+    /*
+     * A block the bar covers whole is never hovered first: the pointer meets
+     * the bar before it. jsdom lays nothing out, so what lies under the bar is
+     * given as a browser's hit test would report it: the bar, then block b.
+     */
+    afterEach(() => {
+      Reflect.deleteProperty(document, "elementsFromPoint");
+    });
+
+    function barOverB(firstPointed: string | null) {
+      const view = render(
+        <HoveredBlockProvider>
+          <PointAt id={firstPointed} />
+          {tree(editorSpy(pair(), "a"), {})}
+        </HoveredBlockProvider>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      const covered = document.querySelector('[data-nx-node="b"]');
+      if (covered === null) throw new Error("block b is not drawn");
+      Object.defineProperty(document, "elementsFromPoint", {
+        configurable: true,
+        value: () => [bar, covered],
+      });
+      // The pointer then leaves whatever it pointed at, for the bar.
+      view.rerender(
+        <HoveredBlockProvider>
+          <PointAt id={null} />
+          {tree(editorSpy(pair(), "a"), {})}
+        </HoveredBlockProvider>
+      );
+      return bar;
+    }
+
+    it("steps aside for a block it covers whole, met from anywhere but the selection", () => {
+      const bar = barOverB(null);
+      fireEvent.pointerEnter(bar, { clientX: 10, clientY: 10 });
+      expect(bar.hasAttribute("data-lets-through")).toBe(true);
+    });
+
+    it("stays for a pointer coming up from the selection, which is heading for a button", () => {
+      const bar = barOverB("a");
+      fireEvent.pointerEnter(bar, { clientX: 10, clientY: 10 });
+      expect(bar.hasAttribute("data-lets-through")).toBe(false);
+      expect(bar.hasAttribute("data-faded")).toBe(false);
+    });
   });
 
   it("keeps its height clear at the top of the scroller while it is drawn", () => {

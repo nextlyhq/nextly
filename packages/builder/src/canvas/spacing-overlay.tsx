@@ -637,38 +637,53 @@ function tightBandsIn(layer: HTMLElement): ReadonlySet<string> {
  * the editor's document, and over a canvas in a frame in the frame's too,
  * whose points are carried onto the editor's through the frame's painted box.
  * Hit-tested against the bands' own boxes, so it holds at any zoom.
+ *
+ * A press counts as pointing too: a tap on a touch screen sends no move. And
+ * bands redrawn under a still pointer (a scroll, an edit, a reflow) are
+ * hit-tested again at the last point, since no move follows to do it.
  */
 function usePointedBand(
   layer: React.RefObject<HTMLDivElement | null>,
   active: boolean,
-  frameKey: unknown
+  frameKey: unknown,
+  geometry: unknown
 ): string | null {
   const [pointed, setPointed] = React.useState<string | null>(null);
+  const last = React.useRef<{ x: number; y: number } | null>(null);
+  const hitTest = React.useCallback(() => {
+    const element = layer.current;
+    const point = last.current;
+    let found: string | null = null;
+    if (element !== null && point !== null) {
+      for (const band of element.querySelectorAll<HTMLElement>(
+        ".nx-spacing-overlay__band"
+      )) {
+        const box = band.getBoundingClientRect();
+        if (
+          point.x >= box.left &&
+          point.x <= box.right &&
+          point.y >= box.top &&
+          point.y <= box.bottom
+        ) {
+          found = bandKeyOf(band);
+          break;
+        }
+      }
+    }
+    setPointed(current => (current === found ? current : found));
+  }, [layer]);
   React.useEffect(() => {
     const element = layer.current;
     if (!active || element === null) {
+      last.current = null;
       setPointed(null);
       return;
     }
     const chrome = element.ownerDocument;
     const frame = overlaySpaceOf(element, CANVAS_ROOT_CLASS)?.frame ?? null;
     const at = (x: number, y: number): void => {
-      let found: string | null = null;
-      for (const band of element.querySelectorAll<HTMLElement>(
-        ".nx-spacing-overlay__band"
-      )) {
-        const box = band.getBoundingClientRect();
-        if (
-          x >= box.left &&
-          x <= box.right &&
-          y >= box.top &&
-          y <= box.bottom
-        ) {
-          found = bandKeyOf(band);
-          break;
-        }
-      }
-      setPointed(current => (current === found ? current : found));
+      last.current = { x, y };
+      hitTest();
     };
     const onChrome = (event: PointerEvent): void =>
       at(event.clientX, event.clientY);
@@ -687,23 +702,33 @@ function usePointedBand(
      * it. Leaving the frame for the editor is followed by the editor's own
      * moves, which point again.
      */
-    const onLeave = (): void => setPointed(null);
+    const onLeave = (): void => {
+      last.current = null;
+      setPointed(null);
+    };
     const inner = frame?.contentDocument ?? null;
-    chrome.addEventListener("pointermove", onChrome, { passive: true });
-    chrome.documentElement.addEventListener("pointerleave", onLeave);
-    if (inner !== null && inner !== chrome) {
-      inner.addEventListener("pointermove", onFrame, { passive: true });
-      inner.documentElement.addEventListener("pointerleave", onLeave);
+    const both = inner !== null && inner !== chrome;
+    for (const type of ["pointermove", "pointerdown"] as const) {
+      chrome.addEventListener(type, onChrome, { passive: true });
+      if (both) inner.addEventListener(type, onFrame, { passive: true });
     }
+    chrome.documentElement.addEventListener("pointerleave", onLeave);
+    if (both) inner.documentElement.addEventListener("pointerleave", onLeave);
     return () => {
-      chrome.removeEventListener("pointermove", onChrome);
+      for (const type of ["pointermove", "pointerdown"] as const) {
+        chrome.removeEventListener(type, onChrome);
+        if (both) inner.removeEventListener(type, onFrame);
+      }
       chrome.documentElement.removeEventListener("pointerleave", onLeave);
-      if (inner !== null && inner !== chrome) {
-        inner.removeEventListener("pointermove", onFrame);
+      if (both) {
         inner.documentElement.removeEventListener("pointerleave", onLeave);
       }
     };
-  }, [layer, active, frameKey]);
+  }, [layer, active, frameKey, hitTest]);
+  // After the redrawn bands are in the page, and before they are painted.
+  React.useLayoutEffect(() => {
+    if (active) hitTest();
+  }, [geometry, active, hitTest]);
   return pointed;
 }
 
@@ -1057,17 +1082,21 @@ export function SpacingOverlay({
    * Asked of `holdsBlocks`, the one answer a drag and Layers use too. A
    * component copy keeps them as well: it draws a whole set of blocks, kept in
    * the component rather than in slots of its own, so whether its slots hold
-   * blocks says nothing about its size.
+   * blocks says nothing about its size. A type the canvas's own resolver
+   * knows is read from that definition, the one the canvas renders: a
+   * container stored before its slot holds anything names no slot itself.
    */
   const outlines = React.useMemo(() => {
     if (selectedId === null) return false;
     const node = findNode(document.nodes, selectedId);
-    return (
-      node !== undefined &&
-      node.type !== COMPONENT_INSTANCE_TYPE &&
-      !holdsBlocks(node, undefined)
-    );
-  }, [document, selectedId]);
+    if (node === undefined || node.type === COMPONENT_INSTANCE_TYPE) {
+      return false;
+    }
+    const definition = resolver.get(node.type);
+    return definition === undefined
+      ? !holdsBlocks(node, undefined)
+      : Object.keys(definition.slots ?? {}).length === 0;
+  }, [document, selectedId, resolver]);
 
   /*
    * A number thicker than its band covers the block it measures (a Button's
@@ -1083,7 +1112,8 @@ export function SpacingOverlay({
   const pointed = usePointedBand(
     layer,
     !hidden && bands.length > 0,
-    canvasFrame
+    canvasFrame,
+    bands
   );
 
   return (

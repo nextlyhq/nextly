@@ -553,4 +553,60 @@ test.describe("the block toolbar over a block above the selection", () => {
       page.getByRole("button", { name: "Undo", exact: true })
     ).toBeEnabled();
   });
+
+  test("steps aside for a small button it covers whole, met from the heading above", async ({
+    page,
+  }) => {
+    // A small button with no padding, right above the hero: the bar, drawn
+    // above the hero, covers it whole, so no part of it can be pointed at
+    // before the bar is met.
+    const id = await createPage(page.request, [
+      roomyHeading(INTRO, "Spring at the allotment"),
+      {
+        id: BADGE,
+        type: "core/button",
+        version: 1,
+        props: { label: "New" },
+        styles: {
+          base: {
+            base: {
+              padding: {
+                blockStart: "0px",
+                blockEnd: "0px",
+                inlineStart: "0px",
+                inlineEnd: "0px",
+              },
+            },
+          },
+        },
+      },
+      heroHeading(HERO_TITLE, "Everything you need to plant this spring"),
+    ]);
+    await openBuilder(page, id, INTRO);
+    await select(page, HERO_TITLE);
+
+    const bar = await barOn(page, "above");
+    const badge = await boxOf(page, BADGE);
+    // The case this is about: nothing of the button is outside the bar and
+    // the gap under it, which belongs to the bar.
+    const hero = await boxOf(page, HERO_TITLE);
+    expect(badge.x).toBeGreaterThanOrEqual(bar.x);
+    expect(badge.x + badge.width).toBeLessThanOrEqual(bar.x + bar.width);
+    expect(badge.y).toBeGreaterThanOrEqual(bar.y);
+    expect(badge.y + badge.height).toBeLessThanOrEqual(hero.y);
+
+    // Down from the heading above onto the bar, where the button is.
+    const intro = await boxOf(page, INTRO);
+    const x = badge.x + badge.width / 2;
+    await page.mouse.move(x, intro.y + intro.height / 2);
+    await page.mouse.move(x, badge.y + badge.height / 2, { steps: 8 });
+    await expect(toolbar(page)).toHaveAttribute("data-lets-through", "");
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect.poll(() => selection(page)).toEqual([BADGE]);
+    // Nothing on the bar was pressed.
+    await expect(
+      page.getByRole("button", { name: "Undo", exact: true })
+    ).toBeDisabled();
+  });
 });
