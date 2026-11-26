@@ -224,6 +224,7 @@ describe.each(getConfiguredTestDialects())(
           expect(await marked(path, "number"), path.join(".")).toMatchObject({
             blocked: "leaves-translation-inside",
             outcome: null,
+            refusal: { code: "TYPE_CHANGE_BLOCKED", steps: [] },
           });
           expect(await marked(path, "email"), path.join(".")).toMatchObject({
             blocked: "unjudged-inside",
@@ -243,22 +244,40 @@ describe.each(getConfiguredTestDialects())(
         ).executeQuery<{ v: number | string | null }>(
           "SELECT schema_version AS v FROM dynamic_collections WHERE slug = 'tct_inside'"
         )) as { v: number | string | null }[];
-        const outcome = await dispatchCollections(
-          {} as ServiceContainer,
-          "applySchemaChanges",
-          { collectionName: "tct_inside" },
-          {
-            fields: [group("one", [{ name: "note", type: "number" }]), TWO],
-            confirmed: true,
-            schemaVersion: Number(row?.v ?? 1),
-          }
-        ).then(
-          () => undefined,
-          (error: unknown) => error
-        );
-        expect(outcome).toMatchObject({
+        const saving = (fields: Field[]) =>
+          dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: "tct_inside" },
+            { fields, confirmed: true, schemaVersion: Number(row?.v ?? 1) }
+          ).then(
+            () => undefined,
+            (error: unknown) => error
+          );
+        expect(
+          await saving([group("one", [{ name: "note", type: "number" }]), TWO])
+        ).toMatchObject({
           code: "INVALID_INPUT",
           logContext: { reason: "container-overlay-left-behind" },
+        });
+        // Where the group keeps another text, the save refuses the change itself, in the words the
+        // picker shows.
+        const shown = await marked(["two", "note"], "number");
+        expect(
+          await saving([
+            ONE,
+            group("two", [{ name: "note", type: "number" }, text("subtitle")]),
+          ])
+        ).toMatchObject({
+          publicData: {
+            errors: [
+              {
+                path: "fields.two.note",
+                code: shown?.refusal?.code,
+                message: shown?.refusal?.reason,
+              },
+            ],
+          },
         });
       },
       300_000
@@ -281,13 +300,19 @@ describe.each(getConfiguredTestDialects())(
       ...extra,
     });
     const CAPTION: Field = { name: "caption", type: "text" };
+    const COUNT: Field = { name: "count", type: "number" };
 
+    // Beside a text the container keeps per language, the save refuses the change, in the words the
+    // picker shows. Beside none, on an entity keeping nothing per language yet, the save would make
+    // its translations empty and go ahead: the picker alone shows it unavailable.
     it.each([
-      ["group", { pick: "red", caption: "One" }],
-      ["repeater", [{ pick: "red", caption: "One" }]],
+      ["group", "a text", CAPTION, { pick: "red", caption: "One" }],
+      ["repeater", "a text", CAPTION, [{ pick: "red", caption: "One" }]],
+      ["group", "no text", COUNT, { pick: "red", count: 1 }],
+      ["repeater", "no text", COUNT, [{ pick: "red", count: 1 }]],
     ] as const)(
-      "in a %s: unavailable, and open once Localized is off, every language keeping it",
-      async (type, value) => {
+      "in a %s beside %s: unavailable, and open once Localized is off, every language keeping it",
+      async (type, _beside, beside, value) => {
         const basePath = await mkdtemp(join(tmpdir(), "nextly-type-targets-"));
         folders.push(basePath);
         vi.stubEnv("NODE_ENV", "development");
@@ -299,7 +324,7 @@ describe.each(getConfiguredTestDialects())(
         });
         instance = test;
         const holding = (field: Field): Field[] => [
-          { name: "meta", type, fields: [field, CAPTION] },
+          { name: "meta", type, fields: [field, beside] },
         ];
         await dispatchCollections(
           {} as ServiceContainer,
@@ -330,11 +355,29 @@ describe.each(getConfiguredTestDialects())(
           (await targetsOf("tct_joins", ["meta", "pick"], "select")).find(
             target => target.type === "text"
           );
-        expect(await toText()).toMatchObject({
-          blocked: "joins-translation-inside",
-          refusal: null,
-          outcome: null,
-        });
+        const shown = await toText();
+        if (beside === CAPTION) {
+          expect(shown).toMatchObject({
+            blocked: "joins-translation-inside",
+            outcome: null,
+            refusal: { code: "INVALID_INPUT", steps: [] },
+          });
+          expect(
+            await save(holding(pick("text"))).then(
+              () => undefined,
+              (error: unknown) => error
+            )
+          ).toMatchObject({
+            code: "INVALID_INPUT",
+            publicMessage: shown?.refusal?.reason,
+          });
+        } else {
+          expect(shown).toMatchObject({
+            blocked: "joins-translation-inside",
+            refusal: null,
+            outcome: null,
+          });
+        }
 
         const created = await test.nextly.create({
           collection: "tct_joins",

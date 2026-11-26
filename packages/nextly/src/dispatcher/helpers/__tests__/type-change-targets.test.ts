@@ -339,6 +339,7 @@ describe("the route's answer for a field found by its path", () => {
         body: { field: ["summary"], type: "textarea" },
         builtBy: "collection",
         layout: { perLanguage: false, fileRetypes: true },
+        entity: { kind: "collection", slug: "posts" },
       })
     ).toThrow(expect.objectContaining({ code: "CONFLICT" }));
   });
@@ -373,6 +374,7 @@ describe("the route's answer for a field found by its path", () => {
         },
         builtBy: "collection",
         layout: { perLanguage: true, fileRetypes: true },
+        entity: { kind: "collection", slug: "posts" },
       });
     };
 
@@ -549,6 +551,40 @@ describe("the route's answer for a field found by its path", () => {
     });
   });
 
+  // A width no database makes a bounded text column of is refused as the request's own error, before
+  // any value is made to judge it by.
+  it.each([
+    ["a collection's", "collection", { validation: { maxLength: 10_485_761 } }],
+    ["a field group's", "fieldGroup", { maxLength: 10_485_761 }],
+  ] as const)(
+    "refuses %s width beyond any text column, and judges one within",
+    (_of, builtBy, wide) => {
+      container.registerSingleton("adapter", () => ({
+        getCapabilities: () => ({ dialect: "postgresql" }),
+      }));
+      const ask = (field: Record<string, unknown>) =>
+        respondTypeChangeTargets({
+          fields: [{ name: "summary", type: "textarea" }] as FieldDefinition[],
+          body: {
+            field: ["summary"],
+            type: "textarea",
+            candidates: [{ type: "text", field }],
+          },
+          builtBy,
+          layout: { perLanguage: false, fileRetypes: true },
+          entity: { kind: builtBy, slug: "posts" },
+        });
+      expect(() => ask(wide)).toThrow(
+        expect.objectContaining({ code: "VALIDATION_ERROR" })
+      );
+      const within =
+        builtBy === "fieldGroup"
+          ? { maxLength: 4000 }
+          : { validation: { maxLength: 4000 } };
+      expect(ask(within).status).toBe(200);
+    }
+  );
+
   it("finds a field a group with no name holds on its level, by its own name", async () => {
     // A stand-in for the site's adapter: the route reads only which database it runs on.
     container.registerSingleton("adapter", () => ({
@@ -569,6 +605,7 @@ describe("the route's answer for a field found by its path", () => {
       },
       builtBy: "collection",
       layout: { perLanguage: false, fileRetypes: true },
+      entity: { kind: "collection", slug: "posts" },
     });
     const body = (await response.json()) as {
       items: { type: string; outcome: string | null }[];

@@ -229,6 +229,12 @@ describe("Change type… on a saved field", () => {
         refusal: null,
         outcome: null,
       },
+      {
+        type: "json",
+        blocked: "needs-rewrite-inside",
+        refusal: null,
+        outcome: null,
+      },
     ];
     const savedRating = { ...meta.fields![0] };
     const { user, onChanged } = renderChange("f-rating", [
@@ -267,6 +273,9 @@ describe("Change type… on a saved field", () => {
     );
     expect(row("email")).toHaveTextContent(
       "Unavailable: Every language shares its value inside its group or repeating rows, and this type would be translated there: the next save in one language would take the value from the others. Turn off Localized on the field and save, then change its type."
+    );
+    expect(row("json")).toHaveTextContent(
+      "Unavailable: Its values are kept inside its group or repeating rows, where a save does not rewrite them into another type yet. Add a new field beside it instead."
     );
     // A type the server did not judge cannot be picked either.
     expect(row("select")).toHaveAttribute("aria-disabled", "true");
