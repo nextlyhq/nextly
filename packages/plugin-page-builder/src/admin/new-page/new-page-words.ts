@@ -16,7 +16,8 @@ export const NEW_PAGE_WORDS = {
   addressNote: "Made from the title. Change it any time.",
   changeAddress: "Change the address",
   // The editor's own word for it, so a rename is one edit in its glossary.
-  headerFooter: HEADER_FOOTER_WORDS.headerAndFooter,
+  headerFooter:
+    HEADER_FOOTER_WORDS.headerAndFooter as typeof HEADER_FOOTER_WORDS.headerAndFooter,
   startFrom: "Start from",
   blank: "Blank",
   /** Under a starter the site can't use, above the server's reason. */

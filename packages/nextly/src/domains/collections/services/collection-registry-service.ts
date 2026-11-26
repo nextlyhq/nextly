@@ -39,8 +39,8 @@ import { clearRegistryRowCache } from "../../dynamic-collections/services/collec
 import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
-import { declarationTakesRow } from "../../schema/migrate/plugin/declared-owner";
 import { settingsOf } from "../../schema/migrate-create/entity-settings";
+import { declarationTakesRow } from "../../schema/migrate/plugin/declared-owner";
 import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-elements";
 import { DEMOTED_FROM_CODE } from "../../schema/pipeline/demoted-from-code";
 import { isHandedToBuilder } from "../../schema/pipeline/registered-collections";
