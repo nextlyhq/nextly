@@ -23,6 +23,7 @@ import {
 
 import {
   addressRecordReady,
+  addressRecordReadyWithin,
   retryFailedCatchUp,
 } from "../address-record/catch-up";
 import {
@@ -945,6 +946,24 @@ function copyAskedFor(
 }
 
 /**
+ * How long a request at a copy's own address waits for the address record
+ * to catch up. A catch-up with nothing to do takes a few reads; one still
+ * running past this is answered "try again" rather than held further.
+ */
+const COPY_RECORD_WAIT_MS = 5000;
+
+/**
+ * The answer at a copy's own address while the address record is not ready,
+ * as the sitemap's is: readers come back, and nothing between keeps it.
+ */
+function copyNotReady(): Response {
+  return new Response("The plain-text copy is being brought up to date.", {
+    status: 503,
+    headers: { "cache-control": "no-store", "retry-after": "120" },
+  });
+}
+
+/**
  * The Proxy handler that answers a request for a page's plain-text copy:
  * a GET or HEAD of an address ending in `.md`, or of a page's own address
  * whose `Accept` header asks for Markdown over HTML. Every other request
@@ -956,16 +975,31 @@ export function plainCopyProxyHandler(
 ): PluginProxyHandler {
   return {
     name: "plain-text-copies",
+    // A copy's own address is served by no page, so a Proxy still starting
+    // waits for the start rather than send it on to be answered not found.
+    // A page's own address, asked for by `Accept`, is the page's to answer.
+    claims: request => copyAskedFor(request)?.atPage === false,
     async handle(request, ctx) {
       const asked = copyAskedFor(request);
       if (asked === undefined) return;
       const { url, atPage } = asked;
       // While the address record catches up, a page may not hold its address
-      // yet: the request passes to the site as if no copy were served, and a
-      // catch-up that failed is tried again.
+      // yet. A copy's own address waits for it, up to a limit: on a server
+      // that has only just started, the catch-up is still running when the
+      // first request comes, and the site serves no page there. Past the
+      // limit, or after a catch-up that failed, it is asked to come back
+      // rather than answered not found, which a reader may keep, and a
+      // failed catch-up is tried again. A page's own address, asked for by
+      // `Accept`, is never held: it passes to the page, which answers it.
+      // Nor is a copy's address where copies are switched off.
       if (!addressRecordReady()) {
         retryFailedCatchUp();
-        return;
+        if (atPage) return;
+        const rules = await config.readRules(ctx, undefined);
+        if (rules.plainTextCopies !== true) return;
+        if (!(await addressRecordReadyWithin(COPY_RECORD_WAIT_MS))) {
+          return { response: copyNotReady() };
+        }
       }
       const copy = await plainCopyAt(ctx, url, config, atPage);
       if (copy === null) return;

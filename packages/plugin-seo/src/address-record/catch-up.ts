@@ -176,6 +176,46 @@ export function lastCatchUp(): Promise<CatchUpReport> | undefined {
 }
 
 /**
+ * Whether the record is ready within `ms`: it waits for the catch-up under
+ * way, and for one started again meanwhile, but never past `ms`, and not at
+ * all where the last one to finish failed. For an answer that cannot be
+ * given without the record, on a server that has only just started.
+ */
+export async function addressRecordReadyWithin(ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  let waited: Promise<CatchUpReport> | undefined;
+  while (!addressRecordReady()) {
+    const run = lastCatchUp();
+    const left = deadline - Date.now();
+    // None under way to wait for (the last one failed and none is retrying),
+    // or only the one already waited for, which has settled while another
+    // started beside it is still running: the record is not ready in time.
+    if (run === undefined || run === waited || left <= 0 || running === 0) {
+      return false;
+    }
+    if (!(await settlesWithin(run, left))) return false;
+    waited = run;
+  }
+  return true;
+}
+
+/** Whether `run` settles within `ms`, the timer cleared either way. */
+async function settlesWithin(
+  run: Promise<unknown>,
+  ms: number
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<boolean>(resolve => {
+    timer = setTimeout(resolve, ms, false);
+  });
+  try {
+    return await Promise.race([run.then(() => true), limit]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * What a catch-up may be told to do along the way. `afterListing` runs once
  * every page has been read and before any is recorded: the moment a save may
  * land between the two, which a caller can stand in for.

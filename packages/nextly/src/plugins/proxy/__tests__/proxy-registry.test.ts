@@ -59,6 +59,11 @@ describe("collecting proxy handlers", () => {
     ["a blank name", [{ name: " ", handle: noop }], "invalid-proxy-handler"],
     ["no handle", [{ name: "x" }], "invalid-proxy-handler"],
     [
+      "a claims that is not a function",
+      [{ name: "x", handle: noop, claims: true }],
+      "invalid-proxy-handler",
+    ],
+    [
       "one name twice",
       [
         { name: "x", handle: noop },

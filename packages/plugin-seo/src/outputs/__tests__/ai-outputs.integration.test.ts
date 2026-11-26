@@ -31,7 +31,11 @@ import {
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { lastCatchUp } from "../../address-record/catch-up";
+import {
+  catchUp,
+  forgetCatchUpFingerprint,
+  lastCatchUp,
+} from "../../address-record/catch-up";
 import { seoPlugin } from "../../plugin";
 import type { ReadRules } from "../../resolver/provider";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
@@ -497,6 +501,41 @@ describe.each(getConfiguredTestDialects())(
       const links = await llmsLinks();
       expect(links).toContain(`${SITE}/index.html.md`);
       expect(links).toContain(`${SITE}/index.md`);
+    });
+
+    it("serves a copy asked for while the address record still catches up, as on a server just started", async () => {
+      const t = await boot(dialect);
+      await post(t, "hello", "published");
+      await switches(t, { plainTextCopies: true });
+      if (seoContext === undefined) throw new Error("the plugin never started");
+      // A whole catch-up under way, held once it has read every page, as the
+      // first request of a server just started finds the one its start
+      // began: it does not wait for the request, nor the request for it.
+      await forgetCatchUpFingerprint(seoContext);
+      let reached: () => void = () => undefined;
+      const atHold = new Promise<void>(resolve => (reached = resolve));
+      let release: () => void = () => undefined;
+      const held = new Promise<void>(resolve => (release = resolve));
+      const run = catchUp({
+        afterListing: async () => {
+          reached();
+          await held;
+        },
+      });
+      await atHold;
+
+      const asking = ask("/blog/hello.md");
+      // Long enough for the request to find the record not ready.
+      await new Promise(resolve => setTimeout(resolve, 100));
+      release();
+      const copy = await asking;
+      await run;
+
+      // The copy, not the page the site would answer not found with.
+      expect(copy.body).not.toBe("the page");
+      expect(copy.status).toBe(200);
+      expect(copy.type).toBe("text/markdown; charset=utf-8");
+      expect(copy.link).toBe(`<${SITE}/blog/hello>; rel="canonical"`);
     });
 
     it("serves a copy at its own address as a cacheable file kept out of search, pointing to llms.txt", async () => {
