@@ -4,16 +4,18 @@
  *
  * An import writes its entries first with their references still holding the
  * ids and addresses of the site they came from; once every entry has its new
- * id, this is the pass that points them at the new ones. A reference is
- * stored in these places, and this reads each one:
+ * id, this is the pass that points them at the new ones. So the ids the map
+ * moves are ones this site does not hold: the rewrite reads every stored row,
+ * and a moved id the site held itself would take the site's own links to that
+ * item with it. A map moving one is refused before anything is read.
+ *
+ * A reference is stored in these places, and this reads each one:
  *
  *   - each collection's and each Single's row: the fields with a column
  *     there, those of a group with no name among them;
  *   - the translations table beside one, where its translatable values are;
  *   - each field group's table: an instance's own fields, and `_parent_id`
  *     when the instance belongs to a collection's entry the map moves;
- *   - each many-to-many junction: both link columns, each by the map of the
- *     collection it points into;
  *   - `nextly_versions`: a collection's or Single's snapshot, walked as the
  *     document it is, and a collection version's `entry_id`, with the
  *     working-draft key made from it;
@@ -25,8 +27,12 @@
  * the map names. Each table is read a page at a time, by its key after the
  * last one read, and a row is written only when something in it changed,
  * with only the columns that changed, each in the form it was read. Versions
- * of a plugin's pages (`scope_kind` "page") belong to the plugin and are left
- * as they are.
+ * of a plugin's pages (`scope_kind` "page") belong to the plugin, which takes
+ * its own data through an archive, and are left as they are.
+ *
+ * A many-to-many junction is not read: its foreign keys hold only ids of rows
+ * the site has, so no junction row can hold an id the map moves. An import
+ * writes those links once both their entries exist.
  *
  * Two tables hold ids as a record of what already happened rather than as
  * content, and are left as they are too: the outbox of content events
@@ -36,7 +42,9 @@
  * fingerprint.
  *
  * Everything runs on the `db` it is given, the caller's transaction, so the
- * rewrite commits or rolls back whole with the import that asked for it.
+ * rewrite commits or rolls back whole with the import that asked for it. The
+ * record of which media items content uses is the caller's to rebuild once
+ * the import ends (`nextly media reindex-usage` reads every document again).
  *
  * @module domains/data/references/rewrite-stored-references
  */
@@ -45,12 +53,16 @@ import type {
   SqlParam,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
 
 import type { FieldConfig } from "../../../collections/fields/types";
+import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import { componentFieldHasColumn } from "../../field-groups/services/field-group-utils";
+import {
+  COMPANION_LOCALE_COLUMN,
+  COMPANION_PARENT_COLUMN,
+} from "../../i18n/companion-columns";
 import {
   parseStoredJson,
   type FieldGroupSchemas,
@@ -60,16 +72,13 @@ import { RELEASE_MEMBERS_TABLE } from "../../releases/release-tables";
 import {
   fieldProducesColumn,
   fieldsStoredOnRow,
-  junctionLinkColumnsOf,
-  junctionTableTo,
   toSnakeCase,
-  usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
 import { workingDraftKey } from "../../versions/working-draft-key";
 
 import { rewriteContentReferences } from "./content-references";
 import type { PluginReferenceShapes } from "./plugin-reference-shapes";
-import { mappedId, type ReferenceMap } from "./reference-map";
+import { mappedId, MEDIA_COLLECTION, type ReferenceMap } from "./reference-map";
 
 /** One collection, Single or field group, and where its values are stored. */
 export interface StoredEntity {
@@ -91,15 +100,8 @@ export interface StoredContentSite {
   fieldGroups: readonly StoredEntity[];
 }
 
-/**
- * The calls the rewrite makes: a transaction's. Junction tables are not in
- * the schema registry `select` and `update` address tables by, so their rows
- * are read and written with Drizzle statements, as every junction read is.
- */
-export type RewriteDb = Pick<
-  TransactionContext,
-  "select" | "update" | "queryStatement" | "runStatement"
->;
+/** The calls the rewrite makes: a transaction's. */
+export type RewriteDb = Pick<TransactionContext, "select" | "update">;
 
 /** What the rewrite reads and writes through. */
 export interface RewriteStoredReferencesDeps {
@@ -109,6 +111,8 @@ export interface RewriteStoredReferencesDeps {
   maxParamsPerQuery: number;
   /** The shapes of the field types plugins add. */
   pluginShapes?: PluginReferenceShapes;
+  /** How many rows one read pages through; 200 unless a caller says. */
+  pageSize?: number;
 }
 
 /** What a rewrite changed. */
@@ -119,7 +123,7 @@ export interface RewriteStoredReferencesResult {
 
 type Row = Record<string, unknown>;
 
-/** How many rows one read pages through. */
+/** How many rows one read pages through, unless the caller says. */
 const PAGE = 200;
 
 /** What every part of the rewrite shares. */
@@ -127,6 +131,7 @@ interface Pass {
   deps: RewriteStoredReferencesDeps;
   map: ReferenceMap;
   schemas: FieldGroupSchemas;
+  pageSize: number;
   changed: Record<string, number>;
 }
 
@@ -150,7 +155,7 @@ function countChanged(pass: Pass, table: string): void {
  * a write to a row already read never moves another one past the reader.
  */
 async function* pagesOf(
-  db: RewriteDb,
+  pass: Pass,
   table: string,
   columns: readonly string[],
   keys: readonly string[],
@@ -180,14 +185,14 @@ async function* pagesOf(
             },
           ];
     const conditions = [...(where?.where ? [where.where] : []), ...afterLast];
-    const rows = await db.select<Row>(table, {
+    const rows = await pass.deps.db.select<Row>(table, {
       columns: [...new Set([...keys, ...columns])],
       ...(conditions.length > 0 ? { where: { and: conditions } } : {}),
       orderBy: keys.map(column => ({ column, direction: "asc" as const })),
-      limit: PAGE,
+      limit: pass.pageSize,
     });
     if (rows.length > 0) yield rows;
-    if (rows.length < PAGE) return;
+    if (rows.length < pass.pageSize) return;
     after = rows[rows.length - 1];
   }
 }
@@ -294,9 +299,7 @@ async function rewriteEntityRows(
   const parentColumns = collectionOfTable ? [parentId, parentTable] : [];
   const columns = [...onRow.map(f => toSnakeCase(nameOf(f))), ...parentColumns];
   if (columns.length === 0) return;
-  for await (const rows of pagesOf(pass.deps.db, entity.table, columns, [
-    "id",
-  ])) {
+  for await (const rows of pagesOf(pass, entity.table, columns, ["id"])) {
     for (const row of rows) {
       const changes = rewrittenColumns(pass, entity.fields, onRow, row);
       const moved = collectionOfTable
@@ -325,101 +328,19 @@ async function rewriteTranslations(
   onRow: readonly FieldConfig[]
 ): Promise<void> {
   const columns = onRow.map(f => toSnakeCase(nameOf(f)));
-  for await (const rows of pagesOf(pass.deps.db, table, columns, [
-    "_parent",
-    "_locale",
-  ])) {
+  const key = [COMPANION_PARENT_COLUMN, COMPANION_LOCALE_COLUMN];
+  for await (const rows of pagesOf(pass, table, columns, key)) {
     for (const row of rows) {
       const changes = rewrittenColumns(pass, entity.fields, onRow, row);
       if (Object.keys(changes).length === 0) continue;
       await writeRow(
         pass,
         table,
-        { _parent: row._parent, _locale: row._locale },
+        Object.fromEntries(key.map(column => [column, row[column]])),
         changes
       );
       countChanged(pass, table);
     }
-  }
-}
-
-/** The collection a many-to-many field links to, as its junction names it. */
-function junctionTarget(field: FieldConfig): string | undefined {
-  const target = (field as { options?: { target?: unknown } }).options?.target;
-  if (typeof target === "string" && target !== "") return target;
-  const relationTo = (field as { relationTo?: unknown }).relationTo;
-  return typeof relationTo === "string" ? relationTo : undefined;
-}
-
-/**
- * One junction's rows: the source column by the map of the collection the
- * links are from (none for a Single), the target column by the target's.
- */
-async function rewriteJunction(
-  pass: Pass,
-  table: string,
-  sourceColumn: string,
-  sourceCollection: string | null,
-  targetColumn: string,
-  targetCollection: string
-): Promise<void> {
-  const { db } = pass.deps;
-  const id = sql.identifier("id");
-  const source = sql.identifier(sourceColumn);
-  const target = sql.identifier(targetColumn);
-  const junction = sql.identifier(table);
-  let after: SqlParam | undefined;
-  for (;;) {
-    const filter = after === undefined ? sql`` : sql` WHERE ${id} > ${after}`;
-    const rows = await db.queryStatement<Row>(
-      sql`SELECT ${id} AS ${sql.identifier("id")}, ${source} AS ${sql.identifier("source")}, ${target} AS ${sql.identifier("target")} FROM ${junction}${filter} ORDER BY ${id} LIMIT ${PAGE}`
-    );
-    for (const row of rows) {
-      const nextSource =
-        mappedId(pass.map, sourceCollection, String(row.source)) ??
-        String(row.source);
-      const nextTarget =
-        mappedId(pass.map, targetCollection, String(row.target)) ??
-        String(row.target);
-      if (
-        nextSource === String(row.source) &&
-        nextTarget === String(row.target)
-      ) {
-        continue;
-      }
-      await db.runStatement(
-        sql`UPDATE ${junction} SET ${source} = ${nextSource}, ${target} = ${nextTarget} WHERE ${id} = ${row.id as SqlParam}`
-      );
-      countChanged(pass, table);
-    }
-    if (rows.length < PAGE) return;
-    after = rows[rows.length - 1].id as SqlParam;
-  }
-}
-
-/** The junctions of an entity's many-to-many fields at the top of its fields. */
-async function rewriteJunctions(
-  pass: Pass,
-  entity: StoredEntity,
-  sourceCollection: string | null
-): Promise<void> {
-  // Only a top-level many-to-many is given a junction by the creating SQL.
-  for (const field of entity.fields) {
-    if (!usesJunctionTable(field)) continue;
-    const targetSlug = junctionTarget(field);
-    if (targetSlug === undefined) continue;
-    const { sourceColumn, targetColumn } = junctionLinkColumnsOf(
-      entity.table,
-      targetSlug
-    );
-    await rewriteJunction(
-      pass,
-      junctionTableTo(entity.table, targetSlug, field),
-      sourceColumn,
-      sourceCollection,
-      targetColumn,
-      targetSlug
-    );
   }
 }
 
@@ -435,7 +356,7 @@ async function rewriteVersions(pass: Pass): Promise<void> {
     single: new Map(site.singles.map(s => [s.slug, s.fields])),
   };
   const pages = pagesOf(
-    pass.deps.db,
+    pass,
     VERSIONS_TABLE,
     ["scopeKind", "scopeSlug", "entryId", "locale", "draftKey", "snapshot"],
     ["id"],
@@ -515,7 +436,7 @@ function rewriteSnapshot(
 /** Each release member of a collection's entry the map moves. */
 async function rewriteReleaseMembers(pass: Pass): Promise<void> {
   const pages = pagesOf(
-    pass.deps.db,
+    pass,
     RELEASE_MEMBERS_TABLE,
     ["releaseId", "scopeKind", "scopeSlug", "entryId", "locale"],
     ["id"],
@@ -547,6 +468,49 @@ async function rewriteReleaseMembers(pass: Pass): Promise<void> {
   }
 }
 
+/** The table media items are stored in. */
+const MEDIA_TABLE = "media";
+
+/**
+ * Refuses, changing nothing, a map that moves an id the site holds itself, in
+ * a collection or the media library: every stored link to that item, the
+ * site's own among them, would be pointed at the new one. Asked a parameter
+ * limit's worth of ids at a time.
+ */
+async function assertMovedIdsAreNotHeld(pass: Pass): Promise<void> {
+  const tables = new Map<string, string>([
+    ...pass.deps.site.collections.map(c => [c.slug, c.table] as const),
+    [MEDIA_COLLECTION, MEDIA_TABLE],
+  ]);
+  const perQuery = Math.max(1, pass.deps.maxParamsPerQuery - 1);
+  for (const [collection, moves] of pass.map.ids ?? []) {
+    const table = tables.get(collection);
+    if (table === undefined) continue;
+    const moved = [...moves.keys()].filter(
+      id => mappedId(pass.map, collection, id) !== undefined
+    );
+    for (let at = 0; at < moved.length; at += perQuery) {
+      const held = await pass.deps.db.select<Row>(table, {
+        columns: ["id"],
+        where: {
+          and: [
+            { column: "id", op: "IN", value: moved.slice(at, at + perQuery) },
+          ],
+        },
+        limit: 1,
+      });
+      if (held.length > 0) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "These references can't be rewritten: an id the import moves still belongs to an item on this site, whose own links would move with it.",
+          logContext: { collection, id: String(held[0].id) },
+        });
+      }
+    }
+  }
+}
+
 /**
  * Rewrite every reference the site stores by `map`, on `deps.db`. A
  * reference the map does not name is kept as it is.
@@ -562,15 +526,15 @@ export async function rewriteStoredReferences(
     schemas: new Map(
       site.fieldGroups.map(g => [g.slug, { fields: [...g.fields] }])
     ),
+    pageSize: deps.pageSize ?? PAGE,
     changed: {},
   };
+  await assertMovedIdsAreNotHeld(pass);
   for (const collection of site.collections) {
     await rewriteEntityRows(pass, collection, fieldProducesColumn);
-    await rewriteJunctions(pass, collection, collection.slug);
   }
   for (const single of site.singles) {
     await rewriteEntityRows(pass, single, fieldProducesColumn);
-    await rewriteJunctions(pass, single, null);
   }
   // An instance's parent is named by its table; the map moves a collection's.
   const collectionOfTable = new Map(

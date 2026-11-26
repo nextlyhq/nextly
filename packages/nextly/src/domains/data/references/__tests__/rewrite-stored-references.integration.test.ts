@@ -7,18 +7,17 @@
  * reference: a collection's row (to-one, to-many and multi-collection
  * relationships, uploads, rich text, a block document, a group, a
  * repeater), a field group and a dynamic zone, a Single, a translated value,
- * a many-to-many junction, the version the write recorded, a version and a
- * release member of a moved entry, and an instance whose parent moved. One
- * to-many value also holds a dangling id: one the map does not name and no
- * row has.
+ * the version the write recorded, a version and a release member of a moved
+ * entry, and an instance whose parent moved. One to-many value also holds a
+ * dangling id: one the map does not name and no row has. A many-to-many
+ * junction holds only ids the site has, and is left as it is.
  *
  * What separates a rewrite that reaches every place from one that misses a
  * table is a search of every stored value: every row of every table the
  * database has is read and searched for each old id and address, before the
  * rewrite (where each must be found, in exactly the tables seeded) and after
- * it (where none may be). The only rows the search passes over are the plain
- * rows the junction's foreign keys need the old ids to have, which hold
- * nothing but their own identity. Run on every configured dialect.
+ * it (where none may be). The rewrite reads a row at a time, so every table
+ * is paged past its first page. Run on every configured dialect.
  */
 import { randomUUID } from "node:crypto";
 
@@ -53,10 +52,6 @@ import {
   RELEASE_MEMBERS_TABLE,
   RELEASES_TABLE,
 } from "../../../releases/release-tables";
-import {
-  junctionLinkColumnsOf,
-  junctionTableTo,
-} from "../../../schema/services/field-column-descriptor";
 import { workingDraftKey } from "../../../versions/working-draft-key";
 import { describeStoredContent } from "../describe-stored-content";
 import type { ReferenceMap } from "../reference-map";
@@ -104,8 +99,6 @@ interface Moves {
   posts: string[];
   pages: string[];
   media: string[];
-  tags: string[];
-  article: string;
   doc: string;
   address: string;
 }
@@ -128,10 +121,10 @@ interface Fixture {
   homeData: Doc;
   /** The tables seeded with an old id or address. */
   seededTables: string[];
-  /** The rows the search passes over, by table: plain rows the junction needs. */
-  plainRows: ReadonlyMap<string, ReadonlySet<string>>;
+  /** The tags the article links to through its junction. */
+  tags: string[];
   ids: { version: string; member: string; orphan: string };
-  tables: { card: string; junction: string };
+  tables: { card: string };
 }
 
 const TAG_FIELD = {
@@ -249,8 +242,6 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     posts: ids(3),
     pages: ids(1),
     media: ids(4),
-    tags: ids(3),
-    article: randomUUID(),
     doc: oldDoc,
     address: `/uploads/old-${randomUUID()}.png`,
   };
@@ -260,27 +251,7 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     await make("tags", { name: "new three" }),
   ];
 
-  // The junction's foreign keys need the rows its old ids name: plain rows,
-  // written straight to the table so nothing records them anywhere else.
   const now = new Date();
-  for (const [index, id] of old.tags.entries()) {
-    await t.adapter.insert("dc_tags", {
-      id,
-      title: `old tag ${index}`,
-      slug: `old-tag-${index}`,
-      name: `old tag ${index}`,
-      created_at: now,
-      updated_at: now,
-    });
-  }
-  await t.adapter.insert("dc_articles", {
-    id: old.article,
-    title: "old article",
-    slug: "old-article",
-    name: "old article",
-    created_at: now,
-    updated_at: now,
-  });
 
   const card = (heading: string, post: string, image: string): Doc => ({
     heading,
@@ -323,7 +294,7 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
   const docId = await make("docs", docData);
   const articleId = await make("articles", {
     name: "article",
-    tags: [old.tags[0], old.tags[1]],
+    tags: [newTags[0], newTags[1]],
   });
   const homeData: Doc = {
     headline: "Welcome",
@@ -351,15 +322,6 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     locale: "fr",
     // The French values are written over the document's only revision.
     data: { title: "Guide fr", cover: old.media[1], _overwrite: true },
-  });
-
-  // A junction row written with the old ids on both sides.
-  const junction = junctionTableTo("dc_articles", "tags", TAG_FIELD);
-  const links = junctionLinkColumnsOf("dc_articles", "tags");
-  await t.adapter.transaction(async tx => {
-    await tx.runStatement(
-      sql`INSERT INTO ${sql.identifier(junction)} (${sql.identifier("id")}, ${sql.identifier(links.sourceColumn)}, ${sql.identifier(links.targetColumn)}) VALUES (${randomUUID()}, ${old.article}, ${old.tags[2]})`
-    );
   });
 
   // A moved entry's version (a working draft, keyed by its id), release
@@ -446,8 +408,6 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     posts: ids(3),
     pages: ids(1),
     media: ids(4),
-    tags: newTags,
-    article: articleId,
     doc: newDoc,
     address: `/uploads/new-${randomUUID()}.png`,
   };
@@ -458,8 +418,6 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
       ["posts", pairs(old.posts, moved.posts)],
       ["pages", pairs(old.pages, moved.pages)],
       ["media", pairs(old.media, moved.media)],
-      ["tags", pairs(old.tags, moved.tags)],
-      ["articles", pairs([old.article], [moved.article])],
       ["docs", pairs([old.doc], [moved.doc])],
     ]),
     addresses: new Map([[old.address, moved.address]]),
@@ -468,8 +426,6 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     ...m.posts,
     ...m.pages,
     ...m.media,
-    ...m.tags,
-    m.article,
     m.doc,
     m.address,
   ];
@@ -486,6 +442,7 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     dangling,
     docId,
     articleId,
+    tags: [newTags[0], newTags[1]],
     guideId,
     docData,
     homeData,
@@ -495,16 +452,11 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
       cardTable,
       quoteTable,
       homeTable,
-      junction,
       VERSIONS_TABLE,
       RELEASE_MEMBERS_TABLE,
     ].sort(),
-    plainRows: new Map([
-      ["dc_tags", new Set(old.tags)],
-      ["dc_articles", new Set([old.article])],
-    ]),
     ids: { version: versionId, member: memberId, orphan: orphanId },
-    tables: { card: cardTable, junction },
+    tables: { card: cardTable },
   };
 }
 
@@ -515,16 +467,13 @@ async function everyStoredRow(fx: Fixture): Promise<Map<string, string[]>> {
     const rows = await fx.t.adapter.queryStatement<Doc>(
       sql`SELECT * FROM ${sql.identifier(table)}`
     );
-    const passedOver = fx.plainRows.get(table);
     out.set(
       table,
-      rows
-        .filter(row => !passedOver?.has(String(row.id)))
-        .map(row =>
-          JSON.stringify(row, (_key, value: unknown) =>
-            typeof value === "bigint" ? String(value) : value
-          )
+      rows.map(row =>
+        JSON.stringify(row, (_key, value: unknown) =>
+          typeof value === "bigint" ? String(value) : value
         )
+      )
     );
   }
   return out;
@@ -550,15 +499,19 @@ function moveAll<T>(fx: Fixture, value: T): T {
   return JSON.parse(text) as T;
 }
 
-async function rewrite(fx: Fixture) {
+async function rewrite(fx: Fixture, map: ReferenceMap = fx.map) {
   return fx.t.adapter.transaction(tx =>
     rewriteStoredReferences(
       {
         db: tx,
         site: fx.site,
         maxParamsPerQuery: fx.t.adapter.getCapabilities().maxParamsPerQuery,
+        // A row a page, so every table's read goes past its first page and
+        // the key after the last row read (one of two columns, on a
+        // translations table) is what finds the next.
+        pageSize: 1,
       },
-      fx.map
+      map
     )
   );
 }
@@ -632,8 +585,9 @@ describe.each(getConfiguredTestDialects())(
         depth: 0,
         overrideAccess: true,
       });
+      // Its junction holds only ids the site has, and is kept as it is.
       expect([...((article.data as Doc).tags as string[])].sort()).toEqual(
-        [...fx.moved.tags].sort()
+        [...fx.tags].sort()
       );
 
       const versions = await fx.t.adapter.select<Doc>(VERSIONS_TABLE, {
@@ -670,6 +624,22 @@ describe.each(getConfiguredTestDialects())(
         where: { and: [{ column: "id", op: "=", value: fx.ids.orphan }] },
       });
       expect(orphan._parent_id).toBe(fx.moved.doc);
+    });
+
+    // An id the site holds itself is one its own content links to: moving it
+    // would point those links at the new item too.
+    it("refuses, changing nothing, a map that moves an id the site holds", async () => {
+      const fx = await boot(dialect);
+      const before = await everyStoredRow(fx);
+      const ids = new Map(fx.map.ids);
+      ids.set("tags", new Map([[fx.tags[0], randomUUID()]]));
+
+      await expect(
+        rewrite(fx, { ids, addresses: fx.map.addresses })
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      // Refused before anything was read to rewrite: every old value is
+      // still where it was, which the rest of the map alone would change.
+      expect(await everyStoredRow(fx)).toEqual(before);
     });
   }
 );

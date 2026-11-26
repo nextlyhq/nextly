@@ -12,6 +12,7 @@
  */
 
 import type { FieldConfig } from "../../../collections/fields/types";
+import { companionTableOf } from "../../i18n/migration/derive-companion-spec";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { localizedFieldRefs } from "../../i18n/runtime/companion-io";
 
@@ -60,7 +61,7 @@ async function entityOf(
     table: record.tableName,
     fields: record.fields,
   };
-  const translationsTable = `${record.tableName}_locales`;
+  const translationsTable = companionTableOf(record.tableName);
   const translates =
     storesPerLanguage(record) &&
     localizedFieldRefs(record.fields.filter(isNamed)).length > 0 &&

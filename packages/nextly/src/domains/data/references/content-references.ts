@@ -349,7 +349,10 @@ function walkBlockDocument(
     const listed = new Set(
       assets.mediaIds.filter((id): id is string => typeof id === "string")
     );
-    const ids: NodeMediaIds = { is: value => listed.has(value), inferred: false };
+    const ids: NodeMediaIds = {
+      is: value => listed.has(value),
+      inferred: false,
+    };
     return withKey(
       withAssets,
       "nodes",
@@ -359,7 +362,14 @@ function walkBlockDocument(
   return withKey(
     document,
     "nodes",
-    walkBlockNodes(document.nodes, null, false, LIKELY_MEDIA_IDS, fieldPath, walk)
+    walkBlockNodes(
+      document.nodes,
+      null,
+      false,
+      LIKELY_MEDIA_IDS,
+      fieldPath,
+      walk
+    )
   );
 }
 
