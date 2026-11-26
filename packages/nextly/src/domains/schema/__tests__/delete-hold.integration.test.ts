@@ -3762,6 +3762,12 @@ describe.each(getConfiguredTestDialects())(
           outside(
             async () => translationsStep.reached && (await left()) === 2 - gone
           );
+        // Made unique, each entry's label is its own.
+        if (dialect === "postgresql") {
+          await rows(
+            `UPDATE ${q(VALUES_TABLE)} SET ${q("label")} = md5(random()::text)`
+          );
+        }
         const { paused, release } = gated(nextStatement);
         const saving = saveRemoving(
           t,
