@@ -58,6 +58,14 @@ export async function refuseUnwrittenChanges(
   const changes = await unwrittenChangesOf({
     ...args,
     recorded: (_entities, newest) => recordedInDatabase(args, newest),
+    // A project with no migration yet is named under the field-group names its database holds,
+    // as `migrate:create` writes its first migration under them.
+    firstFieldGroupNaming: async () => {
+      const { standingRegistryNaming } = await import(
+        "../../field-groups/services/field-group-new-site"
+      );
+      return standingRegistryNaming(args.adapter);
+    },
   });
   const error = unwrittenChangesError(changes, {
     baselineFirst:

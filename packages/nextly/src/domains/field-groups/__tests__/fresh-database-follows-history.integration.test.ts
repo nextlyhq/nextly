@@ -560,6 +560,21 @@ describe.each(getConfiguredTestDialects())(
       writeFileSync(path, JSON.stringify(snapshot, null, 2));
     }
 
+    // Before its first migration is written, `nextly migrate` names what the configuration holds
+    // under the names the database is on, as `migrate:create` writes them.
+    it("names a legacy site's changes under its legacy names where no migration records them", async () => {
+      const url = await emptyDatabase(dialect);
+      const adapter = await connect(dialect, url);
+      await seedLegacyCoreTables(adapter, dialect);
+      await developmentStart(dialect, url);
+      await shutdownServices().catch(() => {});
+
+      const refused = await migrate();
+      expect(refused.exit, refused.said).not.toBeUndefined();
+      expect(refused.said).toContain("comp_fdh_card");
+      expect(refused.said).not.toContain("fg_fdh_card");
+    }, 180_000);
+
     // A site an earlier release set up by its development starts, whose project writes its first
     // migration now: the tables it stands on are the legacy ones, so the migration records those.
     for (const [what, project] of [
