@@ -36,6 +36,7 @@ import {
   type LoadedRegistryRowOptions,
   loadedRegistryRowOf,
 } from "../services/entry-write-hold";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { WriteTries } from "../services/write-tries";
 
 const SLUG = "ewh_notes";
@@ -848,6 +849,63 @@ describe.each(getConfiguredTestDialects())(
         });
       }
     }, 30_000);
+
+    // Whether a field is translated is read as its storage reads it: a text field is translated
+    // with no flag on a collection that keeps values per language, so the flag set to what it already
+    // is stores nothing differently. Turned off, the field moves to the entry's row. Where no value
+    // is kept per language the flag places nothing.
+    it.each([
+      { from: "no flag", to: "translated", translated: true, moves: false },
+      {
+        from: "translated",
+        to: "not translated",
+        translated: true,
+        moves: true,
+      },
+      {
+        from: "not translated",
+        to: "translated",
+        translated: false,
+        moves: null,
+      },
+    ])(
+      "compares a field by whether it is stored translated: $from to $to, on a collection that is translated: $translated",
+      async ({ from, to, translated, moves }) => {
+        const t = await boot(translated);
+        const flagOf = (side: string) =>
+          side === "no flag" ? {} : { localized: side === "translated" };
+        const withNote =
+          (flag: Record<string, unknown>) =>
+          (fields: Array<{ name: string } & Record<string, unknown>>) =>
+            fields.map(field => {
+              if (field.name !== "note") return field;
+              const { localized: _ignored, ...rest } = field;
+              return { ...rest, ...flag };
+            });
+        await saveDefinition(t, withNote(flagOf(from)));
+        const made = await loadedNow(t, { title: "t", note: "n" });
+        await saveDefinition(t, withNote(flagOf(to)));
+        // Untranslated, the flag places a value only where every entity keeps its values per
+        // language (per-language storage).
+        const changed = moves ?? storesPerLanguage({ localized: false });
+        if (changed) {
+          await expect(heldFor(t, made)).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+            publicData: {
+              errors: [
+                expect.objectContaining({
+                  path: "fields.note",
+                  code: "FIELD_CHANGED",
+                }),
+              ],
+            },
+          });
+        } else {
+          await expect(heldFor(t, made)).resolves.toBeUndefined();
+        }
+      },
+      30_000
+    );
 
     // A write's gates were chosen by the lifecycle and translation it was made for (an update's or a
     // publish's, where a status is set): made again under another, it would be judged by gates of the
