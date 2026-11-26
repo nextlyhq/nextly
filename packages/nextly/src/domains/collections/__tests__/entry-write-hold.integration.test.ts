@@ -36,6 +36,7 @@ import {
   type LoadedRegistryRowOptions,
   loadedRegistryRowOf,
 } from "../services/entry-write-hold";
+import { WriteTries } from "../services/write-tries";
 
 const SLUG = "ewh_notes";
 
@@ -847,6 +848,47 @@ describe.each(getConfiguredTestDialects())(
         });
       }
     }, 30_000);
+
+    // A write's gates were chosen by the lifecycle and translation it was made for (an update's or a
+    // publish's, where a status is set): made again under another, it would be judged by gates of the
+    // definition it was not made for. So it is refused, not made again, even where it could be.
+    it.each([
+      { change: "the lifecycle turned on", column: "status" },
+      { change: "translation turned on", column: "localized" },
+    ])(
+      "refuses, and does not make again, a write made before $change",
+      async ({ column }) => {
+        const t = await boot();
+        const set = (on: boolean) =>
+          dialect === "postgresql" ? String(on) : on ? "1" : "0";
+        const tries = new WriteTries(true);
+        const before = await loadedNow(t, { title: "t" }, { tries });
+        await t.adapter.executeQuery(
+          `UPDATE dynamic_collections SET ${column} = ${set(true)}, schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+        );
+        let made = 0;
+        const outcome = await tries
+          .make(
+            async () => {
+              made += 1;
+              await heldFor(
+                t,
+                made === 1
+                  ? before
+                  : await loadedNow(t, { title: "t" }, { tries })
+              );
+            },
+            () => Promise.resolve()
+          )
+          .then(
+            () => "made",
+            (error: unknown) => error
+          );
+        expect(outcome).toMatchObject({ code: "COLLECTION_BEING_CHANGED" });
+        expect(made).toBe(1);
+      },
+      30_000
+    );
 
     // Set together, a field a save removed and one it stores differently are named together, each
     // by what happened to it.
