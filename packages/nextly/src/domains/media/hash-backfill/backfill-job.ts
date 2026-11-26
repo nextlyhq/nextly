@@ -367,20 +367,31 @@ async function runMediaHashBackfillPass(
   const stopStartingAt = startedAt + (pass.deadline - startedAt) / 2;
   for (;;) {
     const batch = await nextBatch(db, report.after);
-    if (batch.length === 0) {
-      if ((await endOfWalk(pass)) === "finished") return report;
-      continue;
-    }
-    for (const item of batch) {
-      // Checked before each file rather than each batch, since one file can
-      // be a large video; the rest waits for the next pass.
-      if (clock() >= stopStartingAt || (await hashOne(pass, item)) === "stop") {
-        await writeReport(db, report);
-        return report;
-      }
-    }
-    await writeReport(db, report);
+    const done =
+      batch.length === 0
+        ? (await endOfWalk(pass)) === "finished"
+        : (await hashBatch(pass, batch, stopStartingAt)) === "stop";
+    if (batch.length > 0) await writeReport(db, report);
+    if (done) return report;
   }
+}
+
+/**
+ * Each record of `batch` in turn, until one asks the pass to stop or the
+ * time for starting files is spent. Checked before each file rather than
+ * each batch, since one file can be a large video; the rest waits for the
+ * next pass.
+ */
+async function hashBatch(
+  pass: PassContext,
+  batch: Array<{ id: string; filename: string; size: number | null }>,
+  stopStartingAt: number
+): Promise<"next" | "stop"> {
+  for (const item of batch) {
+    if (pass.clock() >= stopStartingAt) return "stop";
+    if ((await hashOne(pass, item)) === "stop") return "stop";
+  }
+  return "next";
 }
 
 function noteUnreadable(

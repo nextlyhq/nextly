@@ -137,9 +137,7 @@ type StoredMediaRow = Media & { sizes?: unknown; sha256?: unknown };
  * `Media` does not declare it, so a caller's typed result matches what it
  * receives.
  */
-function handedBack<T extends { sizes?: unknown; sha256?: unknown }>(
-  row: T
-): Omit<T, "sizes" | "sha256"> {
+function handedBack(row: StoredMediaRow): Media {
   const { sha256: _fingerprint, ...rest } = withoutStoredSizes(row);
   return rest;
 }
@@ -780,7 +778,7 @@ export class MediaService extends BaseService {
         success: true,
         statusCode: 201,
         message: "Media uploaded successfully",
-        data: handedBack(mediaRecord) as unknown as Media,
+        data: handedBack(mediaRecord as unknown as StoredMediaRow),
       };
     } catch (error) {
       this.logger.error("[MediaService] Upload media error", { error: error });
