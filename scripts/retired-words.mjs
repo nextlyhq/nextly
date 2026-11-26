@@ -10,7 +10,8 @@
  * Read from the AST, so comments are never findings, the way the builder's
  * and the plugin's own word tests read their screens. A string is read where
  * an author could see it: string literals, template text, an element's own
- * line (`New {…}` for `New {labels.singular}`) and the attributes that are
+ * line (`New {…}` for `New {labels.singular}`, with a string or each branch
+ * of a choice in it read in place) and the attributes that are
  * drawn or spoken (`title`, `placeholder`, `aria-label`…). Skipped, by PLACE
  * and never by word:
  *
@@ -312,21 +313,77 @@ function isInline(node) {
 }
 
 /**
- * One run of an element's children read as a line: text, `{…}` between, and
- * an inline element's own text in its place, so "Normal <b>flow</b>" reads
- * "Normal flow". Any other element breaks the line.
+ * The texts an expression in an element's line can draw: a string or a
+ * template as written, each branch of a choice or a fallback
+ * (`{kind === "data" ? "data" : "content"}`), and `{…}` for anything else.
+ * The strings it reads go into `read`, since the line has read them.
  */
-function elementText(children) {
-  return children
-    .map(child => {
-      if (child.type === "JSXText") return child.value;
-      if (child.type === "JSXExpressionContainer") {
-        return child.expression.type === "JSXEmptyExpression" ? "" : "{…}";
-      }
-      if (isInline(child)) return elementText(child.children);
-      return " ";
-    })
-    .join("");
+function expressionTexts(node, read) {
+  const raw = stringText(node);
+  if (raw !== null) {
+    read.add(node);
+    return [raw];
+  }
+  if (node.type === "ConditionalExpression") {
+    return [
+      ...expressionTexts(node.consequent, read),
+      ...expressionTexts(node.alternate, read),
+    ];
+  }
+  if (node.type === "LogicalExpression") {
+    return [
+      ...expressionTexts(node.left, read),
+      ...expressionTexts(node.right, read),
+    ];
+  }
+  if (
+    node.type === "ParenthesizedExpression" ||
+    node.type === "TSAsExpression" ||
+    node.type === "TSSatisfiesExpression" ||
+    node.type === "TSNonNullExpression"
+  ) {
+    return expressionTexts(node.expression, read);
+  }
+  return ["{…}"];
+}
+
+/**
+ * One run of an element's children as parts of a line, each part the texts
+ * it can draw: text, an expression's texts, and an inline element's own
+ * parts in its place, so "Normal <b>flow</b>" and `Normal {"flow"}` both
+ * read "Normal flow". Any other element breaks the line.
+ */
+function elementParts(children, read) {
+  return children.flatMap(child => {
+    if (child.type === "JSXText") return [[child.value]];
+    if (child.type === "JSXExpressionContainer") {
+      if (child.expression.type === "JSXEmptyExpression") return [];
+      return [[...new Set(expressionTexts(child.expression, read))]];
+    }
+    if (isInline(child)) return elementParts(child.children, read);
+    return [[" "]];
+  });
+}
+
+/**
+ * The lines a run of parts can read. A part with one text is always in its
+ * place; for a part with several, one line per text, with every other such
+ * part read as `{…}`, so each branch is read once beside the fixed text
+ * around it.
+ */
+function partLines(parts) {
+  const varying = parts.flatMap((part, at) => (part.length > 1 ? [at] : []));
+  const line = (at, text) =>
+    tidy(
+      parts
+        .map((part, i) => {
+          if (i === at) return text;
+          return part.length > 1 ? "{…}" : part[0];
+        })
+        .join("")
+    );
+  if (varying.length === 0) return [line(-1, "")];
+  return varying.flatMap(at => parts[at].map(text => line(at, text)));
 }
 
 function tidy(text) {
@@ -345,10 +402,11 @@ function stringText(node) {
 }
 
 /**
- * An element's own line, or null where its children are only expressions,
- * or where it is an inline element read as part of its parent's line.
+ * An element's own lines (one, or one per branch of a choice in it), or
+ * null where it draws only `{…}`, or where it is an inline element read as
+ * part of its parent's line. The strings its lines read go into `read`.
  */
-function elementLine(node, ancestors) {
+function elementLines(node, ancestors, read) {
   if (node.type !== "JSXElement" && node.type !== "JSXFragment") return null;
   const parent = ancestors.at(-1);
   if (
@@ -357,24 +415,37 @@ function elementLine(node, ancestors) {
   ) {
     return null;
   }
-  const line = tidy(elementText(node.children));
-  return line.replace(/\{…\}/g, "").trim() === "" ? null : line;
+  const own = new Set();
+  const lines = [
+    ...new Set(
+      partLines(elementParts(node.children, own)).filter(
+        line => line.replace(/\{…\}/g, "").trim() !== ""
+      )
+    ),
+  ];
+  if (lines.length === 0) return null;
+  for (const string of own) read.add(string);
+  return lines;
 }
 
 /**
- * The texts an author could read in one source file, in source order. A
- * stylesheet's comments inside a string are dropped, since they are never
- * drawn.
+ * What an author could read in one source file, in source order, one entry
+ * per showing: an element's lines together (one per branch of a choice in
+ * it), any other text alone. A stylesheet's comments inside a string are
+ * dropped, since they are never drawn.
  */
-export function shownTexts(source, fileName) {
-  const texts = [];
+function shownReadings(source, fileName) {
+  const readings = [];
+  // The strings an element's line has read in place, not read again alone.
+  const read = new Set();
   const wordsModule = WORDS_MODULE.test(fileName.split("\\").join("/"));
   walk(parseSource(source, fileName).program, (node, ancestors) => {
-    const line = elementLine(node, ancestors);
-    if (line !== null) {
-      texts.push(line);
+    const lines = elementLines(node, ancestors, read);
+    if (lines !== null) {
+      readings.push(lines);
       return;
     }
+    if (read.has(node)) return;
     const raw = stringText(node);
     if (raw === null) return;
     const text = tidy(raw.replace(/\/\*[\s\S]*?\*\//g, " "));
@@ -389,9 +460,14 @@ export function shownTexts(source, fileName) {
     const shownPlace = inShownPlace(node, ancestors);
     if (!shownPlace && (LOG_TAG.test(text) || CSS_TEXT.test(text))) return;
     if (notShown(node, ancestors)) return;
-    texts.push(text);
+    readings.push([text]);
   });
-  return texts;
+  return readings;
+}
+
+/** The texts an author could read in one source file, in source order. */
+export function shownTexts(source, fileName) {
+  return shownReadings(source, fileName).flat();
 }
 
 /**
@@ -415,17 +491,24 @@ export function retiredIn(text, path, rules) {
 
 /**
  * Every shown text that uses a retired word in the scanned folders: one
- * finding per time the text is shown, with every rule it breaks.
+ * finding per time the text is shown, with every rule it breaks. Of one
+ * showing's lines (an element's, one per branch of a choice in it), a later
+ * line is a finding only where it breaks a rule the earlier ones did not, so
+ * the fixed text around a choice counts once.
  */
 export function findRetired(root, rules, folders = SCANNED) {
   const findings = [];
   for (const folder of folders) {
     for (const file of shippedFiles(join(root, folder))) {
       const path = repoPath(root, file);
-      for (const text of shownTexts(readFileSync(file, "utf8"), file)) {
-        const broken = retiredIn(text, path, rules);
-        if (broken.length > 0)
+      for (const lines of shownReadings(readFileSync(file, "utf8"), file)) {
+        const found = new Set();
+        for (const text of lines) {
+          const broken = retiredIn(text, path, rules);
+          if (broken.every(rule => found.has(rule))) continue;
+          for (const rule of broken) found.add(rule);
           findings.push({ file: path, text, rules: broken });
+        }
       }
     }
   }

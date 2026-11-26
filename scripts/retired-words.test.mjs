@@ -21,7 +21,14 @@
  *
  * @module retired-words.test
  */
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -62,7 +69,7 @@ const PENDING = JSON.parse(
  * new text joined the list instead of being written in the glossary's words,
  * which review should refuse.
  */
-const PENDING_COUNT = 537;
+const PENDING_COUNT = 531;
 
 /**
  * Places where a retired word names another idea, or where the text is code
@@ -378,6 +385,10 @@ describe("the retired words", () => {
         'const M = { label: "[Beta] Insert a block" };',
         // A phrase running through an inline element is one line.
         "const N = () => <p>Normal <b>flow</b> here</p>;",
+        // So does one running through a string or a choice's branch in it,
+        // each branch read once beside the text around it.
+        'const O = () => <p>Normal {"flow"}</p>;',
+        'const P = () => <p>Page {kind === "data" ? "data" : "content"}</p>;',
       ].join("\n"),
       "probe.tsx"
     );
@@ -405,7 +416,39 @@ describe("the retired words", () => {
       "breakpoint",
       "[Beta] Insert a block",
       "Normal flow here",
+      "Normal flow",
+      "Page data",
     ]);
+  });
+
+  it("counts the text around a choice once per showing, and each branch's own word", () => {
+    // One file of three elements, in a folder of its own: the fixed text's
+    // word ("Insert") is one finding however many branches the choice has,
+    // a branch's word ("Inspector") is a finding of its own, and a branch
+    // that only joins the text around it ("Page data") is found.
+    const root = mkdtempSync(join(tmpdir(), "retired-words-"));
+    try {
+      mkdirSync(join(root, "src"));
+      writeFileSync(
+        join(root, "src/probe.tsx"),
+        [
+          'const A = () => <p>Insert {a ? "one" : "two"} here</p>;',
+          'const B = () => <p>Open {b ? "Inspector" : "Layers"} now</p>;',
+          'const C = () => <p>Page {k ? "data" : "content"}</p>;',
+        ].join("\n")
+      );
+      expect(findRetired(root, RETIRED_WORDS, ["src"])).toEqual([
+        { file: "src/probe.tsx", text: "Insert one here", rules: ["insert"] },
+        {
+          file: "src/probe.tsx",
+          text: "Open Inspector now",
+          rules: ["inspector"],
+        },
+        { file: "src/probe.tsx", text: "Page data", rules: ["page-data"] },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("reads a lone word anywhere in a words module, but not its codes or comparisons", () => {

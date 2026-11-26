@@ -9,7 +9,7 @@
   "packages/admin/src/components/features/email-hub/design/LayoutsList.tsx": [
     "Customised",
     "Customised",
-    "{…} changed since you customised {…}. Open {…} to review the change."
+    "{…} changed since you customised it. Open {…} to review the change."
   ],
   "packages/admin/src/components/features/email-hub/design/MatchMySite.tsx": [
     "Your site's colours",
@@ -19,7 +19,7 @@
     "Accent colour"
   ],
   "packages/admin/src/components/features/email-hub/messages/MessagesList.tsx": [
-    "{…} changed since you customised {…}."
+    "{…} changed since you customised it."
   ],
   "packages/admin/src/components/features/email-hub/messages/messages-model.ts": [
     "Customised",
@@ -121,7 +121,7 @@
     "Unbind, keep the {…}",
     "{…}: bound to {…}"
   ],
-  "packages/builder/src/bindings/binding-notes.tsx": ["Unbound. {…}"],
+  "packages/builder/src/bindings/binding-notes.tsx": ["{…} {…} Unbound. {…}"],
   "packages/builder/src/bindings/image-binding-fallback.tsx": [
     "Shown when the bound field has no image."
   ],
@@ -162,8 +162,8 @@
     "This component has no fields, so this variant presets nothing."
   ],
   "packages/builder/src/inspector/content/image-controls.tsx": [
-    "Visitors can&apos;t read the bound field, so they see{…} {…}. Type alt text to describe the image they see.",
-    "The image comes from a bound library file, so its own alt text is used. Where the field is empty, visitors see{…} {…}. Type alt text to describe it here instead.",
+    "Visitors can&apos;t read the bound field, so they see {…}. Type alt text to describe the image they see.",
+    "The image comes from a bound library file, so its own alt text is used. Where the field is empty, visitors see {…}. Type alt text to describe it here instead.",
     "The image comes from a bound field. A library file it holds is described by its own alt text; an image address has none, so type alt text to describe it."
   ],
   "packages/builder/src/inspector/hide-on.tsx": [
@@ -175,7 +175,7 @@
     "Fields",
     "Unbind",
     "Unbind {…}",
-    "This component has no fields to change on this page. {…}"
+    "This component has no fields to change on this page. Use Edit component to change its content."
   ],
   "packages/builder/src/inspector/instance-inspector.ts": [
     "Its fields are in the panel; the rest is edited on the component itself."
@@ -183,7 +183,7 @@
   "packages/builder/src/inspector/look-inspector.tsx": [
     "Another look or shared style on this site has the same id, so this one can't be edited here. Give one of them its own name in your site's code.",
     "Changes every {…} on every page. Where another look, a shared style or the block's own values set something, they win.",
-    "A look for {…} blocks",
+    "{…} A look for {…} blocks",
     "This look can't be changed here: the site's shared styles aren't available."
   ],
   "packages/builder/src/inspector/make-component-setting-section.tsx": [
@@ -356,7 +356,7 @@
   "packages/builder/src/shell/exposure-picker.tsx": ["Give the field a name."],
   "packages/builder/src/shell/read-budget-meter.tsx": [
     "Page data",
-    "Page data: couldn&apos;t count {…} Retry",
+    "Page data: couldn&apos;t count · Retry",
     "Page data: counting…",
     "Page data"
   ],
@@ -398,10 +398,7 @@
     "{…} replaces the saved section's content. Pages that inserted it earlier keep their own copies."
   ],
   "packages/plugin-page-builder/src/admin/DeleteComponentDialog.tsx": [
-    "A header & footer set uses",
-    "{…} header & footer sets use",
-    "that header & footer set",
-    "those header & footer sets",
+    "A header & footer set uses . Choose a different component in {…} first.",
     "Header & footer sets"
   ],
   "packages/plugin-page-builder/src/admin/RemoveLayoutAction.tsx": [
@@ -418,14 +415,13 @@
   "packages/plugin-page-builder/src/admin/RemoveLayoutMove.tsx": [
     "Ask someone who can edit {…} to choose another header & footer set, then try again.",
     "Remove header & footer set",
-    "{…} {…} this header & footer set. Move {…} to",
-    ", and then {…} it, or close and choose another header & footer set for {…} yourself.",
-    ". Keep this open; the header & footer set is {…} when every page has moved. If you close this, moving stops; pages already moved stay on {…}.",
-    ". {…} still {…} this header & footer set, so it was not {…}.",
+    "{…} {…} this header & footer set. Move {…} to , and then {…} it, or close and choose another header & footer set for {…} yourself.",
+    "Moving pages to . Keep this open; the header & footer set is {…} when every page has moved. If you close this, moving stops; pages already moved stay on {…}.",
+    "{…} now {…} . {…} still {…} this header & footer set, so it was not {…}.",
     "Header & footer set deleted",
     "Header & footer set unpublished",
     "{…} moved to the site default{…}, and the header & footer set was {…}.",
-    ". The header & footer set was not {…}, because {…} it:",
+    "{…} of {…} moved to . The header & footer set was not {…}, because {…} it:",
     "Remove header & footer set",
     "{…} moved to the site default. The header & footer set was not {…}."
   ],
@@ -447,7 +443,6 @@
     "bindings",
     "Bindings to fix on this page",
     "1 binding no longer fits",
-    "{…} bindings no longer fit",
     "Until you bind each again or unbind it, visitors see what its row says: its fallback, the block’s own value or nothing.",
     "{…} All bindings to fix"
   ],
@@ -524,7 +519,7 @@
     "Give the header & footer set a name."
   ],
   "packages/plugin-page-builder/src/admin/editor/region-card.tsx": [
-    "To use a different {…} in this set, choose one in"
+    "To use a different {…} in this set, choose one in ."
   ],
   "packages/plugin-page-builder/src/admin/editor/set-area-picker.tsx": [
     "No {…} in this set"
@@ -573,8 +568,7 @@
     "The colours could not be removed. Try again."
   ],
   "packages/plugin-page-builder/src/admin/editor/template-preview-strip.tsx": [
-    "{…}. Bound text shows its fallback until there is one.",
-    "{…} couldn’t be read. Bound text shows its fallback meanwhile."
+    "{…}. Bound text shows its fallback until there is one."
   ],
   "packages/plugin-page-builder/src/admin/editor/use-breakpoint-removal.ts": [
     "The breakpoints could not be saved."
@@ -623,7 +617,7 @@
     "This {…}'s header & footer set isn't published",
     "This {…}'s header & footer set and {…} aren't published",
     "Until its header & footer set is published, the {…} is shown inside the site's default header & footer set.",
-    ", header & footer set"
+    "{…} , header & footer set"
   ],
   "packages/plugin-page-builder/src/admin/removal-hold-client.tsx": [
     "This component wasn’t published: how many documents lose the removed fields’ values couldn’t be checked. Try again.",
