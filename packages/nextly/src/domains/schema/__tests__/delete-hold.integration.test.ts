@@ -47,6 +47,7 @@ import { dispatchCollections } from "../../../dispatcher/handlers/collection-dis
 import {
   createTestNextly,
   getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
@@ -521,15 +522,25 @@ function gated(gate: typeof fileStart) {
 }
 
 /**
- * Ends the MySQL connection holding the collection's named locks, as a lost one ends: another
- * connection kills it, and its locks go. Answers whether one held them.
+ * Ends the connection holding the collection for a save, as a lost one ends: another connection
+ * kills it, and its locks go. MySQL's named locks; PostgreSQL's advisory lock, held on a session of
+ * its own. Answers whether one held it.
  */
 async function endHoldingConnection(
-  rows: <T>(text: string) => Promise<T[]>
+  rows: <T>(text: string) => Promise<T[]>,
+  dialect: TestDialect = "mysql"
 ): Promise<boolean> {
-  const [database] = await rows<{ name: string }>("SELECT DATABASE() AS name");
-  const [name] = namedCollectionLockNames(String(database?.name), [SLUG]);
-  const holder = async () => {
+  const holder = async (): Promise<unknown> => {
+    if (dialect === "postgresql") {
+      const [row] = await rows<{ pid: number | string | null }>(
+        `SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND mode = 'ExclusiveLock' AND objsubid = 2 AND classid = hashtext('nextly:entity')::oid AND objid = hashtext('collection:${SLUG}')::oid`
+      );
+      return row?.pid ?? null;
+    }
+    const [database] = await rows<{ name: string }>(
+      "SELECT DATABASE() AS name"
+    );
+    const [name] = namedCollectionLockNames(String(database?.name), [SLUG]);
     const [row] = await rows<{ id: number | string | null }>(
       `SELECT IS_USED_LOCK('${String(name)}') AS id`
     );
@@ -537,11 +548,27 @@ async function endHoldingConnection(
   };
   const id = await holder();
   if (id === null) return false;
-  await rows(`KILL ${String(id)}`);
+  await rows(
+    dialect === "postgresql"
+      ? `SELECT pg_terminate_backend(${String(id)})`
+      : `KILL ${String(id)}`
+  );
   for (let tries = 0; tries < 50 && (await holder()) === id; tries += 1) {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   return true;
+}
+
+/** The query counting which of `columns` table `table` still has, on this database. */
+function columnsLeftQuery(
+  dialect: TestDialect,
+  table: string,
+  columns: readonly string[]
+): string {
+  const named = columns.map(column => `'${column}'`).join(", ");
+  return dialect === "postgresql"
+    ? `SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}' AND column_name IN (${named})`
+    : `SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' AND COLUMN_NAME IN (${named})`;
 }
 
 /**
@@ -2558,11 +2585,12 @@ describe.each(getConfiguredTestDialects())(
       60_000
     );
 
-    // A push's statements run on other connections than the one holding the collection (MySQL). That
-    // one lost, entry writes go ahead, so no statement may follow: what it would drop was counted
-    // under a hold that is gone. Lost before the push's first statement, nothing is dropped; lost
-    // between two, the second does not run.
-    it.runIf(dialect === "mysql").each([
+    // A push's statements run on other connections than the one holding the collection (MySQL,
+    // PostgreSQL). That one lost, entry writes go ahead, so no statement may follow: what it would
+    // drop was counted under a hold that is gone. Lost before the push's first statement, nothing is
+    // dropped; lost between two, the second does not run, and on PostgreSQL, whose push is one
+    // transaction, the first is taken back with it.
+    it.runIf(dialect === "mysql" || dialect === "postgresql").each([
       { lost: "before its first drop", gone: 0 },
       { lost: "between its drops", gone: 1 },
     ])(
@@ -2577,14 +2605,25 @@ describe.each(getConfiguredTestDialects())(
         const left = async () => {
           const [row] = await sql<{ n: number | string }>(
             t,
-            `SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${TABLE}' AND COLUMN_NAME IN ('note', 'memo')`
+            columnsLeftQuery(dialect, TABLE, ["note", "memo"])
           );
           return Number(row?.n);
+        };
+        // On PostgreSQL the push's drops are seen by no other connection until it commits: between
+        // two of them, its transaction holds the table's exclusive lock.
+        const altered = async () => {
+          const [row] = await sql<{ n: number | string }>(
+            t,
+            `SELECT COUNT(*) AS n FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE c.relname = '${TABLE}' AND l.mode = 'AccessExclusiveLock' AND l.granted AND l.pid <> pg_backend_pid()`
+          );
+          return Number(row?.n) > 0;
         };
         // Asked from outside the save's flow, which may hold a transaction.
         const outside = AsyncLocalStorage.snapshot();
         nextStatement.reached = () =>
-          outside(async () => (await left()) === 2 - gone);
+          outside(async () =>
+            dialect === "postgresql" ? altered() : (await left()) === 2 - gone
+          );
         const { paused, release } = gated(
           gone === 0 ? afterCount : nextStatement
         );
@@ -2616,14 +2655,15 @@ describe.each(getConfiguredTestDialects())(
             saving.then(() => false),
           ]);
           expect(reached).toBe(true);
-          ended = await endHoldingConnection(text => sql(t, text));
+          ended = await endHoldingConnection(text => sql(t, text), dialect);
         } finally {
           release();
         }
         const outcome = await saving;
         expect(ended).toBe(true);
         expect(outcome).not.toBe("applied");
-        expect(await left()).toBe(2 - gone);
+        const dropped = dialect === "postgresql" ? 0 : gone;
+        expect(await left()).toBe(2 - dropped);
         const held = async (column: string) =>
           sql<{ n: number | string }>(
             t,
@@ -2635,7 +2675,7 @@ describe.each(getConfiguredTestDialects())(
         // What is left holds all three of its values.
         expect(
           [await held("note"), await held("memo")].filter(n => n === 3)
-        ).toHaveLength(2 - gone);
+        ).toHaveLength(2 - dropped);
       },
       60_000
     );
@@ -3697,11 +3737,12 @@ describe.each(getConfiguredTestDialects())(
       60_000
     );
 
-    // A translated collection's registry row is written after its file, so on MySQL the save holds
-    // the collection on a connection of its own: the translations step drops on another. That one
-    // lost, no drop may follow: before the step neither translated field is dropped, between its
-    // drops the second is not.
-    it.runIf(dialect === "mysql").each([
+    // A translated collection's registry row is written after its file, so on MySQL and PostgreSQL
+    // the save holds the collection on a connection of its own: the translations step drops on
+    // another. That one lost, no drop may follow: before the step neither translated field is
+    // dropped, between its drops the second is not. On PostgreSQL the save also makes `label`
+    // unique, so the step runs after the file rather than in its transaction.
+    it.runIf(dialect === "mysql" || dialect === "postgresql").each([
       { lost: "before the translations step's first drop", gone: 0 },
       { lost: "between the translations step's drops", gone: 1 },
     ])(
@@ -3711,7 +3752,7 @@ describe.each(getConfiguredTestDialects())(
         const rows = <T>(text: string) => query<T>(t, text);
         const left = async () => {
           const [row] = await rows<{ n: number | string }>(
-            `SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${VALUES_TABLE}' AND COLUMN_NAME IN ('note', 'memo')`
+            columnsLeftQuery(dialect, VALUES_TABLE, ["note", "memo"])
           );
           return Number(row?.n);
         };
@@ -3724,7 +3765,11 @@ describe.each(getConfiguredTestDialects())(
         const { paused, release } = gated(nextStatement);
         const saving = saveRemoving(
           t,
-          [{ name: "label", type: "text" }],
+          [
+            dialect === "postgresql"
+              ? { name: "label", type: "text", unique: true }
+              : { name: "label", type: "text" },
+          ],
           ["note", "memo"]
         );
         let ended = false;
@@ -3734,7 +3779,7 @@ describe.each(getConfiguredTestDialects())(
             saving.then(() => false),
           ]);
           expect(reached).toBe(true);
-          ended = await endHoldingConnection(rows);
+          ended = await endHoldingConnection(rows, dialect);
         } finally {
           release();
         }
