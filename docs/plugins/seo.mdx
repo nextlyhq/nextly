@@ -847,6 +847,14 @@ default, for one) would otherwise serve Markdown at the page's address. It is ne
 noindex there, so a cache's mistake can never mark the page. A browser never asks for
 Markdown, so it is always served the page.
 
+A copy asked for at its `.md` address on a server that has only just started is still
+answered: the Proxy waits for Nextly's start, and the copy for the address record to catch
+up, each for a few seconds at most. Past that wait, it answers `503` with
+`cache-control: no-store` and a `Retry-After` header, as the sitemap does, rather than the
+not-found page a reader might keep, unless a page of the site is at that address, which is
+then served. Asked for at the page's own address, it is never held: the page is served until
+the copy can be.
+
 No reader is told apart by who it is: neither output looks at the user agent, and every
 reader asking the same way gets the same answer. llms.txt is its own file. A copy is
 answered by the site's [Proxy](/docs/plugins/proxy), so the site needs its `proxy.ts`, as
@@ -1694,7 +1702,7 @@ What the plugin adds to each request is kept off the database:
 - **The staging guard reads only the environment** when `NEXTLY_PRODUCTION_ADDRESSES` is set, which is the setting to use on a production site. Without it, the SEO settings' addresses are read by a server's first request and kept, read again in the background every 30 seconds.
 - **Each server notes once an hour that its Proxy runs**, in the background, which is how the admin knows redirects are served.
 
-Nextly starts on a server's first request through the Proxy and lets requests through as the page alone until it has, so a cold server never waits; redirects apply from the first request after the start. A redirect that must hold from a server's very first request, or a site that needs only a few fixed redirects and a staging `noindex`, is better served by `redirects()` and `headers()` in `next.config`, which run with no function call.
+Nextly starts on a server's first request through the Proxy and lets requests through as the page alone until it has, so a cold server never waits; redirects apply from the first request after the start. The one exception is a page's [plain-text copy](#llmstxt-and-plain-text-copies) at its `.md` address, which no page of the site serves: that request waits for the start. A redirect that must hold from a server's very first request, or a site that needs only a few fixed redirects and a staging `noindex`, is better served by `redirects()` and `headers()` in `next.config`, which run with no function call.
 
 #### A site that already has `middleware.ts`
 

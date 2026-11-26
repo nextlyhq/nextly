@@ -63,6 +63,13 @@ function checkedName(
       { pluginName, handler: name }
     );
   }
+  if (handler.claims !== undefined && typeof handler.claims !== "function") {
+    throw resolutionError(
+      "invalid-proxy-handler",
+      `Plugin "${pluginName}" contributes the proxy handler "${name}" whose claims is not a function`,
+      { pluginName, handler: name }
+    );
+  }
   if (seen.has(name)) {
     throw resolutionError(
       "duplicate-proxy-handler",
