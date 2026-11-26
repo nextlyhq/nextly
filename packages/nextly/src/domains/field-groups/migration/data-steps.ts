@@ -122,15 +122,30 @@ const CONTENT_TARGETS: readonly RowRewriteTarget[] = [
 ];
 
 /**
- * The moment a content step began, on the database's clock, to the whole second: the precision
- * SQLite keeps its timestamps at. A row written in the same second counts as written during the
- * step; one that existed then was read by the step's walk, which rewrites every row it reads.
+ * The moment a content step begins, on the database's clock: the second whole second after the
+ * clock's reading, which the step waits for before its walk.
+ *
+ * A whole second, since SQLite and MySQL's events ledger keep whole seconds, and two past the
+ * reading, since MySQL rounds a stamp to its column's precision: a row written before the reading
+ * is stored at most one second past it, so before this moment, and a row written from it on is
+ * stored at or after it. Up to two seconds a step, so that no row that existed before the step is
+ * taken for one written during it.
  *
  * The database's clock, not this process's: the database stamps the events ledger's rows itself,
  * and a host whose clock runs apart from it would count rows written during the step as older
  * than it (and refuse a run under traffic), or a row the walk missed as newer (and pass over it).
  */
 async function stepBeganAt(session: MigrationSession): Promise<Date> {
+  const now = await databaseNow(session);
+  const began = (Math.floor(now / 1000) + 2) * 1000;
+  for (let at = now; at < began; at = await databaseNow(session)) {
+    await new Promise(resolve => setTimeout(resolve, began - at));
+  }
+  return new Date(began);
+}
+
+/** The database's clock, in milliseconds since the epoch. */
+async function databaseNow(session: MigrationSession): Promise<number> {
   const rows = await session.inTransaction(ctx =>
     ctx.queryStatement<{ now: unknown }>(
       sql`SELECT ${databaseNowMs(session.dialect)} AS ${sql.identifier("now")}`
@@ -146,7 +161,7 @@ async function stepBeganAt(session: MigrationSession): Promise<Date> {
       },
     });
   }
-  return new Date(Math.floor(now / 1000) * 1000);
+  return now;
 }
 
 /** What rewrites a stored document's wire key from one vocabulary to the other. */

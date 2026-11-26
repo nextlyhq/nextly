@@ -745,6 +745,12 @@ async function follow(args: {
       held.columns
     );
     if (!registered.registered) return undefined;
+    // The names it was registered under before stay registered otherwise, and still carry the
+    // legacy column: a process that followed every move would never read as settled.
+    retractOtherNames(
+      adapter,
+      candidates.filter(name => name !== current)
+    );
     // What a server settled at its start about the group's translations, it settled under the
     // companion's old name. A write on a transaction its caller opened can read that answer and
     // never ask for it, and would take the new companion for one that is not there yet.
@@ -757,6 +763,26 @@ async function follow(args: {
     return current;
   }
   return undefined;
+}
+
+/**
+ * Retract the runtime tables registered under `names`, and their companions: names a followed
+ * group's table had before it moved.
+ */
+function retractOtherNames(
+  adapter: DrizzleAdapter,
+  names: readonly string[]
+): void {
+  const registry = (getSchemaRegistryFromDI() ??
+    (adapter as unknown as { tableResolver?: unknown }).tableResolver) as
+    | { retractDynamicSchema?: (name: string) => void }
+    | null
+    | undefined;
+  if (typeof registry?.retractDynamicSchema !== "function") return;
+  for (const name of names) {
+    registry.retractDynamicSchema(name);
+    registry.retractDynamicSchema(`${name}${STORAGE_FORMAT.companionSuffix}`);
+  }
 }
 
 /** The code a save refused while field-group storage moves under it carries. */
