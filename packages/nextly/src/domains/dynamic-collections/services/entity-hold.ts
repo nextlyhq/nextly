@@ -156,13 +156,14 @@ export async function attemptWithoutWaitingInside<T>(
  * A deleting save's hold of `entity` on PostgreSQL on a connection held for it alone (`session`,
  * from `withSession`), for a save whose change runs on other connections (a push): exclusive until
  * `release`, which runs on the same connection, and in any case until the session's connection
- * closes.
+ * closes. `kept` asks, on that connection, whether it still holds it: a connection that is gone
+ * answers with its failure.
  */
 export async function holdEntityOnPostgresSession(
   session: StatementSession,
   entity: EntityRef,
   waitMs = ENTITY_HOLD_WAIT_MS
-): Promise<{ release: () => Promise<void> }> {
+): Promise<{ release: () => Promise<void>; kept: () => Promise<boolean> }> {
   const compiler = new PgDialect();
   const rows: RowsOn = query => {
     const compiled = compiler.sqlToQuery(query);
@@ -180,6 +181,12 @@ export async function holdEntityOnPostgresSession(
     release: async () => {
       await rows(sql`SELECT pg_advisory_unlock(${advisoryKeysOf(entity)})`);
     },
+    // The lock as this connection's own, by the two keys it was taken with (`advisoryKeysOf`).
+    kept: () =>
+      got(
+        rows,
+        sql`EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted AND mode = 'ExclusiveLock' AND objsubid = 2 AND classid = hashtext(${"nextly:entity"})::oid AND objid = hashtext(${entityHoldKey(entity)})::oid)`
+      ),
   };
 }
 

@@ -1,8 +1,8 @@
 /**
  * A deleting save's hold of its collection, asked again before each statement the save sends.
  *
- * On MySQL a save's statements can run on other connections than the one holding the collection
- * (the push, the translations step, the file of a translated collection). A connection that is lost
+ * On MySQL and PostgreSQL a save's statements can run on other connections than the one holding
+ * the collection (the push, the translations step, the file of a translated collection). A connection that is lost
  * ends its locks, and entry writes go ahead from then on, so what a later statement would drop was
  * counted under a hold that is gone: the save stops before it.
  *

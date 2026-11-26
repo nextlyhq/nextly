@@ -43,8 +43,9 @@ export interface SaveHoldScope {
   take(adapter: DrizzleAdapter, slug: string): Promise<void>;
   /**
    * Runs `work`, a part of the save that sends statements. Where the hold taken is on a connection of
-   * its own that the statements do not run on (MySQL), each is sent only while it is still kept
-   * (`assertSaveHoldKept`); elsewhere `work` runs as it is.
+   * its own that the statements do not run on (MySQL, PostgreSQL), each is sent only while it is
+   * still kept (`assertSaveHoldKept`); elsewhere (SQLite, held in this process) `work` runs as it
+   * is.
    */
   during<T>(work: () => Promise<T>): Promise<T>;
   /**
