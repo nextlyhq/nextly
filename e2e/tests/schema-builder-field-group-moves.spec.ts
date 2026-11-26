@@ -157,9 +157,15 @@ test.describe("moves between a host and a field group it uses", () => {
     };
   }
 
-  /** The outline's live region announces `text`. */
+  /**
+   * The outline's live region announces `text`. Found by what it says, as the moves spec finds it:
+   * the page holds other polite regions too (a status line, the toasts), so a bare selector matches
+   * several and Playwright refuses it.
+   */
   const announces = (page: Page, text: RegExp) =>
-    expect(page.locator('[aria-live="polite"]')).toHaveText(text);
+    expect(
+      page.locator('[aria-live="polite"]').filter({ hasText: text })
+    ).toHaveText(text);
 
   test.beforeEach(async ({ page }) => {
     await createFieldGroup(page.request, fieldGroup, "Card", [
