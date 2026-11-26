@@ -11,7 +11,10 @@ import { systemColumnsForFields } from "../../../domains/schema/services/field-c
 import { defineFieldGroup } from "../../../field-groups/config/define-field-group";
 import { setupTransformerInput } from "../../../plugins/plugin-consent";
 import { defineSingle } from "../../../singles/config/define-single";
-import { configurationProblems } from "../config-problems";
+import {
+  builderDefinitionProblems,
+  configurationProblems,
+} from "../config-problems";
 
 describe("a bad Single and a bad collection, each through its define function", () => {
   it("are both reported, neither stopping the import", () => {
@@ -370,6 +373,174 @@ describe("a define* collection whose index names its system slug", () => {
   });
 });
 
+describe("the Builder's definitions, judged with the same rules", () => {
+  // Each Builder entity no code-first entity shadows is judged as a configuration's entity is,
+  // at its place in the definition file, except where the Builder itself allows what the code
+  // rules refuse: a collection with no fields, and an address that is the address rule's (judged
+  // where an address is new, by the roads that know which are).
+  const text = (name: string) => ({ name, type: "text" });
+
+  it("reports a problem at its place in the definition file", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [{ slug: "cases", fields: [text("body"), text("body")] }],
+        singles: [],
+        components: [],
+      },
+      {},
+      "./ui-schema.json"
+    );
+
+    expect(problems.map(problem => `${problem.path} ${problem.code}`)).toEqual([
+      "ui-schema.json collections[0].fields FIELD_NAME_DUPLICATE",
+    ]);
+  });
+
+  it("allows what the Builder saves: no fields, and an address the address rule judges", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [
+          { slug: "bag", fields: [] },
+          { slug: "view", fields: [text("title")] },
+        ],
+        singles: [],
+        components: [],
+      },
+      {},
+      "./ui-schema.json"
+    );
+
+    expect(problems).toEqual([]);
+  });
+
+  it("does not judge an entry a code-first entity of its kind shadows", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [{ slug: "cases", fields: [text("body"), text("body")] }],
+        singles: [],
+        components: [],
+      },
+      { collections: [{ slug: "cases", fields: [text("title")] }] },
+      "./ui-schema.json"
+    );
+
+    expect(problems).toEqual([]);
+  });
+
+  it("names a field group by the file's own key", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [],
+        singles: [],
+        components: [{ slug: "hero", fields: [text("a"), text("a")] }],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(problems.map(problem => problem.path)).toEqual([
+      "ui-schema.json components[0].fields",
+    ]);
+  });
+});
+
+describe("a Builder relationship stored in the earlier spelling, its target in options", () => {
+  // The Builder still reads `options.target` where a field names no `relationTo`, so the field
+  // is judged with its target as the Builder reads it.
+  it("has no problem", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [
+          {
+            slug: "posts",
+            fields: [
+              {
+                name: "author",
+                type: "relationship",
+                options: { target: "users" },
+              },
+              {
+                name: "meta",
+                type: "group",
+                fields: [
+                  {
+                    name: "editor",
+                    type: "relationship",
+                    options: { target: "users" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(problems).toEqual([]);
+  });
+});
+
+describe("a Builder group with no name, laying its fields out", () => {
+  // The definition format lets only a group go without a name; its fields are stored where it
+  // sits. A field of any other type with no name is still reported.
+  it("has no problem, while a nameless text field beside it is reported", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [
+          {
+            slug: "posts",
+            fields: [
+              {
+                type: "group",
+                fields: [{ name: "headline", type: "text" }],
+              },
+              { type: "text" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(problems.map(problem => [problem.code, problem.path])).toEqual([
+      ["FIELD_NAME_REQUIRED", "ui-schema.json collections[0].fields[1].name"],
+    ]);
+  });
+});
+
+describe("a Builder field named by a SQL keyword", () => {
+  // The Builder's own name rule lets a field be called `select` or `order`, so its definitions
+  // are not refused for it.
+  it("has no problem", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [
+          {
+            slug: "posts",
+            fields: [
+              { name: "select", type: "text" },
+              { name: "order", type: "number" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(problems).toEqual([]);
+  });
+});
+
 describe("a define* entity whose own top-level field takes a system field's exact name but no column", () => {
   // Such a field leaves the column free, so `define*` adds its own text field of the same name
   // beside it, and both answer to that name. Each column-less kind is refused, naming the field
@@ -533,6 +704,75 @@ describe("a define* entity whose own top-level field takes a system field's exac
     };
 
     expect(configurationProblems(declared)).toEqual([]);
+  });
+});
+
+describe("a Builder address each code of the address rule refuses", () => {
+  // The same entity in the configuration is refused with that code; in the definition file it is
+  // left to the roads that know whether the address is new. `SLUG_SAME_SNAKE_CASE` compares two
+  // entities, so no entity judged alone meets it.
+  it.each([
+    ["SLUG_INVALID_FORMAT", "Blog Posts"],
+    ["SLUG_TOO_LONG", "a".repeat(300)],
+    ["SLUG_RESERVED", "users"],
+    ["SLUG_SQL_KEYWORD", "view"],
+  ])("%s is not reported", (code, slug) => {
+    const entity = { slug, fields: [{ name: "body", type: "text" }] };
+
+    expect(
+      configurationProblems({ collections: [entity] }).map(each => each.code)
+    ).toContain(code);
+    expect(
+      builderDefinitionProblems({ collections: [entity] }, {}, "ui-schema.json")
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["missing", {}],
+    ["a number", { slug: 7 }],
+  ])("but a slug that is %s is reported", (_, slug) => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [{ ...slug, fields: [{ name: "body", type: "text" }] }],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(problems.map(each => each.path)).toEqual([
+      "ui-schema.json collections[0].slug",
+    ]);
+  });
+});
+
+describe("a Builder group with no name, by the kind of entity it is in", () => {
+  // Every place but a Single's top level is one the Builder saves. One there was written by hand,
+  // and is served as any other, so a file that works keeps working.
+  it("is reported nowhere, a Single's top level included", () => {
+    const text = { name: "body", type: "text" };
+    const laidOut = { type: "group", fields: [text] };
+    const named = (type: string) => ({
+      name: `in_${type}`,
+      type,
+      fields: [laidOut],
+    });
+
+    const problems = builderDefinitionProblems(
+      {
+        collections: [{ slug: "posts", fields: [laidOut] }],
+        singles: [
+          {
+            slug: "site",
+            fields: [named("group"), named("repeater"), laidOut],
+          },
+        ],
+        components: [{ slug: "card", fields: [laidOut] }],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(problems).toEqual([]);
   });
 });
 
@@ -955,5 +1195,78 @@ describe("an entity with no system field set aside and no name at fault", () => 
     ).toEqual(
       validateCollectionConfig(entity as never).errors.map(error => error.code)
     );
+  });
+});
+
+describe("a Builder container marked translatable as a whole", () => {
+  // Refused as the configuration's is, and told what to do in the file: the mark is taken out by
+  // hand, as nothing takes it out of there, and the change needs a migration.
+  it.each([
+    ["repeater", { fields: [{ name: "inner", type: "text" }] }],
+    ["group", { fields: [{ name: "inner", type: "text" }] }],
+  ])("is reported for a %s, at any depth, with what to edit", (type, rest) => {
+    const marked = { name: "holder", type, localized: true, ...rest };
+    const entity = {
+      slug: "posts",
+      fields: [
+        marked,
+        { name: "outer", type: "group", fields: [{ ...marked, name: "deep" }] },
+      ],
+    };
+
+    for (const list of ["collections", "singles", "components"]) {
+      const problems = builderDefinitionProblems(
+        { [list]: [entity] },
+        {},
+        "ui-schema.json"
+      );
+
+      expect(
+        problems.map(problem => [problem.code, problem.path]),
+        list
+      ).toEqual([
+        [
+          "FIELD_STRUCTURE_NOT_TRANSLATABLE",
+          `ui-schema.json ${list}[0].fields[0].localized`,
+        ],
+        [
+          "FIELD_STRUCTURE_NOT_TRANSLATABLE",
+          `ui-schema.json ${list}[0].fields[1].fields[0].localized`,
+        ],
+      ]);
+      const [first, deep] = problems.map(problem => problem.message);
+      expect(first).toContain('"holder"');
+      expect(deep).toContain('"deep"');
+      for (const message of [first, deep]) {
+        expect(message).toContain("remove `localized: true`");
+        expect(message).toContain("ui-schema.json");
+        expect(message).toContain("`nextly migrate:create`");
+      }
+    }
+  });
+});
+
+describe("a Builder field group placement marked translatable as a whole", () => {
+  it.each(["component", "fieldGroup"])("is not reported for a %s", type => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [
+          {
+            slug: "posts",
+            fields: [
+              { name: "hero", type, component: "card", localized: true },
+            ],
+          },
+        ],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(
+      problems.filter(
+        problem => problem.code === "FIELD_STRUCTURE_NOT_TRANSLATABLE"
+      )
+    ).toEqual([]);
   });
 });

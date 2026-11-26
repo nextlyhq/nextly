@@ -140,7 +140,7 @@ See [CONTRIBUTING.md](https://github.com/nextlyhq/nextly/blob/main/CONTRIBUTING.
 
 - [**GitHub Discussions**](https://github.com/nextlyhq/nextly/discussions) for questions, ideas, and show-and-tell
 - [**Issues**](https://github.com/nextlyhq/nextly/issues) for bug reports and feature requests
-- [**Discord**](https://discord.gg/hJUg9AZMn) for real-time chat with the team and other users
+- [**Discord**](https://discord.gg/t2qN6H5tMj) for real-time chat with the team and other users
 - [**Contributing guide**](https://github.com/nextlyhq/nextly/blob/main/CONTRIBUTING.md) for local setup, the dev workflow, and PR conventions
 
 ## Contributing

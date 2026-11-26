@@ -19,7 +19,7 @@ import { datetime, json, mysqlTable, varchar } from "drizzle-orm/mysql-core";
 import {
   mysqlIndexes,
   TRANSLATION_SOURCES_INDEXES,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-mysql";
 import {
   TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH,
   TRANSLATION_PROVENANCE_FINGERPRINT_LENGTH,

@@ -341,6 +341,22 @@ Builder (`ui`) entities are **always retained** — they're yours, not the plugi
 is why declaring everything through `contributes` (rather than creating tables yourself
 with raw SQL through `ctx.db.raw`) matters: it's what lets uninstall be clean and reversible.
 
+A departed plugin's Singles and field groups stay too: `nextly db:sync`, with
+`--remove-orphaned` as well, keeps them and names each with its plugin. `prune` takes
+collections only. Such a Single is read as before and takes no writes until the plugin is back.
+
+On a site that keeps migration files, remove all of them with a migration instead:
+`nextly migrate:create` writes the one that drops what left your config, and `nextly migrate`
+applies it with your consent. Dropped by `prune` there, a table is one the applied migrations
+still record, and `nextly migrate` refuses until it is back.
+
+Releases up to 0.0.2-alpha.81 recorded a plugin's Singles and field groups, and collections
+under its legacy top-level `collections` key, as the app's own. A development start, a
+configuration reload or one `nextly db:sync` puts that right while the plugin is configured.
+If it has already left your config, nothing says whose they are: `db:sync` lists them as
+orphaned and `--remove-orphaned` would delete them. Put the plugin back, run
+`nextly db:sync` once, then remove it.
+
 > **Tip for plugin authors:** anything you create through `contributes` /
 > `ctx.services` is provenance-tagged and pruned automatically. `ctx.db` itself runs no
 > DDL: it reads and writes declared tables, and creates none. Anything you create with raw

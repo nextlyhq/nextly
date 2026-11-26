@@ -27,6 +27,7 @@ import {
   narrowToContributions,
   NO_APP_STREAM_TABLES,
 } from "../app-stream";
+import { unwrittenOver } from "../../pending/__tests__/helpers/unwritten-over";
 import { generateMigration } from "../generate";
 import { loadLatestSnapshot } from "../snapshot-io";
 
@@ -232,11 +233,13 @@ describe("an element the app contributes to a plugin's table", () => {
     try {
       await runChecks({
         migrationsDir,
-        desiredSnapshot: { tables: [] },
-        appStream: await compileAppStreamTables({
-          config: cfg as never,
-          dialect: "postgresql",
-          logger,
+        unwritten: unwrittenOver({
+          migrationsDir,
+          appStream: await compileAppStreamTables({
+            config: cfg as never,
+            dialect: "postgresql",
+            logger,
+          }),
         }),
         logger: {
           error: (m: string) => errors.push(m),
@@ -302,11 +305,13 @@ describe("a table the app declares itself", () => {
     try {
       await runChecks({
         migrationsDir,
-        desiredSnapshot: { tables: [] },
-        appStream: await compileAppStreamTables({
-          config: cfg as never,
-          dialect: "postgresql",
-          logger,
+        unwritten: unwrittenOver({
+          migrationsDir,
+          appStream: await compileAppStreamTables({
+            config: cfg as never,
+            dialect: "postgresql",
+            logger,
+          }),
         }),
         logger: {
           error: (m: string) => errors.push(m),
@@ -383,11 +388,13 @@ describe("a table an afterDrizzle hook introduces", () => {
     try {
       await runChecks({
         migrationsDir,
-        desiredSnapshot: { tables: [] },
-        appStream: await compileAppStreamTables({
-          config: cfg as never,
-          dialect: "postgresql",
-          logger,
+        unwritten: unwrittenOver({
+          migrationsDir,
+          appStream: await compileAppStreamTables({
+            config: cfg as never,
+            dialect: "postgresql",
+            logger,
+          }),
         }),
         logger: {
           error: (m: string) => errors.push(m),

@@ -153,7 +153,10 @@ export interface ApplyRepairsArgs {
    */
   entities:
     | readonly RepairEntity[]
-    | ((waits: TableWaits) => Promise<readonly RepairEntity[]>);
+    | ((
+        waits: TableWaits,
+        read?: EntitiesRead
+      ) => Promise<readonly RepairEntity[]>);
   nextlyVersion: string;
   /** How long to wait for the schema lock; the lock's own wait for a command-line run when left out. */
   schemaLockWaitMs?: number;
@@ -222,6 +225,15 @@ interface StepPlan {
   consent: ColumnConsentFacts | null;
 }
 
+/** Which read of the entities a run makes. */
+export interface EntitiesRead {
+  /**
+   * Made only to ask, before the schema lock is taken: another run may still hold it, and everything
+   * is read again under it.
+   */
+  beforeLock?: boolean;
+}
+
 /** Convert every safe column and finish every unfinished conversion. Returns the run's document. */
 export async function applyRepairs(
   args: ApplyRepairsArgs
@@ -246,7 +258,7 @@ export async function applyRepairs(
             ...args,
             entities:
               typeof args.entities === "function"
-                ? await args.entities(waits)
+                ? await args.entities(waits, { beforeLock: true })
                 : args.entities,
           },
           waits

@@ -57,6 +57,22 @@ describe("pending changes", () => {
     expect(changes[1]?.inside).toBe(2);
   });
 
+  // A field not saved yet may take any type, as often as wanted: the save is of the field as it ends.
+  it("a new field whose type was changed before its first save is one add, of the type it ends as", () => {
+    const changes = pendingChanges(saved, [
+      ...saved,
+      text("subtitle", { type: "number" }),
+    ]);
+    expect(changes.map(c => `${c.kind} ${c.fieldId}`)).toEqual([
+      "added subtitle",
+    ]);
+    expect(
+      pendingChanges(saved, [...saved, text("subtitle")]).map(
+        c => `${c.kind} ${c.fieldId}`
+      )
+    ).toEqual(["added subtitle"]);
+  });
+
   it("a field added inside a saved group is its own change", () => {
     const current = [
       text("title"),

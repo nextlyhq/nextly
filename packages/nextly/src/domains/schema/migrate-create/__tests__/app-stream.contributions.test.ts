@@ -25,6 +25,7 @@ import {
 import { clearActiveExtensionSchema } from "../../extension/active-schema";
 import { col, defineTable } from "../../extension/dsl";
 import { compileAppStreamTables } from "../app-stream";
+import { unwrittenOver } from "../../pending/__tests__/helpers/unwritten-over";
 import { buildDesiredSnapshotFromConfig, generateMigration } from "../generate";
 import { loadLatestSnapshot } from "../snapshot-io";
 
@@ -230,16 +231,14 @@ describe("what a hook contributes to the app's ENTITY tables", () => {
     try {
       await runChecks({
         migrationsDir,
-        desiredSnapshot: buildDesiredSnapshotFromConfig(
-          entities.collections,
-          entities.singles,
-          entities.components,
-          "postgresql"
-        ),
-        appStream: await compileAppStreamTables({
-          config: entityConfig(extend) as never,
-          dialect: "postgresql",
-          logger,
+        unwritten: unwrittenOver({
+          migrationsDir,
+          ...entities,
+          appStream: await compileAppStreamTables({
+            config: entityConfig(extend) as never,
+            dialect: "postgresql",
+            logger,
+          }),
         }),
         logger: {
           error: (m: string) => errors.push(m),

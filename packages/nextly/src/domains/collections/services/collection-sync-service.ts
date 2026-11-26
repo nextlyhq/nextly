@@ -70,7 +70,10 @@ import {
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { ZodGenerator, TypeGenerator } from "../../schema";
 import { busyTableBounds } from "../../schema/busy-table/bounds";
-import { pluginCollectionSources } from "../../schema/migrate/plugin/plugin-collection-sources";
+import {
+  collectionOwner,
+  pluginEntitySources,
+} from "../../schema/migrate/plugin/plugin-collection-sources";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
 // (parity with the boot/HMR registry sync).
 import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
@@ -453,12 +456,17 @@ export interface CodeFirstCollectionSource<TField> {
 export function toCodeFirstCollectionConfig<TField>(
   collection: CodeFirstCollectionSource<TField>,
   /**
-   * Who declares it: the app (`code`), or the plugin that contributes it (`plugin:<name>`, by
-   * `pluginCollectionSources`). Required, so no route leaves it out: the sync takes a row for the
+   * Who declares it: the app (`code`), or the plugin it belongs to (`plugin:<name>`, by
+   * `collectionOwner`). Required, so no route leaves it out: the sync takes a row for the
    * owner its payload declares, so a plugin's collection sent without one would be recorded as the
    * app's own.
    */
-  source: NonNullable<CodeFirstCollectionConfig["source"]>
+  owner:
+    | NonNullable<CodeFirstCollectionConfig["source"]>
+    | {
+        source: NonNullable<CodeFirstCollectionConfig["source"]>;
+        yieldsToBuilder?: true;
+      }
 ): Omit<CodeFirstCollectionConfig, "fields"> & { fields: TField[] } {
   return {
     slug: collection.slug,
@@ -482,7 +490,7 @@ export function toCodeFirstCollectionConfig<TField>(
     // collection reaches the registry; a function-valued option such as
     // `preview.url` never reaches the stored JSON.
     admin: toPersistedAdmin(asAdminOptions(collection.admin)),
-    source,
+    ...(typeof owner === "string" ? { source: owner } : owner),
     status: collection.status === true,
     localized: collection.localized === true,
     // `status: true` alone aliases to a versioned config, so both are read.
@@ -966,11 +974,11 @@ export class CollectionSyncService extends BaseService {
   ): CodeFirstCollectionConfig[] {
     // The shared projection boot and HMR reload use too, with the origin they give each
     // collection: a plugin's is the plugin's, any other the app's own.
-    const sources = pluginCollectionSources(config.plugins ?? []);
+    const sources = pluginEntitySources(config.plugins ?? []);
     return config.collections.map(collection =>
       toCodeFirstCollectionConfig(
         collection,
-        sources.get(collection.slug) ?? "code"
+        collectionOwner(sources, collection.slug)
       )
     );
   }

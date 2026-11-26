@@ -58,7 +58,10 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
-import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
+import {
+  storesPerLanguage,
+  translationLayoutChange,
+} from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
 import {
@@ -112,6 +115,7 @@ import {
   schemaDraftSplit,
 } from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
+import { isConfigOwnedSource } from "../../domains/webhooks/recording-provenance";
 import { shownWorkflowSummary } from "../../domains/workflows/stage-presentation";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
@@ -176,6 +180,7 @@ import {
   offsetPaginationToMeta,
   unwrapServiceResult,
 } from "../helpers/service-envelope";
+import { respondTypeChangeTargets } from "../helpers/type-change-targets";
 import {
   parseRichTextFormat,
   parseRichTextStyles,
@@ -382,7 +387,8 @@ function injectSingleDefaultFields<T extends SingleWithFields | null>(
   single: T
 ): T {
   if (!single) return single;
-  const isCodeFirst = single.source === "code" || single.source === "built-in";
+  const isCodeFirst =
+    isConfigOwnedSource(single.source) || single.source === "built-in";
   if (isCodeFirst) return single;
   const baseFields = single.fields ?? [];
   // Filter out any existing title/slug fields to prevent duplicates.
@@ -1457,6 +1463,23 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     },
   },
 
+  // The type picker's answer for a saved field of a Single, as a collection's (`respondTypeChangeTargets`).
+  singleTypeChangeTargets: {
+    execute: async (svc, p, body) => {
+      const slug = requireParam(p, "slug", "Single slug");
+      const single = await svc.registry.getSingleBySlug(slug);
+      if (!single) throw NextlyError.notFound({ message: "Single not found" });
+      refuseChangeDefinedInCode(single, "Single", slug);
+      // A Single's table is made by the same builder as a collection's. Its save is applied by its
+      // push, which retypes no translations column.
+      return respondTypeChangeTargets({
+        fields: (single.fields ?? []) as unknown as FieldDefinition[],
+        body,
+        builtBy: "collection",
+        layout: { perLanguage: storesPerLanguage(single), fileRetypes: false },
+      });
+    },
+  },
   previewSingleSchemaChanges: {
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");

@@ -514,6 +514,27 @@ describe.each(LOCK_DIALECTS)(
       });
     }, 180_000);
 
+    it("reaches a plugin's Single through none of its tables but the one it names", async () => {
+      await adapter.update(
+        "dynamic_singles",
+        { source: "plugin:@acme/shop" },
+        { and: [{ column: "slug", op: "=", value: "home" }] }
+      );
+      dropBoth();
+      const named = `${posts},${home}`;
+      const message = await refusedUnchanged(() => migrate(consentFor(named)));
+      // The main table is named, so it is no part of the refusal; what it owns must be named too.
+      expect(message).toContain(`table ${home}_locales\n`);
+      expect(message).toContain(`table ${home}_links\n`);
+      expect(message).not.toContain(`table ${home}\n`);
+
+      await migrate(consentFor(`${named},${home}_locales,${home}_links`));
+      const after = await databaseState();
+      for (const gone of [home, `${home}_locales`, `${home}_links`]) {
+        expect(after.tables[gone], gone).toBeUndefined();
+      }
+    }, 180_000);
+
     it("lists each owned table's rows and each entity's own shared rows before asking", async () => {
       dropBoth();
       const printed: string[] = [];

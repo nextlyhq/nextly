@@ -22,6 +22,7 @@ import {
   columnsDeclaredBy,
   fieldsStoredOnRow,
 } from "../../domains/schema/services/field-column-descriptor";
+import { relationshipTargetSlug } from "../../domains/schema/services/relationship-target-slug";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { validateFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type { SingleConfig } from "../../singles/config/types";
@@ -509,7 +510,9 @@ function asUsed(
  */
 export function configurationProblems(
   declared: ConfigEntities,
-  effective?: ConfigEntities
+  effective?: ConfigEntities,
+  /** `acrossEntities: false` leaves the rules across entities out: each entity alone is judged. */
+  options: { acrossEntities?: boolean } = {}
 ): ConfigProblem[] {
   const collections = asUsed(
     "collections",
@@ -592,6 +595,7 @@ export function configurationProblems(
     });
   }
   // The rules across entities, judged over the entities as the commands use them.
+  if (options.acrossEntities === false) return problems;
   for (const problem of crossEntityProblems({
     collections,
     singles,
@@ -600,4 +604,184 @@ export function configurationProblems(
     problems.push({ ...problem, declaredByDefine: false, crossEntity: true });
   }
   return problems;
+}
+
+/**
+ * What the Builder saves that the code rules refuse, so its definitions are not refused for it:
+ * a collection with no fields of its own (its system fields come at runtime), and an address the
+ * address rule judges (`shared/address-rule`), which the Builder's save and the migrate commands
+ * ask only of a new or changed address, as they know which are; one that already exists keeps
+ * working. A slug that is missing or not a string is still reported: the Builder never writes one.
+ * A field named by a SQL keyword (`select`, `order`) too: the Builder's field save takes one
+ * (`applySchemaChanges`), though creating a collection with one is refused.
+ * A repeater or group marked translatable as a whole is not among them, though the Builder saves
+ * the mark: it is taken out of the file by hand, before an upgrade runs over it.
+ */
+const BUILDER_ALLOWS: ReadonlySet<string> = new Set([
+  "FIELDS_EMPTY",
+  "FIELD_NAME_SQL_KEYWORD",
+  "SLUG_INVALID_FORMAT",
+  "SLUG_TOO_LONG",
+  "SLUG_RESERVED",
+  "SLUG_SQL_KEYWORD",
+  "SLUG_SAME_SNAKE_CASE",
+]);
+
+/**
+ * `entity` with each relationship's target as the Builder reads it (`relationshipTargetSlug`):
+ * a field the earlier Builder stored with its target in `options.target` and no `relationTo` is
+ * judged as naming that target, nested ones included.
+ */
+function withTargetsAsBuilderReads(entity: unknown): unknown {
+  if (typeof entity !== "object" || entity === null) return entity;
+  const fields = (entity as { fields?: unknown }).fields;
+  return Array.isArray(fields)
+    ? { ...entity, fields: fieldsWithTargetsAsBuilderReads(fields) }
+    : entity;
+}
+
+function fieldsWithTargetsAsBuilderReads(
+  fields: readonly unknown[]
+): unknown[] {
+  return fields.map(field => {
+    if (typeof field !== "object" || field === null) return field;
+    const record = field as Record<string, unknown>;
+    // The one reader of a target decides: a named `relationTo` answers itself, a list none.
+    const target = relationshipTargetSlug(record);
+    const read = target === null ? record : { ...record, relationTo: target };
+    return Array.isArray(read.fields)
+      ? { ...read, fields: fieldsWithTargetsAsBuilderReads(read.fields) }
+      : read;
+  });
+}
+
+/**
+ * Whether `problem` is the missing name of a group that only lays its fields out: the one field
+ * the definition format lets go without a name (`ui-schema.ts`), whose fields are stored where it
+ * sits. A collection's and a field group's field saves take one, and every create takes one inside
+ * a container. A Single's saves refuse one at its top level; one there was written by hand, is
+ * served, and is not refused either, so a file that works keeps working. The code rules ask every
+ * field for a name; a nameless field of any other type is reported.
+ */
+function isLayoutGroupName(
+  lists: Readonly<Record<string, readonly unknown[]>>,
+  problem: ConfigProblem
+): boolean {
+  if (
+    problem.code !== "FIELD_NAME_REQUIRED" ||
+    !problem.path.endsWith(".name")
+  ) {
+    return false;
+  }
+  const field = entryAt(lists, problem.path.slice(0, -".name".length));
+  return (
+    typeof field === "object" &&
+    field !== null &&
+    (field as { type?: unknown }).type === "group" &&
+    (field as { name?: unknown }).name === undefined
+  );
+}
+
+/**
+ * Whether `problem` is the mark of a field placing a field group: the Builder saves it, and it is
+ * left as it is in the definition file.
+ */
+function isComponentMark(
+  lists: Readonly<Record<string, readonly unknown[]>>,
+  problem: ConfigProblem
+): boolean {
+  if (problem.code !== "FIELD_STRUCTURE_NOT_TRANSLATABLE") return false;
+  const field = entryAt(lists, problem.path.slice(0, -".localized".length));
+  const type = (field as { type?: unknown } | undefined)?.type;
+  return type === "component" || type === "fieldGroup";
+}
+
+/** What `path` (`collections[0].fields[2]`) names inside `root`, or undefined. */
+function entryAt(root: unknown, path: string): unknown {
+  let at = root;
+  for (const [, key, index] of path.matchAll(
+    /\.?([A-Za-z_$][\w$]*)(?:\[(\d+)\])?/g
+  )) {
+    at =
+      typeof at === "object" && at !== null
+        ? (at as Record<string, unknown>)[key]
+        : undefined;
+    if (index !== undefined) {
+      at = Array.isArray(at) ? at[Number(index)] : undefined;
+    }
+  }
+  return at;
+}
+
+/** The Builder's definitions, as the definition file holds them. */
+export interface BuilderDefinitionEntities {
+  collections?: readonly unknown[];
+  singles?: readonly unknown[];
+  components?: readonly unknown[];
+}
+
+/**
+ * What else is said of `code` in `file`, after the rule's own sentence. The mark on a container is
+ * the one problem whose fix in the file makes a change to migrate: the rule's sentence is written
+ * for the configuration, and names the upgrade alone.
+ */
+function editOf(code: string, file: string): string {
+  return code === "FIELD_STRUCTURE_NOT_TRANSLATABLE"
+    ? ` Edit it in ${file}, then run \`nextly migrate:create\` and \`nextly migrate\`.`
+    : "";
+}
+
+/**
+ * Every problem in the Builder's definitions that the same per-entity rules find, each at its
+ * place in the definition file (`ui-schema.json collections[0].slug`), except what the Builder
+ * itself saves (`BUILDER_ALLOWS`). An entry a code-first entity of its kind shadows is not
+ * judged: the code definition is the one used, as the Builder merge decides (one slug, one kind).
+ */
+export function builderDefinitionProblems(
+  builder: BuilderDefinitionEntities,
+  code: ConfigEntities,
+  definitionFile: string
+): ConfigProblem[] {
+  const file = definitionFile.replace(/^\.\//, "");
+  const lists = {
+    collections: builder.collections ?? [],
+    singles: builder.singles ?? [],
+    fieldGroups: builder.components ?? [],
+  };
+  const codeSlugs = {
+    collections: new Set((code.collections ?? []).map(slugOf)),
+    singles: new Set((code.singles ?? []).map(slugOf)),
+    fieldGroups: new Set((code.fieldGroups ?? []).map(slugOf)),
+  };
+  // Each entry is judged in place, so a problem keeps its index in the file; one a code-first
+  // entity shadows has its problems set aside.
+  const shadowed = (path: string): boolean => {
+    const match = /^(collections|singles|fieldGroups)\[(\d+)\]/.exec(path);
+    if (match === null) return false;
+    const kind = match[1] as keyof typeof lists;
+    const slug = slugOf(lists[kind][Number(match[2])]);
+    return slug !== undefined && codeSlugs[kind].has(slug);
+  };
+  return configurationProblems(
+    {
+      collections: lists.collections.map(withTargetsAsBuilderReads),
+      singles: lists.singles.map(withTargetsAsBuilderReads),
+      fieldGroups: lists.fieldGroups.map(withTargetsAsBuilderReads),
+    },
+    undefined,
+    { acrossEntities: false }
+  )
+    .filter(
+      problem =>
+        !BUILDER_ALLOWS.has(problem.code) &&
+        !shadowed(problem.path) &&
+        !isLayoutGroupName(lists, problem) &&
+        !isComponentMark(lists, problem)
+    )
+    .map(problem => ({
+      ...problem,
+      message: problem.message + editOf(problem.code, file),
+      // The file names field groups `components`.
+      path: `${file} ${problem.path.replace(/^fieldGroups\[/, "components[")}`,
+    }));
 }

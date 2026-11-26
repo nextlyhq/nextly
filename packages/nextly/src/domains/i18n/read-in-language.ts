@@ -423,13 +423,22 @@ export function narrowToRowFields(
 /**
  * A read asked in `locale=all`, as the read it stands for: the default
  * language, every field its own type, with every language's values beside it
- * (`translations: "all"`, under {@link ALL_LOCALES_KEY}). Any other read is
- * returned as it is.
+ * (`translations: "all"`, under {@link ALL_LOCALES_KEY}). Its version still
+ * names every language (`revisionLocale`): it is the read a write of several
+ * languages is made from. Any other read is returned as it is, and spells the
+ * version of its own language: a caller cannot ask for another's.
  */
 export function readOfEveryLanguage<
-  T extends { locale?: string; translations?: "all" },
+  T extends { locale?: string; translations?: "all"; revisionLocale?: string },
 >(params: T): T {
   return params.locale === EVERY_TRANSLATION
-    ? { ...params, locale: undefined, translations: "all" }
-    : params;
+    ? {
+        ...params,
+        locale: undefined,
+        translations: "all",
+        revisionLocale: EVERY_TRANSLATION,
+      }
+    : params.revisionLocale === undefined
+      ? params
+      : { ...params, revisionLocale: undefined };
 }

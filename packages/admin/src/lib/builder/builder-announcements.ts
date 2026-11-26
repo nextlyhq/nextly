@@ -30,7 +30,7 @@ import { findFieldById } from "./field-transformers";
  * description rather than a placeholder name, so it cannot be mistaken for a
  * field called that.
  */
-function fieldSubject(field: BuilderField): string {
+export function fieldSubject(field: BuilderField): string {
   return field.label || field.name || "an unnamed field";
 }
 

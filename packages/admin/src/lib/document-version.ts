@@ -157,12 +157,33 @@ export async function versionToPublishEveryLanguage(
     }
     throw reason;
   });
-  if (shown?.version !== undefined) {
-    if (versionOf(await readShown(shown)) !== shown.version) {
-      throw new ChangedSinceOpened();
-    }
-  }
+  await refuseIfMovedSinceShown(shown, readShown);
   return refused ? OVERWRITE_EVERY_LANGUAGE : versionOf(every);
+}
+
+/**
+ * The version a publish of chosen parts sends where the server described them: the one the
+ * description was made from, so a part changed since is refused rather than put live as something
+ * else. From an editor, the language on screen must still be as the editor opened it.
+ */
+export async function versionDescribed(
+  described: string,
+  shown: ShownCopy | undefined,
+  readShown: (copy: ShownCopy) => Promise<unknown>
+): Promise<string> {
+  await refuseIfMovedSinceShown(shown, readShown);
+  return described;
+}
+
+/** Refuses a write from an editor whose language on screen changed since it was opened. */
+async function refuseIfMovedSinceShown(
+  shown: ShownCopy | undefined,
+  readShown: (copy: ShownCopy) => Promise<unknown>
+): Promise<void> {
+  if (shown?.version === undefined) return;
+  if (versionOf(await readShown(shown)) !== shown.version) {
+    throw new ChangedSinceOpened();
+  }
 }
 
 /** Whether a write was refused because the document changed since the editor's copy, before it was sent or by the server. */

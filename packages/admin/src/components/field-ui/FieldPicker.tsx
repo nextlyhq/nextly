@@ -16,6 +16,12 @@
  * A surface configures it rather than forking it: which built-in types it
  * offers, the surface whose plugin types join them, what it excludes, its
  * most-used types, how a label becomes a name, and its field groups.
+ *
+ * Opened to change a field's type (`FieldTypeChangePicker`), it asks no label:
+ * each type says whether the field can become it, why not where it cannot, and
+ * what the change does to the values it holds, and picking one hands it to the
+ * host. That one is the admin's own, not the plugin kit's: the kit's picker adds
+ * fields.
  */
 import {
   Button,
@@ -95,6 +101,36 @@ export interface FieldPickerConfig {
     onNew?: () => Promise<FieldGroupOption | null>;
   };
 }
+
+/** What changing a field's type to one type does to the values it holds, as the server judges it. */
+export type TypeChangeMark = "keeps" | "converts" | "may-lose";
+
+/** Whether a field can become one type: with what that does to its values, or why not. */
+export type TypeChoice =
+  | { available: true; mark?: TypeChangeMark }
+  | { available: false; reason: string };
+
+/** The picker opened to change a field's type rather than to add a field. */
+export interface FieldPickerChange {
+  /** The field's type now, which is not offered. */
+  current: string;
+  /** Whether the field can become `type`. */
+  choiceOf: (type: string) => TypeChoice;
+  /**
+   * While what each type does is still being judged, or why it could not be: no type is picked
+   * until it is known.
+   */
+  pending?: { kind: "loading" } | { kind: "failed"; message: string };
+  /** Called with the type picked, and for the field-group type, the field group chosen. */
+  onChange: (choice: { type: string; fieldGroup?: string }) => void;
+}
+
+/** What each mark says, beside the type it marks. */
+const MARK_WORDS: Readonly<Record<TypeChangeMark, string>> = {
+  keeps: "Keeps every value",
+  converts: "Converts the values",
+  "may-lose": "May lose some values",
+};
 
 /** What the person chose: a type, a label and the name derived from it. */
 export interface FieldPickerChoice {
@@ -179,7 +215,37 @@ function listKeys(
   };
 }
 
-export function FieldPicker({
+export function FieldPicker(props: FieldPickerProps): React.JSX.Element {
+  return <PickerDialog {...props} />;
+}
+
+/**
+ * The picker opened to change a field's type rather than to add a field: the same search and list,
+ * each type as `change` judges it, and no label asked.
+ */
+export function FieldTypeChangePicker({
+  open,
+  config,
+  title,
+  change,
+  onCancel,
+}: Pick<FieldPickerProps, "open" | "config" | "title" | "onCancel"> & {
+  change: FieldPickerChange;
+}): React.JSX.Element {
+  return (
+    <PickerDialog
+      open={open}
+      config={config}
+      title={title}
+      change={change}
+      onCancel={onCancel}
+      // Nothing is added while a type changes: `change` hands back the type picked.
+      onAdd={() => undefined}
+    />
+  );
+}
+
+function PickerDialog({
   open,
   config,
   title = "Add a field",
@@ -188,7 +254,8 @@ export function FieldPicker({
   offerAddAnother,
   onCancel,
   onAdd,
-}: FieldPickerProps): React.JSX.Element {
+  change,
+}: FieldPickerProps & { change?: FieldPickerChange }): React.JSX.Element {
   return (
     <Dialog open={open} onOpenChange={next => !next && onCancel()}>
       <DialogContent className="max-w-xl">
@@ -196,7 +263,9 @@ export function FieldPicker({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {placement ??
-              "Search for a field type, then give the field a label."}
+              (change
+                ? "Search for the field's new type."
+                : "Search for a field type, then give the field a label.")}
           </DialogDescription>
         </DialogHeader>
         {/* Mounted with the dialog, so every opening starts on a fresh search. */}
@@ -207,6 +276,7 @@ export function FieldPicker({
             offerAddAnother={offerAddAnother}
             onCancel={onCancel}
             onAdd={onAdd}
+            change={change}
           />
         )}
       </DialogContent>
@@ -220,10 +290,11 @@ function PickerBody({
   offerAddAnother,
   onCancel,
   onAdd,
+  change,
 }: Pick<
   FieldPickerProps,
   "config" | "initialLabel" | "offerAddAnother" | "onCancel" | "onAdd"
->) {
+> & { change?: FieldPickerChange }) {
   const [step, setStep] = useState<Step>({ kind: "type" });
   const [query, setQuery] = useState("");
 
@@ -233,16 +304,20 @@ function PickerBody({
     return (
       <TypeStep
         config={config}
+        change={change}
         query={query}
         onQueryChange={setQuery}
         onCancel={onCancel}
-        onPick={type =>
-          setStep(
-            config.fieldGroups && type.type === config.fieldGroups.type
-              ? { kind: "field-group", type }
-              : { kind: "label", type }
-          )
-        }
+        onPick={type => {
+          if (config.fieldGroups && type.type === config.fieldGroups.type) {
+            setStep({ kind: "field-group", type });
+          } else if (change) {
+            // A type change keeps the field's label and name: there is none to ask.
+            change.onChange({ type: type.type });
+          } else {
+            setStep({ kind: "label", type });
+          }
+        }}
       />
     );
   }
@@ -253,9 +328,17 @@ function PickerBody({
         loading={config.fieldGroups?.loading === true}
         onNew={config.fieldGroups?.onNew}
         onBack={back}
-        onPick={fieldGroup =>
-          setStep({ kind: "label", type: step.type, fieldGroup })
-        }
+        onPick={fieldGroup => {
+          if (!change) {
+            setStep({ kind: "label", type: step.type, fieldGroup });
+          } else if (choiceIn(change, step.type.type).available) {
+            // Asked again: the type can stop being available while the group is chosen.
+            change.onChange({
+              type: step.type.type,
+              fieldGroup: fieldGroup.slug,
+            });
+          }
+        }}
       />
     );
   }
@@ -294,14 +377,44 @@ function PickerBody({
   );
 }
 
+/**
+ * Whether a type can be picked: every one when adding a field; when changing a field's type, as the
+ * host judges it, and none while that is still being judged or could not be.
+ */
+function choiceIn(
+  change: FieldPickerChange | undefined,
+  type: string
+): TypeChoice {
+  if (change === undefined) return { available: true };
+  if (change.pending !== undefined) return { available: false, reason: "" };
+  return change.choiceOf(type);
+}
+
+/** What the type step says below its list: no match, or why no type can be picked yet. */
+function typeStepStatus(
+  change: FieldPickerChange | undefined,
+  results: readonly FieldTypeDescription<string>[] | null,
+  query: string
+): string {
+  if (change?.pending?.kind === "loading") {
+    return "Checking what each type does to the saved values…";
+  }
+  if (change?.pending?.kind === "failed") return change.pending.message;
+  return results?.length === 0
+    ? `No field type matches “${query.trim()}”.`
+    : "";
+}
+
 function TypeStep({
   config,
+  change,
   query,
   onQueryChange,
   onCancel,
   onPick,
 }: {
   config: FieldPickerConfig;
+  change?: FieldPickerChange;
   query: string;
   onQueryChange: (query: string) => void;
   onCancel: () => void;
@@ -309,9 +422,14 @@ function TypeStep({
 }) {
   const listId = useId();
   const pluginRows = usePluginFieldTypeEntries(config.surface);
+  const current = change?.current;
   const offered = useMemo(
-    () => offeredFieldTypes(config.types, pluginRows, config.exclude),
-    [config.types, pluginRows, config.exclude]
+    () =>
+      offeredFieldTypes(config.types, pluginRows, config.exclude).filter(
+        // A field's own type is not a change.
+        type => type.type !== current
+      ),
+    [config.types, pluginRows, config.exclude, current]
   );
   const results = searchFieldTypes(offered, query);
   const groups = useMemo(
@@ -325,22 +443,29 @@ function TypeStep({
     [listId]
   );
   const [active, setActive] = useActiveRow(rows.length, optionId);
+  // A type that cannot be picked stays listed, with why, and neither a click nor Enter picks it.
+  const pick = (type: FieldTypeDescription<string>) => {
+    if (choiceIn(change, type.type).available) onPick(type);
+  };
 
   const renderOption = (type: FieldTypeDescription<string>) => {
     const index = rows.indexOf(type);
     const Icon = iconMap[type.icon] ?? Type;
+    const choice = choiceIn(change, type.type);
     return (
       <div
         key={type.type}
         id={optionId(index)}
         role="option"
         aria-selected={index === active}
+        aria-disabled={choice.available ? undefined : true}
         data-type={type.type}
         onMouseDown={event => event.preventDefault()}
         onMouseEnter={() => setActive(index)}
-        onClick={() => onPick(type)}
+        onClick={() => pick(type)}
         className={cn(
-          "flex cursor-pointer items-center gap-3 rounded-md border p-2",
+          "flex items-center gap-3 rounded-md border p-2",
+          choice.available ? "cursor-pointer" : "cursor-not-allowed",
           // The active row is marked as the kit marks a selected card, a
           // primary border and tint, plus the focus ring: a tint keeps the
           // row's own text tokens legible in both colour schemes, where a
@@ -354,12 +479,36 @@ function TypeStep({
           <Icon className="h-4 w-4 text-muted-foreground" aria-hidden />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium">
+          <span
+            className={cn(
+              "block truncate text-sm font-medium",
+              !choice.available && "text-muted-foreground"
+            )}
+          >
             {type.label}
           </span>
-          <span className="block truncate text-xs text-muted-foreground">
-            {type.hint}
-          </span>
+          {/* Why the field cannot become it, in full, where it cannot. */}
+          {!choice.available && choice.reason ? (
+            <span className="block text-xs text-muted-foreground">
+              Unavailable: {choice.reason}
+            </span>
+          ) : (
+            <span className="block truncate text-xs text-muted-foreground">
+              {type.hint}
+            </span>
+          )}
+          {choice.available && choice.mark && (
+            <span
+              className={cn(
+                "block text-xs font-medium",
+                choice.mark === "may-lose"
+                  ? "text-destructive"
+                  : "text-muted-foreground"
+              )}
+            >
+              {MARK_WORDS[choice.mark]}
+            </span>
+          )}
         </span>
       </div>
     );
@@ -382,7 +531,7 @@ function TypeStep({
           setActive(0);
         }}
         onKeyDown={listKeys(rows.length, active, setActive, index =>
-          onPick(rows[index])
+          pick(rows[index])
         )}
       />
       <div
@@ -409,9 +558,7 @@ function TypeStep({
             ))}
       </div>
       <p role="status" className="text-sm text-muted-foreground">
-        {results?.length === 0
-          ? `No field type matches “${query.trim()}”.`
-          : ""}
+        {typeStepStatus(change, results, query)}
       </p>
       <DialogFooter>
         <Button variant="outline" onClick={onCancel}>
