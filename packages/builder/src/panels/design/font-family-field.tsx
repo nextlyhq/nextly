@@ -33,13 +33,14 @@ import {
   type SiteTokenSet,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
-import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
+import { Popover, PopoverTrigger } from "@nextlyhq/ui";
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import { useCanvasTokenMode } from "../../canvas/prefers-dark";
 import { ChoiceList } from "../../choice-list";
 import { InheritedValue } from "../../inspector/style-inspector/inherited-value";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import { variableFor, type SiteVariable } from "../../styles/style-colour";
 
 import { familyStack, siteFamilies } from "./font-library";
@@ -318,7 +319,7 @@ export function FontFamilyField({
         </VariableTipped>
         {/* Aligned to the control's right edge: the list may be wider than
             the control, and the inspector sits at the window's right edge. */}
-        <PopoverContent
+        <BuilderPopoverContent
           align="end"
           sideOffset={4}
           className="nx-font-pick__popover"
@@ -334,7 +335,7 @@ export function FontFamilyField({
             {...activeProps}
             onManageFonts={manage}
           />
-        </PopoverContent>
+        </BuilderPopoverContent>
       </Popover>
       {held === undefined ? null : (
         <UnlinkButton

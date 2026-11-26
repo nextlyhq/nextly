@@ -20,17 +20,12 @@
  *
  * @module admin/TemplateOwnDesigns
  */
+import { BuilderPopoverContent } from "@nextlyhq/builder/shell";
 import {
   useDocumentIdentity,
   type DocumentPanelSectionProps,
 } from "@nextlyhq/plugin-sdk/admin";
-import {
-  Button,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  Skeleton,
-} from "@nextlyhq/ui";
+import { Button, Popover, PopoverTrigger, Skeleton } from "@nextlyhq/ui";
 import { Brush, ExternalLink } from "lucide-react";
 import { useState, type JSX } from "react";
 
@@ -284,13 +279,13 @@ export function OwnDesignsChip(): JSX.Element | null {
           {summary}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-80 p-3">
+      <BuilderPopoverContent align="start" className="w-80 p-3">
         <p className="text-sm font-semibold text-foreground">{summary}</p>
         <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
           {WORDS.copiedSays}
         </p>
         <OwnDesignsList answer={answer} />
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

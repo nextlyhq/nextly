@@ -29,7 +29,6 @@ import {
 import {
   DropdownMenuItem,
   DropdownMenuSeparator,
-  PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
 import { Lock } from "lucide-react";
@@ -40,6 +39,7 @@ import {
   useQueuedStyles,
   type SharedStylesHost,
 } from "../../inspector/style-inspector/style-target";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import type { EditClasses } from "../../styles/block-style-actions";
 import {
   heldByThisPage,
@@ -321,7 +321,7 @@ function TextStyleRow({
           />
         ) : null}
       </div>
-      <PopoverContent
+      <BuilderPopoverContent
         side="right"
         align="start"
         sideOffset={12}
@@ -332,7 +332,7 @@ function TextStyleRow({
         <CloseVariableEditor.Provider value={() => setOpen(false)}>
           <RowEditor row={row} name={option.name} panel={panel} />
         </CloseVariableEditor.Provider>
-      </PopoverContent>
+      </BuilderPopoverContent>
     </PopupRow>
   );
 }

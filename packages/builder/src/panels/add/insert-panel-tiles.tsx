@@ -12,12 +12,7 @@ import {
   type BlockDocument,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
-import {
-  Popover,
-  PopoverAnchor,
-  PopoverContent,
-  useCommandHighlight,
-} from "@nextlyhq/ui";
+import { Popover, PopoverAnchor, useCommandHighlight } from "@nextlyhq/ui";
 import { CornerDownRight } from "lucide-react";
 import * as React from "react";
 
@@ -25,6 +20,7 @@ import { BlockIconMark } from "../../block-icon";
 import { isElement } from "../../canvas/dom-kind";
 import { withEntryContentField } from "../../canvas/entry-content-rules";
 import { usePublishInsertionPreview } from "../../canvas/insertion-preview";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 
 import type { EntryOffer } from "./insert-panel-offers";
 import { cardAnchor, NOWHERE, type Measurable } from "./insert-panel-summon";
@@ -192,7 +188,7 @@ export function TilePopover({
       }}
     >
       <PopoverAnchor virtualRef={anchor} />
-      <PopoverContent
+      <BuilderPopoverContent
         side="right"
         align="start"
         sideOffset={8}
@@ -235,7 +231,7 @@ export function TilePopover({
         >
           {refusal ?? howToAdd(entry)}
         </span>
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }
