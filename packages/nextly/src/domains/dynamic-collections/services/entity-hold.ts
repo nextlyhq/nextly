@@ -230,11 +230,17 @@ function wake(hold: ProcessHold): void {
 async function waitInProcess(
   hold: ProcessHold,
   free: () => boolean,
+  /** Takes what `free` found free, in the same synchronous step, so no flow can take it between. */
+  grant: () => void,
   refused: () => NextlyError,
   waitMs: number
 ): Promise<void> {
   const deadline = Date.now() + waitMs;
-  while (!free()) {
+  for (;;) {
+    if (free()) {
+      grant();
+      return;
+    }
     const left = deadline - Date.now();
     if (left <= 0) throw refused();
     await new Promise<void>(resolve => {
@@ -265,10 +271,12 @@ export async function shareEntityInProcess(
   await waitInProcess(
     hold,
     () => !hold.held && hold.saving === 0,
+    () => {
+      hold.sharing += 1;
+    },
     () => entityBusy(entity, "entity-share-timeout"),
     waitOf(hold.busyTimeoutMs)
   );
-  hold.sharing += 1;
   let released = false;
   return () => {
     if (released) return;
@@ -317,6 +325,9 @@ export async function holdEntityInProcess(
     await waitInProcess(
       hold,
       () => !hold.held && hold.sharing === 0,
+      () => {
+        hold.held = true;
+      },
       () => entityBeingChanged(entity, "entity-hold-timeout"),
       waitMs
     );
@@ -325,7 +336,6 @@ export async function holdEntityInProcess(
     // A save that stopped waiting lets the writes queued behind it look again.
     wake(hold);
   }
-  hold.held = true;
   let released = false;
   return () => {
     if (released) return;
