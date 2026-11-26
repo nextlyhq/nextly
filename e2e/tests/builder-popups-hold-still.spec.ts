@@ -160,10 +160,13 @@ async function holdsThrough(
   await settled(page);
   await expectInsideWindow(page, popup);
 
+  // Asked first: setting up may itself add or take away a row, and the
+  // baseline below is what the change is measured from.
+  const { pointer, change } = await using(popup);
+  await settled(page);
   const side = await popup.getAttribute("data-nx-popup-side");
   const before = await boxOf(popup);
   const height = await popup.evaluate(element => element.scrollHeight);
-  const { pointer, change } = await using(popup);
   // Scrolled into view first: Playwright scrolls a control into view before
   // it acts on it, which would move it inside a popup that scrolls.
   await pointer.scrollIntoViewIfNeeded();

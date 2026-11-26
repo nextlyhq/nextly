@@ -1,27 +1,29 @@
 /*
- * Every builder popup's height and inner scrolling (`popups/builder-popover`).
+ * Every builder popup's size limits and inner scrolling (`popups/builder-popover`).
  *
- * A held popup is no taller than the room on its side, which the popover
- * measures from the edge held beside the anchor, so the limit stays put as
- * the content changes, and content taller than the room scrolls inside.
+ * A held popup is no taller and no wider than the room it has, which the
+ * popover measures from its held top-left corner, so the limits stay put as
+ * the content changes, and content larger than the room scrolls inside.
  * In the components layer, so a popup's own rule (unlayered) or utility
  * class says otherwise where it lays out its own scrolling.
  */
 @layer components {
   :where([data-nx-popup="held"]) {
     max-height: var(--radix-popover-content-available-height, 100vh);
-    overflow-y: auto;
+    max-width: var(--radix-popover-content-available-width, 100vw);
+    overflow: auto;
   }
 }
 
 /*
  * The moment between the popover first putting a popup down and the builder
  * choosing where it holds: unseen, not animating, and with no room limit, so
- * it is measured at its full height. Important, to outrank the animations and
+ * it is measured at its full size. Important, to outrank the animations and
  * the popover's own inline room.
  */
 [data-nx-popup="placing"] {
   --radix-popover-content-available-height: 100000px !important;
+  --radix-popover-content-available-width: 100000px !important;
   opacity: 0 !important;
   animation: none !important;
 }
