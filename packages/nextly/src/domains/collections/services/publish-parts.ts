@@ -25,6 +25,11 @@ import type { RequestActor } from "../../../auth/request-actor";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
+import {
+  describedFrom,
+  type DescribedFrom,
+  type DocumentStanding,
+} from "../../versions/described-from";
 import type {
   LanguageOutcome,
   PublishAllBlocker,
@@ -32,7 +37,12 @@ import type {
 
 import type { LifecycleParts } from "./all-locales-lifecycle";
 import type { CollectionServiceResult } from "./collection-types";
-import type { PublishCaller, PublishGate, PublishPart } from "./publish-gate";
+import type {
+  PublishCaller,
+  PublishGate,
+  PublishGateRefusalCode,
+  PublishPart,
+} from "./publish-gate";
 
 /** Which way the chosen parts move. */
 export type PublishDirection = "publish" | "unpublish";
@@ -67,6 +77,13 @@ export interface PublishPartsAnswer {
     /** Whether the shared part was added to the request: the entry's first publish. */
     added: boolean;
   };
+  /**
+   * In a description, the version it was made from: sent back as `_rev` with the same request, it
+   * is refused where a part described changed since.
+   */
+  _rev?: DescribedFrom["_rev"];
+  /** In a description, a mark of each part, to compare with another description's. */
+  marks?: DescribedFrom["marks"];
 }
 
 /** A field as the checks below read it. */
@@ -134,6 +151,11 @@ export interface PublishPartsEngines {
     /** Whether the request names every language rather than choosing some. */
     everyLanguage: boolean;
   }): Promise<PartsReads | CollectionServiceResult>;
+  /**
+   * The entry's counters and drafts as they stand, for a description to say what it was made from;
+   * undefined where there is no entry.
+   */
+  standing(): Promise<DocumentStanding | undefined>;
   gate: PublishGate;
   /** The entry's collection and who asks, for the gate. */
   collection: string;
@@ -162,6 +184,9 @@ export interface PublishPartsEngines {
 type Issue = ValidationPublicData["errors"][number];
 
 const SHARED_PATH = "shared";
+
+/** The code the publish gate holds a part back with while it waits for approval. */
+const NOT_APPROVED: PublishGateRefusalCode = "NOT_APPROVED";
 
 /** A language's English name, or its code when the runtime cannot name it. */
 function languageName(code: string): string {
@@ -435,9 +460,18 @@ async function refusalsOf(
   ];
 }
 
-/** The request refused whole, every issue in the validation error's public data. */
-function refused(issues: Issue[]): CollectionServiceResult {
-  const error = NextlyError.validation({ errors: issues });
+/**
+ * The request refused whole, every issue in the validation error's public data, with what a
+ * description refused for want of approval alone was made from (`described`).
+ */
+function refused(
+  issues: Issue[],
+  described?: DescribedFrom
+): CollectionServiceResult {
+  const error = NextlyError.validation({
+    errors: issues,
+    ...(described === undefined ? {} : { described }),
+  });
   return {
     ...errorEnvelopeFields(error),
     success: false,
@@ -525,6 +559,21 @@ function sharedPartOf(
     !state.sharedLive &&
     request.shared !== true;
   return { sharedPart: request.shared === true || added, added };
+}
+
+/** What a description of the chosen parts was made from. */
+function describedFromOf(
+  stood: PromiseSettledResult<DocumentStanding | undefined>,
+  judged: Judged
+): DescribedFrom | undefined {
+  if (stood.status === "rejected") throw stood.reason;
+  return (
+    stood.value &&
+    describedFrom(stood.value, {
+      languages: judged.chosen,
+      shared: judged.sharedPart,
+    })
+  );
 }
 
 /** The chosen parts taken down, or what taking them down would do. */
@@ -619,6 +668,13 @@ export async function publishParts(
       ? "all"
       : []
     : asked;
+  const describe = request.describe === true;
+  // Before anything a description says is read, so a change made meanwhile leaves the version
+  // older than what is said, never newer. A failure to read it waits for the answers below, which
+  // name what is wrong with the entry or the caller.
+  const stood = describe
+    ? await Promise.allSettled([engines.standing()])
+    : undefined;
   const reads = await engines.reads({
     locales: askedForAccess,
     shared: !everyLanguage,
@@ -637,11 +693,21 @@ export async function publishParts(
   };
 
   const issues = await refusalsOf(judged, engines);
-  if (issues.length > 0) return refused(issues);
+  if (issues.length > 0) {
+    // Refused for want of approval alone, the parts can still be published past the review: that
+    // move is made from what was described too. Any other refusal tells nothing more.
+    const pastReview =
+      stood !== undefined && issues.every(issue => issue.code === NOT_APPROVED);
+    return refused(
+      issues,
+      pastReview ? describedFromOf(stood[0], judged) : undefined
+    );
+  }
 
   const parts: LifecycleParts | undefined = everyLanguage
     ? undefined
     : { locales: new Set(judged.chosen), shared: sharedPart };
+  const from = stood && describedFromOf(stood[0], judged);
   const sharedLiveAfter = request.direction === "publish";
   const answer: PublishPartsAnswer = {
     id,
@@ -650,8 +716,8 @@ export async function publishParts(
       changes: sharedPart && state.sharedLive !== sharedLiveAfter,
       added,
     },
+    ...from,
   };
-  const describe = request.describe === true;
   return request.direction === "unpublish"
     ? unpublishParts(judged, answer, parts, describe, engines)
     : publishChosenParts(judged, answer, parts, describe, engines);

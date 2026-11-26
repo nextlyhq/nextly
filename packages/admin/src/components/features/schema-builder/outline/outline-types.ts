@@ -22,6 +22,10 @@ interface OutlineFieldActions {
   rename?: (id: string) => void;
   /** Whether a row offers Rename…: where its settings can rename the field. Absent, none does. */
   canRename?: (id: string) => boolean;
+  /** Open Change type… for the field. Absent, rows offer no Change type…. */
+  changeType?: (id: string) => void;
+  /** Whether a row offers Change type…: where its settings would. Absent, none does. */
+  canChangeType?: (id: string) => boolean;
   remove: (id: string) => void;
   setHidden: (id: string, hidden: boolean) => void;
   openFieldGroup: (slug: string) => void;

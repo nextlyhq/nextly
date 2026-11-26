@@ -152,6 +152,11 @@ export function OutlineRowMenu({
                 Rename…
               </DropdownMenuItem>
             )}
+            {actions.changeType && actions.canChangeType?.(id) && (
+              <DropdownMenuItem onSelect={() => actions.changeType?.(id)}>
+                Change type…
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem
               onSelect={() => actions.setHidden(id, !field.admin?.hidden)}
             >

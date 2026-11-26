@@ -3,9 +3,9 @@
  * and the choice of what goes live opened.
  *
  * The plausible broken versions: the form published before the choice is made, the choice opened
- * over unsaved work it does not include, an answer from before the press, a press that goes on
- * into another language's form after the editor moved, a save that failed and still opens the
- * choice, and a press that asks being reported as published.
+ * over unsaved work it does not include, an answer from before the press or from before the work
+ * was stored, a press that goes on into another language's form after the editor moved, a save
+ * that failed and still opens the choice, and a press that asks being reported as published.
  */
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -55,6 +55,8 @@ const SPANISH_TOO = describedAs([
 
 const open = vi.fn();
 const onPublished = vi.fn();
+/** Whether the shared fields hold stored changes, as a fresh read says. */
+const readSharedPending = vi.fn<() => Promise<boolean>>();
 
 function options(
   over: Partial<UseSmartPublishOptions> = {}
@@ -65,6 +67,7 @@ function options(
     currentLocale: "en",
     sharedPending: false,
     live: true,
+    readSharedPending,
     open,
     onPublished,
     ...over,
@@ -100,20 +103,106 @@ function press(
 
 beforeEach(() => {
   vi.resetAllMocks();
+  readSharedPending.mockResolvedValue(false);
   api.publishParts.mockResolvedValue(ENGLISH_ALONE);
 });
 
 describe("the editor's Publish", () => {
   it("publishes in one click, and says so, when only the language on screen changes", async () => {
     const { result } = smartPublish();
-    const editor = host({ unsaved: () => true });
+    const editor = host();
 
     await expect(press(result.current, editor)).resolves.toEqual(STORED);
 
     expect(editor.publish).toHaveBeenCalledTimes(1);
-    expect(editor.save).not.toHaveBeenCalled();
     expect(open).not.toHaveBeenCalled();
     expect(onPublished).toHaveBeenCalledWith({ published: ["en"] });
+    // Nothing unsaved: nothing to store first, and what the editor read stands.
+    expect(editor.save).not.toHaveBeenCalled();
+    expect(readSharedPending).not.toHaveBeenCalled();
+  });
+
+  it("stores unsaved work first, and publishes in one click when what is stored changes this language alone", async () => {
+    const { result } = smartPublish();
+    const order: string[] = [];
+    const step = (name: string) => () => {
+      order.push(name);
+      return Promise.resolve(STORED);
+    };
+    api.publishParts.mockImplementation(() => {
+      order.push("describe");
+      return Promise.resolve(ENGLISH_ALONE);
+    });
+
+    await expect(
+      press(
+        result.current,
+        host({
+          unsaved: () => true,
+          save: step("save"),
+          publish: step("publish"),
+        })
+      )
+    ).resolves.toEqual(STORED);
+
+    expect(order).toEqual(["save", "describe", "publish"]);
+    expect(open).not.toHaveBeenCalled();
+    expect(onPublished).toHaveBeenCalledWith({ published: ["en"] });
+  });
+
+  it("opens the choice when storing a translated edit left a shared change, as a hook may make", async () => {
+    const { result } = smartPublish();
+    const save = vi.fn(() => Promise.resolve(STORED));
+    const editor = host({ unsaved: () => true, save });
+    readSharedPending.mockImplementation(() =>
+      // Asked of what is stored, so after the save.
+      Promise.resolve(save.mock.calls.length > 0)
+    );
+
+    await expect(press(result.current, editor)).resolves.toEqual({
+      ok: false,
+      reason: "cancelled",
+      message: "Choose what to publish.",
+      stored: true,
+    });
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(editor.publish).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledWith(
+      { locales: ["en"], shared: true },
+      "publish",
+      { sharedPending: true }
+    );
+  });
+
+  it("opens the choice when what is stored cannot be read", async () => {
+    readSharedPending.mockRejectedValue(new Error("offline"));
+    const { result } = smartPublish();
+    const editor = host({ unsaved: () => true });
+
+    await press(result.current, editor);
+
+    expect(editor.publish).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledWith(
+      { locales: ["en"], shared: false },
+      "publish",
+      { sharedPending: false }
+    );
+  });
+
+  it("asks nothing and publishes nothing when the work could not be stored", async () => {
+    const { result } = smartPublish();
+    const failed = submitFailed(new Error("offline"));
+    const editor = host({
+      unsaved: () => true,
+      save: () => Promise.resolve(failed),
+    });
+
+    await expect(press(result.current, editor)).resolves.toEqual(failed);
+
+    expect(api.publishParts).not.toHaveBeenCalled();
+    expect(editor.publish).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
   });
 
   it("asks the server on the press what publishing every language would do, changing nothing", async () => {
@@ -285,7 +374,7 @@ describe("the editor's Publish", () => {
       })
     );
     const { result, rerender } = smartPublish();
-    const editor = host({ unsaved: () => true });
+    const editor = host();
     const pressed = press(result.current, editor);
 
     rerender(options({ currentLocale: "es" }));
@@ -296,6 +385,40 @@ describe("the editor's Publish", () => {
     expect(editor.publish).not.toHaveBeenCalled();
     expect(editor.save).not.toHaveBeenCalled();
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("says the work is saved when the editor moved while it was stored, and publishes nothing", async () => {
+    const { result, rerender } = smartPublish();
+    const editor = host({
+      unsaved: () => true,
+      save: () => {
+        rerender(options({ currentLocale: "es" }));
+        return Promise.resolve(STORED);
+      },
+    });
+
+    await expect(press(result.current, editor)).resolves.toEqual({
+      ok: false,
+      reason: "cancelled",
+      message:
+        "You moved to another language or document before this was published. It is saved.",
+      stored: true,
+    });
+    expect(api.publishParts).not.toHaveBeenCalled();
+    expect(editor.publish).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("stores the work of a document nobody reads only when the choice opens", async () => {
+    api.publishParts.mockResolvedValue(SPANISH_TOO);
+    const { result } = smartPublish({ live: false });
+    const editor = host({ unsaved: () => true });
+
+    await press(result.current, editor);
+
+    expect(editor.save).toHaveBeenCalledTimes(1);
+    expect(readSharedPending).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledTimes(1);
   });
 
   it("does not open the choice over the language moved to while the form was stored", async () => {

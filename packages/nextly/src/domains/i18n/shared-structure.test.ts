@@ -17,11 +17,13 @@ import {
   assembleSharedStructure,
   componentFieldsChangingTranslation,
   componentStructureShape,
+  fieldsTurningTranslatedInside,
   holdsUnkeyedText,
   keepsTranslationsInside,
   pruneOverlay,
   sharedStructureShape,
   splitSharedStructure,
+  type StructuredField,
 } from "./shared-structure";
 
 const SLIDES = {
@@ -306,6 +308,112 @@ describe("pruneOverlay", () => {
     expect(changed).toBe(false);
     expect(overlay).toEqual(kept);
   });
+
+  // An instance that keeps its id but changes type no longer holds the earlier type's fields. Kept
+  // in the other languages' overlays, that text would come back if the instance were changed back.
+  describe("an instance changed to another component type", () => {
+    const fieldsOf = (slug: string) =>
+      slug === "hero"
+        ? [{ name: "title", type: "text" }]
+        : slug === "cta"
+          ? [{ name: "label", type: "text" }]
+          : undefined;
+
+    // Fields as their config declares them, the components they offer among their keys.
+    const layout = {
+      name: "layout",
+      type: "component",
+      components: ["hero", "cta"],
+      repeatable: true,
+    };
+    const lead = {
+      name: "lead",
+      type: "component",
+      components: ["hero", "cta"],
+    };
+
+    it("drops the earlier type's text from a list's instance, keeping the new type's", () => {
+      const shape = componentStructureShape(layout, fieldsOf)!;
+      const { overlay, changed } = pruneOverlay(
+        { i1: { title: "Hola", label: "Compra" } },
+        [{ id: "i1", _componentType: "cta" }],
+        shape
+      );
+      expect(changed).toBe(true);
+      expect(overlay).toEqual({ i1: { label: "Compra" } });
+    });
+
+    it("drops the earlier type's text from a single instance", () => {
+      const shape = componentStructureShape(lead, fieldsOf)!;
+      const { overlay, changed } = pruneOverlay(
+        { title: "Hola" },
+        { _componentType: "cta" },
+        shape
+      );
+      expect(changed).toBe(true);
+      expect(overlay).toEqual({});
+    });
+
+    // Two types naming a translated field alike: the new type describes the field too, so only
+    // the structure before the write tells that the text there is the earlier type's.
+    describe("where both types name a translated field alike", () => {
+      const sameName = (slug: string) =>
+        slug === "hero" || slug === "cta"
+          ? [{ name: "title", type: "text" }]
+          : undefined;
+
+      it("drops the earlier type's text, told by the structure before the write", () => {
+        const shape = componentStructureShape(layout, sameName)!;
+        const { overlay, changed } = pruneOverlay(
+          { i1: { title: "Hola" }, i2: { title: "Adiós" } },
+          [
+            { id: "i1", _componentType: "cta" },
+            { id: "i2", _componentType: "hero" },
+          ],
+          shape,
+          [
+            { id: "i1", _componentType: "hero" },
+            { id: "i2", _componentType: "hero" },
+          ]
+        );
+        expect(changed).toBe(true);
+        // The second instance kept its type, and its text.
+        expect(overlay).toEqual({ i1: {}, i2: { title: "Adiós" } });
+      });
+
+      it("drops a single instance's text when it changed type", () => {
+        const shape = componentStructureShape(lead, sameName)!;
+        expect(
+          pruneOverlay({ title: "Hola" }, { _componentType: "cta" }, shape, {
+            _componentType: "hero",
+          })
+        ).toEqual({ overlay: {}, changed: true });
+      });
+    });
+
+    // A type whose fields translate nothing still names what an instance of it is: changed to it,
+    // the instance holds none of the earlier type's text.
+    it("drops the earlier type's text from an instance changed to a type translating nothing", () => {
+      const heroOnly = (slug: string) =>
+        slug === "hero"
+          ? [{ name: "title", type: "text" }]
+          : slug === "cta"
+            ? [{ name: "size", type: "number" }]
+            : undefined;
+      const shape = componentStructureShape(lead, heroOnly)!;
+      expect(
+        pruneOverlay({ title: "Hola" }, { _componentType: "cta" }, shape)
+      ).toEqual({ overlay: {}, changed: true });
+    });
+
+    // The control: the instance kept its type, so nothing of its text goes.
+    it("keeps an instance's text while its type stays", () => {
+      const shape = componentStructureShape(lead, fieldsOf)!;
+      expect(
+        pruneOverlay({ title: "Hola" }, { _componentType: "hero" }, shape)
+      ).toEqual({ overlay: { title: "Hola" }, changed: false });
+    });
+  });
 });
 
 describe("componentStructureShape", () => {
@@ -405,6 +513,66 @@ describe("a container saying it is not translated", () => {
           { name: "heading", type: "text" },
           {
             name: "meta",
+            type: "group",
+            localized: false,
+            fields: [{ name: "code", type: "text" }],
+          },
+        ],
+      })
+    ).toEqual({ kind: "group", texts: ["heading"], inner: {} });
+  });
+
+  // A component placed under `localized: false`, on itself or on a container around it, is shared
+  // whole: it translates nothing, so a container holding nothing else keeps no overlay column.
+  // Read as placing a component anyway, it would get an empty overlay column, and the column would
+  // be guarded as though it held translations.
+  it("places no component that says it is not translated", () => {
+    const sharedCard = {
+      name: "slides",
+      type: "repeater",
+      fields: [
+        { name: "rank", type: "number" },
+        {
+          name: "card",
+          type: "component",
+          component: "card",
+          localized: false,
+        },
+      ],
+    };
+    const insideShared = {
+      name: "slides",
+      type: "repeater",
+      fields: [
+        {
+          name: "meta",
+          type: "group",
+          localized: false,
+          fields: [{ name: "card", type: "component", component: "card" }],
+        },
+      ],
+    };
+    expect(keepsTranslationsInside(sharedCard, true)).toBe(false);
+    expect(keepsTranslationsInside(insideShared, true)).toBe(false);
+    // The control: the same component, translated, is placed.
+    const translatedCard = {
+      name: "slides",
+      type: "repeater",
+      fields: [{ name: "card", type: "component", component: "card" }],
+    };
+    expect(keepsTranslationsInside(translatedCard, true)).toBe(true);
+  });
+
+  // A group with no name only lays fields out, but saying it is not translated it shares the fields
+  // it lays out, as the admin shows them: none of its text is any language's own.
+  it("translates nothing laid out by a group with no name that says it is not translated", () => {
+    expect(
+      sharedStructureShape({
+        name: "page",
+        type: "group",
+        fields: [
+          { name: "heading", type: "text" },
+          {
             type: "group",
             localized: false,
             fields: [{ name: "code", type: "text" }],
@@ -617,6 +785,57 @@ describe("componentFieldsChangingTranslation", () => {
     ).toEqual([]);
     expect(
       componentFieldsChangingTranslation("card", CARD, [CARD[1]!, CARD[2]!])
+    ).toEqual([]);
+  });
+});
+
+describe("fieldsTurningTranslatedInside", () => {
+  // A repeater kept in both shapes, translating its caption either way, with a group inside it.
+  const slidesWith = (details: StructuredField): StructuredField[] => [
+    {
+      name: "slides",
+      type: "repeater",
+      fields: [{ name: "caption", type: "text" }, details],
+    },
+  ];
+
+  it("names a field shared before that the change translates", () => {
+    expect(
+      fieldsTurningTranslatedInside(
+        slidesWith({ name: "label", type: "text", localized: false }),
+        slidesWith({ name: "label", type: "text" })
+      )
+    ).toEqual(["slides.label"]);
+  });
+
+  // The group inside was shared whole before, so it had no shape of its own: its label, every
+  // language's, sits on the structure and would be read as one language's text.
+  it("names a field inside a group shared whole before, which the change translates", () => {
+    expect(
+      fieldsTurningTranslatedInside(
+        slidesWith({
+          name: "details",
+          type: "group",
+          localized: false,
+          fields: [{ name: "label", type: "text" }],
+        }),
+        slidesWith({
+          name: "details",
+          type: "group",
+          fields: [{ name: "label", type: "text" }],
+        })
+      )
+    ).toEqual(["slides.details.label"]);
+  });
+
+  it("names nothing where the group inside translated its label before", () => {
+    const details = {
+      name: "details",
+      type: "group",
+      fields: [{ name: "label", type: "text" }],
+    };
+    expect(
+      fieldsTurningTranslatedInside(slidesWith(details), slidesWith(details))
     ).toEqual([]);
   });
 });

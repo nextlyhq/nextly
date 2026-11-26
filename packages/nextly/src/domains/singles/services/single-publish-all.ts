@@ -130,6 +130,8 @@ import {
 import {
   buildCompanionSchema,
   type CompanionSchema,
+  sharedStructuresIn,
+  storedStructureOf,
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
@@ -140,6 +142,10 @@ import {
 import { withComponentShapesOf } from "../../i18n/runtime/component-shapes";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { partsTogether, type ChangedParts } from "../../versions/changed-parts";
+import {
+  type DocumentStanding,
+  readDocumentStanding,
+} from "../../versions/described-from";
 import {
   bumpDocumentRevision,
   documentVersionOn,
@@ -242,7 +248,11 @@ import {
   runSingleStatusMoveBeforeHooks,
   type SingleBeforeHookCall,
 } from "./single-before-update";
-import { recordSingleProvenance } from "./single-provenance";
+import {
+  dropRemovedRowsText,
+  recordSingleProvenance,
+  type SingleProvenanceDeps,
+} from "./single-provenance";
 import {
   checkSingleAccess,
   getSingleHookCollection,
@@ -878,6 +888,45 @@ export class SinglePublishAllService extends BaseService {
             message: `Single "${slug}" has no document to publish`,
           },
         };
+  }
+
+  /**
+   * The counters and drafts of the Single's document as they stand, for a description of its parts
+   * to say what it was made from. Its languages only where each moves on its own, as a move of
+   * them is judged.
+   *
+   * @experimental
+   */
+  async documentStanding(
+    slug: string,
+    id: string
+  ): Promise<DocumentStanding | undefined> {
+    const singleMeta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      slug,
+      this.logger,
+      { intent: "write" }
+    );
+    if (!singleMeta) return undefined;
+    const { companion, companionPublishable } = await this.resolveLifecycle(
+      slug,
+      singleMeta
+    );
+    const languagesTable = translationTableOf(companion, companionPublishable);
+    return readDocumentStanding(this.adapter, {
+      dialect: this.adapter.dialect,
+      ref: { scopeKind: "single", scopeSlug: slug, entryId: id },
+      table: singleMeta.tableName,
+      languages: languagesJudged(
+        languagesTable,
+        versionLanguagesFor({
+          localized: languagesTable !== null,
+          localization: this.localization,
+          locale: EVERY_LOCALE,
+        })
+      ),
+    });
   }
 
   /**
@@ -2701,6 +2750,53 @@ export class SinglePublishAllService extends BaseService {
     return componentSlug => schemas.get(componentSlug);
   }
 
+  /** What the provenance recording of this service's writes needs. */
+  private provenanceDeps(): SingleProvenanceDeps {
+    return {
+      adapter: this.adapter,
+      logger: this.logger,
+      defaultLocale: this.localization?.defaultLocale,
+    };
+  }
+
+  /**
+   * The structures a promoted language's overlays are the text of, by column: each container's
+   * that the pending change put on the main row (`main`), and the live row's for a container the
+   * change held only text of. Read only where an overlay written has no structure in `main`.
+   */
+  private async structuresHeld(
+    tx: TransactionContext,
+    tableName: string,
+    entryId: string,
+    main: Record<string, unknown>,
+    companion: CompanionSchema,
+    companionValues: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const missing = companion.localizedFields.filter(
+      field =>
+        field.sharedStructure !== undefined &&
+        Object.hasOwn(companionValues, field.column) &&
+        !Object.hasOwn(main, field.column)
+    );
+    if (missing.length === 0) return main;
+    const row = await tx.selectOne<Record<string, unknown>>(tableName, {
+      where: this.whereEq("id", entryId),
+    });
+    const structures: Record<string, unknown> = { ...main };
+    // Read under the key the row holds it by (`storedStructureOf`), and kept
+    // under its column, which the provenance record matches on. A structure
+    // not found is left out, so the overlay is recorded as it is rather than
+    // laid on nothing.
+    for (const { name, column } of missing) {
+      const structure =
+        row === null || row === undefined
+          ? undefined
+          : storedStructureOf(row, { field: name, column });
+      if (structure !== undefined) structures[column] = structure;
+    }
+    return structures;
+  }
+
   private async promotePendingChanges(
     tx: TransactionContext,
     plan: PublishPlan,
@@ -2721,6 +2817,8 @@ export class SinglePublishAllService extends BaseService {
     // So the type tags the drafts record come off at every depth.
     const componentFields = await this.componentFieldsOn(tx, plan.fieldConfigs);
 
+    // The languages whose pending text this publish has written so far.
+    const promotedLocales: string[] = [];
     for (const draft of pending) {
       // The pending change carries no lifecycle of its own; the statuses this
       // publish writes are the ones that count.
@@ -2737,6 +2835,23 @@ export class SinglePublishAllService extends BaseService {
         componentFields
       );
       delete main.status;
+      // The structures the row holds before this change goes live, of the
+      // containers it rewrites: what tells a component instance that changed
+      // type. Read only where the change puts a container's structure down.
+      const placed = companion
+        ? sharedStructuresIn(main, companion.localizedFields)
+        : [];
+      const before =
+        placed.length > 0
+          ? ((await tx.selectOne<Record<string, unknown>>(
+              singleMeta.tableName,
+              {
+                where: this.whereEq("id", existingDoc.id),
+                columns: placed.map(written => written.column),
+              }
+            )) ?? undefined)
+          : undefined;
+      if (draft.locale) promotedLocales.push(draft.locale);
 
       // A promoted draft's values as they are written: a field a Builder save left part-way holds
       // is refused before anything of the publish is written.
@@ -2758,6 +2873,20 @@ export class SinglePublishAllService extends BaseService {
           this.whereEq("id", existingDoc.id)
         );
       }
+      // A row the promoted structure removed takes its text with it in every
+      // language, as a save's removal does.
+      if (companion) {
+        await dropRemovedRowsText(this.provenanceDeps(), tx, {
+          slug: singleMeta.slug,
+          entryId: existingDoc.id,
+          companion,
+          written: placed,
+          before,
+          // Every language this publish has put down so far keeps its text:
+          // it is the new structure's already.
+          writtenLocales: promotedLocales,
+        });
+      }
       if (
         companion &&
         draft.locale &&
@@ -2773,24 +2902,28 @@ export class SinglePublishAllService extends BaseService {
           savedBy: plan.actor,
         });
         // The held draft's record of where its values came from goes live
-        // with them.
-        await recordSingleProvenance(
-          {
-            adapter: this.adapter,
-            logger: this.logger,
-            defaultLocale: this.localization?.defaultLocale,
-          },
-          tx,
-          {
-            slug: singleMeta.slug,
-            entryId: existingDoc.id,
-            locale: draft.locale,
-            values: companionValues,
-            localizedFields: companion.localizedFields,
-            savedBy: plan.actor,
-            promotesDraft: true,
-          }
-        );
+        // with them. A container's overlay is recorded with the structure the
+        // row now holds, as the draft's record was: this draft's, or the live
+        // one where the draft changed only its text.
+        await recordSingleProvenance(this.provenanceDeps(), tx, {
+          slug: singleMeta.slug,
+          entryId: existingDoc.id,
+          locale: draft.locale,
+          values: companionValues,
+          structures: await this.structuresHeld(
+            tx,
+            singleMeta.tableName,
+            existingDoc.id,
+            main,
+            companion,
+            companionValues
+          ),
+          localizedFields: companion.localizedFields,
+          languagesTable: companion.companionTableName,
+          companionTable: companion.table,
+          savedBy: plan.actor,
+          promotesDraft: true,
+        });
       }
       await this.promoteComponents(
         tx,

@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 
-import { appliedFilenames } from "./newest-event";
+import { appliedPluginModules } from "./newest-event";
 import { SchemaEventsRepository } from "./schema-events-repository";
 
 describe("SchemaEventsRepository — C3 additions", () => {
@@ -113,7 +113,7 @@ describe("SchemaEventsRepository — C3 additions", () => {
     const rows = await repo.findFileApplies("plugin:fx/001_x.sql");
     const rollback = rows.find(row => row.status === "rolled_back");
     expect(rollback!.startedAt.getTime()).toBe(applyAt.getTime() + 1);
-    expect(appliedFilenames(rows).has("plugin:fx/001_x.sql")).toBe(false);
+    expect(appliedPluginModules(rows).has("plugin:fx/001_x.sql")).toBe(false);
   });
 
   it("keeps an explicit startedAt as given", async () => {

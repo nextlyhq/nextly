@@ -171,6 +171,11 @@ const PROBES: Record<EntityOwnedData, (owner: Owner) => Promise<number>> = {
       scopeKind: owner.kind,
       scopeSlug: owner.slug,
     }),
+  translationSources: owner =>
+    rowsIn("nextly_translation_sources", {
+      scopeKind: owner.kind,
+      scopeSlug: owner.slug,
+    }),
   translationTransition: async owner =>
     (
       await readI18nTransitionState(
@@ -246,6 +251,19 @@ const SEEDS: Partial<Record<EntityOwnedData, (owner: Owner) => Promise<void>>> =
         valueFingerprint: "f",
         origin: "person",
         writtenAt: new Date(),
+      });
+    },
+    translationSources: async owner => {
+      await t().adapter.insert("nextly_translation_sources", {
+        id: randomUUID(),
+        scopeKind: owner.kind,
+        scopeSlug: owner.slug,
+        entryId: owner.entryId,
+        sourceLocale: "en",
+        fieldPath: "label",
+        fingerprint: "f",
+        content: { value: "hello" },
+        recordedAt: new Date(),
       });
     },
     translationTransition: async owner => {

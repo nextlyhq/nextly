@@ -251,7 +251,7 @@ describe("the user menu's theme and help", () => {
     for (const [name, href] of [
       ["Documentation", "https://nextlyhq.com/docs"],
       ["GitHub", "https://github.com/nextlyhq/nextly"],
-      ["Discord", "https://discord.gg/hJUg9AZMn"],
+      ["Discord", "https://discord.gg/t2qN6H5tMj"],
     ]) {
       const link = screen.getByRole("menuitem", { name });
       expect(link.getAttribute("href")).toBe(href);

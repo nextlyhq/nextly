@@ -49,7 +49,7 @@ function ownedElementKey(
 export type RetiredElementRow = OwnerRecord & { elementKind: ElementKind };
 
 /** Where each element kind lives on a table spec. */
-const LIVE_DIMENSION: Record<ElementKind, keyof TableSpec> = {
+export const LIVE_DIMENSION: Record<ElementKind, keyof TableSpec> = {
   column: "columns",
   index: "indexes",
   fk: "foreignKeys",

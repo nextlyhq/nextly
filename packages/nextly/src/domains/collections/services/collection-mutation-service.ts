@@ -294,6 +294,12 @@ import {
   translationProvenancePresent,
 } from "../../i18n/provenance/record-provenance";
 import {
+  forgetDocumentSources,
+  sourceReaderOf,
+  translationSourcesPresent,
+  type WriteSources,
+} from "../../i18n/provenance/source-text";
+import {
   configuredLocale,
   isValidLocale,
   resolveLocaleChain,
@@ -308,6 +314,7 @@ import {
   upsertCompanionRow,
   type CompanionSchema,
   type SharedStructureWritten,
+  withStructuresBefore,
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
@@ -346,6 +353,10 @@ import {
   type ChangedParts,
 } from "../../versions/changed-parts";
 import type { VersionsDbApi } from "../../versions/db-api";
+import {
+  type DocumentStanding,
+  readDocumentStanding,
+} from "../../versions/described-from";
 import {
   bumpDocumentRevision,
   changerColumns,
@@ -1495,6 +1506,34 @@ async function inChunks<T>(
  *
  * @internal
  */
+/**
+ * The keys of `payload` holding a repeater's or group's structure written exactly as `stored`
+ * holds it (`sameSharedStructure`): the structure a save of the text inside left as it was, which
+ * changes nothing the main row's version covers. Each found under its field name or its column,
+ * as the write and the stored row spell it. The one test both the single-entry and the batch
+ * update leave such a structure out of the main row's write by.
+ */
+function unchangedStructureKeys(
+  payload: Record<string, unknown>,
+  written: readonly SharedStructureWritten[],
+  stored: Record<string, unknown> | undefined
+): string[] {
+  const keys: string[] = [];
+  for (const { field, column } of written) {
+    const key = Object.hasOwn(payload, field)
+      ? field
+      : Object.hasOwn(payload, column)
+        ? column
+        : null;
+    if (key === null || stored === undefined) continue;
+    const before = Object.hasOwn(stored, field)
+      ? stored[field]
+      : stored[column];
+    if (sameSharedStructure(payload[key], before)) keys.push(key);
+  }
+  return keys;
+}
+
 export class GoingLiveRelationsBatch {
   private readonly entryIds: readonly string[];
   private readonly components = new Map<
@@ -6731,10 +6770,11 @@ export class CollectionMutationService extends BaseService {
         // What the draft said about where its values came from goes with
         // it; the live values keep their own record.
         if (draftLocale !== null && (await this.provenanceRecorded(tx))) {
-          await discardDraftProvenance(tx, {
-            ...discardedRef,
-            locale: draftLocale,
-          });
+          await discardDraftProvenance(
+            tx,
+            { ...discardedRef, locale: draftLocale },
+            (await this.sourceTextKept(tx)) ? tx : undefined
+          );
         }
         // The discarded part has nothing unpublished left to review: its
         // review closes with the draft, in this transaction.
@@ -14291,6 +14331,46 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The entry's counters and drafts as they stand, for a description of its parts to say what it
+   * was made from. Its languages only where each moves on its own, as a move of them is judged.
+   *
+   * @experimental
+   */
+  async entryStanding(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<DocumentStanding | undefined> {
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const companion = await this.fileManager.loadCompanionSchema(
+      params.collectionName
+    );
+    const languagesTable = translationTableOf(
+      companion,
+      companion?.hasStatus === true &&
+        (await isCompanionReady(this.adapter, companion.companionTableName))
+    );
+    return readDocumentStanding(this.adapter, {
+      dialect: this.dialect,
+      ref: {
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId: params.entryId,
+      },
+      table: collectionTableName(collection, params.collectionName),
+      languages: languagesJudged(
+        languagesTable,
+        versionLanguagesFor({
+          localized: languagesTable !== null,
+          localization: this.localization,
+          locale: EVERY_LOCALE,
+        })
+      ),
+    });
+  }
+
+  /**
    * What a publish or unpublish of chosen parts reads before it decides anything, on the pool:
    * the entry as stored (whether its shared part is live, and each stored language's own state and
    * values, never filled from another language) and the caller's refusal for each chosen language
@@ -14513,6 +14593,67 @@ export class CollectionMutationService extends BaseService {
       params.locale
     );
     return denied === null;
+  }
+
+  /**
+   * Whether this user may update the entry, decided without writing as
+   * {@link canUpdateEntry} decides it, and again of its row once a transaction
+   * has locked it: each filter the gate answered is matched there as an update
+   * matches it, so an entry moved out of one in between is not changed. For a
+   * write of something beside the document that holds the document's lock.
+   *
+   * @experimental
+   */
+  async judgeEntryUpdate(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    /** The language the write acts in, which a rule's filter is matched in. */
+    locale?: string;
+  }): Promise<{
+    allowed: boolean;
+    stillAllowed(tx: TransactionContext): Promise<boolean>;
+  }> {
+    const refused = {
+      allowed: false,
+      stillAllowed: () => Promise.resolve(false),
+    };
+    if (!(await this.storedEntry(params.collectionName, params.entryId))) {
+      return refused;
+    }
+    const gate = {
+      collectionName: params.collectionName,
+      operation: "update" as const,
+      entryId: params.entryId,
+      user: params.user,
+      // Never overridden: this exists to apply the document's rules.
+      overrideAccess: false,
+      authenticatedScope: params.authenticatedScope,
+    };
+    const access = await this.accessService.checkCollectionWrite(gate);
+    if (access.denied) return refused;
+    const schema = (await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    )) as Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
+    const filters: FilteredWriteCheck[] = [];
+    const outside = await this.addWriteFilter(filters, {
+      schema,
+      access,
+      params: gate,
+      locale: params.locale,
+    });
+    if (outside) return refused;
+    return {
+      allowed: true,
+      stillAllowed: async tx =>
+        (await this.refusalOutsideWriteFilters(
+          tx,
+          schema,
+          params.entryId,
+          filters
+        )) === null,
+    };
   }
 
   /**
@@ -15205,6 +15346,20 @@ export class CollectionMutationService extends BaseService {
             args.judge.holder
           )
         : undefined;
+    // The structures the main row holds before this write, of the containers
+    // it rewrites: what a prune tells a component instance that changed type
+    // by. Read only where the write puts a container's structure down.
+    const split = args.structuresFrom ?? args.translation;
+    const placed = (split?.sharedStructures ?? []).filter(written =>
+      Object.hasOwn(args.columns, written.column)
+    );
+    const structuresBefore =
+      placed.length > 0
+        ? await tx.selectOne<Record<string, unknown>>(args.tableName, {
+            where: this.whereEq("id", args.entryId),
+            columns: placed.map(written => written.column),
+          })
+        : undefined;
     await tx.update(
       args.tableName,
       args.columns,
@@ -15230,8 +15385,12 @@ export class CollectionMutationService extends BaseService {
     await this.pruneRemovedRowTranslations(
       tx,
       args.entryId,
-      args.structuresFrom ?? args.translation,
-      args.provenance?.collectionName
+      split,
+      args.provenance?.collectionName,
+      {
+        before: structuresBefore ?? undefined,
+        writtenLocale: args.translation?.writeLocale,
+      }
     );
     // The translation row as it was before this write, read by the claim:
     // for an overwrite, what it replaced.
@@ -15256,14 +15415,24 @@ export class CollectionMutationService extends BaseService {
         }
       | null
       | undefined,
-    collectionName: string | undefined
+    collectionName: string | undefined,
+    /**
+     * The main row before the write, which tells a component instance that
+     * changed type, and the language whose overlay the write put down itself.
+     */
+    context: {
+      before?: Record<string, unknown>;
+      writtenLocale?: string;
+    } = {}
   ): Promise<void> {
     if (!split?.sharedStructures?.length || !split.companionTable) return;
     await pruneOverlaysOfRemovedRows(tx, this.dialect, {
       companionTable: split.companionTable,
       companionTableName: split.companionTableName,
       parentId: entryId,
-      written: split.sharedStructures,
+      written: withStructuresBefore(split.sharedStructures, context.before),
+      writtenLocales:
+        context.writtenLocale === undefined ? [] : [context.writtenLocale],
     });
     if (collectionName === undefined || !(await this.provenanceRecorded(tx))) {
       return;
@@ -15335,6 +15504,12 @@ export class CollectionMutationService extends BaseService {
       defaultLocale: this.localization.defaultLocale,
       savedBy: args.savedBy,
       claims: provenance.claims,
+      sources: await this.writeSources(
+        tx,
+        provenance.collectionName,
+        args.entryId,
+        translation.writeLocale
+      ),
     });
   }
 
@@ -16862,6 +17037,78 @@ export class CollectionMutationService extends BaseService {
       this.logger,
       transactionTableProbe(this.adapter, tx)
     );
+  }
+
+  /**
+   * Whether the source text translations are made from is kept on `tx`: the
+   * table is there, asked as `provenanceRecorded` asks for its own.
+   */
+  private sourceTextKept(tx: TransactionContext): Promise<boolean> {
+    return translationSourcesPresent(
+      this.adapter,
+      this.logger,
+      transactionTableProbe(this.adapter, tx)
+    );
+  }
+
+  /**
+   * Where a write of entry `entryId` in `locale` reads the values its
+   * translations are made from, and keeps them, on its transaction. None for
+   * a write in the default language, which is made from no other.
+   */
+  private async writeSources(
+    tx: TransactionContext,
+    collectionName: string,
+    entryId: string,
+    locale: string
+  ): Promise<WriteSources | undefined> {
+    if (!this.localization || locale === this.localization.defaultLocale) {
+      return undefined;
+    }
+    const db = tx.getDrizzle();
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      db
+    );
+    if (!companion) return undefined;
+    return {
+      db: tx,
+      kept: await this.sourceTextKept(tx),
+      read: sourceReaderOf({
+        db,
+        companion,
+        // Remembered, never resolved here: the write resolved it, and a probe
+        // of a missing table aborts a PostgreSQL transaction.
+        readiness: cachedCompanionReadiness(
+          this.adapter,
+          companion.companionTableName
+        ),
+        entryId,
+      }),
+    };
+  }
+
+  /**
+   * Remove what is recorded about a deleted entry's translations, in every
+   * language and part, on the delete's transaction: where each value came
+   * from, and the source text it was made from.
+   */
+  private async forgetTranslationRecords(
+    tx: TransactionContext,
+    collectionName: string,
+    entryId: string
+  ): Promise<void> {
+    const document = {
+      scopeKind: "collection" as const,
+      scopeSlug: collectionName,
+      entryId,
+    };
+    if (await this.provenanceRecorded(tx)) {
+      await forgetDocumentProvenance(tx, document);
+    }
+    if (await this.sourceTextKept(tx)) {
+      await forgetDocumentSources(tx, document);
+    }
   }
 
   /**
@@ -19114,19 +19361,13 @@ export class CollectionMutationService extends BaseService {
           // A repeater's or group's structure written as it is stored changes nothing the main
           // row's version covers: its text went to the language's row. Left out of the UPDATE, so
           // a save of translated values alone moves only that language's counter, and a reader of
-          // another language keeps the version it holds (`sameSharedStructure`).
-          for (const written of localizedUpdate?.sharedStructures ?? []) {
-            if (
-              written.field in updatePayload &&
-              sameSharedStructure(
-                updatePayload[written.field],
-                (preUpdateRow as Record<string, unknown> | undefined)?.[
-                  written.field
-                ]
-              )
-            ) {
-              delete updatePayload[written.field];
-            }
+          // another language keeps the version it holds (`unchangedStructureKeys`).
+          for (const key of unchangedStructureKeys(
+            updatePayload,
+            localizedUpdate?.sharedStructures ?? [],
+            preUpdateRow as Record<string, unknown> | undefined
+          )) {
+            delete updatePayload[key];
           }
           // Keyed by SQL column name, as the adapter takes it; see
           // `writeRowAndTranslation`.
@@ -22384,13 +22625,11 @@ export class CollectionMutationService extends BaseService {
           });
           // And the record of where its translated values came from, in every
           // language and part.
-          if (await this.provenanceRecorded(tx)) {
-            await forgetDocumentProvenance(tx, {
-              scopeKind: "collection",
-              scopeSlug: params.collectionName,
-              entryId: params.entryId,
-            });
-          }
+          await this.forgetTranslationRecords(
+            tx,
+            params.collectionName,
+            params.entryId
+          );
 
           // The document's last history event: the whole document, every
           // language, is gone. Its history is kept for the activity log's window
@@ -24471,6 +24710,17 @@ export class CollectionMutationService extends BaseService {
           : { stale: false, claimed: false };
       if ("success" in languageJudged) return languageJudged;
 
+      // A structure written as stored changes nothing the main row's version
+      // covers, as on the single-entry update: left out of this UPDATE, so a
+      // batch edit of translated text alone keeps the document's version.
+      const liveData = { ...finalData };
+      for (const key of unchangedStructureKeys(
+        liveData,
+        localizedUpdate?.sharedStructures ?? [],
+        storedRow ?? existingEntry
+      )) {
+        delete liveData[key];
+      }
       // Skip the live-row UPDATE for a held edit; the pending change is stored
       // below instead.
       const [updated] = storeAsWorkingDraft
@@ -24479,7 +24729,7 @@ export class CollectionMutationService extends BaseService {
             tableName,
             {
               ...stripImmutableSystemFields(
-                finalData,
+                liveData,
                 "collection",
                 tableName,
                 fields
@@ -24494,7 +24744,7 @@ export class CollectionMutationService extends BaseService {
               ...mainRowBump(
                 {
                   updatePayload: stripImmutableSystemFields(
-                    finalData,
+                    liveData,
                     "collection",
                     tableName,
                     fields
@@ -24551,7 +24801,11 @@ export class CollectionMutationService extends BaseService {
             tx,
             entryId,
             localizedUpdate,
-            params.collectionName
+            params.collectionName,
+            {
+              before: storedRow ?? existingEntry,
+              writtenLocale: localizedUpdate.writeLocale,
+            }
           );
           // Where the values came from, beside them on this transaction.
           await this.recordWrittenProvenance(tx, {
@@ -25734,13 +25988,7 @@ export class CollectionMutationService extends BaseService {
         entryId,
       });
       // Where its translated values came from; see the single-delete path.
-      if (await this.provenanceRecorded(tx)) {
-        await forgetDocumentProvenance(tx, {
-          scopeKind: "collection",
-          scopeSlug: params.collectionName,
-          entryId,
-        });
-      }
+      await this.forgetTranslationRecords(tx, params.collectionName, entryId);
 
       // The document's last history event; see the single-delete path.
       await this.recordHistoryEvent(tx, params.collectionName, entryId, {

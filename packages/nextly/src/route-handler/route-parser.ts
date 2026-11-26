@@ -585,6 +585,58 @@ function parseRoleRoutes(
   return null;
 }
 
+/** One POST action on an entity's schema: the operation its permission is judged as, and its method. */
+type SchemaAction = { operation: ParsedRoute["operation"]; method: string };
+
+/** POST /api/collections/schema/{slug}/[action], by action. */
+const COLLECTION_SCHEMA_ACTIONS: Readonly<Record<string, SchemaAction>> = {
+  // Preview schema changes (dry-run diff).
+  preview: { operation: "single", method: "previewSchemaChanges" },
+  // What each other type would do to a saved field's values, as the Builder's type picker lists them.
+  "type-change-targets": { operation: "single", method: "typeChangeTargets" },
+  // Apply confirmed schema changes.
+  apply: { operation: "update", method: "applySchemaChanges" },
+};
+
+/** POST /api/singles/schema/[slug]/[action], by action: as a collection's, under the Single's names. */
+const SINGLE_SCHEMA_ACTIONS: Readonly<Record<string, SchemaAction>> = {
+  "type-change-targets": {
+    operation: "single",
+    method: "singleTypeChangeTargets",
+  },
+  preview: { operation: "single", method: "previewSingleSchemaChanges" },
+  apply: { operation: "update", method: "applySingleSchemaChanges" },
+};
+
+/**
+ * The route of a POST action on one entity's schema (`/schema/{slug}/{action}`) that `actions`
+ * names, with the entity's address in `param`; null for any other request. An action spelled like
+ * an inherited member (`toString`) is none of them.
+ */
+function schemaActionRoute(
+  service: ParsedRoute["service"],
+  actions: Readonly<Record<string, SchemaAction>>,
+  request: {
+    id: string | undefined;
+    subresource: string | undefined;
+    subId: string | undefined;
+    httpMethod: string;
+  },
+  target: { routeParams: Record<string, string>; param: string }
+): ParsedRoute | null {
+  const { id, subresource, subId, httpMethod } = request;
+  if (id !== "schema" || !subresource || subId === undefined) return null;
+  if (httpMethod !== "POST" || !Object.hasOwn(actions, subId)) return null;
+  const action = actions[subId];
+  target.routeParams[target.param] = subresource;
+  return {
+    service,
+    operation: action.operation,
+    method: action.method,
+    routeParams: target.routeParams,
+  };
+}
+
 function parseCollectionRoutes(
   id: string | undefined,
   subresource: string | undefined,
@@ -620,6 +672,18 @@ function parseCollectionRoutes(
     routeParams
   );
   if (bulkUpdateByQueryRoute) return bulkUpdateByQueryRoute;
+
+  // What changed in a translated field's source, and keeping its translation
+  // (more specific than getEntry/updateEntry)
+  const sourceReviewRoute = parseCollectionEntrySourceReviewRoute(
+    id,
+    subresource,
+    subId,
+    additionalParams,
+    httpMethod,
+    routeParams
+  );
+  if (sourceReviewRoute) return sourceReviewRoute;
 
   // Check for duplicate route (more specific)
   const duplicateRoute = parseCollectionEntryDuplicateRoute(
@@ -673,37 +737,15 @@ function parseCollectionRoutes(
     };
   }
 
-  // POST /api/collections/schema/{slug}/preview → preview schema changes (dry-run diff)
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "preview" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.collectionName = subresource;
-    return {
-      service: "collections",
-      operation: "single",
-      method: "previewSchemaChanges",
-      routeParams,
-    };
-  }
-
-  // POST /api/collections/schema/{slug}/apply → apply confirmed schema changes
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "apply" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.collectionName = subresource;
-    return {
-      service: "collections",
-      operation: "update",
-      method: "applySchemaChanges",
-      routeParams,
-    };
-  }
+  // POST /api/collections/schema/{slug}/{preview|type-change-targets|apply}: the Builder save's
+  // actions on one collection's schema (`COLLECTION_SCHEMA_ACTIONS`).
+  const schemaAction = schemaActionRoute(
+    "collections",
+    COLLECTION_SCHEMA_ACTIONS,
+    { id, subresource, subId, httpMethod },
+    { routeParams, param: "collectionName" }
+  );
+  if (schemaAction) return schemaAction;
 
   // GET /api/collections/schema/{slug}/delete-impact → what deleting the
   // collection takes with it, by plugin (a dry run the delete dialog asks)
@@ -962,6 +1004,64 @@ function parseCollectionEntryPublishAllRoute(
   }
 
   return null;
+}
+
+/**
+ * What one action on a translated field's source is, by its verb and URL token:
+ * reading what changed in it, admitted as a read of the document, and keeping
+ * the translation as it is, admitted as an update (@experimental).
+ */
+function sourceReviewAction(
+  httpMethod: string,
+  action: string | undefined
+): {
+  operation: OperationType;
+  entryMethod: string;
+  singleMethod: string;
+} | null {
+  if (httpMethod === "GET" && action === "source-change") {
+    return {
+      operation: "single",
+      entryMethod: "getEntrySourceChange",
+      singleMethod: "getSingleSourceChange",
+    };
+  }
+  if (httpMethod === "POST" && action === "keep-current") {
+    return {
+      operation: "update",
+      entryMethod: "keepEntryTranslation",
+      singleMethod: "keepSingleTranslation",
+    };
+  }
+  return null;
+}
+
+/**
+ * Parse the source review routes for a collection entry.
+ * GET /api/collections/{slug}/entries/{id}/source-change
+ * POST /api/collections/{slug}/entries/{id}/keep-current
+ */
+function parseCollectionEntrySourceReviewRoute(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  additionalParams: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (!id || subresource !== "entries" || !subId) return null;
+  // The route ends at the action: a path that goes on past it names nothing here.
+  if (additionalParams.length !== 1) return null;
+  const action = sourceReviewAction(httpMethod, additionalParams[0]);
+  if (action === null) return null;
+  routeParams.collectionName = id;
+  routeParams.entryId = subId;
+  return {
+    service: "collections",
+    operation: action.operation,
+    method: action.entryMethod,
+    routeParams,
+  };
 }
 
 /**
@@ -1552,6 +1652,30 @@ function parsePermissionRoutes(
   return null;
 }
 
+/**
+ * Parse the source review routes for a Single.
+ * GET /api/singles/{slug}/source-change
+ * POST /api/singles/{slug}/keep-current
+ */
+function parseSingleSourceReviewRoute(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (!id || subId) return null;
+  const action = sourceReviewAction(httpMethod, subresource);
+  if (action === null) return null;
+  routeParams.slug = id;
+  return {
+    service: "singles",
+    operation: action.operation,
+    method: action.singleMethod,
+    routeParams,
+  };
+}
+
 function parseSingleRoutes(
   id: string | undefined,
   subresource: string | undefined,
@@ -1684,37 +1808,15 @@ function parseSingleRoutes(
     };
   }
 
-  // POST /api/singles/schema/[slug]/preview → preview single schema changes (dry-run diff)
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "preview" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "singles",
-      operation: "single",
-      method: "previewSingleSchemaChanges",
-      routeParams,
-    };
-  }
-
-  // POST /api/singles/schema/[slug]/apply → apply confirmed single schema changes
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "apply" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "singles",
-      operation: "update",
-      method: "applySingleSchemaChanges",
-      routeParams,
-    };
-  }
+  // POST /api/singles/schema/[slug]/{type-change-targets|preview|apply}: the Builder save's actions
+  // on one Single's schema (`SINGLE_SCHEMA_ACTIONS`).
+  const schemaAction = schemaActionRoute(
+    "singles",
+    SINGLE_SCHEMA_ACTIONS,
+    { id, subresource, subId, httpMethod },
+    { routeParams, param: "slug" }
+  );
+  if (schemaAction) return schemaAction;
 
   // POST /api/singles/schema/address-check → what creating a Single under an address would
   // answer, asked before the create. Under the singles service, so the Single create's own
@@ -1780,7 +1882,9 @@ function parseComponentRoutes(
   }
 
   // GET /api/field-groups/[slug]/used-by → the fields that place the field
-  // group, and what holds each. Matched before the bare slug routes below,
+  // group, and what holds each; with `?through=field-groups`, then each holder
+  // reaching it through other field groups, with the chain (`via`). The query
+  // travels as a route param. Matched before the bare slug routes below,
   // which do not look at a subresource and would answer this as the field
   // group itself.
   if (id && subresource === "used-by" && !subId && httpMethod === "GET") {
@@ -1838,6 +1942,12 @@ const COMPONENT_SCHEMA_ROUTES: Readonly<Record<string, ComponentRoute>> = {
   "POST preview": {
     operation: "single",
     method: "previewComponentSchemaChanges",
+  },
+  // POST /api/field-groups/schema/[slug]/type-change-targets → the Builder type picker's answer for
+  // a saved field, as a collection's
+  "POST type-change-targets": {
+    operation: "single",
+    method: "componentTypeChangeTargets",
   },
   // POST /api/field-groups/schema/[slug]/apply → apply confirmed component schema changes
   "POST apply": { operation: "update", method: "applyComponentSchemaChanges" },
@@ -3722,13 +3832,14 @@ export function parseRestRoute(
     );
     if (versionResult) return versionResult;
 
-    const result = parseSingleRoutes(
-      id,
-      subresource,
-      subId,
-      httpMethod,
-      routeParams
-    );
+    const result =
+      parseSingleSourceReviewRoute(
+        id,
+        subresource,
+        subId,
+        httpMethod,
+        routeParams
+      ) ?? parseSingleRoutes(id, subresource, subId, httpMethod, routeParams);
     if (result) return result;
   }
 

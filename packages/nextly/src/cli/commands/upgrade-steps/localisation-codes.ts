@@ -36,6 +36,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { LANGUAGES_TABLE } from "../../../schemas/languages/table-name";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 import { TRANSLATION_PROVENANCE_TABLE } from "../../../schemas/translation-provenance/table-name";
+import { TRANSLATION_SOURCES_TABLE } from "../../../schemas/translation-sources/table-name";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import {
@@ -160,6 +161,13 @@ const KEYED_TARGETS: readonly KeyedTarget[] = [
     table: TRANSLATION_PROVENANCE_TABLE,
     same: ["scope_kind", "scope_slug", "entry_id", "part_state", "field_path"],
     language: "locale",
+    spelled: asWritten,
+  },
+  // One row per version of one field's source text in a language of a document.
+  {
+    table: TRANSLATION_SOURCES_TABLE,
+    same: ["scope_kind", "scope_slug", "entry_id", "field_path", "fingerprint"],
+    language: "source_locale",
     spelled: asWritten,
   },
   // One language per code in the Settings registry, whatever else its rows hold.
@@ -439,6 +447,7 @@ export async function convertLanguageCodes(
     // The tables that record a language and nothing computed from it.
     for (const [table, columns] of [
       [TRANSLATION_PROVENANCE_TABLE, ["locale", "sourceLocale"]],
+      [TRANSLATION_SOURCES_TABLE, ["sourceLocale"]],
       [I18N_ARCHIVE_TABLE, ["locale"]],
       [MEDIA_USAGE_TABLE, ["locale"]],
       [PREVIEW_LINKS_TABLE, ["locale"]],

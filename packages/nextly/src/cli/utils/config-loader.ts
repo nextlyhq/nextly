@@ -50,7 +50,7 @@ import {
   setActivePostgresSchema,
 } from "../../domains/schema/services/postgres-schema";
 import { assertBuilderDefinitionsKept } from "../../domains/schema/ui-schema/builder-definitions";
-import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
+import { readUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
 import { publishWebhookEventTypes } from "../../domains/webhooks/event-type-registry";
 import { NextlyError, describeError } from "../../errors/index";
@@ -90,7 +90,10 @@ import {
   CONFIG_SEARCH_DIRS,
   findConfigFile,
 } from "../../shared/lib/config-file";
-import { configurationProblems } from "../../shared/lib/config-problems";
+import {
+  builderDefinitionProblems,
+  configurationProblems,
+} from "../../shared/lib/config-problems";
 import { consoleLogger } from "../../shared/types";
 
 import { bundleAndRequire } from "./config-bundler";
@@ -103,20 +106,57 @@ import { bundleAndRequire } from "./config-bundler";
 const UNREAD_BUILDER_ENTITIES: BuilderEntities = Object.freeze({});
 
 /**
+ * Why each definition file read as `UNREAD_BUILDER_ENTITIES` could not be read, by the object
+ * returned for it: a command that reads the entities reports it with the configuration's problems.
+ */
+const unreadReasons = new WeakMap<BuilderEntities, unknown>();
+
+/** The empty entities standing for a definition file that is not there. */
+const absentDefinitions = new WeakSet<BuilderEntities>();
+
+/** Whether `entities` came from a definition file, one that could not be read included. */
+function hasDefinitionFile(entities: BuilderEntities | undefined): boolean {
+  return entities !== undefined && !absentDefinitions.has(entities);
+}
+
+/** Whether `entities` stands for a definition file that could not be read. */
+function isUnread(entities: BuilderEntities): boolean {
+  return entities === UNREAD_BUILDER_ENTITIES || unreadReasons.has(entities);
+}
+
+/**
+ * What a problem in the Builder's definitions does for `options`: `builderDefinitions` where it is
+ * given, else refused where the caller refuses a missing configuration and warned of otherwise.
+ */
+function builderPolicyOf(options: LoadConfigOptions): "refuse" | "warn" {
+  return (
+    options.builderDefinitions ??
+    (options.missing === "refuse" ? "refuse" : "warn")
+  );
+}
+
+/**
  * The Builder's entities from the app's ui-schema file, empty when there is none. A malformed file
  * is surfaced by migrate:create and migrate:check, which load it again; loading the configuration
  * for any other command does not fail on it, and gets `UNREAD_BUILDER_ENTITIES`.
  */
 async function readBuilderEntities(
   projectRoot: string,
-  uiSchemaFile: Parameters<typeof loadUiSchema>[0]["uiSchemaFile"]
+  uiSchemaFile: Parameters<typeof readUiSchema>[0]["uiSchemaFile"]
 ): Promise<BuilderEntities> {
   try {
-    return manifestToBuilderEntities(
-      await loadUiSchema({ projectRoot, uiSchemaFile })
-    );
-  } catch {
-    return UNREAD_BUILDER_ENTITIES;
+    const { manifest, exists } = await readUiSchema({
+      projectRoot,
+      uiSchemaFile,
+    });
+    const entities = manifestToBuilderEntities(manifest);
+    if (!exists) absentDefinitions.add(entities);
+    return entities;
+  } catch (error) {
+    // Its own object, so the reason travels with it (`unreadReasons`).
+    const unread: BuilderEntities = Object.freeze({});
+    unreadReasons.set(unread, error);
+    return unread;
   }
 }
 
@@ -133,7 +173,7 @@ async function refuseLostBuilderDefinitions(
   config: SanitizedNextlyConfig,
   builderEntities: BuilderEntities
 ): Promise<void> {
-  if (builderEntities === UNREAD_BUILDER_ENTITIES) return;
+  if (isUnread(builderEntities)) return;
   let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
     latest = await loadLatestSnapshot(
@@ -168,6 +208,79 @@ const UNKNOWN_TARGET_CODES: ReadonlySet<string> = new Set([
 /** Whether `error` refuses a target nothing declares, which may be an entity the file lost. */
 function namesAnUnknownTarget(error: unknown): boolean {
   return NextlyError.is(error) && UNKNOWN_TARGET_CODES.has(error.code);
+}
+
+/**
+ * Refuses a definition file that could not be read, at the file, where a plugin's target is
+ * otherwise about to be refused as one nothing declares: the file may declare it. Only there, as
+ * that load is refused either way. Without a plugin the target is not judged, so the gate reports
+ * the file by the caller's policy and a running site goes on.
+ */
+function refuseUnreadDefinitions(
+  builderEntities: BuilderEntities,
+  config: SanitizedNextlyConfig,
+  configPath: string
+): void {
+  if (!isUnread(builderEntities)) return;
+  throw NextlyError.validation({
+    errors: unreadDefinitionProblems(
+      builderEntities,
+      config.db?.uiSchemaFile ?? "ui-schema.json"
+    ),
+    logContext: { configPath, reason: "config-invalid" },
+  });
+}
+
+/**
+ * The Builder's problems a load reports, by `builderPolicyOf`: every one where it refuses them,
+ * none where it warns, each then logged so a running site goes on. A file that could not be read
+ * is that one problem: its entries were not read to be judged.
+ */
+function builderProblemsFor(
+  entities: BuilderEntities,
+  code: Parameters<typeof builderDefinitionProblems>[1],
+  uiSchemaFile: string | undefined,
+  options: LoadConfigOptions
+): ReturnType<typeof builderDefinitionProblems> {
+  const definitionFile = uiSchemaFile ?? "ui-schema.json";
+  const found = isUnread(entities)
+    ? unreadDefinitionProblems(entities, definitionFile)
+    : builderDefinitionProblems(entities, code, definitionFile);
+  if (builderPolicyOf(options) === "refuse") return found;
+  const lines = found.map(
+    problem =>
+      `[Nextly] Problem in the Builder's definitions at ${problem.path}: ${problem.message}`
+  );
+  // A development start loads more than once, and each save loads again: the same problems are
+  // said once, and changed ones anew.
+  const said = lines.join("\n");
+  const root = resolve(options.cwd ?? process.cwd());
+  if (builderWarningSaid.get(root) !== said) {
+    for (const line of lines) consoleLogger.warn(line);
+  }
+  builderWarningSaid.set(root, said);
+  return [];
+}
+
+/** What was last warned of in each project's Builder definitions, by its root. */
+const builderWarningSaid = new Map<string, string>();
+
+/** The problem an unreadable definition file is, at the file, in the shared report's shape. */
+function unreadDefinitionProblems(
+  unread: BuilderEntities,
+  definitionFile: string
+): ReturnType<typeof builderDefinitionProblems> {
+  const reason = unreadReasons.get(unread);
+  return [
+    {
+      path: definitionFile.replace(/^\.\//, ""),
+      code: NextlyError.is(reason) ? reason.code : "NEXTLY_UI_SCHEMA_INVALID",
+      message: NextlyError.is(reason)
+        ? reason.publicMessage
+        : "The Builder's definition file could not be read.",
+      declaredByDefine: false,
+    },
+  ];
 }
 
 /** Builder collection slugs (the only valid relationTo targets among Builder entities). */
@@ -310,6 +423,14 @@ export interface LoadConfigOptions {
    * @default "defaults"
    */
   missing?: "defaults" | "refuse";
+
+  /**
+   * What a problem in the Builder's definitions (`builderDefinitionProblems`) does: `"refuse"`
+   * reports it with the configuration's, and the load is refused; `"warn"` logs each and the load
+   * goes on, as for a running site. By default it refuses where the caller refuses a missing
+   * configuration, as a command that reads the app's entities does, and warns otherwise.
+   */
+  builderDefinitions?: "refuse" | "warn";
 }
 
 /**
@@ -383,6 +504,12 @@ export interface LoadConfigResult {
    * a transformer that adds a plugin or a collection adds it twice.
    */
   appConfig: SanitizedNextlyConfig;
+
+  /**
+   * Whether a Builder definition file was there to judge, one that could not be read included. A
+   * start whose reload judged none says what its stored definitions hold itself.
+   */
+  judgedDefinitionFile?: boolean;
 }
 
 /**
@@ -391,6 +518,8 @@ export interface LoadConfigResult {
 export type ConfigChangeCallback = (result: LoadConfigResult) => void;
 
 let cachedConfig: LoadConfigResult | null = null;
+/** What the cached load did with a problem in the Builder's definitions (`builderPolicyOf`). */
+let cachedBuilderPolicy: "refuse" | "warn" = "warn";
 
 let fileWatcher: FSWatcher | null = null;
 
@@ -612,6 +741,92 @@ function asCause(error: unknown): Error | undefined {
     : undefined;
 }
 
+/**
+ * Refuses the configuration's problems, and the Builder's definitions' beside them
+ * (`builderProblemsFor`), every one named rather than the first.
+ */
+async function refuseConfigurationProblems(args: {
+  /** The app's own entities, as the plugins' setups left them, where the app declared them. */
+  appConfig: Parameters<typeof configurationProblems>[0];
+  config: SanitizedNextlyConfig;
+  /** What a road above already read of the Builder's definitions, else read here. */
+  builderEntities: BuilderEntities | undefined;
+  cwd: string;
+  configPath: string;
+  options: LoadConfigOptions;
+}): Promise<void> {
+  const builderEntities =
+    args.builderEntities ??
+    (await readBuilderEntities(args.cwd, args.config.db?.uiSchemaFile));
+  const problems: ReturnType<typeof configurationProblems> = [
+    ...configurationProblems(args.appConfig, args.config),
+    // The Builder's definitions, by the same rules: reported with the configuration's for a
+    // command that reads the entities, warned of for a running site.
+    ...builderProblemsFor(
+      builderEntities,
+      args.config,
+      args.config.db?.uiSchemaFile,
+      args.options
+    ),
+  ];
+  if (problems.length > 0) {
+    throw NextlyError.validation({
+      errors: problems,
+      logContext: { configPath: args.configPath, reason: "config-invalid" },
+    });
+  }
+}
+
+/**
+ * The load where no configuration file is found and the caller takes the defaults: the default
+ * configuration, with the Builder's definitions beside it judged.
+ */
+async function loadDefaultConfig(
+  cwd: string,
+  options: LoadConfigOptions
+): Promise<LoadConfigResult> {
+  debugLog(options, "No config file found, using default config");
+  // Cleared here too: a long-lived process that had loaded a plugin config
+  // and then lost its config file would otherwise keep the removed plugins'
+  // types registered, and Builder saves would go on recognizing them and
+  // running their `validate` and `validateOptions`.
+  const previousFieldTypes = snapshotFieldTypes();
+  clearFieldTypes();
+  const appConfig = defineConfig({});
+  // The Builder's definitions beside the default configuration are judged as they are beside a
+  // configuration file, once the registry holds no plugin's field type.
+  const builderEntities = await readBuilderEntities(
+    cwd,
+    appConfig.db?.uiSchemaFile
+  );
+  const builderProblems = builderProblemsFor(
+    builderEntities,
+    appConfig,
+    appConfig.db?.uiSchemaFile,
+    options
+  );
+  if (builderProblems.length > 0) {
+    // A refused load installs nothing: the running configuration keeps the field types it had.
+    restoreFieldTypes(previousFieldTypes);
+    throw NextlyError.validation({
+      errors: builderProblems,
+      logContext: { configPath: undefined, reason: "config-invalid" },
+    });
+  }
+  return {
+    config: appConfig,
+    appConfig,
+    configPath: undefined,
+    projectRoot: cwd,
+    dependencies: [],
+    pluginConsent: NO_PLUGIN_CONSENT,
+    // Empty, matching the clear above: work pinned to this result must not
+    // resolve plugin types a later config happens to register.
+    fieldTypes: snapshotFieldTypes(),
+    judgedDefinitionFile: hasDefinitionFile(builderEntities),
+  };
+}
+
 async function loadConfigInternal(
   options: LoadConfigOptions
 ): Promise<LoadConfigResult> {
@@ -640,26 +855,7 @@ async function loadConfigInternal(
     });
   }
 
-  if (!configPath) {
-    debugLog(options, "No config file found, using default config");
-    // Cleared here too: a long-lived process that had loaded a plugin config
-    // and then lost its config file would otherwise keep the removed plugins'
-    // types registered, and Builder saves would go on recognizing them and
-    // running their `validate` and `validateOptions`.
-    clearFieldTypes();
-    const appConfig = defineConfig({});
-    return {
-      config: appConfig,
-      appConfig,
-      configPath: undefined,
-      projectRoot: cwd,
-      dependencies: [],
-      pluginConsent: NO_PLUGIN_CONSENT,
-      // Empty, matching the clear above: work pinned to this result must not
-      // resolve plugin types a later config happens to register.
-      fieldTypes: snapshotFieldTypes(),
-    };
-  }
+  if (!configPath) return loadDefaultConfig(cwd, options);
 
   if (!existsSync(configPath)) {
     throw new NextlyError({
@@ -764,6 +960,8 @@ async function loadConfigInternal(
     clearFieldTypes();
 
     // The Builder's field groups, set by the plugin block, which reads them anyway.
+    // The Builder's entities, once a road below has read them, judged with the configuration's.
+    let builderEntitiesRead: BuilderEntities | undefined;
     let builderFieldGroups:
       | {
           stored: NonNullable<BuilderEntities["components"]>;
@@ -856,6 +1054,7 @@ async function loadConfigInternal(
         cwd,
         config.db?.uiSchemaFile
       );
+      builderEntitiesRead = builderEntities;
       // One slug, one kind, now that the Builder's entities are readable: the
       // fold could not see them, and the runtime boot makes the same check
       // against the registry rows (register.ts), so the two paths agree (D50).
@@ -879,6 +1078,7 @@ async function loadConfigInternal(
         // refuse it, so the fix named is restoring the file, not creating the target. Only a
         // target nothing declares can be that entity; any other refusal is reported as itself.
         if (namesAnUnknownTarget(error)) {
+          refuseUnreadDefinitions(builderEntities, config, configPath);
           await refuseLostBuilderDefinitions(cwd, config, builderEntities);
         }
         throw error;
@@ -920,6 +1120,7 @@ async function loadConfigInternal(
         cwd,
         config.db?.uiSchemaFile
       );
+      builderEntitiesRead = builderEntities;
       const builderSlugs = new Set(builderCollectionSlugs(builderEntities));
       const unknownTarget = collectUnresolvedRelationTargets(
         config as unknown as NextlyServiceConfig
@@ -946,13 +1147,14 @@ async function loadConfigInternal(
     // field's type is judged against them.
     // The app's own entities, in the form the plugins' setups left them, placed where the app
     // declared them; a plugin's contributions keep the checks of their own type.
-    const problems = configurationProblems(appConfig, config);
-    if (problems.length > 0) {
-      throw NextlyError.validation({
-        errors: problems,
-        logContext: { configPath, reason: "config-invalid" },
-      });
-    }
+    await refuseConfigurationProblems({
+      appConfig,
+      config,
+      builderEntities: builderEntitiesRead,
+      cwd,
+      configPath,
+      options,
+    });
 
     // After the configuration's problems, among which a cycle in its own field groups is listed.
     // Field groups placed in a cycle are judged over code and the Builder's field groups whether
@@ -986,6 +1188,7 @@ async function loadConfigInternal(
       // Captured after registration, so it holds exactly what this config
       // contributed rather than whatever the live set becomes later.
       fieldTypes: snapshotFieldTypes(),
+      judgedDefinitionFile: hasDefinitionFile(builderEntitiesRead),
     };
   } catch (error) {
     // The load owns the registry from the clear above until it returns, so
@@ -1103,10 +1306,16 @@ export async function loadConfig(
   // cached default, given where no configuration file was found, is no answer to a caller that
   // refuses to act without one: it is asked again, and refused.
   const wanted = configFileFor(options);
+  // Nor is one loaded where the Builder's problems were only warned of, for a caller that refuses
+  // them. Nor one from another project root: two projects with no configuration file share the
+  // default, but not their definition files.
   const cachedElsewhere =
     cachedConfig !== null &&
     (cachedConfig.configPath !== wanted ||
-      (wanted === undefined && options.missing === "refuse"));
+      cachedConfig.projectRoot !== resolve(options.cwd ?? process.cwd()) ||
+      (wanted === undefined && options.missing === "refuse") ||
+      (builderPolicyOf(options) === "refuse" &&
+        cachedBuilderPolicy !== "refuse"));
   if (cachedConfig && !options.watch && !cachedElsewhere) {
     debugLog(options, "Returning cached config");
     return cachedConfig;
@@ -1119,6 +1328,7 @@ export async function loadConfig(
     const loaded = await loadConfigInternal(options);
 
     cachedConfig = loaded;
+    cachedBuilderPolicy = builderPolicyOf(options);
     // This config is now the installed one, so its registry is what a
     // superseded reload has to put back if it finishes after the swap.
     markInstalledFieldTypes(loaded);

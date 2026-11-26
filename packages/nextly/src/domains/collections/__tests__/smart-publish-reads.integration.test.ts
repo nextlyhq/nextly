@@ -20,6 +20,9 @@
  * put it live unannounced), and an overview that moves on a pending save (the notice would blame
  * a publish for what a save did) or not at all.
  *
+ * A hook that changes a shared field on a save of one language's text is why the editor stores its
+ * unsaved work before it decides: only the stored state shows that change, and it does.
+ *
  * A first publish taking the shared part with it, which the choice shows as fixed, is held by
  * `publish-parts.integration.test.ts` ("puts Spanish live before English, with the shared part,
  * and says the shared part was added").
@@ -37,6 +40,8 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { LocaleTranslationMeta } from "../../i18n/companion-join";
 
 const STORIES = "stories";
+/** A hook of its own sets the shared tagline from the title. */
+const HOOKED = "hooked_stories";
 
 let handle: TestNextly | undefined;
 
@@ -63,6 +68,26 @@ async function boot(dialect: TestDialect): Promise<CollectionsHandler> {
           // Shared by every language.
           text({ name: "tagline", localized: false }),
         ],
+      }),
+      defineCollection({
+        slug: HOOKED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "tagline", localized: false }),
+        ],
+        hooks: {
+          beforeChange: [
+            ({ data }) => {
+              const { title } = data as { title?: unknown };
+              return typeof title === "string"
+                ? { ...data, tagline: `About ${title}` }
+                : data;
+            },
+          ],
+        },
       }),
     ],
   });
@@ -202,6 +227,12 @@ async function liveInEnglishAndSpanish(
   return id;
 }
 
+/** What a description says a publish does, without what it was made from, which it alone answers. */
+function whatItDoes<T extends object>(described: T): T {
+  expect(described).toHaveProperty("_rev");
+  return { ...described, _rev: undefined, marks: undefined };
+}
+
 describe.each(getConfiguredTestDialects())(
   "what the editor's publish reads, against what the publish does (%s)",
   dialect => {
@@ -291,7 +322,7 @@ describe.each(getConfiguredTestDialects())(
 
       // The choice as it opens: English and the shared fields, done as described.
       const applied = await publish(id, ["en"], true);
-      expect(applied).toEqual(described);
+      expect(applied).toEqual(whatItDoes(described));
 
       // The shared change reached readers of every language; Spanish's own change did not go.
       expect((await liveRead(stories, id, "en")).tagline).toBe(
@@ -310,8 +341,56 @@ describe.each(getConfiguredTestDialects())(
         { locale: "es", outcome: "goes-live-with-pending-change" },
       ]);
       const spanishDone = await publish(id, ["es"], false);
-      expect(spanishDone).toEqual(spanishNext);
+      expect(spanishDone).toEqual(whatItDoes(spanishNext));
       expect((await liveRead(stories, id, "es")).title).toBe("Hola otra vez");
+    }, 120_000);
+
+    it("tells the editor of a shared change a hook made from a save of English's text alone, before it is live", async () => {
+      const stories = await boot(dialect);
+      const created = await stories.createEntry(
+        {
+          collectionName: HOOKED,
+          overrideAccess: true,
+          locale: "en",
+          user: { id: "ann" },
+        },
+        { title: "Hello", status: "published" }
+      );
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const id = (created.data as { id: string }).id;
+      const read = async (options: Record<string, unknown>) => {
+        const res = await stories.getEntry({
+          collectionName: HOOKED,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+          ...options,
+        });
+        expect(res.success, JSON.stringify(res)).toBe(true);
+        return res.data as Record<string, unknown>;
+      };
+      const editorReads = () =>
+        read({ includeWorkingDraft: true, status: "all" });
+      expect((await read({ status: "published" })).tagline).toBe("About Hello");
+
+      // The editor stores its edit to the title, and to nothing else.
+      const saved = await stories.updateEntry(
+        {
+          collectionName: HOOKED,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+          user: { id: "ann" },
+        },
+        { title: "Hello again", _overwrite: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+
+      const editor = await editorReads();
+      expect(editor.title).toBe("Hello again");
+      expect(editor.tagline).toBe("About Hello again");
+      expect(editor._sharedChangesPending).toBe(true);
+      expect((await read({ status: "published" })).tagline).toBe("About Hello");
     }, 120_000);
   }
 );

@@ -36,6 +36,7 @@ import {
   Label,
 } from "@admin/components/ui";
 import {
+  useDescribePartsAgain,
   usePublishParts,
   usePublishPartsDescription,
   type PartsRequest,
@@ -45,9 +46,13 @@ import {
   apiErrorMessage,
   validationIssues,
 } from "@admin/lib/api/parseApiError";
-import { refusedAsChangedSince } from "@admin/lib/document-version";
+import {
+  refusedAsChangedSince,
+  staleVersionOf,
+} from "@admin/lib/document-version";
 import type { ShownCopy } from "@admin/lib/document-version";
 import type {
+  PartMarks,
   PartsLanguageOutcome,
   PublishPartsDirection,
   PublishPartsResult,
@@ -58,6 +63,7 @@ import type { PartReview } from "@admin/types/workflows";
 import { useReturnFocusOnClose } from "../../releases/dialog-opener";
 import type { LanguageLabel } from "../publishAllOutcomes";
 
+import { changedSinceDescribed, sameMarks } from "./described-changes";
 import type { TranslationOverview } from "./out-of-date";
 import {
   movedParts,
@@ -76,6 +82,7 @@ import {
   type PartsChoice,
 } from "./publish-parts-choice";
 import {
+  describedPastReview,
   readyProblems,
   refusedForApprovalAlone,
   type ReadyProblem,
@@ -225,6 +232,11 @@ interface DescribedParts {
   describedPastReview: boolean;
   /** Why the server refuses the request, if it does. */
   error: Error | null;
+  /**
+   * What the description of the request was made from: its own, or, where it was refused for
+   * want of approval alone, what the refusal says it was made from.
+   */
+  from: { _rev?: string; marks?: PartMarks } | undefined;
 }
 
 /** Whether what publishing every language would do is asked: for a publish among languages. */
@@ -300,6 +312,7 @@ function useDescribedParts({
       answered &&
       (!description.isError || refusedForApprovalAlone(description.error)),
     error: description.error,
+    from: answerOf(description) ?? describedPastReview(description.error),
   };
 }
 
@@ -408,6 +421,7 @@ function usePartsMove({
   onRefused,
   choice,
   request,
+  parts,
 }: Pick<
   PublishPartsDialogProps,
   | "target"
@@ -423,18 +437,33 @@ function usePartsMove({
   choice: PartsChoice;
   /** What is sent: the choice, less what is not offered. */
   request: PartsChoice;
+  /** The parts as the server describes them, and so what is sent was made of. */
+  parts: DescribedParts;
 }): {
   confirm: (withoutReview?: string) => Promise<void>;
   pending: boolean;
   error: Error | null;
+  /** The marks of the description a refused move was made of, where it had one. */
+  refusedMarks: PartMarks | undefined;
+  /** The last refusal no longer holds the parts it was of. */
+  forgetRefusal: () => void;
 } {
   const move = usePublishParts({ target, direction, shown });
-  const [refusedChoice, setRefusedChoice] = useState<PartsChoice | null>(null);
+  const [refused, setRefused] = useState<{
+    choice: PartsChoice;
+    marks: PartMarks | undefined;
+  } | null>(null);
   const confirm = async (withoutReview?: string): Promise<void> => {
+    // As they were when the person confirmed them, past a review the server refuses to describe
+    // too: it says what it described them from.
+    // A server that said neither leaves what publishing every language was described from.
+    const made = parts.from;
+    const described = made?._rev ?? parts.everyLanguageAnswer?._rev;
     try {
       const done = await move.mutateAsync({
         locales: request.locales,
         shared: request.shared,
+        ...(described === undefined ? {} : { described }),
         ...(withoutReview === undefined
           ? {}
           : { withoutReview: { reason: withoutReview } }),
@@ -459,16 +488,17 @@ function usePartsMove({
       onOpenChange(false);
     } catch {
       // Shown in the dialog beside the parts it names; the dialog stays open, back on the parts.
-      setRefusedChoice(choice);
+      setRefused({ choice, marks: made?.marks });
       onRefused();
     }
   };
-  const ofThisChoice =
-    refusedChoice !== null && sameParts(refusedChoice, choice);
+  const ofThisChoice = refused !== null && sameParts(refused.choice, choice);
   return {
     confirm,
     pending: move.isPending,
     error: ofThisChoice ? move.error : null,
+    refusedMarks: ofThisChoice ? refused.marks : undefined,
+    forgetRefusal: () => setRefused(null),
   };
 }
 
@@ -511,6 +541,53 @@ function generalRefusals(
   );
 }
 
+/** A refusal because the document changed, where what changed is not known. */
+const CHANGED_SINCE_OPENED =
+  "This document changed since you opened it. Review the latest version, then try again.";
+
+/**
+ * What a move refused because the document changed says: what changed, once the parts are described
+ * as they are now and a mark of one differs from the description the move was made of, or the
+ * server itself refused it; null for any other refusal.
+ */
+function changedSentence(
+  refusal: Error | null,
+  {
+    before,
+    parts,
+    direction,
+    labelOf,
+  }: {
+    before: PartMarks | undefined;
+    parts: DescribedParts;
+    direction: PublishPartsDirection;
+    labelOf: LanguageLabel;
+  }
+): string | null {
+  if (refusal === null || !refusedAsChangedSince(refusal)) return null;
+  // Said once the parts are described as they are now.
+  if (parts.checking) return null;
+  const now = parts.describedPastReview ? parts.from?.marks : undefined;
+  return before !== undefined &&
+    now !== undefined &&
+    movedSinceDescribed(refusal, before, now)
+    ? changedSinceDescribed({ before, now, direction, labelOf })
+    : CHANGED_SINCE_OPENED;
+}
+
+/**
+ * Whether what refused a move changed since the parts were described. A move held back from the
+ * editor's copy where nothing did was held by a change made before they were described, after the
+ * editor opened the document.
+ */
+function movedSinceDescribed(
+  refusal: Error,
+  before: PartMarks,
+  now: PartMarks
+): boolean {
+  return staleVersionOf(refusal) !== undefined || !sameMarks(before, now);
+}
+
 /**
  * Focus that closing left on nothing, sent to the editor's main button: what opened the dialog
  * may have been held while it ran, and held controls cannot keep the focus.
@@ -544,10 +621,12 @@ export function PublishPartsDialog(
   });
   const { request } = parts;
   const { rows, facts } = useDrawnParts({ ...props, choice, parts });
+  const describeAgain = useDescribePartsAgain(props.target);
   const move = usePartsMove({
     ...props,
     choice,
     request,
+    parts,
     onRefused: () => setReason(null),
   });
   // What the server refuses, by part: from the move when it was refused, else from the
@@ -618,7 +697,15 @@ export function PublishPartsDialog(
         <Facts facts={facts} />
 
         {review === undefined ? null : (
-          <ReadyToPublish document={review.document} problems={problems} />
+          <ReadyToPublish
+            document={review.document}
+            problems={problems}
+            onStepTaken={() => {
+              // What the parts were refused for may be settled now: asked of the server again.
+              move.forgetRefusal();
+              describeAgain();
+            }}
+          />
         )}
         {reason === null ? null : (
           <WithoutReviewReason
@@ -631,7 +718,12 @@ export function PublishPartsDialog(
         <Outcome
           checking={parts.checking}
           messages={generalRefusals(refusal, refused, problems)}
-          refusal={refusal}
+          changed={changedSentence(refusal, {
+            before: move.refusedMarks,
+            parts,
+            direction,
+            labelOf,
+          })}
         />
 
         {reason !== null ? (
@@ -763,11 +855,12 @@ function Facts({ facts }: { facts: readonly string[] }): JSX.Element | null {
 function Outcome({
   checking,
   messages,
-  refusal,
+  changed,
 }: {
   checking: boolean;
   messages: readonly string[];
-  refusal: Error | null;
+  /** What a move refused because the document changed says. */
+  changed: string | null;
 }): JSX.Element {
   return (
     <>
@@ -789,12 +882,11 @@ function Outcome({
           {message}
         </p>
       ))}
-      {refusal !== null && refusedAsChangedSince(refusal) ? (
+      {changed === null ? null : (
         <p role="alert" className="text-sm text-danger-text">
-          This document changed since you opened it. Review the latest version,
-          then try again.
+          {changed}
         </p>
-      ) : null}
+      )}
     </>
   );
 }

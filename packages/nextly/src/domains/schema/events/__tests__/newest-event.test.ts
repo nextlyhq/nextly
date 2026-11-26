@@ -1,6 +1,6 @@
 /**
  * "Is this file applied?" is answered by the NEWEST event for it, and every
- * reader of the ledger asks through `appliedFilenames`.
+ * reader of the ledger asks through `appliedPluginModules`.
  *
  * A rollback is recorded by inserting a `rolled_back` event after the
  * `applied` one, so "has an applied row" is the plausible wrong answer these
@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  appliedFilenames,
+  appliedPluginModules,
   newestEvent,
   newestEventsByFilename,
 } from "../newest-event";
@@ -40,11 +40,11 @@ function row(
   };
 }
 
-describe("appliedFilenames", () => {
+describe("appliedPluginModules", () => {
   it("applied then rolled back is NOT applied", () => {
     // The row a filter for `status === "applied"` would still find.
     const rows = [row("a", "applied", 1000), row("a", "rolled_back", 2000)];
-    expect(appliedFilenames(rows)).toEqual(new Set());
+    expect(appliedPluginModules(rows)).toEqual(new Set());
   });
 
   it("rolled back then applied again IS applied", () => {
@@ -53,23 +53,23 @@ describe("appliedFilenames", () => {
       row("a", "rolled_back", 2000),
       row("a", "applied", 3000),
     ];
-    expect(appliedFilenames(rows)).toEqual(new Set(["a"]));
+    expect(appliedPluginModules(rows)).toEqual(new Set(["a"]));
   });
 
   it("decides by startedAt, not by the order rows arrive in", () => {
     // A ledger read carries no ORDER BY, so the rollback can come back first.
     const rows = [row("a", "rolled_back", 2000), row("a", "applied", 1000)];
-    expect(appliedFilenames(rows)).toEqual(new Set());
+    expect(appliedPluginModules(rows)).toEqual(new Set());
   });
 
   it("a failed re-apply after an applied row is not applied", () => {
     const rows = [row("a", "applied", 1000), row("a", "failed", 2000)];
-    expect(appliedFilenames(rows)).toEqual(new Set());
+    expect(appliedPluginModules(rows)).toEqual(new Set());
   });
 
   it("a failed attempt before a successful apply leaves it applied", () => {
     const rows = [row("a", "failed", 1000), row("a", "applied", 2000)];
-    expect(appliedFilenames(rows)).toEqual(new Set(["a"]));
+    expect(appliedPluginModules(rows)).toEqual(new Set(["a"]));
   });
 
   it("judges each filename on its own events", () => {
@@ -79,11 +79,13 @@ describe("appliedFilenames", () => {
       row("b", "rolled_back", 2500),
       row("c", "failed", 3000),
     ];
-    expect(appliedFilenames(rows)).toEqual(new Set(["a"]));
+    expect(appliedPluginModules(rows)).toEqual(new Set(["a"]));
   });
 
   it("skips rows with no filename", () => {
-    expect(appliedFilenames([row(null, "applied", 1000)])).toEqual(new Set());
+    expect(appliedPluginModules([row(null, "applied", 1000)])).toEqual(
+      new Set()
+    );
   });
 });
 
@@ -98,6 +100,6 @@ describe("newestEventsByFilename", () => {
 
     expect(newestEventsByFilename(rows).get("a")).toBe(newestEvent(rows));
     expect(newestEventsByFilename(rows).get("a")?.id).toBe("first");
-    expect(appliedFilenames(rows)).toEqual(new Set(["a"]));
+    expect(appliedPluginModules(rows)).toEqual(new Set(["a"]));
   });
 });
