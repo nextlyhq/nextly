@@ -31,6 +31,12 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 
 import {
+  namingOfRegistry,
+  type FieldGroupNaming,
+} from "../../domains/field-groups/services/field-group-storage-names";
+import { declaredFieldGroupStorage } from "../../domains/field-groups/services/field-group-stored-tables";
+import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
+import {
   deriveCompanionSpec,
   deriveCompanionTableSpec,
 } from "../../domains/i18n/migration/derive-companion-spec";
@@ -445,6 +451,12 @@ export interface BaselineCoreDeps {
   adapter: CLIDatabaseAdapter;
   db: unknown;
   dialect: SupportedDialect;
+  /**
+   * The field-group names the database keeps its groups under, which the snapshot records: a
+   * database whose storage moved to the current names starts a history on them. Legacy when
+   * omitted.
+   */
+  fieldGroupNaming?: FieldGroupNaming;
   /** Absolute path to the `migrations/` directory. */
   migrationsDir: string;
   logger: CommandContext["logger"];
@@ -1091,7 +1103,9 @@ async function adopt(deps: BaselineCoreDeps): Promise<BaselineCoreResult> {
               undefined,
               undefined,
               // A baseline is a project's first migration: written from none.
-              { parent: null, merges: [] }
+              { parent: null, merges: [] },
+              // The names the database keeps field groups under, which every later file follows.
+              deps.fieldGroupNaming ?? "legacy"
             ),
           () => prepareWhole(sqlPath, sqlContent),
         ]);
@@ -1233,6 +1247,11 @@ export async function runMigrateBaseline(
     }
 
     const config = configResult.config;
+    // The names this database keeps field groups under, read from its own registry: the history
+    // this command starts records them, and the entities below are declared under them.
+    const fieldGroupNaming = namingOfRegistry(
+      await resolveRegistryNameFromCatalog(adapter as unknown as DrizzleAdapter)
+    );
     // Config and the Builder manifest, merged the way generation merges them
     // and resolved once. Every command that compares a live database against a
     // snapshot reads the same answer, because assembling it per call site is
@@ -1241,6 +1260,7 @@ export async function runMigrateBaseline(
       projectRoot: cwd,
       config,
       deferredExtends: configResult.deferredExtends,
+      fieldGroupNaming,
     });
 
     // The app stream's extension schema, compiled exactly as `migrate:create`
@@ -1253,6 +1273,23 @@ export async function runMigrateBaseline(
       config,
       dialect,
       logger: { warn: m => logger.warn(m) },
+      // A contribution to a field group attaches to the table the database holds it in, with the
+      // type column that table has.
+      ...(fieldGroupNaming === "legacy"
+        ? {}
+        : {
+            fieldGroupTables: new Map(
+              resolved.entities
+                .filter(entity => entity.kind === "fieldGroup")
+                .map(entity => [entity.slug, entity.tableName])
+            ),
+            fieldGroupTypeColumns: (
+              await declaredFieldGroupStorage(
+                adapter as unknown as DrizzleAdapter,
+                resolved.entities.filter(entity => entity.kind === "fieldGroup")
+              )
+            )?.typeColumns,
+          }),
     });
 
     // A dry run reports a history refusal as the real run's, and exits 0.
@@ -1260,6 +1297,7 @@ export async function runMigrateBaseline(
       adapter,
       db,
       dialect,
+      fieldGroupNaming,
       migrationsDir,
       logger,
       name: options.name,

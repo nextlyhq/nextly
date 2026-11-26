@@ -1012,7 +1012,7 @@ describe.each(getConfiguredTestDialects())(
           // would delete must not write into the instance it keeps.
           await updateIn("vaults", door, "editor", id, { one: null });
           const row = (
-            await t.adapter.select<Doc>("comp_vault", {
+            await t.adapter.select<Doc>("fg_vault", {
               where: { and: [{ column: "id", op: "=", value: instanceId }] },
             })
           )[0];

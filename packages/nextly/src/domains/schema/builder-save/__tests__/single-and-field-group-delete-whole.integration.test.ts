@@ -28,6 +28,7 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import { servedSchemaVersion } from "../../../../route-handler/schema-version";
+import { fieldGroupTableNameFor } from "../../../field-groups/services/field-group-storage-names";
 import { resolveRegistryTableName } from "../../../field-groups/storage/resolve-storage-names";
 import {
   cachedCompanionReadiness,
@@ -36,7 +37,6 @@ import {
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { junctionTablesOf } from "../../services/field-column-descriptor";
-import { resolveComponentTableName } from "../../utils/resolve-table-name";
 
 // A step after the delete's commit made to fail: forgetting the dropped translations table on the
 // adapter itself, which only that step does. The teardown inside the transaction forgets it on the
@@ -164,7 +164,7 @@ describe.each(getConfiguredTestDialects())(
       return {
         kind: "fieldGroup",
         slug,
-        table: resolveComponentTableName(slug),
+        table: fieldGroupTableNameFor("current", slug),
         registry: await resolveRegistryTableName(t.adapter),
         junctions: [],
       };

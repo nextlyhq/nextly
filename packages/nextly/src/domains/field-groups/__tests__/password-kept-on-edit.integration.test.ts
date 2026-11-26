@@ -312,7 +312,7 @@ describe.each(getConfiguredTestDialects())(
         },
         _overwrite: true,
       });
-      const row = await rawRow("comp_kbox", { id: instanceId });
+      const row = await rawRow("fg_kbox", { id: instanceId });
 
       expect(row.heading).toBe("f2");
       expect(open(row.box).a).toBe("2");
@@ -347,8 +347,8 @@ describe.each(getConfiguredTestDialects())(
         ],
         _overwrite: true,
       });
-      const rep = await rawRow("comp_kbox", { id: fgsId });
-      const block = await rawRow("comp_kbox", { id: zoneId });
+      const rep = await rawRow("fg_kbox", { id: fgsId });
+      const block = await rawRow("fg_kbox", { id: zoneId });
 
       expect([rep.heading, open(rep.box).a]).toEqual(["f2", "2"]);
       expect(await hashes(open(rep.box).secret, "rep-1")).toBe(true);
@@ -456,7 +456,7 @@ describe.each(getConfiguredTestDialects())(
         depth: 1,
       } as never)) as Doc;
       const directId = String((read.direct as Doc | undefined)?.id);
-      const direct = await rawRow("comp_kpin", { id: directId });
+      const direct = await rawRow("fg_kpin", { id: directId });
       expect(direct.heading).toBe("d2");
       expect(await hashes(direct.pin, "direct-1")).toBe(true);
     });

@@ -119,6 +119,7 @@ import {
   judgeOrphanRemoval,
   performPermissionSeeding,
   syncUserFields,
+  newDatabaseNamingOf,
 } from "./dev-build";
 import { ensureCoreTables, productionSyncRefusal } from "./dev-server";
 import { createDebouncedSync } from "./dev-watcher";
@@ -402,7 +403,9 @@ export async function runDbSync(
     // dynamic_collections, etc.) must exist before any sync or query.
     // Uses drizzle-kit pushSchema() to create ALL tables from the Drizzle
     // schema definitions, guaranteeing they match 100%.
-    await ensureCoreTables(adapter, options, context);
+    await ensureCoreTables(adapter, options, context, () =>
+      newDatabaseNamingOf(configResult.config, context.cwd)
+    );
 
     // Step 3.55: Refuse while a field group storage migration is in flight.
     //

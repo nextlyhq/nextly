@@ -17,8 +17,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import type { SupportedDialect } from "../../database/schema-registry";
+import type { FieldGroupNaming } from "../../domains/field-groups/services/field-group-storage-names";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
+import { refuseCurrentNamesOnLegacyStorage } from "../../domains/schema/migrate/field-group-history";
 import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
 import { withOldBuilderMarks } from "../../domains/schema/migrate/old-builder-ledger";
 import {
@@ -29,7 +31,10 @@ import {
 } from "../../domains/schema/migrate/resolve";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import { marksNoTransaction } from "../../domains/schema/migrate/split-sql";
-import { parseSnapshotFile } from "../../domains/schema/migrate-create/snapshot-io";
+import {
+  parseSnapshotFile,
+  snapshotFileNaming,
+} from "../../domains/schema/migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
@@ -208,6 +213,22 @@ async function loadSnapshot(
   }
 }
 
+/** The field-group names the file's snapshot says it is on; null where none can be read. */
+async function snapshotNaming(
+  metaDir: string,
+  filename: string
+): Promise<FieldGroupNaming | null> {
+  const file = `${filename.replace(/\.sql$/, "")}.snapshot.json`;
+  try {
+    return snapshotFileNaming(
+      await readFile(resolve(metaDir, file), "utf-8"),
+      file
+    );
+  } catch {
+    return null;
+  }
+}
+
 /**
  * What `--failed-cleanup` reports. Every attempt since the file's last other
  * event that failed or recorded no outcome is cleared together, so it says
@@ -270,6 +291,12 @@ export async function runMigrateResolve(
         (await migrationFileIn(migrationsDir, name, dialect, marked)) !==
         undefined,
       loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
+      refuseUnfitStorage: async () =>
+        refuseCurrentNamesOnLegacyStorage(
+          adapter as unknown as DrizzleAdapter,
+          filename,
+          await snapshotNaming(metaDir, filename)
+        ),
       marksNoTransaction: async () =>
         marksNoTransaction(
           await migrationTextIn(migrationsDir, filename, dialect, marked)

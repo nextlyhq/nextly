@@ -231,7 +231,7 @@ describe.each(getConfiguredTestDialects())(
       // read already: each of the others once, and nothing more for the warning.
       expect(loaderReads(withProblem)).toEqual([
         "dynamic_singles",
-        "dynamic_components",
+        "dynamic_field_groups",
       ]);
       expect(said(AT_START)).toHaveLength(1);
     }, 300_000);

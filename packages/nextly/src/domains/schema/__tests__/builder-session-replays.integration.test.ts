@@ -139,7 +139,7 @@ async function entityTables(
   const rows = await adapter.executeQuery<{ n?: string; N?: string }>(sql);
   return rows
     .map(row => String(row.n ?? row.N))
-    .filter(name => /^(dc_|single_|comp_)/.test(name))
+    .filter(name => /^(dc_|single_|fg_)/.test(name))
     .sort();
 }
 
@@ -153,7 +153,7 @@ async function registryRows(adapter: DrizzleAdapter) {
   for (const table of [
     "dynamic_collections",
     "dynamic_singles",
-    "dynamic_components",
+    "dynamic_field_groups",
   ]) {
     rows[table] = (
       await adapter.executeQuery<Record<string, unknown>>(
@@ -398,7 +398,7 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(writes.length, file?.text).toBeGreaterThan(0);
       for (const statement of writes) {
         expect(statement.slice(0, 120)).toMatch(
-          /^INSERT INTO [`"]?(dynamic_collections|dynamic_singles|dynamic_components|nextly_meta)[`"]?[\s(]/i
+          /^INSERT INTO [`"]?(dynamic_collections|dynamic_singles|dynamic_field_groups|nextly_meta)[`"]?[\s(]/i
         );
       }
     }
@@ -568,7 +568,7 @@ for (const dialect of getConfiguredTestDialects()) {
                 { name: "count", type: "number" },
               ],
               confirmed: true,
-              schemaVersion: await versionOf("dynamic_components", "meta"),
+              schemaVersion: await versionOf("dynamic_field_groups", "meta"),
             }
           )
         );

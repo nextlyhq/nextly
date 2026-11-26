@@ -47,6 +47,7 @@ import {
 } from "./di/service-access";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
+import type { RegistryReadAdapter } from "./domains/field-groups/services/field-group-stored-tables";
 import { recordBuildSchemaVersion } from "./domains/schema/build-schema-version";
 import { NextlyError } from "./errors/nextly-error";
 import {
@@ -519,7 +520,8 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
               single => !unchangedSinceLastStart("single", single.slug)
             )
           );
-          const changedFieldGroups = driftCheckFieldGroups(
+          const changedFieldGroups = await fieldGroupsForDriftCheck(
+            adapter,
             (config.fieldGroups ?? []).filter(
               group => !unchangedSinceLastStart("fieldGroup", group.slug)
             )
@@ -1035,4 +1037,21 @@ export async function shutdownNextly(): Promise<void> {
   if (globalForInit.__nextly_cachedInstance) {
     await globalForInit.__nextly_cachedInstance.shutdown();
   }
+}
+
+/**
+ * The field groups a start's drift check previews, each under the table its registry row names
+ * (`driftCheckFieldGroups`). Where the registry cannot be read, which table a group is in is not
+ * known, and its preview is left out rather than made of a guessed name.
+ */
+async function fieldGroupsForDriftCheck(
+  adapter: RegistryReadAdapter,
+  groups: Parameters<typeof driftCheckFieldGroups>[0]
+): Promise<ReturnType<typeof driftCheckFieldGroups>> {
+  if (groups.length === 0) return [];
+  const { readStoredFieldGroupTables } = await import(
+    "./domains/field-groups/services/field-group-stored-tables"
+  );
+  const stored = await readStoredFieldGroupTables(adapter);
+  return stored.usable ? driftCheckFieldGroups(groups, stored) : [];
 }

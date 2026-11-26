@@ -7,6 +7,8 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { MIGRATION_TARGET } from "../../domains/field-groups/migration/target";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { ensureFirstRunSetup, type HoldSchemaLock } from "../first-run";
 
 interface FakeAdapter {
@@ -175,9 +177,18 @@ describe("ensureFirstRunSetup", () => {
     ).mock.calls;
     // Probes the Nextly-namespaced ledger (not a generic `users` table). The
     // post-push bootstrap guard probes the same table again, so don't pin the
-    // exact count — pin that every probe targets nextly_schema_events.
-    expect(probeCalls.length).toBeGreaterThanOrEqual(1);
-    expect(probeCalls.every(c => c[0] === "nextly_schema_events")).toBe(true);
+    // exact count — pin that the first probe and every other targets nextly_schema_events, or the
+    // field-group registry, which a setup keeps under the name it stands under.
+    expect(probeCalls[0]?.[0]).toBe("nextly_schema_events");
+    expect(
+      probeCalls.every(c =>
+        [
+          "nextly_schema_events",
+          STORAGE_FORMAT.registryTable,
+          MIGRATION_TARGET.registryTable,
+        ].includes(c[0] ?? "")
+      )
+    ).toBe(true);
   });
 
   it("bootstraps the nextly_schema_events ledger via executeQuery when missing", async () => {

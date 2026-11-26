@@ -61,6 +61,7 @@ import { resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { storageNamesFor } from "../../domains/field-groups/services/field-group-storage-names";
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
 import { refuseWhileSaveLeftPartWay } from "../../domains/schema/builder-save/save-in-progress";
 import {
@@ -78,7 +79,10 @@ import {
   unrecordedMerges,
 } from "../../domains/schema/migrate/history-line";
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
-import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
+import {
+  declaredNamesOf,
+  declaredFieldGroupNaming,
+} from "../../domains/schema/migrate/resolved-schema";
 import {
   marksNoTransaction,
   splitSqlStatements,
@@ -94,6 +98,7 @@ import {
   unwrittenChangesOf,
 } from "../../domains/schema/migrate/unwritten-changes";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
+import { withFieldGroupTables } from "../../domains/schema/migrate-create/app-migration-inputs";
 import { describeSettingsChange } from "../../domains/schema/migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
 import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
@@ -267,7 +272,20 @@ export async function runMigrateCheck(
   } catch (error) {
     exitWithError(logger, configDeclarationError(error) ?? error);
   }
-  const { merged } = definitions;
+  // Each field group under the names the history keeps them under, as `migrate:create` names them
+  // (`appMigrationInputs`): a history moved to the current names compares `fg_<slug>` tables.
+  // A snapshot this CLI cannot read is reported by the checks below, as `INVALID_SNAPSHOT` naming
+  // the file; read here first, it would end the run as an unexpected error. Until then the names
+  // are taken as legacy, which every history before the record is on.
+  const fieldGroupNaming = await declaredFieldGroupNaming({
+    projectRoot: cwd,
+    config: configResult.config,
+  });
+  const merged = withFieldGroupTables(
+    definitions.merged,
+    storageNamesFor(fieldGroupNaming),
+    undefined
+  );
 
   // Read as `nextly migrate` reads the folder.
   const declared = await declaredNamesOf({

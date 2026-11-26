@@ -38,12 +38,18 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { readMigrationState } from "../../domains/field-groups/migration/state";
 import { MIGRATION_TARGET } from "../../domains/field-groups/migration/target";
+import {
+  storageNamesFor,
+  type FieldGroupNaming,
+} from "../../domains/field-groups/services/field-group-storage-names";
 import {
   forgetFieldGroupStorageNames,
   resolveFieldGroupRegistryName,
   resolveFieldGroupRegistryTable,
 } from "../../domains/field-groups/storage/resolve-storage-names";
+import { MetaService } from "../../domains/meta/services/meta-service";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -421,7 +427,16 @@ export class SystemTableService extends BaseService {
    * }
    * ```
    */
-  async ensureSystemTables(): Promise<SystemTableInitResult> {
+  async ensureSystemTables(
+    options: {
+      /**
+       * The names the field-group registry is created under where the database has none: given by
+       * a setup of a new site. Otherwise the ones the storage migration's marker records, so a
+       * registry dropped from a site on the current names is not put back under the legacy one.
+       */
+      fieldGroupNaming?: FieldGroupNaming;
+    } = {}
+  ): Promise<SystemTableInitResult> {
     const created: string[] = [];
     const existing: string[] = [];
 
@@ -456,9 +471,12 @@ export class SystemTableService extends BaseService {
         existing.push(registryTable);
         this.logger.info(`System table '${registryTable}' already exists`);
       } else {
-        await this.createDynamicComponentsTable();
-        created.push(registryTable);
-        this.logger.info(`Created system table '${registryTable}'`);
+        const { registryTable: name } = storageNamesFor(
+          options.fieldGroupNaming ?? (await this.recordedFieldGroupNaming())
+        );
+        await this.createDynamicComponentsTable(name);
+        created.push(name);
+        this.logger.info(`Created system table '${name}'`);
       }
 
       // `nextly_migrations` is not created. It is where an earlier release kept
@@ -627,9 +645,35 @@ export class SystemTableService extends BaseService {
     await this.executeSQL(sql.createDynamicCollections);
   }
 
-  private async createDynamicComponentsTable(): Promise<void> {
+  private async createDynamicComponentsTable(
+    registryTable: string
+  ): Promise<void> {
     const sql = this.getSQLTemplates();
-    await this.executeSQL(sql.createDynamicComponents);
+    // The table alone is named: its indexes keep one spelling under either name, as the table
+    // builder names them (`buildDynamicFieldGroups`).
+    const legacy = STORAGE_FORMAT.registryTable;
+    await this.executeSQL(
+      sql.createDynamicComponents
+        .replaceAll(`"${legacy}"`, `"${registryTable}"`)
+        .replaceAll(`\`${legacy}\``, `\`${registryTable}\``)
+    );
+  }
+
+  /**
+   * The names this database's field groups are on as the storage migration's marker records them,
+   * legacy where it records nothing or cannot be read.
+   */
+  private async recordedFieldGroupNaming(): Promise<FieldGroupNaming> {
+    try {
+      const state = await readMigrationState(
+        new MetaService(this.adapter, this.logger)
+      );
+      return state.status === "settled" && state.generation !== "legacy"
+        ? "current"
+        : "legacy";
+    } catch {
+      return "legacy";
+    }
   }
 
   private async executeSQL(sql: string): Promise<void> {

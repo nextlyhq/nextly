@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { defineCollection, group, relationship, text } from "../../../config";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
+import { resolveRegistryNameFromCatalog } from "../../../domains/field-groups/storage/resolve-storage-names";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import {
@@ -253,6 +254,11 @@ describe.each(getConfiguredTestDialects())(
       await reconcileCore({
         db: db(),
         dialect,
+        // The registry the database holds, as `nextly migrate` resolves it.
+        fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+          dialect,
+          getDrizzle: <T>() => db() as T,
+        }),
         logger: { info: () => {}, warn: () => {} },
       });
       run.dialect = dialect;

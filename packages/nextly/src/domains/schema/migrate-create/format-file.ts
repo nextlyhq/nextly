@@ -26,6 +26,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { CURRENT_NAMES_SHOWN } from "../../field-groups/services/field-group-names-shown";
 import { answersHeaderLine } from "../../i18n/migration/answer-language-names";
 import {
   consentToCover,
@@ -317,6 +318,40 @@ ${GENERATED_FILE_LINE} ${now.toISOString()}
 -- DOWN
 -- Nothing to undo. A rollback needs a statement to run, so this one reads nothing.
 SELECT 1;
+`;
+}
+
+/**
+ * The migration `nextly migrate:create --field-group-names=current` writes beside its snapshot:
+ * the point where the project's history moves its field groups to the current names. It holds no
+ * statement. The storage itself moves only through `nextly migrate:field-groups`, never inside
+ * `nextly migrate`, so applying this file checks that the database already moved and records it
+ * (`refuseFieldGroupTransitionOnLegacy`). Its DOWN is empty on purpose: `nextly migrate:down`
+ * refuses a file with nothing to run, and rolling the record back would leave a database on the
+ * current names behind a history that says legacy.
+ */
+export function formatFieldGroupTransitionFile(
+  name: string,
+  dialect: SupportedDialect,
+  now: Date
+): string {
+  return `-- Migration: ${name}
+-- Generated: field-group names
+${SCOPED_ENTITIES_MARKER}
+-- Generated at: ${now.toISOString()}
+-- Dialect: ${getDialectDisplayName(dialect)}
+--
+-- Written by \`nextly migrate:create --field-group-names=current\`. It changes
+-- nothing in the database: from this migration on, the history keeps field
+-- groups under the current names (${CURRENT_NAMES_SHOWN}). Move each
+-- database first with \`nextly migrate:field-groups --apply --backup-confirmed\`;
+-- \`nextly migrate\` refuses this file on a database that has not moved.
+
+-- UP
+
+
+-- DOWN
+-- Cannot be rolled back: the field-group storage stays on the current names.
 `;
 }
 

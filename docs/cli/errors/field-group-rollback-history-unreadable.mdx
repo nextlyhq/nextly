@@ -1,0 +1,23 @@
+---
+title: FIELD_GROUP_ROLLBACK_HISTORY_UNREADABLE
+description: "`nextly migrate:field-groups --down` could not tell which field-group names the database's applied migration history is on."
+---
+
+## Cause
+
+`nextly migrate:field-groups --down` could not tell which field-group names the database's applied migration history is on.
+
+The database records a migration as applied, and its file is not in the project's migrations folder, or its snapshot in `meta/` cannot be read. A history on the current field-group names cannot be moved back, and only the project's migrations say which names it is on. Nothing was changed.
+
+## Fix
+
+Run the command from the project that holds the database's migrations, with its migrations folder as it was deployed. Restore a snapshot that cannot be read from version control.
+
+## Example
+
+```text
+✗ Whether this database's field groups can be moved back could not be told: 20261119_120000_000_field_group_current_names is recorded applied, and its snapshot cannot be read.
+  Why:  A history on the current field-group names cannot be moved back, and only the project's migrations say which names it is on.
+  Next: Nothing was changed. Run the command from the project that holds its migrations.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-rollback-history-unreadable  (FIELD_GROUP_ROLLBACK_HISTORY_UNREADABLE)
+```

@@ -22,7 +22,7 @@ import {
 
 const TARGETS = "fgm_targets";
 const GROUP = "fgm_meta";
-const TABLE = `comp_${GROUP}`;
+const TABLE = `fg_${GROUP}`;
 
 const links = {
   name: "links",

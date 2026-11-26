@@ -40,7 +40,7 @@ import {
   withStopPoints,
 } from "../../../domains/schema/migrate/stop-points";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
-import { resolveComponentTableName } from "../../../domains/schema/utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../../domains/field-groups/services/field-group-storage-names";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -73,7 +73,7 @@ const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
 
 const META = "mrp_meta";
 const TAGS = "mrp_tags";
-const META_TABLE = resolveComponentTableName(META);
+const META_TABLE = fieldGroupTableNameFor("current", META);
 
 /** An entity under test: the two removed, and the collection that stays. */
 interface Entity {

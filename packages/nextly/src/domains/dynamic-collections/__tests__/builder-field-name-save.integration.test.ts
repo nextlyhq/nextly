@@ -414,8 +414,8 @@ describeEachDialect(
           )
         )
       ).toBe("accepted");
-      const columnsBefore = await columnsOf("comp_card");
-      const { version } = await registered("dynamic_components", "card");
+      const columnsBefore = await columnsOf("fg_card");
+      const { version } = await registered("dynamic_field_groups", "card");
 
       const answer = await answerOf(() =>
         dispatchComponents(
@@ -439,7 +439,7 @@ describeEachDialect(
           message: expect.stringContaining("longer than 63 characters"),
         }),
       ]);
-      expect(await columnsOf("comp_card")).toEqual(columnsBefore);
+      expect(await columnsOf("fg_card")).toEqual(columnsBefore);
     });
 
     it("refuses a stored field given a column its name is too long for, and writes nothing", async () => {

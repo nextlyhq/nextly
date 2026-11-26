@@ -21,6 +21,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { FieldGroupRegistryService } from "../../domains/field-groups/services/field-group-registry-service";
 import { FieldGroupSchemaService } from "../../domains/field-groups/services/field-group-schema-service";
+import { typeColumnForNewTable } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   type CollectionMetadata,
   DynamicCollectionRegistryService,
@@ -32,7 +33,6 @@ import { deriveCompanionSpec } from "../../domains/i18n/migration/derive-compani
 import { buildCompanionCreateOnlySql } from "../../domains/i18n/migration/generate-up";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { ResolvedVersionsConfig } from "../../schemas/versions/types";
 import type { Logger } from "../../services/shared";
 
@@ -259,14 +259,15 @@ export async function seedBuilderSingle(
 }
 
 /**
- * Create the `comp_<slug>` table + `dynamic_components` row for a UI component.
+ * Create the `fg_<slug>` table + field-group registry row for a UI component, as a new site does.
  */
 export async function seedBuilderComponent(
   adapter: DrizzleAdapter,
   opts: SeedBuilderCollectionOptions
 ): Promise<{ slug: string; tableName: string }> {
   const slug = opts.slug.toLowerCase();
-  const tableName = `comp_${slug}`;
+  // A new site keeps its field groups on the current names, as the Builder's create names them.
+  const tableName = `fg_${slug}`;
   const dialect = adapter.getCapabilities().dialect;
 
   const userFields = opts.fields
@@ -298,7 +299,7 @@ export async function seedBuilderComponent(
     adapter,
     tableName,
     schemaService.generateRuntimeSchema(tableName, userFields, {
-      typeColumn: STORAGE_FORMAT.columns.type,
+      typeColumn: typeColumnForNewTable(tableName),
     })
   );
 

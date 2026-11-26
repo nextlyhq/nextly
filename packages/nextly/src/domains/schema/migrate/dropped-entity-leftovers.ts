@@ -42,7 +42,7 @@ import {
 } from "../../i18n/migration/entity-translation-rows";
 import { dropTranslationsTable } from "../../i18n/migration/teardown-entity-i18n";
 import { deleteEntityReviewStates } from "../../workflows/review-state-repository";
-import { recordedEntityTable } from "../migrate-create/dropped-translations";
+import { recordedEntityTables } from "../migrate-create/dropped-translations";
 import type {
   EntitySettingsRecord,
   SettingsEntityKind,
@@ -362,7 +362,10 @@ export function recordedTablesOf(
   const tables = new Set<string>();
   for (const record of [...chain].reverse()) {
     const entry = record[key][slug];
-    if (entry !== undefined) tables.add(recordedEntityTable(kind, slug, entry));
+    if (entry === undefined) continue;
+    for (const table of recordedEntityTables(kind, slug, entry)) {
+      tables.add(table);
+    }
   }
   return [...tables];
 }
@@ -375,7 +378,9 @@ export function tablesHeldBy(record: EntitySettingsRecord): Set<string> {
   const tables = new Set<string>();
   for (const [kind, key] of RECORDED_KINDS) {
     for (const [slug, entry] of Object.entries(record[key])) {
-      tables.add(recordedEntityTable(kind, slug, entry));
+      for (const table of recordedEntityTables(kind, slug, entry)) {
+        tables.add(table);
+      }
     }
   }
   return tables;

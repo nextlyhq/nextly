@@ -22,9 +22,9 @@ vi.mock("../companion-join", async importOriginal => {
     ) => {
       if (
         failCardJoin.on &&
-        getTableName(args.mainTable as never) === "comp_card"
+        getTableName(args.mainTable as never) === "fg_card"
       ) {
-        return Promise.reject(new Error("comp_card_locales: connection reset"));
+        return Promise.reject(new Error("fg_card_locales: connection reset"));
       }
       return actual.selectRowsWithCompanion(args);
     },
@@ -109,7 +109,7 @@ describe.each(getConfiguredTestDialects())(
       await read();
 
       const statements = (await statementsOf(dialect, read)).filter(sql =>
-        /dc_articles|dc_authors|comp_card/i.test(sql)
+        /dc_articles|dc_authors|fg_card/i.test(sql)
       );
       expect(statements).toHaveLength(3);
       for (const sql of statements) expect(sql).toMatch(/left join/i);
