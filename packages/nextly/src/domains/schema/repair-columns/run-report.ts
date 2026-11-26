@@ -9,6 +9,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../errors";
 import type { BusyTableBounds } from "../busy-table/bounds";
 
 import {
@@ -44,6 +45,7 @@ import {
   progressFinding,
   progressStepName,
 } from "./resume";
+import { schemaLockHeldError } from "./stop-errors";
 import { TableWaits } from "./table-wait";
 import type { ColumnFinding, RepairEntity } from "./types";
 
@@ -178,6 +180,43 @@ function overScan(
   return after;
 }
 
+/** Whether `error` is the refusal of an attempt at a migration that is unresolved. */
+const isUnresolvedAttempt = (error: unknown): boolean =>
+  NextlyError.isCode(error, "NEXTLY_MIGRATION_PARTIALLY_APPLIED");
+
+/**
+ * The entities, where an attempt at a migration may be unresolved only because it still runs.
+ *
+ * While a run holds the schema lock, the attempt may be its own, and what the refusal advises would
+ * be done under it: the holder is named instead, whatever it is, and the reader told to wait. A
+ * holder that stopped is named with when its lock lapses. Where nothing holds it, everything is read
+ * once more, for a migration that ended between the read and the lock's; an attempt that is still
+ * open then is one left unresolved, and is refused as such.
+ */
+async function entitiesOnceSettled(
+  adapter: DrizzleAdapter,
+  read: () => Promise<readonly RepairEntity[]>
+): Promise<readonly RepairEntity[]> {
+  const refuseWhileHeld = async (error: unknown): Promise<void> => {
+    if (!isUnresolvedAttempt(error)) throw error;
+    const lock = await readSchemaLockState(adapter);
+    if (lock.state === "held") {
+      throw schemaLockHeldError(DRY_RUN_COMMAND, lock.holder);
+    }
+  };
+  try {
+    return await read();
+  } catch (error) {
+    await refuseWhileHeld(error);
+  }
+  try {
+    return await read();
+  } catch (error) {
+    await refuseWhileHeld(error);
+    throw error;
+  }
+}
+
 /** The document of a dry run over `entities`. Reads the database and changes nothing. */
 export async function dryRunReport(args: {
   adapter: DrizzleAdapter;
@@ -208,10 +247,11 @@ export async function dryRunReport(args: {
   // ends before the scan does; read again after it (`readAfter`), for one that starts during it.
   const before = await schemaLockBefore(adapter, dialect, waits);
   const started = Date.now();
+  const entitiesArg = args.entities;
   const entities =
-    typeof args.entities === "function"
-      ? await args.entities(waits)
-      : args.entities;
+    typeof entitiesArg === "function"
+      ? await entitiesOnceSettled(adapter, () => entitiesArg(waits))
+      : entitiesArg;
   const findings = await findColumnDifferences({
     db: adapter.getDrizzle(),
     dialect,
