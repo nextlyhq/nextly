@@ -51,7 +51,7 @@ import { runDbSync } from "../db-sync";
 import { openCollectionRegistry } from "../db-sync-registry";
 
 const SINGLE_TABLE = "single_om_banner";
-const GROUP_TABLE = "comp_om_seo";
+const GROUP_TABLE = "fg_om_seo";
 
 /** The configuration; `edited` gives the Single and the group one more field each. */
 function configuration(edited: boolean) {

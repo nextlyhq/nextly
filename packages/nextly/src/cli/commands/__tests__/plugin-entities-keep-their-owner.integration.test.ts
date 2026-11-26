@@ -67,7 +67,7 @@ import {
   createTestNextly,
   getConfiguredTestDialects,
 } from "../../../plugins/test-nextly";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import { consoleLogger } from "../../../shared/types";
 import type { CommandContext } from "../../program";
@@ -118,9 +118,9 @@ const APP_GROUP = defineFieldGroup({
 });
 
 const SETTINGS_TABLE = "single_pks_settings";
-const HERO_TABLE = "comp_pks_hero";
+const HERO_TABLE = "fg_pks_hero";
 const APP_SINGLE_TABLE = "single_pks_app_single";
-const APP_GROUP_TABLE = "comp_pks_app_group";
+const APP_GROUP_TABLE = "fg_pks_app_group";
 const EVENTS_TABLE = "dc_pks_events";
 
 /** The plugin, as the loader's configuration holds it beside the entities it folded in. */
@@ -296,7 +296,7 @@ for (const dialect of getConfiguredTestDialects()) {
     async function recordedAsTheApps(): Promise<void> {
       for (const [registry, slug] of [
         ["dynamic_singles", SETTINGS.slug],
-        [STORAGE_FORMAT.registryTable, HERO.slug],
+        [MIGRATION_TARGET.registryTable, HERO.slug],
       ]) {
         await adapter.update(
           registry,
@@ -686,7 +686,7 @@ for (const dialect of getConfiguredTestDialects()) {
       await dbSync(withPlugin());
       for (const [registry, slug] of [
         ["dynamic_singles", SETTINGS.slug],
-        [STORAGE_FORMAT.registryTable, HERO.slug],
+        [MIGRATION_TARGET.registryTable, HERO.slug],
       ]) {
         await adapter.update(
           registry,

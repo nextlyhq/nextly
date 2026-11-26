@@ -59,7 +59,7 @@ import {
   getConfiguredTestDialects,
   type TestDialect,
 } from "../../../plugins/test-nextly";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import type { mergeSetupResultIntoConfig as MergeSetupResultIntoConfig } from "../../utils/config-loader";
@@ -460,7 +460,7 @@ describe.each(getConfiguredTestDialects())(
       expect((await owners("dynamic_singles"))["mdp-settings"]).toBe(
         "plugin:@test/mdp-shop"
       );
-      expect((await owners(STORAGE_FORMAT.registryTable))["mdp-hero"]).toBe(
+      expect((await owners(MIGRATION_TARGET.registryTable))["mdp-hero"]).toBe(
         "plugin:@test/mdp-shop"
       );
     }, 120_000);
