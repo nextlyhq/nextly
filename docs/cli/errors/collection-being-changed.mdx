@@ -7,7 +7,7 @@ description: "A change that deletes values lost its hold of the collection part 
 
 A change that deletes values lost its hold of the collection part way, so it stopped before its next statement.
 
-A Schema Builder change that deletes stored values holds its collection from the moment it counts them until the change is recorded, so no write lands in between. Some of its statements run on other connections than the one holding the collection. Before each, the change asks whether its hold still stands; this one found it gone, because the connection holding it ended, so other writes could already go ahead. It sent nothing more.
+A Schema Builder change that deletes stored values holds its collection from the moment it counts them until the change is recorded, so that entry writes wait for it. Some of its statements run on other connections than the one holding the collection. Just before each, the change asks whether its hold still stands; this one found it gone, because the connection holding it ended, so other writes could already go ahead. It sent nothing more. The question is asked before a statement, not with it, so a hold lost between the answer and the statement is seen only by the next one.
 
 ## Fix
 
