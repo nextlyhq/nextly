@@ -18,11 +18,16 @@ const CHROME = chromeStylesheetSource(url =>
   readFileSync(fileURLToPath(url), "utf8")
 );
 
-/** The body of the one rule whose whole selector is `selector`. */
+/**
+ * The body of the one rule whose whole selector is `selector`. Whitespace is
+ * read as one space, since the formatter wraps a long selector across lines.
+ */
 function ruleExactly(selector: string): string {
   const sheet = CHROME.replace(/\/\*[\s\S]*?\*\//g, "");
   for (const match of sheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    if ((match[1] ?? "").trim() === selector) return match[2] ?? "";
+    if ((match[1] ?? "").replace(/\s+/g, " ").trim() === selector) {
+      return match[2] ?? "";
+    }
   }
   throw new Error(`no rule for ${selector}`);
 }
