@@ -305,10 +305,10 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
         <CheckListPlugin />
         {/* A link points only where a reader can be taken, and pasting an
             address over selected text links it. Addresses typed or pasted
-            into the text become links by themselves, on a field that offers
-            links: one whose toolbar leaves the link out gets none made for
-            it either. */}
-        <LinkPlugin validateUrl={isLinkUrl} />
+            into the text become links by themselves. Both only on a field
+            that offers links: one whose toolbar leaves the link out gets no
+            link made for it either, which it would have no way to remove. */}
+        <LinkPlugin validateUrl={offersLinks ? isLinkUrl : undefined} />
         {offersLinks ? (
           <AutoLinkPlugin matchers={[...AUTO_LINK_MATCHERS]} />
         ) : null}

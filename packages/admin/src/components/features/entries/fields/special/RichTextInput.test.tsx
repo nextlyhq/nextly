@@ -263,6 +263,48 @@ function selectAll(editor: LexicalEditor): void {
   );
 }
 
+/**
+ * Write `text`, select it, and paste `url` over it, as the clipboard hands a
+ * paste to the editor. jsdom has no ClipboardEvent or DragEvent, and Lexical's
+ * paste handlers know an event by its constructor's name, so stand-ins of
+ * those names carry the text for the length of the paste.
+ */
+function pasteOverAll(editor: LexicalEditor, text: string, url: string): void {
+  const Stub = {
+    ClipboardEvent: class extends Event {
+      constructor(
+        readonly clipboardData: {
+          types: string[];
+          files: File[];
+          items: DataTransferItem[];
+          getData: (type: string) => string;
+        }
+      ) {
+        super("paste");
+      }
+    },
+  }.ClipboardEvent;
+  vi.stubGlobal("ClipboardEvent", Stub);
+  vi.stubGlobal("DragEvent", { DragEvent: class extends Event {} }.DragEvent);
+  try {
+    typeText(editor, text);
+    selectAll(editor);
+    dispatchNow(
+      editor,
+      PASTE_COMMAND,
+      // The stand-in has the members the handlers read.
+      new Stub({
+        types: ["text/plain"],
+        files: [],
+        items: [],
+        getData: type => (type === "text" || type === "text/plain" ? url : ""),
+      }) as unknown as ClipboardEvent
+    );
+  } finally {
+    vi.unstubAllGlobals();
+  }
+}
+
 /** Each link the document holds, by kind, address and text. */
 function linksIn(
   editor: LexicalEditor
@@ -367,39 +409,25 @@ describe("RichTextInput — links made from addresses in the text", () => {
   });
 
   it("links selected text to an address pasted over it", async () => {
-    // jsdom has no ClipboardEvent; Lexical's paste handler knows the event
-    // by its constructor's name, so a stand-in of that name carries the text.
-    const Stub = {
-      ClipboardEvent: class extends Event {
-        constructor(
-          readonly clipboardData: { getData: (type: string) => string }
-        ) {
-          super("paste");
-        }
-      },
-    }.ClipboardEvent;
-    vi.stubGlobal("ClipboardEvent", Stub);
-    try {
-      render(<Harness initial={doc("")} />);
-      const editor = editorOn(await screen.findByLabelText("body"));
-      typeText(editor, "Hack day");
-      selectAll(editor);
-      const url = "https://events.example.org/2026/builders-day";
-      dispatchNow(
-        editor,
-        PASTE_COMMAND,
-        // The stand-in has the one member the handler reads.
-        new Stub({
-          getData: type => (type === "text" ? url : ""),
-        }) as unknown as ClipboardEvent
-      );
+    render(<Harness initial={doc("")} />);
+    const editor = editorOn(await screen.findByLabelText("body"));
+    const url = "https://events.example.org/2026/builders-day";
+    pasteOverAll(editor, "Hack day", url);
 
-      expect(linksIn(editor)).toEqual([
-        { type: "link", url, text: "Hack day" },
-      ]);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    expect(linksIn(editor)).toEqual([{ type: "link", url, text: "Hack day" }]);
+  });
+
+  it("makes no link of a paste on a field whose toolbar leaves links out", async () => {
+    render(
+      <Harness
+        initial={doc("")}
+        field={{ ...FIELD, features: ["bold", "italic"] }}
+      />
+    );
+    const editor = editorOn(await screen.findByLabelText("body"));
+    pasteOverAll(editor, "Hack day", "https://events.example.org/2026/");
+
+    expect(linksIn(editor)).toEqual([]);
   });
 
   it("refuses to link text to a script address", async () => {
