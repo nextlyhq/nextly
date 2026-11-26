@@ -451,11 +451,6 @@ describe("the entry's Design section", () => {
         name: "Create a collection template for posts",
       })
     ).toBeTruthy();
-    expect(
-      screen.getByText(
-        "To design posts here instead, give them a collection template."
-      )
-    ).toBeTruthy();
   });
 
   it("says the site's own page shows the entry where its address is not known yet, and offers its draft template", () => {

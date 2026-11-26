@@ -629,7 +629,6 @@ function ServedBySite({
   held: boolean;
 }): JSX.Element {
   const { meta } = answer;
-  const offered = meta.template !== null || meta.mayCreateTemplate;
 
   return (
     <DesignCard>
@@ -644,7 +643,7 @@ function ServedBySite({
               href={address}
               target="_blank"
               rel="noreferrer"
-              className="break-all font-medium text-primary underline underline-offset-2"
+              className="break-words font-medium text-primary underline underline-offset-2"
             >
               {address}
             </a>
@@ -653,12 +652,15 @@ function ServedBySite({
         )}
       </p>
       <TemplateOffer answer={answer} collection={collection} held={held} />
-      {offered ? (
-        <Note>{WORDS.servedBySiteNote(meta.names.plural)}</Note>
-      ) : null}
     </DesignCard>
   );
 }
+
+/**
+ * The offer's button, the panel's width: a label naming a long collection
+ * wraps inside it rather than running past the card.
+ */
+const OFFER_BUTTON_CLASS = "h-auto w-full whitespace-normal py-1.5";
 
 /**
  * The collection's template to open, or one to create where the author may,
@@ -699,7 +701,7 @@ function TemplateOffer({
         type="button"
         variant="outline"
         size="sm"
-        className="w-full"
+        className={OFFER_BUTTON_CLASS}
         onClick={() =>
           openInAdmin(builderHref(meta.templatesCollection, template.id))
         }
@@ -715,7 +717,7 @@ function TemplateOffer({
       type="button"
       variant="outline"
       size="sm"
-      className="w-full"
+      className={OFFER_BUTTON_CLASS}
       disabled={busy || held}
       {...(held ? { title: HELD_REASON } : {})}
       onClick={create}

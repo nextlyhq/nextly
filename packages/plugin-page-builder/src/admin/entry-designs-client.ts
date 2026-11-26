@@ -259,8 +259,6 @@ export const OWN_DESIGN_WORDS = {
   servedBySite: (plural: string): string =>
     `${plural} are shown on the site by its own page, not by a template.`,
   servedAt: (singular: string): string => `This ${inSentence(singular)} is at`,
-  servedBySiteNote: (plural: string): string =>
-    `To design ${inSentence(plural)} here instead, give them a collection template.`,
   createTemplate: (plural: string): string =>
     `Create a collection template for ${inSentence(plural)}`,
   creatingTemplate: "Creating the template…",
