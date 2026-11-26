@@ -182,7 +182,8 @@ export interface PluginSinglesService {
    * until someone runs the destructive cleanup — `reload-config.ts` says so
    * where it prunes the defaults, describing "a removed single's registry row
    * (which stays readable)". Such a row is returned here, carrying
-   * `source: "code"`.
+   * the source it was recorded with: `"code"`, or `plugin:<name>` for one a
+   * plugin contributed.
    *
    * It is NOT filtered out at this layer, and that is deliberate rather than an
    * omission. Filtering after `listSingles` returns would happen after the

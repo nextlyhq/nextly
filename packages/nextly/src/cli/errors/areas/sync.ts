@@ -26,6 +26,10 @@ function fieldGroupCommand(error: NextlyError): string {
 }
 
 export const SYNC_CODES = defineCodes({
+  ENTITIES_NOT_SYNCED: {
+    cause:
+      "`db:sync` could not add a column or create a table for some entities, so it recorded them failed and synced the rest.",
+  },
   LOCALIZATION_NOT_PROVISIONED: {
     cause:
       "`db:sync` could not create the translation tables of a localized entity, so its translations cannot be written or read.",
@@ -219,6 +223,22 @@ export function syncConfirmationRequired(
     what: `\`db:sync ${flag} ${slug}\` changed nothing: it asks before it changes anything.`,
     why: "No terminal is attached to ask (or `--non-interactive` was given, or `CI` is set), and `--yes` was not given.",
     next: `Run \`nextly db:sync ${flag} ${slug} --yes\` to answer it yes.`,
+  });
+}
+
+/**
+ * `db:sync` once everything else is done, for the entities whose column or table the database
+ * refused: each named with what was refused and why.
+ */
+export function entitiesNotSynced(
+  entities: readonly { slug: string; detail: string }[]
+): CliError {
+  return new CliError("ENTITIES_NOT_SYNCED", {
+    what: `\`db:sync\` could not add a column or create a table, so these entities are recorded failed: ${entities
+      .map(({ slug, detail }) => `\`${slug}\` (${detail})`)
+      .join(", ")}.`,
+    why: "The database refused the statement. Everything else was synced, and the steps over data an earlier release stored wait for a run that syncs every entity.",
+    next: "Fix the cause, then run `nextly db:sync` again; it retries them.",
   });
 }
 

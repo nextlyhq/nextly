@@ -41,7 +41,6 @@ import {
   Input,
   Popover,
   PopoverAnchor,
-  PopoverContent,
   PopoverTrigger,
   Textarea,
 } from "@nextlyhq/ui";
@@ -51,6 +50,7 @@ import * as React from "react";
 import type { UnbindAnswer } from "../composition-actions";
 import type { ContentServices } from "../inspector/content/content-controls";
 import { propLabel, type EditableProp } from "../inspector/inspector";
+import { BuilderPopoverContent } from "../popups/builder-popover";
 
 import {
   boundField,
@@ -208,7 +208,7 @@ function BindButton({
           <Database aria-hidden="true" size={14} />
         </button>
       </PopoverTrigger>
-      <PopoverContent
+      <BuilderPopoverContent
         align="end"
         className="nx-binding-popover"
         // The bound chip replaces this button, so focus is handed to it once
@@ -253,7 +253,7 @@ function BindButton({
             onBound();
           }}
         />
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }
@@ -735,7 +735,7 @@ function ChipWithMenu({
           />
         </DropdownMenuContent>
       </DropdownMenu>
-      <PopoverContent
+      <BuilderPopoverContent
         align="end"
         className="nx-binding-popover"
         // Anchored, not triggered, so Radix has no trigger to give focus back
@@ -748,7 +748,7 @@ function ChipWithMenu({
         }}
       >
         {picker(() => setChanging(false))}
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

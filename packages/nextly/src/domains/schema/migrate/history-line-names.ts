@@ -26,3 +26,9 @@ export const MIGRATION_PLACE_STATED_TWICE_REASON =
  */
 export const BLANK_FILE_LINE =
   "-- This is a blank migration file for custom SQL.";
+
+/**
+ * The header line `migrate:create` writes in every file it generates, a blank one included,
+ * followed by the time. A file without it was written by hand, which no snapshot is owed for.
+ */
+export const GENERATED_FILE_LINE = "-- Generated at:";

@@ -1,0 +1,32 @@
+---
+title: ENTITIES_NOT_SYNCED
+description: "`db:sync` could not add a column or create a table for some entities, so it recorded them failed and synced the rest."
+---
+
+## Cause
+
+`db:sync` could not add a column or create a table for some entities, so it recorded them failed and synced the rest.
+
+When a Single or a field group gains a field, `db:sync` adds the column the field needs to that entity's table, and it creates the table of a new one. When the database refuses that statement, for example because a column name is longer than it allows, a row would be too large, or another connection holds the table, the entity is recorded failed (`migration_status` is `failed`), and the run goes on with every other entity, the user fields and the permissions. It then ends with this code and exit code 1, naming each failed entity with the column or table the database refused and the reason it gave.
+
+A run that ended with exit code 0 before this release, while printing a warning such as `Failed to add column … to …`, now ends with exit code 1. In CI or a deploy script, that step now fails where the schema did not come into step, rather than passing over it.
+
+The steps over data an earlier release stored (hashing passwords stored as given, moving translatable values per language and the rest of the steps `nextly migrate` also takes) are not taken in such a run: they read the tables as the configuration describes them, so they wait for a run that syncs every entity. The run says so, and names the passwords still stored as given.
+
+With `--watch`, the first sync and each re-sync report the same error and the watch goes on. A re-sync never takes the steps over stored data; the next `nextly db:sync` takes them.
+
+## Fix
+
+- Read the reason the database gave for each entity, and fix its cause: rename a field whose column name is too long, shorten or split an entity whose row is too large, or end the session holding the table.
+- Run `nextly db:sync` again. It tries every entity recorded failed again, also when its configuration did not change, and records it applied once its table is in step.
+
+The same run also brings up to date a type an earlier release left with a field recorded and no column: one a plugin extends at a development start, whose reads then fail with `ENTITY_NOT_MIGRATED`.
+
+## Example
+
+```text
+✗ `db:sync` could not add a column or create a table, so these entities are recorded failed: `seo` (priority: Duplicate column name 'priority').
+  Why:  The database refused the statement. Everything else was synced, and the steps over data an earlier release stored wait for a run that syncs every entity.
+  Next: Fix the cause, then run `nextly db:sync` again; it retries them.
+  Docs: https://nextlyhq.com/docs/cli/errors/entities-not-synced  (ENTITIES_NOT_SYNCED)
+```

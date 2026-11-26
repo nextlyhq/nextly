@@ -69,6 +69,7 @@ import {
   landingPush,
   nextSteps,
 } from "../../domains/schema/builder-save/landing-push";
+import { settleKeptPerLanguage } from "../../domains/schema/builder-save/per-language-answers";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
   renamedFieldsOf,
@@ -115,6 +116,7 @@ import {
   schemaDraftSplit,
 } from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
+import { isConfigOwnedSource } from "../../domains/webhooks/recording-provenance";
 import { shownWorkflowSummary } from "../../domains/workflows/stage-presentation";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
@@ -381,7 +383,8 @@ function injectSingleDefaultFields<T extends SingleWithFields | null>(
   single: T
 ): T {
   if (!single) return single;
-  const isCodeFirst = single.source === "code" || single.source === "built-in";
+  const isCodeFirst =
+    isConfigOwnedSource(single.source) || single.source === "built-in";
   if (isCodeFirst) return single;
   const baseFields = single.fields ?? [];
   // Filter out any existing title/slug fields to prevent duplicates.
@@ -2054,9 +2057,36 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           };
           // What the companion reconcile would drop of another owner's, refused before either road runs.
           await refuseBuilderCompanionTakingOthersElements("single", companion);
+          // Once the translations table is in step, the Single's fields kept per language are
+          // settled as the save's file settles them (`settleKeptPerLanguage`): each new field's
+          // stated default in the document's default-language row, and the person's answer for a
+          // field made required.
+          const pushThenSettle = async () => {
+            const pushed = await pushAndReconcileCompanion(
+              push,
+              desired,
+              "single",
+              companion
+            );
+            await settleKeptPerLanguage(
+              { db: adapter.getDrizzle(), dialect, entity: "single" },
+              {
+                tableName,
+                localized: isLocalized,
+                oldFields: single.fields,
+                newFields: fields as unknown as FieldDefinition[],
+                eventResolutions,
+                legacy: legacyBundle,
+                fills: undefined,
+                rowFills: fileAnswers.rowFills,
+                renameResolutions,
+              }
+            );
+            return pushed;
+          };
           const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
-            () => pushAndReconcileCompanion(push, desired, "single", companion),
+            pushThenSettle,
             {
               kind: "single",
               slug,

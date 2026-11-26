@@ -214,8 +214,8 @@ export interface SingleDefinition {
   /** Field configurations */
   fields: Record<string, unknown>[];
 
-  /** Source of the Single definition */
-  source: "code" | "ui" | "built-in";
+  /** Source of the Single definition; `plugin:<name>` for one a plugin contributes */
+  source: "code" | "ui" | "built-in" | `plugin:${string}`;
 
   /** Whether the Single is locked from UI edits (code-first Singles are always locked) */
   locked: boolean;
@@ -260,7 +260,7 @@ export interface SingleDefinition {
  */
 export interface FindSinglesArgs extends DirectAPIConfig, RunAsPrincipal {
   /** Filter by source type */
-  source?: "code" | "ui" | "built-in";
+  source?: "code" | "ui" | "built-in" | `plugin:${string}`;
 
   /** Filter by migration status */
   migrationStatus?: "synced" | "pending" | "generated" | "applied" | "failed";

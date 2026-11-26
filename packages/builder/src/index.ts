@@ -663,3 +663,43 @@ export type {
   PageFacts,
   UnpublishedPart,
 } from "./page-checks/page-facts";
+
+/**
+ * @experimental The editor's glossary: the words an author reads for each of
+ * its ideas.
+ *
+ * Exported for the Page Builder plugin's admin screens, which name the same
+ * ideas as the editor and read the same words, so a rename is one edit. The
+ * retired words and their rules stay inside the repository: the test that
+ * reads them imports the glossary's source.
+ */
+export {
+  ADD_PANEL_WORDS,
+  BOX_DESCRIPTION,
+  CHOICE_WORDS,
+  CONNECT_WORDS,
+  CONVERSION_WORDS,
+  DESIGN_ACTION_WORDS,
+  EDITOR_WORDS,
+  GAP_WORDS,
+  HEADER_FOOTER_WORDS,
+  IMAGE_FIT_WORDS,
+  INDUSTRY_KEYWORDS,
+  LINK_WORDS,
+  MESSAGE_WORDS,
+  PANEL_TOGGLE_WORDS,
+  POSITION_WORDS,
+  PROPERTY_WORDS,
+  SAVED_SECTION_SIZE_WORDS,
+  SCREEN_SIZE_WORDS,
+  SIZE_WORDS,
+  VARIABLE_WORDS,
+  VERB_WORDS,
+  changeForThis,
+  connectedTo,
+  contentThisPageLoads,
+  headerAndFooterNamed,
+  letEachPageChange,
+  propertyCount,
+  type EditorWord,
+} from "./glossary";

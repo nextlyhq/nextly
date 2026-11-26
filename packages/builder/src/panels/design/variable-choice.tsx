@@ -39,7 +39,6 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   Popover,
-  PopoverContent,
   PopoverTrigger,
   SelectGroup,
   SelectItem,
@@ -53,6 +52,7 @@ import * as React from "react";
 import { useCanvasTokenMode } from "../../canvas/prefers-dark";
 import { ChoiceList } from "../../choice-list";
 import { ChromeTooltip } from "../../chrome-tooltip";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import {
   variableFor,
   variableLabel,
@@ -322,7 +322,7 @@ export function VariableChoice({
       <VariableTipped tip={tip ?? "Choose a variable"}>
         <PopoverTrigger asChild>{button}</PopoverTrigger>
       </VariableTipped>
-      <PopoverContent
+      <BuilderPopoverContent
         align="end"
         className="nx-style-inspector__picker"
         // The list puts focus on its search or its entries itself.
@@ -354,7 +354,7 @@ export function VariableChoice({
             setOpen(false);
           }}
         />
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

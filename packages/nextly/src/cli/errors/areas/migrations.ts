@@ -5,6 +5,7 @@
  * @module cli/errors/areas/migrations
  */
 
+import { ANSWER_LANGUAGE_REASON } from "../../../domains/i18n/migration/answer-language-names";
 import {
   perLanguageDriftNext,
   perLanguageMoveWhy,
@@ -35,7 +36,9 @@ import {
   APPLIED_MIGRATION_FILE_MISSING_REASON,
   APPLIED_SNAPSHOT_INVALID_REASON,
   APPLIED_SNAPSHOT_MISSING_REASON,
+  APPLIED_SNAPSHOTS_LOST_REASON,
   MIGRATION_SNAPSHOTS_UNREADABLE_REASON,
+  SNAPSHOT_WITHOUT_ENTITIES_REASON,
 } from "../../../domains/schema/repair-columns/stop-reasons";
 import { NextlyError } from "../../../errors/nextly-error";
 import { CliError, type CliErrorParts } from "../cli-error";
@@ -565,6 +568,20 @@ function placeStatedTwiceParts(error: NextlyError): CliErrorParts {
 }
 
 /**
+ * A file whose answers are decided in another language, as the three parts the refusal was built
+ * from (`answerLanguageError`); the whole message stands where they are not there.
+ */
+function answerLanguageParts(error: NextlyError): CliErrorParts {
+  return (
+    contextParts(error) ?? {
+      what: error.publicMessage,
+      why: "A migration's answers settle entries by their values in one language, which is not this project's default language.",
+      next: "Where no environment has applied it, delete it and make the save again with this project's default language.",
+    }
+  );
+}
+
+/**
  * A refusal over what another owner built on the app's tables, as its three parts: its first
  * sentence says what was refused, its last the step, and those between name each element.
  */
@@ -657,6 +674,17 @@ export const MIGRATION_CODES = defineCodes({
         code: "CONFLICT",
         reason: MIGRATION_PLACE_STATED_TWICE_REASON,
         describe: placeStatedTwiceParts,
+      },
+    ],
+  },
+  MIGRATION_LANGUAGE_DIFFERS: {
+    cause:
+      "A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused it before any of its statements.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: ANSWER_LANGUAGE_REASON,
+        describe: answerLanguageParts,
       },
     ],
   },
@@ -1369,6 +1397,22 @@ export const MIGRATION_CODES = defineCodes({
         reason: APPLIED_SNAPSHOT_MISSING_REASON,
         describe: snapshotStopParts,
       },
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: APPLIED_SNAPSHOTS_LOST_REASON,
+        describe: snapshotStopParts,
+      },
+    ],
+  },
+  SNAPSHOT_WITHOUT_ENTITIES: {
+    cause:
+      "The newest applied migration's snapshot, written by an earlier release, records no entities, while an older applied one does.",
+    from: [
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: SNAPSHOT_WITHOUT_ENTITIES_REASON,
+        describe: snapshotStopParts,
+      },
     ],
   },
   INVALID_SNAPSHOT: {
@@ -1409,6 +1453,10 @@ export const MIGRATION_CODES = defineCodes({
   SETTINGS_CHANGE_WITHOUT_MIGRATION: {
     cause:
       "An entity's settings changed in the configuration, and no migration records the change.",
+  },
+  BUILDER_DEFINITION_IGNORED: {
+    cause:
+      "The Schema Builder's definition file is one git ignores, so `migrate:check` cannot tell the changes not yet in a migration from what the project commits.",
   },
   DATABASE_BEHIND_MIGRATIONS: {
     cause:
@@ -1523,19 +1571,49 @@ const CREATE_MIGRATION =
 export function schemaChangeWithoutMigration(
   count: number,
   lines: readonly string[],
-  moves: readonly PerLanguageMove[] = []
+  moves: readonly PerLanguageMove[] = [],
+  /** Whether `lines` names anything besides the moves (`changesBesideMoves`). */
+  others = false
 ): CliError {
   if (moves.length > 0) {
     return new CliError("SCHEMA_DRIFT", {
       what: `${count} pending schema change(s) detected.`,
       why: [...lines, perLanguageMoveWhy(moves)].join("\n"),
-      next: perLanguageDriftNext(moves, count, CREATE_MIGRATION),
+      next: perLanguageDriftNext(moves, others, CREATE_MIGRATION),
     });
   }
   return new CliError("SCHEMA_DRIFT", {
     what: `${count} pending schema change(s) detected.`,
     why: lines.join("\n"),
     next: CREATE_MIGRATION,
+  });
+}
+
+/**
+ * Permission changes no migration holds, where nothing else is pending: each owner's as one line of
+ * the drift list, so the count is the number of lines. A permission is not a schema change, and the
+ * check that says this reads no database.
+ */
+export function permissionChangeWithoutMigration(
+  count: number,
+  lines: readonly string[]
+): CliError {
+  return new CliError("SCHEMA_DRIFT", {
+    what: `${count} pending permission change${count === 1 ? "" : "s"} detected.`,
+    why: lines.join("\n"),
+    next: CREATE_MIGRATION,
+  });
+}
+
+/**
+ * `migrate:check`'s refusal of a Schema Builder definition file git ignores: it computes the
+ * changes not yet in a migration from what the project commits, and an ignored file is not.
+ */
+export function builderDefinitionIgnored(file: string): CliError {
+  return new CliError("BUILDER_DEFINITION_IGNORED", {
+    what: `The Schema Builder's definition file, \`${file}\`, is ignored by git.`,
+    why: "`migrate:check` compares what the project commits with its migrations, and an ignored file is not committed, so the check would pass on one machine and fail on another.",
+    next: `Commit \`${file}\`: remove the line in \`.gitignore\` that ignores it, then \`git add\` it.`,
   });
 }
 

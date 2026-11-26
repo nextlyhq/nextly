@@ -363,6 +363,12 @@ export function settingsChangesBetween(
 }
 
 /** One entity's changes; see `settingsChanges` for what each word means. */
+/**
+ * The one change named for an entity whose previous snapshot predates recording settings: what it
+ * declares is recorded for the first time, which is no change of what it declared before.
+ */
+export const SETTINGS_RECORDED = "settings recorded";
+
 function entityChanges(
   was: RecordedEntitySettings | undefined,
   now: RecordedEntitySettings | undefined,
@@ -370,7 +376,7 @@ function entityChanges(
   declaredNow: boolean
 ): string[] {
   if (now === undefined) return declaredNow ? [] : ["removed"];
-  if (!previousKnown) return ["settings recorded"];
+  if (!previousKnown) return [SETTINGS_RECORDED];
   if (was === undefined) return ["added"];
   return [
     ...(was.source !== now.source ? ["source"] : []),

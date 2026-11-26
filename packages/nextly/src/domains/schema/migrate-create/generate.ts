@@ -31,7 +31,10 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { underNaming } from "../../field-groups/services/field-group-storage-names";
 import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
-import { isFieldLocalized } from "../../i18n/classify-fields";
+import {
+  holdsOneStructure,
+  isFieldLocalized,
+} from "../../i18n/classify-fields";
 import type { JoinRetries } from "../../i18n/migration/archive-preflight";
 import { carriedDefinition } from "../../i18n/migration/carried-definition";
 import {
@@ -108,6 +111,13 @@ import type { Deletion } from "../migrate/data-loss-consent";
 import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
 import { mergedBy } from "../migrate/history-line";
 import { compareMigrationBaseNames } from "../migrate/migration-order";
+import { storedNamesDroppedIn } from "../migrate/stored-names";
+import {
+  nothingToWrite,
+  pendingChangesOf,
+  recordsForTheFirstTime,
+  SETTINGS_NOT_RECORDED_NOTICE,
+} from "../pending/pending-changes";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -140,13 +150,14 @@ import { renderedType } from "../pipeline/sql-templates/create-table-body";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import {
-  resolutionStatement,
+  resolutionStatements,
   type ColumnResolution,
 } from "../pipeline/sql-templates/resolution-statements";
 import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-rebuild";
 import { schemaVersionStoreSql } from "../schema-version";
 import {
   columnsDeclaredBy,
+  toSnakeCase,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
@@ -175,12 +186,14 @@ import {
   type PermissionRecord,
 } from "./declared-permissions";
 import { buildInverseOperations } from "./down-generator";
+import { droppedJunctions, junctionDropsPlaced } from "./dropped-junctions";
 import {
   droppedTranslations,
   translationsDropsPlaced,
 } from "./dropped-translations";
 import {
   describeSettingsChange,
+  recordedSettingsOf,
   settingsChangesFor,
   settingsRecordOf,
   type EntitySettingsChange,
@@ -527,6 +540,13 @@ export interface GenerateArgs {
    */
   dryRun?: boolean;
   /**
+   * Plan the run to report what it would write, without the refusals that stop writing its file
+   * (an unrecorded translation, translation turned off beside other changes, a moved value's
+   * undeclared language): the changes they concern are still planned and named, and
+   * `migrate:create` refuses them when it writes.
+   */
+  reportOnly?: boolean;
+  /**
    * Decides whether the deletions the plan makes (`plannedDeletions`) may be written, called once
    * the plan is final and before any file is written, a dry run's included. `migrate:create` lists
    * them, counts them where it can read the database, and asks or refuses as the data-loss consent
@@ -575,7 +595,7 @@ export interface GenerateResult {
 }
 
 /** The table an operation acts on (for correlating metadata upserts). */
-function operationTableName(op: Operation): string {
+export function operationTableName(op: Operation): string {
   switch (op.type) {
     case "add_table":
       return op.table.name;
@@ -986,14 +1006,13 @@ async function renameDecisions(
 }
 
 /**
- * Run the migrate:create orchestration. Returns null if no operations
- * remain (config matches latest snapshot; the CLI exits 0 for that).
+ * What one run of `migrate:create` plans before it asks about a rename or writes a file: the latest
+ * snapshot and the configuration's desired one, the diff between them with every companion,
+ * translation and move file planned around it, and the settings and permissions that change. One
+ * computation, so a report of the changes not yet in a migration names what this run would write.
+ * Null where a `--record-snapshot` run has nothing to record.
  */
-export async function generateMigration(
-  requested: GenerateArgs
-): Promise<GenerateResult | null> {
-  // Before anything is planned: a writer another has overtaken stops here.
-  await refuseStaleStart(requested);
+export async function planRun(requested: GenerateArgs) {
   // Scoped, every planner below sees the scoped entity alone.
   const scoped = withScopedEntities(requested);
   const metaDir = resolve(scoped.migrationsDir, "meta");
@@ -1021,6 +1040,8 @@ export async function generateMigration(
     previous: previous?.data.snapshot ?? EMPTY_SNAPSHOT,
     previousContributions: previous?.data.contributions ?? {},
     desired: withTablesAsTheyStand(
+      // Read beside the tables the last migration left: a field group's discriminator is the column
+      // its table was recorded with, which its name alone cannot say.
       buildDesiredSnapshotFromConfig(
         // A container keeping one structure has its main column nullable however it is declared
         // (`buildDesiredTableFromFields`), so one leaving whole translation is added to rows that
@@ -1028,7 +1049,10 @@ export async function generateMigration(
         args.collections,
         args.singles,
         args.components,
-        args.dialect
+        args.dialect,
+        previous?.data.snapshot,
+        // Held-back fields were kept above, and released where asked (`withKeptScopeFieldsOf`).
+        { keepHeldBack: false }
       ),
       args.tablesAsTheyStand
     ),
@@ -1076,7 +1100,9 @@ export async function generateMigration(
     ...args.singles.map(e => tagged(e, "single")),
     ...args.components.map(e => tagged(e, "fieldGroup")),
   ];
-  refuseUnrecordedTranslations(args, { snapshotSays, signOfTranslation });
+  if (args.reportOnly !== true) {
+    refuseUnrecordedTranslations(args, { snapshotSays, signOfTranslation });
+  }
   // What the snapshot this run writes says of each translated table's companion: read from the
   // database for `--record-snapshot`, carried forward otherwise (`writtenTranslations`).
   const written = await writtenTranslations(args, {
@@ -1090,6 +1116,7 @@ export async function generateMigration(
   const companionRenames = await companionRenameDecisions(
     entities,
     previousSnapshot,
+    previous?.data.entities,
     args,
     companionHistory
   );
@@ -1114,7 +1141,9 @@ export async function generateMigration(
   //     from the main table — but the companion migration already relocates them
   //     (create + seed + drop). Strip those drops so we don't drop twice.
   operations = stripRelocatedDrops(operations, companionPlans);
-  refuseTurnOffBesideOtherChanges(operations, companionPlans);
+  if (args.reportOnly !== true) {
+    refuseTurnOffBesideOtherChanges(operations, companionPlans);
+  }
 
   // 3a'. Fields moved into or out of a group in code. The diff reads each as a delete and an add;
   //      an accepted one is carried as the Schema Builder carries a move, its values copied to the
@@ -1156,14 +1185,16 @@ export async function generateMigration(
   // them in Settings instead, which a migration file cannot depend on, since the database the
   // developer reaches is not the one the file runs against. So such a file is refused until the
   // config names its default.
-  refuseUndeclaredSeedLanguage(
-    args.defaultLocale,
-    {
-      seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
-      moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
-    },
-    () => perLanguageMovesIn(diffed, args, args.dialect)
-  );
+  if (args.reportOnly !== true) {
+    refuseUndeclaredSeedLanguage(
+      args.defaultLocale,
+      {
+        seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
+        moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
+      },
+      () => perLanguageMovesIn(diffed, args, args.dialect)
+    );
+  }
 
   // 3d. Translated fields that become or stop being unique within each language. Their companion
   //     indexes are dropped before the main file and created after every other file.
@@ -1218,6 +1249,72 @@ export async function generateMigration(
   // whose columns both stand.
   const changesBeyondTables =
     hasSettingsChanges || changedPermissions.length > 0 || movesValues(args);
+  return {
+    args,
+    metaDir,
+    now,
+    diffed,
+    previous,
+    stream,
+    previousSnapshot,
+    desiredSnapshot,
+    entities,
+    written,
+    companionPlans,
+    codeMoves,
+    operations,
+    fieldLeavesPlans,
+    fieldJoinsPlans,
+    uniquePlans,
+    retypesPlans,
+    hasCompanions,
+    settingsRecord,
+    changedSettings,
+    permissionRecord,
+    changedPermissions,
+    changesBeyondTables,
+    movesValues: movesValues(args),
+  };
+}
+
+/** What `planRun` plans for a run that writes something. */
+export type PlannedRun = NonNullable<Awaited<ReturnType<typeof planRun>>>;
+
+/**
+ * Run the migrate:create orchestration. Returns null if no operations
+ * remain (config matches latest snapshot; the CLI exits 0 for that).
+ */
+export async function generateMigration(
+  requested: GenerateArgs
+): Promise<GenerateResult | null> {
+  // Before anything is planned: a writer another has overtaken stops here.
+  await refuseStaleStart(requested);
+  const planned = await planRun(requested);
+  if (planned === null) return null;
+  let { operations } = planned;
+  const {
+    args,
+    metaDir,
+    now,
+    previous,
+    stream,
+    previousSnapshot,
+    desiredSnapshot,
+    entities,
+    written,
+    companionPlans,
+    codeMoves,
+    fieldLeavesPlans,
+    fieldJoinsPlans,
+    uniquePlans,
+    retypesPlans,
+    hasCompanions,
+    settingsRecord,
+    changedSettings,
+    permissionRecord,
+    changedPermissions,
+    changesBeyondTables,
+  } = planned;
 
   const recorded = await recordedUnlessChanged(args, {
     // Not the per-language unique indexes: a snapshot from before the record has none of them, so
@@ -1244,8 +1341,12 @@ export async function generateMigration(
     },
   });
   if (recorded !== undefined) return recorded;
-  if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
-    return null;
+  // Nothing to write: the same answer every report of the changes not yet in a migration reads.
+  const pending = pendingChangesOf(planned);
+  if (nothingToWrite(pending)) return null;
+  // Settings an earlier snapshot never recorded are recorded now, as `migrate:check` says.
+  if (recordsForTheFirstTime(pending)) {
+    args.onWarning?.(SETTINGS_NOT_RECORDED_NOTICE);
   }
 
   // 4-6. Rename detection + prompt + apply — only meaningful when the main table
@@ -1377,7 +1478,11 @@ export async function generateMigration(
       )
     ),
     ...leftoverDrops,
-    ...(args.resolutions ?? []).map(r => resolutionStatement(r, args.dialect)),
+    // Each answer's statements, but an answer for a field kept per language whose translations
+    // table a companion file of this run changes: that file runs after this one, so it carries them.
+    ...(args.resolutions ?? [])
+      .filter(r => companionFileSettling(r, companionPlans) === undefined)
+      .flatMap(r => resolutionStatements(r, args.dialect)),
     ...generateStatements(
       settled.tighten,
       args.dialect,
@@ -1425,6 +1530,26 @@ export async function generateMigration(
     ...translationsDropsPlaced(sqlStatements, translations.up, args.dialect)
   );
   downSqlStatements.push(...translations.down);
+  // 7a''. A removed entity's own many-to-many tables go before the tables they link, and come back,
+  //       empty, with the DOWN (`droppedJunctions`): no snapshot records one either.
+  const junctions = droppedJunctions({
+    operations,
+    previous: previousSnapshot,
+    previousEntities: previous?.data.entities,
+    // Every entity declared, not only a scoped run's: a link table another one names stays.
+    remaining: {
+      collections: requested.collections,
+      singles: requested.singles,
+    },
+    droppedAlready: tablesDroppedByCaller(args),
+    dialect: args.dialect,
+  });
+  sqlStatements.splice(
+    0,
+    sqlStatements.length,
+    ...junctionDropsPlaced(sqlStatements, junctions.up, args.dialect)
+  );
+  downSqlStatements.push(...junctions.down);
   // A renamed field group's rows move once its tables are as the file leaves them, and move back
   // before the DOWN takes those tables back.
   sqlStatements.push(...groupRenames.up);
@@ -1620,14 +1745,23 @@ export async function generateMigration(
     });
   });
   forwardPlans.forEach(({ plan, entity }, i) => {
+    // The answers it settles (`companionFileSettling`).
+    const settled = (args.resolutions ?? []).filter(
+      r => companionFileSettling(r, companionPlans) === plan
+    );
     companionFiles.push({
       spec: plan.spec,
       opts: {
         // `none` plans are filtered out by the planner, so the kind is always writable here.
         kind: plan.kind === "none" ? "create-only" : plan.kind,
         entity,
-        upSql: plan.upSql,
+        // After its own statements, its answers: their column is there by then, added by this file
+        // where the field is new.
+        upSql: settled
+          .flatMap(r => resolutionStatements(r, args.dialect))
+          .reduce(joinSql, plan.upSql),
         downSql: plan.downSql,
+        ...answeringIn(settled),
         now: new Date(now.getTime() + i + 1),
       },
     });
@@ -1765,6 +1899,11 @@ export async function generateMigration(
     hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
     settingsChanges: changedSettings.map(describeSettingsChange),
     permissionChanges: changedPermissions.map(describePermissionChange),
+    ...answeringIn(
+      (args.resolutions ?? []).filter(
+        r => companionFileSettling(r, companionPlans) === undefined
+      )
+    ),
     deletions: judged.main,
     // A junction table the caller adds is a table this file changes.
     changesNoTable:
@@ -2419,6 +2558,11 @@ interface CompanionPlanEntry {
    */
   entity: I18nTransitionKind;
   /**
+   * Whether the file holds nothing but the columns a repeater's or group's text is kept in: added to
+   * a translations table, or the table of an entity whose only text per language is in there.
+   */
+  overlays?: true;
+  /**
    * A DISABLE's unique indexes on the restored columns, which it creates itself once the values
    * are back (`settingsAfterRestore`): the main migration's `add_index` for each is left out, as
    * its `add_column` is (`stripRelocatedDrops`).
@@ -2630,7 +2774,12 @@ function planCompanionMigrations(
             companionExisted: false,
           });
           if (plan.kind !== "none") {
-            entries.push({ spec: tableSpec, plan, entity: entityKind });
+            entries.push({
+              spec: tableSpec,
+              plan,
+              entity: entityKind,
+              overlays: true,
+            });
           }
         }
         continue;
@@ -3040,6 +3189,34 @@ function renamePairs(
 const joinSql = (a: string, b: string) =>
   a === "" ? b : b === "" ? a : `${a}\n--> statement-breakpoint\n${b}`;
 
+/** The language the answers among `resolutions` are decided in, for their file's header. */
+function answeringIn(resolutions: readonly ColumnResolution[]): {
+  answersIn?: string;
+} {
+  const answersIn = resolutions.find(r => r.perLanguage !== undefined)
+    ?.perLanguage?.locale;
+  return answersIn === undefined ? {} : { answersIn };
+}
+
+/**
+ * The companion file of this run that settles `resolution`'s rows, or undefined where the main file
+ * does. An answer for a field kept per language settles rows of its translations table, so where a
+ * file of this run that runs after the main one changes that table (creates it, or adds the field's
+ * column), the answer runs at the end of that file, once the column is there; the last such file
+ * where there are several. Any other answer, and one whose translations table no file of this run
+ * changes, is the main file's, where it settles rows before its column is made required.
+ */
+function companionFileSettling(
+  resolution: ColumnResolution,
+  companionPlans: readonly CompanionPlanEntry[]
+): CompanionMigrationPlan | undefined {
+  if (resolution.perLanguage === undefined) return undefined;
+  return companionPlans.findLast(
+    ({ plan }) =>
+      plan.kind !== "disable" && plan.spec.mainTable === resolution.tableName
+  )?.plan;
+}
+
 /**
  * The statements renaming `renamed`'s columns in `table`, and the ones
  * renaming them back: a plain `RENAME COLUMN`, which every supported dialect
@@ -3065,6 +3242,30 @@ function companionRenameStatements(
 }
 
 /**
+ * The columns of the fields holding other fields (a repeater, group or component) in the
+ * declaration `record` holds of the entity, by name; none where it holds no declaration.
+ */
+function containerColumnsDeclared(
+  record: EntitySettingsRecord | undefined,
+  kind: I18nTransitionKind,
+  slug: string
+): string[] {
+  const fields = recordedSettingsOf(record, kind, slug)?.settings.fields;
+  if (!Array.isArray(fields)) return [];
+  return fields.flatMap(field => {
+    if (field === null || typeof field !== "object" || Array.isArray(field)) {
+      return [];
+    }
+    const { name, type } = field;
+    return typeof name === "string" &&
+      typeof type === "string" &&
+      holdsOneStructure({ type })
+      ? [toSnakeCase(name)]
+      : [];
+  });
+}
+
+/**
  * Which translated columns are renamed, by entity table: for each translated
  * entity whose translations table the previous snapshot records, every pair
  * of a column it recorded that the entity no longer translates and one it
@@ -3086,14 +3287,17 @@ function companionRenameStatements(
 async function companionRenameDecisions(
   entities: readonly TaggedConfigEntity[],
   previous: NextlySchemaSnapshot,
+  previousEntities: EntitySettingsRecord | undefined,
   args: GenerateArgs,
   history: TranslationRecords
 ): Promise<Map<string, CompanionRename[]>> {
   const byTable = new Map<string, CompanionRename[]>();
   for (const { entity, kind } of entities) {
     // Every entity keeping its values per language, a translated one or, under per-language
-    // storage, one that is not (`storesPerLanguage`): its containers keep their text in overlay
-    // columns all the same, and a rename that left one behind would drop every language's text.
+    // storage, one that is not (`storesPerLanguage`), as the companion's own plan reads it: a
+    // rename of one of its text fields is its translations table's rename, not an add and a drop,
+    // and its containers keep their text in overlay columns there all the same, where a rename
+    // that left one behind would drop every language's text.
     if (!storesPerLanguage(entity)) continue;
     const previousTable = previous.tables.find(
       t => t.name === entity.tableName
@@ -3104,7 +3308,25 @@ async function companionRenameDecisions(
     ) {
       continue;
     }
-    const recorded = previousTable.localizedColumns ?? [];
+    const translated = entity.localized === true;
+    const containers = overlayColumnsOf(entity, kind, args.dialect);
+    // An earlier release kept a container marked `localized: true` whole on the translations table,
+    // and its snapshot lists that column among the translated ones. The column stays as the
+    // container's overlay, so in an untranslated entity it is no text column a rename takes, nor
+    // is the column of a container the previous snapshot declares and this run removes.
+    const containersKnown = new Set([
+      ...containers,
+      ...containerColumnsDeclared(previousEntities, kind, entity.slug),
+    ]);
+    // A container's structure is on the main table under its overlay's own name, where a text field
+    // kept per language has no column: what tells the two apart where nothing is declared. A
+    // database still holding a text field's column on both is not served until `nextly migrate` has
+    // moved it; taken by a baseline before that, the field's rename is not offered.
+    const onMain = new Set(previousTable.columns.map(column => column.name));
+    const recorded = (previousTable.localizedColumns ?? []).filter(
+      column =>
+        translated || (!containersKnown.has(column) && !onMain.has(column))
+    );
     // Each translated field's column as the config now describes it, by name.
     const described = new Map(
       entity.fields
@@ -3121,7 +3343,7 @@ async function companionRenameDecisions(
     const now = [...described.keys()];
     // The overlay columns, apart: one is paired only with another, never with a text's column.
     const recordedOverlays = previousTable.overlayColumns ?? [];
-    const overlaysNow = overlayColumnsOf(entity, kind, args.dialect);
+    const overlaysNow = containers;
     const pairs = [
       ...renamePairs(recorded, now),
       ...renamePairs(recordedOverlays, overlaysNow),
@@ -4214,6 +4436,7 @@ function overlaysEntryFor(
       downSql: joinSql(planned.downSql, renames.down),
     },
     entity: kind,
+    ...(renamed.length === 0 ? { overlays: true as const } : {}),
   };
 }
 
@@ -4335,10 +4558,21 @@ export function buildDesiredSnapshotFromConfig(
    * holds back from a type switched off keeps its column while these have it
    * (`kept-scope-fields.ts`). Omitted, nothing held back is kept.
    */
-  existing?: NextlySchemaSnapshot
+  existing?: NextlySchemaSnapshot,
+  /**
+   * Whether a field a plugin's scope holds back keeps its column from `existing`. A caller that keeps
+   * them itself, and releases them when asked (`withKeptScopeFieldsOf`), reads `existing` for the
+   * field groups' discriminators alone.
+   */
+  options: { keepHeldBack?: boolean } = {}
 ): NextlySchemaSnapshot {
   const tables: TableSpec[] = [];
-  const kept = columnsByTable(existing ?? { tables: [] }, dialect);
+  const kept = columnsByTable(
+    options.keepHeldBack === false
+      ? { tables: [] }
+      : (existing ?? { tables: [] }),
+    dialect
+  );
   // Each field group's discriminator, read off the table as the last migration recorded it: the
   // storage migration renames a group's column whatever its table is called, so the name alone
   // cannot say which one an existing table has (`chooseTypeColumns`).
@@ -4686,6 +4920,16 @@ function isFieldGroupTable(table: TableSpec): boolean {
   const columns = new Set(table.columns.map(column => column.name));
   if (FIELD_GROUP_SIGNATURE.every(column => columns.has(column))) return true;
   return table.name.startsWith(STORAGE_FORMAT.tablePrefix);
+}
+
+/** The tables the statements the caller adds drop: a Schema Builder save's own. */
+function tablesDroppedByCaller(args: GenerateArgs): Set<string> {
+  const up = args.appendedStatements?.up;
+  return new Set(
+    [...(up?.first ?? []), ...(up?.last ?? [])].flatMap(statement =>
+      storedNamesDroppedIn(statement, args.dialect)
+    )
+  );
 }
 
 /**

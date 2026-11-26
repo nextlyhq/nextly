@@ -1,0 +1,37 @@
+---
+title: SNAPSHOT_WITHOUT_ENTITIES
+description: "The newest applied migration's snapshot, written by an earlier release, records no entities, while an older applied one does."
+---
+
+## Cause
+
+The newest applied migration's snapshot, written by an earlier release, records no entities, while an older applied one does.
+
+Since `0.0.2-alpha.73`, every snapshot `nextly migrate:create` writes records each collection's, Single's and field group's fields. An earlier release's `migrate:create` wrote snapshots without that record. A project can hold both: a migration written by a teammate still on an earlier release, applied after one written on a later release.
+
+`nextly repair-columns` judges each column against its field as last migrated, which is read from the newest applied snapshot that records the entities. Here that snapshot is older than a migration that changed the tables since, so judging by it would convert the newer migration's columns back. The command stops before it reads or changes any column, dry run included.
+
+## Fix
+
+Write a migration with this release and apply it. Its snapshot records the entities as the configuration declares them, and is then the newest applied one:
+
+```bash
+nextly migrate:create --name="<migration-name>"
+nextly migrate
+```
+
+Then run `nextly repair-columns` again.
+
+## Example
+
+```text
+✗ The applied migration `20261024_120000_make_author_required` has a snapshot that records no entities, and the older `20261020_120000_add_posts` has one that does.
+  Why:  An earlier release's `migrate:create` wrote it. Its migration changed the tables after `20261020_120000_add_posts`, so judging the columns by `20261020_120000_add_posts` would convert them back.
+  Next: Run `nextly migrate:create --name="<migration-name>"`, then `nextly migrate`: the migration it writes records the entities as they are. Then run `nextly repair-columns` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/snapshot-without-entities  (SNAPSHOT_WITHOUT_ENTITIES)
+```
+
+## Related
+
+- [Repair old columns](/docs/database/repair-columns)
+- [Production migrations](/docs/guides/production-migrations)
