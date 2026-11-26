@@ -4,6 +4,9 @@
  * surface the change came from, and, for a field whose values an earlier apply of the same change
  * already moved, judged as a retry. A file that widens such a field still copies every value; one
  * that narrows it is refused with how to finish the earlier change.
+ *
+ * A translated field that becomes shared while its storage changes is refused in the same surface's
+ * words: a Schema Builder save names the Builder's steps, not the CLI's.
  */
 import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -68,6 +71,35 @@ async function joinAt(
   return (await readdir(dir)).filter(f => !before.has(f) && f.endsWith(".sql"));
 }
 
+/**
+ * Generate `docs` with `price` translated as decimal(10,2), then shared at `precision`, and return
+ * the second run's new files, or its refusal.
+ */
+async function leaveAt(
+  dialect: SupportedDialect,
+  precision: number,
+  judgement?: GenerateArgs["joiningJudgement"]
+): Promise<string[]> {
+  const dir = await mkdtemp(join(tmpdir(), "nextly-leave-judgement-"));
+  const run = (entity: MinimalConfigEntity, name: string, at: string) =>
+    generateMigration({
+      name,
+      dialect,
+      migrationsDir: dir,
+      defaultLocale: "en",
+      collections: [entity],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: new Date(at),
+      ...(judgement === undefined ? {} : { joiningJudgement: judgement }),
+    });
+  await run(docs(true, 10), "one", "2026-11-11T10:00:00.000Z");
+  const before = new Set(await readdir(dir));
+  await run(docs(false, precision), "two", "2026-11-11T11:00:00.000Z");
+  return (await readdir(dir)).filter(f => !before.has(f) && f.endsWith(".sql"));
+}
+
 /** The Builder's judgement: the retries its database shows, as its preflight judged them. */
 const builder = (
   moved: string[],
@@ -112,6 +144,31 @@ describe.each(["postgresql", "mysql"] as const)(
     it("judges another entity's joining field as a first join", async () => {
       await expect(
         joinAt(dialect, 8, { ...builder(["price"]), slug: "other" })
+      ).rejects.toThrow(
+        /"price" changes how it is stored.*nextly migrate:create/
+      );
+    });
+  }
+);
+
+describe.each(["postgresql", "mysql"] as const)(
+  "the generator's wording of a field leaving translation as it is reshaped (%s)",
+  dialect => {
+    it("refuses in the words for code when no writer says otherwise", async () => {
+      await expect(leaveAt(dialect, 8)).rejects.toThrow(
+        /"price" changes how it is stored.*stops it being translated.*nextly migrate:create/
+      );
+    });
+
+    it("words the refusal for the Builder when the Builder writes the file", async () => {
+      await expect(leaveAt(dialect, 8, builder([]))).rejects.toThrow(
+        /Its type, length or precision changes in the same change that stops it being translated.*Turn off Localized and save/
+      );
+    });
+
+    it("words another entity's refusal for code", async () => {
+      await expect(
+        leaveAt(dialect, 8, { ...builder([]), slug: "other" })
       ).rejects.toThrow(
         /"price" changes how it is stored.*nextly migrate:create/
       );

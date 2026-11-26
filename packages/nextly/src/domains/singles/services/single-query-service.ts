@@ -1931,7 +1931,7 @@ export class SingleQueryService extends BaseService {
         stored: storedRevisions,
         translations,
         countersFirst,
-        locale: options.locale,
+        locale: options.revisionLocale ?? options.locale,
       });
 
       // After every gate above: only a read already granted is told who
@@ -2160,12 +2160,7 @@ export class SingleQueryService extends BaseService {
     doc: SingleDocument | null;
     translations: JoinedTranslations | undefined;
   }> {
-    const joinable = await this.joinableTranslations(
-      slug,
-      singleMeta,
-      options.locale,
-      options.fallbackLocale
-    );
+    const joinable = await this.joinableTranslations(slug, singleMeta, options);
     if (!joinable) {
       // Inside a read routed to a plugin's transaction the row is read with a
       // shared lock (`readLocksRows`): the latest committed row, held until
@@ -2213,8 +2208,11 @@ export class SingleQueryService extends BaseService {
   private async joinableTranslations(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    locale: string | undefined,
-    fallbackLocale: string | false | undefined
+    {
+      locale,
+      fallbackLocale,
+      revisionLocale,
+    }: Pick<GetSingleOptions, "locale" | "fallbackLocale" | "revisionLocale">
   ): Promise<Omit<JoinedTranslations, "companionRows"> | null> {
     const parts = await this.languageReadParts(
       slug,
@@ -2228,7 +2226,7 @@ export class SingleQueryService extends BaseService {
       !parts ||
       !chainCoversVersion(parts.localeChain, {
         localization: this.localization,
-        locale,
+        locale: revisionLocale ?? locale,
       })
     ) {
       return null;

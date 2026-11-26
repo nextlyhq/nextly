@@ -585,6 +585,58 @@ function parseRoleRoutes(
   return null;
 }
 
+/** One POST action on an entity's schema: the operation its permission is judged as, and its method. */
+type SchemaAction = { operation: ParsedRoute["operation"]; method: string };
+
+/** POST /api/collections/schema/{slug}/[action], by action. */
+const COLLECTION_SCHEMA_ACTIONS: Readonly<Record<string, SchemaAction>> = {
+  // Preview schema changes (dry-run diff).
+  preview: { operation: "single", method: "previewSchemaChanges" },
+  // What each other type would do to a saved field's values, as the Builder's type picker lists them.
+  "type-change-targets": { operation: "single", method: "typeChangeTargets" },
+  // Apply confirmed schema changes.
+  apply: { operation: "update", method: "applySchemaChanges" },
+};
+
+/** POST /api/singles/schema/[slug]/[action], by action: as a collection's, under the Single's names. */
+const SINGLE_SCHEMA_ACTIONS: Readonly<Record<string, SchemaAction>> = {
+  "type-change-targets": {
+    operation: "single",
+    method: "singleTypeChangeTargets",
+  },
+  preview: { operation: "single", method: "previewSingleSchemaChanges" },
+  apply: { operation: "update", method: "applySingleSchemaChanges" },
+};
+
+/**
+ * The route of a POST action on one entity's schema (`/schema/{slug}/{action}`) that `actions`
+ * names, with the entity's address in `param`; null for any other request. An action spelled like
+ * an inherited member (`toString`) is none of them.
+ */
+function schemaActionRoute(
+  service: ParsedRoute["service"],
+  actions: Readonly<Record<string, SchemaAction>>,
+  request: {
+    id: string | undefined;
+    subresource: string | undefined;
+    subId: string | undefined;
+    httpMethod: string;
+  },
+  target: { routeParams: Record<string, string>; param: string }
+): ParsedRoute | null {
+  const { id, subresource, subId, httpMethod } = request;
+  if (id !== "schema" || !subresource || subId === undefined) return null;
+  if (httpMethod !== "POST" || !Object.hasOwn(actions, subId)) return null;
+  const action = actions[subId];
+  target.routeParams[target.param] = subresource;
+  return {
+    service,
+    operation: action.operation,
+    method: action.method,
+    routeParams: target.routeParams,
+  };
+}
+
 function parseCollectionRoutes(
   id: string | undefined,
   subresource: string | undefined,
@@ -685,37 +737,15 @@ function parseCollectionRoutes(
     };
   }
 
-  // POST /api/collections/schema/{slug}/preview → preview schema changes (dry-run diff)
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "preview" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.collectionName = subresource;
-    return {
-      service: "collections",
-      operation: "single",
-      method: "previewSchemaChanges",
-      routeParams,
-    };
-  }
-
-  // POST /api/collections/schema/{slug}/apply → apply confirmed schema changes
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "apply" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.collectionName = subresource;
-    return {
-      service: "collections",
-      operation: "update",
-      method: "applySchemaChanges",
-      routeParams,
-    };
-  }
+  // POST /api/collections/schema/{slug}/{preview|type-change-targets|apply}: the Builder save's
+  // actions on one collection's schema (`COLLECTION_SCHEMA_ACTIONS`).
+  const schemaAction = schemaActionRoute(
+    "collections",
+    COLLECTION_SCHEMA_ACTIONS,
+    { id, subresource, subId, httpMethod },
+    { routeParams, param: "collectionName" }
+  );
+  if (schemaAction) return schemaAction;
 
   // GET /api/collections/schema/{slug}/delete-impact → what deleting the
   // collection takes with it, by plugin (a dry run the delete dialog asks)
@@ -1778,37 +1808,15 @@ function parseSingleRoutes(
     };
   }
 
-  // POST /api/singles/schema/[slug]/preview → preview single schema changes (dry-run diff)
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "preview" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "singles",
-      operation: "single",
-      method: "previewSingleSchemaChanges",
-      routeParams,
-    };
-  }
-
-  // POST /api/singles/schema/[slug]/apply → apply confirmed single schema changes
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "apply" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "singles",
-      operation: "update",
-      method: "applySingleSchemaChanges",
-      routeParams,
-    };
-  }
+  // POST /api/singles/schema/[slug]/{type-change-targets|preview|apply}: the Builder save's actions
+  // on one Single's schema (`SINGLE_SCHEMA_ACTIONS`).
+  const schemaAction = schemaActionRoute(
+    "singles",
+    SINGLE_SCHEMA_ACTIONS,
+    { id, subresource, subId, httpMethod },
+    { routeParams, param: "slug" }
+  );
+  if (schemaAction) return schemaAction;
 
   // POST /api/singles/schema/address-check → what creating a Single under an address would
   // answer, asked before the create. Under the singles service, so the Single create's own
@@ -1934,6 +1942,12 @@ const COMPONENT_SCHEMA_ROUTES: Readonly<Record<string, ComponentRoute>> = {
   "POST preview": {
     operation: "single",
     method: "previewComponentSchemaChanges",
+  },
+  // POST /api/field-groups/schema/[slug]/type-change-targets → the Builder type picker's answer for
+  // a saved field, as a collection's
+  "POST type-change-targets": {
+    operation: "single",
+    method: "componentTypeChangeTargets",
   },
   // POST /api/field-groups/schema/[slug]/apply → apply confirmed component schema changes
   "POST apply": { operation: "update", method: "applyComponentSchemaChanges" },

@@ -17,6 +17,13 @@ export type ValidationPublicData = {
     /** The language the issue is in, where it is about one language's own value. */
     locale?: string;
   }>;
+  /**
+   * What a description was made from, where it was refused for want of approval alone: the
+   * version a move of the same parts sends past the review (`_rev`), and a mark of each part.
+   *
+   * @experimental
+   */
+  described?: { _rev: string; marks: unknown };
 };
 
 /**

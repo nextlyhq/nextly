@@ -52,7 +52,11 @@ function placementGraph(definitions: readonly FieldGroupDefinition[]): {
         if (written.has(key)) placed.add(key);
       }
     }
-    edges.set(slug.toLowerCase(), [...placed]);
+    // Two definitions with one slug each keep their placements: the later does not replace the
+    // earlier's, so a cycle through either is found, beside the duplicate the configuration's
+    // check reports.
+    const key = slug.toLowerCase();
+    edges.set(key, [...new Set([...(edges.get(key) ?? []), ...placed])]);
   }
   return { edges, written };
 }
