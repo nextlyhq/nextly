@@ -2,8 +2,9 @@
  * Every write to an entry of a collection or Single removed from code is
  * refused, wherever it comes from.
  *
- * Such an entity's registry row says the app's code defines it, and the
- * running configuration no longer declares it (`isRemovedFromCode`). Its
+ * Such an entity's registry row says the app's code defines it, or for a Single
+ * a plugin, and the running configuration no longer declares it
+ * (`isRemovedFromCode`). Its
  * tables are kept until a migration retires it, and its entries stay readable,
  * but nothing the configuration describes writes to them any more: an edit
  * made there would land in storage the next migration drops, or that the app
@@ -26,10 +27,13 @@
 import { getService } from "../../../di/service-access";
 import { NextlyError } from "../../../errors/nextly-error";
 
-import { declaredSlugsOf, isRemovedFromCode } from "./removed-from-code";
+import {
+  declaredSlugsOf,
+  isRemovedFromCode,
+  type RemovableEntityKind,
+} from "./removed-from-code";
 
-/** Which registry an entity's row lives in. */
-export type RemovableEntityKind = "collection" | "single";
+export type { RemovableEntityKind } from "./removed-from-code";
 
 /** The slugs a configuration declares, per kind. */
 export interface DeclaredEntities {
@@ -113,10 +117,19 @@ export async function refuseWriteIfRemovedFromCode(
   slug: string,
   options: { executor?: unknown; lookup?: RegistryLookup } = {}
 ): Promise<void> {
-  if (await entityRemovedFromCode(kind, slug, options)) {
-    throw NextlyError.removedFromCode({ kind, slug });
-  }
+  const row = await removedRow(kind, slug, options);
+  if (row === undefined) return;
+  const plugin = row.source?.startsWith(PLUGIN_PREFIX)
+    ? row.source.slice(PLUGIN_PREFIX.length)
+    : undefined;
+  throw NextlyError.removedFromCode({
+    kind,
+    slug,
+    ...(plugin === undefined ? {} : { plugin }),
+  });
 }
+
+const PLUGIN_PREFIX = "plugin:";
 
 /**
  * Whether `slug` names an entity removed from code, for a path that does
@@ -128,14 +141,25 @@ export async function entityRemovedFromCode(
   slug: string,
   options: { executor?: unknown; lookup?: RegistryLookup } = {}
 ): Promise<boolean> {
+  return (await removedRow(kind, slug, options)) !== undefined;
+}
+
+/** The registry row of the entity `slug` names, where that is removed from code. */
+async function removedRow(
+  kind: RemovableEntityKind,
+  slug: string,
+  options: { executor?: unknown; lookup?: RegistryLookup }
+): Promise<{ source?: string | null } | undefined> {
   const slugs = declaredOfKind(kind);
-  if (slugs === undefined || slugs.has(slug)) return false;
+  if (slugs === undefined || slugs.has(slug)) return undefined;
   const row = await (options.lookup ?? readRegistryRow)(
     kind,
     slug,
     options.executor
   );
-  return row !== null && registryRowRemovedFromCode(kind, row);
+  return row !== null && registryRowRemovedFromCode(kind, row)
+    ? row
+    : undefined;
 }
 
 /**
@@ -151,6 +175,7 @@ export function registryRowRemovedFromCode(
   const declared = globalForDeclared.__nextly_declaredEntities;
   if (declared === undefined) return false;
   return isRemovedFromCode(
+    kind,
     row,
     kind === "single" ? declared.singles : declared.collections
   );
@@ -167,7 +192,7 @@ export function rowRemovedFromCode(
   row: { slug?: string | null; source?: string | null }
 ): boolean {
   const slugs = declaredOfKind(kind);
-  return slugs !== undefined && isRemovedFromCode(row, slugs);
+  return slugs !== undefined && isRemovedFromCode(kind, row, slugs);
 }
 
 /** The slugs of `kind` the published configuration declares, or `undefined` while none is published. */

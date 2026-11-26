@@ -68,7 +68,11 @@ import {
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import { compileAndPublishExtensionSchema } from "../domains/schema/extension/publish";
 import { registerExtensionTables } from "../domains/schema/extension/register-tables";
-import { pluginCollectionSources } from "../domains/schema/migrate/plugin/plugin-collection-sources";
+import {
+  collectionOwner,
+  pluginCollectionSources,
+  pluginEntitySources,
+} from "../domains/schema/migrate/plugin/plugin-collection-sources";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { hasRelationSwitches } from "../domains/schema/pipeline/companion-shape-switches";
@@ -112,8 +116,8 @@ import {
 import {
   configTheCodeOwns,
   configWithRecordedHandOvers,
-  isCodeOwned,
   mergeRegisteredCollectionsSafely,
+  mergeRegisteredEntities,
   withoutHandedToBuilder,
 } from "../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector";
@@ -489,6 +493,7 @@ interface SingleRegistrySurface {
       tableName?: string;
       fields?: unknown[];
       status?: boolean;
+      localized?: boolean;
       source?: string;
     }>
   >;
@@ -545,7 +550,12 @@ interface ComponentRegistrySurface {
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
   // for UI-created components (components have no status column). Optional.
   getAllComponents?(): Promise<
-    Array<{ slug?: string; tableName?: string; fields?: unknown[] }>
+    Array<{
+      slug?: string;
+      tableName?: string;
+      fields?: unknown[];
+      localized?: boolean;
+    }>
   >;
 }
 /**
@@ -598,7 +608,7 @@ async function defaultResolver(name: string): Promise<unknown> {
 // registry-only metadata (versions/localized/status/labels/description) reaches
 // the registry too, not just schema (DDL) changes.
 //
-// Each collection carries its origin, by the rule a start gives it (`pluginCollectionSources`): a
+// Each collection carries its origin, by the rule a start gives it (`collectionOwner`): a
 // slug a plugin contributes is `plugin:<name>`, any other the app's own `code`. Required, so no
 // route sends a plugin's collection as the app's: a record the reload creates keeps the origin it
 // is created with, and a plugin's collection over a record the Schema Builder was handed is the
@@ -607,18 +617,22 @@ function buildCollectionSyncPayload(
   collections: CollectionDef[],
   plugins: SourcedPlugins | undefined
 ) {
-  const sources = pluginCollectionSources(plugins ?? []);
+  const sources = pluginEntitySources(plugins ?? []);
   // The projection every sync route shares; see `toCodeFirstCollectionConfig`.
   return collections
     .filter((c): c is CollectionDef & { slug: string } => !!c.slug)
-    .map(c => toCodeFirstCollectionConfig(c, sources.get(c.slug) ?? "code"));
+    .map(c => toCodeFirstCollectionConfig(c, collectionOwner(sources, c.slug)));
 }
 
-/** The plugins a configuration declares, as far as which collections each contributes. */
+/** The plugins a configuration declares, as far as which entities each contributes. */
 type SourcedPlugins = Parameters<typeof pluginCollectionSources>[0];
 
 // Build the code-first registry-sync payload for singles (see above).
-function buildSingleSyncPayload(singles: SingleDef[]) {
+function buildSingleSyncPayload(
+  singles: SingleDef[],
+  plugins: SourcedPlugins | undefined
+) {
+  const sources = pluginEntitySources(plugins ?? []).singles;
   return singles
     .filter((s): s is SingleDef & { slug: string } => !!s.slug)
     .map(s => {
@@ -632,6 +646,8 @@ function buildSingleSyncPayload(singles: SingleDef[]) {
               .join(" "));
       return {
         slug: s.slug,
+        // Its origin, as each collection's payload carries it.
+        source: sources.get(s.slug) ?? ("code" as const),
         label: labelStr,
         fields: s.fields ?? [],
         description: s.description,
@@ -652,7 +668,11 @@ function buildSingleSyncPayload(singles: SingleDef[]) {
 // Normalize code-first components to the registry sync shape. Shared by the DDL
 // path and the metadata-only path so a component's metadata (e.g. a `hidden`
 // field flag, which drives webhook payload stripping) stays in step either way.
-function buildComponentSyncPayload(components: ComponentDef[]) {
+function buildComponentSyncPayload(
+  components: ComponentDef[],
+  plugins: SourcedPlugins | undefined
+) {
+  const sources = pluginEntitySources(plugins ?? []).fieldGroups;
   return components
     .filter((c): c is ComponentDef & { slug: string } => !!c.slug)
     .map(c => {
@@ -666,6 +686,8 @@ function buildComponentSyncPayload(components: ComponentDef[]) {
               .join(" "));
       return {
         slug: c.slug,
+        // Its origin, as each collection's payload carries it.
+        source: sources.get(c.slug) ?? ("code" as const),
         label: labelStr,
         fields: c.fields ?? [],
         description: c.description,
@@ -759,7 +781,10 @@ async function syncCodeFirstMetadataOnly(
     const singleReg = (await resolve(
       "singleRegistryService"
     )) as SingleRegistrySurface;
-    const payload = buildSingleSyncPayload(newConfig.singles ?? []);
+    const payload = buildSingleSyncPayload(
+      newConfig.singles ?? [],
+      newConfig.plugins
+    );
     let failedSlugs = new Set<string>();
     if (payload.length > 0) {
       failedSlugs = failedSingleSlugs(
@@ -788,7 +813,10 @@ async function syncCodeFirstMetadataOnly(
     const compReg = (await resolve(
       "fieldGroupRegistryService"
     )) as ComponentRegistrySurface;
-    const payload = buildComponentSyncPayload(newConfig.fieldGroups ?? []);
+    const payload = buildComponentSyncPayload(
+      newConfig.fieldGroups ?? [],
+      newConfig.plugins
+    );
     if (payload.length > 0) {
       const failed = componentSyncErrors(
         await compReg.syncCodeFirstComponents(payload)
@@ -3306,7 +3334,8 @@ async function applyReloadHolding(
   // owns both the merge and the policy for an unreadable registry, so this
   // path and `db:sync` cannot drift apart again.
   //
-  // A collection or Single removed from code is not preserved. Its row's
+  // A collection or Single removed from code, a departed plugin's Single among them, is not
+  // preserved. Its row's
   // stored fields would become desired schema, so this apply would create its
   // dropped tables again or alter kept ones to match the row, and a table that
   // had drifted from its row would hold up the whole apply on a confirmation.
@@ -3320,6 +3349,7 @@ async function applyReloadHolding(
       desiredCollections,
       async () =>
         withoutRemovedFromCode(
+          "collection",
           await registeredCollections,
           declaredCollections
         ),
@@ -3338,24 +3368,18 @@ async function applyReloadHolding(
       // Removed from code: left out, for the reason given above the
       // collections merge.
       const dbSingles = withoutRemovedFromCode(
+        "single",
         await singleRegistry.getAllSingles(),
         declaredSingles
       );
-      for (const s of dbSingles) {
-        if (!s?.slug || !s?.tableName) continue;
-        if (desiredSingles[s.slug]) continue; // code config wins
-        desiredSingles[s.slug] = {
-          slug: s.slug,
-          tableName: s.tableName,
-          fields: (s.fields ?? []) as DesiredSingle["fields"],
-          status: s.status === true,
-          // Read from the row, not inferred from the row's presence. A plugin's single whose
-          // plugin left the config keeps its row, so it reaches this loop while still owned by
-          // code; calling it the Builder's would widen its columns on the apply that follows,
-          // for a removal nobody requested.
-          builderOwned: !isCodeOwned(s),
-        };
-      }
+      // The merge the collections and `db:sync` use.
+      Object.assign(
+        desiredSingles,
+        mergeRegisteredEntities(desiredSingles, dbSingles, (row, base) => ({
+          ...base,
+          status: row.status === true,
+        }))
+      );
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -3372,18 +3396,14 @@ async function applyReloadHolding(
       "fieldGroupRegistryService"
     )) as ComponentRegistrySurface;
     if (typeof componentRegistry?.getAllComponents === "function") {
-      const dbComponents = await componentRegistry.getAllComponents();
-      for (const c of dbComponents) {
-        if (!c?.slug || !c?.tableName) continue;
-        if (desiredComponents[c.slug]) continue; // code config wins
-        desiredComponents[c.slug] = {
-          slug: c.slug,
-          tableName: c.tableName,
-          fields: (c.fields ?? []) as DesiredFieldGroup["fields"],
-          // Read from the row, for the same reason as the singles loop above.
-          builderOwned: !isCodeOwned(c),
-        };
-      }
+      Object.assign(
+        desiredComponents,
+        mergeRegisteredEntities(
+          desiredComponents,
+          await componentRegistry.getAllComponents(),
+          (_row, base) => base
+        )
+      );
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -3675,7 +3695,8 @@ async function applyReloadHolding(
         "singleRegistryService"
       )) as SingleRegistrySurface;
       const codeFirstSingleConfigs = buildSingleSyncPayload(
-        (newConfig.singles ?? []).filter(notHeld("single"))
+        (newConfig.singles ?? []).filter(notHeld("single")),
+        newConfig.plugins
       );
       let failedSlugs = new Set<string>();
       if (codeFirstSingleConfigs.length > 0) {
@@ -3750,7 +3771,8 @@ async function applyReloadHolding(
       const codeFirstComponentConfigs = buildComponentSyncPayload(
         (newConfig.fieldGroups ?? [])
           .filter(notHeld("fieldGroup"))
-          .filter(group => !skippedComponentSlugs.has(group.slug ?? ""))
+          .filter(group => !skippedComponentSlugs.has(group.slug ?? "")),
+        newConfig.plugins
       );
       if (codeFirstComponentConfigs.length > 0) {
         // A group the sync reports rather than writes leaves the registry behind the DDL the
@@ -4180,9 +4202,12 @@ async function restoreHeldRows(
     if (singles.length > 0) {
       const result = await (
         (await resolve("singleRegistryService")) as SingleRegistrySurface
-      ).syncCodeFirstSingles(buildSingleSyncPayload(singles), {
-        seedPermissions: false,
-      });
+      ).syncCodeFirstSingles(
+        buildSingleSyncPayload(singles, newConfig.plugins),
+        {
+          seedPermissions: false,
+        }
+      );
       failed.push(...unwrittenSlugs(result).map(slug => named("single", slug)));
     }
     const groups = restored(
@@ -4193,7 +4218,9 @@ async function restoreHeldRows(
     if (groups.length > 0) {
       const result = await (
         (await resolve("fieldGroupRegistryService")) as ComponentRegistrySurface
-      ).syncCodeFirstComponents(buildComponentSyncPayload(groups));
+      ).syncCodeFirstComponents(
+        buildComponentSyncPayload(groups, newConfig.plugins)
+      );
       failed.push(
         ...unwrittenSlugs(result).map(slug => named("fieldGroup", slug))
       );

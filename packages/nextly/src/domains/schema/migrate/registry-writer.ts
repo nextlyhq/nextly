@@ -62,6 +62,10 @@ import {
   singleRowValues,
 } from "../ui-schema/metadata-sql";
 
+import type {
+  PluginEntitySources,
+  PluginSource,
+} from "./plugin/plugin-collection-sources";
 import {
   anySlugs,
   clearedSettings,
@@ -79,11 +83,11 @@ export interface RegistryWriteDeps {
   adapter: DrizzleAdapter;
   logger: Logger;
   /**
-   * The origin of each collection a plugin contributes, `plugin:<name>` by
-   * slug, as the start gives it: a row the writer creates for one of them
-   * is that plugin's, not the app's.
+   * The origin of each collection, Single and field group a plugin
+   * contributes, `plugin:<name>` by slug, as the start gives it: a row the
+   * writer creates for one of them is that plugin's, not the app's.
    */
-  collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
+  entitySources?: PluginEntitySources;
   /**
    * Which rows the registry already holds are brought to the source, by kind
    * and slug; every one when absent. A row the registry lacks is written
@@ -464,13 +468,18 @@ async function recordedRows(
         slug,
         ...names(recorded, storedCollections, slug),
         write: () => {
-          const origin = collectionOriginOf(
+          const origin = originOf(
             recorded,
-            deps.collectionSources?.get(slug)
+            deps.entitySources?.collections.get(slug)
           );
           return collections.writeRecordedCollection(
             recordedCollection(slug, recorded, origin.source),
-            origin,
+            {
+              ...origin,
+              ...(deps.entitySources?.legacyCollections.has(slug) === true
+                ? { yieldsToBuilder: true }
+                : {}),
+            },
             options("collection", recorded, storedCollections, slug)
           );
         },
@@ -482,12 +491,17 @@ async function recordedRows(
         kind: "single" as const,
         slug,
         ...names(recorded, storedSingles, slug),
-        write: () =>
-          singles.writeRecordedSingle(
-            recordedSingle(slug, recorded),
-            originOf(recorded),
+        write: () => {
+          const origin = originOf(
+            recorded,
+            deps.entitySources?.singles.get(slug)
+          );
+          return singles.writeRecordedSingle(
+            recordedSingle(slug, recorded, origin.source),
+            origin,
             options("single", recorded, storedSingles, slug)
-          ),
+          );
+        },
       })),
     ...Object.entries(entities.fieldGroups)
       .filter(kept)
@@ -499,15 +513,19 @@ async function recordedRows(
         write: () => {
           // Projected inside the row's own write, so a record that cannot be
           // read costs that row alone.
-          const { config, tableName } = recordedFieldGroup(slug, recorded);
-          return fieldGroups.writeRecordedComponent(
-            config,
-            originOf(recorded),
-            {
-              ...options("fieldGroup", recorded, storedFieldGroups, slug),
-              ...(tableName === undefined ? {} : { tableName }),
-            }
+          const origin = originOf(
+            recorded,
+            deps.entitySources?.fieldGroups.get(slug)
           );
+          const { config, tableName } = recordedFieldGroup(
+            slug,
+            recorded,
+            origin.source
+          );
+          return fieldGroups.writeRecordedComponent(config, origin, {
+            ...options("fieldGroup", recorded, storedFieldGroups, slug),
+            ...(tableName === undefined ? {} : { tableName }),
+          });
         },
       })),
   ];
@@ -564,44 +582,39 @@ function recordedOptions<TRecord>(
  * (`plugin`), any other code-first one the app's, a Builder one the
  * Builder's. Used only for a row the writer creates.
  */
-function originOf(recorded: RecordedEntitySettings): {
-  source: "code" | "ui";
-  locked: boolean;
-} {
-  return recorded.source === "code"
-    ? { source: "code", locked: true }
-    : { source: "ui", locked: false };
-}
-
-/** `originOf` for a collection, which a plugin can contribute (`plugin`). */
-function collectionOriginOf(
+function originOf(
   recorded: RecordedEntitySettings,
-  plugin: `plugin:${string}` | undefined
-): { source: "code" | "ui" | `plugin:${string}`; locked: boolean } {
-  const origin = originOf(recorded);
-  return origin.source === "code" && plugin !== undefined
-    ? { ...origin, source: plugin }
-    : origin;
+  plugin: PluginSource | undefined
+): { source: "code" | "ui" | PluginSource; locked: boolean } {
+  return recorded.source === "code"
+    ? { source: plugin ?? "code", locked: true }
+    : { source: "ui", locked: false };
 }
 
 /** A recorded Single, as the code-first sync's payload (`recordedCollection`). */
 function recordedSingle(
   slug: string,
-  recorded: RecordedEntitySettings
+  recorded: RecordedEntitySettings,
+  /** The origin the row it creates takes (`originOf`). */
+  source: CodeFirstSingleConfig["source"]
 ): CodeFirstSingleConfig {
   const declared = { ...declaration(recorded), slug };
   if (recorded.source === "code") {
     // `defineSingle` gives every Single an admin object, empty where the
     // config declares no option, and a snapshot drops an object holding only
     // unset options. Restored, so the row stores what a start stores.
-    return toCodeFirstSingleConfig({
-      admin: {},
-      ...declared,
-    } as CodeFirstSingleSource);
+    return toCodeFirstSingleConfig(
+      {
+        admin: {},
+        ...declared,
+      } as CodeFirstSingleSource,
+      source
+    );
   }
   const row = singleRowValues(declared as UiSchemaEntity);
   return {
     slug,
+    source,
     label: row.label,
     fields: row.fields,
     ...(row.description === undefined || row.description === null
@@ -624,18 +637,24 @@ function recordedSingle(
  */
 function recordedFieldGroup(
   slug: string,
-  recorded: RecordedEntitySettings
+  recorded: RecordedEntitySettings,
+  /** The origin the row it creates takes (`originOf`). */
+  source: CodeFirstComponentConfig["source"]
 ): { config: CodeFirstComponentConfig; tableName?: string } {
   const declared = { ...declaration(recorded), slug };
   if (recorded.source === "code") {
     return {
-      config: toCodeFirstComponentConfig(declared as CodeFirstComponentSource),
+      config: toCodeFirstComponentConfig(
+        declared as CodeFirstComponentSource,
+        source
+      ),
     };
   }
   const row = componentRowValues(declared as UiSchemaEntity);
   return {
     config: {
       slug,
+      source,
       label: row.label,
       fields: row.fields,
       ...(row.description === undefined || row.description === null
@@ -658,7 +677,7 @@ function recordedFieldGroup(
 function recordedCollection(
   slug: string,
   recorded: RecordedEntitySettings,
-  /** The origin the row it creates takes (`collectionOriginOf`). */
+  /** The origin the row it creates takes (`originOf`). */
   source: NonNullable<CodeFirstCollectionConfig["source"]>
 ): CodeFirstCollectionConfig {
   const declared = { ...declaration(recorded), slug };

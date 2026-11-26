@@ -303,6 +303,24 @@ export async function newestSnapshotName(
 }
 
 /**
+ * Whether the site keeps migration files: its migrations folder holds a written
+ * migration with its snapshot (`recordedSnapshotNames`), a baseline's alone
+ * included. A missing or empty folder holds none, nor does one with SQL files
+ * and no snapshot, which record no table. What a snapshot holds is not read.
+ */
+export async function keepsMigrationFiles(site: {
+  cwd?: string;
+  migrationsDir: string;
+}): Promise<boolean> {
+  const metaDir = resolve(
+    site.cwd ?? process.cwd(),
+    site.migrationsDir,
+    "meta"
+  );
+  return (await newestSnapshotName(metaDir)) !== undefined;
+}
+
+/**
  * Read the latest snapshot file from `migrations/meta/`.
  *
  * "Latest" = alphabetically last, which corresponds to the highest

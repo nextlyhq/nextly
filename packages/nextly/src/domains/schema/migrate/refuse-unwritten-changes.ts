@@ -20,6 +20,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { APP_OWNER } from "../../../plugins/permissions/collect-permissions";
 import type { EntitySettingsChange } from "../migrate-create/entity-settings";
+import { translationsNotRecordedNotice } from "../pending/pending-changes";
 import type { Operation } from "../pipeline/diff/types";
 
 import { configurationRegistryRows } from "./first-run";
@@ -64,6 +65,9 @@ export async function refuseUnwrittenChanges(
       (await holdsAnyAddedTable(args.adapter, changes.tables)),
   });
   if (error !== undefined) throw error;
+  if (changes.besideNotRecorded !== undefined) {
+    args.logger.warn(translationsNotRecordedNotice(changes.besideNotRecorded));
+  }
 }
 
 /** `tableExists`, where the adapter has it. */

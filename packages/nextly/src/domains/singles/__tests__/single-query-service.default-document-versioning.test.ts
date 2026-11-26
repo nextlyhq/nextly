@@ -6,7 +6,7 @@
  * so v1 must omit those defaults and stay untagged by locale; otherwise
  * restoring v1 resurrects translations that were never persisted or visible.
  */
-import { describe, it, expect, vi } from "vitest";
+import { beforeAll, describe, it, expect, vi } from "vitest";
 
 import { SingleQueryService } from "../services/single-query-service";
 
@@ -17,6 +17,15 @@ import {
   createMockHookRegistry,
   siteSettingsMeta,
 } from "./single-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 // Intercept the version write so the test asserts exactly the snapshot + locale
 // the service hands to capture, without running real version persistence.

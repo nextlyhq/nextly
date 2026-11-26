@@ -21,14 +21,59 @@ export interface FieldGroupPlacement {
   entitySlug: string;
   /** The field's path from its entity's top level, dotted through containers. */
   fieldPath: string;
+  /**
+   * For a holder reaching the field group through other field groups, those field groups, holder
+   * side first; absent for a direct use. Only the read through field groups gives it.
+   */
+  via?: string[];
+}
+
+/**
+ * Every collection, Single and field group using a field group, directly or through other field
+ * groups, and whether the reader may read every one of them: `complete` is false where the
+ * reader's scope hides a collection or Single, so a list without them is not taken for the whole.
+ */
+export interface FieldGroupUses {
+  items: FieldGroupPlacement[];
+  complete: boolean;
+}
+
+/** The used-by answer read through field groups: its list, and the meta saying whether it is whole. */
+interface UsedThroughResponse {
+  items: FieldGroupPlacement[];
+  meta?: { complete?: unknown };
+}
+
+/**
+ * The query reading every user of a field group, those reaching it through other field groups
+ * among them (`?through=field-groups`): what a refused move names. Under its own key beside the
+ * direct read, so the field group editor's list and this answer never stand in for each other,
+ * and under the field group's detail key, so the saves that refresh one refresh both.
+ */
+export function fieldGroupUsedThroughQuery(slug: string | undefined) {
+  return {
+    queryKey: [...fieldGroupKeys.detail(slug ?? ""), "used-by", "through"],
+    queryFn: async (): Promise<FieldGroupUses> => {
+      const result = await protectedApi.get<UsedThroughResponse>(
+        `/field-groups/${encodeURIComponent(slug ?? "")}/used-by?through=field-groups`
+      );
+      // Whole unless the server says a user was hidden: an answer saying nothing of it is the
+      // server's whole list, as the direct read always was.
+      return { items: result.items, complete: result.meta?.complete !== false };
+    },
+    enabled: Boolean(slug),
+    // Read afresh, as the direct read is: a save placing the field group elsewhere refreshes its
+    // own entity's keys, not this one.
+    staleTime: 0,
+    gcTime: 0,
+  };
 }
 
 /**
  * The query reading where a field group is used, for one slug: what
- * `useFieldGroupUsedBy` reads, and what a page asking about several field
- * groups at once reads for each.
+ * `useFieldGroupUsedBy` reads for the field group's own editor.
  */
-export function fieldGroupUsedByQuery(slug: string | undefined) {
+function fieldGroupUsedByQuery(slug: string | undefined) {
   return {
     queryKey: [...fieldGroupKeys.detail(slug ?? ""), "used-by"],
     queryFn: async () => {

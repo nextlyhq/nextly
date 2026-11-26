@@ -437,12 +437,15 @@ export class NextlyError extends Error {
    * registry row says the app's code defines it, and the running configuration
    * no longer declares it. Its entries are read-only until it is retired or
    * declared again, so the message names the entity, says what happened and
-   * gives both ways out. `publicData` carries the kind and the slug, which the
-   * caller named, so a client can mark the entity without parsing the sentence.
+   * gives both ways out; for one a plugin contributed, it names the plugin to
+   * put back. `publicData` carries the kind and the slug, which the caller
+   * named, so a client can mark the entity without parsing the sentence.
    */
   static removedFromCode(opts: {
     kind: "collection" | "single";
     slug: string;
+    /** The plugin that contributed it, where one did. */
+    plugin?: string;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     const thing = opts.kind === "single" ? "Single" : "collection";
@@ -450,10 +453,14 @@ export class NextlyError extends Error {
     return new NextlyError({
       code: "ENTITY_REMOVED_FROM_CODE",
       publicMessage:
-        `The ${thing} "${opts.slug}" was removed from code, so ${its} ` +
+        (opts.plugin === undefined
+          ? `The ${thing} "${opts.slug}" was removed from code, so ${its} `
+          : `The ${thing} "${opts.slug}" comes from the plugin "${opts.plugin}", which no longer declares it in the configuration, so ${its} `) +
         `can't be changed. To retire it, run \`nextly migrate:create\` and ` +
-        `then \`nextly migrate\`. To keep it, declare it again in ` +
-        `nextly.config.ts.`,
+        `then \`nextly migrate\`. ` +
+        (opts.plugin === undefined
+          ? `To keep it, declare it again in nextly.config.ts.`
+          : `To change it, put the plugin back in nextly.config.ts.`),
       publicData: { kind: opts.kind, slug: opts.slug },
       logContext: { kind: opts.kind, slug: opts.slug, ...opts.logContext },
     });
@@ -613,13 +620,18 @@ export class NextlyError extends Error {
 
   static validation(opts: {
     errors: ValidationPublicData["errors"];
+    /** See {@link ValidationPublicData.described}. */
+    described?: ValidationPublicData["described"];
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "VALIDATION_ERROR",
       publicMessage: "Validation failed.",
-      publicData: { errors: opts.errors },
+      publicData: {
+        errors: opts.errors,
+        ...(opts.described === undefined ? {} : { described: opts.described }),
+      },
       cause: opts.cause,
       logContext: opts.logContext,
     });

@@ -15,11 +15,8 @@
 // rename that rebuilds a table would otherwise leave RQB serving the
 // pre-change table (the "500s until restart" bug class, May 2026).
 
-import { defineRelations, getTableName, is } from "drizzle-orm";
+import { defineRelations, entityKind, getTableName } from "drizzle-orm";
 import type { AnyRelations } from "drizzle-orm";
-import { MySqlTable } from "drizzle-orm/mysql-core";
-import { PgTable } from "drizzle-orm/pg-core";
-import { SQLiteTable } from "drizzle-orm/sqlite-core";
 
 import { NextlyError } from "../errors/nextly-error";
 
@@ -154,6 +151,34 @@ export function staticRelationTables(
 ): Record<string, unknown> {
   // The bundle loaded for this dialect when its adapter was created.
   return loadedDialect(dialect).tables;
+}
+
+/** How drizzle marks the tables of the three dialects. */
+const TABLE_KINDS: ReadonlySet<unknown> = new Set([
+  "PgTable",
+  "MySqlTable",
+  "SQLiteTable",
+]);
+
+/**
+ * Whether `value` is a table of one of the three dialects, by the kind drizzle
+ * marks its class, or one that class extends, with. As drizzle's own `is`
+ * compares them, so a table made by another copy of drizzle is one too; asked
+ * of the mark rather than of the classes, which would load every dialect.
+ * Drizzle's common `Table` would take any other database's table for one.
+ */
+function isTableOfADialect(value: object): boolean {
+  let made: unknown = Object.getPrototypeOf(value)?.constructor;
+  while (typeof made === "function") {
+    if (
+      Object.hasOwn(made, entityKind) &&
+      TABLE_KINDS.has(Reflect.get(made, entityKind))
+    ) {
+      return true;
+    }
+    made = Object.getPrototypeOf(made);
+  }
+  return false;
 }
 
 export class SchemaRegistry {
@@ -453,11 +478,7 @@ export class SchemaRegistry {
   private isDrizzleTable(value: unknown): boolean {
     if (!value || typeof value !== "object") return false;
     try {
-      return (
-        is(value as never, PgTable) ||
-        is(value as never, MySqlTable) ||
-        is(value as never, SQLiteTable)
-      );
+      return isTableOfADialect(value);
     } catch {
       // If drizzle-orm's `is` function isn't available, check for common table properties
       const obj = value as Record<string, unknown>;

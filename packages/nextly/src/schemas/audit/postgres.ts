@@ -21,7 +21,7 @@ import {
   ACTIVITY_LOG_INDEXES,
   AUDIT_LOG_INDEXES,
   pgIndexes,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-postgres";
 
 import {
   AUDIT_ACTOR_KIND_LENGTH,

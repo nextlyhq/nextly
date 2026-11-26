@@ -192,6 +192,199 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     });
   });
 
+  /** What a move of Spanish would do, and the version and marks it was described from. */
+  async function describeSpanish(
+    id: string,
+    direction: "publish" | "unpublish" = "publish"
+  ) {
+    const { item } = await t!.nextly[direction]({
+      collection: "posts",
+      id,
+      locales: ["es"],
+      describe: true,
+    });
+    return { rev: item._rev ?? "", marks: item.marks! };
+  }
+
+  /** A move of Spanish from a description, and the code it is refused with. */
+  function moveSpanish(
+    id: string,
+    rev: string,
+    direction: "publish" | "unpublish" = "publish"
+  ): Promise<string> {
+    return t!.nextly[direction]({
+      collection: "posts",
+      id,
+      locales: ["es"],
+      data: { _rev: rev },
+    }).then(
+      () => "moved",
+      (error: unknown) => String((error as { code?: string }).code)
+    );
+  }
+
+  const save = (id: string, locale: string, data: Doc) =>
+    t!.nextly.update({
+      collection: "posts",
+      id,
+      locale,
+      data: { ...data, _overwrite: true },
+    });
+
+  it("publishes from a description what it described, and refuses once a part of it changed", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" }, fr: { title: "Bonjour" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: ["en"],
+      data: { _overwrite: true },
+    });
+
+    // Spanish's stored text, which no draft holds.
+    const first = await describeSpanish(id);
+    await save(id, "es", { title: "Hola otra vez" });
+    expect(await moveSpanish(id, first.rev)).toBe("STALE_VERSION");
+    expect(await states(id)).toMatchObject({ es: "draft" });
+    const second = await describeSpanish(id);
+    expect(second.marks.languages.es).not.toBe(first.marks.languages.es);
+    expect(second.marks.rest).toBe(first.marks.rest);
+
+    // A shared field's live value, which is shown in Spanish too.
+    await save(id, "en", { tagline: "Changed" });
+    expect(await moveSpanish(id, second.rev)).toBe("STALE_VERSION");
+
+    // French, which is not described: nothing of Spanish changed.
+    const third = await describeSpanish(id);
+    await save(id, "fr", { title: "Salut" });
+    expect((await describeSpanish(id)).marks).toMatchObject({
+      languages: third.marks.languages,
+    });
+    expect(await moveSpanish(id, third.rev)).toBe("moved");
+    expect(await states(id)).toMatchObject({ es: "published", fr: "draft" });
+  });
+
+  it("refuses from a description once a held draft changed, and marks whose it was", async () => {
+    await boot(posts({ versions: { drafts: true } }));
+    const id = await entry({ es: { title: "Hola" }, fr: { title: "Bonjour" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    await save(id, "es", { title: "Hola 2" });
+
+    const first = await describeSpanish(id);
+    await save(id, "es", { title: "Hola 3" });
+    expect(await moveSpanish(id, first.rev)).toBe("STALE_VERSION");
+    const second = await describeSpanish(id);
+    expect(second.marks.languages.es).not.toBe(first.marks.languages.es);
+    expect(second.marks.rest).toBe(first.marks.rest);
+
+    // Another language's draft moves the document's own counter: refused, and not marked Spanish's.
+    await save(id, "fr", { title: "Salut" });
+    expect(await moveSpanish(id, second.rev)).toBe("STALE_VERSION");
+    const third = await describeSpanish(id);
+    expect(third.marks.languages).toEqual(second.marks.languages);
+    expect(third.marks.rest).not.toBe(second.marks.rest);
+
+    expect(await moveSpanish(id, third.rev)).toBe("moved");
+    const live = await t!.nextly.findByID({
+      collection: "posts",
+      id,
+      locale: "es",
+      status: "published",
+    });
+    expect((live as Doc).title).toBe("Hola 3");
+  });
+
+  it("publishes past the review from a description refused for approval alone, and refuses once it changed", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    // Holds Spanish back for approval, unless the publish is made without review.
+    container.registerSingleton<PublishGate>("publishGate", () => ({
+      refusals: question =>
+        Promise.resolve(
+          question.withoutReview
+            ? []
+            : question.parts
+                .filter(part => part.kind === "language")
+                .map(part => ({
+                  part,
+                  code: "NOT_APPROVED" as const,
+                  message: "Waiting for approval.",
+                }))
+        ),
+      judge: () =>
+        Promise.resolve({ refusals: [], settle: () => Promise.resolve() }),
+    }));
+    /** What a description of Spanish's publish was made from, as its refusal says. */
+    const describedFrom = async () => {
+      const refusal = await t!.nextly
+        .publish({ collection: "posts", id, locales: ["es"], describe: true })
+        .then(
+          () => undefined,
+          (error: unknown) => error as { code?: string; publicData?: Doc }
+        );
+      expect(refusal?.code).toBe("VALIDATION_ERROR");
+      return (refusal?.publicData?.described as { _rev: string })._rev;
+    };
+    const pastReview = (rev: string) =>
+      t!.nextly
+        .publish({
+          collection: "posts",
+          id,
+          locales: ["es"],
+          withoutReview: { reason: "Due today." },
+          data: { _rev: rev },
+        })
+        .then(
+          () => "moved",
+          (error: unknown) => String((error as { code?: string }).code)
+        );
+
+    const first = await describedFrom();
+    expect(first).toMatch(/es:\d+/);
+    await save(id, "es", { title: "Hola otra vez" });
+    expect(await pastReview(first)).toBe("STALE_VERSION");
+    expect(await states(id)).toMatchObject({ es: "draft" });
+
+    expect(await pastReview(await describedFrom())).toBe("moved");
+    expect(await states(id)).toMatchObject({ es: "published" });
+  });
+
+  it("unpublishes from a description what it described, and refuses once it changed", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    const first = await describeSpanish(id, "unpublish");
+    await save(id, "es", { title: "Hola otra vez" });
+    expect(await moveSpanish(id, first.rev, "unpublish")).toBe("STALE_VERSION");
+    expect(await states(id)).toMatchObject({ es: "published" });
+    const second = await describeSpanish(id, "unpublish");
+    expect(await moveSpanish(id, second.rev, "unpublish")).toBe("moved");
+    expect(await states(id)).toMatchObject({ es: "draft" });
+  });
+
+  it("says what a description alone was made from", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    const { item } = await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: ["es"],
+      data: { _overwrite: true },
+    });
+    expect(item).not.toHaveProperty("_rev");
+    expect(item).not.toHaveProperty("marks");
+  });
+
   it("publishes no language when chosen languages fail validation, and names every one that fails", async () => {
     await boot(
       posts({

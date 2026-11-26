@@ -28,6 +28,10 @@ import {
   liveCompanionColumns,
   localizedColumnsOnMain,
 } from "../runtime/companion-io";
+import {
+  fieldsTurningTranslatedInside,
+  type StructuredField,
+} from "../shared-structure";
 
 import { companionColumnsThatCannotHold } from "./companion-column-holds";
 import {
@@ -35,6 +39,7 @@ import {
   type UniqueTranslatedColumn,
 } from "./companion-unique-indexes";
 import { ddlType } from "./ddl-types";
+import { fieldTurningTranslatedRefusal } from "./disable-keeping-overlays";
 import { ensureI18nArchive } from "./ensure-archive";
 import { fieldsJoiningTranslation } from "./field-joins-translation";
 import {
@@ -266,6 +271,16 @@ export async function archiveFieldsLeavingTranslation(args: {
     liveCompanionColumns: (await companionColumns()).map(c => c.name),
   });
   if (leftBehind) throw leftBehind;
+  // A shared field inside a container keeping its text per language made translated: its stored
+  // value, every language's, would be taken by the first language saved
+  // (`fieldsTurningTranslatedInside`). Refused before anything changes, translation staying on.
+  if (args.wasLocalized && args.isLocalized) {
+    const turning = fieldTurningTranslatedRefusal(
+      { kind: args.kind, slug: args.entity },
+      fieldsTurningTranslatedInside(oldFields, args.newFields)
+    );
+    if (turning) throw turning;
+  }
   // Nothing to judge or archive when no field changes whether it is translated, or its name.
   if (leaving.size === 0 && joining.length === 0 && !rename) {
     return;

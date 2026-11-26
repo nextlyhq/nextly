@@ -13,7 +13,10 @@
 // fallow-ignore-file code-duplication
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 
-import { NOTICES_INDEXES, sqliteIndexes } from "../_internal/core-indexes";
+import {
+  NOTICES_INDEXES,
+  sqliteIndexes,
+} from "../_internal/core-indexes-sqlite";
 import { users } from "../users/sqlite";
 
 import { NOTICES_TABLE } from "./table-name";
