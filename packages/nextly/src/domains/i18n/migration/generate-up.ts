@@ -547,14 +547,25 @@ export function buildMissingDefaultRowsInsert(
 export function buildDefaultLocaleRefreshStatements(
   spec: CompanionCopyRef,
   columnNames: readonly string[],
-  options: { refreshStatus?: boolean } = {}
+  options: {
+    refreshStatus?: boolean;
+    /**
+     * Fill only a value the row does not hold yet: each column keeps what it holds, and takes the
+     * main row's value only where it holds none. For an overlay, whose text the main row no longer
+     * holds once a language is saved, so copying main over it would replace that text with the
+     * bare structure.
+     */
+    keepWritten?: boolean;
+  } = {}
 ): string[] {
   const { dialect, mainTable, companionTable, defaultLocale } = spec;
   const comp = q(companionTable, dialect);
   const main = q(mainTable, dialect);
   const correlate = `${main}.${q("id", dialect)} = ${comp}.${q("_parent", dialect)}`;
   const copy = (target: string, source: string) =>
-    `${target} = (SELECT ${source} FROM ${main} WHERE ${correlate})`;
+    options.keepWritten === true
+      ? `${target} = COALESCE(${comp}.${target}, (SELECT ${source} FROM ${main} WHERE ${correlate}))`
+      : `${target} = (SELECT ${source} FROM ${main} WHERE ${correlate})`;
 
   const assignments = columnNames.map(name =>
     copy(q(name, dialect), q(name, dialect))
@@ -596,7 +607,12 @@ export function buildOverlaySeedStatements(
 ): string[] {
   if (columnNames.length === 0) return [];
   return [
-    ...buildDefaultLocaleRefreshStatements(spec, columnNames),
+    // A row's overlay already written is kept: the seed can run again where its column already
+    // stands (an upgraded site whose newest snapshot records no overlay columns), by when the main
+    // row holds the structure alone and copying it over would leave that language no text.
+    ...buildDefaultLocaleRefreshStatements(spec, columnNames, {
+      keepWritten: true,
+    }),
     buildMissingDefaultRowsInsert(spec, columnNames, {
       status: options.status === true,
     }),

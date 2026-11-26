@@ -31,7 +31,7 @@ import { basename, dirname, join } from "node:path";
 import { Pool } from "pg";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { defineCollection, defineConfig, text } from "../../../config";
+import { defineCollection, defineConfig, group, text } from "../../../config";
 import { getDialectTables } from "../../../database/index";
 import { createAdapter } from "../../../database/factory";
 import { SchemaRegistry } from "../../../database/schema-registry";
@@ -116,6 +116,23 @@ const localizedConfig = defineConfig({
       slug: LOCALIZED_SLUG,
       localized: true,
       fields: [text({ name: "title", localized: true })],
+    }),
+  ],
+});
+
+/** A localized collection whose group keeps its text per language, in an overlay column. */
+const CONTAINER_SLUG = `baseline_box_${RUN_ID}`;
+const CONTAINER_TABLE = resolveCollectionTableName(CONTAINER_SLUG);
+const containerConfig = defineConfig({
+  localization: { locales: ["en", "es"], defaultLocale: "en" },
+  collections: [
+    defineCollection({
+      slug: CONTAINER_SLUG,
+      localized: true,
+      fields: [
+        text({ name: "title", localized: true }),
+        group({ name: "settings", fields: [text({ name: "headline" })] }),
+      ],
     }),
   ],
 });
@@ -1366,6 +1383,58 @@ function runSuite(dialect: SupportedDialect): void {
     };
     const main = recorded.snapshot.tables.find(t => t.name === LOCALIZED_TABLE);
     expect(main?.localizedColumns).toEqual(["title"]);
+  });
+
+  // A group keeping its text per language has an overlay column on the companion, beside its
+  // structure on the main table. The config describes it, so it is adopted like any translated
+  // column: carried into the baseline's companion and recorded as an overlay, apart from the
+  // translated columns a later disable moves. Taken for a column nothing describes, every project
+  // with such a group would be refused, and the advice to drop it would delete its text.
+  it("adopts a companion holding a group's overlay column, recording it as an overlay", async () => {
+    await runDbSync(h, containerConfig);
+    expect(await tableExists(h, `${CONTAINER_TABLE}_locales`)).toBe(true);
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      localizedEntities: containerConfig.collections.map(c => ({
+        slug: c.slug,
+        tableName: resolveCollectionTableName(c.slug),
+        fields: c.fields,
+        status: false,
+        builtBy: "codeFirst" as const,
+      })),
+      defaultLocale: "en",
+    });
+    expect(adopted.kind).toBe("baselined");
+    if (adopted.kind !== "baselined") return;
+
+    const up = splitSqlStatements(
+      parseSqlSections(await readFile(adopted.sqlPath, "utf-8")).upSql
+    );
+    const companion = up
+      .filter(st => st.includes(`${CONTAINER_TABLE}_locales`))
+      .join("\n");
+    expect(companion).toContain("settings");
+    expect(companion).toContain("title");
+
+    const recorded = JSON.parse(
+      await readFile(adopted.snapshotPath, "utf-8")
+    ) as {
+      snapshot: {
+        tables: {
+          name: string;
+          localizedColumns?: string[];
+          overlayColumns?: string[];
+        }[];
+      };
+    };
+    const main = recorded.snapshot.tables.find(t => t.name === CONTAINER_TABLE);
+    expect(main?.localizedColumns).toEqual(["title"]);
+    expect(main?.overlayColumns).toEqual(["settings"]);
   });
 
   it("refuses to adopt a companion holding a column nothing describes", async () => {

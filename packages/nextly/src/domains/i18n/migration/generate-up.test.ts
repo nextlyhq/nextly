@@ -296,7 +296,10 @@ describe("seeding a container's overlay for the default language", () => {
       ["slides"],
       { status: true }
     );
-    expect(refresh).toContain('"slides" = (SELECT "slides" FROM "dc_pages"');
+    // A row's overlay already written is kept; one not yet written takes the main row's value.
+    expect(refresh).toContain(
+      '"slides" = COALESCE("dc_pages_locales"."slides", (SELECT "slides" FROM "dc_pages"'
+    );
     expect(insert).toContain(`COALESCE("dc_pages"."status", 'draft')`);
     expect(insert).not.toMatch(/, "dc_pages"\."status" FROM/);
   });

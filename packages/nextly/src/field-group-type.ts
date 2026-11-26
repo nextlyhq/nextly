@@ -76,3 +76,11 @@ export {
   directComponentFields,
   type DirectField,
 } from "./domains/field-groups/direct-component-fields";
+
+// Who uses a field group, in the words a refused move into or out of one ends with: the server's
+// refusal and the Schema Builder's read the same function, so they cannot name the users
+// differently. Internal to the admin's use; it imports nothing, so the entry stays as light.
+export {
+  fieldGroupUsersClause,
+  type FieldGroupUserNamed,
+} from "./domains/field-groups/storage/field-group-users-clause";

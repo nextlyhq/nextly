@@ -743,6 +743,42 @@ export interface SharedStructureWritten {
   /** The structure written, as stored (JSON text allowed). */
   structure: unknown;
   shape: SharedStructureShape;
+  /**
+   * The structure the main row held before the write, where the writer read it
+   * (`withStructuresBefore`): a component instance whose type changed since then
+   * loses every language's text of it (`pruneOverlay`).
+   */
+  before?: unknown;
+}
+
+/**
+ * `written` with the structure each container held before the write, read off `stored` (the main
+ * row before it), under the field's name or its column as the row spells it. What lets a prune
+ * tell a component instance that changed type (`pruneOverlay`).
+ */
+export function withStructuresBefore(
+  written: readonly SharedStructureWritten[],
+  stored: Readonly<Record<string, unknown>> | undefined
+): SharedStructureWritten[] {
+  if (stored === undefined) return [...written];
+  return written.map(entry => ({
+    ...entry,
+    before: storedStructureOf(stored, entry),
+  }));
+}
+
+/**
+ * A container's structure as a stored row holds it: under its field's name, as a row read through
+ * the runtime model keys it, else under its column, as a statement's row does. The one lookup
+ * every reader of a container's stored structure takes.
+ */
+export function storedStructureOf(
+  stored: Readonly<Record<string, unknown>>,
+  field: { field: string; column: string }
+): unknown {
+  return Object.hasOwn(stored, field.field)
+    ? stored[field.field]
+    : stored[field.column];
 }
 
 /**
@@ -832,9 +868,15 @@ export async function pruneOverlaysOfRemovedRows(
     companionTableName: string;
     parentId: string;
     written: readonly SharedStructureWritten[];
+    /**
+     * The languages whose overlay this write put down itself: theirs is the new structure's
+     * text already, so a changed component type takes nothing of it.
+     */
+    writtenLocales?: readonly string[];
   }
 ): Promise<void> {
   if (args.written.length === 0) return;
+  const fresh = new Set(args.writtenLocales ?? []);
   const table = args.companionTable as Record<string, unknown>;
   const projection: Record<string, unknown> = { _locale: table._locale };
   for (const { column } of args.written) projection[column] = table[column];
@@ -845,10 +887,16 @@ export async function pruneOverlaysOfRemovedRows(
     .where(eq(table._parent as never, args.parentId));
   for (const row of rows) {
     const changed: Record<string, unknown> = {};
-    for (const { column, structure, shape } of args.written) {
+    const isFresh = fresh.has(String(row._locale));
+    for (const { column, structure, shape, before } of args.written) {
       const stored = row[column];
       if (stored === null || stored === undefined) continue;
-      const pruned = pruneOverlay(stored, structure, shape);
+      const pruned = pruneOverlay(
+        stored,
+        structure,
+        shape,
+        isFresh ? undefined : before
+      );
       if (!pruned.changed) continue;
       const kept = storedOverlay(pruned.overlay);
       changed[column] = kept === null ? null : JSON.stringify(kept);
@@ -1276,7 +1324,9 @@ export async function reconcileCompanionColumns(
     // (one an earlier release kept shared, now keeping its text apart): the default language's
     // overlay is seeded from it, as `migrate:create` and the Builder seed it. Left empty, a first
     // save in another language writes the structure without that text, and the default
-    // language's text is gone. Run once: the column is present on every later run.
+    // language's text is gone. Run once: the column is present on every later run, so a seed
+    // that fails takes its columns back out (`withdrawUnseededOverlays`) and fails the run, and
+    // the next run finds them missing, adds them again and seeds them.
     if (args.defaultLocale !== undefined) {
       const added = desired
         .filter(f => keepsTranslationsInside(f, true))
@@ -1290,17 +1340,32 @@ export async function reconcileCompanionColumns(
         const { buildOverlaySeedStatements } = await import(
           "../migration/generate-up"
         );
-        for (const stmt of buildOverlaySeedStatements(
-          {
-            dialect: args.dialect,
-            mainTable: args.tableName,
-            companionTable: companionTableName,
-            defaultLocale: args.defaultLocale,
-          },
-          seeded,
-          { status: hasStatus && onMain.has("status") }
-        )) {
-          await adapter.executeQuery(stmt);
+        try {
+          for (const stmt of buildOverlaySeedStatements(
+            {
+              dialect: args.dialect,
+              mainTable: args.tableName,
+              companionTable: companionTableName,
+              defaultLocale: args.defaultLocale,
+            },
+            seeded,
+            { status: hasStatus && onMain.has("status") }
+          )) {
+            await adapter.executeQuery(stmt);
+          }
+        } catch (error) {
+          // Not left to the catch below, which takes the columns' presence as success: here the
+          // columns are present and the seed they were added for is not done.
+          fail(
+            await withdrawUnseededOverlays(
+              adapter,
+              companionTableName,
+              seeded,
+              args.dialect,
+              error
+            )
+          );
+          return !failed;
         }
       }
     }
@@ -1318,6 +1383,41 @@ export async function reconcileCompanionColumns(
     fail(error);
   }
   return !failed;
+}
+
+/**
+ * Takes out the overlay columns a failed seed was owed, so the next reconcile finds them missing,
+ * adds them and seeds them again: with the columns left in place, every later run would read the
+ * companion as in step and never seed them. Each was added by this run and holds only what the
+ * failed seed may have copied in, which the next run copies again. Returns the error to report:
+ * the seed's, or, when a column cannot be taken out, one naming the columns left unseeded, since
+ * the next run will not seed those by itself.
+ */
+async function withdrawUnseededOverlays(
+  adapter: CompanionReconcileAdapter,
+  companionTableName: string,
+  columns: readonly string[],
+  dialect: SupportedDialect,
+  seedError: unknown
+): Promise<unknown> {
+  const left: string[] = [];
+  for (const column of columns) {
+    try {
+      await adapter.executeQuery(
+        `ALTER TABLE ${quoteIdent(companionTableName, dialect)} DROP COLUMN ${quoteIdent(column, dialect)}`
+      );
+    } catch {
+      left.push(column);
+    }
+  }
+  if (left.length === 0) return seedError;
+  const reason =
+    seedError instanceof Error ? seedError.message : String(seedError);
+  return new Error(
+    `The default language's text was not copied into ${companionTableName} (${left.join(", ")}): ` +
+      `${reason}. The columns could not be taken out again, so a later run will not copy it: ` +
+      `drop them and run again.`
+  );
 }
 
 /**

@@ -227,3 +227,60 @@ describe("a start given plain-object entities that break a rule across entities"
     expect(created.adapters).toBe(0);
   });
 });
+
+describe("a start given plain objects that break each other rule across entities", () => {
+  const body = [{ name: "body", type: "text" }];
+  const placing = (slug: string) => [
+    { name: "inner", type: "component", component: slug },
+  ];
+
+  it.each([
+    [
+      "two Singles at one address",
+      "PUBLIC_ADDRESS_TAKEN",
+      {
+        singles: [
+          { slug: "home", publicAddress: "/", fields: body },
+          { slug: "start", publicAddress: "/", fields: body },
+        ],
+      },
+    ],
+    [
+      "two field groups whose slugs make one table",
+      "COMPONENT_TABLE_COLLISION",
+      {
+        fieldGroups: [
+          { slug: "foo-bar", fields: body },
+          { slug: "foo--bar", fields: body },
+        ],
+      },
+    ],
+    [
+      "field groups that place each other in a cycle",
+      "FIELD_GROUP_CYCLE",
+      {
+        fieldGroups: [
+          { slug: "one", fields: placing("two") },
+          { slug: "two", fields: placing("one") },
+        ],
+      },
+    ],
+  ])("refuses %s, before it connects", async (_, code, entities) => {
+    const refused = await refusalOf({
+      ...entities,
+      db: DB,
+    } as unknown as Parameters<typeof registerServices>[0]);
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    expect(
+      (
+        (refused as { publicData?: { errors?: Array<{ code?: string }> } })
+          .publicData?.errors ?? []
+      ).map(problem => problem.code)
+    ).toContain(code);
+    expect(created.adapters).toBe(0);
+  });
+});

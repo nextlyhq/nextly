@@ -111,8 +111,12 @@ export function placesComponent(field: StructuredField): boolean {
   const open = new WeakSet<object>();
   const visit = (level: readonly StructuredField[]): boolean =>
     level.some(child => {
+      // The cutoff the shape is derived by (`childShape`): a field saying it is not translated,
+      // a component or a container around one among them, is shared whole and places nothing.
+      if (child.localized === false) return false;
       if (componentSlugsOf(child).length > 0) return true;
       if (!isStructureContainer(child) || open.has(child)) return false;
+      if (neverTranslatable(child)) return false;
       open.add(child);
       return visit(child.fields ?? []);
     });
@@ -196,8 +200,14 @@ function shapeOfLevel(
   const visit = (level: readonly StructuredField[]) => {
     for (const child of level) {
       if (!child.name) {
-        // A group with no name only lays fields out: they are values of this level.
-        if (child.type === "group" && child.fields && !open.has(child)) {
+        // A group with no name only lays fields out: they are values of this level. Saying it is
+        // not translated, it shares every field it lays out, as a named one would.
+        if (
+          child.type === "group" &&
+          child.fields &&
+          child.localized !== false &&
+          !open.has(child)
+        ) {
           open.add(child);
           visit(child.fields);
           open.delete(child);
@@ -289,6 +299,85 @@ export function componentFieldsChangingTranslation(
   );
 }
 
+/**
+ * The fields inside an entity's repeaters and groups, at any depth, that a change makes translated
+ * where they were shared, by path (`slides.rank`): each field kept by name in a container kept by
+ * name, of the same kind, that already kept its text per language before the change. Its value
+ * stored on the structure, every language's, would be read as one language's text from then on.
+ * A container inside one kept, shared whole before, is read as having kept no text, so each text
+ * the change translates inside it is named too (`slides.details.label`). A field added holds no
+ * stored value yet; an entity's container that starts keeping text has its overlay seeded from the
+ * structure, so neither is named.
+ */
+export function fieldsTurningTranslatedInside(
+  before: readonly StructuredField[],
+  after: readonly StructuredField[]
+): string[] {
+  // A level's fields by name, a group with no name read through, as `shapeOfLevel` reads it.
+  const named = (fields: readonly StructuredField[] | undefined) => {
+    const out = new Map<string, StructuredField>();
+    const visit = (level: readonly StructuredField[]) => {
+      for (const field of level) {
+        if (typeof field.name === "string" && field.name !== "") {
+          out.set(field.name, field);
+        } else if (field.type === "group" && field.fields) {
+          visit(field.fields);
+        }
+      }
+    };
+    visit(fields ?? []);
+    return out;
+  };
+  const found: string[] = [];
+  const walk = (
+    was: SharedStructureShape,
+    now: SharedStructureShape,
+    fieldsBefore: readonly StructuredField[] | undefined,
+    fieldsAfter: readonly StructuredField[] | undefined,
+    path: string
+  ): void => {
+    const earlier = named(fieldsBefore);
+    for (const [name, field] of named(fieldsAfter)) {
+      const prior = earlier.get(name);
+      if (prior === undefined) continue;
+      // Own entries only: a field named like an object's built-ins (`constructor`) is no shape.
+      const nestedWas = Object.hasOwn(was.inner, name)
+        ? was.inner[name]
+        : undefined;
+      const nestedNow = Object.hasOwn(now.inner, name)
+        ? now.inner[name]
+        : undefined;
+      if (
+        isStructureContainer(field) &&
+        prior.type === field.type &&
+        nestedNow !== undefined
+      ) {
+        // A container inside with no shape before was shared whole (`localized: false`, or it held
+        // nothing translatable): it kept no text per language, so every text inside it now is new.
+        walk(
+          nestedWas ?? { kind: nestedNow.kind, texts: [], inner: {} },
+          nestedNow,
+          prior.fields,
+          field.fields,
+          `${path}.${name}`
+        );
+      } else if (!was.texts.includes(name) && now.texts.includes(name)) {
+        found.push(`${path}.${name}`);
+      }
+    }
+  };
+  const earlier = named(before);
+  for (const [name, field] of named(after)) {
+    const prior = earlier.get(name);
+    if (prior === undefined || prior.type !== field.type) continue;
+    const was = sharedStructureShape(prior);
+    const now = sharedStructureShape(field);
+    if (was === null || now === null) continue;
+    walk(was, now, prior.fields, field.fields, name);
+  }
+  return found.sort();
+}
+
 /** The components a field places: one, or a dynamic zone's several; none for any other field. */
 function componentSlugsOf(field: StructuredField): string[] {
   const { single, many } = extractFieldGroupReferences(field);
@@ -323,10 +412,18 @@ export function componentStructureShape(
       fieldsOf,
       open: new Set([...open, slug]),
     });
-    if (shape) byType[slug] = shape;
+    // A type whose fields translate nothing keeps an empty shape: it still says what an instance
+    // of it holds, so one changed to it reads none of another type's text.
+    byType[slug] = shape ?? { kind, texts: [], inner: {} };
   }
   const shapes = Object.values(byType);
-  if (shapes.length === 0) return null;
+  if (
+    shapes.every(
+      shape => shape.texts.length === 0 && Object.keys(shape.inner).length === 0
+    )
+  ) {
+    return null;
+  }
   const texts = [...new Set(shapes.flatMap(shape => shape.texts))];
   const inner: Record<string, SharedStructureShape> = {};
   for (const shape of shapes) {
@@ -571,27 +668,32 @@ function asLevel(value: unknown): OverlayLevel {
  * `overlay` without the entries of rows `structure` no longer holds, at every depth, and whether
  * anything was dropped. Run on every language's overlay when a write changes the structure, so a
  * removed row's translations go with it rather than waiting for a row given its id again.
+ *
+ * `before`, the structure the write replaced, tells a component instance that kept its id but
+ * changed type: its text is the earlier type's, even for a field both types name alike, so it
+ * goes. Left out, an instance is judged by its type alone.
  */
 export function pruneOverlay(
   overlay: unknown,
   structure: unknown,
-  shape: SharedStructureShape
+  shape: SharedStructureShape,
+  before?: unknown
 ): { overlay: OverlayLevel; changed: boolean } {
   const parsed = valueOf(overlay);
   const level = isPlainRecord(parsed) ? parsed : {};
   const kept = valueOf(structure);
+  const earlier = valueOf(before);
   if (shape.kind === "group") {
     const structureKept = isPlainRecord(kept) ? kept : {};
-    return pruneLevel(level, structureKept, shapeOfRow(structureKept, shape));
+    return pruneLevel(
+      level,
+      structureKept,
+      shape,
+      isPlainRecord(earlier) ? earlier : undefined
+    );
   }
-  const rows = new Map<string, Record<string, unknown>>();
-  if (Array.isArray(kept)) {
-    const keys = rowKeys(kept);
-    kept.forEach((row, index) => {
-      const id = keys[index];
-      if (id !== undefined && isPlainRecord(row)) rows.set(id, row);
-    });
-  }
+  const rows = keyedRowsOf(kept);
+  const earlierRows = keyedRowsOf(earlier);
   const out: OverlayLevel = {};
   let changed = false;
   for (const [id, entry] of Object.entries(level)) {
@@ -600,28 +702,73 @@ export function pruneOverlay(
       changed = true;
       continue;
     }
-    const pruned = pruneLevel(entry, row, shapeOfRow(row, shape));
+    const pruned = pruneLevel(entry, row, shape, earlierRows.get(id));
     out[id] = pruned.overlay;
     changed ||= pruned.changed;
   }
   return { overlay: out, changed };
 }
 
-/** One row's (or one group's) overlay entry pruned against its structure's nested containers. */
+/**
+ * One row's (or one group's) overlay entry pruned against its structure, read by the type it
+ * records (`shapeOfRow`): its nested containers' removed rows go, and so does the text of another
+ * type of the same component, which an instance that changed type no longer holds. A key no type
+ * describes is left alone: this level's shape may have been read without its components' fields.
+ */
 function pruneLevel(
   entry: OverlayLevel,
   structure: Record<string, unknown>,
-  shape: SharedStructureShape
+  levelShape: SharedStructureShape,
+  before?: Record<string, unknown>
 ): { overlay: OverlayLevel; changed: boolean } {
+  const shape = shapeOfRow(structure, levelShape);
   const out: OverlayLevel = { ...entry };
   let changed = false;
+  // An instance whose type changed since `before` holds none of its text: all of it is the
+  // earlier type's, a field both types name alike among it.
+  const typeChanged =
+    levelShape.byType !== undefined &&
+    before !== undefined &&
+    readFieldGroupType(before) !== readFieldGroupType(structure);
+  if (typeChanged || shape !== levelShape) {
+    const own = new Set(
+      typeChanged ? [] : [...shape.texts, ...Object.keys(shape.inner)]
+    );
+    const anyType = new Set([
+      ...levelShape.texts,
+      ...Object.keys(levelShape.inner),
+    ]);
+    for (const name of Object.keys(out)) {
+      if (anyType.has(name) && !own.has(name)) {
+        delete out[name];
+        changed = true;
+      }
+    }
+  }
   for (const [name, nestedShape] of Object.entries(shape.inner)) {
     if (!Object.hasOwn(out, name)) continue;
-    const nested = pruneOverlay(out[name], structure[name], nestedShape);
+    const nested = pruneOverlay(
+      out[name],
+      structure[name],
+      nestedShape,
+      before?.[name]
+    );
     out[name] = nested.overlay;
     changed ||= nested.changed;
   }
   return { overlay: out, changed };
+}
+
+/** A list's rows that have a key ({@link rowKeys}), by it; none for a value that is no list. */
+function keyedRowsOf(value: unknown): Map<string, Record<string, unknown>> {
+  const rows = new Map<string, Record<string, unknown>>();
+  if (!Array.isArray(value)) return rows;
+  const keys = rowKeys(value);
+  value.forEach((row, index) => {
+    const id = keys[index];
+    if (id !== undefined && isPlainRecord(row)) rows.set(id, row);
+  });
+  return rows;
 }
 
 /**

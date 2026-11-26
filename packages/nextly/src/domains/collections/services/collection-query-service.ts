@@ -3416,6 +3416,8 @@ export class CollectionQueryService extends BaseService {
      * sees the grant, so the waiver does not travel.
      */
     hooksWaived?: boolean;
+    /** The language the version is spelled for, where it is not the read's own. */
+    revisionLocale?: string;
     /** Translation counters the read already took (`attachDocumentVersions`). */
     knownLanguages?: {
       revisions: ReadonlyMap<string, ReadonlyMap<string, number>>;
@@ -3733,7 +3735,7 @@ export class CollectionQueryService extends BaseService {
     attachDocumentVersions(finalData, {
       stored: storedRevisions,
       localization: this.localization,
-      locale: params.locale,
+      locale: params.revisionLocale ?? params.locale,
       known: params.knownLanguages,
     });
 
@@ -4191,6 +4193,8 @@ export class CollectionQueryService extends BaseService {
     sourceLocales?: boolean;
     /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
     translations?: "all";
+    /** The language the version is spelled for, where it is not the read's own (`readOfEveryLanguage`). */
+    revisionLocale?: string;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -4298,11 +4302,16 @@ export class CollectionQueryService extends BaseService {
         | { kind: "unknown" } => {
         const sortFieldSnake = toSnakeCase(sortField);
         // A localized sort field lives in the companion table (absent
-        // from the main schema), ordered by a correlated subquery below.
+        // from the main schema), ordered by a correlated subquery below. A
+        // repeater or group keeping one structure is not one: it sorts on its
+        // structure, the main table's column every language reads, as a
+        // filter judges it (`localizedFilterContext`).
         const localizedSortField =
           companion && localeChain
             ? companion.localizedFields.find(
-                f => f.name === sortField || f.column === sortFieldSnake
+                f =>
+                  f.sharedStructure === undefined &&
+                  (f.name === sortField || f.column === sortFieldSnake)
               )
             : undefined;
         if (localizedSortField) {
@@ -4654,7 +4663,7 @@ export class CollectionQueryService extends BaseService {
         localeChain !== null &&
         chainCoversVersion(localeChain, {
           localization: this.localization,
-          locale: params.locale,
+          locale: params.revisionLocale ?? params.locale,
         });
       const knownFirst = countersWithContent
         ? undefined
@@ -4914,6 +4923,7 @@ export class CollectionQueryService extends BaseService {
         rows: expandedEntries,
         hooksWaived,
         knownLanguages,
+        revisionLocale: params.revisionLocale,
         collectionName: params.collectionName,
         // The collection record this read was planned from, so a `dbName`
         // collection's contributed columns are found under its real table.
@@ -5898,6 +5908,8 @@ export class CollectionQueryService extends BaseService {
     sourceLocales?: boolean;
     /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
     translations?: "all";
+    /** The language the version is spelled for, where it is not the read's own (`readOfEveryLanguage`). */
+    revisionLocale?: string;
     /**
      * Attach `_details`: where the site serves the entry, and who made and
      * changed it (`entryDetails`). Who is personal data, so the route asks
@@ -6126,7 +6138,7 @@ export class CollectionQueryService extends BaseService {
         companion &&
         chainCoversVersion(localeChain, {
           localization: this.localization,
-          locale: params.locale,
+          locale: params.revisionLocale ?? params.locale,
         }) &&
         companionReady
           ? localeChain
@@ -6716,6 +6728,7 @@ export class CollectionQueryService extends BaseService {
         rows: [expandedEntry],
         hooksWaived,
         knownLanguages,
+        revisionLocale: params.revisionLocale,
         // afterRead handlers on a read by id receive the document itself.
         single: true,
         collectionName: params.collectionName,

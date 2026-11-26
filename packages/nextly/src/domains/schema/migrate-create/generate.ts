@@ -474,6 +474,9 @@ export interface GenerateArgs {
    * finish the earlier change; any other is written, its values copied into
    * a column that holds them. Without it, every joining field is judged as
    * joining for the first time, worded for code.
+   *
+   * The surface words the entity's refusals of fields leaving translation
+   * too, so a Schema Builder save names the Builder's steps for both.
    */
   joiningJudgement?: {
     slug: string;
@@ -1019,24 +1022,11 @@ export async function generateMigration(
     previousContributions: previous?.data.contributions ?? {},
     desired: withTablesAsTheyStand(
       buildDesiredSnapshotFromConfig(
-        // A required container leaving whole translation is added nullable in this run, its
-        // rows filled after the migrations (`withStagedContainerColumns`).
-        args.collections.map(c =>
-          withStagedContainerColumns(
-            c,
-            "collection",
-            previous?.data.snapshot,
-            args.dialect
-          )
-        ),
-        args.singles.map(c =>
-          withStagedContainerColumns(
-            c,
-            "single",
-            previous?.data.snapshot,
-            args.dialect
-          )
-        ),
+        // A container keeping one structure has its main column nullable however it is declared
+        // (`buildDesiredTableFromFields`), so one leaving whole translation is added to rows that
+        // get their structure from the data step after the migrations, in every run.
+        args.collections,
+        args.singles,
         args.components,
         args.dialect
       ),
@@ -1146,6 +1136,7 @@ export async function generateMigration(
     companionHistory,
     args.onWarning ?? (() => {}),
     desiredSnapshot,
+    args.joiningJudgement,
     args.languageOrder
   );
 
@@ -3100,7 +3091,10 @@ async function companionRenameDecisions(
 ): Promise<Map<string, CompanionRename[]>> {
   const byTable = new Map<string, CompanionRename[]>();
   for (const { entity, kind } of entities) {
-    if (entity.localized !== true) continue;
+    // Every entity keeping its values per language, a translated one or, under per-language
+    // storage, one that is not (`storesPerLanguage`): its containers keep their text in overlay
+    // columns all the same, and a rename that left one behind would drop every language's text.
+    if (!storesPerLanguage(entity)) continue;
     const previousTable = previous.tables.find(
       t => t.name === entity.tableName
     );
@@ -3214,6 +3208,8 @@ function planFieldsLeavingTranslation(
   history: TranslationRecords,
   warn: (message: string) => void,
   desiredSnapshot: NextlySchemaSnapshot,
+  /** The caller's judgement of one entity, whose surface its refusals are worded for. */
+  judgement: GenerateArgs["joiningJudgement"],
   languageOrder?: readonly string[]
 ): FieldLeavesEntry[] {
   const entries: FieldLeavesEntry[] = [];
@@ -3237,7 +3233,14 @@ function planFieldsLeavingTranslation(
     const desiredMain = desiredSnapshot.tables.find(
       t => t.name === c.tableName
     );
-    assertFieldsMayLeaveTranslation(entry, leaving, previousColumns, dialect);
+    assertFieldsMayLeaveTranslation(
+      entry,
+      leaving,
+      previousColumns,
+      dialect,
+      // A Schema Builder save's entity is worded for the Builder; any other, for code.
+      judgement?.slug === c.slug ? judgement.surface : "code"
+    );
     const held = heldSettingsOf(
       c.tableName,
       leaving.map(l => l.column.name),
@@ -3932,7 +3935,9 @@ function assertFieldsMayLeaveTranslation(
   { entity: c, kind }: TaggedConfigEntity,
   leaving: readonly LeavingField[],
   previousColumns: ReadonlyMap<string, LocalizedColumnSpec> | undefined,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /** Whose steps the refusal names: the Schema Builder's, or the config's and its CLI's. */
+  surface: TranslationSurface
 ): void {
   const refusals = refusalsForFieldsLeavingTranslation({
     leaving: new Set(leaving.map(l => l.field.name)),
@@ -3940,7 +3945,7 @@ function assertFieldsMayLeaveTranslation(
     ...(previousColumns ? { previousColumns } : {}),
     dialect,
     builtBy: columnOriginOf(c, kind),
-    surface: "code",
+    surface,
   });
   refuseMigration(c, refusals);
 }
@@ -4308,48 +4313,6 @@ function stripRelocatedDrops(
     }
     return true;
   });
-}
-
-/**
- * `entity` with each required repeater or group that was translated whole before, and so had no
- * column on its main table, made optional for this run's main table: the column that now holds its
- * one structure is added nullable, since the rows already there get their structure only from
- * `nextly migrate`'s data step after the migrations, and a NOT NULL column added to rows that have
- * no value is refused. The next run, which finds the column there and the container no longer
- * translated whole, makes it required as declared. Nothing changes without a previous snapshot.
- */
-function withStagedContainerColumns(
-  entity: MinimalConfigEntity,
-  kind: I18nTransitionKind,
-  existing: NextlySchemaSnapshot | undefined,
-  dialect: SupportedDialect
-): MinimalConfigEntity {
-  const previous = existing?.tables.find(t => t.name === entity.tableName);
-  if (!previous?.localizedColumns?.length) return entity;
-  const wasTranslated = new Set(previous.localizedColumns);
-  const onMain = new Set(previous.columns.map(column => column.name));
-  const staged = new Set(
-    overlayContainersOf(entity).filter(field => {
-      if (field.required !== true) return false;
-      const column = fieldToLocalizedColumnSpec(
-        field,
-        dialect,
-        columnOriginOf(entity, kind)
-      );
-      return (
-        column != null &&
-        wasTranslated.has(column.name) &&
-        !onMain.has(column.name)
-      );
-    })
-  );
-  if (staged.size === 0) return entity;
-  return {
-    ...entity,
-    fields: entity.fields.map(field =>
-      staged.has(field) ? { ...field, required: false } : field
-    ),
-  };
 }
 
 /**

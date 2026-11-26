@@ -314,6 +314,7 @@ import {
   upsertCompanionRow,
   type CompanionSchema,
   type SharedStructureWritten,
+  withStructuresBefore,
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
@@ -346,6 +347,10 @@ import {
   type ChangedParts,
 } from "../../versions/changed-parts";
 import type { VersionsDbApi } from "../../versions/db-api";
+import {
+  type DocumentStanding,
+  readDocumentStanding,
+} from "../../versions/described-from";
 import {
   bumpDocumentRevision,
   changerColumns,
@@ -1495,6 +1500,34 @@ async function inChunks<T>(
  *
  * @internal
  */
+/**
+ * The keys of `payload` holding a repeater's or group's structure written exactly as `stored`
+ * holds it (`sameSharedStructure`): the structure a save of the text inside left as it was, which
+ * changes nothing the main row's version covers. Each found under its field name or its column,
+ * as the write and the stored row spell it. The one test both the single-entry and the batch
+ * update leave such a structure out of the main row's write by.
+ */
+function unchangedStructureKeys(
+  payload: Record<string, unknown>,
+  written: readonly SharedStructureWritten[],
+  stored: Record<string, unknown> | undefined
+): string[] {
+  const keys: string[] = [];
+  for (const { field, column } of written) {
+    const key = Object.hasOwn(payload, field)
+      ? field
+      : Object.hasOwn(payload, column)
+        ? column
+        : null;
+    if (key === null || stored === undefined) continue;
+    const before = Object.hasOwn(stored, field)
+      ? stored[field]
+      : stored[column];
+    if (sameSharedStructure(payload[key], before)) keys.push(key);
+  }
+  return keys;
+}
+
 export class GoingLiveRelationsBatch {
   private readonly entryIds: readonly string[];
   private readonly components = new Map<
@@ -14257,6 +14290,46 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The entry's counters and drafts as they stand, for a description of its parts to say what it
+   * was made from. Its languages only where each moves on its own, as a move of them is judged.
+   *
+   * @experimental
+   */
+  async entryStanding(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<DocumentStanding | undefined> {
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const companion = await this.fileManager.loadCompanionSchema(
+      params.collectionName
+    );
+    const languagesTable = translationTableOf(
+      companion,
+      companion?.hasStatus === true &&
+        (await isCompanionReady(this.adapter, companion.companionTableName))
+    );
+    return readDocumentStanding(this.adapter, {
+      dialect: this.dialect,
+      ref: {
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId: params.entryId,
+      },
+      table: collectionTableName(collection, params.collectionName),
+      languages: languagesJudged(
+        languagesTable,
+        versionLanguagesFor({
+          localized: languagesTable !== null,
+          localization: this.localization,
+          locale: EVERY_LOCALE,
+        })
+      ),
+    });
+  }
+
+  /**
    * What a publish or unpublish of chosen parts reads before it decides anything, on the pool:
    * the entry as stored (whether its shared part is live, and each stored language's own state and
    * values, never filled from another language) and the caller's refusal for each chosen language
@@ -15219,6 +15292,20 @@ export class CollectionMutationService extends BaseService {
             args.judge.holder
           )
         : undefined;
+    // The structures the main row holds before this write, of the containers
+    // it rewrites: what a prune tells a component instance that changed type
+    // by. Read only where the write puts a container's structure down.
+    const split = args.structuresFrom ?? args.translation;
+    const placed = (split?.sharedStructures ?? []).filter(written =>
+      Object.hasOwn(args.columns, written.column)
+    );
+    const structuresBefore =
+      placed.length > 0
+        ? await tx.selectOne<Record<string, unknown>>(args.tableName, {
+            where: this.whereEq("id", args.entryId),
+            columns: placed.map(written => written.column),
+          })
+        : undefined;
     await tx.update(
       args.tableName,
       args.columns,
@@ -15244,8 +15331,12 @@ export class CollectionMutationService extends BaseService {
     await this.pruneRemovedRowTranslations(
       tx,
       args.entryId,
-      args.structuresFrom ?? args.translation,
-      args.provenance?.collectionName
+      split,
+      args.provenance?.collectionName,
+      {
+        before: structuresBefore ?? undefined,
+        writtenLocale: args.translation?.writeLocale,
+      }
     );
     // The translation row as it was before this write, read by the claim:
     // for an overwrite, what it replaced.
@@ -15270,14 +15361,24 @@ export class CollectionMutationService extends BaseService {
         }
       | null
       | undefined,
-    collectionName: string | undefined
+    collectionName: string | undefined,
+    /**
+     * The main row before the write, which tells a component instance that
+     * changed type, and the language whose overlay the write put down itself.
+     */
+    context: {
+      before?: Record<string, unknown>;
+      writtenLocale?: string;
+    } = {}
   ): Promise<void> {
     if (!split?.sharedStructures?.length || !split.companionTable) return;
     await pruneOverlaysOfRemovedRows(tx, this.dialect, {
       companionTable: split.companionTable,
       companionTableName: split.companionTableName,
       parentId: entryId,
-      written: split.sharedStructures,
+      written: withStructuresBefore(split.sharedStructures, context.before),
+      writtenLocales:
+        context.writtenLocale === undefined ? [] : [context.writtenLocale],
     });
     if (collectionName === undefined || !(await this.provenanceRecorded(tx))) {
       return;
@@ -19198,19 +19299,13 @@ export class CollectionMutationService extends BaseService {
           // A repeater's or group's structure written as it is stored changes nothing the main
           // row's version covers: its text went to the language's row. Left out of the UPDATE, so
           // a save of translated values alone moves only that language's counter, and a reader of
-          // another language keeps the version it holds (`sameSharedStructure`).
-          for (const written of localizedUpdate?.sharedStructures ?? []) {
-            if (
-              written.field in updatePayload &&
-              sameSharedStructure(
-                updatePayload[written.field],
-                (preUpdateRow as Record<string, unknown> | undefined)?.[
-                  written.field
-                ]
-              )
-            ) {
-              delete updatePayload[written.field];
-            }
+          // another language keeps the version it holds (`unchangedStructureKeys`).
+          for (const key of unchangedStructureKeys(
+            updatePayload,
+            localizedUpdate?.sharedStructures ?? [],
+            preUpdateRow as Record<string, unknown> | undefined
+          )) {
+            delete updatePayload[key];
           }
           // Keyed by SQL column name, as the adapter takes it; see
           // `writeRowAndTranslation`.
@@ -24504,6 +24599,17 @@ export class CollectionMutationService extends BaseService {
           : { stale: false, claimed: false };
       if ("success" in languageJudged) return languageJudged;
 
+      // A structure written as stored changes nothing the main row's version
+      // covers, as on the single-entry update: left out of this UPDATE, so a
+      // batch edit of translated text alone keeps the document's version.
+      const liveData = { ...finalData };
+      for (const key of unchangedStructureKeys(
+        liveData,
+        localizedUpdate?.sharedStructures ?? [],
+        storedRow ?? existingEntry
+      )) {
+        delete liveData[key];
+      }
       // Skip the live-row UPDATE for a held edit; the pending change is stored
       // below instead.
       const [updated] = storeAsWorkingDraft
@@ -24512,7 +24618,7 @@ export class CollectionMutationService extends BaseService {
             tableName,
             {
               ...stripImmutableSystemFields(
-                finalData,
+                liveData,
                 "collection",
                 tableName,
                 fields
@@ -24527,7 +24633,7 @@ export class CollectionMutationService extends BaseService {
               ...mainRowBump(
                 {
                   updatePayload: stripImmutableSystemFields(
-                    finalData,
+                    liveData,
                     "collection",
                     tableName,
                     fields
@@ -24584,7 +24690,11 @@ export class CollectionMutationService extends BaseService {
             tx,
             entryId,
             localizedUpdate,
-            params.collectionName
+            params.collectionName,
+            {
+              before: storedRow ?? existingEntry,
+              writtenLocale: localizedUpdate.writeLocale,
+            }
           );
           // Where the values came from, beside them on this transaction.
           await this.recordWrittenProvenance(tx, {
