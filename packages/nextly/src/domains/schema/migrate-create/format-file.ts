@@ -27,6 +27,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { CURRENT_NAMES_SHOWN } from "../../field-groups/services/field-group-names-shown";
+import { answersHeaderLine } from "../../i18n/migration/answer-language-names";
 import {
   consentToCover,
   describeDeletion,
@@ -195,6 +196,8 @@ export interface FormatArgs {
    * headers for the same reason as the settings: no table changes with them.
    */
   permissionChanges?: readonly string[];
+  /** The language the file's answers for fields kept per language are decided in, where it has any. */
+  answersIn?: string;
   /**
    * Whether the file changes no table. Its UP may still hold statements: a
    * Builder entity's registry row travels with its settings.
@@ -276,7 +279,7 @@ export function formatMigrationFile(args: FormatArgs): string {
   const downBody = downBodyOf(args);
 
   return `-- Migration: ${args.name}
-${destructiveLines(args.deletions ?? [])}${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}${GENERATED_FILE_LINE} ${now}
+${destructiveLines(args.deletions ?? [])}${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}${answersHeaderLine(args.answersIn)}${GENERATED_FILE_LINE} ${now}
 -- Dialect: ${getDialectDisplayName(args.dialect)}
 
 -- UP

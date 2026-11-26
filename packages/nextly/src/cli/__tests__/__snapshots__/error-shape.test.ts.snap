@@ -1192,6 +1192,14 @@ exports[`each code, as a command ends with it > MIGRATION_IRREVERSIBLE 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/migration-irreversible  (MIGRATION_IRREVERSIBLE)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATION_LANGUAGE_DIFFERS 1`] = `
+"✗ A migration's answers are not recorded as decided in this project's default language, "es".
+  Why:  20261021_090000_require_body.sql: its answers are decided in "en", and this project's default language is "es".
+        Run here, its statements would settle other entries than the ones answered for. Nothing was changed.
+  Next: Where no environment has applied it, delete it and make the save again with "es" as the default language. Where one has, do its other statements by hand, settle the entries in "es" by hand, and record it with \`nextly migrate:resolve --applied 20261021_090000_require_body.sql\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-language-differs  (MIGRATION_LANGUAGE_DIFFERS)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATION_MISSING 1`] = `
 "✗ The ledger records 1 applied migration this build's migrations folder lacks (\`20261020_120000_add_posts.sql\`), so \`nextly migrate\` ran nothing.
   Why:  A newer build has migrated this database, or a file was removed from the folder after it ran.

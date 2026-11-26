@@ -103,6 +103,7 @@
   "MIGRATION_DRIFT": "The database matches neither the state a migration starts from nor the state it produces.",
   "MIGRATION_HISTORY_FORKED": "Migrations were written without each other, and no migration yet records them together, so the command applied none of them that was not applied already.",
   "MIGRATION_IRREVERSIBLE": "A migration to roll back has no `-- DOWN` section.",
+  "MIGRATION_LANGUAGE_DIFFERS": "A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused it before any of its statements.",
   "MIGRATION_MISSING": "A migration recorded as applied has no file in the migrations folder.",
   "MIGRATION_NAME_REQUIRED": "`nextly migrate:create` was given no name for a migration that is not blank.",
   "MIGRATION_NOT_PROVEN": "A pending migration's schema is already in the database, but its snapshot does not prove everything the file does, so it was not recorded as applied without running.",

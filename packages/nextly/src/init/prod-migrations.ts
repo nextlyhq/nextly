@@ -95,6 +95,8 @@ interface MigrateCoreLike {
     /** See `MigrateCoreDeps.seedPermissions`. */
     seedPermissions?: () => Promise<void>;
     /** Spread in by `deployStepDeps`, checked here for the reason above. */
+    defaultLanguage?: DeployStepDeps["defaultLanguage"];
+    /** Spread in by `deployStepDeps`, checked here for the reason above. */
     firstRun?: DeployStepDeps["firstRun"];
     /** Spread in by `deployStepDeps`, checked here for the reason above. */
     markOrphanedPermissions?: DeployStepDeps["markOrphanedPermissions"];

@@ -26,6 +26,10 @@
  *   permission, and every permission of a plugin installed before it that
  *   its snapshot still declares, unorphaned; a plugin the baseline held and
  *   the snapshot no longer records is spoken for through the baseline.
+ * - A collection removed in code has its built-in permissions, which have no
+ *   owner, orphaned by a later run where the run that applied the removal
+ *   could not: recorded applied by hand, or stopped before it marked them.
+ *   Those another entity, or a plugin, still declares stay live.
  * - An older build's `nextly migrate`, whose folder lacks a migration the
  *   database records applied, stops before writing and changes no orphan mark.
  */
@@ -43,12 +47,18 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database";
-import { defineCollection, defineConfig, text } from "../../../config";
+import {
+  defineCollection,
+  defineConfig,
+  defineSingle,
+  text,
+} from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { loadDialectTables } from "../../../database/dialect-tables";
 import { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { seedAccessOnCommandConnection } from "../../../domains/schema/migrate/command-access";
+import { withStopPoints } from "../../../domains/schema/migrate/stop-points";
 import { collectCustomPermissions } from "../../../plugins/permissions/collect-permissions";
 import {
   definePlugin,
@@ -66,6 +76,7 @@ import { createLogger } from "../../utils/logger";
 import { installRegistryResolver } from "../../utils/registry-resolver";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
+import { runMigrateResolve } from "../migrate-resolve";
 
 type LoadedConfig = Parameters<typeof mergeSetupResultIntoConfig>[0];
 
@@ -122,14 +133,16 @@ function plugin(
   });
 }
 
-/** A config of `collections`, the app's `permissions` and `plugins`. */
+/** A config of `collections`, `singles`, the app's `permissions` and `plugins`. */
 function config(parts: {
   collections?: ReturnType<typeof defineCollection>[];
+  singles?: ReturnType<typeof defineSingle>[];
   permissions?: [action: string, resource: string][];
   plugins?: PluginDefinition[];
 }) {
   return defineConfig({
     collections: parts.collections ?? [POSTS],
+    singles: parts.singles ?? [],
     permissions: (parts.permissions ?? []).map(([action, resource]) => ({
       action,
       resource,
@@ -238,7 +251,11 @@ describe.each(getConfiguredTestDialects())(
       const { context, said } = command();
       setNonInteractive(true);
       const code = await exiting(() =>
-        runMigrateCreate(`step${clock}`, { cwd: dir }, context)
+        runMigrateCreate(
+          `step${clock}`,
+          { cwd: dir, acceptDataLoss: true },
+          context
+        )
       ).finally(() => setNonInteractive(false));
       expect(code, said.join("\n")).toBeUndefined();
     }
@@ -250,7 +267,9 @@ describe.each(getConfiguredTestDialects())(
       loaded.config = loadedConfig;
       tick();
       const { context, said } = command();
-      const code = await exiting(() => runMigrate({ cwd: dir }, context));
+      const code = await exiting(() =>
+        runMigrate({ cwd: dir, acceptDataLoss: true }, context)
+      );
       return { code, said };
     }
 
@@ -500,6 +519,139 @@ describe.each(getConfiguredTestDialects())(
         "audit-mop-reports": false,
         "read-mop-notes": false,
       });
+    }, 240_000);
+
+    /** Every permission of `mop-notes`, by slug, with whether it is marked; it has some. */
+    async function marksOfNotes(): Promise<Record<string, boolean>> {
+      const own = Object.entries(await marks()).filter(([slug]) =>
+        slug.endsWith("-mop-notes")
+      );
+      expect(own.length).toBeGreaterThan(0);
+      return Object.fromEntries(own);
+    }
+
+    /**
+     * `mop-notes` removed from `with_`, leaving `without`, by an operator: its table dropped by hand
+     * and the file that removes it recorded applied, so no run applied it.
+     */
+    async function removedByHand(
+      with_: unknown,
+      without: unknown
+    ): Promise<void> {
+      await migrateCreate(with_);
+      await migrate(with_);
+      await migrateCreate(without);
+      await on(adapter =>
+        adapter.executeQuery(`DROP TABLE ${q}dc_mop_notes${q}`)
+      );
+      const file = readdirSync(join(dir, "migrations"))
+        .filter(name => name.endsWith(".sql"))
+        .sort()
+        .at(-1);
+      loaded.config = without;
+      const { context, said } = command();
+      const code = await exiting(() =>
+        runMigrateResolve(
+          { cwd: dir, applied: file } as Parameters<
+            typeof runMigrateResolve
+          >[0],
+          context
+        )
+      );
+      expect(code, said.join("\n")).toBeUndefined();
+      // The fixture is what it claims: nothing has marked them yet.
+      expect(Object.values(await marksOfNotes())).not.toContain(true);
+    }
+
+    it("orphans, with its grants, what a removal recorded applied by hand left", async () => {
+      await removedByHand(config({ collections: [POSTS, NOTES] }), config({}));
+      const before = await grants();
+
+      const said = await migrate(config({}));
+
+      expect(Object.values(await marksOfNotes())).not.toContain(false);
+      expect(
+        (await orphaned()).every(slug => slug.endsWith("-mop-notes"))
+      ).toBe(true);
+      expect(await grants()).toEqual(before);
+      expect(markLines(said).length).toBe(
+        Object.keys(await marksOfNotes()).length
+      );
+      // A run with nothing left to mark says nothing of it.
+      expect(markLines(await migrate(config({})))).toEqual([]);
+    }, 240_000);
+
+    it("orphans what a run stopped after the removal committed had not marked", async () => {
+      const both = config({ collections: [POSTS, NOTES] });
+      await migrateCreate(both);
+      await migrate(both);
+      await migrateCreate(config({}));
+      loaded.config = config({});
+      const { context } = command();
+      let stopped = false;
+      await withStopPoints(
+        point => {
+          if (!point.endsWith(": permissions not marked yet")) return;
+          stopped = true;
+          throw new Error("stopped");
+        },
+        () =>
+          exiting(() => runMigrate({ cwd: dir, acceptDataLoss: true }, context))
+      );
+      expect(stopped).toBe(true);
+      expect(Object.values(await marksOfNotes())).not.toContain(true);
+
+      await migrate(config({}));
+
+      expect(Object.values(await marksOfNotes())).not.toContain(false);
+    }, 240_000);
+
+    it("keeps those a Single of the same slug still has", async () => {
+      const single = defineSingle({
+        slug: "mop-notes",
+        fields: [text({ name: "body" })],
+      });
+      const without = config({ singles: [single] });
+      await removedByHand(
+        config({ collections: [POSTS, NOTES], singles: [single] }),
+        without
+      );
+
+      await migrate(without);
+
+      expect(await marksOfNotes()).toMatchObject({
+        "create-mop-notes": true,
+        "delete-mop-notes": true,
+        "read-mop-notes": false,
+        "update-mop-notes": false,
+      });
+    }, 240_000);
+
+    it("keeps one a plugin still declares", async () => {
+      const flow = plugin("@test/mop-flow", ["publish", "mop-notes"]);
+      const without = config({ plugins: [flow] });
+      await removedByHand(
+        config({ collections: [POSTS, NOTES], plugins: [flow] }),
+        without
+      );
+
+      await migrate(without);
+
+      expect(await marksOfNotes()).toMatchObject({
+        "publish-mop-notes": false,
+        "read-mop-notes": true,
+      });
+    }, 240_000);
+
+    it("marks none of a collection made again, when a later migration declares it", async () => {
+      const both = config({ collections: [POSTS, NOTES] });
+      await removedByHand(both, config({}));
+      await migrateCreate(both);
+
+      await migrate(both);
+
+      expect(Object.values(await marksOfNotes())).not.toContain(true);
+      expect(markLines(await migrate(both))).toEqual([]);
     }, 240_000);
 
     it("changes no orphan mark and no grant when an older build's nextly migrate finds a migration its folder lacks", async () => {

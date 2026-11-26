@@ -5,6 +5,10 @@
  */
 import { tableBusyError } from "../../../domains/schema/busy-table/report";
 import { assertNoLegacyBookkeeping } from "../../../domains/schema/events/legacy-detection";
+import {
+  answerLanguageError,
+  answerLanguageRefusal,
+} from "../../../domains/i18n/migration/answer-language";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
 import {
   judgeDataLoss,
@@ -302,6 +306,17 @@ export const MIGRATION_CASES = {
         file: "20261021_090000_seed.mysql.sql",
         placed: { parent: "20261019_080000_init", merges: [] },
       }
+    ),
+  // As `nextly migrate` refuses a file answered in English where the default language is Spanish.
+  MIGRATION_LANGUAGE_DIFFERS: () =>
+    answerLanguageError(
+      [
+        answerLanguageRefusal(
+          { name: "20261021_090000_require_body", answersIn: "en" },
+          "es"
+        ),
+      ],
+      "es"
     ),
   // As a command that waited its whole wait for the migration files is refused.
   MIGRATIONS_WRITER_BUSY: () =>

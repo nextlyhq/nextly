@@ -1,0 +1,43 @@
+---
+title: MIGRATION_LANGUAGE_DIFFERS
+description: "A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused it before any of its statements."
+---
+
+## Cause
+
+A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused it before any of its statements.
+
+A field whose values are kept per language can be made required while some entries have no value for it. The save then asks what to do with those entries: fill the field, or delete them. The answer is decided in the default language: an entry is one that has no value in it. The migration file's statements hold that language as it was when the file was written, and its header records it:
+
+```text
+-- Answers in: en
+```
+
+Where the project's default language is another one, the same statements settle other entries. A delete removes entries that are complete in the default language, and a fill writes another language's values. `nextly migrate` compares the two before any statement and refuses the file, naming both languages. It refuses a file that holds such an answer and records no language too, since nothing says which one it was decided in.
+
+A file whose answer has nothing to settle in the database is not refused. The language decides nothing where there are no entries: in a new database, or where the entity's table and its translations table are missing or empty before the run. A table that another statement of the run renames into place counts as holding entries when it stands under its earlier name, and so does one that cannot be read.
+
+A file with more than one such answer is refused as a whole when any one of them has entries to settle. The message names the file.
+
+The check is made before the run, and again just before the file's first statement, so a row that an earlier file of the same run adds is seen. The file is then refused and none of its statements run; the files applied before it stay applied. An entry a site writes to an empty table between that check and the file's statements is not seen.
+
+The default language is the one `localization.defaultLocale` declares in the configuration. Without it, it is the one set in Settings, and `en` where no languages are set.
+
+## Fix
+
+Which one to use depends on whether an environment has applied the file:
+
+- **No environment has applied it.** Delete the file and its snapshot, and make the save again with the right default language. The new file records it.
+- **An environment has applied it.** Do the file's other statements by hand, fill or delete the entries with no value in your default language, and record the file with `nextly migrate:resolve --applied <file>`. A translations table's file has no snapshot to compare the database with, so record it with `--skip-verify` too.
+
+The dry run (`nextly migrate --dry-run`) names the files a run would refuse.
+
+## Example
+
+```text
+✗ A migration's answers are not recorded as decided in this project's default language, "es".
+  Why:  20261021_090000_require_body.sql: its answers are decided in "en", and this project's default language is "es".
+        Run here, its statements would settle other entries than the ones answered for. Nothing was changed.
+  Next: Where no environment has applied it, delete it and make the save again with "es" as the default language. Where one has, do its other statements by hand, settle the entries in "es" by hand, and record it with `nextly migrate:resolve --applied 20261021_090000_require_body.sql`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-language-differs  (MIGRATION_LANGUAGE_DIFFERS)
+```

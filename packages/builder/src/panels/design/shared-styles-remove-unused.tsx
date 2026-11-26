@@ -6,15 +6,11 @@
  * @module shared-styles-remove-unused
  */
 
-import {
-  Popover,
-  PopoverAnchor,
-  PopoverContent,
-  PopoverTrigger,
-} from "@nextlyhq/ui";
+import { Popover, PopoverAnchor, PopoverTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { EDITOR_WORDS } from "../../editor-words";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import {
   isUnused,
   SHARED_STYLE_NOT_WHOLE_REMOVAL,
@@ -118,7 +114,7 @@ export function RemoveUnusedHead({
         </p>
       ) : null}
       {shown && access !== undefined ? (
-        <PopoverContent
+        <BuilderPopoverContent
           side="right"
           align="start"
           sideOffset={12}
@@ -136,7 +132,7 @@ export function RemoveUnusedHead({
             }}
             onKeep={() => setOpen(false)}
           />
-        </PopoverContent>
+        </BuilderPopoverContent>
       ) : null}
     </Popover>
   );

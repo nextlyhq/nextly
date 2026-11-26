@@ -16,7 +16,6 @@ import {
   Checkbox,
   Input,
   Popover,
-  PopoverContent,
   PopoverTrigger,
   Spinner,
   toast,
@@ -25,6 +24,7 @@ import { ArrowLeft, Search } from "lucide-react";
 import * as React from "react";
 
 import { EDITOR_WORDS } from "../../editor-words";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import type { PreferenceStore } from "../../shell-state";
 
 import { ChoiceMenu } from "./font-choice-menu";
@@ -550,7 +550,7 @@ function CatalogueRow({
             )}
           </button>
         </PopoverTrigger>
-        <PopoverContent
+        <BuilderPopoverContent
           side="right"
           align="start"
           sideOffset={12}
@@ -569,7 +569,7 @@ function CatalogueRow({
               onAdded?.(family.family, family.category);
             }}
           />
-        </PopoverContent>
+        </BuilderPopoverContent>
       </Popover>
     </li>
   );
