@@ -130,6 +130,7 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
       <ProblemNotices
         problems={problems}
         making={making}
+        fixedByCopy={fixedByCopyOf(context)}
         onMake={makerOf(props, making, madeFromOf(answer, names, chosen))}
         chosenImage={props.chosenImage}
         onReveal={() => setRevealed(count => count + 1)}
@@ -225,6 +226,13 @@ function PanelNotes({
   );
 }
 
+/** The share image problems a 1200 × 630 copy fixes, as each is said. */
+function fixedByCopyOf(context: SeoTabContext | undefined): string[] {
+  return (context?.shareImage?.problems ?? [])
+    .filter(problem => copyFixes([problem]))
+    .map(problem => problem.message);
+}
+
 /**
  * What makes a share image of the right size from the notices, where the
  * page's image is one a copy fixes and the person may change the page.
@@ -255,12 +263,15 @@ function makerOf(
 function ProblemNotices({
   problems,
   making,
+  fixedByCopy,
   onMake,
   chosenImage,
   onReveal,
 }: {
   problems: readonly SeoProblem[];
   making: ShareImageMaking;
+  /** What a 1200 × 630 copy fixes, as each share image problem says it. */
+  fixedByCopy: readonly string[];
   /** Makes a share image networks can show, where one would fix it. */
   onMake: (() => void) | undefined;
   /** The page's chosen share image, once read: the copy, once made. */
@@ -269,13 +280,28 @@ function ProblemNotices({
   onReveal: () => void;
 }): ReactNode {
   const made = making.made;
-  // A copy made in this visit is 1200 × 630 by construction, so the notice
-  // it fixed goes at once, before the page is judged again.
+  // A copy made in this visit is a 1200 × 630 JPEG by construction, so a
+  // notice of a size or a format it fixed goes at once, before the page is
+  // judged again. One a copy can't fix, such as the site's address missing,
+  // stays.
   const shown = problems.filter(
-    problem => problem.id !== "share-image" || made === undefined
+    problem =>
+      problem.id !== "share-image" ||
+      made === undefined ||
+      !fixedByCopy.includes(problem.text)
   );
   const failure = making.failureAt("notice");
   const madeHere = made?.at === "notice" ? made : undefined;
+  // The action, and what is said of it, sit beside one notice only: the
+  // first a copy fixes, else the first about the share image.
+  const fixable = shown.findIndex(
+    problem =>
+      problem.id === "share-image" && fixedByCopy.includes(problem.text)
+  );
+  const makeAt =
+    fixable === -1
+      ? shown.findIndex(problem => problem.id === "share-image")
+      : fixable;
   if (shown.length === 0 && madeHere === undefined) return null;
   return (
     <div className="grid gap-2">
@@ -291,17 +317,17 @@ function ProblemNotices({
         >
           <AlertDescription className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[13px]">
             <span>{problem.text}</span>
-            {problem.id === "share-image" && onMake !== undefined ? (
+            {index === makeAt && onMake !== undefined ? (
               <LinkAction disabled={making.busy} onClick={onMake}>
                 {makeLabel(making.busy)}
               </LinkAction>
             ) : null}
-            {problem.id === "share-image" && making.busy ? (
+            {index === makeAt && making.busy ? (
               <span className="basis-full text-muted-foreground">
                 {MAKING_TEXT}
               </span>
             ) : null}
-            {problem.id === "share-image" && failure !== undefined ? (
+            {index === makeAt && failure !== undefined ? (
               <span className="basis-full font-medium text-danger-text">
                 {failureText(
                   failure,

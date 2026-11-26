@@ -1244,3 +1244,73 @@ describe("making a share image, as it happens", () => {
     ).toBeEnabled();
   });
 });
+
+describe("making a share image, what stays said", () => {
+  /** A page whose picture is the wrong size, on a site with no address. */
+  const UNADDRESSED: SeoTabContext = {
+    ...CONTEXT,
+    levels: {
+      ...LEVELS,
+      content: {
+        ...LEVELS.content,
+        image: {
+          value: { url: "/media/cover.webp", width: 800, height: 600 },
+          field: "coverImage",
+        },
+      },
+    },
+    fieldLabels: { ...CONTEXT.fieldLabels, coverImage: "Cover image" },
+    shareImage: {
+      problems: [
+        { message: "800 × 600, LinkedIn will crop it", fix: "make" },
+        {
+          message: "The site's address isn't set, so networks can't load it",
+          fix: "settings",
+        },
+      ],
+    },
+  };
+
+  it("keeps a notice a copy can't fix once the copy is made", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        context={UNADDRESSED}
+        onMakeShareImage={() => Promise.resolve("made-1")}
+      />
+    );
+    const [fromNotice] = screen.getAllByRole("button", {
+      name: "Make a share image",
+    });
+    await user.click(fromNotice as HTMLElement);
+    await screen.findByTestId("seo-share-made-notice");
+    expect(screen.queryByText("800 × 600, LinkedIn will crop it")).toBeNull();
+    expect(
+      screen.getByText(
+        "The site's address isn't set, so networks can't load it"
+      )
+    ).toBeVisible();
+  });
+
+  it("frees both buttons and says so when making one fails before it starts", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        context={UNADDRESSED}
+        onMakeShareImage={() => {
+          throw new Error("The media library can't be reached.");
+        }}
+      />
+    );
+    const [fromNotice] = screen.getAllByRole("button", {
+      name: "Make a share image",
+    });
+    await user.click(fromNotice as HTMLElement);
+    expect(
+      await screen.findByText(
+        /The share image couldn't be made: The media library can't be reached\./
+      )
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Making…" })).toBeNull();
+  });
+});

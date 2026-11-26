@@ -101,7 +101,17 @@ export function useShareImageMaking(
       setBusy(true);
       setFailed(({ [at]: _cleared, ...others }) => others);
       const askedFor = image;
-      void onMake()
+      // A maker that throws before it answers is a refusal like any other,
+      // so the buttons are freed and the failure said.
+      let asked: Promise<string | undefined>;
+      try {
+        asked = onMake();
+      } catch (error) {
+        asked = Promise.reject(
+          error instanceof Error ? error : new Error(String(error))
+        );
+      }
+      void asked
         .then(
           id => {
             if (id === undefined) {
