@@ -161,7 +161,8 @@ export function fieldGroupHistoryBeginsOnCurrentError(
       `${filename} begins the migration history on the current field-group names (${CURRENT_NAMES_SHOWN}), and this database's field groups are on the legacy ones (${LEGACY_NAMES_SHOWN}). ` +
       "Applying it would record names the database does not have. " +
       "It was not applied. If no database has applied it, delete it with its snapshot and the translations migrations written with it, and run `nextly migrate:create` again where this database can be reached: it is then written under the names this database holds. " +
-      `If another database has applied it, move this one's field groups with \`${FIELD_GROUP_STORAGE_MIGRATION_COMMAND}\`, then run \`nextly migrate\` again.`,
+      `If another database has applied it, move this one's field groups with \`${FIELD_GROUP_STORAGE_MIGRATION_COMMAND}\`, then run \`nextly migrate\` again. ` +
+      `The moved tables keep their earlier index names, so where \`nextly migrate\` then says the database already stands where the file ends, record it with \`nextly migrate:resolve --applied ${filename.replace(/\.sql$/, "")}\` and run \`nextly migrate\` once more.`,
     logContext: {
       reason: "field-group-storage-not-migrated",
       file: filename,

@@ -655,6 +655,9 @@ describe.each(getConfiguredTestDialects())(
       expect(refused.said).toMatch(
         /delete it with its snapshot .* run `nextly migrate:create` again where this database can be reached/
       );
+      expect(refused.said).toMatch(
+        /nextly migrate:resolve --applied \d+_\d+_\d+_init`/
+      );
 
       rmSync(join(dir, "migrations"), { recursive: true, force: true });
       mkdirSync(join(dir, "migrations"));

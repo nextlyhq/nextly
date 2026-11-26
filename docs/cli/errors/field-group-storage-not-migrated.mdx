@@ -18,7 +18,7 @@ npx nextly migrate:field-groups --apply --backup-confirmed
 npx nextly migrate
 ```
 
-If the refused migration is the **first** of the history, it was written where this database could not be read, or for a new database. If no database has applied it yet, delete it with its snapshot in `migrations/meta` and the translations migrations written with it, and run `nextly migrate:create` again where this database can be reached. It is then written under the names the database holds. If another database has applied it, move this database's field groups as above.
+If the refused migration is the **first** of the history, it was written where this database could not be read, or for a new database. If no database has applied it yet, delete it with its snapshot in `migrations/meta` and the translations migrations written with it, and run `nextly migrate:create` again where this database can be reached. It is then written under the names the database holds. If another database has applied it, move this database's field groups as above. The moved tables keep their earlier index names, so `nextly migrate` may then stop with [`MIGRATION_NOT_PROVEN`](/docs/cli/errors/migration-not-proven), saying the database already stands where the file ends: record the file with `nextly migrate:resolve --applied <migration>` and run `nextly migrate` once more.
 
 ## Example
 
