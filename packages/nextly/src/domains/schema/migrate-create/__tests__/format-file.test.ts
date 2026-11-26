@@ -17,6 +17,7 @@ import {
   formatTimestamp,
   slugify,
 } from "../format-file";
+import { recordedAnswerLanguage } from "../../../i18n/migration/answer-language";
 
 describe("formatMigrationFile", () => {
   const NOW = new Date("2026-04-29T15:45:00.123Z");
@@ -598,6 +599,33 @@ describe("the generated line every file `migrate:create` writes carries", () => 
       now: NOW,
     });
     expect(lines(out)).toContain(LINE);
+  });
+
+  // A file holding an answer for a field kept per language records the answer's language just
+  // above it: each line read on its own, by the generated line's reader and by the language's.
+  it("is a line of a generated migration whose answers record their language, and of one with none", () => {
+    const write = (answersIn?: string) =>
+      formatMigrationFile({
+        name: "require_note",
+        dialect: "postgresql",
+        sqlStatements: [
+          'UPDATE "dc_posts_locales" SET "note" = \'noted\' WHERE "note" IS NULL',
+        ],
+        downSqlStatements: [],
+        collections: ["posts"],
+        singles: [],
+        components: [],
+        hasUserExt: false,
+        now: NOW,
+        ...(answersIn === undefined ? {} : { answersIn }),
+      });
+    const answered = write("en");
+    expect(lines(answered)).toContain(LINE);
+    expect(lines(answered)).toContain("-- Answers in: en");
+    expect(recordedAnswerLanguage(answered)).toBe("en");
+    const unanswered = write();
+    expect(lines(unanswered)).toContain(LINE);
+    expect(recordedAnswerLanguage(unanswered)).toBeUndefined();
   });
 
   it("is a line of a blank migration", () => {
