@@ -9,6 +9,10 @@
  * size, and the window's. The popover library positions from those exactly as
  * it would in a browser, and writes where it put the popup on its wrapper.
  */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { Popover, PopoverAnchor, PopoverContent } from "@nextlyhq/ui";
 import * as React from "react";
@@ -134,6 +138,8 @@ function Popup({
   align = "start",
   open = true,
   anchorKey,
+  padding = 8,
+  keepSide = false,
 }: {
   as: Content;
   rows: number;
@@ -141,6 +147,8 @@ function Popup({
   align?: "start" | "center" | "end";
   open?: boolean;
   anchorKey?: string;
+  padding?: number | { top?: number; left?: number };
+  keepSide?: boolean;
 }): React.JSX.Element {
   return (
     <>
@@ -151,7 +159,8 @@ function Popup({
           side={side}
           align={align}
           sideOffset={12}
-          collisionPadding={8}
+          collisionPadding={padding}
+          {...(keepSide ? { avoidCollisions: false } : {})}
           {...(anchorKey === undefined ? {} : { anchorKey })}
         >
           {Array.from({ length: rows }, (_, row) => (
@@ -224,6 +233,59 @@ describe("a builder popup when it opens", () => {
     anchorBox = { left: 400, top: 20, width: 200, height: 20 };
     await opened(BuilderPopoverContent, "right");
     expect(placedAt(wrapper()).top).toBe(TOP_BAR_HEIGHT + 8);
+  });
+});
+
+describe("what a builder popup is told", () => {
+  it("keeps no distance from an edge its padding leaves out", async () => {
+    // Padding for the top only: the left edge is the window's own, as the
+    // popover reads it, not the default gap.
+    anchorBox = { left: 2, top: 100, width: 200, height: 28 };
+    render(
+      <Popup
+        as={BuilderPopoverContent}
+        rows={3}
+        side="bottom"
+        padding={{ top: 8 }}
+      />
+    );
+    await waitFor(() =>
+      expect(content().getAttribute("data-nx-popup")).toBe("held")
+    );
+    expect(placedAt(wrapper()).left).toBe(2);
+  });
+
+  it("keeps the default gap when it gives no padding at all", async () => {
+    anchorBox = { left: 2, top: 100, width: 200, height: 28 };
+    render(<Popup as={BuilderPopoverContent} rows={3} side="bottom" />);
+    await waitFor(() =>
+      expect(content().getAttribute("data-nx-popup")).toBe("held")
+    );
+    expect(placedAt(wrapper()).left).toBe(8);
+  });
+
+  it("marks a popup kept on its side, which keeps its own width", async () => {
+    render(<Popup as={BuilderPopoverContent} rows={3} keepSide />);
+    await waitFor(() =>
+      expect(content().getAttribute("data-nx-popup")).toBe("held")
+    );
+    expect(content().hasAttribute("data-nx-popup-keep-side")).toBe(true);
+    // The stylesheet lifts the width limit for exactly that mark.
+    const sheet = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "../styles/popups.css"),
+      "utf8"
+    );
+    expect(sheet).toMatch(
+      /:where\(\[data-nx-popup="held"\]\[data-nx-popup-keep-side\]\)\s*\{\s*max-width:\s*none;/
+    );
+  });
+
+  it("leaves the mark off a popup that may change side", async () => {
+    render(<Popup as={BuilderPopoverContent} rows={3} />);
+    await waitFor(() =>
+      expect(content().getAttribute("data-nx-popup")).toBe("held")
+    );
+    expect(content().hasAttribute("data-nx-popup-keep-side")).toBe(false);
   });
 });
 

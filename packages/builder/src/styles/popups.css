@@ -13,6 +13,12 @@
     max-width: var(--radix-popover-content-available-width, 100vw);
     overflow: auto;
   }
+
+  /* A popup told to keep its side, room or not, keeps its own width: capped
+     to the room beside a nearby edge it would shrink to a sliver there. */
+  :where([data-nx-popup="held"][data-nx-popup-keep-side]) {
+    max-width: none;
+  }
 }
 
 /*

@@ -39,14 +39,15 @@ import {
 } from "./popup-placement";
 
 /**
- * The props the general popover content takes, but two it can't honour:
+ * The props the general popover content takes, but three it can't honour:
  * `forceMount`, since content kept mounted while closed would keep its old
- * place for the next opening, and `collisionBoundary`, since a popup is
- * planned against the window (and the top bar), not a box of the caller's.
+ * place for the next opening; `collisionBoundary`, since a popup is planned
+ * against the window (and the top bar), not a box of the caller's; and
+ * `sticky`, since a held popup follows its anchor and nothing else moves it.
  */
 export type BuilderPopoverContentProps = Omit<
   React.ComponentPropsWithoutRef<typeof PopoverContent>,
-  "forceMount" | "collisionBoundary"
+  "forceMount" | "collisionBoundary" | "sticky"
 > & {
   /**
    * Which anchor the popup is open beside, for one that stays open while
@@ -84,15 +85,21 @@ type Told =
 
 type Padding = BuilderPopoverContentProps["collisionPadding"];
 
+/**
+ * The distances a popup keeps from the window's edges, as the popover reads
+ * `collisionPadding`: one number for every edge, or an object whose missing
+ * edges are none. Only a popup that gives no padding at all gets the gap.
+ */
 function insetsFrom(padding: Padding): PopupInsets {
-  if (typeof padding === "number") {
-    return { top: padding, right: padding, bottom: padding, left: padding };
+  const each = padding ?? EDGE_GAP;
+  if (typeof each === "number") {
+    return { top: each, right: each, bottom: each, left: each };
   }
   return {
-    top: padding?.top ?? EDGE_GAP,
-    right: padding?.right ?? EDGE_GAP,
-    bottom: padding?.bottom ?? EDGE_GAP,
-    left: padding?.left ?? EDGE_GAP,
+    top: each.top ?? 0,
+    right: each.right ?? 0,
+    bottom: each.bottom ?? 0,
+    left: each.left ?? 0,
   };
 }
 
@@ -351,6 +358,9 @@ export const BuilderPopoverContent: React.ForwardRefExoticComponent<
         // The side it was planned on: the popover's own names the side its
         // corner is measured from.
         data-nx-popup-side={held?.planned ?? side}
+        // Kept on its side whatever its room, so it keeps its own width too
+        // (`styles/popups.css`) rather than being squeezed into that room.
+        data-nx-popup-keep-side={keepSide ? "" : undefined}
       />
     );
   }
