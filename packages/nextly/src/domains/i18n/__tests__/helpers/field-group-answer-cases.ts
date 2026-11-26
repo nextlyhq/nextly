@@ -135,7 +135,7 @@ export function fieldGroupAnswerCases(prefix: string): void {
         const rows = await adapter.executeQuery<
           { id: unknown; locale: unknown } & LanguageRow
         >(
-          `SELECT ${q("_parent")} AS id, ${q("_locale")} AS locale, ${q("heading")} AS heading, ${q("note")} AS note FROM ${q(`comp_${prefix}_card_locales`)}`
+          `SELECT ${q("_parent")} AS id, ${q("_locale")} AS locale, ${q("heading")} AS heading, ${q("note")} AS note FROM ${q(`fg_${prefix}_card_locales`)}`
         );
         return Object.fromEntries(
           rows.map(row => [
@@ -151,7 +151,7 @@ export function fieldGroupAnswerCases(prefix: string): void {
           id: unknown;
           views: unknown;
         }>(
-          `SELECT ${q("id")} AS id, ${q("views")} AS views FROM ${q(`comp_${prefix}_card`)}`
+          `SELECT ${q("id")} AS id, ${q("views")} AS views FROM ${q(`fg_${prefix}_card`)}`
         );
         return Object.fromEntries(
           rows.map(row => [String(row.id), Number(row.views)])
@@ -268,7 +268,7 @@ export function fieldGroupAnswerCases(prefix: string): void {
           schemaVersion: version.schemaVersion,
           eventResolutions: [
             {
-              eventId: `add_not_null_with_nulls:comp_${slug}.note`,
+              eventId: `add_not_null_with_nulls:fg_${slug}.note`,
               ...(answer === "fill"
                 ? { kind: "provide_default", value: "filled" }
                 : { kind: "delete_nonconforming" }),
