@@ -61,8 +61,9 @@ describe("nextly setup-token and the config", () => {
       "commander",
       "picocolors",
     ]);
-    // The store's module loads it, so its absence above is the command's own.
+    // The store's module loads drizzle, so its absence above is the command's
+    // own. (A dialect's core it loads only with that dialect's tables.)
     const store = await runtimeImportsOf("cli/commands/setup-token-store.ts");
-    expect([...store.packages.keys()]).toContain("drizzle-orm/sqlite-core");
+    expect([...store.packages.keys()]).toContain("drizzle-orm");
   });
 });

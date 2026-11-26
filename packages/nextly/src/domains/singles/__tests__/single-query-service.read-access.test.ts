@@ -13,7 +13,7 @@
  * no context at all.
  */
 
-import { beforeEach, describe, it, expect, vi } from "vitest";
+import { beforeAll, beforeEach, describe, it, expect, vi } from "vitest";
 
 import {
   callerMay,
@@ -34,6 +34,15 @@ import {
   siteSettingsMeta,
   textField,
 } from "./single-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 // The signed-in caller the gate looks up, set per test (`callerMay`).
 vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
