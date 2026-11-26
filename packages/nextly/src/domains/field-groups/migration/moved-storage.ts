@@ -368,6 +368,7 @@ export async function lookingUpRegistry<T>(args: {
   if (executor === undefined) return lookingUpOffTransaction(adapter, lookup);
 
   const savepoint = await takeSavepoint(adapter, executor);
+  const settled = isSettledOnCurrentNames(adapter);
   try {
     return await lookup();
   } catch (error) {
@@ -375,7 +376,7 @@ export async function lookingUpRegistry<T>(args: {
     if (candidate === undefined || !isRegistry(candidate)) throw error;
     if (!(await canAsk(adapter, executor, savepoint))) {
       await adapter.afterRollback(() => resolveAgain(adapter));
-      throw error;
+      throw unaskedFailure(error, candidate, savepoint, settled);
     }
     const moved = await isMovedStorage(
       adapter,
@@ -519,6 +520,23 @@ async function takeSavepoint(
   return { name, taken: true };
 }
 
+/**
+ * What a failure on a PostgreSQL transaction that cannot be asked about is raised as. A process
+ * settled on the current names takes no savepoint, and only a rollback of the migration moves
+ * field-group storage under it: refused to be retried, as a save that met the migration going up
+ * is. Any other failure that cannot be asked about is raised as it was.
+ */
+function unaskedFailure(
+  error: unknown,
+  candidate: MoveCandidate,
+  savepoint: TransactionSavepoint | undefined,
+  settled: boolean
+): unknown {
+  return savepoint === undefined && settled
+    ? storageMovingRefusal(candidate.missing)
+    : error;
+}
+
 /** Whether a transaction can be asked anything after a statement failed on it. */
 async function canAsk(
   adapter: DrizzleAdapter,
@@ -577,6 +595,7 @@ export async function refusingMovedStorage<T>(args: {
   const executor = onTransaction(adapter, args.executor);
   if (executor === undefined) return work();
   const savepoint = await takeSavepoint(adapter, executor);
+  const settled = isSettledOnCurrentNames(adapter);
   try {
     return await work();
   } catch (error) {
@@ -586,10 +605,9 @@ export async function refusingMovedStorage<T>(args: {
     // A name not registered is refused before any statement runs, so the transaction still answers.
     const ran = candidate.kind !== "unregistered";
     if (ran && !(await canAsk(adapter, executor, savepoint))) {
-      // Only a rollback of the migration moves storage under a process settled on the current
-      // names: they are followed, so a retry finds them, and the failure is raised as it was.
+      // They are followed once the transaction has rolled back, so a retry finds them.
       await adapter.afterRollback(follow);
-      throw error;
+      throw unaskedFailure(error, candidate, savepoint, settled);
     }
     const moved = await isMovedStorage(
       adapter,
