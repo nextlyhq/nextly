@@ -11,14 +11,12 @@
 import { FontChoicesContext, SiteFontRoles } from "@nextlyhq/builder/shell";
 import { useContext, type JSX } from "react";
 
-import { useFontCatalogue } from "./site-style-fonts";
 import { useVariablesStudio } from "./site-style-tokens-studio";
 
 /** The Body and Headings fonts, inside the tokens studio's frame. */
 export function FontRolesTab(): JSX.Element | null {
   const studio = useVariablesStudio();
   const fonts = useContext(FontChoicesContext);
-  const catalogue = useFontCatalogue();
   if (studio?.tokens === undefined) return null;
   return (
     <SiteFontRoles
@@ -29,7 +27,6 @@ export function FontRolesTab(): JSX.Element | null {
       faces={fonts?.faces}
       fromCode={fonts?.fromCode ?? []}
       onManageFonts={fonts?.onManageFonts}
-      onAddCut={catalogue?.add}
     />
   );
 }

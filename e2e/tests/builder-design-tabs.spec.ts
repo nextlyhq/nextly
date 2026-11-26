@@ -105,12 +105,10 @@ test("names its four tabs in order, each holding its own kind", async ({
   await expect(
     panel.getByRole("button", { name: /^Text and surfaces, \d+$/ })
   ).toBeVisible();
-  // Type: the Body and Headings fonts and the way to the site's fonts, then
-  // the type sizes.
+  // Type: the Fonts header, with the way to the site's fonts, over the Body
+  // and Headings fonts, then the type sizes.
   await switchTo(page, "Type");
-  await expect(
-    panel.getByRole("region", { name: "Body and headings fonts" })
-  ).toBeVisible();
+  await expect(panel.getByRole("region", { name: "Fonts" })).toBeVisible();
   await expect(
     panel.getByRole("button", { name: "Manage fonts…" })
   ).toBeVisible();

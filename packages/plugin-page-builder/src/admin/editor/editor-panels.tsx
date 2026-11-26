@@ -118,8 +118,8 @@ const SiteFontsScreen: typeof SiteFontsScreenPart = lazyPart(() =>
 );
 
 /**
- * The Type tab's Body and Headings fonts, fetched with the fonts panel: they
- * read the font catalogue for "Add Bold".
+ * The Type tab's Fonts header and its Body and Headings fonts, fetched when
+ * the tab first draws them, as the text styles are.
  */
 const FontRolesTab: typeof FontRolesTabPart = lazyPart(() =>
   import("./site-font-roles-tab").then(m => m.FontRolesTab)
@@ -1275,20 +1275,13 @@ export function editorPanelRenderer({
                 limits={documentLimits}
               />
             ),
-            // Type: the Body and Headings fonts, the way to the Fonts screen,
-            // then the type sizes and the font and weight variables.
+            // Type: the Fonts header ("Manage fonts…" at its end, where
+            // focus returns when the Fonts screen closes) over the Body and
+            // Headings fonts, then the type sizes and the font and weight
+            // variables.
             type: () => (
               <>
                 <FontRolesTab />
-                <button
-                  type="button"
-                  className="nx-vars__link nx-fonts-manage"
-                  onClick={() => view.choose(FONTS_SCREEN_VIEW)}
-                  // Where focus returns when the screen closes.
-                  data-fonts-manage=""
-                >
-                  Manage fonts…
-                </button>
                 <VariablesTab tab="type" />
                 {/* After the type sizes they are built on. */}
                 <TextStylesTab

@@ -8,7 +8,7 @@
  *   page; picking Headings sets every heading and leaves paragraphs alone; a
  *   block with a font of its own keeps it. The page declares
  *   `--site-font-body` for a host's own CSS.
- * - A Headings font with no bold says so.
+ * - A Headings font with no bold draws no warning and offers no "Add Bold".
  * - Undo and Redo reverse the Body font.
  * - The rows are reached and changed with the keyboard alone; at the panel's
  *   narrowest they fit and the list stays in the window; the Type tab passes
@@ -184,7 +184,7 @@ async function openType(page: Page) {
       .click();
   }
   await panel.getByRole("tab", { name: /^Type/ }).click();
-  const fonts = panel.getByRole("region", { name: "Body and headings fonts" });
+  const fonts = panel.getByRole("region", { name: "Fonts" });
   await expect(fonts).toBeVisible({ timeout: 30_000 });
   return { panel, fonts };
 }
@@ -237,20 +237,19 @@ test("Body and Headings reach every page: the canvas, its header and footer, the
       )
     ).not.toBe("");
 
-    // At the top of Type, above the way to the site's fonts.
+    // At the top of Type, under the Fonts header that carries the way to the
+    // site's fonts.
     const frame = await openBuilder(page);
-    const { panel, fonts } = await openType(page);
+    const { fonts } = await openType(page);
     await expect(
       fonts.getByRole("button", { name: "Body font, Your site's own font" })
     ).toBeVisible();
     await expect(
       fonts.getByRole("button", { name: "Headings font, Same as body" })
     ).toBeVisible();
-    const top = async (locator: ReturnType<Page["locator"]>) =>
-      (await locator.boundingBox())?.y ?? Number.POSITIVE_INFINITY;
-    expect(await top(fonts)).toBeLessThan(
-      await top(panel.getByRole("button", { name: "Manage fonts…" }))
-    );
+    await expect(
+      fonts.getByRole("button", { name: "Manage fonts…" })
+    ).toBeVisible();
 
     // Body: every paragraph, the header's and the footer's, and the heading
     // with it while Headings is the same as body.
@@ -319,7 +318,7 @@ test("Body and Headings reach every page: the canvas, its header and footer, the
   }
 });
 
-test("a Headings font with no bold says so, and Undo and Redo reverse the Body font", async ({
+test("a Headings font with no bold draws no warning, and Undo and Redo reverse the Body font", async ({
   page,
 }) => {
   test.setTimeout(300_000);
@@ -330,10 +329,15 @@ test("a Headings font with no bold says so, and Undo and Redo reverse the Body f
     await openBuilder(page);
     await pick(page, "Headings font", "Lora");
     const { fonts } = await openType(page);
+    // Lora is loaded at 400 only and draws the headings, yet nothing warns
+    // about a missing bold and no "Add Bold" is offered.
     await expect(
-      fonts.getByText("Lora has no Bold, so browsers draw a fake bold")
+      fonts.getByRole("button", { name: "Headings font, Lora" })
     ).toBeVisible();
-    await expect(fonts.getByRole("button", { name: "Add Bold" })).toBeVisible();
+    await expect(fonts.getByText(/has no Bold|fake bold/)).toHaveCount(0);
+    await expect(fonts.getByRole("button", { name: "Add Bold" })).toHaveCount(
+      0
+    );
 
     await pick(page, "Body font", "Serif");
     const body = async () =>

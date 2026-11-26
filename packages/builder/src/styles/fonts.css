@@ -537,23 +537,13 @@ button.nx-font-roles__row:focus-visible {
   white-space: nowrap;
 }
 
-/* Said under the rows, in the panel's own type, when headings fake a bold. */
-.nx-font-roles__note {
-  display: flex;
-  flex-wrap: wrap;
+/* "Manage fonts…" at the end of the Fonts header: a target of its own, at
+   least 24px tall, as WCAG 2.2 asks, in a header row that is itself 24px. */
+.nx-font-roles__manage {
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border: 1px solid var(--nx-border);
-  border-radius: var(--radius-md);
-  background: var(--nx-background);
-  font-size: var(--text-xs);
-}
-
-.nx-font-roles__note-text {
-  flex: 1 1 100%;
-  margin: 0;
-  overflow-wrap: anywhere;
+  min-height: 24px;
+  white-space: nowrap;
 }
 
 /*
@@ -580,7 +570,7 @@ button.nx-font-roles__row:focus-visible {
   margin-left: -6px;
 }
 
-/* "Manage fonts…" under the Body and Headings fonts in Design → Type. */
+/* "How text works" in Design → Type: a link on a line of its own. */
 .nx-fonts-manage {
   display: inline-flex;
   align-items: center;
