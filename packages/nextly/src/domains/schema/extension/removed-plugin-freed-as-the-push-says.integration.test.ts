@@ -9,21 +9,27 @@
  * forgets that it was the plugin's, and the change takes it with the field's column, asking for the
  * data-loss consent as for any column it removes.
  *
- * The push, the uninstall and the restarts are the real ones, on one database: SQLite's file, or a
- * scratch database of the server's. Only the configuration the command reads, and the adapter it
- * opens, are the test's.
+ * The same steps on a database `nextly migrate` set up, the change written by `nextly
+ * migrate:create` and applied by `nextly migrate`: the index was recorded by the migration that made
+ * it, and the change is refused until the plugin is uninstalled.
+ *
+ * The push, the commands and the restarts are the real ones, on one database: SQLite's file, or a
+ * scratch database of the server's. Only the configuration the commands read is the test's.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database";
+import { runMigrate } from "../../../cli/commands/migrate";
+import { runMigrateCreate } from "../../../cli/commands/migrate-create";
 import { runPluginUninstall } from "../../../cli/commands/plugin-lifecycle-runner";
 import type { CommandContext } from "../../../cli/program";
+import type { mergeSetupResultIntoConfig as MergeSetupResultIntoConfig } from "../../../cli/utils/config-loader";
 import { createLogger } from "../../../cli/utils/logger";
-import { defineCollection, number, text } from "../../../config";
+import { defineCollection, defineConfig, number, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { clearServices } from "../../../di/register";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
@@ -34,38 +40,44 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { _resetEnvCache } from "../../../shared/lib/env";
+import { setNonInteractive } from "../migrate/can-prompt";
 import { resolveDataLossConsent } from "../migrate/data-loss-consent";
 import { SchemaOwnersRepository } from "../ownership/schema-owners-repository";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import { applyDesiredSchema } from "../pipeline/index";
 
-/** What the uninstall command reads: the configuration, and the database it opens. */
+/**
+ * What the commands read: the configuration and the folder they run in. They open the database by
+ * DATABASE_URL, as the CLI does (`databaseFor`).
+ */
 const run = vi.hoisted(() => ({
-  dialect: "sqlite" as string,
-  adapter: undefined as unknown as object,
   config: undefined as unknown,
+  dir: "",
 }));
 
-vi.mock("../../../cli/utils/config-loader", () => ({
-  loadConfig: async () => ({
-    config: run.config,
-    appConfig: run.config,
-    pluginConsent: undefined,
-  }),
-}));
+type LoadedConfig = Parameters<typeof MergeSetupResultIntoConfig>[0];
 
-vi.mock("../../../cli/utils/adapter", () => ({
-  validateDatabaseEnv: () => ({
-    valid: true,
-    dialect: run.dialect,
-    databaseUrl: "unused",
-  }),
-  // The test's adapter, kept open after the command, so the restarts boot on it.
-  createCliAdapter: async () =>
-    Object.assign(Object.create(run.adapter) as object, {
-      disconnect: async () => {},
-    }),
-}));
+vi.mock("../../../cli/utils/config-loader", async importOriginal => {
+  const original =
+    await importOriginal<typeof import("../../../cli/utils/config-loader")>();
+  return {
+    ...original,
+    loadConfig: async () => {
+      const config = run.config as LoadedConfig;
+      return {
+        config: original.mergeSetupResultIntoConfig(
+          config,
+          config,
+          config.plugins ?? []
+        ),
+        appConfig: config,
+        pluginConsent: undefined,
+        projectRoot: run.dir,
+        dependencies: [],
+      };
+    },
+  };
+});
 
 const SLUG = "rpf_posts";
 const TABLE = `dc_${SLUG}`;
@@ -106,6 +118,8 @@ let drop: (() => Promise<void>) | undefined;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "nextly-rpf-"));
+  mkdirSync(join(dir, "migrations"));
+  run.dir = dir;
 });
 
 afterEach(async () => {
@@ -120,15 +134,18 @@ afterEach(async () => {
 
 /** The database every boot of a case reaches: a SQLite file, or a scratch database. */
 async function databaseFor(dialect: TestDialect) {
-  if (dialect === "sqlite") {
-    return createAdapter({
-      type: "sqlite",
-      url: `file:${join(dir, "app.db")}`,
-    });
+  let url = `file:${join(dir, "app.db")}`;
+  if (dialect !== "sqlite") {
+    const scratch = await createScratchDatabase(dialect, "rpf");
+    drop = scratch.drop;
+    url = scratch.url;
   }
-  const scratch = await createScratchDatabase(dialect, "rpf");
-  drop = scratch.drop;
-  return createAdapter({ type: dialect, url: scratch.url });
+  // The address a command opens a database of its own by, as `migrate:create` does to judge what
+  // its change removes.
+  vi.stubEnv("DB_DIALECT", dialect);
+  vi.stubEnv("DATABASE_URL", url);
+  _resetEnvCache();
+  return createAdapter({ type: dialect, url });
 }
 
 describeEachDialect(
@@ -175,8 +192,6 @@ describeEachDialect(
 
     it("applies the change once the plugin is put back, uninstalled and taken out again", async () => {
       const adapter = (await databaseFor(dialect)) as TestNextly["adapter"];
-      run.dialect = dialect;
-      run.adapter = adapter as unknown as object;
       vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", `${TABLE}.code`);
 
       // Started with the plugin: the push makes the index and records it as the plugin's.
@@ -225,6 +240,128 @@ describeEachDialect(
       expect(after.columns).toContain("title");
       expect(after.columns).not.toContain("code");
       expect(after.indexes).not.toContain(INDEX);
+    }, 120_000);
+
+    /** The app's configuration, with the plugin or not, and with `code` or not. */
+    const configured = (withPlugin: boolean, withCode: boolean) =>
+      defineConfig({
+        ...(withPlugin ? { plugins: [indexer] } : {}),
+        collections: [
+          defineCollection({ slug: SLUG, fields: fields(withCode) }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+
+    /** A command run as the CLI runs it: its exit code, where it ended with one, and what it said. */
+    async function command(
+      config: unknown,
+      work: (c: CommandContext) => Promise<void>
+    ) {
+      run.config = config;
+      const said: string[] = [];
+      const base = createLogger({ quiet: true });
+      const capture = (message: string) => {
+        said.push(message);
+      };
+      const exit = vi.spyOn(process, "exit").mockImplementation(code => {
+        throw new Error(`exit ${String(code)}`);
+      });
+      const stderr = vi
+        .spyOn(console, "error")
+        .mockImplementation((...parts: unknown[]) => {
+          said.push(parts.map(String).join(" "));
+        });
+      setNonInteractive(true);
+      try {
+        await work({
+          logger: {
+            ...base,
+            info: capture,
+            warn: capture,
+            success: capture,
+            error: capture,
+          },
+          options: {},
+          cwd: dir,
+        } as unknown as CommandContext);
+        return { code: undefined as number | undefined, said: said.join("\n") };
+      } catch (error) {
+        const match = /^exit (\d+)$/.exec((error as Error).message);
+        if (match) return { code: Number(match[1]), said: said.join("\n") };
+        throw error;
+      } finally {
+        setNonInteractive(false);
+        exit.mockRestore();
+        stderr.mockRestore();
+      }
+    }
+    const migrateCreate = (name: string, config: unknown) =>
+      command(config, c =>
+        runMigrateCreate(name, { cwd: dir, acceptDataLoss: true }, c)
+      );
+    const migrate = (config: unknown) =>
+      command(config, c => runMigrate({ cwd: dir, acceptDataLoss: true }, c));
+    const files = () =>
+      readdirSync(join(dir, "migrations")).filter(name =>
+        name.endsWith(".sql")
+      );
+
+    it("applies the change through migrate:create and nextly migrate once the plugin is put back, uninstalled and taken out again", async () => {
+      const adapter = (await databaseFor(dialect)) as TestNextly["adapter"];
+      try {
+        // Set up by migrations: the index is made by the app's migration, and recorded as the plugin's.
+        expect(
+          (await migrateCreate("add_posts", configured(true, true))).code
+        ).toBe(undefined);
+        expect((await migrate(configured(true, true))).code).toBe(undefined);
+        const made = await shapeOf(adapter);
+        expect(made.indexes).toContain(INDEX);
+        expect(made.rows).toEqual([`${PLUGIN}:index:${INDEX}`]);
+
+        // Without the plugin, the change is refused before anything is written, naming it.
+        const written = files();
+        const refused = await migrateCreate(
+          "remove_code",
+          configured(false, false)
+        );
+        expect(refused.code, refused.said).not.toBe(undefined);
+        expect(refused.said).toContain(PLUGIN);
+        expect(refused.said).toContain(INDEX);
+        expect(files()).toEqual(written);
+
+        // 1. Back in the configuration. 2. Uninstalled, naming what it leaves.
+        const uninstalled = await command(configured(true, true), c =>
+          runPluginUninstall(
+            PLUGIN,
+            {
+              keepData: false,
+              yes: false,
+              consent: resolveDataLossConsent({ flag: true, env: {} }),
+            },
+            c
+          )
+        );
+        expect(uninstalled.code, uninstalled.said).toBe(undefined);
+        const left = await shapeOf(adapter);
+        expect(left.indexes).toContain(INDEX);
+        expect(left.rows).toEqual([]);
+
+        // 3. Out of the configuration. 4. The change, written and run.
+        const created = await migrateCreate(
+          "remove_code",
+          configured(false, false)
+        );
+        expect(created.code, created.said).toBe(undefined);
+        const migrated = await migrate(configured(false, false));
+        expect(migrated.code, migrated.said).toBe(undefined);
+
+        const after = await shapeOf(adapter);
+        expect(after.columns).toContain("title");
+        expect(after.columns).not.toContain("code");
+        expect(after.indexes).not.toContain(INDEX);
+      } finally {
+        await adapter.disconnect();
+      }
     }, 120_000);
   }
 );
