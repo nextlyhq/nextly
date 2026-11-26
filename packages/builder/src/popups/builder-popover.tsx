@@ -28,16 +28,21 @@ import * as React from "react";
 import {
   type PopupAlign,
   type PopupBox,
+  type PopupHold,
   type PopupInsets,
-  type PopupPlan,
   type PopupSide,
   anchorOf,
+  holdFor,
   planPopup,
 } from "./popup-placement";
 
-/** The props the general popover content takes. */
-export type BuilderPopoverContentProps = React.ComponentPropsWithoutRef<
-  typeof PopoverContent
+/**
+ * The props the general popover content takes, but `forceMount`: content
+ * kept mounted while closed would keep its old place for the next opening.
+ */
+export type BuilderPopoverContentProps = Omit<
+  React.ComponentPropsWithoutRef<typeof PopoverContent>,
+  "forceMount"
 > & {
   /**
    * Which anchor the popup is open beside, for one that stays open while
@@ -55,10 +60,23 @@ const EDGE_GAP = 8;
 /** The builder's top bar, which a popup keeps clear of. */
 const TOP_BAR = ".nx-builder-topbar";
 
-/** A held popup: the place, and the edges it was planned against. */
-interface Held extends PopupPlan {
+/**
+ * A held popup: what the popover is told, the side it was planned on, and
+ * the edges it was planned against.
+ */
+interface Held {
+  hold: Told;
+  planned: PopupSide;
   insets: PopupInsets;
 }
+
+/**
+ * What the popover is told: a hold, or before there is one (or where none
+ * could be measured) the side and distance asked for.
+ */
+type Told =
+  | PopupHold
+  | { side: PopupSide; sideOffset: number; alignOffset: number };
 
 type Padding = BuilderPopoverContentProps["collisionPadding"];
 
@@ -103,11 +121,12 @@ function lengthOn(element: HTMLElement, name: string): number {
  */
 function nextPlace(
   content: HTMLElement,
-  now: PopupPlan,
+  now: Told,
   asked: {
     side: PopupSide;
     align: PopupAlign;
     sideOffset: number;
+    alignOffset: number;
     keepSide: boolean;
   },
   padding: Padding
@@ -127,14 +146,10 @@ function nextPlace(
   if (was !== null) content.setAttribute("data-nx-popup", was);
 
   const insets = windowInsets(doc, padding);
-  const anchor = anchorOf(
-    placed,
-    { ...now, sideOffset: asked.sideOffset },
-    {
-      width: lengthOn(wrapper, "--radix-popper-anchor-width"),
-      height: lengthOn(wrapper, "--radix-popper-anchor-height"),
-    }
-  );
+  const anchor = anchorOf(placed, now, {
+    width: lengthOn(wrapper, "--radix-popper-anchor-width"),
+    height: lengthOn(wrapper, "--radix-popper-anchor-height"),
+  });
   const plan = planPopup({
     anchor,
     size: { width: natural.width, height: natural.height },
@@ -144,8 +159,14 @@ function nextPlace(
     align: asked.align,
     sideOffset: asked.sideOffset,
     keepSide: asked.keepSide,
+    alignOffset: asked.alignOffset,
   });
-  return { ...plan, insets };
+  const size = { width: natural.width, height: natural.height };
+  return {
+    hold: holdFor(plan, anchor, size, asked.sideOffset, insets),
+    planned: plan.side,
+    insets,
+  };
 }
 
 /**
@@ -165,6 +186,7 @@ export const BuilderPopoverContent: React.ForwardRefExoticComponent<
       collisionPadding = EDGE_GAP,
       // Asked off, the popup stays on its side even without room there.
       avoidCollisions = true,
+      alignOffset = 0,
       anchorKey,
       ...props
     },
@@ -176,17 +198,13 @@ export const BuilderPopoverContent: React.ForwardRefExoticComponent<
     const [node, setNode] = React.useState<HTMLDivElement | null>(null);
     const [held, setHeld] = React.useState<Held | null>(null);
     // The place the popover has the popup at, read by the handlers below.
-    const now = React.useRef<PopupPlan>({ side, alignOffset: 0 });
-    now.current = held ?? { side, alignOffset: 0 };
+    const first: Told = { side, sideOffset, alignOffset: 0 };
+    const now = React.useRef<Told>(first);
+    now.current = held?.hold ?? first;
     const keepSide = !avoidCollisions;
-    const asked = React.useRef({
-      side,
-      align,
-      sideOffset,
-      keepSide,
-      collisionPadding,
-    });
-    asked.current = { side, align, sideOffset, keepSide, collisionPadding };
+    const where = { side, align, sideOffset, alignOffset, keepSide };
+    const asked = React.useRef({ ...where, collisionPadding });
+    asked.current = { ...where, collisionPadding };
 
     // The anchor the popup was last placed beside.
     const placedBeside = React.useRef(anchorKey);
@@ -202,7 +220,8 @@ export const BuilderPopoverContent: React.ForwardRefExoticComponent<
       // Nothing to measure from: shown where the popover put it.
       setHeld(
         next ?? {
-          ...now.current,
+          hold: now.current,
+          planned: now.current.side,
           insets: insetsFrom(asked.current.collisionPadding),
         }
       );
@@ -281,15 +300,18 @@ export const BuilderPopoverContent: React.ForwardRefExoticComponent<
       <PopoverContent
         {...props}
         ref={ref}
-        side={held?.side ?? side}
-        // Start alignment and an offset say the place exactly, so a change
-        // in the popup's size cannot move its start edge.
+        // Start alignment and the two offsets say where its top-left corner
+        // goes, so a change in the popup's size cannot move it.
+        side={now.current.side}
         align="start"
-        alignOffset={held?.alignOffset ?? 0}
-        sideOffset={sideOffset}
+        alignOffset={now.current.alignOffset}
+        sideOffset={now.current.sideOffset}
         avoidCollisions={false}
         collisionPadding={held?.insets ?? collisionPadding}
         data-nx-popup={held === null ? "placing" : "held"}
+        // The side it was planned on: the popover's own names the side its
+        // corner is measured from.
+        data-nx-popup-side={held?.planned ?? side}
       />
     );
   }

@@ -201,7 +201,7 @@ describe("a builder popup when it opens", () => {
   it("opens beside its anchor, raised to fit above the window's bottom", async () => {
     await opened(BuilderPopoverContent);
     const at = placedAt(wrapper());
-    expect(content().getAttribute("data-side")).toBe("right");
+    expect(content().getAttribute("data-nx-popup-side")).toBe("right");
     expect(at.left).toBe(anchorBox.left + anchorBox.width + 12);
     expect(at.top + size.height).toBe(WINDOW.height - 8);
   });
@@ -209,14 +209,14 @@ describe("a builder popup when it opens", () => {
   it("opens on the other side when its own has no room", async () => {
     anchorBox = { left: 1300, top: 300, width: 200, height: 28 };
     await opened(BuilderPopoverContent);
-    expect(content().getAttribute("data-side")).toBe("left");
+    expect(content().getAttribute("data-nx-popup-side")).toBe("left");
     expect(placedAt(wrapper()).left).toBe(1300 - 12 - size.width);
   });
 
   it("opens upward from an anchor at the window's bottom", async () => {
     anchorBox = { left: 400, top: 690, width: 200, height: 28 };
     await opened(BuilderPopoverContent, "bottom");
-    expect(content().getAttribute("data-side")).toBe("top");
+    expect(content().getAttribute("data-nx-popup-side")).toBe("top");
     expect(placedAt(wrapper()).top + size.height).toBe(690 - 12);
   });
 
@@ -237,7 +237,27 @@ describe("a builder popup while it is open", () => {
     await scrolled();
 
     expect(placedAt(wrapper())).toEqual(before);
-    expect(content().getAttribute("data-side")).toBe("right");
+    expect(content().getAttribute("data-nx-popup-side")).toBe("right");
+  });
+
+  it("keeps its top where it was when it opened upward and grows", async () => {
+    // Opened above its anchor: a row added at its foot must not lift the
+    // rows above it out from under the pointer.
+    anchorBox = { left: 400, top: 690, width: 200, height: 28 };
+    const view = render(
+      <Popup as={BuilderPopoverContent} rows={3} side="bottom" />
+    );
+    await waitFor(() =>
+      expect(content().getAttribute("data-nx-popup")).toBe("held")
+    );
+    expect(content().getAttribute("data-nx-popup-side")).toBe("top");
+    const before = placedAt(wrapper());
+
+    size = { ...size, height: size.height + 48 };
+    view.rerender(<Popup as={BuilderPopoverContent} rows={4} side="bottom" />);
+    await scrolled();
+
+    expect(placedAt(wrapper())).toEqual(before);
   });
 
   it("is what the general popover, in the same place, does not do", async () => {
@@ -307,7 +327,7 @@ describe("a builder popup while it is open", () => {
 
   it("is placed again when the window is resized", async () => {
     await opened(BuilderPopoverContent);
-    expect(content().getAttribute("data-side")).toBe("right");
+    expect(content().getAttribute("data-nx-popup-side")).toBe("right");
 
     // A narrower window leaves no room on the right.
     setWindow(1300, WINDOW.height);
@@ -317,7 +337,7 @@ describe("a builder popup while it is open", () => {
     });
 
     await waitFor(() =>
-      expect(content().getAttribute("data-side")).toBe("left")
+      expect(content().getAttribute("data-nx-popup-side")).toBe("left")
     );
     expect(placedAt(wrapper()).left).toBe(anchorBox.left - 12 - size.width);
   });

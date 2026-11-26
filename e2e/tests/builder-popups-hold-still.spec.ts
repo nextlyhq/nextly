@@ -4,9 +4,9 @@
  *
  * Each popup is opened from a control in the lower half of the window, where
  * there is least room below, and then changed so that a row, a section or a
- * message appears or goes inside it. The edge beside the control that opened
- * it, and its side, must not move by a pixel, and the control the author just
- * used must still be under the pointer. Every popup must also be inside the
+ * message appears or goes inside it. Its top-left corner, which its controls
+ * are measured from, and its side must not move, and the control the author
+ * just used must still be under the pointer. Every popup must also be inside the
  * window and clear of the top bar.
  *
  * - The type size editor (Design › Type › Site text).
@@ -94,20 +94,6 @@ async function settled(page: Page): Promise<void> {
   );
 }
 
-/** The popup's edge beside its anchor and its start edge, by its side. */
-function heldEdges(side: string, box: Box): { across: number; along: number } {
-  switch (side) {
-    case "right":
-      return { across: box.x, along: box.y };
-    case "left":
-      return { across: box.x + box.width, along: box.y };
-    case "top":
-      return { across: box.y + box.height, along: box.x };
-    default:
-      return { across: box.y, along: box.x };
-  }
-}
-
 /**
  * Two places the same to within a pixel. A popup's height is fractional (its
  * lines are), and the popover rounds its place to whole pixels, so a popup
@@ -144,9 +130,9 @@ async function expectInsideWindow(page: Page, popup: Locator): Promise<void> {
 
 /**
  * Opens `popup` from `opener`, which must sit in the lower half of the
- * window, makes `change`, and holds the popup to where it was: its side, the
- * edge beside the opener, its start edge and `pointer` (the control the
- * author just used) all unmoved, and its content's height changed, so the
+ * window, makes `change`, and holds the popup to where it was: its side, its
+ * top-left corner and `pointer` (the control the author just used) all
+ * unmoved, and its content's height changed, so the
  * change did resize it.
  */
 async function holdsThrough(
@@ -174,7 +160,7 @@ async function holdsThrough(
   await settled(page);
   await expectInsideWindow(page, popup);
 
-  const side = (await popup.getAttribute("data-side")) ?? "";
+  const side = await popup.getAttribute("data-nx-popup-side");
   const before = await boxOf(popup);
   const height = await popup.evaluate(element => element.scrollHeight);
   await change(popup);
@@ -186,11 +172,13 @@ async function holdsThrough(
   await settled(page);
 
   const after = await boxOf(popup);
-  expect(await popup.getAttribute("data-side")).toBe(side);
+  expect(await popup.getAttribute("data-nx-popup-side")).toBe(side);
+  // Its top-left corner, whichever side it opened on: the corner its
+  // controls are measured from.
   expectSamePlace(
-    heldEdges(side, after),
-    heldEdges(side, before),
-    "the edge beside the opener"
+    { x: after.x, y: after.y },
+    { x: before.x, y: before.y },
+    "the popup's top-left corner"
   );
   expectSamePlace(await boxOf(pointer(popup)), at, "the control just used");
   await expectInsideWindow(page, popup);
@@ -492,28 +480,23 @@ test.describe("a builder popup holds still while its content changes", () => {
 });
 
 test.describe("what may move a builder popup", () => {
-  test("it moves with its row when the panel under it scrolls", async ({
+  test("it moves with its control when the panel under it scrolls", async ({
     page,
   }) => {
-    await page.setViewportSize({ width: WINDOW.width, height: 560 });
-    await openEditorWith(page, NODES, TEXT);
-    const panel = await openDesign(page);
-    await panel.getByRole("tab", { name: /^Colou?rs/ }).click();
-    // By its element: the open popup is modal, which takes the panel's
-    // region out of the accessibility tree.
-    const row = page
-      .locator('section[aria-label="Design panel"] .nx-vars__row')
-      .nth(1);
-    await row.click();
-    const popup = page.locator('[data-slot="popover-content"].nx-vars-editor');
+    const inspector = await styleBox(page);
+    await expand(inspector.getByRole("button", { name: /^Spacing/ }));
+    const scroller = page.locator(".nx-inspector");
+    const opener = page
+      .locator(".nx-spacing-box")
+      .getByRole("button", { name: /^Padding top / });
+    await lowered(scroller, opener);
+    await opener.click();
+    const popup = page.getByRole("dialog", { name: "Padding top" });
     await expect(popup).toHaveAttribute("data-nx-popup", "held");
     await settled(page);
 
     const before = await boxOf(popup);
-    const rowBefore = await boxOf(row);
-    const scroller = page
-      .locator('section[aria-label="Design panel"] .nx-vars__body')
-      .first();
+    const openerBefore = await boxOf(opener);
     const by = await scroller.evaluate(element => {
       const was = element.scrollTop;
       element.scrollTop += 40;
@@ -522,9 +505,13 @@ test.describe("what may move a builder popup", () => {
     expect(by, "the panel has room to scroll").toBeGreaterThan(0);
     await settled(page);
 
-    const rowAfter = await boxOf(row);
+    const openerAfter = await boxOf(opener);
     const after = await boxOf(popup);
-    expectSamePlace({ y: rowAfter.y }, { y: rowBefore.y - by }, "the row");
+    expectSamePlace(
+      { y: openerAfter.y },
+      { y: openerBefore.y - by },
+      "the control"
+    );
     expectSamePlace(
       { x: after.x, y: after.y },
       { x: before.x, y: before.y - by },

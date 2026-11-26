@@ -8,6 +8,7 @@ import {
   type PopupBox,
   type PopupInsets,
   anchorOf,
+  holdFor,
   planPopup,
 } from "./popup-placement";
 
@@ -202,6 +203,97 @@ describe("a builder popup's place when it opens", () => {
     const { alignOffset } = plan(anchor, "bottom", "center");
     expect(Number.isInteger(anchor.left + alignOffset)).toBe(false);
     expect(Number.isInteger(alignOffset)).toBe(true);
+  });
+});
+
+describe("a caller's own shift along the side", () => {
+  const plan = (align: "start" | "center" | "end") =>
+    planPopup({
+      anchor: box(400, 100, 120),
+      size: SIZE,
+      viewport: WINDOW,
+      insets: INSETS,
+      side: "bottom",
+      align,
+      sideOffset: 8,
+      alignOffset: 10,
+    });
+
+  it("is read as the popover reads it", () => {
+    expect(plan("start").alignOffset).toBe(10);
+    expect(plan("end").alignOffset).toBe(120 - 240 - 10);
+    // The popover leaves a centered popup's offset unread.
+    expect(plan("center").alignOffset).toBe(60 - 120);
+  });
+});
+
+describe("how a planned popup is held", () => {
+  const anchor = box(400, 500, 120, 28);
+
+  /** The popup's top-left corner, as the popover puts it from a hold. */
+  const corner = (hold: ReturnType<typeof holdFor>) =>
+    hold.side === "bottom"
+      ? {
+          left: anchor.left + hold.alignOffset,
+          top: anchor.top + anchor.height + hold.sideOffset,
+        }
+      : {
+          left: anchor.left + anchor.width + hold.sideOffset,
+          top: anchor.top + hold.alignOffset,
+        };
+
+  it("keeps a popup below or beside as it was planned", () => {
+    expect(
+      holdFor({ side: "bottom", alignOffset: -5 }, anchor, SIZE, 8, INSETS)
+    ).toEqual({
+      side: "bottom",
+      sideOffset: 8,
+      alignOffset: -5,
+    });
+    expect(
+      holdFor({ side: "right", alignOffset: -5 }, anchor, SIZE, 8, INSETS)
+    ).toEqual({
+      side: "right",
+      sideOffset: 8,
+      alignOffset: -5,
+    });
+  });
+
+  it("holds a popup above its anchor by its top, where it opened", () => {
+    const hold = holdFor(
+      { side: "top", alignOffset: 0 },
+      anchor,
+      SIZE,
+      8,
+      INSETS
+    );
+    expect(hold.side).toBe("bottom");
+    // Its bottom 8 px above the anchor, so its top is 300 px higher still.
+    expect(corner(hold)).toEqual({ left: 400, top: 500 - 8 - 300 });
+  });
+
+  it("holds a popup left of its anchor by its left edge", () => {
+    const hold = holdFor(
+      { side: "left", alignOffset: 0 },
+      anchor,
+      SIZE,
+      8,
+      INSETS
+    );
+    expect(hold.side).toBe("right");
+    expect(corner(hold)).toEqual({ left: 400 - 8 - 240, top: 500 });
+  });
+
+  it("starts a popup taller than the room above at the window's inset", () => {
+    const tall = { width: 240, height: 900 };
+    const hold = holdFor(
+      { side: "top", alignOffset: 0 },
+      anchor,
+      tall,
+      8,
+      INSETS
+    );
+    expect(corner(hold).top).toBe(INSETS.top);
   });
 });
 

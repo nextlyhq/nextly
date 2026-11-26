@@ -8,6 +8,12 @@
  * place along it once, here, from the room around what opened them, and the
  * popover is then told exactly that and nothing else (`builder-popover`).
  *
+ * What is held is the popup's top-left corner, whichever side it opened on,
+ * because that is where its controls are measured from: a row appearing
+ * further down leaves every control above it where the author's pointer is.
+ * A popup opened above its anchor therefore grows downward, over the anchor,
+ * rather than upward under the pointer.
+ *
  * Plain arithmetic over boxes in window coordinates, so it is tested at every
  * edge without a browser.
  *
@@ -44,6 +50,55 @@ export interface PopupInsets {
 export interface PopupPlan {
   side: PopupSide;
   alignOffset: number;
+}
+
+/**
+ * How the popover is told to hold a planned popup: beside its anchor's
+ * bottom or right edge, at a side offset that may be negative, start-aligned.
+ * Both offsets then measure the popup's top-left corner from the anchor's,
+ * so a change in the popup's own size cannot move that corner. The side the
+ * popup was planned on is kept separately.
+ */
+export interface PopupHold {
+  side: "bottom" | "right";
+  sideOffset: number;
+  alignOffset: number;
+}
+
+/**
+ * The hold that puts a popup where `plan` places it, `size` as it is now. A
+ * popup above or left of its anchor and larger than the room there starts at
+ * the window's inset, and its content scrolls inside.
+ */
+export function holdFor(
+  plan: PopupPlan,
+  anchor: PopupBox,
+  size: { width: number; height: number },
+  sideOffset: number,
+  insets: PopupInsets
+): PopupHold {
+  const { alignOffset } = plan;
+  const above = Math.min(size.height, anchor.top - sideOffset - insets.top);
+  const before = Math.min(size.width, anchor.left - sideOffset - insets.left);
+  switch (plan.side) {
+    case "bottom":
+      return { side: "bottom", sideOffset, alignOffset };
+    case "right":
+      return { side: "right", sideOffset, alignOffset };
+    case "top":
+      // Its top, measured from the anchor's bottom edge.
+      return {
+        side: "bottom",
+        sideOffset: Math.round(-(sideOffset + above + anchor.height)),
+        alignOffset,
+      };
+    case "left":
+      return {
+        side: "right",
+        sideOffset: Math.round(-(sideOffset + before + anchor.width)),
+        alignOffset,
+      };
+  }
 }
 
 const OPPOSITE: Record<PopupSide, PopupSide> = {
@@ -109,6 +164,12 @@ export function planPopup(input: {
   sideOffset: number;
   /** Kept on the side asked for even without room, as some popups ask. */
   keepSide?: boolean;
+  /**
+   * The caller's own shift along the side, read as the popover reads it:
+   * toward the end for a start alignment, toward the start for an end one,
+   * and not at all for a centered popup.
+   */
+  alignOffset?: number;
 }): PopupPlan {
   const { anchor, size, viewport, insets, align, sideOffset } = input;
   const room = (side: PopupSide): number =>
@@ -135,12 +196,13 @@ export function planPopup(input: {
     ? viewport.width - insets.right
     : viewport.height - insets.bottom;
 
+  const shift = input.alignOffset ?? 0;
   const wanted =
     align === "start"
-      ? start
+      ? start + shift
       : align === "center"
         ? start + anchorLength / 2 - length / 2
-        : start + anchorLength - length;
+        : start + anchorLength - length - shift;
   const at =
     length >= max - min ? min : Math.min(Math.max(wanted, min), max - length);
 
