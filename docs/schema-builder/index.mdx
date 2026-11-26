@@ -53,7 +53,7 @@ Conditional visibility supports type-aware operators (`equals`, `notEquals`, `co
 
 **Change type…** is in a field's settings and in its row menu. It opens the field picker on the field. A field you have not saved yet can become any type the Builder offers. A group or repeater that holds fields can become only the other, which keeps them.
 
-For a saved field, the picker marks each type by what the change does to the saved values: keeps every value, converts the values, or may lose some. A type the save would refuse whatever the values hold is shown as unavailable, with the reason. The save then checks the stored values, and refuses a change that would lose or cut one, naming the field. Inside a group or repeater it rewrites no value yet, so a change that would have to rewrite every value, such as a number becoming text, is shown as unavailable there, and one that would rewrite some may lose them.
+For a saved field, the picker marks each type by what the change does to the saved values: keeps every value, converts the values, or may lose some. A type the save would refuse whatever the values hold is shown as unavailable, with the reason. The save then checks the stored values, and refuses a change that would lose or cut one, naming the field. Inside a group or repeater it rewrites no value yet, so a change that would have to rewrite one, such as a number becoming text, is marked as one that may lose some there, and the save refuses it where a value is stored.
 
 The field keeps its name, label and help text, where and when it shows, Unique, Index, and the settings the new type also has. Its default value is dropped.
 
