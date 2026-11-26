@@ -309,7 +309,6 @@ function BuilderWorkspace(
     // As the save judges names: with Draft/Published as stored or as the pending settings set it.
     lifecycleEnabled: props.lifecycleEnabled === true,
     outline,
-    fieldGroups,
   });
   // Leaves for a field group's own editor, where its fields are changed. The
   // page's guard asks first while changes are pending, as it does for every
