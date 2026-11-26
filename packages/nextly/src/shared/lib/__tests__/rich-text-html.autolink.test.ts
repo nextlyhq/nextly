@@ -33,18 +33,18 @@ describe("an address the editor linked", () => {
         words("Meet at "),
         {
           type: "autolink",
-          url: "https://www.meetup.com/wordpress-haripur/",
+          url: "https://www.example.org/groups/open-source/",
           rel: null,
           target: null,
           title: null,
           isUnlinked: false,
-          children: [words("https://www.meetup.com/wordpress-haripur/")],
+          children: [words("https://www.example.org/groups/open-source/")],
         },
       ]),
       { styles: "none" }
     );
     expect(html).toContain(
-      'href="https://www.meetup.com/wordpress-haripur/">https://www.meetup.com/wordpress-haripur/</a>'
+      'href="https://www.example.org/groups/open-source/">https://www.example.org/groups/open-source/</a>'
     );
   });
 

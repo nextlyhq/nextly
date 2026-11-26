@@ -291,14 +291,14 @@ describe("RichTextInput — links made from addresses in the text", () => {
 
     typeText(
       editor,
-      "Meet at https://www.meetup.com/wordpress-haripur/ or www.example.com, mail me@example.com today"
+      "Meet at https://www.example.org/groups/open-source/ or www.example.com, mail me@example.com today"
     );
 
     expect(linksIn(editor)).toEqual([
       {
         type: "autolink",
-        url: "https://www.meetup.com/wordpress-haripur/",
-        text: "https://www.meetup.com/wordpress-haripur/",
+        url: "https://www.example.org/groups/open-source/",
+        text: "https://www.example.org/groups/open-source/",
       },
       {
         type: "autolink",
@@ -325,7 +325,10 @@ describe("RichTextInput — links made from addresses in the text", () => {
     );
     const editor = editorOn(await screen.findByLabelText("body"));
 
-    typeText(editor, "Meet at https://www.meetup.com/wordpress-haripur/ today");
+    typeText(
+      editor,
+      "Meet at https://www.example.org/groups/open-source/ today"
+    );
 
     expect(linksIn(editor)).toEqual([]);
   });
@@ -381,8 +384,7 @@ describe("RichTextInput — links made from addresses in the text", () => {
       const editor = editorOn(await screen.findByLabelText("body"));
       typeText(editor, "Hack day");
       selectAll(editor);
-      const url =
-        "https://events.mlh.com/events/15848-haripur-builders-hack-day";
+      const url = "https://events.example.org/2026/builders-day";
       dispatchNow(
         editor,
         PASTE_COMMAND,
