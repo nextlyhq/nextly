@@ -180,13 +180,24 @@ export function recordedEntityTables(
     if (typeof dbName === "string") return [dbName];
     return fieldGroupTableNames(slug);
   }
+  return [recordedEntityTable(kind, slug, entry)];
+}
+
+/**
+ * The one table a recorded collection's or Single's declaration names, by the rule `nextly
+ * migrate` reads it by: its `dbName` where it names one, else its slug's. A field group's may be
+ * under either naming, so it is asked of {@link recordedEntityTables}.
+ */
+export function recordedEntityTable(
+  kind: "collection" | "single",
+  slug: string,
+  entry: RecordedEntitySettings
+): string {
+  const { dbName } = entry.settings;
   const named = typeof dbName === "string" ? { slug, dbName } : { slug };
-  switch (kind) {
-    case "collection":
-      return [DEFAULT_TABLE_NAME_RESOLVERS.collection(named)];
-    case "single":
-      return [DEFAULT_TABLE_NAME_RESOLVERS.single(named)];
-  }
+  return kind === "collection"
+    ? DEFAULT_TABLE_NAME_RESOLVERS.collection(named)
+    : DEFAULT_TABLE_NAME_RESOLVERS.single(named);
 }
 
 /** A recorded field, as the companion's classifier reads one. */
