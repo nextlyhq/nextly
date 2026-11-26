@@ -955,10 +955,10 @@ describe.each(getConfiguredTestDialects())(
       expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
     });
 
-    // WAITING, never run. The one road found by which another owner's part comes onto a table the
-    // Builder owns: a collection declared in code, a plugin's hook indexing its column, recorded by
-    // the push, then handed to the Builder (`nextly db:sync --demote`), its entry and the plugin
-    // removed from the configuration. The row is the push's, not the test's.
+    // The one road found by which another owner's part comes onto a table the Builder owns: a
+    // collection declared in code, a plugin's hook indexing its column, recorded by the push, then
+    // handed to the Builder (`nextly db:sync --demote`), its entry and the plugin removed from the
+    // configuration. The row is the push's, not the test's.
     it("refuses removing a field a removed plugin's index stands on, once its collection is handed to the Builder", async () => {
       const slug = "fco_handed";
       const table = `dc_${slug}`;
@@ -1041,11 +1041,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     // A collection pushed with a plugin's hidden column and its index, handed to the Builder, the
-    // plugin then removed. With no migration history the Builder brings the table up to date as
-    // one an earlier version made, and offers to remove the column and its index. They are the
-    // plugin's, not the app's: neither the save as sent nor the same save with every conversion
-    // confirmed may remove them, and each answer names the plugin.
-    it("never removes a removed plugin's column as a table an earlier version made, its conversions confirmed or not", async () => {
+    // plugin then removed. With no migration history the Builder brings the table up to date as one
+    // an earlier version made. The column and its index are the plugin's, not the app's: the save
+    // neither offers them for removal nor removes them, and goes through, keeping them and the value.
+    it("keeps a removed plugin's column and index when the Builder brings a table no history records up to date", async () => {
       const slug = "fco_converted";
       const table = `dc_${slug}`;
       const index = "idx_fco_converted_marker";
@@ -1152,22 +1151,24 @@ describe.each(getConfiguredTestDialects())(
           (error: unknown) => error
         );
 
-      const asSent = await save({});
-      expect(NextlyError.is(asSent), String(asSent)).toBe(true);
-      expect((asSent as NextlyError).publicMessage).toContain(PLUGIN);
-      expect(await markerOf(t)).toEqual(before);
+      const saved = await save({});
 
-      // Every conversion an earlier save could have offered for the table: its index, by the
-      // table's name, and its column.
-      const confirmed = await save({
-        acknowledgedConversions: [table, MARKER],
-      });
-      expectNamesTheElement(confirmed, {
-        field: MARKER,
-        kind: "column",
-        table,
-      });
-      expect(await markerOf(t)).toEqual(before);
+      expect(saved, String(saved)).toBeUndefined();
+      const after = await markerOf(t);
+      expect(after.columns).toContain("rank");
+      expect(after.columns).toContain(MARKER);
+      expect(after.indexes).toContain(index);
+      expect(after.values).toEqual(before.values);
+      // No file the save wrote takes either away.
+      const written = after.files.filter(
+        ([name]) => !before.files.some(([was]) => was === name)
+      );
+      expect(written.length).toBeGreaterThan(0);
+      for (const [, content] of written) {
+        const up = content.split("-- DOWN")[0] ?? "";
+        expect(up).not.toMatch(new RegExp(`DROP[^;]*${MARKER}`, "i"));
+        expect(up).not.toContain(index);
+      }
     });
   }
 );
