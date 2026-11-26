@@ -89,6 +89,21 @@ function getItemLabel(item: SearchResultItem): string {
   return item.title || item.name || item.label || item.email || item.id;
 }
 
+/** How many already-added matches the empty message names before counting. */
+const ALREADY_ADDED_NAMED = 3;
+
+/**
+ * What the list says when every match is already selected: their names, so
+ * "No results found" never hides an entry that is already there.
+ */
+function alreadyAddedWords(items: readonly SearchResultItem[]): string {
+  const named = items.slice(0, ALREADY_ADDED_NAMED).map(getItemLabel);
+  const more = items.length - named.length;
+  return more > 0
+    ? `Already added: ${named.join(", ")} and ${String(more)} more`
+    : `Already added: ${named.join(", ")}`;
+}
+
 // ============================================================
 // Component
 // ============================================================
@@ -99,9 +114,9 @@ function getItemLabel(item: SearchResultItem): string {
  * Features:
  * - Debounced search (300ms) to prevent API flooding
  * - Collection tabs for polymorphic relationships
- * - Loading state with spinner
- * - Empty state message
- * - Excludes already-selected items
+ * - Loading state while a search is out, keeping the previous results shown
+ * - Empty state message, said only once the search has answered
+ * - Excludes already-selected items, and names them when they are all it found
  * - Close button to dismiss
  *
  * @example Single collection
@@ -134,18 +149,28 @@ export function RelationshipSearch({
 }: RelationshipSearchProps): JSX.Element {
   const [search, setSearch] = useState("");
   const [selectedCollection, setSelectedCollection] = useState(collections[0]);
+  const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
+  // Which search the results belong to: a collection and the term sent.
+  const searchKey = `${selectedCollection ?? ""}\u0000${debouncedSearch}`;
   // Not `usePagination`, because this list does not paginate: it ACCUMULATES.
   // The page number only ever increments to fetch more, results append to what
   // is already shown, and there is no page size selector and no way back to a
   // previous page. The hook models navigation between pages of a fixed set,
   // which is a different thing that happens to count with the same word.
-  const [currentPage, setCurrentPage] = useState(1);
-  const [accumulatedResults, setAccumulatedResults] = useState<
-    SearchResultItem[]
-  >([]);
-  const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
+  // The page is kept with the search it was counted for, so a new term reads
+  // its first page, and never another term's page number, with no reset to
+  // run first.
+  const [paging, setPaging] = useState({ key: searchKey, page: 1 });
+  const currentPage = paging.key === searchKey ? paging.page : 1;
+  // The results shown, with the search they answer. They stay on screen
+  // until the next search answers, so typing never blanks the list. Nothing
+  // has answered yet at first, which no search's key matches.
+  const [shown, setShown] = useState<{
+    key: string;
+    items: SearchResultItem[];
+  }>({ key: "", items: [] });
 
-  const { data, isLoading } = useEntries({
+  const { data, isLoading, isFetching, isPlaceholderData } = useEntries({
     collectionSlug: selectedCollection,
     params: {
       search: debouncedSearch,
@@ -158,32 +183,48 @@ export function RelationshipSearch({
     enabled: !!selectedCollection,
   });
 
-  // Accumulate results when new data arrives
+  // An answer for this search: its first page replaces what is shown, a later
+  // page adds the entries not already shown. A placeholder is the previous
+  // search's answer, held while this one loads, so it changes nothing.
   useEffect(() => {
-    if (data?.items) {
-      if (currentPage === 1) {
-        // First page - replace all results
-        setAccumulatedResults(data.items);
-      } else {
-        // Subsequent pages - append only new results (avoid duplicates)
-        setAccumulatedResults(prev => {
-          const existingIds = new Set(prev.map(item => item.id));
-          const newItems = (data.items as SearchResultItem[]).filter(
-            item => !existingIds.has(item.id)
-          );
-          return [...prev, ...newItems];
-        });
+    if (data?.items === undefined || isPlaceholderData) return;
+    const items = data.items as SearchResultItem[];
+    setShown(previous => {
+      if (currentPage === 1 || previous.key !== searchKey) {
+        return { key: searchKey, items };
       }
-    }
-  }, [data, currentPage]);
+      const existingIds = new Set(previous.items.map(item => item.id));
+      return {
+        key: searchKey,
+        items: [
+          ...previous.items,
+          ...items.filter(item => !existingIds.has(item.id)),
+        ],
+      };
+    });
+  }, [data, isPlaceholderData, currentPage, searchKey]);
 
-  // Filter out already selected items
-  const results = accumulatedResults.filter(
-    item => !excludeIds.includes(item.id)
-  );
+  // Another collection's results are never offered: picking one would relate
+  // an entry of that collection under this one's slug.
+  const shownHere = shown.key.startsWith(`${selectedCollection ?? ""}\u0000`)
+    ? shown.items
+    : [];
+  // Already-selected entries are not offered again, but are said by name when
+  // they are all the search matched.
+  const results = shownHere.filter(item => !excludeIds.includes(item.id));
+  const alreadyAdded = shownHere.filter(item => excludeIds.includes(item.id));
+
+  // Whether the answer for what is typed is still to come: the term is
+  // waiting out the debounce, or its first page is not in yet. Until it
+  // comes, no empty result is said, since none has been answered. A later
+  // page loading is said on its own button instead.
+  const answered = shown.key === searchKey;
+  const searching = search !== debouncedSearch || !answered || isLoading;
 
   // Check if there are more pages to load (canonical meta per spec §5.1).
-  const hasMore = data?.meta.hasNext ?? false;
+  // While a later page loads, the data held is the page before it, whose
+  // answer still stands.
+  const hasMore = answered && (data?.meta.hasNext ?? false);
   const totalDocs = data?.meta.total ?? 0;
 
   const handleSelect = useCallback(
@@ -193,23 +234,18 @@ export function RelationshipSearch({
     [onSelect, selectedCollection]
   );
 
+  // The page and the results follow the collection by `searchKey`.
   const handleCollectionChange = useCallback((collection: string) => {
     setSelectedCollection(collection);
-    setCurrentPage(1); // Reset to first page when changing collections
-    setAccumulatedResults([]); // Clear accumulated results
-    // Optionally clear search when switching collections
-    // setSearch("");
   }, []);
 
   const handleLoadMore = useCallback(() => {
-    setCurrentPage(prev => prev + 1);
-  }, []);
+    setPaging({ key: searchKey, page: currentPage + 1 });
+  }, [searchKey, currentPage]);
 
-  // Reset page when search changes
+  // The previous results stay until the new term's answer replaces them.
   const handleSearchChange = useCallback((value: string) => {
     setSearch(value);
-    setCurrentPage(1);
-    setAccumulatedResults([]); // Clear accumulated results
   }, []);
 
   return (
@@ -266,61 +302,70 @@ export function RelationshipSearch({
       </div>
 
       {/* Results list */}
-      <div className="max-h-60 overflow-y-auto space-y-1">
-        {isLoading && currentPage === 1 ? (
-          <div className="flex items-center justify-center py-4">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+      <div className="max-h-60 overflow-y-auto space-y-1" aria-busy={searching}>
+        {searching ? (
+          <div
+            role="status"
+            className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground"
+          >
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            Searching…
           </div>
-        ) : results.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center py-4">
-            {debouncedSearch ? "No results found" : "Type to search..."}
-          </p>
+        ) : null}
+        {results.length === 0 ? (
+          searching ? null : (
+            <p className="text-sm text-muted-foreground text-center py-4">
+              {alreadyAdded.length > 0
+                ? alreadyAddedWords(alreadyAdded)
+                : debouncedSearch
+                  ? "No results found"
+                  : "Type to search..."}
+            </p>
+          )
         ) : (
-          <>
-            {results.map(item => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => handleSelect(item)}
-                className={cn(
-                  "w-full text-left p-2 rounded-md transition-colors hover-unified",
-                  "focus:bg-primary/5 focus:outline-none"
-                )}
-              >
-                <span className="font-medium block whitespace-normal break-words">
-                  {getItemLabel(item)}
+          results.map(item => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => handleSelect(item)}
+              className={cn(
+                "w-full text-left p-2 rounded-md transition-colors hover-unified",
+                "focus:bg-primary/5 focus:outline-none"
+              )}
+            >
+              <span className="font-medium block whitespace-normal break-words">
+                {getItemLabel(item)}
+              </span>
+              {item.description && (
+                <span className="text-sm text-muted-foreground block whitespace-normal break-words mt-0.5">
+                  {item.description}
                 </span>
-                {item.description && (
-                  <span className="text-sm text-muted-foreground block whitespace-normal break-words mt-0.5">
-                    {item.description}
-                  </span>
-                )}
-              </button>
-            ))}
+              )}
+            </button>
+          ))
+        )}
 
-            {/* Load More button */}
-            {hasMore && (
-              <div className="pt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="md"
-                  onClick={handleLoadMore}
-                  disabled={isLoading}
-                  className="w-full"
-                >
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="h-3 w-3 animate-spin mr-2" />
-                      Loading...
-                    </>
-                  ) : (
-                    `Load More (${results.length} of ${totalDocs})`
-                  )}
-                </Button>
-              </div>
-            )}
-          </>
+        {/* Load More button, also where every match so far is already added */}
+        {hasMore && (
+          <div className="pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="md"
+              onClick={handleLoadMore}
+              disabled={isFetching}
+              className="w-full"
+            >
+              {isFetching ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin mr-2" />
+                  Loading...
+                </>
+              ) : (
+                `Load More (${results.length} of ${totalDocs})`
+              )}
+            </Button>
+          </div>
         )}
       </div>
     </div>

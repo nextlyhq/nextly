@@ -22,6 +22,7 @@
  * @module outputs/plain-copy
  */
 import { isRecord, textOf } from "../plain-values";
+import { isFollowedLink } from "../rich-text-link";
 
 /** A field as the type declares it, as far as a copy needs it. */
 export interface CopyField {
@@ -136,7 +137,8 @@ function inline(nodes: readonly Node[]): string {
   return nodes
     .map(node => {
       if (node.type === "linebreak") return "\n";
-      if (node.type === "link" || node.type === "autolink") {
+      // An address the author unlinked is read below as its words.
+      if (isFollowedLink(node)) {
         const words = inline(childrenOf(node));
         const url = textOf(node.url);
         return url === undefined

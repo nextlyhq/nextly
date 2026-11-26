@@ -74,6 +74,20 @@ export interface RichTextNode {
   [key: string]: unknown;
 }
 
+/**
+ * Whether `node` is a link a reader follows: a `link`, or an `autolink` the
+ * author has not taken the link off. The editor keeps an address the author
+ * unlinked as an `autolink` marked `isUnlinked`, so it is not linked again
+ * as they type, and every reader draws that as its words alone.
+ */
+export function isFollowedLink(node: {
+  readonly type: string;
+  readonly isUnlinked?: unknown;
+}): boolean {
+  if (node.type === "link") return true;
+  return node.type === "autolink" && node.isUnlinked !== true;
+}
+
 /** A whole rich-text value: Lexical's editor state, rooted. */
 export interface RichTextValue {
   root: {
@@ -602,8 +616,11 @@ function nodePieces(
     return textLeafPieces(node, walk);
   }
   if (node.type === "linebreak") return [{ kind: "break" }];
-  if (node.type === "link" || node.type === "autolink") {
-    return linkOrWords(node, walk, inLink, stack);
+  if (isFollowedLink(node)) return linkOrWords(node, walk, inLink, stack);
+  // An address the author unlinked is its words, with nothing dropped.
+  if (node.type === "autolink") {
+    pushReversed(stack, kidsOf(node));
+    return [];
   }
   walk.dropped = true;
   if (typeof node.text === "string") return textPieces(node.text, 0);

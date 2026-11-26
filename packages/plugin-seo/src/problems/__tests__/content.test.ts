@@ -78,6 +78,32 @@ describe("contentFacts", () => {
     ]);
   });
 
+  it("reads no link from an address the author unlinked, only its words", () => {
+    const facts = contentFacts({
+      id: "7",
+      body: {
+        root: {
+          type: "root",
+          children: [
+            {
+              type: "paragraph",
+              children: [
+                {
+                  type: "autolink",
+                  url: "/blog/kept-as-words",
+                  isUnlinked: true,
+                  children: [{ type: "text", text: "/blog/kept-as-words" }],
+                },
+                { type: "autolink", url: "/blog/linked" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    expect(facts.links).toEqual([{ field: "body", url: "/blog/linked" }]);
+  });
+
   it("reads Page Builder's image and button blocks, and its decorative mark", () => {
     const facts = contentFacts({
       id: "7",

@@ -53,6 +53,8 @@
  */
 import {
   getCachedNextly,
+  NextlyError,
+  publicAddressOf,
   respondList,
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
@@ -84,6 +86,7 @@ import {
   templateCollectionProblem,
   type TemplateGuardSetup,
 } from "./template-guard";
+import { storedAddressOf, TEMPLATE_ADDRESS_FIELD } from "./template-routing";
 
 /**
  * The filter the Direct API's `find` takes, as the plugin SDK's own handle
@@ -222,6 +225,16 @@ export interface EntryDesignsReads {
     collection: string,
     ids: readonly string[]
   ): Promise<ReadonlySet<string>>;
+  /**
+   * Where the site declares `collection`'s entries are shown
+   * (`publicAddressOf`): null where it declares nothing, else `entry`'s path,
+   * read as the caller, or null for no entry or one with no value yet to
+   * fill the address.
+   */
+  siteAddress(
+    collection: string,
+    entry: string | undefined
+  ): Promise<{ readonly address: string | null } | null>;
 }
 
 /** A row's id as text, or undefined. */
@@ -295,6 +308,7 @@ function withheldAnswer(
       templateAllowed,
       mayCreateTemplate: false,
       mayGiveDesign: false,
+      servedBySite: null,
       entry: ask.entry ?? null,
       templatesCollection,
       names,
@@ -483,13 +497,28 @@ export async function readEntryDesigns(
     reads.templates({
       where: { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } },
       limit: 1,
-      select: { id: true, title: true, status: true },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        [TEMPLATE_ADDRESS_FIELD]: true,
+      },
     }),
     // Only the own designs of entries the caller may read, page by page.
     readableDesigns(ask, reads),
   ]);
   const template = templateOf(base.rows[0]);
   const { items } = designs;
+  // The page builder serves the entries only at a template address, declared
+  // in code or stored on the template. Without one, a collection that
+  // declares a public address is shown by the site's own route, so the card
+  // must not say its entries are off the site for want of a template.
+  const pageBuilderServes =
+    guard.declaredAddresses.has(collection) ||
+    storedAddressOf(base.rows[0]?.[TEMPLATE_ADDRESS_FIELD]) !== null;
+  const servedBySite = pageBuilderServes
+    ? null
+    : await reads.siteAddress(collection, ask.entry);
 
   return {
     items,
@@ -505,12 +534,18 @@ export async function readEntryDesigns(
       templateAllowed,
       mayCreateTemplate: mayCreate && templateAllowed && template === null,
       mayGiveDesign: mayCreate && template?.status === "published",
+      servedBySite,
       entry: ask.entry ?? null,
       templatesCollection: templates,
       names,
       collection,
     },
   };
+}
+
+/** Whether `value` is a row: an object, not an array. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Rows a caller-scoped find answered, or none. */
@@ -597,6 +632,31 @@ function directEntryDesignsReads(
         )
       );
       return new Set(rows.flatMap(row => idOf(row) ?? []));
+    },
+    // Core's one answer for where an entry is shown. Asked first with no
+    // entry, which reads nothing and says whether the site declares an
+    // address at all; only then is the entry read, as the caller, to fill it.
+    siteAddress: async (collection, entry) => {
+      const type = { kind: "collection", slug: collection } as const;
+      // A collection core does not know is shown nowhere.
+      const declared = await publicAddressOf(type).catch((error: unknown) => {
+        if (NextlyError.isNotFound(error)) return null;
+        throw error;
+      });
+      if (declared === null || declared.status === "none") return null;
+      if (entry === undefined) return { address: null };
+      const row = await readOrNull(async () =>
+        (await getCachedNextly()).findByID({
+          collection,
+          id: entry,
+          ...(await readingAsUser(ctx)),
+          status: "all",
+          depth: 0,
+        })
+      );
+      if (!isRecord(row)) return { address: null };
+      const found = await publicAddressOf(type, row);
+      return { address: found.status === "resolved" ? found.path : null };
     },
   };
 }

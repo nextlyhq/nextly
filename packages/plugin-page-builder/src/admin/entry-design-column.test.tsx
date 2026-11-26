@@ -95,6 +95,7 @@ function answer(
       templateAllowed: true,
       mayCreateTemplate: false,
       mayGiveDesign: false,
+      servedBySite: null,
       entry: null,
       templatesCollection: "templates",
       names: { singular: "Post", plural: "Posts" },

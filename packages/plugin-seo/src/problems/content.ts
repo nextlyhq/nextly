@@ -13,6 +13,7 @@
  */
 import { notAPageAddress } from "../not-found/page-address";
 import { isRecord, textOf } from "../plain-values";
+import { isFollowedLink } from "../rich-text-link";
 
 import type { ImageFact, LinkFact } from "./page-checks";
 
@@ -209,6 +210,12 @@ function walkRecord(
     return;
   }
   if (isOtherDocument(value)) return;
+  // An address the author unlinked is words, not a link the page shows:
+  // only its words are read, never its stored address.
+  if (value.type === "autolink" && !isFollowedLink(value)) {
+    walk(value.children, field, facts, depth + 1);
+    return;
+  }
   if (typeof value.type === "string") {
     NODE_READERS[value.type]?.(value, field, facts);
   }

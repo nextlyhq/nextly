@@ -98,13 +98,14 @@ function answer(
     templateReadable?: boolean;
     mayCreateTemplate?: boolean;
     mayGiveDesign?: boolean;
+    servedBySite?: EntryDesignsResponse["meta"]["servedBySite"];
   } = {}
 ): EntryDesignsResponse {
-  const items = overrides.items ?? [];
+  const { items = [], template: given, ...rest } = overrides;
   const template =
-    overrides.template === undefined
+    given === undefined
       ? ({ id: "t1", title: "Blog post", status: "published" } as const)
-      : overrides.template;
+      : given;
   return {
     items,
     meta: {
@@ -115,17 +116,19 @@ function answer(
       hasNext: false,
       hasPrev: false,
       template,
-      templateReadable: overrides.templateReadable ?? true,
-      templateAllowed: overrides.templateAllowed ?? true,
+      templateReadable: true,
+      templateAllowed: true,
       // As the route answers them: a template to create only where there is
       // none, an own design to give only from a published one.
-      mayCreateTemplate: overrides.mayCreateTemplate ?? template === null,
-      mayGiveDesign:
-        overrides.mayGiveDesign ?? template?.status === "published",
+      mayCreateTemplate: template === null,
+      mayGiveDesign: template?.status === "published",
+      servedBySite: null,
       entry: "p1",
       templatesCollection: "templates",
       names: { singular: "Post", plural: "Posts" },
       collection: "posts",
+      // What the test states, over the route's answers above.
+      ...rest,
     },
   };
 }
@@ -422,6 +425,59 @@ describe("the entry's Design section", () => {
     ]);
   });
 
+  it("says the site's own page shows the entry, at its address, rather than that it is off the site", () => {
+    read = {
+      data: answer({
+        template: null,
+        servedBySite: { address: "/blog/field-notes" },
+      }),
+      error: null,
+    };
+    section();
+    expect(
+      screen.getByRole("heading", { name: "Design: your site's own page" })
+    ).toBeTruthy();
+    expect(screen.queryByText(/isn't shown as a page on the site/)).toBeNull();
+    expect(
+      screen.getByText(
+        /Posts are shown on the site by its own page, not by a template\. This post is at/
+      )
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "/blog/field-notes" });
+    expect(link.getAttribute("href")).toBe("/blog/field-notes");
+    // The template stays on offer, as the way to design posts here instead.
+    expect(
+      screen.getByRole("button", {
+        name: "Create a collection template for posts",
+      })
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "To design posts here instead, give them a collection template."
+      )
+    ).toBeTruthy();
+  });
+
+  it("says the site's own page shows the entry where its address is not known yet, and offers its draft template", () => {
+    read = {
+      data: answer({
+        template: { id: "t1", title: "Blog post", status: "draft" },
+        servedBySite: { address: null },
+      }),
+      error: null,
+    };
+    section();
+    expect(
+      screen.getByText(
+        "Posts are shown on the site by its own page, not by a template."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Open the Blog post template" })
+    ).toBeTruthy();
+  });
+
   it("says a failed read, with a way to ask again", () => {
     read = { data: undefined, error: new Error("offline") };
     section();
@@ -593,6 +649,18 @@ describe("entryDesignStateOf", () => {
         "p1"
       ).kind
     ).toBe("own");
+  });
+
+  it("reads a collection the site's own page shows as that, not as off the site", () => {
+    expect(
+      entryDesignStateOf(
+        answer({ template: null, servedBySite: { address: "/blog/a" } }),
+        "p1"
+      )
+    ).toEqual({ kind: "served-by-site", address: "/blog/a" });
+    // A published template still draws the entry where the page builder
+    // serves it; the route says nothing of the site's page then.
+    expect(entryDesignStateOf(answer(), "p1").kind).toBe("uses-template");
   });
 
   it("reads another entry's own design as no own design of this one", () => {

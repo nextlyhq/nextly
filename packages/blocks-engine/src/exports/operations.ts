@@ -139,6 +139,7 @@ export {
 export {
   codeTokenClass,
   hasFormat,
+  isFollowedLink,
   isOneParagraphProp,
   isRichTextNode,
   isRichTextValue,
