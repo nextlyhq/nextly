@@ -9,6 +9,7 @@ import { settleLeftSaves } from "../settle-left-save";
 import { settleRegistryWriter } from "../settle-registry";
 import { describe, expect, it, vi } from "vitest";
 
+import { SchemaOwnersRepository } from "../../ownership/schema-owners-repository";
 import {
   leftSaveHooks,
   leftSaveSuite,
@@ -196,6 +197,52 @@ describe.each(LEFT_SAVE_SUITES)(
           `SELECT slug FROM ${table}`
         )) as unknown as Array<{ slug: unknown }>;
         expect(rows.map(row => row.slug)).toEqual(["first"]);
+      },
+      600_000
+    );
+
+    // A column the registry row declares is the entity's, whoever a record names as its owner (a
+    // collection demoted from code keeps the column a plugin's hook added there, and its record).
+    it.runIf(dialect === "mysql")(
+      "serves a write setting a field whose column a record names another owner's, and refuses the one a committed rename changed",
+      async () => {
+        const t = await boot();
+        await killRename(t, afterStatement(renames("heading")));
+        await new SchemaOwnersRepository(
+          t.adapter.getDrizzle(),
+          dialect
+        ).upsert([
+          {
+            tableName: table,
+            elementKind: "column",
+            elementName: "note",
+            ownerKind: "plugin",
+            ownerId: "@t/left-save-writes",
+            migratedBy: "plugin:@t/left-save-writes",
+            ownerVersion: "1.0.0",
+            schemaVersion: 1,
+            state: "active",
+          },
+        ]);
+
+        const [served, refused] = await fromAnotherProcess([
+          {
+            kind: "write",
+            via: "api",
+            data: { title: "N1", slug: "n1", note: "a note" },
+          },
+          {
+            kind: "write",
+            via: "api",
+            data: { title: "H1", slug: "h1", heading: "a heading" },
+          },
+        ]);
+
+        expect(served!.ok, JSON.stringify(served)).toBe(true);
+        expect(refused!.code, JSON.stringify(refused)).toBe(
+          "BUILDER_SAVE_FIELD_UNSETTLED"
+        );
+        expect(refused!.message, JSON.stringify(refused)).toMatch(/heading/);
       },
       600_000
     );

@@ -4776,10 +4776,13 @@ export async function fieldsNotServed(
   const table = await saveTableOf(deps, save);
   const desired = await desiredTable(deps, save, current, registered, table);
   if (desired === undefined) return undefined;
+  // Read against the registry row's own shape: a column it declares that a record names another
+  // owner's is still the entity's, and compared.
   const live = await liveJudgedTable(
     deps,
     table,
-    storesPerLanguage(registered)
+    storesPerLanguage(registered),
+    [desired]
   );
   const dialect = deps.adapter.getCapabilities().dialect;
   const builtBy = kindOf(save).builtBy;
