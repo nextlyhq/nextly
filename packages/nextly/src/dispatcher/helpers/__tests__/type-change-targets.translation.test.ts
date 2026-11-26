@@ -372,9 +372,10 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
           layout: { perLanguage: false, fileRetypes: true },
         })
       ).toMatchObject({
-        // Its values are on the structure there, and a text is no document until rewritten.
-        blocked: "needs-rewrite-inside",
-        outcome: null,
+        // Its values are on the structure there, and a text is no document until rewritten, which no
+        // save does: the save refuses the change only where a row stores one.
+        blocked: null,
+        outcome: "may-lose",
       });
     });
 
@@ -480,14 +481,10 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         if (defaultLocalizedForType(type)) continue;
         for (const to of ["text", "textarea", "richText", "email", "code"]) {
           const label = `${type} to ${to}`;
-          // What the pair alone answers, where nothing there is kept per language. A pair every value of
-          // which would need rewriting there is still one a value of the type can take.
+          // What the pair alone answers, where nothing there is kept per language.
           const alone = await picked(pick(type), to, { layout: EARLIER });
           const answer = await picked(pick(type), to);
-          if (
-            alone?.blocked === null ||
-            alone?.blocked === "needs-rewrite-inside"
-          ) {
+          if (alone?.blocked === null) {
             expect(answer, label).toMatchObject(joins());
             joining.add(type);
           } else {
@@ -669,12 +666,12 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       });
     });
 
-    // A save rewrites no value held inside a container yet: a change every value of which would have to
-    // be rewritten into the new type's form is refused there, and one that would rewrite some, may
-    // lose them.
+    // A save rewrites no value held inside a container yet: a value a change would have to rewrite into
+    // the new type's form may be lost there. The save refuses the change only where a row stores one,
+    // so even where every value would need rewriting, the change stays open, marked by it.
     it.each([
-      ["a number", "number", "needs-rewrite-inside", null],
-      ["a checkbox", "checkbox", "needs-rewrite-inside", null],
+      ["a number", "number", null, "may-lose"],
+      ["a checkbox", "checkbox", null, "may-lose"],
       ["JSON", "json", null, "may-lose"],
     ])(
       "%s kept shared inside, becoming a text: what the save does with values it does not rewrite",

@@ -69,7 +69,9 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
     pairOutcome(typeOf(dialect, from, fromExtra), typeOf(dialect, to, toExtra));
 
   // Inside a named group's or a repeater's JSON a save rewrites no value: each is judged as its JSON
-  // writing stands (`heldInJson`), so a change that would rewrite every value is refused there.
+  // writing stands (`heldInJson`), so a value a change would rewrite may be lost there. The save
+  // refuses the change only where a row stores one, so even where every value would need it, the
+  // change is not refused whatever the values hold.
   describe("held inside a container's JSON", () => {
     const held = (
       from: string,
@@ -85,10 +87,10 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
       return pairOutcomeHeldInJson(typed(from, fromExtra), typed(to));
     };
 
-    it("a change that would rewrite every value it holds needs a rewrite no save makes", () => {
-      expect(held("number", "text")).toBe("needs-rewrite");
-      expect(held("number", "text", FRACTION)).toBe("needs-rewrite");
-      expect(held("checkbox", "text")).toBe("needs-rewrite");
+    it("a change that would rewrite every value it holds may lose them", () => {
+      expect(held("number", "text")).toBe("may-lose");
+      expect(held("number", "text", FRACTION)).toBe("may-lose");
+      expect(held("checkbox", "text")).toBe("may-lose");
     });
 
     it("a change that would rewrite some of them may lose those", () => {

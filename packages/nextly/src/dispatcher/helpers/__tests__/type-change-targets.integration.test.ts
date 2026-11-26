@@ -128,10 +128,11 @@ describe.each(getConfiguredTestDialects())(
           t,
         ])
       );
-      // A number held in the group's JSON is no text until rewritten, which no save does yet.
+      // A number held in the group's JSON is no text until rewritten, which no save does yet: the save
+      // refuses the change where a row stores one.
       expect(inGroup.get("text")).toMatchObject({
-        blocked: "needs-rewrite-inside",
-        outcome: null,
+        blocked: null,
+        outcome: "may-lose",
       });
       expect(inGroup.get("json")).toMatchObject({
         blocked: null,
