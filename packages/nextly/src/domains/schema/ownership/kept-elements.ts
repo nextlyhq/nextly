@@ -14,8 +14,10 @@
  * `nextly migrate` does, and keeps the elements whose recorded owner no longer
  * declares any schema (`keptElements`): they are added to the desired state
  * as the database has them, so no route plans their drop. A plugin removed
- * from the configuration keeps what it added, as it keeps its tables, until
- * `nextly plugins uninstall` removes them or the plugin returns.
+ * from the configuration keeps what it added, as it keeps its tables, until it
+ * returns, or is put back and uninstalled: the uninstall leaves in place what
+ * the app's migrations carry and forgets that it was the plugin's, so the app's
+ * next change removes it with the data-loss consent.
  *
  * A contributor that is still configured and stops declaring one of its
  * elements has removed it, and the push drops that one (it is the
