@@ -63,6 +63,8 @@ import { participatingOwners } from "../domains/public-addresses/participants";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import {
   clearActiveExtensionSchema,
+  getActiveConfiguredPlugins,
+  setActiveConfiguredPlugins,
   setActiveExtensionSchema,
 } from "../domains/schema/extension/active-schema";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
@@ -2437,7 +2439,10 @@ async function applyReloadHolding(
   // same undo when the reload does not land: a refused reload keeps the
   // previous config, and its tables are what the database still has.
   const previousExtensionSchema = getActiveExtensionSchema(dialect);
+  // The plugins the previous configuration lists, published with its schema, put back with it.
+  const previousConfiguredPlugins = getActiveConfiguredPlugins();
   reloadUndo.push(() => {
+    setActiveConfiguredPlugins(previousConfiguredPlugins);
     if (previousExtensionSchema) {
       setActiveExtensionSchema(dialect, previousExtensionSchema);
     } else {

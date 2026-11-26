@@ -46,6 +46,7 @@ import {
 } from "../../hooks/hook-registry";
 import {
   clearActiveExtensionSchema,
+  getActiveConfiguredPlugins,
   getActiveExtensionSchema,
 } from "../../domains/schema/extension/active-schema";
 import { col, defineTable } from "../../domains/schema/extension/dsl";
@@ -2350,6 +2351,44 @@ describe("reloadNextlyConfig", () => {
       // A refused reload keeps the previous config, and with it the schema the
       // previous config compiled — not the one this reload compiled.
       expect(getActiveExtensionSchema("sqlite")).toBe(previous);
+    });
+
+    it("puts back the configured plugins with the schema when the reload does not land", async () => {
+      // A previous configuration listing two plugins, one of which declares no schema at all:
+      // distinct from the one plugin this reload lists, so "put back" is observable.
+      await compileAndPublishExtensionSchema({
+        dialect: "sqlite",
+        plugins: [
+          {
+            name: "@acme/earlier",
+            version: "1.0.0",
+            contributes: {
+              schema: { tables: [defineTable("legacy", { id: col.id() })] },
+            },
+          } as never,
+          { name: "@acme/quiet", version: "1.0.0" } as never,
+        ],
+        config: {},
+        logger: { warn: () => undefined },
+      });
+      expect([...getActiveConfiguredPlugins()].sort()).toEqual([
+        "@acme/earlier",
+        "@acme/quiet",
+      ]);
+
+      loadConfigSpy.mockResolvedValue({ config: withPluginTable });
+      introspectSpy.mockRejectedValue(new Error("connection refused"));
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(pipelineApplySpy).not.toHaveBeenCalled();
+      // A refused reload keeps the previous configuration, and with it the plugins it lists: not
+      // the one this reload's configuration lists.
+      expect([...getActiveConfiguredPlugins()].sort()).toEqual([
+        "@acme/earlier",
+        "@acme/quiet",
+      ]);
     });
 
     it("puts back the fields a scope held back when the reload does not land", async () => {
