@@ -543,13 +543,14 @@ describe("compareWithNewestSnapshot", () => {
       expect(changes.besideNotRecorded).toEqual(pending.beside);
     });
 
-    it("are named in a notice that sends nobody to migrate:create", () => {
+    // The file `migrate:create` writes fills in only what is empty, so it may be named.
+    it("are named in a notice that says nextly migrate makes them and migrate:create records them", () => {
       const notice = translationsNotRecordedNotice(pending.beside);
       expect(notice).toContain("not recorded yet");
-      expect(notice).toContain("`nextly migrate` makes what is missing");
+      expect(notice).toContain(
+        "`nextly migrate` makes what is missing; `nextly migrate:create` records it in its next migration."
+      );
       for (const line of refused) expect(notice).toContain(line);
-      // The file it would write seeds the default language's text again.
-      expect(notice).not.toContain("migrate:create");
     });
 
     it("are no notice where there are none", () => {

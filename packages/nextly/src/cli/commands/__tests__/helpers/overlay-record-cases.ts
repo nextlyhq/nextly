@@ -195,8 +195,9 @@ const NOT_RECORDED = "not recorded yet";
 /** What a notice says of what `nextly migrate` makes itself. */
 const MADE_BY_MIGRATE = "`nextly migrate` makes what is missing";
 
-/** What a notice of it must not send anyone to: the file seeds the default language's text again. */
-const CREATE_ADVICE = "`nextly migrate:create` writes and records";
+/** What a notice of it says of the migration that records it. */
+const RECORDED_LATER =
+  "`nextly migrate:create` records it in its next migration";
 
 export function overlayRecordCases(
   loaded: Loaded,
@@ -498,7 +499,8 @@ export function overlayRecordCases(
           if (noticed) {
             expect(said).toContain(NOT_RECORDED);
             expect(said).toContain(line);
-            expect(said).not.toContain(CREATE_ADVICE);
+            expect(said).toContain(MADE_BY_MIGRATE);
+            expect(said).toContain(RECORDED_LATER);
           } else {
             expect(said).not.toContain(NOT_RECORDED);
           }
@@ -594,14 +596,13 @@ export function overlayRecordCases(
           expect(await translationColumns()).toContain("box");
           expect(started.warned).toContain(NOT_RECORDED);
           expect(started.warned).toContain(OVERLAY_LINE);
-          expect(started.warned).not.toContain(CREATE_ADVICE);
+          expect(started.warned).toContain(RECORDED_LATER);
           await refusedByNone(project, true);
           await writtenAndApplied(project);
         }, 120_000);
       });
 
-      // `nextly migrate` makes the translations tables of what the configuration declares, and no
-      // other: the Schema Builder's own are made by its saves and by the migrations written of them.
+      // A collection of the Schema Builder's, which the configuration does not declare.
       describe("a Schema Builder collection an earlier release left", () => {
         const LINE = `~ translations table dc_${BUILT}`;
         const builtColumns = () => columnsOf(`dc_${BUILT}_locales`);
@@ -620,17 +621,10 @@ export function overlayRecordCases(
           expect(await builtColumns()).not.toContain("box");
         }, 120_000);
 
-        it("is refused by every surface, naming the overlay's file, which nextly migrate does not make", async () => {
-          const checked = await check(builtProject);
-          expect(checked.code, checked.said).toBe(1);
-          const ran = await migrate(builtProject);
-          expect(ran.code, ran.said).toBe(1);
-          const started = await startsCheck(builtProject);
-          for (const said of [checked.said, ran.said, started]) {
-            expect(said).toContain(LINE);
-            expect(said).not.toContain(NOT_RECORDED);
-          }
-          expect(await builtColumns()).not.toContain("box");
+        // `nextly migrate` makes the Schema Builder's too, as it makes what the configuration declares.
+        it("is refused by no surface, which says it is not recorded, and nextly migrate makes the column", async () => {
+          await refusedByNone(builtProject, true, LINE);
+          expect(await builtColumns()).toContain("box");
         }, 120_000);
 
         it("has the column added by migrate:create, and nothing left after", async () => {
@@ -642,19 +636,10 @@ export function overlayRecordCases(
           await refusedByNone(builtProject);
         }, 120_000);
 
-        it("is refused by no surface where no settings are recorded, and the notice never says nextly migrate makes it", async () => {
+        it("is refused by no surface where no settings are recorded, and nextly migrate makes the column", async () => {
           await forgetTheSettings();
-          const checked = await check(builtProject);
-          expect(checked.code, checked.said).toBeUndefined();
-          const ran = await migrate(builtProject);
-          expect(ran.code, ran.said).toBeUndefined();
-          expect(await startsCheck(builtProject)).toBeUndefined();
-          for (const said of [checked.said, ran.said, warned.join("\n")]) {
-            expect(said).toContain(NOT_RECORDED);
-            expect(said).toContain(LINE);
-            expect(said).not.toContain(MADE_BY_MIGRATE);
-          }
-          expect(await builtColumns()).not.toContain("box");
+          await refusedByNone(builtProject, true, LINE);
+          expect(await builtColumns()).toContain("box");
         }, 120_000);
       });
 
