@@ -147,6 +147,7 @@ const FAILS = {
     "Header & footer sets",
     "A site can have more than one set of a header and footer.",
     "Give the header & footer set a name.",
+    "Header sets",
   ],
   look: [
     "Keep the look on this block only",
@@ -157,6 +158,8 @@ const FAILS = {
     "by {…}'s built-in look",
     "Rename look",
     "Looks",
+    "Image look",
+    "Feature card looks",
   ],
   element: ["How solid the element is"],
   logical: ["Space inside, per logical side."],
@@ -198,6 +201,7 @@ const FAILS_IN_PLACE = [
       "No {…} in this set",
       "Also used by {…} and {…} other sets",
       "{…} is this set's own {…} now.",
+      "Sets",
     ],
   },
   {
@@ -244,6 +248,7 @@ const PASSES = [
   "One look tells you",
   "The block looks as it does now",
   "Button looks off",
+  "The image looks sharp",
   "The footer sets its own color",
   "The value is bound by its parent",
   "The space between the paragraphs of rich text.",
@@ -371,6 +376,8 @@ describe("the retired words", () => {
         'const L = `Remove ${pluralise(n, "breakpoint")}`;',
         // A tag-like prefix is still read where a value is shown.
         'const M = { label: "[Beta] Insert a block" };',
+        // A phrase running through an inline element is one line.
+        "const N = () => <p>Normal <b>flow</b> here</p>;",
       ].join("\n"),
       "probe.tsx"
     );
@@ -397,6 +404,7 @@ describe("the retired words", () => {
       "colours",
       "breakpoint",
       "[Beta] Insert a block",
+      "Normal flow here",
     ]);
   });
 

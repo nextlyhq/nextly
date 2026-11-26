@@ -143,7 +143,7 @@
   ],
   "packages/builder/src/inspector/component-fields-panel.tsx": [
     "The name each page’s editor shows for this field.",
-    "Field",
+    "Field {…}",
     "no fields yet",
     "field",
     "fields",
@@ -356,7 +356,7 @@
   "packages/builder/src/shell/exposure-picker.tsx": ["Give the field a name."],
   "packages/builder/src/shell/read-budget-meter.tsx": [
     "Page data",
-    "Page data: couldn&apos;t count",
+    "Page data: couldn&apos;t count {…} Retry",
     "Page data: counting…",
     "Page data"
   ],
@@ -449,7 +449,7 @@
     "1 binding no longer fits",
     "{…} bindings no longer fit",
     "Until you bind each again or unbind it, visitors see what its row says: its fallback, the block’s own value or nothing.",
-    "All bindings to fix"
+    "{…} All bindings to fix"
   ],
   "packages/plugin-page-builder/src/admin/bindings-report/BindingsToFixPage.tsx": [
     "Header & footer set",
@@ -507,12 +507,12 @@
   ],
   "packages/plugin-page-builder/src/admin/editor/editor-top-bar.tsx": [
     "Untitled set",
-    "Header & footer set"
+    "{…} Header & footer set"
   ],
   "packages/plugin-page-builder/src/admin/editor/header-footer-group.tsx": [
     "Couldn&rsquo;t load the header & footer sets.",
     "Header & footer sets",
-    "Showing the first {…}. See every header & footer set",
+    "Showing the first {…}. See every header & footer set (opens in a new tab)",
     "The header & footer set could not be changed. Try again.",
     "Header & footer set name",
     "{…} is the site default. Make another set the default before deleting it."
@@ -609,7 +609,7 @@
     "New header & footer set",
     "binding",
     "bindings",
-    "A field changed after these blocks were bound to it."
+    "{…} A field changed after these blocks were bound to it."
   ],
   "packages/plugin-page-builder/src/admin/page-layout.tsx": [
     "Which header & footer set this page is drawn inside.",

@@ -137,11 +137,12 @@ const BUILDER_AND_PLUGIN = [
 /** "Header", "footer", "header & footer" and their plurals. */
 const HEADER_OR_FOOTER = /\b(?:header|footer)s?\b/i;
 /**
- * "set" as a noun: "a set", "this set", "footer sets", "{…} set", never
- * the verb ("Set a width", "the header sets the title").
+ * "set" as a noun: "a set", "this set", "Header sets", "{…} set", a bare
+ * "Sets" label, never the verb ("Set a width", "The header sets its
+ * title").
  */
 const SET_NOUN =
-  /\bfooter\s+set\b|\bfooter\s+sets\b(?!\s+(?:its|the|a|an|their|how|what|which|up)\b)|\b(?:a|an|the|one|this|each|every|another|new|default|other|which|its|no|than one|untitled)\s+sets?\b|\{…\}\s+sets?\b|\bthis set's\b/i;
+  /\b(?:header|footer)\s+set\b|\b(?:header|footer)\s+sets\b(?!\s+(?:its|the|a|an|their|how|what|which|up)\b)|^sets$|\b(?:a|an|the|one|this|each|every|another|new|default|other|which|its|no|than one|untitled)\s+sets?\b|\{…\}\s+sets?\b|\bthis set's\b/i;
 
 /**
  * The header & footer screens, where "set" means a header & footer even when
@@ -174,6 +175,8 @@ const LOOK_NOUN = new RegExp(
     String.raw`\b(?:this|which)\s+look\b(?!\s+(?:at|for|like|up)\b)`,
     String.raw`(?:\bblock|\bbutton|\{…\}['’]?s?)\s+looks?\b${LOOK_VERB}`,
     String.raw`^looks?\b${LOOK_VERB}`,
+    // A label naming any block's style: "Image look", "Feature card looks".
+    String.raw`^(?!(?:have|has|had|take|takes|took|give|gives|gave|get|quick)\b)[A-Z][\w-]*(?:\s+(?!(?:a|an|the|this|that|its)\b)[\w-]+){0,3}\s+looks?$`,
   ].join("|"),
   "i"
 );

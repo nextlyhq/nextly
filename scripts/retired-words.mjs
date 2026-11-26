@@ -298,7 +298,24 @@ function notShown(node, ancestors) {
   );
 }
 
-/** One run of an element's children read as a line: text, `{…}` between. */
+/** The inline elements whose text runs on in the line around them. */
+const INLINE_ELEMENT =
+  /^(?:a|abbr|b|bdi|bdo|cite|code|data|dfn|em|i|kbd|mark|q|s|samp|small|span|strong|sub|sup|time|u|var)$/;
+
+/** Whether a node is an inline element (`<b>`, `<code>`), by its tag. */
+function isInline(node) {
+  return (
+    node.type === "JSXElement" &&
+    node.openingElement.name.type === "JSXIdentifier" &&
+    INLINE_ELEMENT.test(node.openingElement.name.name)
+  );
+}
+
+/**
+ * One run of an element's children read as a line: text, `{…}` between, and
+ * an inline element's own text in its place, so "Normal <b>flow</b>" reads
+ * "Normal flow". Any other element breaks the line.
+ */
 function elementText(children) {
   return children
     .map(child => {
@@ -306,6 +323,7 @@ function elementText(children) {
       if (child.type === "JSXExpressionContainer") {
         return child.expression.type === "JSXEmptyExpression" ? "" : "{…}";
       }
+      if (isInline(child)) return elementText(child.children);
       return " ";
     })
     .join("");
@@ -326,9 +344,19 @@ function stringText(node) {
   return null;
 }
 
-/** An element's own line, or null where its children are only expressions. */
-function elementLine(node) {
+/**
+ * An element's own line, or null where its children are only expressions,
+ * or where it is an inline element read as part of its parent's line.
+ */
+function elementLine(node, ancestors) {
   if (node.type !== "JSXElement" && node.type !== "JSXFragment") return null;
+  const parent = ancestors.at(-1);
+  if (
+    isInline(node) &&
+    (parent?.type === "JSXElement" || parent?.type === "JSXFragment")
+  ) {
+    return null;
+  }
   const line = tidy(elementText(node.children));
   return line.replace(/\{…\}/g, "").trim() === "" ? null : line;
 }
@@ -342,7 +370,7 @@ export function shownTexts(source, fileName) {
   const texts = [];
   const wordsModule = WORDS_MODULE.test(fileName.split("\\").join("/"));
   walk(parseSource(source, fileName).program, (node, ancestors) => {
-    const line = elementLine(node);
+    const line = elementLine(node, ancestors);
     if (line !== null) {
       texts.push(line);
       return;
