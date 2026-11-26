@@ -1208,7 +1208,13 @@ async function judgedStop(
     );
     if (alone !== undefined) withEach.set(change.field, alone);
   }
-  const live = await liveJudgedTable(deps, table, storesPerLanguage(entity));
+  // Judged against the shapes the save starts from and ends at, which describe what of the table is
+  // the entity's own: an element a record names another owner's that either describes stays in.
+  const after = await desired(entity.fields);
+  const live = await liveJudgedTable(deps, table, storesPerLanguage(entity), [
+    before,
+    ...(after === undefined ? [] : [after]),
+  ]);
   const report = judgeStoppedSave({ asked, live, before, withEach });
   if (report === undefined) return undefined;
   const applied = {
@@ -1407,12 +1413,20 @@ function translationsColumnName(column: string): string {
 async function liveJudgedTable(
   deps: CollectionSaveDeps,
   table: string,
-  perLanguage: boolean
+  perLanguage: boolean,
+  /**
+   * The tables it is judged against, where it is: an element another owner's record names is kept
+   * where one of them describes it (`liveTables`' `describedIn`), and left out otherwise.
+   */
+  describedIn?: readonly TableSpec[]
 ): Promise<TableSpec | undefined> {
   const translations = `${table}_locales`;
   const live = await liveTables(
     deps,
-    perLanguage ? [table, translations] : [table]
+    perLanguage ? [table, translations] : [table],
+    describedIn === undefined
+      ? {}
+      : { describedIn: [{ tables: [...describedIn] }] }
   );
   const main = live.tables.find(t => t.name === table);
   if (main === undefined || !perLanguage) return main;
