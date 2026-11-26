@@ -44,7 +44,10 @@ const meta = (fields: FieldDefinition[]) =>
 const OUTSIDE = [SUBTITLE, meta([])];
 const INSIDE = [meta([SUBTITLE])];
 
-/** The statements a field's move plans for `pages`, as its file runs them: before its changes, and after. */
+/**
+ * The statements a field's move plans for `pages`, as its file runs them: its stops and the writes
+ * before its changes (`first`), and the writes after them (`last`).
+ */
 function moved(
   before: FieldDefinition[],
   after: FieldDefinition[],
@@ -60,7 +63,8 @@ function moved(
     kind: "collection",
   });
   return {
-    first: splitSqlStatements(up.first.join("\n"), "mysql"),
+    // The stops lead the file, before every move's writes, as the planner places them apart.
+    first: splitSqlStatements([...up.stops, ...up.first].join("\n"), "mysql"),
     last: splitSqlStatements(up.last.join("\n"), "mysql"),
   };
 }
@@ -348,6 +352,11 @@ describeMysql("a transactional migration that fails on MySQL", () => {
   ])(
     "leaves every value in the group where a field's move fails at %s, and does not say the file is partly applied",
     async (_name, statements) => {
+      // The move's stops are run, or the case says nothing of the rows they write.
+      expect(
+        statements.filter(sql => /CREATE TEMPORARY TABLE/i.test(sql)),
+        "the move's stops"
+      ).not.toEqual([]);
       expect(
         await ran(
           statements,
