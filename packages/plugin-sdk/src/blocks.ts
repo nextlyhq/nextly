@@ -403,6 +403,19 @@ export type {
 // would otherwise bring the whole engine and its CSS parser to every admin
 // screen. The same module the root re-exports, so one registry either way.
 export { defineNamedQuery, param } from "@nextlyhq/blocks-engine/named-query";
+
+/**
+ * Whether a stored rich-text node is a link a reader follows: a `link`, or
+ * an `autolink` the author has not unlinked. A plugin that turns stored rich
+ * text into words and links (a page's Markdown copy, its link checks) asks
+ * the same rule the page renderers draw by, rather than keeping its own.
+ *
+ * From the engine's format entry, which imports nothing, so this entry still
+ * never loads the engine's root.
+ *
+ * @experimental Intended to become stable with the rich-text format it reads.
+ */
+export { isFollowedLink } from "@nextlyhq/blocks-engine/format";
 /** @experimental Settles with `defineNamedQuery`. */
 export type {
   BooleanParam,

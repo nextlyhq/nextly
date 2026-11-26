@@ -218,6 +218,32 @@ describe("the relationship picker's search", () => {
     expect(screen.getByRole("button", { name: "Open Data" })).toBeTruthy();
   });
 
+  it("reads a search's first page again when it comes back to it after another", () => {
+    answers["Open#1"] = { items: [OPEN_SOURCE], hasNext: true };
+    answers["Open#2"] = { items: [OPEN_DATA] };
+    arrived.add("Open#2");
+    const view = picker();
+    arrive(view, "");
+    type(view, "Open");
+    arrive(view, "Open");
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /Load More/ }));
+    });
+    expect(screen.getByRole("button", { name: "Open Data" })).toBeTruthy();
+
+    type(view, "Community");
+    answers["Community#1"] = { items: [COMMUNITY] };
+    arrive(view, "Community");
+    expect(screen.getByRole("button", { name: "Community" })).toBeTruthy();
+
+    // Back to the first term: its first page, not only the page loaded last.
+    type(view, "Open");
+    arrive(view, "Open");
+    expect(screen.getByRole("button", { name: "Open Source" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open Data" })).toBeNull();
+    expect(screen.getByRole("button", { name: /Load More/ })).toBeTruthy();
+  });
+
   it("names the matches already added when they are all it found", () => {
     const view = picker([OPEN_SOURCE.id]);
     arrive(view, "", [OPEN_SOURCE.id]);

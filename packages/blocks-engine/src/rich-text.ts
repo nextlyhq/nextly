@@ -50,6 +50,7 @@
  * text, reads no text out of it, and commits an empty string over the passage.
  */
 import { authoredText } from "./authored-text";
+import { isFollowedLink } from "./rich-text-link";
 import { isLinkableUrl } from "./url-policy";
 
 export const RICH_TEXT_PROP_TYPE = "richText";
@@ -72,20 +73,6 @@ export interface RichTextNode {
   format?: number;
   /** Whatever else the node serialized. */
   [key: string]: unknown;
-}
-
-/**
- * Whether `node` is a link a reader follows: a `link`, or an `autolink` the
- * author has not taken the link off. The editor keeps an address the author
- * unlinked as an `autolink` marked `isUnlinked`, so it is not linked again
- * as they type, and every reader draws that as its words alone.
- */
-export function isFollowedLink(node: {
-  readonly type: string;
-  readonly isUnlinked?: unknown;
-}): boolean {
-  if (node.type === "link") return true;
-  return node.type === "autolink" && node.isUnlinked !== true;
 }
 
 /** A whole rich-text value: Lexical's editor state, rooted. */

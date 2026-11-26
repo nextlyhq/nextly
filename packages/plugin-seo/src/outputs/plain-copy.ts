@@ -21,8 +21,9 @@
  *
  * @module outputs/plain-copy
  */
+import { isFollowedLink } from "@nextlyhq/plugin-sdk/blocks";
+
 import { isRecord, textOf } from "../plain-values";
-import { isFollowedLink } from "../rich-text-link";
 
 /** A field as the type declares it, as far as a copy needs it. */
 export interface CopyField {

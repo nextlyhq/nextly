@@ -11,9 +11,10 @@
  *
  * @module problems/content
  */
+import { isFollowedLink } from "@nextlyhq/plugin-sdk/blocks";
+
 import { notAPageAddress } from "../not-found/page-address";
 import { isRecord, textOf } from "../plain-values";
-import { isFollowedLink } from "../rich-text-link";
 
 import type { ImageFact, LinkFact } from "./page-checks";
 

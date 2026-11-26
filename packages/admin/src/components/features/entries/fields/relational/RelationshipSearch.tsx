@@ -162,6 +162,14 @@ export function RelationshipSearch({
   // run first.
   const [paging, setPaging] = useState({ key: searchKey, page: 1 });
   const currentPage = paging.key === searchKey ? paging.page : 1;
+  // Leaving a search forgets its pages: coming back to it reads its first
+  // page again, since the results shown by then are another search's, and a
+  // later page alone would leave out the matches before it.
+  useEffect(() => {
+    setPaging(previous =>
+      previous.key === searchKey ? previous : { key: searchKey, page: 1 }
+    );
+  }, [searchKey]);
   // The results shown, with the search they answer. They stay on screen
   // until the next search answers, so typing never blanks the list. Nothing
   // has answered yet at first, which no search's key matches.
