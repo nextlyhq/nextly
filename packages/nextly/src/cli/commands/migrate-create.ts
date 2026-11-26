@@ -52,6 +52,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { refuseWhileSaveLeftPartWay } from "../../domains/schema/builder-save/save-in-progress";
+import { configuredPluginNames } from "../../domains/schema/extension/active-schema";
 import {
   buildExtensionSchema,
   type ExtensionSchema,
@@ -624,11 +625,10 @@ async function refuseRemovingOthersElementsIn(
   deletions: readonly Deletion[],
   dialect: SupportedDialect,
   logger: CommandContext["logger"],
-  /**
-   * What this run compiled of the configuration: which plugins it names, what each declares. None
-   * where nothing declares a schema.
-   */
-  extensionSchema: ExtensionSchema | undefined
+  /** What this run compiled of the configuration: what each owner declares. None where nothing declares a schema. */
+  extensionSchema: ExtensionSchema | undefined,
+  /** The plugins the configuration lists, whatever each declares (`configuredPluginNames`). */
+  configuredPlugins: ReadonlySet<string>
 ): Promise<void> {
   if (!deletions.some(deletion => deletion.core !== true)) return;
   const opened = await openDryRunAdapter({ dialect }).catch(
@@ -654,7 +654,10 @@ async function refuseRemovingOthersElementsIn(
       sources: databaseRemovedElementsSources(
         opened as unknown as DrizzleAdapter,
         dialect,
-        () => Promise.resolve(extensionSchema ?? null)
+        {
+          extensionSchema: () => Promise.resolve(extensionSchema ?? null),
+          configuredPlugins,
+        }
       ),
       // The code-first change has the fields' columns: each column names its field.
       fieldOf: (_table, column) => column,
@@ -1006,7 +1009,8 @@ export async function runMigrateCreate(
             deletions,
             dialect,
             logger,
-            inputs.appStream.extensionSchema
+            inputs.appStream.extensionSchema,
+            configuredPluginNames(configResult.config.plugins ?? [])
           );
           return judgeMigrationDeletions(deletions, {
             consent,

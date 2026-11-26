@@ -29,6 +29,10 @@ import {
   resolveComponentTableName,
 } from "../utils/resolve-table-name";
 
+import {
+  configuredPluginNames,
+  setActiveConfiguredPlugins,
+} from "./active-schema";
 import type { DrizzleSchemaHook } from "./after-drizzle";
 import {
   buildExtensionSchema,
@@ -181,6 +185,10 @@ export async function compileAndPublishExtensionSchema(
   ) => Promise<ExtensionSchema | undefined> = compileExtensionSchema
 ): Promise<ExtensionSchema | undefined> {
   const schema = await compile(input);
+  // Every plugin the configuration lists, published whether or not a schema compiles: a plugin
+  // still configured that declares nothing removes its own parts with a change, as one declaring
+  // them no more does (`removed-elements.ts`, `kept-elements.ts`).
+  setActiveConfiguredPlugins(configuredPluginNames(input.plugins));
   if (schema === undefined) {
     // Nothing declares a schema. Cleared rather than left alone, so a reload
     // that REMOVES the last plugin does not leave its tables in the desired

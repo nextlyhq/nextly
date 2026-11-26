@@ -43,9 +43,12 @@ function sources(live: {
   /** A table's live spellings, where the database spells it other than the change does. */
   liveNames?: Record<string, string[]>;
   schema?: ExtensionSchemaRecord | null;
+  /** The plugins the configuration lists; none unless given. */
+  configured?: readonly string[];
 }): RemovedElementsSources {
   return {
     extensionSchema: () => Promise.resolve(live.schema ?? null),
+    configuredPlugins: () => Promise.resolve(new Set(live.configured ?? [])),
     // Matched by folded name, as the owner rows a push has read are (`removedElementsSourcesOn`).
     recordedElements: tables =>
       Promise.resolve(
@@ -108,16 +111,14 @@ async function judged(
   }
 }
 
-/** A compiled schema declaring nothing, its configured plugins `configured`. */
-const configuring = (...configured: string[]): ExtensionSchemaRecord =>
-  ({
-    specs: [],
-    owners: new Map(),
-    entityColumns: new Map(),
-    entityIndexes: new Map(),
-    elementOwners: new Map(),
-    schemaPlugins: new Set(configured),
-  }) as unknown as ExtensionSchemaRecord;
+/** A compiled schema declaring nothing. */
+const DECLARING_NOTHING = {
+  specs: [],
+  owners: new Map(),
+  entityColumns: new Map(),
+  entityIndexes: new Map(),
+  elementOwners: new Map(),
+} as unknown as ExtensionSchemaRecord;
 
 const recordedIndex: ElementOnTable = {
   owner: PLUGIN,
@@ -239,21 +240,24 @@ describe("a key pointing at several removed columns", () => {
     }
   });
 
-  it("goes with them where every one is its owner's, a plugin still configured", async () => {
-    const refused = await judged(
-      columns("extra"),
-      sources({
-        schema: configuring(PLUGIN.id),
-        recorded: [ownKey, ownColumn],
-        keysInto: [{ ...key, referencesColumns: ["extra"] }],
-      })
-    );
+  it("goes with them where every one is its owner's, a plugin still configured, a schema compiled or none", async () => {
+    for (const schema of [DECLARING_NOTHING, null]) {
+      const refused = await judged(
+        columns("extra"),
+        sources({
+          schema,
+          configured: [PLUGIN.id],
+          recorded: [ownKey, ownColumn],
+          keysInto: [{ ...key, referencesColumns: ["extra"] }],
+        })
+      );
 
-    expect(refused).toBeUndefined();
+      expect(refused).toBeUndefined();
+    }
   });
 
   it("is refused where its owner is no longer configured: an app's change removes nothing of a plugin's", async () => {
-    for (const schema of [configuring(), null]) {
+    for (const schema of [DECLARING_NOTHING, null]) {
       const refused = await judged(
         columns("extra"),
         sources({
@@ -282,7 +286,11 @@ describe("a change that drops an entity's table whole", () => {
     expect(
       await judged(
         dropped,
-        sources({ schema: configuring(PLUGIN.id), recorded: [recordedColumn] })
+        sources({
+          schema: DECLARING_NOTHING,
+          configured: [PLUGIN.id],
+          recorded: [recordedColumn],
+        })
       )
     ).toBeUndefined();
   });
@@ -290,7 +298,7 @@ describe("a change that drops an entity's table whole", () => {
   it("is refused over what a plugin no longer configured added there", async () => {
     const refused = await judged(
       dropped,
-      sources({ schema: configuring(), recorded: [recordedColumn] })
+      sources({ schema: DECLARING_NOTHING, recorded: [recordedColumn] })
     );
     expect(refused?.publicMessage).toContain(PLUGIN.id);
     expect(refused?.publicMessage).toContain("plugin_note");
@@ -298,7 +306,7 @@ describe("a change that drops an entity's table whole", () => {
 
   it("is refused over what a configured plugin still declares there", async () => {
     const declaring = {
-      ...configuring(PLUGIN.id),
+      ...DECLARING_NOTHING,
       entityColumns: new Map([
         [
           TABLE,
@@ -315,7 +323,11 @@ describe("a change that drops an entity's table whole", () => {
     } as unknown as ExtensionSchemaRecord;
     const refused = await judged(
       dropped,
-      sources({ schema: declaring, recorded: [recordedColumn] })
+      sources({
+        schema: declaring,
+        configured: [PLUGIN.id],
+        recorded: [recordedColumn],
+      })
     );
     expect(refused?.publicMessage).toContain(PLUGIN.id);
   });

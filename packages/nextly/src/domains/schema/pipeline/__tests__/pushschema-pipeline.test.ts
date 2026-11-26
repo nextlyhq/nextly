@@ -60,6 +60,7 @@ vi.mock("../../ownership/removed-elements", async importOriginal => {
     ...original,
     removedElementsSourcesOn: (): removedElements.RemovedElementsSources => ({
       extensionSchema: () => Promise.resolve(null),
+      configuredPlugins: () => Promise.resolve(new Set()),
       recordedElements: () => Promise.resolve([]),
       indexColumns: () => Promise.resolve(new Map()),
       indexNames: () => Promise.resolve(new Set()),

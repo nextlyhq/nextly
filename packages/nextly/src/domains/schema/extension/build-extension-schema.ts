@@ -281,14 +281,6 @@ export interface ExtensionSchema {
    * recorded tables were created under (`assertPluginPrefixesKept`).
    */
   pluginPrefixes: ReadonlyMap<string, string>;
-  /**
-   * The plugins this compile was handed a schema of (their `contributes.schema`), whatever their
-   * hooks added this time: the configured plugins a change may ask whether an element is still its
-   * owner's. A plugin whose hook adds to a table only while it finds the table declares nothing
-   * once the table is gone, and is still configured. In memory only: nothing that is written
-   * records it.
-   */
-  schemaPlugins: ReadonlySet<string>;
   /** Stable hash of the compiled output, for caches. */
   fingerprint: string;
 }
@@ -1400,11 +1392,6 @@ export async function buildExtensionSchema(
     codeFirstTables: new Set(entityOwners.keys()),
     entityOwners,
     pluginPrefixes: input.pluginPrefixes,
-    schemaPlugins: new Set(
-      input.plugins.flatMap(plugin =>
-        plugin.owner.kind === "plugin" ? [plugin.owner.id] : []
-      )
-    ),
     fingerprint: fingerprintOf(
       specs,
       entityIndexes,

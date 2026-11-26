@@ -59,6 +59,7 @@ import {
 } from "../busy-table/tries";
 import type { HolderReport } from "../busy-table/types";
 import { prepareTryWatchdog } from "../busy-table/watchdog";
+import { getActiveConfiguredPlugins } from "../extension/active-schema";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
 import {
   refusingNewDanglingReferences,
@@ -894,6 +895,9 @@ export class PushSchemaPipeline {
     // index on that table, because the desired state it built knew nothing
     // about it.
     const extensions = getActiveExtensionSchema(dialect);
+    // Every plugin the configuration lists, published with the schema: which owners still have
+    // their parts, read once for the whole push (`kept-elements.ts`, `removed-elements.ts`).
+    const configuredPlugins = getActiveConfiguredPlugins();
     const scope = computeJournalScope(
       source,
       args.uiTargetSlug,
@@ -1192,6 +1196,7 @@ export class PushSchemaPipeline {
           db,
           dialect,
           schema: extensions,
+          configuredPlugins,
           managedTables: managedTableNames,
           live: liveSnapshot,
           record: true,
@@ -1412,6 +1417,7 @@ export class PushSchemaPipeline {
             db,
             dialect,
             extensions,
+            configuredPlugins,
             rows: elementOwners?.rows,
           }),
           // A push has the fields' columns, not their definitions: each column names its field.

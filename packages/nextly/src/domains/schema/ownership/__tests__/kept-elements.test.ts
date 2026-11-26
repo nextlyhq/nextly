@@ -12,8 +12,8 @@ import type {
 } from "../../pipeline/diff/types";
 import {
   assertNoContributedOwnerChange,
+  configuredOwners,
   contributedElements,
-  declaringOwners,
   keptElements,
   ownerRowsToRecord,
   refuseChangesToKeptElements,
@@ -157,16 +157,14 @@ describe("contributedElements", () => {
   });
 });
 
-describe("declaringOwners", () => {
-  it("is the app and every plugin that declares a table or an element", () => {
-    const schema = schemaFrom(["seo"]);
-    schema.owners.set("kh__items", { kind: "plugin", id: "kh" });
-    expect([...declaringOwners(schema, "sqlite")].sort()).toEqual([
+describe("configuredOwners", () => {
+  it("is the app and every plugin the configuration lists, one declaring nothing included", () => {
+    expect([...configuredOwners(new Set(["seo", "quiet"]))].sort()).toEqual([
       "app",
-      "kh",
+      "quiet",
       "seo",
     ]);
-    expect([...declaringOwners(null, "sqlite")]).toEqual(["app"]);
+    expect([...configuredOwners(new Set())]).toEqual(["app"]);
   });
 });
 

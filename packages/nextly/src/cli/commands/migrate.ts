@@ -3011,6 +3011,9 @@ async function runMigrationStreams(
     ...(deps.extensionSchema === undefined
       ? {}
       : { extensionSchema: deps.extensionSchema }),
+    ...(deps.declaredPlugins === undefined
+      ? {}
+      : { configuredPlugins: deps.declaredPlugins }),
   });
   return { pluginModulesApplied, applied };
 }
@@ -5575,6 +5578,12 @@ export async function runFileMigrations(args: {
    * the app's tables, read by the check that a file removes none of it.
    */
   extensionSchema?: ExtensionSchema;
+  /**
+   * Every plugin the configuration lists, whatever it declares (`MigrateCoreDeps.declaredPlugins`):
+   * a plugin among them removes its own parts with a file, one not among them is gone and removes
+   * nothing. None given, no plugin is read as configured.
+   */
+  configuredPlugins?: ReadonlySet<string>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -5683,6 +5692,7 @@ export async function runFileMigrations(args: {
       db,
       dialect,
       extensions: args.extensionSchema ?? null,
+      configuredPlugins: args.configuredPlugins ?? new Set(),
       rows: fileOwnerRows,
     }),
   });

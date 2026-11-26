@@ -33,7 +33,10 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { SCHEMA_OWNERS_TABLE } from "../../../schemas/schema-owners";
-import { getActiveExtensionSchema } from "../extension/active-schema";
+import {
+  getActiveConfiguredPlugins,
+  getActiveExtensionSchema,
+} from "../extension/active-schema";
 import type { SchemaOwner } from "../extension/types";
 import type { Deletion } from "../migrate/data-loss-consent";
 import type {
@@ -83,6 +86,12 @@ function fold(name: string): string {
 export interface RemovedElementsSources {
   /** The compiled extension schema, or `null` when nothing declares one. */
   extensionSchema(): Promise<ExtensionSchemaRecord | null>;
+  /**
+   * The plugins the change's configuration lists, every one, whatever it declares
+   * (`configuredPluginNames`): a plugin among them removes its own parts with the change; one not
+   * among them is gone from the configuration, and removes nothing.
+   */
+  configuredPlugins(): Promise<ReadonlySet<string>>;
   /** The element rows `nextly_schema_owners` keeps for these tables. */
   recordedElements(
     tables: readonly string[]
@@ -199,6 +208,8 @@ export function removedElementsSourcesOn(input: {
   db: unknown;
   dialect: SupportedDialect;
   extensions: ExtensionSchemaRecord | null;
+  /** The plugins the configuration lists (`RemovedElementsSources.configuredPlugins`). */
+  configuredPlugins: ReadonlySet<string>;
   rows: readonly OwnerRecord[] | undefined;
 }): RemovedElementsSources {
   const { db, dialect, rows } = input;
@@ -211,6 +222,7 @@ export function removedElementsSourcesOn(input: {
   };
   return {
     extensionSchema: () => Promise.resolve(input.extensions),
+    configuredPlugins: () => Promise.resolve(input.configuredPlugins),
     recordedElements: async tables =>
       elementsFromOwnerRows(await ownerRows(tables)),
     tableOwners: async tables => pluginTableOwners(await ownerRows(tables)),
@@ -248,23 +260,31 @@ export async function readRecordedElementsThrough(
 }
 
 /**
- * The sources a change's check reads from a database: the extension schema this process published
- * at boot or on its last reload, the owner record's element rows, and the catalog's columns. Read
- * when the check asks, so a failure to read any refuses the change.
+ * The sources a change's check reads from a database: the extension schema and the configured
+ * plugins this process published at boot or on its last reload, the owner record's element rows,
+ * and the catalog's columns. Read when the check asks, so a failure to read any refuses the change.
  */
 export function databaseRemovedElementsSources(
   adapter: RecordedElementsAdapter,
   dialect: SupportedDialect,
   /**
-   * The compiled schema of the change's own configuration, where the caller compiled it: a command
-   * that publishes none would otherwise read whatever schema the process published last.
+   * The change's own configuration, where the caller compiled it: its schema and the plugins it
+   * lists. A command that publishes neither would otherwise read whatever the process published
+   * last.
    */
-  compiled?: () => Promise<ExtensionSchemaRecord | null>
+  run?: {
+    extensionSchema: () => Promise<ExtensionSchemaRecord | null>;
+    configuredPlugins: ReadonlySet<string>;
+  }
 ): RemovedElementsSources {
   return {
     extensionSchema:
-      compiled ??
+      run?.extensionSchema ??
       (() => Promise.resolve().then(() => getActiveExtensionSchema(dialect))),
+    configuredPlugins: () =>
+      Promise.resolve().then(
+        () => run?.configuredPlugins ?? getActiveConfiguredPlugins()
+      ),
     recordedElements: tables => readRecordedElementsOn(adapter, tables),
     tableOwners: async tables =>
       tables.length > 0 && (await schemaOwnersTableExists(adapter))
@@ -442,7 +462,8 @@ export async function refuseRemovingOthersElements(args: {
       schema,
       await args.sources.tableOwners(tables),
       spellings,
-      declared
+      declared,
+      await args.sources.configuredPlugins()
     );
     const found: Taken[] = [];
     for (const element of all) {
@@ -575,7 +596,7 @@ interface RemovedOwners {
   column(table: string, column: string): SchemaOwner;
   /**
    * Whether `owner` removes what is its own with the change, so it is not taken: the owner of what
-   * the change removes, and still configured (`schemaPlugins`). A plugin no longer configured
+   * the change removes, and still configured (`configuredPlugins`). A plugin no longer configured
    * removes nothing with an app's change: its element, even on its own column, is taken.
    */
   removesItsOwn(removed: SchemaOwner | undefined, owner: SchemaOwner): boolean;
@@ -597,7 +618,8 @@ function removedOwners(
   schema: ExtensionSchemaRecord | null,
   recorded: ReadonlyMap<string, SchemaOwner>,
   spellings: ReadonlyMap<string, TableSpellings>,
-  declared: readonly ElementOnTable[]
+  declared: readonly ElementOnTable[],
+  configuredPlugins: ReadonlySet<string>
 ): RemovedOwners {
   const compiled = new Map(
     [...(schema?.owners ?? [])].map(([name, owner]) => [fold(name), owner])
@@ -605,7 +627,7 @@ function removedOwners(
   const tableOwner = (table: string) =>
     compiled.get(fold(table)) ?? recorded.get(fold(table));
   const configured = (owner: SchemaOwner) =>
-    owner.kind === "app" || schema?.schemaPlugins?.has(owner.id) === true;
+    owner.kind === "app" || configuredPlugins.has(owner.id);
   const declaredKeys = new Set(declared.map(elementKey));
   return {
     table: tableOwner,

@@ -36,9 +36,6 @@ export type ExtensionSchemaRecord = Pick<
   ExtensionSchema,
   "specs" | "owners" | "entityColumns" | "entityIndexes" | "elementOwners"
 > &
-  // The plugins the compile was handed, for a change asking whether an element's owner is still
-  // configured. Absent from a record made without a compile: no plugin is then taken for one.
-  Partial<Pick<ExtensionSchema, "schemaPlugins">> &
   // The relation edges and the tables declaring them, for an uninstall
   // asking who queries through the plugin's tables. Optional: a record read
   // where relations are not asked about need not carry them.

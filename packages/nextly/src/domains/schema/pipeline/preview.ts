@@ -22,6 +22,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { getActiveConfiguredPlugins } from "../extension/active-schema";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
 import {
   keptElements,
@@ -169,6 +170,8 @@ export async function previewDesiredSchema(
     db,
     dialect,
     schema: extensions,
+    // The plugins the configuration lists, as the apply reads them, so the preview keeps what it keeps.
+    configuredPlugins: getActiveConfiguredPlugins(),
     managedTables: desiredSchemaTableNames(desired, extensions),
     live: liveSnapshot,
     record: false,
