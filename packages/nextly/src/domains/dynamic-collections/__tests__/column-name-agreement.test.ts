@@ -10,7 +10,7 @@
 // surfaced. That makes it a latent divergence rather than a live bug, and exactly the kind that
 // stops being latent the moment another caller reaches the same generator.
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { buildDesiredTableFromFields } from "../../schema/pipeline/diff/build-from-fields";
@@ -28,6 +28,15 @@ import { validateCollectionConfig } from "../../../collections/config/validate-c
 import { defineSingle } from "../../../singles/config/define-single";
 import { DynamicCollectionSchemaService } from "../services/dynamic-collection-schema-service";
 import { configurationProblems } from "../../../shared/lib/config-problems";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 /** Every problem the configuration's load reports for these entities, as one text. */
 const problemText = (entities: Parameters<typeof configurationProblems>[0]) =>

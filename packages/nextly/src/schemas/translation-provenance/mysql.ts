@@ -18,7 +18,7 @@ import { datetime, mysqlTable, varchar } from "drizzle-orm/mysql-core";
 import {
   mysqlIndexes,
   TRANSLATION_PROVENANCE_INDEXES,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-mysql";
 
 import {
   TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH,

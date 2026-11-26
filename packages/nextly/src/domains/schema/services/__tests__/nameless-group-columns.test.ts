@@ -12,7 +12,7 @@
  * not only the absence of a throw.
  */
 import { getColumns, type Table } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
@@ -26,6 +26,15 @@ import {
   type SupportedDialect,
 } from "../field-column-descriptor";
 import { generateRuntimeSchema } from "../runtime-schema-generator";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 

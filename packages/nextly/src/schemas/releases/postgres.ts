@@ -25,7 +25,10 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-import { NEXTLY_RELEASES_INDEXES, pgIndexes } from "../_internal/core-indexes";
+import {
+  NEXTLY_RELEASES_INDEXES,
+  pgIndexes,
+} from "../_internal/core-indexes-postgres";
 import type { VersionScopeKind } from "../versions/types";
 
 import type { ReleaseKind, ReleaseMemberAction, ReleaseState } from "./types";

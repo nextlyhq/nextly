@@ -16,7 +16,7 @@ import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 import {
   EXTERNAL_IDENTITIES_INDEXES,
   sqliteIndexes,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-sqlite";
 import { users } from "../users/sqlite";
 
 import { EXTERNAL_IDENTITIES_TABLE } from "./table-name";

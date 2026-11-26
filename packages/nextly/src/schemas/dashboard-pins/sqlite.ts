@@ -20,7 +20,7 @@ import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 import {
   DASHBOARD_PINS_INDEXES,
   sqliteIndexes,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-sqlite";
 import { users } from "../users/sqlite";
 
 import { DASHBOARD_PINS_TABLE } from "./table-name";

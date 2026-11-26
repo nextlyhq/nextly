@@ -24,7 +24,7 @@ import {
 } from "drizzle-orm/pg-core";
 import type { PgBuildExtraConfigColumns } from "drizzle-orm/pg-core";
 
-import { USERS_INDEXES, pgIndexes } from "../_internal/core-indexes";
+import { USERS_INDEXES, pgIndexes } from "../_internal/core-indexes-postgres";
 
 /** `users` columns, a fresh builder record per call (see `core-table-contributions`). */
 export function usersColumns() {
