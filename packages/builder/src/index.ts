@@ -663,3 +663,12 @@ export type {
   PageFacts,
   UnpublishedPart,
 } from "./page-checks/page-facts";
+
+/**
+ * @experimental The editor's glossary: the words an author reads for each of
+ * its ideas, and the words it no longer says.
+ *
+ * Exported for the Page Builder plugin's admin screens, which name the same
+ * ideas as the editor and read the same words, so a rename is one edit.
+ */
+export * from "./glossary";
