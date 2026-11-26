@@ -1072,6 +1072,42 @@ describe("Advanced", () => {
   });
 });
 
+describe("a share card made from the page's picture", () => {
+  it("shows the card, and says it follows the picture it was cut from", async () => {
+    const user = userEvent.setup();
+    const carded: SeoTabContext = {
+      ...CONTEXT,
+      levels: {
+        ...LEVELS,
+        content: {
+          ...LEVELS.content,
+          image: {
+            value: {
+              url: "/admin/api/plugins/@nextlyhq/plugin-seo/share-card/f1/1a2b3c4d.jpg",
+              width: 1200,
+              height: 630,
+              alt: "A desk",
+            },
+            field: "coverImage",
+            madeFrom: { url: "/media/cover.webp", width: 1212, height: 758 },
+          },
+        },
+      },
+      fieldLabels: { ...CONTEXT.fieldLabels, coverImage: "Cover image" },
+    };
+    render(<Harness context={carded} />);
+    await user.click(screen.getByRole("button", { name: /^Advanced/ }));
+    const row = within(inAdvanced());
+    expect(row.getByText("1200 × 630 · JPEG")).toBeVisible();
+    expect(row.getByTestId("seo-share-card-made")).toHaveTextContent(
+      "Networks show the cover image (1212 × 758) as this 1200 × 630 copy, cut around its focal point and made automatically. It follows the cover image: a new picture or focal point makes a new copy."
+    );
+    expect(
+      row.queryByRole("button", { name: "Make a share image" })
+    ).toBeNull();
+  });
+});
+
 describe("editing the automatic text", () => {
   it("puts the automatic title in the field to edit, with the caret at its end", async () => {
     const user = userEvent.setup();

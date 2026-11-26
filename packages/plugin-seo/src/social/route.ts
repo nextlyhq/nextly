@@ -85,7 +85,10 @@ function tooLarge(): NextlyError {
  * The bytes of the picture at `url`, as the media library serves it: a path
  * from the root is read from `origin`, where the site serves its uploads.
  */
-async function readPicture(url: string, origin: string): Promise<Uint8Array> {
+export async function readPicture(
+  url: string,
+  origin: string
+): Promise<Uint8Array> {
   let address: URL;
   try {
     address = new URL(url, `${origin}/`);

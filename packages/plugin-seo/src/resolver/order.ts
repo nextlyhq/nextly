@@ -68,6 +68,11 @@ export interface Sourced<T> {
   pattern?: string;
   /** The page's own field a value was taken from, where it came from one. */
   field?: string;
+  /**
+   * The picture a share card was cut from, where the value is a card the
+   * plugin made from the page's own picture rather than the picture itself.
+   */
+  madeFrom?: PageMetadataImage;
 }
 
 /** The values a page, its route's code or its design can supply. */
@@ -91,6 +96,14 @@ interface FromField<T> {
   field: string;
 }
 
+/**
+ * The page's own picture as its share image: the picture, or the card cut
+ * from it where networks would not show it in full, with what it was cut from.
+ */
+type ContentImage = FromField<PageMetadataImage> & {
+  madeFrom?: PageMetadataImage;
+};
+
 /** What each level holds for one page. */
 export interface Levels {
   /** What a person typed, with visibility and an Advanced canonical. */
@@ -109,7 +122,7 @@ export interface Levels {
   content: {
     title?: FromField<string>;
     description?: FromField<string>;
-    image?: FromField<PageMetadataImage>;
+    image?: ContentImage;
   };
   site: {
     title?: string;
@@ -268,6 +281,9 @@ export function resolveOrder(
           value: picture(contentImage.value),
           from: "content",
           field: contentImage.field,
+          ...(contentImage.madeFrom === undefined
+            ? {}
+            : { madeFrom: contentImage.madeFrom }),
         },
     { value: picture(levels.site.image), from: "site" },
   ]);

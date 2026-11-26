@@ -96,6 +96,18 @@ async function loadSharp(): Promise<Sharp | null> {
   }
 }
 
+/** Whether the image library loads here, asked once per process. */
+let sharpLoads: Promise<boolean> | undefined;
+
+/**
+ * Whether share images can be made in this process: whether the sharp image
+ * library loads. Asked once, so a page's head pays for it at most once.
+ */
+export function canMakeShareImages(): Promise<boolean> {
+  sharpLoads ??= loadSharp().then(sharp => sharp !== null);
+  return sharpLoads;
+}
+
 /** `sharp`, or a refusal naming the command that installs it. */
 async function sharpOrRefuse(): Promise<Sharp> {
   const sharp = await loadSharp();

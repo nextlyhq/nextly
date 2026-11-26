@@ -481,7 +481,12 @@ function ownImages(
 ): string[] {
   const site =
     also.siteImage === undefined ? null : absolute(also.siteImage, origin);
-  const share = answer.image?.from === "site" ? undefined : answer.image?.value;
+  // A card the plugin cut from the page's picture is listed as the picture
+  // itself: the page's own image, at the address the page shows it at.
+  const share =
+    answer.image?.from === "site"
+      ? undefined
+      : (answer.image?.madeFrom ?? answer.image?.value);
   const urls = [share, also.mapped].map(image =>
     image === undefined ? null : absolute(image.url, origin)
   );

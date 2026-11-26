@@ -25,6 +25,8 @@ import { isRecord, textOf } from "../plain-values";
 import type { AiCrawlerChoice } from "../settings/contract";
 import { fillPattern } from "../settings/patterns";
 import type { StoredRobotsRules } from "../settings/robots-rules-stored";
+import { shareCardOf, type CardSource } from "../social/share-card";
+import { canMakeShareImages } from "../social/share-image";
 import { typedPageLevel } from "../tab/typed";
 
 import type { Levels } from "./order";
@@ -128,6 +130,29 @@ async function mediaOf(ctx: PluginContext, value: unknown): Promise<unknown> {
     if (NextlyError.isCode(error, "NOT_FOUND")) return undefined;
     throw error;
   }
+}
+
+/**
+ * A media document as the share card reads it: its id, its stored file and
+ * focal point, the inputs to a cut; nothing where it lacks an id or a file.
+ */
+function cardSourceOf(
+  media: unknown,
+  image: PageMetadataImage
+): CardSource | undefined {
+  if (!isRecord(media)) return undefined;
+  const id = textOf(media.id);
+  const filename = textOf(media.filename);
+  if (id === undefined || filename === undefined) return undefined;
+  const at = (value: unknown) => (typeof value === "number" ? value : null);
+  return {
+    ...image,
+    id,
+    filename,
+    ...(typeof media.mimeType === "string" ? { mimeType: media.mimeType } : {}),
+    focalX: at(media.focalX),
+    focalY: at(media.focalY),
+  };
 }
 
 /** A media document as a share image; nothing without an address to load. */
@@ -288,12 +313,23 @@ async function contentLevel(
 async function contentImage(
   ctx: PluginContext,
   document: Readonly<Record<string, unknown>>
-): Promise<{ value: PageMetadataImage; field: string } | undefined> {
+): Promise<Levels["content"]["image"]> {
   for (const field of CONTENT_FIELDS.image) {
     const value = document[field];
     if (value === null || value === undefined || value === "") continue;
-    const image = await imageOf(ctx, value);
-    if (image !== undefined) return { value: image, field };
+    const media = await mediaOf(ctx, value);
+    const image = asImage(media);
+    if (image === undefined) continue;
+    // A picture networks would not show in full is served as a card cut
+    // from it, named by the picture's version so it follows the picture.
+    // Only where the card can be made: with no image library, the picture
+    // is served as it is, and the tab says what keeps it from showing.
+    const source = cardSourceOf(media, image);
+    const card = source === undefined ? undefined : shareCardOf(source);
+    if (card !== undefined && (await canMakeShareImages())) {
+      return { value: card, field, madeFrom: image };
+    }
+    return { value: image, field };
   }
   return undefined;
 }

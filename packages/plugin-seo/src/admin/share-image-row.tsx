@@ -183,9 +183,47 @@ function shownImage(
 ): ChosenImage | undefined {
   if (chosen) return props.chosenImage;
   const image = props.answer?.image;
+  // A card cut from the page's picture is what networks are given, so the
+  // row shows the card rather than the picture's own file.
+  if (image?.madeFrom !== undefined) {
+    return {
+      ...image.value,
+      filename: `share card of ${fileNameOf(image.madeFrom.url)}`,
+      mimeType: "image/jpeg",
+    };
+  }
   return (
     props.shownImageFile ??
     (image && { ...image.value, filename: fileNameOf(image.value.url) })
+  );
+}
+
+/**
+ * What the row says of a card the plugin cut from the page's picture: what
+ * it was cut from, and that it follows that picture.
+ */
+function CardMade({
+  props,
+  madeFrom,
+}: {
+  props: AdvancedProps;
+  madeFrom: NonNullable<SeoAnswer["image"]>["madeFrom"];
+}): ReactNode {
+  if (madeFrom === undefined) return null;
+  const name = madeFromOf(props.answer, props.names, false).name;
+  const size =
+    madeFrom.width === undefined || madeFrom.height === undefined
+      ? ""
+      : ` (${madeFrom.width} × ${madeFrom.height})`;
+  return (
+    <Note>
+      <span data-testid="seo-share-card-made">
+        Networks show the {name}
+        {size} as this 1200 × 630 copy, cut around its focal point and made
+        automatically. It follows the {name}: a new picture or focal point makes
+        a new copy.
+      </span>
+    </Note>
   );
 }
 
@@ -273,6 +311,9 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
         </div>
       </div>
       {making === undefined ? null : <MakeStatus making={making} />}
+      {chosen ? null : (
+        <CardMade props={props} madeFrom={answer?.image?.madeFrom} />
+      )}
       {made ? (
         <Note tone="success" icon={<Check className="size-4" />}>
           <span data-testid="seo-share-made">

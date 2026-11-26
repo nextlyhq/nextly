@@ -160,6 +160,7 @@ import {
   withSocialCard,
   type SocialCardOptions,
 } from "./social/card";
+import { shareCardRoute } from "./social/card-route";
 import { shareImageRoute } from "./social/route";
 import { decideStanding, stagingGuard } from "./staging/guard";
 import { withStructuredData } from "./structured-data/provider";
@@ -1156,6 +1157,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       codeRoutes
     ),
     shareImageRoute(options.baseUrl),
+    // The cards a page's own picture is served as where networks would not
+    // show the picture in full, cut when first fetched.
+    shareCardRoute(options.baseUrl),
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
     contentTypesRoute(types),
