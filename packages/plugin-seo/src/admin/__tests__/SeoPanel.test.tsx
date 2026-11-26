@@ -6,6 +6,7 @@
  * another site is used only once confirmed.
  */
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -168,7 +169,7 @@ const titleField = () => screen.getByLabelText("Title on Google");
 /** The Advanced section, its rows and all. */
 const inAdvanced = () =>
   screen
-    .getByRole("button", { name: /Advanced/ })
+    .getByRole("button", { name: /^Advanced/ })
     .closest("section") as HTMLElement;
 const searchTitle = () => screen.getByTestId("seo-search-title");
 
@@ -1068,5 +1069,178 @@ describe("Advanced", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Enter the full address, starting with https://."
     );
+  });
+});
+
+describe("editing the automatic text", () => {
+  it("puts the automatic title in the field to edit, with the caret at its end", async () => {
+    const user = userEvent.setup();
+    const writes: [string, unknown][] = [];
+    render(<Harness onWrite={(f, v) => writes.push([f, v])} />);
+    const automatic =
+      "Surfer SEO vs Rext AI: Which Fits Your Workflow? | Rext AI";
+    // Automatic: the field is empty and its text is only the placeholder.
+    expect(titleField()).toHaveValue("");
+    expect(titleField()).toHaveAttribute("placeholder", automatic);
+
+    const [forTitle] = screen.getAllByRole("button", {
+      name: "Edit the automatic text",
+    });
+    await user.click(forTitle as HTMLElement);
+    expect(titleField()).toHaveValue(automatic);
+    expect(writes).toContainEqual(["metaTitle", automatic]);
+    await waitFor(() => expect(titleField()).toHaveFocus());
+    const input = titleField() as HTMLInputElement;
+    expect(input.selectionStart).toBe(automatic.length);
+    expect(screen.getByText("Typed for this page")).toBeVisible();
+
+    // Typing goes on from the end of the text, not before it.
+    await user.type(titleField(), "!");
+    expect(titleField()).toHaveValue(`${automatic}!`);
+  });
+
+  it("puts the automatic description in its field too", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const description = screen.getByLabelText("Description on Google");
+    const offered = screen.getAllByRole("button", {
+      name: "Edit the automatic text",
+    });
+    expect(offered).toHaveLength(2);
+    await user.click(offered[1] as HTMLElement);
+    expect(description).toHaveValue(
+      "Surfer SEO grades drafts; Rext AI writes them with sources."
+    );
+    await waitFor(() => expect(description).toHaveFocus());
+  });
+
+  it("offers no automatic text to edit while the page can't be changed", () => {
+    render(<Harness writable={false} />);
+    for (const offered of screen.getAllByRole("button", {
+      name: "Edit the automatic text",
+    })) {
+      expect(offered).toBeDisabled();
+    }
+  });
+});
+
+describe("making a share image, as it happens", () => {
+  /** A page whose cover image networks would crop, so a copy is offered. */
+  const IMAGED: SeoTabContext = {
+    ...CONTEXT,
+    levels: {
+      ...LEVELS,
+      content: {
+        ...LEVELS.content,
+        image: {
+          value: { url: "/media/cover.webp", width: 800, height: 600 },
+          field: "coverImage",
+        },
+      },
+    },
+    fieldLabels: { ...CONTEXT.fieldLabels, coverImage: "Cover image" },
+    shareImage: {
+      problems: [{ message: "800 × 600, LinkedIn will crop it", fix: "make" }],
+    },
+  };
+
+  /** A copy held until the test lets it come back, or fail. */
+  function held() {
+    let settle: {
+      resolve: (id: string | undefined) => void;
+      reject: (error: Error) => void;
+    } = { resolve: () => {}, reject: () => {} };
+    let asked = 0;
+    const make = () => {
+      asked += 1;
+      return new Promise<string | undefined>((resolve, reject) => {
+        settle = { resolve, reject };
+      });
+    };
+    return {
+      make,
+      asked: () => asked,
+      resolve: (id: string | undefined) => settle.resolve(id),
+      reject: (error: Error) => settle.reject(error),
+    };
+  }
+
+  const fromNotice = () =>
+    screen.getAllByRole("button", { name: /Make a share image|Making/ })[0];
+
+  it("says it is making one, and holds both buttons until it is made", async () => {
+    const user = userEvent.setup();
+    const copy = held();
+    render(<Harness context={IMAGED} onMakeShareImage={copy.make} />);
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(fromNotice() as HTMLElement);
+
+    // Said as it happens, and both buttons wait for it.
+    expect(
+      screen
+        .getAllByRole("status")
+        .some(region =>
+          region.textContent?.includes("Making a 1200 × 630 share image…")
+        )
+    ).toBe(true);
+    const waiting = screen.getAllByRole("button", { name: "Making…" });
+    expect(waiting).toHaveLength(2);
+    for (const button of waiting) expect(button).toBeDisabled();
+    await user.click(waiting[1] as HTMLElement);
+    expect(copy.asked()).toBe(1);
+
+    await act(async () => copy.resolve("made-1"));
+    expect(screen.queryByRole("button", { name: "Making…" })).toBeNull();
+  });
+
+  it("says beside the notice that the copy was made and chosen, and shows it under Advanced", async () => {
+    const user = userEvent.setup();
+    const copy = held();
+    render(<Harness context={IMAGED} onMakeShareImage={copy.make} />);
+    await user.click(fromNotice() as HTMLElement);
+    await act(async () => copy.resolve("made-1"));
+
+    // Where the click was: the copy is the page's now, said so plainly.
+    const made = await screen.findByTestId("seo-share-made-notice");
+    expect(made).toHaveTextContent(
+      "Made a 1200 × 630 share image from the cover image and chose it for this page."
+    );
+    // The notice it fixed is gone, rather than offering another copy.
+    expect(
+      screen.queryByRole("button", { name: "Make a share image" })
+    ).toBeNull();
+
+    // Advanced is closed, so the note opens it at the row.
+    const advanced = screen.getByRole("button", { name: /^Advanced/ });
+    expect(advanced).toHaveAttribute("aria-expanded", "false");
+    await user.click(
+      within(made).getByRole("button", { name: "Show it under Advanced" })
+    );
+    expect(advanced).toHaveAttribute("aria-expanded", "true");
+    expect(within(inAdvanced()).getByText("Made for this page")).toBeVisible();
+    expect(within(inAdvanced()).getByTestId("seo-share-made")).toBeVisible();
+  });
+
+  it("says why a share image couldn't be made, where it was asked for", async () => {
+    const user = userEvent.setup();
+    const copy = held();
+    render(<Harness context={IMAGED} onMakeShareImage={copy.make} />);
+    await user.click(fromNotice() as HTMLElement);
+    await act(async () =>
+      copy.reject(
+        new Error(
+          "This picture's address is not public, so networks could not load it on a card either."
+        )
+      )
+    );
+    expect(
+      await screen.findByText(
+        /The share image couldn't be made: This picture's address is not public/
+      )
+    ).toBeVisible();
+    // Free to try again.
+    expect(
+      screen.getAllByRole("button", { name: "Make a share image" })[0]
+    ).toBeEnabled();
   });
 });
