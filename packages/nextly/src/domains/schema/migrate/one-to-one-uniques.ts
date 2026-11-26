@@ -244,9 +244,15 @@ async function missingUniqueness(
 ): Promise<MissingUniqueness[]> {
   const missing: MissingUniqueness[] = [];
   for (const registered of await registeredEntities(db, dialect)) {
-    // A plugin's tables follow its own migration modules, which would read an index made here as
-    // drift; its one-to-ones are its modules' to make unique.
-    if (registered.source.startsWith("plugin")) continue;
+    // A plugin's collections follow its own migration modules, which would read an index made here
+    // as drift; their one-to-ones are its modules' to make unique. Its Singles are the app's
+    // migrations' to make, as the app's own are.
+    if (
+      registered.entity.kind === "collection" &&
+      registered.source.startsWith("plugin")
+    ) {
+      continue;
+    }
     const showValues = registered.definitionApplied;
     missing.push(
       ...[

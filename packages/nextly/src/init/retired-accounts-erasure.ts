@@ -23,9 +23,8 @@
  * @module init/retired-accounts-erasure
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { mysqlTable, varchar } from "drizzle-orm/mysql-core";
-import { pgTable, text } from "drizzle-orm/pg-core";
-import { sqliteTable, text as sqliteText } from "drizzle-orm/sqlite-core";
+
+import { loadedCore } from "../database/dialect-tables";
 
 /** The retired tables this module erases from. */
 export const RETIRED_ACCOUNTS_TABLE = "accounts";
@@ -60,12 +59,15 @@ export function retiredSessionsTable(dialect: SupportedDialect) {
  */
 export function retiredOwnedTable(name: string, dialect: SupportedDialect) {
   if (dialect === "postgresql") {
+    const { pgTable, text } = loadedCore("postgresql");
     return pgTable(name, { userId: text(OWNER_COLUMN).notNull() });
   }
   if (dialect === "mysql") {
+    const { mysqlTable, varchar } = loadedCore("mysql");
     return mysqlTable(name, {
       userId: varchar(OWNER_COLUMN, { length: 255 }).notNull(),
     });
   }
-  return sqliteTable(name, { userId: sqliteText(OWNER_COLUMN).notNull() });
+  const { sqliteTable, text } = loadedCore("sqlite");
+  return sqliteTable(name, { userId: text(OWNER_COLUMN).notNull() });
 }

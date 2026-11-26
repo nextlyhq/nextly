@@ -30,7 +30,10 @@
 import { pgTable, text, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
 import type { PgBuildExtraConfigColumns } from "drizzle-orm/pg-core";
 
-import { NEXTLY_JOBS_INDEXES, pgIndexes } from "../_internal/core-indexes";
+import {
+  NEXTLY_JOBS_INDEXES,
+  pgIndexes,
+} from "../_internal/core-indexes-postgres";
 
 import type { JobState } from "./types";
 

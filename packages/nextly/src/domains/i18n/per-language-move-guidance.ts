@@ -79,24 +79,22 @@ export function perLanguageMoveNext(
 }
 
 /**
- * The `next` of a SCHEMA_DRIFT that lists moves among its `listed` changes: the two safe ways
- * forward and, where any listed change is not a move, `createMigration`, the remedy those others
- * need whichever way is chosen.
+ * The `next` of a SCHEMA_DRIFT that lists moves among its changes: the two safe ways forward and,
+ * where any listed change is not a move (`others`), `createMigration`, the remedy those others need
+ * whichever way is chosen. Told, never counted: a table's moves are one line of the list however
+ * many fields move.
  */
 export function perLanguageDriftNext(
   moves: readonly PerLanguageMove[],
-  listed: number,
+  others: boolean,
   createMigration: string
 ): string {
-  const moved = moves.reduce((n, m) => n + m.columns.length, 0);
   return [
     perLanguageMoveNext(
       moves,
       'run `nextly migrate:create --name="<migration-name>"`, commit the result, and run `nextly migrate` again.'
     ),
-    ...(listed > moved
-      ? [`For the other changes listed: ${createMigration}`]
-      : []),
+    ...(others ? [`For the other changes listed: ${createMigration}`] : []),
   ].join("\n");
 }
 

@@ -8,6 +8,7 @@
 
 import type { TimeseriesInterval } from "../../domains/collections/query/timeseries-interval";
 import type { PartOutcome } from "../../domains/collections/services/publish-parts";
+import type { PartMarks } from "../../domains/versions/described-from";
 import type { FieldRewriteValue } from "../../domains/versions/field-rewrite";
 import type { RowPartReview } from "../../domains/workflows/row-review-states";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
@@ -862,6 +863,13 @@ export interface PublishResult {
   id: string;
   languages: PartOutcome[];
   shared: { changes: boolean; added: boolean };
+  /**
+   * With `describe`, the version the description was made from: given back as `data._rev` with the
+   * same parts, the change is refused where one of them changed since.
+   */
+  _rev?: string;
+  /** With `describe`, a mark of each part, to compare with another description's. */
+  marks?: PartMarks;
 }
 
 /** What every `nextly.rewriteField` call names, of an entry or of a Single. */

@@ -21,7 +21,7 @@ import {
   sqliteTable,
   text as sqliteText,
 } from "drizzle-orm/sqlite-core";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { sqliteTableDdl } from "../../../../__tests__/fixtures/sqlite-table-ddl";
 import type { SupportedDialect } from "../../../../database/schema-registry";
@@ -29,6 +29,15 @@ import { normalizeType } from "../../pipeline/diff/normalize-type";
 import type { ColumnDescriptor, ColumnKind } from "../field-column-descriptor";
 import { renderDialectType } from "../field-column-descriptor";
 import { buildUserDrizzleColumn } from "../runtime-schema-generator";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 /**
  * Every member of the union, listed.

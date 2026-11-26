@@ -19,6 +19,7 @@ import {
   DEFAULT_POSTGRES_SCHEMA,
 } from "../../domains/schema/services/postgres-schema";
 import { dialectFromUrl } from "../../shared/lib/env";
+import { DIALECTS } from "../../shared/lib/stated-dialect";
 import { reportDryRun } from "../dry-run";
 import { announceMode } from "../environment";
 import { connectionFailure, databaseEnvError } from "../errors/areas/database";
@@ -99,6 +100,26 @@ export function detectDialectFromUrl(
 }
 
 /**
+ * The dialect the environment names, by the rules every command reads it by: `DB_DIALECT`, else
+ * the scheme of `DATABASE_URL`; or the first thing wrong with it. Read without connecting, so a
+ * command that reads no database judges the environment as one that connects does.
+ */
+export function environmentDialect(
+  env: Readonly<Record<string, string | undefined>>
+):
+  | { dialect: SupportedDialect }
+  | { problem: "dialect-undetected" | "dialect-invalid"; named?: string } {
+  const named =
+    env.DB_DIALECT ||
+    (env.DATABASE_URL ? detectDialectFromUrl(env.DATABASE_URL) : undefined);
+  if (!named) return { problem: "dialect-undetected" };
+  if (!(DIALECTS as readonly string[]).includes(named)) {
+    return { problem: "dialect-invalid", named };
+  }
+  return { dialect: named as SupportedDialect };
+}
+
+/**
  * Validate database environment variables
  *
  * @returns Validation result with errors if any
@@ -110,35 +131,29 @@ export function validateDatabaseEnv(): DatabaseEnvValidation {
   const errors: string[] = [];
   let problem: DatabaseEnvValidation["problem"];
   const databaseUrl = process.env.DATABASE_URL;
-  const dialectEnv = process.env.DB_DIALECT as SupportedDialect | undefined;
 
   if (!databaseUrl) {
     errors.push("DATABASE_URL environment variable is required");
     problem = "url-missing";
   }
 
-  let dialect: SupportedDialect | undefined = dialectEnv;
-  if (!dialect && databaseUrl) {
-    dialect = detectDialectFromUrl(databaseUrl);
-  }
-
-  if (!dialect) {
+  // The dialect by the one reading of the environment (`environmentDialect`).
+  const named = environmentDialect(process.env);
+  if ("problem" in named) {
     errors.push(
-      "Could not detect database dialect. Set DB_DIALECT to one of: postgresql, mysql, sqlite"
+      named.problem === "dialect-undetected"
+        ? "Could not detect database dialect. Set DB_DIALECT to one of: postgresql, mysql, sqlite"
+        : `Invalid DB_DIALECT: ${named.named ?? ""}. Must be one of: postgresql, mysql, sqlite`
     );
-    problem ??= "dialect-undetected";
-  } else if (!["postgresql", "mysql", "sqlite"].includes(dialect)) {
-    errors.push(
-      `Invalid DB_DIALECT: ${dialect}. Must be one of: postgresql, mysql, sqlite`
-    );
-    problem ??= "dialect-invalid";
+    problem ??= named.problem;
   }
 
   return {
     valid: errors.length === 0,
     errors,
     problem,
-    dialect: errors.length === 0 ? dialect : undefined,
+    dialect:
+      errors.length === 0 && "dialect" in named ? named.dialect : undefined,
     databaseUrl: errors.length === 0 ? databaseUrl : undefined,
   };
 }

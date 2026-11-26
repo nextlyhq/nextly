@@ -8,9 +8,6 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { getTableConfig as mysqlTableConfig } from "drizzle-orm/mysql-core";
-import { getTableConfig as pgTableConfig } from "drizzle-orm/pg-core";
-import { getTableConfig as sqliteTableConfig } from "drizzle-orm/sqlite-core";
 
 import { loadedDialect } from "../../database/dialect-tables";
 import { NextlyError } from "../../errors/nextly-error";
@@ -122,15 +119,15 @@ function lockForDialect(dialect: SupportedDialect) {
   switch (loaded.dialect) {
     case "postgresql": {
       const table = loaded.tables.nextlyFieldGroupLock;
-      return { table, columns: pgTableConfig(table).columns };
+      return { table, columns: loaded.core.getTableConfig(table).columns };
     }
     case "mysql": {
       const table = loaded.tables.nextlyFieldGroupLock;
-      return { table, columns: mysqlTableConfig(table).columns };
+      return { table, columns: loaded.core.getTableConfig(table).columns };
     }
     case "sqlite": {
       const table = loaded.tables.nextlyFieldGroupLock;
-      return { table, columns: sqliteTableConfig(table).columns };
+      return { table, columns: loaded.core.getTableConfig(table).columns };
     }
   }
 }
@@ -146,15 +143,15 @@ function schemaLockForDialect(dialect: SupportedDialect) {
   switch (loaded.dialect) {
     case "postgresql": {
       const table = loaded.tables.nextlySchemaLock;
-      return { table, columns: pgTableConfig(table).columns };
+      return { table, columns: loaded.core.getTableConfig(table).columns };
     }
     case "mysql": {
       const table = loaded.tables.nextlySchemaLock;
-      return { table, columns: mysqlTableConfig(table).columns };
+      return { table, columns: loaded.core.getTableConfig(table).columns };
     }
     case "sqlite": {
       const table = loaded.tables.nextlySchemaLock;
-      return { table, columns: sqliteTableConfig(table).columns };
+      return { table, columns: loaded.core.getTableConfig(table).columns };
     }
   }
 }

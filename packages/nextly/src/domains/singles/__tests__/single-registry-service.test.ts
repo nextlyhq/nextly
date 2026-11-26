@@ -680,6 +680,7 @@ describe("SingleRegistryService", () => {
 
       const result = await ctx.service.syncCodeFirstSingles([
         {
+          source: "code",
           slug: "header",
           label: "Header",
           fields: [{ name: "logo", type: "upload" }],
@@ -710,6 +711,7 @@ describe("SingleRegistryService", () => {
 
       const result = await ctx.service.syncCodeFirstSingles([
         {
+          source: "code",
           slug: "site-settings",
           label: "Site Settings",
           fields: [{ name: "siteName", type: "text" }],
@@ -733,7 +735,12 @@ describe("SingleRegistryService", () => {
       });
 
       const result = await ctx.service.syncCodeFirstSingles([
-        { slug: "site-settings", label: "Site Settings", fields },
+        {
+          source: "code",
+          slug: "site-settings",
+          label: "Site Settings",
+          fields,
+        },
       ]);
 
       expect(result.unchanged).toEqual(["site-settings"]);
@@ -745,7 +752,12 @@ describe("SingleRegistryService", () => {
       ctx.adapter.selectOne.mockRejectedValue(new Error("db explode"));
 
       const result = await ctx.service.syncCodeFirstSingles([
-        { slug: "site-settings", label: "Site Settings", fields: [] },
+        {
+          source: "code",
+          slug: "site-settings",
+          label: "Site Settings",
+          fields: [],
+        },
       ]);
 
       expect(result.errors).toHaveLength(1);
@@ -782,6 +794,7 @@ describe("SingleRegistryService", () => {
 
       const result = await ctx.service.syncCodeFirstSingles([
         {
+          source: "code",
           slug: "site-settings",
           label: "Site Settings",
           fields,
@@ -841,6 +854,7 @@ describe("SingleRegistryService", () => {
 
       const result = await ctx.service.syncCodeFirstSingles([
         {
+          source: "code",
           slug: "site-settings",
           label: "Site Settings",
           // Changed, so the SCHEMA branch is the one selected.
@@ -883,6 +897,7 @@ describe("SingleRegistryService", () => {
 
       const result = await ctx.service.syncCodeFirstSingles([
         {
+          source: "code",
           slug: "site-settings",
           label: "Site Settings",
           fields,
@@ -902,6 +917,7 @@ describe("SingleRegistryService", () => {
 
       await ctx.service.syncCodeFirstSingles([
         {
+          source: "code",
           slug: "header-nav",
           label: "Header Nav",
           fields: [{ name: "items", type: "json" }],

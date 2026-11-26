@@ -11,6 +11,7 @@
 import { NextlyError } from "../../../errors";
 import { shellQuote } from "../migrate/drift-error";
 import { BLANK_FILE_LINE } from "../migrate/history-line-names";
+import { describeHolder, type SchemaLockHolder } from "../pipeline/schema-lock";
 
 import {
   APPLIED_MIGRATION_FILE_MISSING_REASON,
@@ -286,4 +287,20 @@ export function snapshotReadFailedOnceError(file: string): NextlyError {
     },
     { file }
   );
+}
+
+/**
+ * A run that holds the schema lock keeps this one, which takes none, from reading what it leaves:
+ * the refusal `command` gets from the lock itself, in its words.
+ */
+export function schemaLockHeldError(
+  command: string,
+  holder: SchemaLockHolder
+): NextlyError {
+  const named = describeHolder(holder);
+  return new NextlyError({
+    code: "NEXTLY_MIGRATE_LOCK_BUSY",
+    publicMessage: `\`${command}\` did not start, and changed nothing: the schema lock is still held. ${named.charAt(0).toUpperCase()}${named.slice(1)} Run it again once that finishes.`,
+    logContext: { reason: "schema lock held", command, holder },
+  });
 }

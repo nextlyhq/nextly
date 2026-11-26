@@ -9,7 +9,7 @@
  */
 import { getColumns, SQL, type Table } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { buildExtensionSchema } from "../build-extension-schema";
 import { col, defineTable, type ColumnBuilder } from "../dsl";
 import { entitySeedColumns } from "../entity-seed";
@@ -31,6 +31,15 @@ import {
 import { toDrizzleTable, toTableSpec } from "../compile";
 import { diffSnapshots } from "../../pipeline/diff/diff";
 import type { ExtensionColumn, ExtensionTable } from "../types";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 

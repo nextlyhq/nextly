@@ -21,6 +21,7 @@ import { FilterSeams } from "../../filters/seams";
 import type { Nextly } from "../../init/nextly-instance";
 import type { CollectionRegistryService } from "../collections/services/collection-registry-service";
 import type { SingleRegistryService } from "../singles/services/single-registry-service";
+import { isConfigOwnedSource } from "../webhooks/recording-provenance";
 
 import {
   addressableFieldNames,
@@ -243,8 +244,9 @@ export function addressFrom(
 /**
  * @experimental The site's content types with no public address yet: those
  * declared in code with none, and those made in the Schema Builder that no
- * plugin supplies one for. A plugin's own types and the system's are never
- * listed, since they are not pages of the site.
+ * plugin supplies one for. A plugin's Singles are judged as the site's; its
+ * collections and the system's types are never listed, since they are not
+ * pages of the site.
  */
 export async function typesWithoutAddress(): Promise<PublicAddressType[]> {
   const without: PublicAddressType[] = [];
@@ -257,9 +259,10 @@ export async function typesWithoutAddress(): Promise<PublicAddressType[]> {
 }
 
 /**
- * The site's own content types with their registry rows: those declared in
- * code and those made in the Schema Builder, never a plugin's own or the
- * system's. One list for every reader that walks the site's types.
+ * The site's content types with their registry rows: those declared in code,
+ * those made in the Schema Builder, and the Singles a plugin contributes; never
+ * a plugin's collection or the system's types. One list for every reader that
+ * walks the site's types.
  */
 export async function siteTypes(): Promise<
   { type: PublicAddressType; row: TypeRecord }[]
@@ -279,5 +282,11 @@ export async function siteTypes(): Promise<
       row: row as TypeRecord,
     })),
   ];
-  return rows.filter(({ row }) => row.source === "code" || row.source === "ui");
+  return rows.filter(
+    ({ type, row }) =>
+      row.source === "ui" ||
+      (type.kind === "single"
+        ? isConfigOwnedSource(row.source)
+        : row.source === "code")
+  );
 }

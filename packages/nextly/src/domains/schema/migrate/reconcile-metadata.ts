@@ -98,6 +98,7 @@ import {
   leftoverOrphanScopeOf,
   type MigrationOrphanScope,
 } from "./permission-orphans";
+import type { PluginEntitySources } from "./plugin/plugin-collection-sources";
 import { anySlugs, droppedEntities } from "./registry-history";
 import { readRegistrySource, type RegistrySource } from "./registry-source";
 import { writeRegistryFromSource } from "./registry-writer";
@@ -184,8 +185,8 @@ export interface ReconcileMetadataDeps {
    * consent covered, dropped as their entity's rows go; none otherwise.
    */
   dropLeftoverTranslations?: ReadonlySet<string>;
-  /** Each plugin-contributed collection's origin (`RegistryWriteDeps.collectionSources`). */
-  collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
+  /** Each plugin-contributed entity's origin (`RegistryWriteDeps.entitySources`). */
+  entitySources?: PluginEntitySources;
   /**
    * Seam for tests; defaults to reading the migration headers from disk.
    *
@@ -1059,9 +1060,9 @@ async function registerRows(
       {
         adapter,
         logger: asServiceLogger(logger),
-        ...(deps.collectionSources === undefined
+        ...(deps.entitySources === undefined
           ? {}
-          : { collectionSources: deps.collectionSources }),
+          : { entitySources: deps.entitySources }),
         ...(rewrites === undefined ? {} : { rewrites }),
       }
     );

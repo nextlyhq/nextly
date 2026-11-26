@@ -25,7 +25,7 @@ import {
   type PgBuildExtraConfigColumns,
 } from "drizzle-orm/pg-core";
 
-import { MEDIA_INDEXES, pgIndexes } from "../_internal/core-indexes";
+import { MEDIA_INDEXES, pgIndexes } from "../_internal/core-indexes-postgres";
 import { users } from "../users/postgres";
 
 /** `media` columns, a fresh builder record per call (see `core-table-contributions`). */

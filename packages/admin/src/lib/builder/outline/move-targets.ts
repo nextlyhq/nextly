@@ -71,6 +71,18 @@ export function fieldGroupFieldHolding(
   return own && own !== row ? own.field : undefined;
 }
 
+/**
+ * For a field group's own row, the field group defining it: the nearest, as the row records it,
+ * so a field of a field group inside another names the inner one; undefined for any other row.
+ */
+export function fieldGroupOfRow(
+  byId: ReadonlyMap<string, OutlineNode>,
+  rowId: string
+): string | undefined {
+  const reason = byId.get(rowId)?.readOnly;
+  return reason?.kind === "field-group" ? reason.slug : undefined;
+}
+
 /** The container a row's siblings belong to, as a place names it. */
 function containerOf(
   rows: OutlineRows,
