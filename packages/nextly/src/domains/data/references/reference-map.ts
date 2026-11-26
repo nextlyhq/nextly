@@ -68,7 +68,7 @@ export function mappedId(
  * map gives it, else, for an address naming a media item by its route, the
  * same route naming the item's new id.
  */
-export function mappedAddress(
+function mappedAddress(
   map: ReferenceMap,
   url: string,
   mediaId?: string

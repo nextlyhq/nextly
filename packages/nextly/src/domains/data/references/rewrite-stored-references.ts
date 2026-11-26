@@ -263,6 +263,22 @@ function rewrittenColumns(
 }
 
 /**
+ * The new id of a field-group instance's parent, when its parent is an entry
+ * of a collection the map moves; `undefined` otherwise.
+ */
+function movedParent(
+  pass: Pass,
+  collectionOfTable: ReadonlyMap<string, string>,
+  row: Row
+): string | undefined {
+  const { parentId, parentTable } = STORAGE_FORMAT.columns;
+  const owner = collectionOfTable.get(String(row[parentTable]));
+  return owner === undefined
+    ? undefined
+    : mappedId(pass.map, owner, String(row[parentId]));
+}
+
+/**
  * A collection's or Single's rows, or a field group's instances: the values
  * in their columns, and for an instance its parent's id when the parent is
  * an entry of a collection the map moves.
@@ -283,14 +299,10 @@ async function rewriteEntityRows(
   ])) {
     for (const row of rows) {
       const changes = rewrittenColumns(pass, entity.fields, onRow, row);
-      if (collectionOfTable) {
-        const owner = collectionOfTable.get(String(row[parentTable]));
-        const moved =
-          owner === undefined
-            ? undefined
-            : mappedId(pass.map, owner, String(row[parentId]));
-        if (moved !== undefined) changes[parentId] = moved;
-      }
+      const moved = collectionOfTable
+        ? movedParent(pass, collectionOfTable, row)
+        : undefined;
+      if (moved !== undefined) changes[parentId] = moved;
       if (Object.keys(changes).length === 0) continue;
       await writeRow(pass, entity.table, { id: row.id }, changes);
       countChanged(pass, entity.table);
@@ -418,7 +430,7 @@ async function rewriteJunctions(
  */
 async function rewriteVersions(pass: Pass): Promise<void> {
   const { site } = pass.deps;
-  const fieldsOf = {
+  const fieldsOf: VersionFields = {
     collection: new Map(site.collections.map(c => [c.slug, c.fields])),
     single: new Map(site.singles.map(s => [s.slug, s.fields])),
   };
@@ -437,34 +449,47 @@ async function rewriteVersions(pass: Pass): Promise<void> {
   );
   for await (const rows of pages) {
     for (const row of rows) {
-      const scopeKind = row.scopeKind === "single" ? "single" : "collection";
-      const scopeSlug = String(row.scopeSlug);
-      const changes: Row = {};
-      const fields = fieldsOf[scopeKind].get(scopeSlug);
-      const snapshot = row.snapshot;
-      if (fields !== undefined) {
-        const walked = rewriteSnapshot(pass, fields, snapshot);
-        if (walked !== snapshot) changes.snapshot = walked;
-      }
-      const entryId =
-        scopeKind === "collection"
-          ? mappedId(pass.map, scopeSlug, String(row.entryId))
-          : undefined;
-      if (entryId !== undefined) {
-        changes.entryId = entryId;
-        if (row.draftKey !== null && row.draftKey !== undefined) {
-          const locale = typeof row.locale === "string" ? row.locale : null;
-          changes.draftKey = workingDraftKey(
-            { scopeKind, scopeSlug, entryId },
-            locale
-          );
-        }
-      }
+      const changes = versionChanges(pass, fieldsOf, row);
       if (Object.keys(changes).length === 0) continue;
       await writeRow(pass, VERSIONS_TABLE, { id: row.id }, changes);
       countChanged(pass, VERSIONS_TABLE);
     }
   }
+}
+
+/** The fields of each collection and Single, by its slug. */
+interface VersionFields {
+  collection: ReadonlyMap<string, readonly FieldConfig[]>;
+  single: ReadonlyMap<string, readonly FieldConfig[]>;
+}
+
+/**
+ * What one version row becomes: its snapshot rewritten, and for a
+ * collection's version whose entry moved, the entry's new id and, on a
+ * working draft, the draft key made from it.
+ */
+function versionChanges(pass: Pass, fieldsOf: VersionFields, row: Row): Row {
+  const scopeKind = row.scopeKind === "single" ? "single" : "collection";
+  const scopeSlug = String(row.scopeSlug);
+  const changes: Row = {};
+  const fields = fieldsOf[scopeKind].get(scopeSlug);
+  if (fields !== undefined) {
+    const walked = rewriteSnapshot(pass, fields, row.snapshot);
+    if (walked !== row.snapshot) changes.snapshot = walked;
+  }
+  // A Single's version names its one row, which an import never moves.
+  if (scopeKind !== "collection") return changes;
+  const entryId = mappedId(pass.map, scopeSlug, String(row.entryId));
+  if (entryId === undefined) return changes;
+  changes.entryId = entryId;
+  if (row.draftKey !== null && row.draftKey !== undefined) {
+    const locale = typeof row.locale === "string" ? row.locale : null;
+    changes.draftKey = workingDraftKey(
+      { scopeKind, scopeSlug, entryId },
+      locale
+    );
+  }
+  return changes;
 }
 
 /** A snapshot rewritten, kept as a string when the dialect stored it so. */
