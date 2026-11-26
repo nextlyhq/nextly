@@ -1218,35 +1218,6 @@ export function holdEntityOnSession(
 }
 
 /**
- * An entry write's share of a Single's or a field group's hold on MySQL, in the write's
- * transaction (`rowsOn` runs there), as a collection's write shares its collection's
- * (`holdCollectionsIn` for `"share"`): the entity's named lock, taken and released across a read
- * of its registry row `FOR SHARE`, which then lasts until the write's transaction ends. A save
- * holding the entity holds the named lock, so the write waits for it. Answers the row read, or none
- * where the entity is gone.
- */
-export async function shareEntityOnMysql(
-  adapter: object,
-  rowsOn: RowsOn,
-  entity: EntityRef
-): Promise<{ id: unknown; schema_version: unknown } | undefined> {
-  const named = await takeNamedLocks(
-    adapter,
-    rowsOn,
-    database => namedEntityLockNames(database, entity),
-    ENTITY_NOUN[entity.kind]
-  );
-  try {
-    const [row] = await rowsOn<{ id: unknown; schema_version: unknown }>(
-      sql`SELECT ${sql.identifier("id")}, ${sql.identifier("schema_version")} FROM ${sql.identifier(registryTableOf(entity))} WHERE ${sql.identifier("slug")} = ${entity.slug} FOR SHARE`
-    );
-    return row;
-  } finally {
-    await named.release();
-  }
-}
-
-/**
  * A deleting save's hold of `entity` on MySQL, taken on the migration try's own connection
  * (`db`, the handle the runner gives the try's `before`), as a collection delete holds it
  * (`holdCollectionsIn` for `"update"`): its named locks first, then its registry row `FOR UPDATE`,
