@@ -851,8 +851,9 @@ A copy asked for at its `.md` address on a server that has only just started is 
 answered: the Proxy waits for Nextly's start, and the copy for the address record to catch
 up, each for a few seconds at most. Past that wait, it answers `503` with
 `cache-control: no-store` and a `Retry-After` header, as the sitemap does, rather than the
-not-found page a reader might keep. Asked for at the page's own address, it is never held:
-the page is served until the copy can be.
+not-found page a reader might keep, unless a page of the site is at that address, which is
+then served. Asked for at the page's own address, it is never held: the page is served until
+the copy can be.
 
 No reader is told apart by who it is: neither output looks at the user agent, and every
 reader asking the same way gets the same answer. llms.txt is its own file. A copy is
