@@ -162,12 +162,15 @@ describe.each(EDITORS)("in $editor", ({ surface }) => {
     it("updates an open menu's refusal once the users have been read", async () => {
       const probe = newProbe();
       const initial = fieldsWithNotes();
+      // The rows stay as they were, as the page's do while only the users' read changes.
+      const fieldGroups = nestedFixtureFieldGroups();
+      const blockCatalogs = nestedFixtureBlockCatalogs();
       const harness = (context: MoveContext) => (
         <MoveHarness
           initial={initial}
           context={context}
-          fieldGroups={nestedFixtureFieldGroups()}
-          blockCatalogs={nestedFixtureBlockCatalogs()}
+          fieldGroups={fieldGroups}
+          blockCatalogs={blockCatalogs}
           probe={probe}
         />
       );
