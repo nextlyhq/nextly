@@ -25,6 +25,8 @@
 import { PopoverContent } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { boxAcross, boxInFrameViewport } from "../canvas/geometry-dom";
+
 import {
   type PopupAlign,
   type PopupBox,
@@ -37,12 +39,14 @@ import {
 } from "./popup-placement";
 
 /**
- * The props the general popover content takes, but `forceMount`: content
- * kept mounted while closed would keep its old place for the next opening.
+ * The props the general popover content takes, but two it can't honour:
+ * `forceMount`, since content kept mounted while closed would keep its old
+ * place for the next opening, and `collisionBoundary`, since a popup is
+ * planned against the window (and the top bar), not a box of the caller's.
  */
 export type BuilderPopoverContentProps = Omit<
   React.ComponentPropsWithoutRef<typeof PopoverContent>,
-  "forceMount"
+  "forceMount" | "collisionBoundary"
 > & {
   /**
    * Which anchor the popup is open beside, for one that stays open while
@@ -95,9 +99,15 @@ function insetsFrom(padding: Padding): PopupInsets {
 /** The window's edges for a popup in `doc`, its top moved below the top bar. */
 function windowInsets(doc: Document, padding: Padding): PopupInsets {
   const insets = insetsFrom(padding);
-  const bar = doc.querySelector(TOP_BAR)?.getBoundingClientRect();
+  const found = doc.querySelector(TOP_BAR);
+  // The bar's client box in its own document's viewport, which is the
+  // popup's window too: both are drawn in the editor's document.
+  const bar = found === null ? undefined : boxInFrameViewport(found);
   if (bar === undefined || bar.height === 0) return insets;
-  return { ...insets, top: Math.max(insets.top, bar.bottom + insets.top) };
+  return {
+    ...insets,
+    top: Math.max(insets.top, bar.y + bar.height + insets.top),
+  };
 }
 
 const boxOf = (rect: DOMRect): PopupBox => ({
@@ -139,11 +149,18 @@ function nextPlace(
   const view = doc.defaultView;
   if (view === null) return null;
 
-  const placed = boxOf(wrapper.getBoundingClientRect());
+  // Where the popover has it, and its size drawn as the placing state draws
+  // it, with no height limit, put back at once so nothing is painted between.
   const was = content.getAttribute("data-nx-popup");
-  content.setAttribute("data-nx-popup", "placing");
-  const natural = wrapper.getBoundingClientRect();
-  if (was !== null) content.setAttribute("data-nx-popup", was);
+  const measured = boxAcross(
+    wrapper,
+    () => content.setAttribute("data-nx-popup", "placing"),
+    () => {
+      if (was !== null) content.setAttribute("data-nx-popup", was);
+    }
+  );
+  const placed = boxOf(measured.before);
+  const natural = measured.after;
 
   const insets = windowInsets(doc, padding);
   const anchor = anchorOf(placed, now, {

@@ -95,7 +95,7 @@ async function settled(page: Page): Promise<void> {
 }
 
 /**
- * Two places the same to within a pixel. A popup's height is fractional (its
+ * Two places the same to within a pixel of rounding. A popup's height is fractional (its
  * lines are), and the popover rounds its place to whole pixels, so a popup
  * held by its bottom edge can settle a fraction of a pixel away; a popup that
  * moves is tens of pixels away.
@@ -109,7 +109,7 @@ function expectSamePlace(
     expect(
       Math.abs((after[key] ?? Number.NaN) - (before[key] ?? 0)),
       `${what}: ${key} moved from ${before[key]} to ${after[key]}`
-    ).toBeLessThan(1);
+    ).toBeLessThanOrEqual(1);
   }
 }
 
@@ -164,6 +164,10 @@ async function holdsThrough(
   const before = await boxOf(popup);
   const height = await popup.evaluate(element => element.scrollHeight);
   const { pointer, change } = await using(popup);
+  // Scrolled into view first: Playwright scrolls a control into view before
+  // it acts on it, which would move it inside a popup that scrolls.
+  await pointer.scrollIntoViewIfNeeded();
+  await settled(page);
   const at = await boxOf(pointer);
   await change();
   await settled(page);
@@ -181,7 +185,13 @@ async function holdsThrough(
     { x: before.x, y: before.y },
     "the popup's top-left corner"
   );
-  expectSamePlace(await boxOf(pointer), at, "the control just used");
+  // Where it is, not how big: a message may widen the popup's fields.
+  const now = await boxOf(pointer);
+  expectSamePlace(
+    { x: now.x, y: now.y },
+    { x: at.x, y: at.y },
+    "the control just used"
+  );
   await expectInsideWindow(page, popup);
 }
 
@@ -259,6 +269,21 @@ async function storeSiteStyle(
   expect(written.ok(), `writing the site style: ${written.status()}`).toBe(
     true
   );
+}
+
+/**
+ * Makes `change`, and waits for the editor's write of the site style it
+ * causes, so nothing is still on its way when the test puts the style back.
+ */
+async function written(page: Page, change: () => Promise<void>) {
+  const saved = page.waitForResponse(
+    response =>
+      response.url().includes(SITE_STYLE) &&
+      response.request().method() === "PATCH" &&
+      response.ok()
+  );
+  await change();
+  await saved;
 }
 
 /**
@@ -346,24 +371,31 @@ test.describe("a builder popup holds still while its content changes", () => {
         opener: row,
         popup: page.getByRole("dialog", { name: `Edit ${name}`, exact: true }),
         using: async popup => {
+          // Always the way that adds a row at the popup's foot: a row stated
+          // already is put back first, before anything is measured.
           const reset = popup.getByRole("button", {
             name: "Reset",
             exact: true,
           });
           if (await reset.isVisible()) {
-            return {
-              pointer: popup.getByRole("radio").first(),
-              change: async () => {
-                await reset.click();
-                await expect(reset).toHaveCount(0);
-              },
-            };
+            await written(page, () => reset.click());
+            await expect(reset).toHaveCount(0);
+            await settled(page);
           }
-          const radio = popup.getByRole("radio", { checked: false }).first();
+          // Held by its own name: "the first unchecked radio" would be
+          // another radio once this one is checked.
+          const label = await popup
+            .getByRole("radio", { checked: false })
+            .first()
+            .evaluate(
+              input => input.closest("label")?.textContent?.trim() ?? ""
+            );
+          expect(label, "an unchecked size").toBeTruthy();
+          const radio = popup.getByRole("radio", { name: label, exact: true });
           return {
             pointer: radio,
             change: async () => {
-              await radio.check();
+              await written(page, () => radio.check());
               await expect(reset).toBeVisible();
             },
           };
@@ -395,7 +427,7 @@ test.describe("a builder popup holds still while its content changes", () => {
             // The Light value, above the dark one that comes or goes.
             pointer: popup.getByLabel("Light", { exact: true }),
             change: async () => {
-              await (gone ? remove : add).click();
+              await written(page, () => (gone ? remove : add).click());
               await expect(gone ? add : remove).toBeVisible();
             },
           };
@@ -427,7 +459,7 @@ test.describe("a builder popup holds still while its content changes", () => {
             pointer: spacing,
             change: async () => {
               await spacing.fill("0.05");
-              await spacing.press("Enter");
+              await written(page, () => spacing.press("Enter"));
               await expect(
                 popup.getByRole("button", { name: /^Reset Letter spacing/ })
               ).toBeVisible();
@@ -458,10 +490,13 @@ test.describe("a builder popup holds still while its content changes", () => {
       using: async popup => {
         const custom = popup.getByRole("button", { name: "Custom colour" });
         return {
-          pointer: custom,
+          // The list of colour variables above it. The picker makes room for
+          // the custom section by shortening that list, so the button below
+          // it rises within the popup by design; the list itself stays.
+          pointer: popup.getByRole("listbox", { name: "Colour variables" }),
           change: async () => {
             await custom.click();
-            await expect(page.getByLabel("Hex colour")).toBeVisible();
+            await expect(popup.getByLabel("Hex colour")).toBeInViewport();
           },
         };
       },
@@ -596,9 +631,6 @@ test.describe("what may move a builder popup", () => {
   test("the add picker opened low stays inside and scrolls its list", async ({
     page,
   }) => {
-    // A short window, so the results are taller than the room they have.
-    const short = { width: WINDOW.width, height: 480 };
-    await page.setViewportSize(short);
     const id = await createPage(page.request);
     await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
     await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
@@ -618,9 +650,19 @@ test.describe("what may move a builder popup", () => {
     await expect
       .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
       .toBe("1");
+    const from = await boxOf(add);
+    expect(from.y, "opened from the lower half").toBeGreaterThan(
+      WINDOW.height / 2
+    );
     await add.click();
     const popup = page.getByRole("dialog", { name: "Add a block" });
     await expect(popup).toHaveAttribute("data-nx-popup", "held");
+    // Then a short window, placed again inside it, so the results are taller
+    // than the room they have.
+    const short = { width: WINDOW.width, height: 480 };
+    await page.setViewportSize(short);
+    await settled(page);
+    await settled(page);
     await popup.getByRole("combobox", { name: "Search blocks" }).fill("e");
     await settled(page);
 
