@@ -86,6 +86,7 @@ export { jsonLdScriptProps, type JsonLdScriptProps } from "./runtime/seo";
 export {
   PAGE_METADATA_CAPABILITY,
   PAGE_METADATA_SERVICE,
+  type PageArticle,
   type PageMetadataAnswer,
   type PageMetadataImage,
   type PageImagePreview,

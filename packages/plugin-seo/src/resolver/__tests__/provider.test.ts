@@ -390,6 +390,86 @@ describe("what the answer depends on", () => {
     });
   });
 
+  it("serves a route's image at its stored size where it is the page's own picture", async () => {
+    // The route states its picture as a share card's size; it isn't one.
+    const stored = {
+      url: "https://files.example.com/cover.jpg",
+      width: 1212,
+      height: 758,
+      altText: "A cover",
+    };
+    const answer = await resolveSeo(
+      context({ f1: stored }),
+      entryInput(
+        "pages",
+        { slug: "a", featuredImage: "f1" },
+        {
+          code: {
+            image: {
+              url: "https://files.example.com/cover.jpg",
+              width: 1200,
+              height: 630,
+              alt: "The post's title",
+            },
+          },
+        }
+      )
+    );
+    expect(answer.image).toEqual({
+      value: {
+        url: "https://files.example.com/cover.jpg",
+        width: 1212,
+        height: 758,
+        // The route's own words for it stay.
+        alt: "The post's title",
+      },
+      from: "code",
+    });
+  });
+
+  it("knows the page's picture by its path, with the media item's alt where the route gives none", async () => {
+    const answer = await resolveSeo(
+      context({
+        f1: { url: "/media/cover.jpg", width: 800, height: 600, alt: "Desk" },
+      }),
+      entryInput(
+        "pages",
+        { slug: "a", coverImage: "f1" },
+        {
+          code: {
+            image: {
+              url: "https://example.com/media/cover.jpg",
+              width: 1200,
+              height: 630,
+            },
+          },
+        }
+      )
+    );
+    expect(answer.image?.value).toEqual({
+      url: "https://example.com/media/cover.jpg",
+      width: 800,
+      height: 600,
+      alt: "Desk",
+    });
+  });
+
+  it("keeps the size a route states for a picture that is not the page's own", async () => {
+    const answer = await resolveSeo(
+      context({ f1: { url: "/media/cover.jpg", width: 800, height: 600 } }),
+      entryInput(
+        "pages",
+        { slug: "a", coverImage: "f1" },
+        { code: { image: { url: "/og?title=a", width: 1200, height: 630 } } }
+      )
+    );
+    expect(answer.image?.value).toEqual({
+      url: "/og?title=a",
+      width: 1200,
+      height: 630,
+    });
+  });
+
   it("goes on to the next content image where one names an image that is gone", async () => {
     const answer = await resolveSeo(
       context({ f1: { url: "/featured.jpg" } }),

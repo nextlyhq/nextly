@@ -302,6 +302,74 @@ async function contentImage(
 const hasImage = (image: PageMetadataImage | undefined) =>
   textOf(image?.url) !== undefined;
 
+/** Whether an address is a path on the site itself, with no origin. */
+const isPath = (address: string) =>
+  address.startsWith("/") && !address.startsWith("//");
+
+/**
+ * Whether two addresses name the same file: alike in full, or, where either
+ * is a path on the site, alike in path and query, since a route often states
+ * its picture at the full address of the path the media library keeps.
+ */
+function sameAddress(one: string, other: string): boolean {
+  const base = "https://site.invalid";
+  try {
+    const a = new URL(one, base);
+    const b = new URL(other, base);
+    return isPath(one) || isPath(other)
+      ? a.pathname + a.search === b.pathname + b.search
+      : a.href === b.href;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The page's own pictures, each as the media library keeps it, for checking
+ * an image a route or a design states. A picture that cannot be looked up is
+ * left out here: this check never costs the page an image it has.
+ */
+async function ownPictures(
+  ctx: PluginContext,
+  document: Readonly<Record<string, unknown>>
+): Promise<PageMetadataImage[]> {
+  const pictures: PageMetadataImage[] = [];
+  for (const field of CONTENT_FIELDS.image) {
+    const value = document[field];
+    if (value === null || value === undefined || value === "") continue;
+    const picture = await imageOf(ctx, value).catch(() => undefined);
+    if (picture !== undefined) pictures.push(picture);
+  }
+  return pictures;
+}
+
+/**
+ * An image a route's code or a design states, at the size the media library
+ * stores where it is one of the page's own pictures: a route that states its
+ * picture as 1200 × 630 when it isn't would have the head claim a share
+ * card's size for it, and the crop warning say nothing. The route's own alt
+ * text stays; the media item's fills in where it gives none. Any other image
+ * is kept as stated.
+ */
+async function atStoredSize(
+  ctx: PluginContext,
+  document: Readonly<Record<string, unknown>>,
+  image: PageMetadataImage
+): Promise<PageMetadataImage> {
+  if (!hasImage(image)) return image;
+  const own = (await ownPictures(ctx, document)).find(picture =>
+    sameAddress(picture.url, image.url)
+  );
+  if (own?.width === undefined || own.height === undefined) return image;
+  const alt = image.alt ?? own.alt;
+  return {
+    ...image,
+    width: own.width,
+    height: own.height,
+    ...(alt === undefined ? {} : { alt }),
+  };
+}
+
 /** The content type's patterns, filled in from the page. */
 function patternLevel(
   patterns: { title?: string; description?: string },
@@ -352,6 +420,24 @@ export async function levelsOf(
     hasImage(input.code.image) ||
     hasImage(input.derived.image);
   const content = await contentLevel(ctx, document, !higherImage);
+  // Only the image that wins is checked against the page's own pictures:
+  // the page's own share image is one already, read with its stored size.
+  const codeImage = input.code.image;
+  const code =
+    hasImage(page.image) || codeImage === undefined
+      ? input.code
+      : {
+          ...input.code,
+          image: await atStoredSize(ctx, document, codeImage),
+        };
+  const designImage = input.derived.image;
+  const template =
+    hasImage(page.image) || hasImage(codeImage) || designImage === undefined
+      ? input.derived
+      : {
+          ...input.derived,
+          image: await atStoredSize(ctx, document, designImage),
+        };
   const address = await addressOf(
     ctx,
     { type, key },
@@ -361,8 +447,8 @@ export async function levelsOf(
   );
   return {
     page,
-    code: input.code,
-    template: input.derived,
+    code,
+    template,
     pattern: patternLevel(
       patternsOf(rules, key),
       defined({ title: content.title?.value, siteName: rules.siteName }),
