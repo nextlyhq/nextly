@@ -345,6 +345,64 @@ describe("moves the rule refuses", () => {
     expect(out.message.endsWith(users)).toBe(true);
   });
 
+  // A row is defined by its nearest field group: a field of a field group placed inside another is
+  // changed in the inner one's editor, and a field of one entry of a field accepting several in
+  // that entry's. Broken, the refusal names the field using them, and its users.
+  it("names the field group defining a row, not the field using it", () => {
+    const fields = nestedFixtureFields();
+    const seo = fields.find(each => each.id === "f-seo")!;
+    const users = (slug: string) =>
+      slug === "social"
+        ? {
+            uses: [{ entityType: "fieldGroup" as const, entitySlug: "seo" }],
+            complete: true,
+          }
+        : {
+            uses: [{ entityType: "collection" as const, entitySlug: "posts" }],
+            complete: true,
+          };
+    const { message } = refusal(
+      judgeMove(
+        fields,
+        "f-seo/social/handle",
+        {},
+        {
+          ...ctx,
+          fieldGroupFieldHolding: id =>
+            id.startsWith("f-seo/") ? seo : undefined,
+          fieldOfRow: () => plain("f-seo/social/handle", "handle"),
+          fieldGroupOfRow: () => "social",
+          describeFieldGroup: users,
+        }
+      )
+    );
+    expect(message).toBe(
+      "handle cannot be moved into or out of the field group social: a field group is changed only in its own editor. It is used by the field group seo."
+    );
+
+    const cards = plain("f-cards", "cards", {
+      type: "component",
+      components: ["seo", "social"],
+    } as Partial<BuilderField>);
+    const entry = refusal(
+      judgeMove(
+        [cards],
+        "f-cards/@seo/meta_title",
+        {},
+        {
+          ...ctx,
+          fieldGroupFieldHolding: () => cards,
+          fieldOfRow: () => plain("f-cards/@seo/meta_title", "meta_title"),
+          fieldGroupOfRow: () => "seo",
+          describeFieldGroup: users,
+        }
+      )
+    );
+    expect(entry.message).toBe(
+      "meta_title cannot be moved into or out of the field group seo: a field group is changed only in its own editor. It is used by the collection posts."
+    );
+  });
+
   // A list not yet read, or one whose read failed, is no list of users: naming none would read as
   // a field group nothing else uses.
   it("says the users could not be read while their list is not there", () => {

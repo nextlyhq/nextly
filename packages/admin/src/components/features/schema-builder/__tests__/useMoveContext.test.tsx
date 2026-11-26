@@ -138,7 +138,7 @@ describe("useMoveContext's field groups", () => {
     expect(result.current.describeFieldGroup?.("unused")).toBeUndefined();
   });
 
-  it("gives a field group's own row its own field, and the field placing the field group", () => {
+  it("gives a field group's own row its own field, the field placing it, and its defining field group", () => {
     get.mockResolvedValue({ items: [], meta: { total: 0, complete: true } });
     const { result } = render();
     expect(result.current.fieldOfRow?.("f-seo/meta_title")?.name).toBe(
@@ -147,5 +147,10 @@ describe("useMoveContext's field groups", () => {
     expect(
       result.current.fieldGroupFieldHolding?.("f-seo/meta_title")?.name
     ).toBe("seo");
+    // And the field group defining a row: the nearest, for a field group placed inside another.
+    expect(result.current.fieldGroupOfRow?.("f-seo/meta_title")).toBe("seo");
+    expect(result.current.fieldGroupOfRow?.("f-seo/social/handle")).toBe(
+      "social"
+    );
   });
 });

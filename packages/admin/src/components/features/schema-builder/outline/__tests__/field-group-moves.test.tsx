@@ -7,10 +7,11 @@
  * so a person who tries learns why; a row declared in code offers none of them. A drag is judged by
  * the same rule, and is driven in the browser test, where a pointer can drag.
  */
-import { within } from "@testing-library/react";
+import { fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
+import { recordDragRegion } from "@admin/__tests__/helpers/drag";
 import { render, screen } from "@admin/__tests__/utils";
 import type { MoveContext } from "@admin/lib/builder/move-rule";
 
@@ -40,24 +41,42 @@ function contextIn(surface: MoveContext["surface"]): MoveContext {
   return {
     entityReadOnly: false,
     surface,
-    describeFieldGroup: slug =>
-      slug === "seo"
+    describeFieldGroup: slug => {
+      if (slug === "seo") {
+        return {
+          uses: [
+            { entityType: "collection", entitySlug: "c1" },
+            { entityType: "collection", entitySlug: "c2" },
+            { entityType: "fieldGroup", entitySlug: "b" },
+            { entityType: "single", entitySlug: "s", via: ["b"] },
+          ],
+          complete: true,
+        };
+      }
+      // The field group the fixture's field group places inside it.
+      return slug === "social"
         ? {
-            uses: [
-              { entityType: "collection", entitySlug: "c1" },
-              { entityType: "collection", entitySlug: "c2" },
-              { entityType: "fieldGroup", entitySlug: "b" },
-              { entityType: "single", entitySlug: "s", via: ["b"] },
-            ],
+            uses: [{ entityType: "fieldGroup", entitySlug: "seo" }],
             complete: true,
           }
-        : undefined,
+        : undefined;
+    },
   };
 }
 
-/** The nested fixture with one more field below the field group, which the keys can move into it. */
+/**
+ * The nested fixture with a field accepting both field groups ahead of it, and one more field below
+ * the field group, which the keys can move into it.
+ */
 function fieldsWithNotes(): BuilderField[] {
   return [
+    {
+      id: "f-cards",
+      name: "cards",
+      label: "Cards",
+      type: "component",
+      components: ["seo", "social"],
+    } as BuilderField,
     ...nestedFixtureFields(),
     {
       id: "f-notes",
@@ -96,6 +115,23 @@ const handleOf = (path: string) => row(path)?.previousElementSibling ?? null;
 const announced = () =>
   (document.querySelector('[aria-live="polite"]')?.textContent ?? "").trim();
 
+/** Open a row's menu by its key, and its disabled Move to…'s description, if it has one. */
+async function moveToOf(
+  user: ReturnType<typeof userEvent.setup>,
+  path: string
+): Promise<string | null> {
+  row(path)?.focus();
+  await user.keyboard("{Shift>}{F10}{/Shift}");
+  await screen.findByRole("menu");
+  const item = screen.queryByRole("menuitem", { name: "Move to…" });
+  if (!item) return null;
+  expect(item).toHaveAttribute("aria-disabled", "true");
+  return (
+    document.getElementById(item.getAttribute("aria-describedby") ?? "")
+      ?.textContent ?? ""
+  );
+}
+
 describe.each(EDITORS)("in $editor", ({ surface }) => {
   describe("a field group's own field", () => {
     it("offers its handle to drag, where a row declared in code offers none", () => {
@@ -121,6 +157,29 @@ describe.each(EDITORS)("in $editor", ({ surface }) => {
       expect(probe.fields).toEqual(initial);
     });
 
+    // The nearest field group defines a row: a field of the field group placed inside another is
+    // changed in the inner one's editor, and is refused naming it and its users.
+    it("names the field group inside another that defines it, with that one's users", async () => {
+      const { user } = setup(surface);
+      expect(await moveToOf(user, "seo/social/handle")).toBe(
+        `Handle cannot be moved into or out of the field group social: ${STAYS} It is used by the field group seo.`
+      );
+    });
+
+    // A drag of a row the entity's fields do not hold still names it, as a drag of any field does.
+    it("is named when it is picked up to drag", async () => {
+      setup(surface);
+      const heard = recordDragRegion();
+      const handle = handleOf("seo/meta_title") as HTMLElement;
+      fireEvent.keyDown(handle, { code: "Space", key: " " });
+      await waitFor(() =>
+        expect(
+          heard.some(said => said.startsWith("Picked up Meta title"))
+        ).toBe(true)
+      );
+      fireEvent.keyDown(handle, { code: "Escape", key: "Escape" });
+    });
+
     it("refuses a move out by key, up and out of its container, and changes nothing", async () => {
       const { user, probe, initial } = setup(surface);
       for (const key of ["{Alt>}{ArrowUp}{/Alt}", "{Alt>}{ArrowLeft}{/Alt}"]) {
@@ -128,6 +187,20 @@ describe.each(EDITORS)("in $editor", ({ surface }) => {
         await user.keyboard(key);
         expect(announced()).toBe(`${OUT} Nothing moved.`);
       }
+      expect(probe.commits).toBe(0);
+      expect(probe.fields).toEqual(initial);
+    });
+  });
+
+  // An entry of a field accepting several field groups stands for one of them and is no field: it
+  // offers no way of moving it. The fields beneath it are that field group's, and name it alone.
+  describe("a field accepting several field groups", () => {
+    it("offers no move on an entry, and names the entry's field group for a field beneath it", async () => {
+      const { user, probe, initial } = setup(surface);
+      expect(handleOf("cards/@seo")).toHaveClass("invisible");
+      expect(await moveToOf(user, "cards/@seo")).toBeNull();
+      await user.keyboard("{Escape}");
+      expect(await moveToOf(user, "cards/@seo/meta_title")).toBe(OUT);
       expect(probe.commits).toBe(0);
       expect(probe.fields).toEqual(initial);
     });

@@ -16,7 +16,11 @@ import {
   moveDestinations,
   type MoveContext,
 } from "@admin/lib/builder/move-rule";
-import { fieldGroupFieldHolding } from "@admin/lib/builder/outline/move-targets";
+import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
+import {
+  fieldGroupFieldHolding,
+  fieldGroupOfRow,
+} from "@admin/lib/builder/outline/move-targets";
 import type { BlockCatalog } from "@admin/lib/builder/outline/block-rows";
 import {
   buildOutline,
@@ -81,6 +85,7 @@ export function MoveHarness({
     fieldGroupFieldHolding: rowId => fieldGroupFieldHolding(byId, rowId),
     // And names the row's own field, as the page's context does.
     fieldOfRow: rowId => byId.get(rowId)?.field,
+    fieldGroupOfRow: rowId => fieldGroupOfRow(byId, rowId),
   };
   const callbacks: OutlineCallbacks = {
     select: id => setSelectedId(id),
@@ -100,7 +105,11 @@ export function MoveHarness({
     },
   };
   return (
-    <DndContext collisionDetection={crumbsByPointer}>
+    <DndContext
+      collisionDetection={crumbsByPointer}
+      // What a drag says, as the page has it say.
+      accessibility={{ announcements: builderAnnouncements(fields) }}
+    >
       <Outline
         kind="collection"
         nodes={nodes}
