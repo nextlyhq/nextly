@@ -5,12 +5,21 @@
  * column or, as SQLite's field-group table does, on the table.
  */
 import type { SQL } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { FieldGroupSchemaService } from "../../../domains/field-groups/services/field-group-schema-service";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { contentTarget } from "../content-target";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 const GROUP = "comp_ct_meta";
 

@@ -19,7 +19,7 @@ import { jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import {
   pgIndexes,
   TRANSLATION_SOURCES_INDEXES,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-postgres";
 import type { ProvenanceScopeKind } from "../translation-provenance/types";
 
 import { TRANSLATION_SOURCES_TABLE } from "./table-name";

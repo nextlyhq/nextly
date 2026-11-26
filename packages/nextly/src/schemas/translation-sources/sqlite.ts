@@ -19,7 +19,7 @@ import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import {
   sqliteIndexes,
   TRANSLATION_SOURCES_INDEXES,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-sqlite";
 import type { ProvenanceScopeKind } from "../translation-provenance/types";
 
 import { TRANSLATION_SOURCES_TABLE } from "./table-name";

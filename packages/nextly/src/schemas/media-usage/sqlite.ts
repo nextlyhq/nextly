@@ -17,7 +17,10 @@
 // fallow-ignore-file code-duplication
 import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 
-import { MEDIA_USAGE_INDEXES, sqliteIndexes } from "../_internal/core-indexes";
+import {
+  MEDIA_USAGE_INDEXES,
+  sqliteIndexes,
+} from "../_internal/core-indexes-sqlite";
 import { media } from "../media/sqlite";
 
 import { MEDIA_USAGE_TABLE } from "./table-name";

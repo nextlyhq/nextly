@@ -15,7 +15,7 @@
 import type { BuildColumns } from "drizzle-orm";
 import { sqliteTable, integer, text } from "drizzle-orm/sqlite-core";
 
-import { USERS_INDEXES, sqliteIndexes } from "../_internal/core-indexes";
+import { USERS_INDEXES, sqliteIndexes } from "../_internal/core-indexes-sqlite";
 import { sqliteTimestamp } from "../_internal/sqlite-timestamp";
 
 /** `users` columns, a fresh builder record per call (see `core-table-contributions`). */

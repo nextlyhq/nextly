@@ -23,6 +23,13 @@ import {
   type SupportedDialect,
 } from "../../../schema/services/field-column-descriptor";
 import { FieldGroupSchemaService } from "../field-group-schema-service";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches as it is collected; the
+// unit setup loads only the run's own dialect, as an app's adapter would.
+await Promise.all(
+  ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+);
 
 /** Fields the descriptor stores as JSON, each named for the column it makes. */
 const JSON_FIELDS = [

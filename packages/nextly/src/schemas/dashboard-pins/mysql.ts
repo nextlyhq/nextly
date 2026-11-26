@@ -20,7 +20,7 @@ import { mysqlTable, varchar, datetime } from "drizzle-orm/mysql-core";
 import {
   DASHBOARD_PINS_INDEXES,
   mysqlIndexes,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-mysql";
 import { users } from "../users/mysql";
 
 import { DASHBOARD_PINS_TABLE } from "./table-name";
