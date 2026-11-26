@@ -374,17 +374,21 @@ export function storedDataOfRun(args: {
       }
     },
 
-    // Read-only. Only where this run did not take its steps, since
-    // migrations are still pending: one that took them has just hashed every
-    // password it found, and one refused has named the work already. A count
-    // that cannot be read never fails a migrate that succeeded.
+    // Read-only. Only where this run did not take its steps (migrations are
+    // still pending, or `db:sync` could not sync every entity): one that took
+    // them has just hashed every password it found, and one refused has named
+    // the work already. A count that cannot be read never fails the run.
     warnOfPasswordsLeft: async () => {
       if (taken || refused !== null) return;
       try {
+        // Named by the run's own command, which is what hashes them.
         const notice = storedPasswordsNotice(
           storedPasswordTotal(
             await countPasswordsStoredAsGiven(storedPasswordsOn(adapter))
-          )
+          ),
+          args.command === "nextly db:sync"
+            ? "nextly db:sync"
+            : "nextly migrate"
         );
         if (notice) logger.warn(notice);
       } catch (err) {

@@ -56,6 +56,7 @@
     "demote-loses-unique-index",
     "demote-plugin-collection",
     "drop-of-foreign-table",
+    "entities-not-synced",
     "field-group-backup-not-confirmed",
     "field-group-migration-in-flight",
     "field-group-storage-refused",

@@ -88,7 +88,9 @@ import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors";
+import { entitiesNotSynced } from "../errors/areas/sync";
 import { CliError } from "../errors/cli-error";
+import { formatCliError } from "../errors/render";
 import {
   createContext,
   type CommandContext,
@@ -120,6 +122,10 @@ import {
 } from "./dev-build";
 import { ensureCoreTables, productionSyncRefusal } from "./dev-server";
 import { createDebouncedSync } from "./dev-watcher";
+import {
+  collectEntitiesNotSynced,
+  type EntityNotSynced,
+} from "./entities-not-synced";
 import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { syncSchemaInOrder } from "./sync-schema";
 import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
@@ -370,6 +376,8 @@ export async function runDbSync(
   });
 
   const takesDataSteps = options.autoSync !== false;
+  /** The entities the sync could not bring up to date, for the run's closing error. */
+  let notSynced: EntityNotSynced[] = [];
 
   try {
     // Step 3.4: Work of that kind whose backup nobody confirmed is refused
@@ -492,8 +500,11 @@ export async function runDbSync(
           await judgeOrphanRemoval(configResult, adapter, options, context);
 
           // The registry read, the companion passes, the pushes and the move of fields a translated
-          // entity makes shared, in one order (`syncSchemaInOrder`).
-          await syncSchemaInOrder(configResult, adapter, options, context);
+          // entity makes shared, in one order (`syncSchemaInOrder`). An entity whose column or table
+          // the database refused is recorded failed and the rest goes on; the run ends naming it.
+          ({ notSynced } = await collectEntitiesNotSynced(() =>
+            syncSchemaInOrder(configResult, adapter, options, context)
+          ));
 
           if (collectionCount === 0) {
             logger.warn("No collections defined in config");
@@ -515,8 +526,16 @@ export async function runDbSync(
     // Step 6: Data an earlier release stored, brought up to date under the
     // schema lock, which the sync above has let go: once in a run, a watched
     // one included. A backup refusal made only now, for work the check before
-    // the sync could not see, ends the run with the sync applied.
-    if (takesDataSteps) {
+    // the sync could not see, ends the run with the sync applied. Not where an
+    // entity could not be synced: the steps read the tables as the
+    // configuration describes them, so they wait for a run that syncs every
+    // entity, and the run names the passwords still stored as given.
+    if (takesDataSteps && notSynced.length > 0) {
+      logger.warn(
+        "The steps over data an earlier release stored were not taken: they wait for a `nextly db:sync` that syncs every entity."
+      );
+      await storedData.warnOfPasswordsLeft();
+    } else if (takesDataSteps) {
       const schemaChanged = schemaBefore !== (await liveSchemaOf(adapter));
       await runWithFieldTypes(configResult.fieldTypes, () =>
         storedData.takeAfterSchemaChanges(
@@ -526,6 +545,15 @@ export async function runDbSync(
     }
     const storedDataRefused = storedData.refusal();
     if (storedDataRefused !== null) throw storedDataRefused;
+
+    // Everything else is done. A run ends with the entities it could not sync, and exit code 1; a
+    // watch reports them and goes on watching, as it does for a re-sync.
+    if (notSynced.length > 0) {
+      const failure = entitiesNotSynced(notSynced);
+      if (!options.watch) throw failure;
+      // In full, as a run ends with it: its next step and its page.
+      logger.error(formatCliError(failure));
+    }
 
     // Step 7: Watch mode. Gated on any entity kind this command syncs, not just
     // collections and singles: `loadConfig({ watch: true })` has already opened
