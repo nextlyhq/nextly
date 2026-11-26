@@ -1064,7 +1064,7 @@ describe("plugins uninstall over what it added to a collection's table, which th
         liveElements: stillThere(),
       })
     );
-    expect(notes.join("\n")).toMatch(leftLine);
+    expect((notes ?? []).join("\n")).toMatch(leftLine);
   });
 
   it("CONTROL: names nothing left where the app's migrations carry nothing of it", async () => {
