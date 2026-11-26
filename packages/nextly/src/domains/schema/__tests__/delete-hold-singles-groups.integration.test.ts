@@ -214,19 +214,26 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
         } as never);
       }
 
-      /** A link to a new entry of TAGS, written as a person writes it: the Single's, or a new entry's group. */
-      async function writeLink(t: TestNextly, kind: Kind): Promise<void> {
+      /**
+       * One more link, to a new entry of TAGS, written as a person writes it: the Single's links are
+       * set to every one so far (`linked`), and a field group's are a new entry's group's.
+       */
+      async function writeLink(
+        t: TestNextly,
+        kind: Kind,
+        linked: string[]
+      ): Promise<void> {
         const tag = (await t.nextly.create({
           collection: TAGS,
           data: { title: "t" },
         } as never)) as { item: { id: unknown } };
-        const links = [String(tag.item.id)];
+        linked.push(String(tag.item.id));
         if (kind === "Single") {
           const saved = await (
             t.getService("singleEntryService") as SingleEntryService
           ).update(
             SINGLE,
-            { heading: "h", links, _overwrite: true },
+            { heading: "h", links: [...linked], _overwrite: true },
             { overrideAccess: true }
           );
           if (!saved.success) throw new Error(String(saved.message));
@@ -234,7 +241,7 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
         }
         await t.nextly.create({
           collection: PARENT,
-          data: { title: "p", meta: { heading: "h", links } },
+          data: { title: "p", meta: { heading: "h", links: linked.slice(-1) } },
         } as never);
       }
 
@@ -368,12 +375,13 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
           // table on a field group, it reads as unknown, and a save confirming any count is refused.
           it("counts a removed many-to-many where its links are, deletes the count confirmed and refuses a stale one", async () => {
             const t = await boot(kind, LINKED);
-            await writeLink(t, kind);
+            const linked: string[] = [];
+            await writeLink(t, kind, linked);
             const review = await reviewed(kind, "links");
             expect(review).toMatchObject({ rowCount: 1 });
             expect(review?.rowCountUnknown).toBeUndefined();
             // A link written after the review counted one.
-            await writeLink(t, kind);
+            await writeLink(t, kind, linked);
             expect(await save(t, kind, 1, "links")).toMatchObject(
               refusedWith(2, "links")
             );
