@@ -198,12 +198,12 @@ export function pairOutcome(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect
 ): PairOutcome | null {
-  if (pairBlocked(from, to) !== null) return null;
-  if (choiceMayRefuse(from, to)) return "may-lose";
-  return outcomeOver(
-    from,
-    to,
-    valuesOf(from, to).map(value => ({ value }))
+  return markOfPair(from, to, () =>
+    outcomeOver(
+      from,
+      to,
+      valuesOf(from, to).map(value => ({ value }))
+    )
   );
 }
 
@@ -218,19 +218,35 @@ export function pairOutcomeHeldInJson(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect
 ): PairOutcome | null {
+  return markOfPair(from, to, () =>
+    outcomeOver(
+      from,
+      to,
+      valuesOf(from, to).flatMap(value => {
+        const held = asHeldInJson(value);
+        return held === undefined
+          ? []
+          : [{ value: itemOf(from, held), stored: JSON.stringify(held) }];
+      }),
+      heldInJson(from, to)
+    )
+  );
+}
+
+/**
+ * The mark of a pair, wherever its values are kept: null where it is blocked whatever they hold
+ * (`pairBlocked`), may-lose where a choice may refuse them, and otherwise what `judged` makes of
+ * them, asked only then. One place for both, so a field on its column and one held in JSON are
+ * answered by the same rules before their values are.
+ */
+function markOfPair(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect,
+  judged: () => PairOutcome
+): PairOutcome | null {
   if (pairBlocked(from, to) !== null) return null;
   if (choiceMayRefuse(from, to)) return "may-lose";
-  return outcomeOver(
-    from,
-    to,
-    valuesOf(from, to).flatMap(value => {
-      const held = asHeldInJson(value);
-      return held === undefined
-        ? []
-        : [{ value: itemOf(from, held), stored: JSON.stringify(held) }];
-    }),
-    heldInJson(from, to)
-  );
+  return judged();
 }
 
 /**
