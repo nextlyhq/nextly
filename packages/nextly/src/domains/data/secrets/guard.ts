@@ -76,12 +76,58 @@ function coreColumns(
   const snapshot = getCoreSchema(options.dialect, {
     fieldGroupRegistryTable: options.fieldGroupRegistryTable,
   });
-  return new Map(
-    snapshot.tables.map(table => [
-      table.name,
-      new Set(table.columns.map(column => column.name)),
-    ])
-  );
+  const byTable = new Map<string, ReadonlySet<string>>();
+  for (const table of snapshot.tables) {
+    byTable.set(table.name, new Set(table.columns.map(column => column.name)));
+  }
+  return byTable;
+}
+
+/**
+ * Refuse a row keyed by anything but its table's column names. `known` is
+ * undefined for a table outside core, whose columns core does not know.
+ */
+function assertColumnNames(
+  table: string,
+  input: OutgoingRow,
+  known: ReadonlySet<string> | undefined
+): void {
+  if (known === undefined) return;
+  const strange = Object.keys(input).filter(key => !known.has(key));
+  if (strange.length > 0) {
+    throw refuse("row-keys-are-not-column-names", { table, keys: strange });
+  }
+}
+
+/** Whether a row of a `some-rows` table is secret, by its deciding column. */
+function isSecretRow(
+  table: string,
+  input: OutgoingRow,
+  answer: Extract<SecretAnswer, { holds: "some-rows" }>
+): boolean {
+  // A row that does not carry the deciding column cannot be told apart, so it
+  // is refused rather than guessed at.
+  if (!Object.hasOwn(input, answer.decidedBy)) {
+    throw refuse("row-without-deciding-column", {
+      table,
+      column: answer.decidedBy,
+    });
+  }
+  return answer.isSecret(input[answer.decidedBy]);
+}
+
+/** The row without the secret columns a `columns` answer names. */
+function withoutColumns(
+  input: OutgoingRow,
+  answer: Extract<SecretAnswer, { holds: "columns" }>,
+  includeSignInData: boolean
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...input };
+  for (const column of answer.columns) {
+    if (column.kind === "sign-in" && includeSignInData) continue;
+    delete out[column.name];
+  }
+  return out;
 }
 
 /**
@@ -92,6 +138,7 @@ export function createSecretGuard(options: SecretGuardOptions): SecretGuard {
   const columns = coreColumns(options);
   const registry = options.fieldGroupRegistryTable;
   const others = options.otherTables ?? {};
+  const includeSignInData = options.includeSignInData === true;
 
   for (const table of Object.keys(others)) {
     if (columns.has(table) || Object.hasOwn(CORE_SECRET_ANSWERS, table)) {
@@ -125,39 +172,16 @@ export function createSecretGuard(options: SecretGuardOptions): SecretGuard {
     input: OutgoingRow
   ): Record<string, unknown> | null {
     const answer = answerFor(table);
-
-    const known = columns.get(table);
-    if (known !== undefined) {
-      const strange = Object.keys(input).filter(key => !known.has(key));
-      if (strange.length > 0) {
-        throw refuse("row-keys-are-not-column-names", { table, keys: strange });
-      }
-    }
-
+    assertColumnNames(table, input, columns.get(table));
     switch (answer.holds) {
       case "nothing":
         return { ...input };
       case "every-row":
         return null;
       case "some-rows":
-        // A row that does not carry the deciding column cannot be told apart,
-        // so it is kept back rather than guessed at.
-        if (!Object.hasOwn(input, answer.decidedBy)) {
-          throw refuse("row-without-deciding-column", {
-            table,
-            column: answer.decidedBy,
-          });
-        }
-        return answer.isSecret(input[answer.decidedBy]) ? null : { ...input };
-      case "columns": {
-        const out: Record<string, unknown> = { ...input };
-        for (const column of answer.columns) {
-          if (column.kind === "sign-in" && options.includeSignInData === true)
-            continue;
-          delete out[column.name];
-        }
-        return out;
-      }
+        return isSecretRow(table, input, answer) ? null : { ...input };
+      case "columns":
+        return withoutColumns(input, answer, includeSignInData);
     }
   }
 

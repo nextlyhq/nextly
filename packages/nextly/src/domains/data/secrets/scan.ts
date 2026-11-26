@@ -46,25 +46,58 @@ export interface SecretSighting {
  * The shortest value worth seeding. A short value turns up by chance in
  * unrelated bytes, and a scan that reports noise gets its findings ignored.
  */
-export const MIN_SEED_LENGTH = 16;
+const MIN_SEED_LENGTH = 16;
+
+/** One seed with the byte patterns it is looked for as. */
+interface LookedFor {
+  readonly seed: SeededSecret;
+  readonly forms: ReadonlyArray<{ form: SightingForm; bytes: Buffer }>;
+}
 
 /** Every form one seeded value is looked for in. */
-function formsOf(value: string): Array<{ form: SightingForm; bytes: Buffer }> {
+function formsOf(value: string): LookedFor["forms"] {
   const raw = Buffer.from(value, "utf8");
   const hex = raw.toString("hex");
   return [
-    { form: "as written" as const, bytes: raw },
+    { form: "as written", bytes: raw },
+    { form: "base64", bytes: Buffer.from(raw.toString("base64"), "utf8") },
     {
-      form: "base64" as const,
-      bytes: Buffer.from(raw.toString("base64"), "utf8"),
-    },
-    {
-      form: "base64url" as const,
+      form: "base64url",
       bytes: Buffer.from(raw.toString("base64url"), "utf8"),
     },
-    { form: "hex" as const, bytes: Buffer.from(hex, "utf8") },
-    { form: "hex" as const, bytes: Buffer.from(hex.toUpperCase(), "utf8") },
+    { form: "hex", bytes: Buffer.from(hex, "utf8") },
+    { form: "hex", bytes: Buffer.from(hex.toUpperCase(), "utf8") },
   ];
+}
+
+/** Refuse a seed short enough to be found where nobody put it. */
+function assertSeedsAreLongEnough(seeds: readonly SeededSecret[]): void {
+  const short = seeds.find(seed => seed.value.length < MIN_SEED_LENGTH);
+  if (short === undefined) return;
+  throw NextlyError.invalidInput({
+    message: `A seeded secret must be at least ${MIN_SEED_LENGTH} characters, so the scan cannot match it by chance.`,
+    logContext: { label: short.label, length: short.value.length },
+  });
+}
+
+/** A part's content as bytes, without copying a binary part. */
+function bytesOf(part: OutputPart): Buffer {
+  return typeof part.content === "string"
+    ? Buffer.from(part.content, "utf8")
+    : Buffer.from(
+        part.content.buffer,
+        part.content.byteOffset,
+        part.content.byteLength
+      );
+}
+
+/** The forms of one seed found in one part's bytes, each form once. */
+function formsFoundIn(bytes: Buffer, looked: LookedFor): SightingForm[] {
+  const found = new Set<SightingForm>();
+  for (const { form, bytes: needle } of looked.forms) {
+    if (bytes.includes(needle)) found.add(form);
+  }
+  return [...found];
 }
 
 /**
@@ -77,34 +110,14 @@ export function findSeededSecrets(
   parts: Iterable<OutputPart>,
   seeds: readonly SeededSecret[]
 ): SecretSighting[] {
-  for (const seed of seeds) {
-    if (seed.value.length < MIN_SEED_LENGTH) {
-      throw NextlyError.invalidInput({
-        message: `A seeded secret must be at least ${MIN_SEED_LENGTH} characters, so the scan cannot match it by chance.`,
-        logContext: { label: seed.label, length: seed.value.length },
-      });
-    }
-  }
-
+  assertSeedsAreLongEnough(seeds);
   const looked = seeds.map(seed => ({ seed, forms: formsOf(seed.value) }));
   const found: SecretSighting[] = [];
   for (const part of parts) {
-    const bytes =
-      typeof part.content === "string"
-        ? Buffer.from(part.content, "utf8")
-        : Buffer.from(
-            part.content.buffer,
-            part.content.byteOffset,
-            part.content.byteLength
-          );
-    for (const { seed, forms } of looked) {
-      const seen = new Set<SightingForm>();
-      for (const { form, bytes: needle } of forms) {
-        if (seen.has(form)) continue;
-        if (bytes.includes(needle)) {
-          seen.add(form);
-          found.push({ label: seed.label, where: part.where, form });
-        }
+    const bytes = bytesOf(part);
+    for (const each of looked) {
+      for (const form of formsFoundIn(bytes, each)) {
+        found.push({ label: each.seed.label, where: part.where, form });
       }
     }
   }
