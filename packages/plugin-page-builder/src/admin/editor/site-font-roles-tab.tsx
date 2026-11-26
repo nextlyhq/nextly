@@ -11,15 +11,16 @@
 import { FontChoicesContext, SiteFontRoles } from "@nextlyhq/builder/shell";
 import { useContext, type JSX } from "react";
 
-import { useFontCatalogue } from "./site-style-fonts";
 import { useVariablesStudio } from "./site-style-tokens-studio";
 
 /** The Body and Headings fonts, inside the tokens studio's frame. */
 export function FontRolesTab(): JSX.Element | null {
   const studio = useVariablesStudio();
   const fonts = useContext(FontChoicesContext);
-  const catalogue = useFontCatalogue();
-  if (studio?.tokens === undefined) return null;
+  if (studio === null) return null;
+  // Drawn while the site's variables are still being read, or could not be:
+  // the Fonts header and "Manage fonts…" show without the two rows, so the
+  // Fonts screen stays in reach and has a link to hand focus back to.
   return (
     <SiteFontRoles
       tokens={studio.tokens}
@@ -29,7 +30,6 @@ export function FontRolesTab(): JSX.Element | null {
       faces={fonts?.faces}
       fromCode={fonts?.fromCode ?? []}
       onManageFonts={fonts?.onManageFonts}
-      onAddCut={catalogue?.add}
     />
   );
 }

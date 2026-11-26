@@ -1,7 +1,7 @@
 /**
  * What the Body and Headings fonts read and write: one token set holding the
  * font variable and the Site text rows pointing at it, nothing until a font
- * is picked, the fallback of the font's kind, and the missing-Bold check.
+ * is picked, and the fallback of the font's kind.
  */
 import {
   DEFAULT_SITE_TEXT,
@@ -15,7 +15,6 @@ import { roleStack } from "./font-library";
 import {
   fontRoleSetting,
   fontRoleWrites,
-  missingBold,
   roleFamilies,
   withFontRole,
 } from "./site-font-roles-model";
@@ -242,71 +241,5 @@ describe("the fallback of a font's kind", () => {
     expect(roleFamilies([face("Lora", "400", LORA)], [])).toMatchObject([
       { family: "Lora", stack: '"Lora", serif' },
     ]);
-  });
-});
-
-describe("a Headings font with no bold", () => {
-  const lora = roleFamilies([face("Lora", "400", LORA)], []);
-
-  it("names a catalogue family with no face at 600 or heavier, with the request adding its Bold", () => {
-    const tokens = withFontRole(SITE, "heading", '"Lora", serif');
-    expect(missingBold(tokens, lora)).toEqual({
-      family: "Lora",
-      add: {
-        id: "lora",
-        weights: [700],
-        styles: ["normal"],
-        subsets: ["latin"],
-      },
-    });
-  });
-
-  it("judges headings drawn in the Body font by it", () => {
-    const tokens = withFontRole(SITE, "body", '"Lora", serif');
-    expect(missingBold(tokens, lora)?.family).toBe("Lora");
-  });
-
-  it("offers no add for an uploaded family, and says nothing for one with a bold", () => {
-    const uploaded = roleFamilies([face("Mine", "400")], []);
-    expect(
-      missingBold(withFontRole(SITE, "heading", '"Mine", sans-serif'), uploaded)
-    ).toEqual({ family: "Mine" });
-    const bold = roleFamilies(
-      [face("Lora", "400", LORA), face("Lora", "700", LORA)],
-      []
-    );
-    expect(
-      missingBold(withFontRole(SITE, "heading", '"Lora", serif'), bold)
-    ).toBeUndefined();
-    // An italic bold leaves upright headings with a fake bold.
-    const italic = roleFamilies(
-      [
-        face("Lora", "400", LORA),
-        { ...face("Lora", "700", LORA), style: "italic" },
-      ],
-      []
-    );
-    expect(
-      missingBold(withFontRole(SITE, "heading", '"Lora", serif'), italic)
-        ?.family
-    ).toBe("Lora");
-    // A variable face reaching 600 or heavier between two named weights
-    // draws a bold too.
-    const between = roleFamilies([face("Lora", "625 675", LORA)], []);
-    expect(
-      missingBold(withFontRole(SITE, "heading", '"Lora", serif'), between)
-    ).toBeUndefined();
-    // A variable face covering 700 draws a bold.
-    const variable = roleFamilies([face("Lora", "400 700", LORA)], []);
-    expect(
-      missingBold(withFontRole(SITE, "heading", '"Lora", serif'), variable)
-    ).toBeUndefined();
-  });
-
-  it("says nothing for a system font or while no font is picked", () => {
-    expect(missingBold(SITE, lora)).toBeUndefined();
-    expect(
-      missingBold(withFontRole(SITE, "heading", "serif"), lora)
-    ).toBeUndefined();
   });
 });
