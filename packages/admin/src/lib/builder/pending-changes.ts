@@ -446,6 +446,29 @@ function changesOfKept(
 }
 
 /**
+ * The changes of the built-in rows (a collection's title) from `saved`, the rows as loaded or last
+ * saved: their Unique setting is the one thing of them a person changes, so a row whose Unique
+ * differs from its saved one is a change of its settings. Only a row a save sends counts
+ * (`saves`, the save's own test), so a toggle no save would carry is never offered as one. Matched
+ * by name, the built-in rows' identity. The user fields' changes are `pendingChanges`', which
+ * leaves built-in rows out.
+ */
+export function builtInChanges(
+  saved: readonly BuilderField[],
+  current: readonly BuilderField[],
+  saves: (field: BuilderField) => boolean
+): PendingChange[] {
+  return current.flatMap(field => {
+    if (!field.isSystem || !saves(field)) return [];
+    const was = saved.find(row => row.isSystem && row.name === field.name);
+    if (was === undefined) return [];
+    return (was.advanced?.unique === true) === (field.advanced?.unique === true)
+      ? []
+      : [changeOf("settings", field)];
+  });
+}
+
+/**
  * The pending changes from `baseline` to `current`: in the order of the
  * definition now, each deleted field after them in its saved order.
  */
@@ -536,9 +559,14 @@ function describeChange(change: PendingChange): string {
  */
 export function describeStep(
   before: readonly BuilderField[],
-  after: readonly BuilderField[]
+  after: readonly BuilderField[],
+  /** Which built-in rows a save sends (`builtInChanges`): their changes are named as well. */
+  savesBuiltIn: (field: BuilderField) => boolean = () => false
 ): string {
-  const changes = pendingChanges(before, after);
+  const changes = [
+    ...builtInChanges(before, after, savesBuiltIn),
+    ...pendingChanges(before, after),
+  ];
   if (changes.length === 1 && changes[0]) return describeChange(changes[0]);
   return `${changes.length} changes`;
 }

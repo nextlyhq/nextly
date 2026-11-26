@@ -35,6 +35,7 @@ const noPending: BuilderPendingChanges = {
   marks: new Map(),
   settingChanges: [],
   saved: [],
+  savedBuiltIns: [],
   canUndo: false,
   canRedo: false,
   undo: () => null,
