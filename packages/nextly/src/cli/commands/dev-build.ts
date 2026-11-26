@@ -484,10 +484,8 @@ export async function syncSingles(
 
   // Auto-sync: Create data tables for created/updated Singles and set status to 'applied'
   const autoSyncEnabled = options.autoSync !== false;
-  if (
-    autoSyncEnabled &&
-    (result.created.length > 0 || result.updated.length > 0)
-  ) {
+  // Also with nothing created or updated: it takes entities an earlier run recorded failed.
+  if (autoSyncEnabled) {
     await performSinglesAutoSync(
       config,
       adapter,
@@ -625,10 +623,8 @@ export async function syncComponents(
 
   // Auto-sync: Create data tables for created/updated Components and set status to 'applied'
   const autoSyncEnabled = options.autoSync !== false;
-  if (
-    autoSyncEnabled &&
-    (result.created.length > 0 || result.updated.length > 0)
-  ) {
+  // Also with nothing created or updated: it takes entities an earlier run recorded failed.
+  if (autoSyncEnabled) {
     await performComponentsAutoSync(
       config,
       adapter,

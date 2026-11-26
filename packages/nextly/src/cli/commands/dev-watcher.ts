@@ -18,6 +18,9 @@ import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fiel
 import { describeError } from "../../errors/index";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
+import { entitiesNotSynced } from "../errors/areas/sync";
+import { CliError } from "../errors/cli-error";
+import { formatCliError } from "../errors/render";
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import type { LoadConfigResult } from "../utils/config-loader";
@@ -28,6 +31,7 @@ import {
   performPermissionSeeding,
   syncUserFields,
 } from "./dev-build";
+import { collectEntitiesNotSynced } from "./entities-not-synced";
 import { syncSchemaInOrder } from "./sync-schema";
 
 /** Debounce delay in milliseconds */
@@ -123,19 +127,32 @@ export function createDebouncedSync(
             await judgeOrphanRemoval(configToSync, adapter, options, context);
 
             // The registry read, the companion passes, the pushes and the move of fields a translated
-            // entity makes shared, in one order (`syncSchemaInOrder`).
-            await syncSchemaInOrder(configToSync, adapter, options, context);
+            // entity makes shared, in one order (`syncSchemaInOrder`). An entity the database
+            // refused a column or table of is recorded failed, and the rest goes on.
+            const { notSynced } = await collectEntitiesNotSynced(() =>
+              syncSchemaInOrder(configToSync, adapter, options, context)
+            );
 
             // Sync user_ext table (always — handles both code and UI fields)
             await syncUserFields(configToSync, adapter, options, context);
 
             // Seed permissions for new/updated collections and singles
             await performPermissionSeeding(adapter, options, context);
+
+            // Named last, as a run of `db:sync` ends: reported below, and the watch goes on.
+            // A re-sync takes no step over data an earlier release stored, so it says nothing of
+            // them either way.
+            if (notSynced.length > 0) throw entitiesNotSynced(notSynced);
           }
         );
       });
     } catch (error) {
-      logger.error(`Re-sync failed: ${describeError(error)}`);
+      // A command's own error in full, as a run ends with it (its next step and its page).
+      logger.error(
+        error instanceof CliError
+          ? `Re-sync failed:\n${formatCliError(error)}`
+          : `Re-sync failed: ${describeError(error)}`
+      );
     } finally {
       isSyncing = false;
 

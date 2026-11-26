@@ -882,6 +882,13 @@ exports[`each code, as a command ends with it > DROP_OF_FOREIGN_TABLE 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/drop-of-foreign-table  (DROP_OF_FOREIGN_TABLE)"
 `;
 
+exports[`each code, as a command ends with it > ENTITIES_NOT_SYNCED 1`] = `
+"✗ \`db:sync\` could not add a column or create a table, so these entities are recorded failed: \`seo\` (priority: Duplicate column name 'priority').
+  Why:  The database refused the statement. Everything else was synced, and the steps over data an earlier release stored wait for a run that syncs every entity.
+  Next: Fix the cause, then run \`nextly db:sync\` again; it retries them.
+  Docs: https://nextlyhq.com/docs/cli/errors/entities-not-synced  (ENTITIES_NOT_SYNCED)"
+`;
+
 exports[`each code, as a command ends with it > FIELD_GROUP_BACKUP_NOT_CONFIRMED 1`] = `
 "✗ \`nextly migrate:field-groups --apply\` did not run: it needs \`--backup-confirmed\`.
   Why:  Applying renames field-group tables and rewrites stored rows, so it runs only once you confirm a restorable backup of the database exists.

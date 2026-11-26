@@ -59,6 +59,7 @@
     "demote-plugin-collection",
     "dialect-not-stated",
     "drop-of-foreign-table",
+    "entities-not-synced",
     "field-group-backup-not-confirmed",
     "field-group-migration-in-flight",
     "field-group-storage-refused",
