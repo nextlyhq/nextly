@@ -42,6 +42,7 @@ import type { PreferenceStore } from "../../shell-state";
 import {
   activeTokenMode,
   colourHexOf,
+  colourVariablesMatching,
   variableFor,
   variableLabel,
   shownVariables,
@@ -58,6 +59,7 @@ import { useFieldDescription } from "../css-hint";
 import { InheritedValue } from "./inherited-value";
 import type { CommitOutcome } from "./style-field-surroundings";
 import { useDraft, TextField, useTypesLive } from "./style-text-field";
+import { TypedColourSuggestions } from "./typed-colour-suggestions";
 
 /**
  * Whether Control held with a primary press means a CONTEXT MENU here.
@@ -314,6 +316,10 @@ export function ColourField({
   onType?: ((value: StyleValue | null) => CommitOutcome) | undefined;
 }): React.JSX.Element {
   const noteId = React.useId();
+  const refusalId = React.useId();
+  // Text the box was left holding that is neither a colour nor a variable's
+  // name, said in the box's own words until it is typed in again.
+  const [refused, setRefused] = React.useState<string>();
   // Lifted out of the text field because two controls edit one value: a draft
   // private to the field would leave the swatch painting a superseded one.
   const { draft, setDraft, edited, reset, live } = useDraft(stored);
@@ -332,6 +338,13 @@ export function ColourField({
   );
   // A keystroke's and a picker move's write.
   const typed = typedOrCommitted(onType, onCommit);
+  const typedCommit = useTypedColourCommit({
+    choices,
+    stored,
+    onCommit,
+    commitColour,
+    setRefused,
+  });
   const { commitInstead, closed, onColour } = usePickerWrites({
     commitColour,
     onMove: typed,
@@ -366,9 +379,15 @@ export function ColourField({
     tokens,
     mode,
     obscuredBy,
-    describedBy,
+    describedBy: describedByAll(
+      refused === undefined ? undefined : refusalId,
+      describedBy
+    ),
     noteId,
   });
+  // Refused by the box itself or by the write: either way the text was not
+  // taken, and the box says so.
+  const invalid = describedBy !== undefined || refused !== undefined;
 
   return (
     <>
@@ -418,22 +437,36 @@ export function ColourField({
           // what the document holds are one contract — and a second copy of it
           // beside the first is what drifts, silently, in the direction of
           // losing an edit.
-          <TextField
-            id={id}
-            control={control}
-            stored={stored}
+          <TypedColourSuggestions
+            fieldId={id}
             draft={draft}
-            setDraft={setDraft}
-            tokens={tokens}
-            describedBy={describes}
-            // The REFUSAL alone. `describes` also carries the contrast verdict,
-            // which is supplementary text and never a complaint.
-            invalid={describedBy !== undefined}
-            live={live}
-            // Remembered among Recent colours once, when the edit ends.
-            onType={typed}
-            onCommit={commitColour}
-          />
+            offered={choices}
+            onChoose={variable => {
+              setRefused(undefined);
+              commitInstead({ $token: variable.identity });
+            }}
+          >
+            <TextField
+              id={id}
+              control={control}
+              stored={stored}
+              draft={draft}
+              setDraft={value => {
+                // Typed in again: the box's refusal no longer describes it.
+                setRefused(undefined);
+                setDraft(value);
+              }}
+              tokens={tokens}
+              describedBy={describes}
+              // The REFUSAL alone. `describes` also carries the contrast
+              // verdict, which is supplementary text and never a complaint.
+              invalid={invalid}
+              live={live}
+              // Remembered among Recent colours once, when the edit ends.
+              onType={typed}
+              onCommit={typedCommit}
+            />
+          </TypedColourSuggestions>
         ) : (
           <ColourUnlink
             held={held}
@@ -447,10 +480,57 @@ export function ColourField({
           />
         )}
       </div>
+      {refused === undefined ? null : (
+        <p className="nx-inspector__error" id={refusalId} role="alert">
+          {`No color or variable is called "${refused}".`}
+        </p>
+      )}
       <ContrastNote id={noteId} contrast={contrast} />
-      <RawColourNote stored={stored} />
+      {/* Advice about the stored colour, not about text that was refused. */}
+      {invalid ? null : <RawColourNote stored={stored} />}
     </>
   );
+}
+
+/**
+ * The colour box's end-of-edit write.
+ *
+ * A variable's whole name connects it, ignoring case, spaces and hyphens, as
+ * the list under the box matches it. Anything else is written as typed, and
+ * the write decides whether it is a colour. Text refused there is said in the
+ * box's own words, and the write's own line is cleared by asking for the
+ * stored value again, which moves nothing: the document keeps the value from
+ * before the edit and only "No color or variable is called …" is shown.
+ */
+function useTypedColourCommit({
+  choices,
+  stored,
+  onCommit,
+  commitColour,
+  setRefused,
+}: {
+  choices: readonly SiteVariable[];
+  stored: StyleValue | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+  commitColour: (value: StyleValue | null) => CommitOutcome;
+  setRefused: (text: string | undefined) => void;
+}): (value: StyleValue | null) => CommitOutcome {
+  return value => {
+    setRefused(undefined);
+    if (typeof value !== "string") return commitColour(value);
+    const named = colourVariablesMatching(value, choices).find(
+      match => match.exact
+    );
+    if (named !== undefined) {
+      return commitColour({ $token: named.variable.identity });
+    }
+    const outcome = commitColour(value);
+    if (outcome === "refused") {
+      onCommit(stored ?? null);
+      setRefused(value.trim());
+    }
+    return outcome;
+  };
 }
 
 /**

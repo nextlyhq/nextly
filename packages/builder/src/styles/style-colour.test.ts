@@ -24,6 +24,7 @@ import {
   contrastObscuredAbove,
   colourHexOf,
   colourShowable,
+  colourVariablesMatching,
   variableFor,
   variableLabel,
   variablesFor,
@@ -1018,5 +1019,83 @@ describe("a colour picker's order", () => {
       .map(variable => variable.name)
       .filter(name => ["color.a", "color.b", "color.c"].includes(name));
     expect(names).toEqual(["color.c", "color.a", "color.b"]);
+  });
+});
+
+describe("the colour variables a typed colour box suggests", () => {
+  /** A colour variable as a field is offered it, light and dark. */
+  const colour = (
+    label: string,
+    light: string,
+    dark: string = light
+  ): SiteVariable => ({
+    identity: `color.${label.toLowerCase().replace(/\s+/g, ".")}`,
+    name: `color.${label.toLowerCase().replace(/\s+/g, ".")}`,
+    label,
+    pair: { light, dark },
+    kind: "color",
+    value: light,
+    swatch: light,
+  });
+  const YELLOW_500 = colour("Yellow 500", "#f5c518", "#e0b000");
+  const YELLOW_300 = colour("Yellow 300", "#fde68a");
+  const BRAND = colour("Brand", "#2563eb");
+  const OFFERED = [YELLOW_300, YELLOW_500, BRAND];
+  const labels = (text: string): string[] =>
+    colourVariablesMatching(text, OFFERED).map(match => match.variable.label);
+
+  it('lists both yellows for "yellow 5", the one it starts first', () => {
+    expect(labels("yellow 5")).toEqual(["Yellow 500", "Yellow 300"]);
+  });
+
+  it("ignores case, spaces and hyphens", () => {
+    expect(labels("YELLOW-500")[0]).toBe("Yellow 500");
+    expect(labels("yellow500")[0]).toBe("Yellow 500");
+    expect(labels("  Yellow   500 ")[0]).toBe("Yellow 500");
+  });
+
+  it("says which match is the variable's whole name", () => {
+    const [first, second] = colourVariablesMatching("yellow-500", OFFERED);
+    expect(first?.exact).toBe(true);
+    expect(second?.exact).toBe(false);
+    expect(colourVariablesMatching("yellow 5", OFFERED)[0]?.exact).toBe(false);
+  });
+
+  it("lists the variables holding a typed hex colour, in either mode", () => {
+    expect(labels("#f5c518")).toEqual(["Yellow 500"]);
+    expect(labels("#F5C518")).toEqual(["Yellow 500"]);
+    expect(labels("#e0b000")).toEqual(["Yellow 500"]);
+  });
+
+  it("lists by the colour a typed colour is, however it is written", () => {
+    expect(labels("rgb(37 99 235)")).toEqual(["Brand"]);
+  });
+
+  it("lists the yellows for a colour word that starts their names", () => {
+    expect(labels("yellow")).toEqual(["Yellow 300", "Yellow 500"]);
+  });
+
+  it("lists nothing for text no name or colour answers", () => {
+    expect(labels("teal")).toEqual([]);
+    expect(labels("")).toEqual([]);
+    expect(labels("   ")).toEqual([]);
+  });
+
+  it("matches the qualified label two variables of one name are shown by", () => {
+    const one = colour("Accent", "#111111");
+    const two = {
+      ...colour("Accent", "#222222"),
+      identity: "color.accent.two",
+    };
+    const both = colourVariablesMatching("accent", [one, two]);
+    expect(both.map(match => match.variable.identity)).toEqual([
+      one.identity,
+      two.identity,
+    ]);
+    // Each is a whole-name match only by its qualified label.
+    expect(both.every(match => match.exact)).toBe(false);
+    expect(
+      colourVariablesMatching("Accent (color.accent.two)", [one, two])[0]
+    ).toEqual({ variable: two, exact: true });
   });
 });

@@ -579,6 +579,108 @@ export function variableLabel(
   return shared ? `${token.label} (${token.identity})` : token.label;
 }
 
+/** A colour variable that answers what was typed into a colour box. */
+export interface TypedColourMatch {
+  readonly variable: SiteVariable;
+  /**
+   * Whether the text is this variable's whole name, and no other variable's:
+   * the one case a box connects without a choice being made.
+   */
+  readonly exact: boolean;
+}
+
+/**
+ * Text as a typed name is compared: lower case, without its spaces and
+ * hyphens, so "Yellow-500", "yellow500" and "yellow 500" are one name.
+ */
+function squashedName(text: string): string {
+  return text.toLowerCase().replace(/[\s-]+/g, "");
+}
+
+/** How well a variable's names answer the typed text; lower is better. */
+const NAME_RANKS = {
+  whole: 0,
+  start: 1,
+  within: 2,
+  firstWord: 3,
+} as const;
+
+/**
+ * How well one variable answers typed text by name, or `undefined` when it
+ * does not: its whole name, the start of one, somewhere in one, or only the
+ * typed text's first word starting it ("yellow" of "yellow 5" for "Yellow
+ * 300"). Asked of every name the box answers to: the label the list shows,
+ * that label qualified where two share it, and the code name.
+ */
+function nameRank(
+  variable: SiteVariable,
+  offered: readonly SiteVariable[],
+  typed: string,
+  firstWord: string
+): number | undefined {
+  const names = [
+    variable.label,
+    variableLabel(variable, offered),
+    variable.name,
+  ].map(squashedName);
+  if (names.includes(typed)) return NAME_RANKS.whole;
+  if (names.some(name => name.startsWith(typed))) return NAME_RANKS.start;
+  if (typed.length >= 2 && names.some(name => name.includes(typed))) {
+    return NAME_RANKS.within;
+  }
+  if (firstWord.length >= 2 && names.some(name => name.startsWith(firstWord))) {
+    return NAME_RANKS.firstWord;
+  }
+  return undefined;
+}
+
+/**
+ * The colour variables a colour box suggests for what is typed in it, best
+ * first: those holding the colour the text is (a hex code, `rgb()`, a colour
+ * word), in light or dark, then those whose name it matches, ignoring case,
+ * spaces and hyphens.
+ *
+ * The one answer to "which variable does this text mean", for the list under
+ * a typed box and for the picker's search alike. The colour is read by
+ * {@link colourHexOf}, the engine's reading, so a value matches here exactly
+ * when the box would store it as that colour.
+ *
+ * A whole name is `exact` only where no other variable shares it, for the
+ * reason `tokenForTypedName` gives: connecting one of two would store an
+ * identity the author could not have predicted.
+ */
+export function colourVariablesMatching(
+  text: string,
+  offered: readonly SiteVariable[]
+): readonly TypedColourMatch[] {
+  const typed = squashedName(text);
+  if (typed === "") return [];
+  const hex = colourHexOf(text.trim(), undefined)?.toLowerCase();
+  const firstWord = squashedName(text.trim().split(/[\s-]+/)[0] ?? "");
+  const ranked = offered.flatMap(variable => {
+    const holds =
+      hex !== undefined &&
+      [variable.pair.light, variable.pair.dark].some(
+        value => value?.toLowerCase() === hex
+      );
+    // The colour it holds ranks above any name, so "#f5c518" leads with
+    // the variable that is that colour.
+    const rank = holds ? -1 : nameRank(variable, offered, typed, firstWord);
+    return rank === undefined ? [] : [{ variable, rank }];
+  });
+  ranked.sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      a.variable.label.localeCompare(b.variable.label) ||
+      a.variable.identity.localeCompare(b.variable.identity)
+  );
+  const wholeNames = ranked.filter(entry => entry.rank === NAME_RANKS.whole);
+  return ranked.map(({ variable, rank }) => ({
+    variable,
+    exact: rank === NAME_RANKS.whole && wholeNames.length === 1,
+  }));
+}
+
 /**
  * One site token in the forms a control needs it in.
  *
