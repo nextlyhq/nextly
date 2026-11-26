@@ -86,9 +86,9 @@ DATABASE_URL=file:./dev.db
 
 ## Runtime
 
-| Variable   | Required | Default       | Description                                                                                        |
-| ---------- | -------- | ------------- | -------------------------------------------------------------------------------------------------- |
-| `NODE_ENV` | No       | `development` | Runtime environment: `development`, `production`, or `test`. Affects production-only checks below. |
+| Variable   | Required | Default | Description                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV` | No       | —       | Runtime environment: `development`, `production`, or `test`. Affects production-only checks below. `next dev` and `next start` set it; a script run outside Next.js leaves it unset unless you set it, and a start with it unset applies no schema change itself, as under `test`: it registers the configuration and changes no table, so a changed definition stays pending until `nextly migrate`. |
 
 ---
 
