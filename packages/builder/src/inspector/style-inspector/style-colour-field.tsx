@@ -576,6 +576,18 @@ function useTypedColourCommit({
     if (isTokenRef(value) && typed !== "" && checkColorValue(typed) === null) {
       return commitColour(typed);
     }
+    // A variable the field read the name of is checked against the names the
+    // list matches too: one another variable shares, spaced or hyphenated
+    // differently, is refused as shared rather than picked between.
+    if (isTokenRef(value) && typed !== "") {
+      const whole = colourVariablesMatching(typed, choices).filter(
+        match => match.whole
+      );
+      if (whole.length > 1) {
+        setRefused({ text: typed, shared: true });
+        return "refused";
+      }
+    }
     if (typeof value !== "string") return commitColour(value);
     if (checkColorValue(value.trim()) === null) return commitColour(value);
     const matches = colourVariablesMatching(value, choices);

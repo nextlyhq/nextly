@@ -126,6 +126,13 @@ export function TypedColourSuggestions({
   const optionId = (at: number): string => `${listId}-option-${String(at)}`;
   const active = open && index >= 0 ? optionId(index) : undefined;
   useComboboxAttributes(fieldId, listId, open, active);
+  // The highlighted entry kept in sight as the arrows move it through a list
+  // taller than the popup.
+  React.useEffect(() => {
+    if (active !== undefined) {
+      document.getElementById(active)?.scrollIntoView({ block: "nearest" });
+    }
+  }, [active]);
 
   const choose = (variable: SiteVariable): void => {
     setDismissedAt(draft);
@@ -196,7 +203,12 @@ export function TypedColourSuggestions({
               setFocused(false);
             }
           }}
-          onChangeCapture={() => setTyped(true)}
+          onChangeCapture={() => {
+            setTyped(true);
+            // Escape closed the list for the text it was pressed on; any edit
+            // after it offers the list again, even back to the same text.
+            setDismissedAt(null);
+          }}
           onKeyDownCapture={onKeyDownCapture}
         >
           {children}

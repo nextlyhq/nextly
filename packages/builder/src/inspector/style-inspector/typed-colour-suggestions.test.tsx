@@ -32,6 +32,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest";
 
 import { useEditorState, type EditorState } from "../../editor-state";
@@ -53,6 +54,7 @@ afterEach(cleanup);
 afterAll(clearBlocks);
 
 beforeEach(() => {
+  siteTokens = TOKENS;
   clearBlocks();
   registerBlocks(
     [
@@ -123,6 +125,8 @@ const PAGE: BlockDocument = {
 } as BlockDocument;
 
 let editorRef: EditorState | null = null;
+/** The site's variables a test runs with: {@link TOKENS} unless it says. */
+let siteTokens: SiteTokenSet = TOKENS;
 
 function editor(): EditorState {
   if (editorRef === null) throw new Error("no editor rendered");
@@ -132,7 +136,7 @@ function editor(): EditorState {
 function Host(): React.JSX.Element {
   const state = useEditorState({ initialDocument: PAGE });
   editorRef = state;
-  return <InspectorPanel editor={state} tokens={TOKENS} />;
+  return <InspectorPanel editor={state} tokens={siteTokens} />;
 }
 
 function colourOf(): unknown {
@@ -411,5 +415,59 @@ describe("a colour box over a variable's own typing", () => {
     expect(colourOf()).toEqual({ $token: "color.yellow.300" });
     act(() => editor().undo());
     expect(colourOf()).toBe("#0000ff");
+  });
+});
+
+describe("a colour box's list, over a longer edit", () => {
+  it("refuses a name two variables share once spaces and hyphens are set aside", () => {
+    siteTokens = {
+      tokens: [
+        ...TOKENS.tokens,
+        {
+          name: "color.yellow.500b",
+          label: "Yellow-500",
+          kind: "color",
+          values: { light: "#f0c000" },
+        },
+      ],
+    };
+    const box = mount();
+    typeInto(box, "Yellow 500");
+    fireEvent.blur(box);
+    expect(colourOf()).toBe("#0000ff");
+    expect(
+      screen.getAllByRole("alert").map(alert => alert.textContent)
+    ).toEqual([
+      'More than one variable is called "Yellow 500". Choose one from the list.',
+    ]);
+  });
+
+  it("offers the list again after Escape once the text is edited, even back to the same text", () => {
+    const box = mount();
+    typeInto(box, "yellow 5");
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(suggestions()).toEqual([]);
+    fireEvent.change(box, { target: { value: "yellow 50" } });
+    expect(suggestions()).toEqual(["Yellow 500", "Yellow 300"]);
+    fireEvent.change(box, { target: { value: "yellow 5" } });
+    expect(suggestions()).toEqual(["Yellow 500", "Yellow 300"]);
+  });
+
+  it("keeps the highlighted entry in sight as the arrows move it", () => {
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    try {
+      const box = mount();
+      typeInto(box, "yellow");
+      scrolled.mockClear();
+      fireEvent.keyDown(box, { key: "ArrowDown" });
+      fireEvent.keyDown(box, { key: "ArrowDown" });
+      const active = box.getAttribute("aria-activedescendant");
+      expect(active).not.toBeNull();
+      expect(scrolled.mock.contexts.at(-1)).toBe(
+        document.getElementById(active ?? "")
+      );
+    } finally {
+      scrolled.mockRestore();
+    }
   });
 });
