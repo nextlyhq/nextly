@@ -201,7 +201,7 @@ describe("the glossary", () => {
         rule =>
           (rule.where === undefined ||
             rule.where.some(prefix => path.startsWith(prefix))) &&
-          rule.test(text)
+          rule.test(text, path)
       ).map(rule => `${rule.id}: ${text}`)
     );
     expect(used).toEqual([]);
