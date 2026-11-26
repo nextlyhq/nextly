@@ -30,11 +30,13 @@ import {
   type FreshDatabase,
   withFreshDatabase,
 } from "../../../../__tests__/helpers/fresh-database";
-import { SETUP_TOKEN_META_KEY } from "../../../../auth/setup-token/setup-token";
 import { loadDialectTables } from "../../../../database/dialect-tables";
 import { getCoreSchema } from "../../../../schemas/core-schema";
-import { PRINCIPAL_DIGEST_KEY_META_KEY } from "../../../audit/principal-digest";
-import { CORE_SECRET_ANSWERS } from "../core-secrets";
+import {
+  CORE_SECRET_ANSWERS,
+  SECRET_META_KEY_PREFIXES,
+  SECRET_META_KEYS,
+} from "../core-secrets";
 import { createSecretGuard } from "../guard";
 import { findSeededSecrets, type OutputPart, type SeededSecret } from "../scan";
 
@@ -175,32 +177,6 @@ const SEEDERS: Record<
     });
     return { secrets: [{ label: "api_keys", value }], plain: [] };
   },
-  nextly_meta: async insert => {
-    const token = seed();
-    const digestKey = seed();
-    const plain = seed();
-    // Written as JSON text: the column is JSON on PostgreSQL and MySQL and
-    // plain text on SQLite, and a JSON string is stored by all three.
-    await insert("nextly_meta", {
-      key: SETUP_TOKEN_META_KEY,
-      value: JSON.stringify({ digest: token }),
-    });
-    await insert("nextly_meta", {
-      key: PRINCIPAL_DIGEST_KEY_META_KEY,
-      value: JSON.stringify(`sealed:${digestKey}`),
-    });
-    await insert("nextly_meta", {
-      key: "seed.marker",
-      value: JSON.stringify(plain),
-    });
-    return {
-      secrets: [
-        { label: "nextly_meta setup token", value: token },
-        { label: "nextly_meta digest key", value: digestKey },
-      ],
-      plain: [plain],
-    };
-  },
   "nextly_document_lock.claim_token": async (insert, userId) => {
     const value = seed();
     const plain = seed();
@@ -259,24 +235,15 @@ const SEEDERS: Record<
       plain: [],
     };
   },
-  "nextly_received_webhooks.claim_token": async insert => {
+  "nextly_jobs.input": async insert => {
     const value = seed();
     const plain = seed();
-    await insert("nextly_received_webhooks", {
-      delivery_key: randomUUID(),
-      owner: "fixture",
-      provider: "stripe",
-      delivery_id: plain,
-      freshness: "fresh",
-      status: "pending",
-      claim_token: value,
-      received_at: new Date(),
-      prune_at: new Date(Date.now() + 60_000),
+    await insert("nextly_jobs", {
+      id: randomUUID(),
+      slug: plain,
+      input: { link: `https://example.test/reset?token=${value}` },
     });
-    return {
-      secrets: [{ label: "nextly_received_webhooks.claim_token", value }],
-      plain: [plain],
-    };
+    return { secrets: [{ label: "nextly_jobs.input", value }], plain: [plain] };
   },
   "email_providers.configuration": async insert => {
     const value = seed();
@@ -350,6 +317,50 @@ async function seedWebhook(insert: Insert): Promise<Seeded> {
   };
 }
 
+/**
+ * Each meta key that is secret, and one key under each secret prefix, as the
+ * places they are seeded under. A row of `nextly_meta` is secret by its key,
+ * so each key is a place of its own: one seeded key would leave the others
+ * untested.
+ */
+const META_PLACES: ReadonlyArray<{ place: string; key: string }> = [
+  ...[...SECRET_META_KEYS].map(key => ({ place: `nextly_meta[${key}]`, key })),
+  ...SECRET_META_KEY_PREFIXES.map(prefix => ({
+    place: `nextly_meta[${prefix}*]`,
+    key: `${prefix}fixture`,
+  })),
+];
+
+async function seedMeta(insert: Insert): Promise<Seeded> {
+  const secrets: SeededSecret[] = [];
+  for (const { place, key } of META_PLACES) {
+    const value = seed();
+    // Written as JSON text: the column is JSON on PostgreSQL and MySQL and
+    // plain text on SQLite, and a JSON string is stored by all three.
+    await insert("nextly_meta", {
+      key,
+      value: JSON.stringify(`sealed:${value}`),
+    });
+    secrets.push({ label: place, value });
+  }
+  const plain = seed();
+  await insert("nextly_meta", {
+    key: "seed.marker",
+    value: JSON.stringify(plain),
+  });
+  return { secrets, plain: [plain] };
+}
+
+/**
+ * A plain row in a table that holds no secret, so a guard that dropped every
+ * row of such a table fails the "the rest still leaves" check too.
+ */
+async function seedPlainTable(insert: Insert): Promise<Seeded> {
+  const plain = seed();
+  await insert("roles", { id: randomUUID(), name: plain, slug: plain });
+  return { secrets: [], plain: [plain] };
+}
+
 /** Every place the list declares a secret, in the keys the seeders use. */
 function declaredPlaces(): string[] {
   return Object.entries(CORE_SECRET_ANSWERS).flatMap(([table, answer]) => {
@@ -357,8 +368,11 @@ function declaredPlaces(): string[] {
       case "nothing":
         return [];
       case "every-row":
-      case "some-rows":
         return [table];
+      case "some-rows":
+        return table === "nextly_meta"
+          ? META_PLACES.map(each => each.place)
+          : [table];
       case "columns":
         return answer.columns.map(column => `${table}.${column.name}`);
     }
@@ -381,6 +395,8 @@ async function seedEverything(fresh: FreshDatabase): Promise<Seeded> {
     if (place !== "users.password_hash") all.push(await seeder(insert, userId));
   }
   all.push(await seedWebhook(insert));
+  all.push(await seedMeta(insert));
+  all.push(await seedPlainTable(insert));
   return {
     secrets: all.flatMap(each => each.secrets),
     plain: all.flatMap(each => each.plain),
@@ -416,9 +432,13 @@ function labelsFound(parts: OutputPart[], seeds: SeededSecret[]): string[] {
 
 describe("the secret guard over every core table", () => {
   it("has a seeder for every place the list declares a secret", () => {
-    expect([...Object.keys(SEEDERS), ...WEBHOOK_PLACES].sort()).toEqual(
-      declaredPlaces().sort()
-    );
+    expect(
+      [
+        ...Object.keys(SEEDERS),
+        ...WEBHOOK_PLACES,
+        ...META_PLACES.map(each => each.place),
+      ].sort()
+    ).toEqual(declaredPlaces().sort());
   });
 
   it.each(availableDialects())(

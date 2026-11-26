@@ -14,6 +14,17 @@
  * does. That test also checks each named column exists on every dialect, so a
  * renamed column cannot leave a stale name here that silently stops matching.
  *
+ * What counts as a secret: a value that lets whoever holds it act as a
+ * person, a key or the site (a token, a key, a code, a credential sealed
+ * under the site's secret), and a value core cannot read that a plugin may
+ * fill with one (a job's input). A lease or lock holder that only the server
+ * ever sees is not one; a token handed to a browser to prove it holds a lock
+ * is.
+ *
+ * Tables Nextly has retired (`sessions`, `accounts` on an upgraded install)
+ * are not core tables and have no answer here, so the guard refuses their
+ * rows rather than guessing.
+ *
  * Names are the tables' and columns' names in the database (`token_hash`, not
  * `tokenHash`), because those are what a portable archive carries.
  *
@@ -22,6 +33,7 @@
 
 import { SETUP_CLAIM_META_KEY } from "../../../auth/setup-token/setup-gate";
 import { SETUP_TOKEN_META_KEY } from "../../../auth/setup-token/setup-token";
+import { digestKeyMetaKey } from "../../../plugins/security/keyed-digest";
 import { PRINCIPAL_DIGEST_KEY_META_KEY } from "../../audit/principal-digest";
 
 /**
@@ -85,11 +97,29 @@ function flaggedSecret(value: unknown): boolean {
 }
 
 /** The `nextly_meta` keys whose value is a credential or a key. */
-const SECRET_META_KEYS: ReadonlySet<string> = new Set([
+export const SECRET_META_KEYS: ReadonlySet<string> = new Set([
   SETUP_TOKEN_META_KEY,
   SETUP_CLAIM_META_KEY,
   PRINCIPAL_DIGEST_KEY_META_KEY,
 ]);
+
+/**
+ * The starts of `nextly_meta` keys that hold one secret per owner: each
+ * plugin's digest key. Taken from the function that names those keys, with
+ * an empty owner, so the two cannot spell the prefix differently.
+ */
+export const SECRET_META_KEY_PREFIXES: readonly string[] = [
+  digestKeyMetaKey(""),
+];
+
+/** Whether a `nextly_meta` row's key names a secret. */
+function isSecretMetaKey(value: unknown): boolean {
+  if (typeof value !== "string") return true;
+  return (
+    SECRET_META_KEYS.has(value) ||
+    SECRET_META_KEY_PREFIXES.some(prefix => value.startsWith(prefix))
+  );
+}
 
 /**
  * The answer for every core table, keyed by its name in the database.
@@ -140,8 +170,8 @@ export const CORE_SECRET_ANSWERS: Readonly<Record<string, SecretAnswer>> = {
   nextly_meta: {
     holds: "some-rows",
     decidedBy: "key",
-    isSecret: value => typeof value === "string" && SECRET_META_KEYS.has(value),
-    why: "the setup token, the setup claim and the audit digest key are kept here beside plain flags",
+    isSecret: isSecretMetaKey,
+    why: "the setup token, the setup claim, the audit digest key and each plugin's digest key are kept here beside plain flags",
   },
   nextly_field_group_lock: NOTHING,
   nextly_schema_lock: NOTHING,
@@ -167,16 +197,9 @@ export const CORE_SECRET_ANSWERS: Readonly<Record<string, SecretAnswer>> = {
     holds: "every-row",
     why: "each row is a one-time link or code a plugin issued",
   },
-  nextly_received_webhooks: {
-    holds: "columns",
-    columns: [
-      {
-        name: "claim_token",
-        kind: "secret",
-        why: "the token that lets its holder complete or release a delivery's claim",
-      },
-    ],
-  },
+  // Its claim token is a lease only the server holds, like the job and
+  // delivery leases beside it: nothing outside the server is handed it.
+  nextly_received_webhooks: NOTHING,
   nextly_plugin_events: NOTHING,
   nextly_plugin_event_deliveries: NOTHING,
   nextly_limit_store: NOTHING,
@@ -231,7 +254,16 @@ export const CORE_SECRET_ANSWERS: Readonly<Record<string, SecretAnswer>> = {
   nextly_releases: NOTHING,
   nextly_release_members: NOTHING,
   nextly_version_pins: NOTHING,
-  nextly_jobs: NOTHING,
+  nextly_jobs: {
+    holds: "columns",
+    columns: [
+      {
+        name: "input",
+        kind: "secret",
+        why: "what a job was given, which core cannot read and a plugin may fill with a live link or code",
+      },
+    ],
+  },
   nextly_events: NOTHING,
   nextly_webhooks: {
     holds: "columns",

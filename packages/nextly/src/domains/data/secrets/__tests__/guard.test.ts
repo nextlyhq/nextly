@@ -9,9 +9,10 @@
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { SETUP_TOKEN_META_KEY } from "../../../../auth/setup-token/setup-token";
 import { loadDialectTables } from "../../../../database/dialect-tables";
 import { NextlyError } from "../../../../errors/nextly-error";
+import { digestKeyMetaKey } from "../../../../plugins/security/keyed-digest";
+import { SECRET_META_KEYS } from "../core-secrets";
 import { createSecretGuard, type SecretGuard } from "../guard";
 
 // Built once the dialects are loaded: the guard reads the core schema.
@@ -114,10 +115,14 @@ describe("createSecretGuard", () => {
     }
   );
 
-  it("keeps back the setup token's meta row and keeps a plain one", () => {
-    expect(
-      guard.row("nextly_meta", { key: SETUP_TOKEN_META_KEY, value: "{}" })
-    ).toBeNull();
+  it.each([...SECRET_META_KEYS, digestKeyMetaKey("forms")])(
+    "keeps back the meta row under %s",
+    key => {
+      expect(guard.row("nextly_meta", { key, value: "{}" })).toBeNull();
+    }
+  );
+
+  it("keeps a plain meta row", () => {
     const plain = { key: "public-role-created", value: "true" };
     expect(guard.row("nextly_meta", plain)).toEqual(plain);
   });
@@ -145,16 +150,30 @@ describe("createSecretGuard", () => {
     ).toBe("row-keys-are-not-column-names");
   });
 
+  it("drops a job's input, which core cannot read", () => {
+    expect(
+      guard.row("nextly_jobs", { id: "j1", slug: "send", input: { link: "x" } })
+    ).toEqual({ id: "j1", slug: "send" });
+  });
+
+  const pluginTables = {
+    plugin_forms_tokens: {
+      answer: { holds: "every-row", why: "fixture" },
+      columns: ["id"],
+    },
+    plugin_forms_entries: {
+      answer: {
+        holds: "columns",
+        columns: [{ name: "captcha_key", kind: "secret", why: "fixture" }],
+      },
+      columns: ["id", "captcha_key", "body"],
+    },
+  } as const;
+
   it("applies a writer's answer for a table outside core", () => {
     const withPlugin = createSecretGuard({
       dialect: "postgresql",
-      otherTables: {
-        plugin_forms_tokens: { holds: "every-row", why: "fixture" },
-        plugin_forms_entries: {
-          holds: "columns",
-          columns: [{ name: "captcha_key", kind: "secret", why: "fixture" }],
-        },
-      },
+      otherTables: pluginTables,
     });
     expect(withPlugin.row("plugin_forms_tokens", { id: "t" })).toBeNull();
     expect(
@@ -166,15 +185,101 @@ describe("createSecretGuard", () => {
     ).toEqual({ id: "e", body: "hi" });
   });
 
+  it("refuses a plugin table's row keyed by property names", () => {
+    const withPlugin = createSecretGuard({
+      dialect: "postgresql",
+      otherTables: pluginTables,
+    });
+    expect(
+      refusalReason(() =>
+        withPlugin.row("plugin_forms_entries", { id: "e", captchaKey: "k" })
+      )
+    ).toBe("row-keys-are-not-column-names");
+  });
+
+  it("refuses a plugin answer naming a column its table lacks", () => {
+    expect(
+      refusalReason(() =>
+        createSecretGuard({
+          dialect: "postgresql",
+          otherTables: {
+            plugin_forms_entries: {
+              answer: pluginTables.plugin_forms_entries.answer,
+              columns: ["id", "body"],
+            },
+          },
+        })
+      )
+    ).toBe("answer-names-a-column-the-table-lacks");
+  });
+
   it("refuses a second answer for a core table", () => {
     expect(
       refusalReason(() =>
         createSecretGuard({
           dialect: "postgresql",
-          otherTables: { api_keys: { holds: "nothing" } },
+          otherTables: {
+            api_keys: { answer: { holds: "nothing" }, columns: ["id"] },
+          },
         })
       )
     ).toBe("secret-answer-for-core-table");
+  });
+
+  it("drops a secret column a plugin added to a core table and keeps a plain one", () => {
+    const widened = createSecretGuard({
+      dialect: "postgresql",
+      contributedColumns: {
+        users: [
+          { name: "forms_reset_code", kind: "secret" },
+          { name: "forms_nickname", kind: "plain" },
+        ],
+      },
+    });
+    expect(
+      widened.row("users", {
+        id: "u1",
+        forms_reset_code: "c",
+        forms_nickname: "Ada",
+      })
+    ).toEqual({ id: "u1", forms_nickname: "Ada" });
+    // Without the declaration, the same row is refused rather than let through.
+    expect(
+      refusalReason(() =>
+        guard.row("users", { id: "u1", forms_reset_code: "c" })
+      )
+    ).toBe("row-keys-are-not-column-names");
+  });
+
+  it.each([
+    [
+      { api_keys: [{ name: "extra", kind: "plain" as const }] },
+      "contribution-to-a-table-that-takes-none",
+    ],
+    [
+      { users: [{ name: "email", kind: "plain" as const }] },
+      "contribution-reuses-a-core-column",
+    ],
+  ])(
+    "refuses a contribution it cannot place (%j)",
+    (contributedColumns, reason) => {
+      expect(
+        refusalReason(() =>
+          createSecretGuard({ dialect: "postgresql", contributedColumns })
+        )
+      ).toBe(reason);
+    }
+  );
+
+  it("refuses a registry name that is another core table's", () => {
+    expect(
+      refusalReason(() =>
+        createSecretGuard({
+          dialect: "sqlite",
+          fieldGroupRegistryTable: "api_keys",
+        })
+      )
+    ).toBe("registry-name-is-a-core-table");
   });
 
   it("answers for the field-group registry under the name the database gives it", () => {
@@ -189,7 +294,7 @@ describe("createSecretGuard", () => {
   it("returns only the rows that may leave", () => {
     expect(
       guard.rows("nextly_meta", [
-        { key: SETUP_TOKEN_META_KEY, value: "{}" },
+        { key: [...SECRET_META_KEYS][0], value: "{}" },
         { key: "public-role-created", value: "true" },
       ])
     ).toEqual([{ key: "public-role-created", value: "true" }]);
