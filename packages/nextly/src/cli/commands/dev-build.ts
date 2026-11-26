@@ -9,6 +9,8 @@
  * @module cli/commands/dev-build
  */
 
+import { resolve } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import {
@@ -18,6 +20,7 @@ import {
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { dashboardPinsPresent } from "../../domains/dashboard/dashboard-pins";
+import type { FieldGroupNaming } from "../../domains/field-groups/services/field-group-storage-names";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
@@ -205,7 +208,13 @@ export async function publishExtensionSchema(
   const capabilities = (adapter as unknown as DrizzleAdapter).getCapabilities();
   // Each field group under its stored table, so a contribution to a group attaches to the table
   // it is in: `fg_<slug>` on a site whose field-group storage was migrated.
-  const fieldGroups = await storedFieldGroupsOf(adapter, configResult.config);
+  const fieldGroups = await storedFieldGroupsOf(
+    adapter,
+    configResult.config,
+    // Asked only where the database has no registry: a dry run over an empty one, which a real
+    // run would have set up by now (`ensureCoreTables`).
+    () => newDatabaseNamingOf(configResult.config, context.cwd)
+  );
   await compileAndPublishExtensionSchema({
     ...(fieldGroups === undefined
       ? {}
@@ -1302,15 +1311,28 @@ async function storedFieldGroupTableOf(
 /** Where each declared field group is stored, as the extension compile takes it. */
 async function storedFieldGroupsOf(
   adapter: unknown,
-  config: { fieldGroups?: readonly unknown[] }
+  config: { fieldGroups?: readonly unknown[] },
+  newDatabaseNaming?: () => Promise<FieldGroupNaming>
 ) {
   const { declaredFieldGroupStorage } = await import(
     "../../domains/field-groups/services/field-group-stored-tables"
   );
   return declaredFieldGroupStorage(
     adapter as Parameters<typeof declaredFieldGroupStorage>[0],
-    config.fieldGroups
+    config.fieldGroups,
+    newDatabaseNaming
   );
+}
+
+/** The names an empty database of the project starts its field groups on. */
+export async function newDatabaseNamingOf(
+  config: LoadConfigResult["config"],
+  cwd: string
+): Promise<FieldGroupNaming> {
+  const { emptyDatabaseFieldGroupNaming } = await import(
+    "../../domains/schema/migrate/new-database-naming"
+  );
+  return emptyDatabaseFieldGroupNaming(resolve(cwd, config.db.migrationsDir));
 }
 
 export async function ensureLocalizedCompanions(

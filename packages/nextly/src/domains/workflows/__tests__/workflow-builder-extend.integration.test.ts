@@ -100,7 +100,7 @@ async function columnsOf(adapter: Adapter, table: string): Promise<string[]> {
 
 async function storedFieldNames(
   adapter: Adapter,
-  table: "dynamic_collections" | "dynamic_components",
+  table: "dynamic_collections" | "dynamic_field_groups",
   slug: string
 ): Promise<string[]> {
   const rows = await adapter.executeQuery<{ fields: string }>(
@@ -192,9 +192,9 @@ describe("a boot refused for its workflows, beside a Builder reconcile (sqlite)"
     });
 
     const after = await leftBehind();
-    expect(await columnsOf(after, "comp_hero")).not.toContain("secret");
+    expect(await columnsOf(after, "fg_hero")).not.toContain("secret");
     expect(
-      await storedFieldNames(after, "dynamic_components", "hero")
+      await storedFieldNames(after, "dynamic_field_groups", "hero")
     ).not.toContain("secret");
   });
 });

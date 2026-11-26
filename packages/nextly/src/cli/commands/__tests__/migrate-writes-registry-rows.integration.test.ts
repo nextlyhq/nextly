@@ -31,6 +31,8 @@ import { createAdapter } from "../../../database/factory";
 import { CollectionRegistryService } from "../../../domains/collections/services/collection-registry-service";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { container } from "../../../di/container";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
+import { buildFieldGroupRegistryTable } from "../../../domains/field-groups/storage/registry-schemas";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { withMigrateLock } from "../../../domains/schema/pipeline/locks";
 import { mutateManifest } from "../../../domains/schema/ui-schema/mutate";
@@ -345,6 +347,10 @@ interface Selecting {
   };
 }
 
+/** The field-group registry a new site starts on. */
+const fieldGroupRegistryOf = (dialect: TestDialect) =>
+  buildFieldGroupRegistryTable(dialect, MIGRATION_TARGET.registryTable);
+
 /** The collection registry row of `slug`, or undefined. */
 async function collectionRow(
   t: TestNextly,
@@ -367,7 +373,7 @@ async function registryRows(
   return {
     collections: await db.select().from(tables.dynamicCollections),
     singles: await db.select().from(tables.dynamicSingles),
-    fieldGroups: await db.select().from(tables.dynamicFieldGroups),
+    fieldGroups: await db.select().from(fieldGroupRegistryOf(dialect)),
   };
 }
 
@@ -638,7 +644,7 @@ describe.each(getConfiguredTestDialects())(
       const site = (await db.select().from(tables.dynamicSingles)).find(
         row => row.slug === "rr_site"
       );
-      const hero = (await db.select().from(tables.dynamicFieldGroups)).find(
+      const hero = (await db.select().from(fieldGroupRegistryOf(dialect))).find(
         row => row.slug === "rr_hero"
       );
       // A Single also holds the system fields `defineSingle` adds.

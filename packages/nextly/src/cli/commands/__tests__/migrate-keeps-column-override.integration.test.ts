@@ -38,7 +38,7 @@ import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/in
 import { normalizeType } from "../../../domains/schema/pipeline/diff/normalize-type";
 import type { TableSpec } from "../../../domains/schema/pipeline/diff/types";
 import { resolveSingleTableName } from "../../../domains/singles/services/resolve-single-table-name";
-import { resolveComponentTableName } from "../../../domains/schema/utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../../domains/field-groups/services/field-group-storage-names";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -70,7 +70,7 @@ vi.mock("../../utils/config-loader", async importOriginal => ({
 
 const POSTS_TABLE = "dc_mo_posts";
 const SITE_TABLE = resolveSingleTableName({ slug: "mo_site" });
-const SEO_TABLE = resolveComponentTableName("mo_seo");
+const SEO_TABLE = fieldGroupTableNameFor("current", "mo_seo");
 const TABLES = [POSTS_TABLE, SITE_TABLE, SEO_TABLE] as const;
 
 /** Each table's overridden string column. */

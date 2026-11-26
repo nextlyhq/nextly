@@ -36,8 +36,17 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
+import {
+  storageNamesFor,
+  type FieldGroupNaming,
+} from "../../domains/field-groups/services/field-group-storage-names";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
+import {
+  answerLanguageRefusals,
+  recordedAnswerLanguage,
+  refuseAnswersInAnotherLanguage,
+} from "../../domains/i18n/migration/answer-language";
 import {
   isLocalizationIntentRefusal,
   parseLocalizationIntent,
@@ -49,6 +58,7 @@ import {
   filesWithinStep,
   stepContinuedNotice,
 } from "../../domains/i18n/migration/step-windows";
+import { siteDefaultLanguage } from "../../domains/i18n/migration/transition-recorder";
 import { databaseIdentity } from "../../domains/schema/builder-save/saved-database";
 import {
   recheckBeforeFiles,
@@ -133,6 +143,13 @@ import {
   withEntityCoverage,
 } from "../../domains/schema/migrate/entity-shared-rows";
 import {
+  isFieldGroupTransition,
+  refuseFieldGroupTransitionOnLegacy,
+  refuseMovedStorageBehindLegacyHistory,
+  refuseTypeColumnsHistoryDoesNotRecord,
+  underDatabaseFieldGroupNames,
+} from "../../domains/schema/migrate/field-group-history";
+import {
   readDeletionFacts,
   runDeletions,
   runStatements,
@@ -154,6 +171,10 @@ import {
   runMigrationStatements,
   type MigrationUnit,
 } from "../../domains/schema/migrate/migration-transaction";
+import {
+  isNewDatabaseHistoryUnreadable,
+  newDatabaseFieldGroupNaming,
+} from "../../domains/schema/migrate/new-database-naming";
 import {
   markedFileChange,
   readOldBuilderLedger,
@@ -276,6 +297,7 @@ import {
   EMPTY_SNAPSHOT,
   isOlderFormatSnapshot,
   parseSnapshotFile,
+  snapshotFieldGroupNaming,
   type SnapshotFile,
 } from "../../domains/schema/migrate-create/snapshot-io";
 import {
@@ -509,6 +531,8 @@ interface ParsedMigration {
    * both apply verbatim, which is what they have always done.
    */
   localization?: LocalizationMigrationIntent;
+  /** The language its header records for its answers (`recordedAnswerLanguage`), where it does. */
+  answersIn?: string;
   /** Timestamp extracted from filename */
   timestamp: string;
   /** Source of the migration (core bundled or app) */
@@ -838,7 +862,35 @@ export async function runMigrate(
     const serverConstructs = (
       adapter as unknown as DrizzleAdapter
     ).getCapabilities();
+    // Each field group's stored table and type column, so a contribution to a group is compiled,
+    // and its ownership recorded, against the table the group is in: `fg_<slug>` on a site whose
+    // field-group storage was migrated.
+    const { declaredFieldGroupStorage } = await import(
+      "../../domains/field-groups/services/field-group-stored-tables"
+    );
+    // A database this run sets up for the first time has no registry yet, and is set up on the
+    // names its history keeps (`newDatabaseFieldGroupNaming`), so its groups compile on them.
+    const fieldGroups = await declaredFieldGroupStorage(
+      adapter as unknown as DrizzleAdapter,
+      configResult.config.fieldGroups,
+      // A newest snapshot that is no snapshot says no names here: the run's own reading of the
+      // folder names the file and refuses it, before Phase 1 asks again.
+      () =>
+        newDatabaseFieldGroupNaming({
+          adapter,
+          migrationsDir: appMigrationsDir,
+        }).catch((error: unknown) => {
+          if (isNewDatabaseHistoryUnreadable(error)) return undefined;
+          throw error;
+        })
+    );
     const extensionSchema = await compileExtensionSchema({
+      ...(fieldGroups === undefined
+        ? {}
+        : {
+            fieldGroupTables: fieldGroups.tables,
+            fieldGroupTypeColumns: fieldGroups.typeColumns,
+          }),
       dialect,
       plugins: configResult.config.plugins ?? [],
       config: configResult.config,
@@ -901,6 +953,11 @@ export async function runMigrate(
         plugins: configResult.config.plugins ?? [],
         step: options.step,
         logger,
+        defaultLanguage: () =>
+          siteDefaultLanguage(
+            adapter as unknown as DrizzleAdapter,
+            configResult.config
+          ),
         serverConstructs,
         extensionSchema,
       });
@@ -1445,6 +1502,11 @@ export interface MigrateCoreDeps {
   knownJunctions?: ReadonlySet<string>;
   /** What the declared schema names, which old Builder files are judged against. */
   declared?: DeclaredNames;
+  /**
+   * The database's default language, which a file's answers are judged against
+   * (`refuseAnswersInAnotherLanguage`). Absent, the one Settings stores, or the implicit one.
+   */
+  defaultLanguage?: () => Promise<string>;
   withLock?: typeof withMigrateLock;
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
@@ -1638,6 +1700,8 @@ export async function previewMigrate(args: {
   plugins: Parameters<typeof pluginMigrationArgs>[0];
   step?: number;
   logger: CommandContext["logger"];
+  /** As `MigrateCoreDeps.defaultLanguage`. */
+  defaultLanguage?: () => Promise<string>;
   /** As `MigrateCoreDeps.readEventTriggersFn`. */
   readEventTriggers?: () => Promise<readonly string[]>;
   /** Connected server capabilities, judged identically to execution. */
@@ -1777,6 +1841,23 @@ export async function previewMigrate(args: {
     db,
     dialect
   )) {
+    logger.info(`  ✖ a real run would refuse ${file}: ${message}`);
+  }
+  // The files a real run refuses for the language their answers are decided in.
+  const { refusals: languageRefusals } = await answerLanguageRefusals(
+    pendingFiles,
+    {
+      units: [
+        ...moduleRuns,
+        ...pendingFiles.map(file => fileUnit(file, dialect)),
+      ],
+      adapter: adapter as unknown as DrizzleAdapter,
+      db,
+      dialect,
+    },
+    () => defaultLanguageOf({ adapter, defaultLanguage: args.defaultLanguage })
+  );
+  for (const { file, message } of languageRefusals) {
     logger.info(`  ✖ a real run would refuse ${file}: ${message}`);
   }
   // The translations tables a real run checks before its first file, judged the same way.
@@ -3073,6 +3154,9 @@ async function runMigrationStreams(
       : {}),
     judged,
     ...(beforeApply === undefined ? {} : { beforeApply }),
+    ...(deps.defaultLanguage === undefined
+      ? {}
+      : { defaultLanguage: deps.defaultLanguage }),
     ...(afterApply === undefined ? {} : { afterApply }),
     ...(deps.entitySources === undefined
       ? {}
@@ -3175,6 +3259,7 @@ export async function migrateCore(
   await refuseUnwrittenChangesOnceRetired(deps);
   // And a database that lacks what its applied migrations made, read-only;
   // asked again under the lock, below.
+  await refuseFieldGroupHistoryBehindStorage(deps);
   await refuseDatabaseBehindLedger(deps);
   // Before the lock as well, so a person is asked without other runs waiting
   // on them; judged again under the lock, below, against the database as it
@@ -3476,16 +3561,15 @@ export async function migrateCore(
       );
       // The ledger as no other run changes it now: what it says applied is
       // still in the database, before Phase 1's first write.
+      await refuseFieldGroupHistoryBehindStorage(deps);
       await refuseDatabaseBehindLedger(deps);
       deps.logger.info("Phase 1: reconciling core schema...");
       // Resolved here, where a failure can still fail the command cleanly. The
       // core schema is a desired shape, so naming a registry the database does
       // not have is an instruction to create it — and an empty legacy registry
       // beside a populated migrated one is preferred by every reader.
-      const fieldGroupRegistryTable = await resolveRegistryNameFromCatalog({
-        dialect: deps.dialect,
-        getDrizzle: <T>() => deps.db as T,
-      });
+      const { newSiteNaming, fieldGroupRegistryTable } =
+        await phaseOneFieldGroupRegistry(deps);
       // DETECTED rather than asserted: a caller of this seam may hand an
       // adapter without these operations, and a cast to a shape with
       // `tableExists` would then call `undefined`, a TypeError that skips the
@@ -3561,6 +3645,7 @@ export async function migrateCore(
         ensureLedger: deps.ensureLedger,
       });
       coreChanged = r.changed;
+      await recordNewDatabaseNaming(deps, newSiteNaming);
       // With the run's first write behind it, and every refusal it makes
       // before writing passed, the marks it owes.
       await (deps.markOldBuilderFilesFn ?? markOldBuilderFiles)(deps);
@@ -3828,17 +3913,16 @@ async function missingFromStream(
 async function missingFromAppStream(
   deps: MigrateCoreDeps
 ): Promise<MissingFromDatabase[]> {
-  // The applied app migrations in run order, as the files are discovered.
-  const appliedInOrder = (
-    await listMigrationFiles(
-      deps.adapter,
-      deps.db,
-      deps.dialect,
-      deps.migrationsDir,
-      deps.logger,
-      deps.declared
-    )
-  )
+  // The app migrations in run order, as the files are discovered.
+  const files = await listMigrationFiles(
+    deps.adapter,
+    deps.db,
+    deps.dialect,
+    deps.migrationsDir,
+    deps.logger,
+    deps.declared
+  );
+  const appliedInOrder = files
     .filter(entry => entry.applied)
     .map(entry => entry.file.name);
   if (appliedInOrder.length === 0) return [];
@@ -3861,12 +3945,115 @@ async function missingFromAppStream(
       ),
     },
   }));
+  // With the move to the current names still to apply, the database already holds the field
+  // groups under them, so the legacy snapshots are read as the storage migration renamed them.
+  const compared = await underDatabaseFieldGroupNames(
+    deps.adapter as unknown as DrizzleAdapter,
+    snapshots
+  );
   // An applied migration with no snapshot of its own (`migrate:create --blank`, a translations
   // file) ordered after the newest applied snapshot may have dropped or renamed what that snapshot
   // records, and no snapshot says what it left. The database's end state cannot be read from the
   // files then, so nothing is named rather than a table or column it removed on purpose.
   if (appliedInOrder.at(-1) !== snapshots.at(-1)?.migration) return [];
-  return missingFromStream(deps, snapshots);
+  return missingFromStream(deps, compared);
+}
+
+/**
+ * The field-group registry Phase 1 reconciles core with. A database this run sets up for the first
+ * time starts its field groups on the names its history keeps them under
+ * (`newDatabaseFieldGroupNaming`, then `newSiteNaming`); every other keeps the registry it holds.
+ */
+async function phaseOneFieldGroupRegistry(deps: MigrateCoreDeps) {
+  const newSiteNaming = await newDatabaseFieldGroupNaming(deps);
+  const fieldGroupRegistryTable =
+    newSiteNaming === undefined
+      ? await resolveRegistryNameFromCatalog({
+          dialect: deps.dialect,
+          getDrizzle: <T>() => deps.db as T,
+        })
+      : storageNamesFor(newSiteNaming).registryTable;
+  return { newSiteNaming, fieldGroupRegistryTable };
+}
+
+/**
+ * A new database on the current names records that its field groups are settled there, as a first
+ * start records it, so `migrate:field-groups` finds nothing to do.
+ */
+async function recordNewDatabaseNaming(
+  deps: MigrateCoreDeps,
+  newSiteNaming: FieldGroupNaming | undefined
+): Promise<void> {
+  if (newSiteNaming !== "current") return;
+  const { recordNewSiteOnCurrentNames } = await import(
+    "../../domains/field-groups/services/field-group-new-site"
+  );
+  await recordNewSiteOnCurrentNames(
+    deps.adapter as unknown as DrizzleAdapter,
+    serviceLoggerOf(deps.logger)
+  );
+}
+
+/**
+ * Refuses, before anything applies, a database whose field groups moved to the current names
+ * while the history's newest applied file is still on the legacy ones and the next file is not
+ * the one that moves it (`refuseMovedStorageBehindLegacyHistory`), and one holding a field-group
+ * table an earlier release created after the move, on the legacy type column the history does not
+ * record (`refuseTypeColumnsHistoryDoesNotRecord`). Run on every migrate run, the development
+ * start's included: unlike the comparison of the database with its ledger, which only some runs
+ * make, a legacy file applied to moved storage writes under names the registry no longer has.
+ */
+async function refuseFieldGroupHistoryBehindStorage(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  const files = await listMigrationFiles(
+    deps.adapter,
+    deps.db,
+    deps.dialect,
+    deps.migrationsDir,
+    deps.logger,
+    deps.declared
+  );
+  const metaDir = resolve(deps.migrationsDir, "meta");
+  for (const entry of [...files].reverse()) {
+    if (!entry.applied) continue;
+    const newest = await loadTargetSnapshot(metaDir, entry.file.name);
+    if (newest === null) continue;
+    const next = await nextPendingSnapshot(deps.migrationsDir, files);
+    const adapter = deps.adapter as unknown as DrizzleAdapter;
+    await refuseMovedStorageBehindLegacyHistory({
+      adapter,
+      newestApplied: snapshotFieldGroupNaming(newest),
+      nextPending: next === null ? undefined : snapshotFieldGroupNaming(next),
+    });
+    // What the run holds the database to: the newest applied file, and the move of the history
+    // where it is the next to apply.
+    const heldTo =
+      next !== null && isFieldGroupTransition(newest, next)
+        ? [newest, next]
+        : [newest];
+    await refuseTypeColumnsHistoryDoesNotRecord({
+      adapter,
+      snapshots: heldTo.map(file => ({
+        snapshot: file.snapshot,
+        fieldGroupNaming: snapshotFieldGroupNaming(file),
+      })),
+    });
+    return;
+  }
+}
+
+/**
+ * The snapshot of the next app file to apply, where it has one: what tells a moved database's run
+ * whether the file in front of it is the one that moves the history.
+ */
+async function nextPendingSnapshot(
+  migrationsDir: string,
+  files: ReadonlyArray<{ applied: boolean; file: { name: string } }>
+): Promise<SnapshotFile | null> {
+  const next = files.find(entry => !entry.applied);
+  if (next === undefined) return null;
+  return loadTargetSnapshot(resolve(migrationsDir, "meta"), next.file.name);
 }
 
 /**
@@ -4104,6 +4291,27 @@ async function judgeFileDeletions(
     deps.db,
     deps.dialect
   );
+  // A file whose answers are decided in another language than this database's default settles other
+  // rows than the ones they were given for, so it is refused here too, before any statement and
+  // before anyone is asked to consent to what it deletes (`refuseAnswersInAnotherLanguage`). One
+  // with no entry to settle here is not.
+  await refuseAnswersInAnotherLanguage(
+    appFilesInStep(listed, appStepAfter(deps.step, modules.length)),
+    {
+      units: [
+        ...modules,
+        ...appFileUnits(
+          listed,
+          appStepAfter(deps.step, modules.length),
+          deps.dialect
+        ),
+      ],
+      adapter: deps.adapter as unknown as DrizzleAdapter,
+      db: deps.db,
+      dialect: deps.dialect,
+    },
+    () => defaultLanguageOf(deps)
+  );
   const units = [...modules, ...fileUnits];
   // The translations tables deleted entities left standing, asked about with the files' deletions
   // and dropped by the metadata pass once covered: a table drop runs only under the consent.
@@ -4161,6 +4369,16 @@ async function judgeFileDeletions(
     fileUnits.map(unit => [unit.label, textDigest(unit.text)])
   );
   return { agreement, files, leftovers: leftovers.map(left => left.table) };
+}
+
+/** The database's default language, as the run was given it or as Settings stores it. */
+function defaultLanguageOf(
+  deps: Pick<MigrateCoreDeps, "adapter" | "defaultLanguage">
+): Promise<string> {
+  return (
+    deps.defaultLanguage?.() ??
+    siteDefaultLanguage(deps.adapter as unknown as DrizzleAdapter, {})
+  );
 }
 
 /** The word a deletion's reason names each kind of entity by. */
@@ -5331,6 +5549,7 @@ async function changeFilesFrom(
         filename: `${files[end].name}.sql`,
         before: before?.entities,
         target: target.entities,
+        fieldGroupNaming: snapshotFieldGroupNaming(target),
         statements: written.flatMap(file =>
           splitSqlStatements(file.upSql, dialect, file)
         ),
@@ -5757,6 +5976,8 @@ export async function runFileMigrations(args: {
    * the app's tables, read by the check that a file removes none of it.
    */
   extensionSchema?: ExtensionSchema;
+  /** As `MigrateCoreDeps.defaultLanguage`. */
+  defaultLanguage?: () => Promise<string>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -5898,6 +6119,15 @@ export async function runFileMigrations(args: {
       }
       if (!plan.runs.has(m)) break;
       if (m === plan.continuesAt) logger.info(plan.notice);
+      // The file that moves the history to the current field-group names applies only to a
+      // database whose storage already moved; on any other it is refused before it is recorded.
+      if (isFieldGroupTransition(beforeFile, targetFile)) {
+        await refuseFieldGroupTransitionOnLegacy(
+          adapter as unknown as DrizzleAdapter,
+          filename,
+          beforeFile === null
+        );
+      }
 
       // Both apply routes run the same whole-file judgement, so a foreign drop
       // — or a statement the runner's transaction cannot hold — is refused
@@ -6052,6 +6282,15 @@ export async function runFileMigrations(args: {
       if (typeChanges !== undefined && !atItsEnd) {
         await refuseFileTypeChanges(db, typeChanges);
       }
+      // The language of the file's answers is judged again, over the database as the files before
+      // it left it: a row one of them put in is an entry now. The default language is read again
+      // too, since a file may have changed the one Settings holds.
+      await refuseAnswersInAnotherLanguage(
+        [m],
+        { units: [{ statements: upStatements }], adapter: dz, db, dialect },
+        () => defaultLanguageOf(args),
+        "file"
+      );
       // The caller's last word before the file applies, every refusal of it passed.
       await args.beforeApply?.(m.name);
 
@@ -6295,6 +6534,7 @@ function parseMigrationFile(
 
   const { upSql, downSql } = parseSqlSections(content);
   const localization = parseLocalizationIntent(content, `${name}.sql`);
+  const answersIn = recordedAnswerLanguage(content);
 
   return {
     name,
@@ -6311,6 +6551,7 @@ function parseMigrationFile(
     source,
     transaction: !marksNoTransaction(content),
     ...(localization === null ? {} : { localization }),
+    ...(answersIn === undefined ? {} : { answersIn }),
   };
 }
 

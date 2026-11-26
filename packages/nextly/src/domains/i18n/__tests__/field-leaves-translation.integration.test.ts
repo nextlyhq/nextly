@@ -11,13 +11,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../../config";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
-import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
   type TestDialect,
@@ -27,6 +26,11 @@ import type { ServiceContainer } from "../../../services";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive/ddl";
 import { restoreI18nArchive } from "../migration/restore-archive";
+import {
+  createTestNextlyOnSite,
+  eachSite,
+} from "../../field-groups/__tests__/helpers/both-sites";
+import { storageNamesFor } from "../../field-groups/services/field-group-storage-names";
 
 const LOCALES = ["en", "es", "ar"];
 const VALUES: Record<string, string> = {
@@ -80,13 +84,16 @@ function quote(dialect: TestDialect, name: string): string {
   return dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 }
 
-describeEachDialect("a field that stops being translated", dialect => {
+const onEachSite = describe.each(eachSite());
+
+onEachSite("a field that stops being translated (%s %s)", (dialect, naming) => {
+  const names = storageNamesFor(naming);
   let current: TestNextly;
 
   beforeEach(async () => {
     // The builder's update path runs its migration in development only.
     vi.stubEnv("NODE_ENV", "development");
-    current = await createTestNextly({
+    current = await createTestNextlyOnSite(naming, {
       dialect,
       collections: [],
       localization: { locales: LOCALES, defaultLocale: "en" },
@@ -203,12 +210,12 @@ describeEachDialect("a field that stops being translated", dialect => {
     );
     const id = "promo-1";
     await query(
-      `INSERT INTO ${quote(dialect, "comp_promo")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
+      `INSERT INTO ${quote(dialect, `${names.tablePrefix}promo`)} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
         `VALUES ('${id}', 'entry-1', 'dc_pages', 'promo', 7)`
     );
     for (const locale of LOCALES) {
       await query(
-        `INSERT INTO ${quote(dialect, "comp_promo_locales")} (${["_parent", "_locale", "heading"].map(c => quote(dialect, c)).join(", ")}) ` +
+        `INSERT INTO ${quote(dialect, `${names.tablePrefix}promo_locales`)} (${["_parent", "_locale", "heading"].map(c => quote(dialect, c)).join(", ")}) ` +
           `VALUES ('${id}', '${locale}', '${VALUES[locale]}')`
       );
     }
@@ -310,8 +317,8 @@ describeEachDialect("a field that stops being translated", dialect => {
       runsFile: true,
       entity: {
         slug: "promo",
-        table: "comp_promo",
-        registry: "dynamic_components",
+        table: `${names.tablePrefix}promo`,
+        registry: names.registryTable,
       },
       seed: seedFieldGroup,
       change: async () => {
@@ -323,7 +330,7 @@ describeEachDialect("a field that stops being translated", dialect => {
             fields: SHARED,
             confirmed: true,
             localized: true,
-            schemaVersion: await schemaVersionOf("dynamic_components", "promo"),
+            schemaVersion: await schemaVersionOf(names.registryTable, "promo"),
           }
         );
       },
@@ -333,29 +340,32 @@ describeEachDialect("a field that stops being translated", dialect => {
   it.each(PATHS)(
     "keeps them when $path",
     async ({ entity, seed, change, runsFile }) => {
-    const id = await seed();
+      const id = await seed();
 
-    await change();
+      await change();
 
-    const [main] = await query<{ heading: string | null }>(
-      `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, entity.table)} WHERE ${quote(dialect, "id")} = '${id}'`
-    );
-    expect(main?.heading).toBe(VALUES.en);
-    const archived = await query<{ locale: string; value: string }>(
-      `SELECT ${quote(dialect, "locale")} AS locale, ${quote(dialect, "value")} AS value FROM ${quote(dialect, "nextly_i18n_archive")} ` +
-        `WHERE ${quote(dialect, "collection")} = '${entity.slug}' AND ${quote(dialect, "field")} = 'heading' AND ${quote(dialect, "entry_id")} = '${id}' ` +
-        `ORDER BY ${quote(dialect, "locale")}`
-    );
-    // Every other language archived. A save that runs its migration file archives the kept one
-    // too, as `nextly migrate:create`'s file does, so the file's DOWN can put it back.
-    expect(archived).toEqual([
-      { locale: "ar", value: VALUES.ar },
-      ...(runsFile ? [{ locale: "en", value: VALUES.en }] : []),
-      { locale: "es", value: VALUES.es },
-    ]);
-    expect(await columnsOf(`${entity.table}_locales`)).not.toContain("heading");
-    expect(await columnsOf(entity.table)).toContain("heading");
-  });
+      const [main] = await query<{ heading: string | null }>(
+        `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, entity.table)} WHERE ${quote(dialect, "id")} = '${id}'`
+      );
+      expect(main?.heading).toBe(VALUES.en);
+      const archived = await query<{ locale: string; value: string }>(
+        `SELECT ${quote(dialect, "locale")} AS locale, ${quote(dialect, "value")} AS value FROM ${quote(dialect, "nextly_i18n_archive")} ` +
+          `WHERE ${quote(dialect, "collection")} = '${entity.slug}' AND ${quote(dialect, "field")} = 'heading' AND ${quote(dialect, "entry_id")} = '${id}' ` +
+          `ORDER BY ${quote(dialect, "locale")}`
+      );
+      // Every other language archived. A save that runs its migration file archives the kept one
+      // too, as `nextly migrate:create`'s file does, so the file's DOWN can put it back.
+      expect(archived).toEqual([
+        { locale: "ar", value: VALUES.ar },
+        ...(runsFile ? [{ locale: "en", value: VALUES.en }] : []),
+        { locale: "es", value: VALUES.es },
+      ]);
+      expect(await columnsOf(`${entity.table}_locales`)).not.toContain(
+        "heading"
+      );
+      expect(await columnsOf(entity.table)).toContain("heading");
+    }
+  );
 
   /**
    * Ways an archive can refuse the values a change depends on. Each leaves a table in place, so
@@ -685,7 +695,7 @@ describeEachDialect("a field that stops being translated", dialect => {
       // `sub_title` and archived under that column; the Schema Builder lower-cases names, so only a
       // code-defined field shows the difference.
       await current.destroy();
-      current = await createTestNextly({
+      current = await createTestNextlyOnSite(naming, {
         dialect,
         collections: [
           defineCollection({

@@ -227,7 +227,7 @@ describe.each(getConfiguredTestDialects())(
           depth: 0,
         } as never)) as Doc;
         const holderId = String((read.one as Doc | undefined)?.id);
-        const holder = await rawRow("comp_pwholder", holderId);
+        const holder = await rawRow("fg_pwholder", holderId);
         expect(await hashes(valuesAt(holder.box, "pin")[0], "in-c")).toBe(true);
       });
 
@@ -309,7 +309,7 @@ describe.each(getConfiguredTestDialects())(
 
       expect(valuesAt(read.direct, "pin")).toEqual([]);
       const directId = String((read.direct as Doc | undefined)?.id);
-      const stored = await rawRow("comp_pwpin", directId);
+      const stored = await rawRow("fg_pwpin", directId);
       expect(await hashes(stored.pin, "direct-d")).toBe(true);
     });
   }

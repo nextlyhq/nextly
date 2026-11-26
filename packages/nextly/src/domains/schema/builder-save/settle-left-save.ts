@@ -35,6 +35,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "../../../errors/nextly-error";
 import { parseUiSchema } from "../../../schemas/_zod/ui-schema";
 import type { AddressKind } from "../../../shared/address-rule";
+import { underNaming } from "../../field-groups/services/field-group-storage-names";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
@@ -1025,17 +1026,26 @@ function relatedTables(record: LeftSave): string[] {
     if (entity === null) continue;
     try {
       const minimal = uiToMinimal(entity as never, prefix);
-      for (const table of collectionOwnTables(
-        minimal.tableName,
-        minimal.fields
-      )) {
-        tables.add(table.toLowerCase());
+      for (const main of definedTables(record.kind, minimal.tableName)) {
+        for (const table of collectionOwnTables(main, minimal.fields)) {
+          tables.add(table.toLowerCase());
+        }
       }
     } catch {
       // An entity the merge cannot read names no table; the header test still applies.
     }
   }
   return [...tables];
+}
+
+/**
+ * The main tables a definition can name: a field group's under either naming, since a save's
+ * record does not say which the site is on, and only one of them is there.
+ */
+function definedTables(kind: AddressKind, derived: string): string[] {
+  return kind === "fieldGroup"
+    ? [derived, underNaming("current", derived)]
+    : [derived];
 }
 
 /** The entity's main table, from the definition before the save or after it. */
@@ -1045,7 +1055,10 @@ function entityTables(record: LeftSave): string[] {
     const entity = rawEntity(text ?? null, record.kind, record.slug);
     if (entity === null) continue;
     try {
-      return [uiToMinimal(entity as never, prefix).tableName];
+      return definedTables(
+        record.kind,
+        uiToMinimal(entity as never, prefix).tableName
+      );
     } catch {
       // An entity the merge cannot read names no table; the header test still applies.
     }

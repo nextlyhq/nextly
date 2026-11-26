@@ -28,7 +28,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import type { ServiceContainer } from "../../../services";
 import type { AddressKind } from "../../../shared/address-rule";
 import { ADDRESS_CASES } from "../../../shared/__tests__/helpers/address-cases";
@@ -186,7 +186,7 @@ for (const dialect of getConfiguredTestDialects()) {
         [
           "dynamic_collections",
           "dynamic_singles",
-          STORAGE_FORMAT.registryTable,
+          MIGRATION_TARGET.registryTable,
         ].map(async table =>
           (
             await t!.adapter.select<{ slug: string }>(table, {
@@ -246,7 +246,7 @@ for (const dialect of getConfiguredTestDialects()) {
         code: "DUPLICATE",
         message: TAKEN_SEO,
       });
-      expect(await t!.adapter.tableExists("comp_seo")).toBe(false);
+      expect(await t!.adapter.tableExists("fg_seo")).toBe(false);
     });
 
     // A Single `foo-locales`, recorded before the rule refused such an address, stores in

@@ -8,6 +8,10 @@ import { describe, expect, it } from "vitest";
 
 import type { BusyTableBounds } from "../bounds";
 import { runMigrationStatements } from "../../migrate/migration-transaction";
+import {
+  isSaveHoldLost,
+  withSaveHoldAsked,
+} from "../../pipeline/save-hold-check";
 import { runUnitInTries } from "../run-unit";
 
 const BOUNDS: BusyTableBounds = { tryMs: 100, totalMs: 1_500 };
@@ -257,5 +261,73 @@ describe("runUnitInTries on MySQL in one transaction", () => {
       count,
       busy,
     ]);
+  });
+});
+
+describe("runUnitInTries while a deleting save's hold is asked", () => {
+  const drops = ["DROP TABLE two", "DROP TABLE one"];
+
+  /** The unit run where `kept` answers for the save's hold, or with none: what it sent, and how it ended. */
+  async function ranWith(
+    kept?: (sent: readonly string[]) => boolean
+  ): Promise<{ events: string[]; failure: unknown }> {
+    const events: string[] = [];
+    const { adapter, sent } = mysqlAdapter({
+      failStatement: statement => {
+        events.push(statement);
+        return undefined;
+      },
+    });
+    const failure = await withSaveHoldAsked(
+      kept === undefined
+        ? undefined
+        : () => {
+            events.push("asked");
+            return Promise.resolve(kept(sent));
+          },
+      () =>
+        runUnitInTries(
+          adapter,
+          drops,
+          unit,
+          () => {
+            events.push("ledger");
+            return Promise.resolve();
+          },
+          run
+        )
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    return { events, failure };
+  }
+
+  it("asks before each statement, and not before the ledger write of what ran", async () => {
+    const { events, failure } = await ranWith(() => true);
+    expect(failure).toBeUndefined();
+    const [two, one] = drops.map(drop => events.indexOf(drop));
+    expect(events.slice(0, two)).toContain("asked");
+    expect(events.slice(two, one)).toContain("asked");
+    expect(events.slice(one)).not.toContain("asked");
+    expect(events.slice(one)).toContain("ledger");
+  });
+
+  it("sends no further statement, and records nothing, once the hold is lost", async () => {
+    const { events, failure } = await ranWith(
+      sent => !sent.includes("DROP TABLE two")
+    );
+    expect(isSaveHoldLost(failure)).toBe(true);
+    expect(events).toContain("DROP TABLE two");
+    expect(events).not.toContain("DROP TABLE one");
+    expect(events).not.toContain("ledger");
+  });
+
+  it("sends the same statements as a unit with no hold to ask", async () => {
+    const asked = await ranWith(() => true);
+    const alone = await ranWith();
+    expect(asked.events.filter(event => event !== "asked")).toEqual(
+      alone.events
+    );
   });
 });

@@ -275,15 +275,26 @@ describe.each(getConfiguredTestDialects())(
         .filter(f => f.endsWith(".snapshot.json"))
         .sort();
 
-    /** `file` as an earlier release's `migrate:create` wrote it: its tables and checksum alone. */
+    /**
+     * `file` as an earlier release's `migrate:create` wrote it: its tables and checksum alone, and
+     * the field-group names its history is on, which a version 2 snapshot always records.
+     */
     function asEarlierRelease(file: string): void {
       const path = join(metaDir(), file);
-      const { version, migrationHash, snapshot } = JSON.parse(
-        readFileSync(path, "utf8")
-      ) as Record<string, unknown>;
+      const { version, fieldGroupStorage, migrationHash, snapshot } =
+        JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
       writeFileSync(
         path,
-        JSON.stringify({ version, migrationHash, snapshot }, null, 2)
+        JSON.stringify(
+          {
+            version,
+            ...(fieldGroupStorage === undefined ? {} : { fieldGroupStorage }),
+            migrationHash,
+            snapshot,
+          },
+          null,
+          2
+        )
       );
     }
 

@@ -24,7 +24,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import type { ServiceContainer } from "../../../services";
 import type { AddressKind } from "../../../shared/address-rule";
 
@@ -74,7 +74,7 @@ function create(kind: AddressKind, address: string): Promise<unknown> {
 const TABLE: Record<AddressKind, (address: string) => string> = {
   collection: address => `dc_${address}`,
   single: address => `single_${address}`,
-  fieldGroup: address => `comp_${address}`,
+  fieldGroup: address => `fg_${address}`,
 };
 
 for (const dialect of getConfiguredTestDialects()) {
@@ -104,7 +104,7 @@ for (const dialect of getConfiguredTestDialects()) {
         [
           "dynamic_collections",
           "dynamic_singles",
-          STORAGE_FORMAT.registryTable,
+          MIGRATION_TARGET.registryTable,
         ].map(async table =>
           (
             await t!.adapter.select<{ slug: string }>(table, {

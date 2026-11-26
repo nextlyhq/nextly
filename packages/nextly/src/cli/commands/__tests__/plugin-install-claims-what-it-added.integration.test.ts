@@ -27,6 +27,7 @@
 import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { defineFieldGroup, text } from "../../../config";
 import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import type { SchemaHook } from "../../../domains/schema/extension/draft";
@@ -36,6 +37,7 @@ import {
   buildBlankPluginMigration,
   buildPluginMigration,
 } from "../../../domains/schema/migrate-create/generate-plugin";
+import { resolveRegistryNameFromCatalog } from "../../../domains/field-groups/storage/resolve-storage-names";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import {
   migrationChecksum,
@@ -67,6 +69,7 @@ const run = vi.hoisted(() => ({
   dialect: "sqlite" as string,
   adapter: undefined as unknown,
   plugins: [] as unknown[],
+  fieldGroups: undefined as unknown[] | undefined,
 }));
 
 vi.mock("../../utils/config-loader", () => ({
@@ -74,6 +77,9 @@ vi.mock("../../utils/config-loader", () => ({
     const config = {
       db: { migrationsDir: "./migrations" },
       plugins: run.plugins,
+      ...(run.fieldGroups === undefined
+        ? {}
+        : { fieldGroups: run.fieldGroups }),
     };
     return { config, appConfig: config, pluginConsent: undefined };
   },
@@ -422,6 +428,11 @@ describe.each(getConfiguredTestDialects())(
       await reconcileCore({
         db: db(),
         dialect,
+        // The registry the database holds, as `nextly migrate` resolves it.
+        fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+          dialect,
+          getDrizzle: <T>() => db() as T,
+        }),
         logger: { info: () => {}, warn: () => {} },
       });
       run.dialect = dialect;
@@ -499,11 +510,53 @@ describe.each(getConfiguredTestDialects())(
 
     afterEach(async () => {
       vi.restoreAllMocks();
+      run.fieldGroups = undefined;
       await handle?.destroy();
     });
 
     const install = (name: string, consent?: DataLossConsent) =>
       runPluginInstall(name, { consent }, context);
+
+    // A new site stores a group in `fg_<slug>`. Compiled under the legacy name, a contribution to
+    // that table named none the install knew, and the install of any plugin was refused.
+    it("installs beside a contribution to a field group on the current names", async () => {
+      const card = defineFieldGroup({
+        slug: "pi_card",
+        fields: [text({ name: "heading" })],
+      });
+      await handle.destroy();
+      handle = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        fieldGroups: [card],
+      });
+      run.adapter = handle.adapter;
+      expect(await columnsOf("fg_pi_card")).toContain("heading");
+      run.fieldGroups = [card];
+      run.plugins = [
+        {
+          name: HOST,
+          version: "1.0.0",
+          contributes: {
+            schema: {
+              prefix: "hs",
+              tables: [items],
+              extend: [
+                ({ schema }: Parameters<SchemaHook>[0]) => {
+                  schema.extendTable("fg_pi_card", {
+                    columns: { extra: col.shortText({ nullable: true }) },
+                  });
+                },
+              ],
+              migrations: [modules!.host],
+            },
+          },
+        },
+      ];
+
+      await install(HOST);
+
+      expect(await columnsOf("hs__items")).toContain("label");
+    }, 120_000);
     // A module that stops adding the column drops it: the install takes the
     // data-loss consent for it, as `nextly migrate` would.
     const droppingExtra = () =>

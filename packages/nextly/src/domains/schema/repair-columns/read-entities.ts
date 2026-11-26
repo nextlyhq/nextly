@@ -27,6 +27,7 @@ import type { Logger } from "../../../shared/types";
 import { CollectionRegistryService } from "../../collections/services/collection-registry-service";
 import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
+import { recordedFieldGroupTable } from "../../field-groups/services/field-group-storage-names";
 import { LOCALIZATION_MIGRATION_MARKER } from "../../i18n/migration/write-migration-file";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { UserExtSchemaService } from "../../users/services/user-ext-schema-service";
@@ -434,10 +435,13 @@ function snapshotEntityOf(
   const settings: Record<string, unknown> = entry.settings;
   const dbName =
     typeof settings.dbName === "string" ? settings.dbName : undefined;
-  const table = tableFor[kind]({
-    slug,
-    ...(dbName !== undefined ? { dbName } : {}),
-  });
+  const table =
+    kind === "fieldGroup"
+      ? recordedFieldGroupTable(slug, name => tables.has(name))
+      : tableFor[kind]({
+          slug,
+          ...(dbName !== undefined ? { dbName } : {}),
+        });
   const columnTypes = tables.get(table);
   return {
     kind,
@@ -936,6 +940,22 @@ async function userFieldSources(
   return { stored, configured: [...codeFields, ...adminFields] };
 }
 
+/**
+ * A configured field group at the table the registry stores it in, which is `fg_<slug>` on a site
+ * on the current names: no configuration names a field group's table, so none of its migrations
+ * moves it. Every other entity as configured.
+ */
+function atStoredTable(
+  entity: ConfiguredEntity,
+  registry: readonly RegistryEntity[]
+): ConfiguredEntity {
+  if (entity.kind !== "fieldGroup") return entity;
+  const table = registry.find(
+    row => row.kind === "fieldGroup" && row.slug === entity.slug
+  )?.tableName;
+  return table === undefined ? entity : { ...entity, table };
+}
+
 /** Every entity the comparison covers, with the definitions each is judged against. */
 export async function readRepairEntities(args: {
   adapter: DrizzleAdapter;
@@ -1003,7 +1023,7 @@ export async function readRepairEntities(args: {
   }
   const [registry, { snapshots, baseline }, userFields] = read.value;
   return resolveRepairEntities({
-    configured,
+    configured: configured.map(entity => atStoredTable(entity, registry)),
     hasManifest,
     registry,
     snapshots,

@@ -104,6 +104,13 @@ export interface ResolveMigrationArgs {
   fileExists: (filename: string) => Promise<boolean>;
   /** The file's paired target snapshot, or null if absent. */
   loadTargetSnapshot: () => Promise<NextlySchemaSnapshot | null>;
+  /**
+   * Refuses a file on field-group names the database's storage is not on, asked by `--applied`
+   * before it compares or records anything, and whether or not it compares: the names are in no
+   * table the comparison reads, so a file it skips or matches can still record a move the
+   * database has not made. Absent, nothing is asked.
+   */
+  refuseUnfitStorage?: () => Promise<void>;
   /** True iff the file's first line is `-- nextly:no-transaction`. */
   marksNoTransaction: () => Promise<boolean>;
   /**
@@ -219,6 +226,7 @@ async function resolveApplied(
     return acceptChecksum(args, filename, standing.outcome, rows, marked);
   }
 
+  await args.refuseUnfitStorage?.();
   const verified = args.skipVerify
     ? false
     : await verifyTarget(args, filename, rows);

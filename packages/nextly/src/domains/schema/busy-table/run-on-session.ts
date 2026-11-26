@@ -29,6 +29,7 @@ import {
   assertSchemaLockHeld,
   schemaLockConfirmedUntil,
 } from "../pipeline/schema-lock";
+import { assertSaveHoldKept } from "../pipeline/save-hold-check";
 
 import type { BusyTableBounds } from "./bounds";
 import {
@@ -154,8 +155,9 @@ export async function runStatementsInTries(
           : {}),
       },
       async (_tryNumber, tryMs): Promise<TryResult<undefined>> => {
-        // A run that lost the schema lock sends nothing more.
+        // A run that lost the schema lock sends nothing more, nor a save that lost its hold.
         await assertSchemaLockHeld();
+        await assertSaveHoldKept();
         // The session opens no transaction and binds no flow, so the watch's asks, made here,
         // still go to the pool, never to the session it watches.
         const watch = watchTry(adapter, dialect, tryMs);

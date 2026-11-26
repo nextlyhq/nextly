@@ -776,7 +776,7 @@ describe.each(getConfiguredTestDialects())(
       // The site has since removed that language: its stored components and
       // its pending change are kept under French, which it does not configure.
       await current!.adapter.executeQuery(
-        `UPDATE comp_${SEALED_BOX_COMPONENT}_locales SET _locale = 'fr' WHERE _locale = 'es'`
+        `UPDATE fg_${SEALED_BOX_COMPONENT}_locales SET _locale = 'fr' WHERE _locale = 'es'`
       );
       const ref = {
         scopeKind: "collection" as const,
@@ -808,7 +808,7 @@ describe.each(getConfiguredTestDialects())(
         errors: [expect.objectContaining({ code: "FORBIDDEN" })],
       });
       const labels = await current!.adapter.executeQuery<{ label: string }>(
-        `SELECT label FROM comp_${SEALED_BOX_COMPONENT}_locales WHERE _locale = 'fr'`
+        `SELECT label FROM fg_${SEALED_BOX_COMPONENT}_locales WHERE _locale = 'fr'`
       );
       expect(labels.map(row => row.label)).toEqual(["Spanish"]);
       expect(await pendingLocales(id)).toEqual(["fr"]);
@@ -1061,7 +1061,7 @@ function countDocumentReads(read: string[]): void {
         const name = isTable(table) ? getTableName(table) : undefined;
         if (
           name === `dc_${READS}_locales` ||
-          name?.startsWith("comp_") === true
+          name?.startsWith("fg_") === true
         ) {
           read.push(name);
         }

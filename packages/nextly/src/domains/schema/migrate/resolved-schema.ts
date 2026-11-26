@@ -16,7 +16,17 @@
  *
  * @module domains/schema/migrate/resolved-schema
  */
+import { resolve } from "node:path";
+
+import {
+  underNaming,
+  type FieldGroupNaming,
+} from "../../field-groups/services/field-group-storage-names";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
+import {
+  historyFieldGroupNamingIn,
+  SnapshotFileError,
+} from "../migrate-create/snapshot-io";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 import { loadUiSchema } from "../ui-schema/loader";
 import { applyDeferredExtendsToManifest } from "../ui-schema/merge";
@@ -150,12 +160,19 @@ export interface ResolveSchemaArgs {
     collections: readonly unknown[];
     singles?: readonly unknown[];
     fieldGroups?: readonly unknown[];
-    db: { uiSchemaFile: string };
+    db: { uiSchemaFile: string; migrationsDir?: string };
   };
   /** Plugin additions to Builder entities, from `loadConfig`. */
   deferredExtends?: readonly unknown[];
   /** Defaults to `DEFAULT_TABLE_NAME_RESOLVERS`. */
   resolvers?: TableNameResolvers;
+  /**
+   * The names field groups are declared under. Omitted, the naming of the newest snapshot in the
+   * project's migrations folder (`fieldGroupNamingOfHistory`): every command that reads the
+   * declared schema follows the history, so a project that moved to the current names declares
+   * `fg_<slug>` tables and never reads them as undeclared.
+   */
+  fieldGroupNaming?: FieldGroupNaming;
   /**
    * The Builder manifest, where the caller has already read it: it is merged as it is and the
    * file is not read again, so everything the caller takes from the manifest comes from one read.
@@ -183,6 +200,37 @@ async function manifestOf(
 }
 
 /**
+ * The field-group naming of the project's migration history: its newest snapshot's, and legacy
+ * where the configuration names no migrations folder or the folder has no snapshot.
+ */
+export async function fieldGroupNamingOfHistory(args: {
+  projectRoot: string;
+  config: { db: { migrationsDir?: string } };
+}): Promise<FieldGroupNaming> {
+  const dir = args.config.db.migrationsDir;
+  if (dir === undefined) return "legacy";
+  return historyFieldGroupNamingIn(resolve(args.projectRoot, dir, "meta"));
+}
+
+/**
+ * {@link fieldGroupNamingOfHistory} for a command that judges the history's files itself
+ * afterwards. A newest snapshot that is no snapshot says no names, and the command's own reading
+ * of the folder is what names the file and refuses it: a corrupt snapshot, or one beside an old
+ * Schema Builder file, which is no migration. Read here as legacy, which every history before the
+ * record was on, so that reading still happens. A history that says two names is refused by name.
+ */
+export async function declaredFieldGroupNaming(
+  args: Parameters<typeof fieldGroupNamingOfHistory>[0]
+): Promise<FieldGroupNaming> {
+  try {
+    return await fieldGroupNamingOfHistory(args);
+  } catch (error) {
+    if (error instanceof SnapshotFileError) return "legacy";
+    throw error;
+  }
+}
+
+/**
  * Merge code-first config with the Builder manifest.
  *
  * Code-first wins on a slug collision, matching generation. Order matters
@@ -198,6 +246,12 @@ export async function resolveDeclaredSchema(
   args: ResolveSchemaArgs
 ): Promise<ResolvedSchema> {
   const resolvers = args.resolvers ?? DEFAULT_TABLE_NAME_RESOLVERS;
+  const naming =
+    args.fieldGroupNaming ?? (await declaredFieldGroupNaming(args));
+  // Every field group, code-first and Builder alike, by the one resolver under the history's
+  // naming: the storage migration moves a derived name by its prefix alone.
+  const fieldGroupTable = (e: { slug: string }) =>
+    underNaming(naming, resolvers.component(e));
   const codeFirst = [
     ...toResolved(
       args.config.collections,
@@ -211,8 +265,11 @@ export async function resolveDeclaredSchema(
       "codeFirst",
       resolvers.single
     ),
-    ...toResolved(args.config.fieldGroups ?? [], "fieldGroup", "codeFirst", e =>
-      resolvers.component(e)
+    ...toResolved(
+      args.config.fieldGroups ?? [],
+      "fieldGroup",
+      "codeFirst",
+      fieldGroupTable
     ),
   ];
 
@@ -249,7 +306,7 @@ export async function resolveDeclaredSchema(
         survivingOf(merged.components ?? [], args.config.fieldGroups ?? []),
         "fieldGroup",
         "fieldGroup",
-        e => resolveComponentTableName(e.slug)
+        fieldGroupTable
       ),
     ];
     // From the SURVIVING collections only. A shadowed collection's custom

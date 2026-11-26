@@ -301,7 +301,7 @@ const ROADS: Road[] = [
   },
   {
     name: "a field group (its migration file)",
-    table: "comp_card",
+    table: "fg_card",
     runsFile: true,
     async create(_t, fields) {
       await dispatchComponents(
@@ -326,7 +326,7 @@ const ROADS: Road[] = [
             : {
                 renameResolutions: [
                   {
-                    tableName: "comp_card",
+                    tableName: "fg_card",
                     fromColumn: "heading",
                     toColumn: renamed,
                     choice: "rename",
@@ -339,7 +339,7 @@ const ROADS: Road[] = [
   {
     // Translation turned on in the same save, as for the Single above.
     name: "a field group turning translation on (its migration file)",
-    table: "comp_band",
+    table: "fg_band",
     runsFile: true,
     async create(_t, fields) {
       await dispatchComponents(
@@ -364,7 +364,7 @@ const ROADS: Road[] = [
             : {
                 renameResolutions: [
                   {
-                    tableName: "comp_band",
+                    tableName: "fg_band",
                     fromColumn: "heading",
                     toColumn: renamed,
                     choice: "rename",

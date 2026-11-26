@@ -5,6 +5,10 @@
  */
 import { tableBusyError } from "../../../domains/schema/busy-table/report";
 import { assertNoLegacyBookkeeping } from "../../../domains/schema/events/legacy-detection";
+import {
+  answerLanguageError,
+  answerLanguageRefusal,
+} from "../../../domains/i18n/migration/answer-language";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
 import {
   judgeDataLoss,
@@ -17,7 +21,17 @@ import {
 } from "../../../domains/schema/migrate/core-reconcile";
 import { coreDeletionOf } from "../../../domains/schema/migrate/core-retired-columns";
 import { migrationDriftError } from "../../../domains/schema/migrate/drift-error";
+import {
+  fieldGroupHistoryBehindStorageError,
+  fieldGroupStorageNotMigratedError,
+  fieldGroupTypeColumnNotRecordedError,
+} from "../../../domains/schema/migrate/field-group-history";
+import {
+  rollbackHistoryUnreadableError,
+  rollbackRefusedError,
+} from "../../../domains/schema/migrate/field-group-rollback";
 import { ownWriteLockError } from "../../../domains/schema/migrate/migration-transaction";
+import { fieldGroupHistoryNamesUnrecordedError } from "../../../domains/schema/migrate-create/snapshot-io";
 import {
   assertNotPartiallyApplied,
   concurrentRunError,
@@ -292,6 +306,17 @@ export const MIGRATION_CASES = {
         file: "20261021_090000_seed.mysql.sql",
         placed: { parent: "20261019_080000_init", merges: [] },
       }
+    ),
+  // As `nextly migrate` refuses a file answered in English where the default language is Spanish.
+  MIGRATION_LANGUAGE_DIFFERS: () =>
+    answerLanguageError(
+      [
+        answerLanguageRefusal(
+          { name: "20261021_090000_require_body", answersIn: "en" },
+          "es"
+        ),
+      ],
+      "es"
     ),
   // As a command that waited its whole wait for the migration files is refused.
   MIGRATIONS_WRITER_BUSY: () =>
@@ -643,6 +668,28 @@ export const MIGRATION_CASES = {
   SETTINGS_CHANGE_WITHOUT_MIGRATION: () =>
     settingsChangeWithoutMigration(1, ["~ posts: labels.singular"]),
   BUILDER_DEFINITION_IGNORED: () => builderDefinitionIgnored("ui-schema.json"),
+  // The refusals `nextly migrate` makes of the field-group transition, built as it throws them.
+  FIELD_GROUP_STORAGE_NOT_MIGRATED: () =>
+    fieldGroupStorageNotMigratedError(
+      "20261119_120000_000_field_group_current_names.sql"
+    ),
+  FIELD_GROUP_HISTORY_BEHIND_STORAGE: () =>
+    fieldGroupHistoryBehindStorageError(),
+  FIELD_GROUP_HISTORY_NAMES_UNRECORDED: () =>
+    fieldGroupHistoryNamesUnrecordedError(
+      "20261101_120000_000_add_banner",
+      ["fg_banner"],
+      ["comp_card"]
+    ),
+  FIELD_GROUP_ROLLBACK_REFUSED: () =>
+    rollbackRefusedError("20261119_120000_000_field_group_current_names"),
+  FIELD_GROUP_ROLLBACK_HISTORY_UNREADABLE: () =>
+    rollbackHistoryUnreadableError(
+      "20261119_120000_000_field_group_current_names",
+      "its snapshot cannot be read"
+    ),
+  FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED: () =>
+    fieldGroupTypeColumnNotRecordedError(["fg_banner"]),
   DATABASE_BEHIND_MIGRATIONS: () =>
     databaseBehindMigrations(2, [
       "- table dc_posts (created by 20261116_120000_000_create_posts)",

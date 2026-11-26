@@ -63,11 +63,10 @@ import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { AddressKind } from "../../../shared/address-rule";
 import {
   closeHoldingConnection,
-  holdCollectionOnConnection,
-  holdCollectionOnSession,
+  holdEntityOnConnection,
 } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
-import { statedMoment } from "../../dynamic-collections/services/stated-default";
+import type { EntityRef } from "../../dynamic-collections/services/entity-hold";
 import {
   resolveFieldGroupStorageNames,
   underNaming,
@@ -175,6 +174,7 @@ import {
   withoutOthersElements,
 } from "../ownership/removed-elements";
 import {
+  countEntriesWithoutDefaultLanguageValue,
   countRowsBreakingNotNull,
   querySqlRows,
 } from "../pipeline/classifier/count-helpers";
@@ -200,7 +200,10 @@ import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces
 import { builtByFor } from "../pipeline/registered-collections";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
-import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
+import type {
+  ColumnResolution,
+  PerLanguageColumn,
+} from "../pipeline/sql-templates/resolution-statements";
 import { identifierKey } from "../rename-target";
 import {
   classifyFieldKind,
@@ -235,6 +238,19 @@ import {
   isDeletionCountRefusal,
 } from "./deletion-counts";
 import { nextSteps, partlyAppliedChange } from "./landing-push";
+import {
+  defaultLanguage,
+  keptPerLanguage,
+  madeRequired,
+  perLanguageColumn,
+  fillValueOf,
+  sourceColumn,
+} from "./per-language-answers";
+import {
+  type SaveHoldScope,
+  saveHoldScope,
+  withRegistryTable,
+} from "./save-hold";
 import {
   openSaveRecords,
   recordSaveStarted,
@@ -424,9 +440,10 @@ const SAVE_KINDS: Record<AddressKind, SaveKind> = {
 export function saveKindOf(kind: AddressKind): {
   manifest: SaveKind["manifest"];
   prefix: SaveKind["prefix"];
+  builtBy: SaveKind["builtBy"];
 } {
-  const { manifest, prefix } = SAVE_KINDS[kind];
-  return { manifest, prefix };
+  const { manifest, prefix, builtBy } = SAVE_KINDS[kind];
+  return { manifest, prefix, builtBy };
 }
 
 /** The kind of entity `save` writes. */
@@ -523,6 +540,12 @@ export async function writeCollectionSave(
      * write, so a save refused by any of them has written nothing.
      */
     beforeWrite?: () => Promise<void>;
+    /**
+     * The caller's hold of the collection for a save that deletes values (`saveHoldScope`),
+     * kept past this save until the caller has written the registry row, and let go by it. Absent,
+     * the save keeps its own, let go when it returns.
+     */
+    holdScope?: SaveHoldScope | undefined;
   } = {}
 ): Promise<CollectionSaveResult> {
   // A drift refusal leaves the save's files withdrawn, so it is told with the Builder's way on.
@@ -538,6 +561,22 @@ async function writeCollectionSaveOnce(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   options: Parameters<typeof writeCollectionSave>[2] = {}
+): Promise<CollectionSaveResult> {
+  // The save's hold where it deletes values, the caller's or, without one, its own until it returns.
+  const scope = options.holdScope ?? saveHoldScope(deps.logger);
+  try {
+    return await writeCollectionSaveHeld(deps, save, options, scope);
+  } finally {
+    if (options.holdScope === undefined) await scope.end();
+  }
+}
+
+/** `writeCollectionSave`'s save, made once, its hold taken through `scope` where it deletes values. */
+async function writeCollectionSaveHeld(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  options: NonNullable<Parameters<typeof writeCollectionSave>[2]>,
+  scope: SaveHoldScope
 ): Promise<CollectionSaveResult> {
   // The save's record that it is in progress is cleared when this scope ends, or the caller's
   // where one is open around it (`withSaveRecords`), as its outcome allows.
@@ -569,7 +608,8 @@ async function writeCollectionSaveOnce(
           deps,
           save,
           written.table,
-          () => appliedBy()
+          () => appliedBy(),
+          scope
         );
         // `"unchanged"`: nothing was pushed (an update of settings alone), so a failure recording
         // the files leaves nothing applied, and they are withdrawn as before any change.
@@ -593,13 +633,22 @@ async function writeCollectionSaveOnce(
             deps.adapter.getCapabilities().dialect
           );
         }
-        await runWritten(
+        // Where the caller writes the registry row after the file, the hold lasts until it does.
+        const hold = await heldForFileRoad(
           deps,
-          written.files,
-          written.table,
-          bounds,
-          options.inLastTransaction,
-          deletionHoldOfSave(deps, save, written.table)
+          deletionHoldOfSave(deps, save, written.table),
+          scope,
+          options.inLastTransaction !== undefined
+        );
+        await scope.during(() =>
+          runWritten(
+            deps,
+            written.files,
+            written.table,
+            bounds,
+            options.inLastTransaction,
+            hold
+          )
         );
       } else if (options.appliedAfter !== undefined) {
         // The counts the person confirmed, compared just before the change is made here, as before
@@ -609,7 +658,8 @@ async function writeCollectionSaveOnce(
           deps,
           save,
           written.table,
-          () => appliedAfter()
+          () => appliedAfter(),
+          scope
         );
         pushed = true;
         if (applied === "partly-applied") written.started.left();
@@ -2018,9 +2068,11 @@ async function refuseRowFillsOutsideSingle(
  * The fills and deletes a save's file writes between a column's creation and its NOT NULL: the
  * person's answers, and a Single's row fills (`CollectionSave.rowFills`) as fills, each a column
  * of `table`. A structured value (a JSON, chips or plugin JSON field's) is written as the JSON
- * text its column stores.
+ * text its column stores. A field kept per language settles its entries' default-language rows in
+ * the translations table instead (`perLanguageColumnOf`), and its column is made NOT NULL nowhere.
  */
 function fileResolutions(
+  deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string
 ): { resolutions?: ColumnResolution[] } {
@@ -2029,25 +2081,51 @@ function fileResolutions(
     ...(save.rowFills ?? []).map(fill => ({
       column: fill.column,
       kind: "fill" as const,
-      // A date is written as the moment it names, which the fill stores in the dialect's form
-      // (`storedDateValue`), as the PATCH road's fill does; never the text it was stated in.
-      value:
-        answeredField(save, fill.column)?.type === "date"
-          ? (statedMoment(fill.value) ?? fill.value)
-          : fill.value,
+      // A date is written as the moment it names (`fillValueOf`), as the PATCH road's fill
+      // stores it; never the text it was stated in.
+      value: fillValueOf(answeredField(save, fill.column)?.type, fill.value),
     })),
   ];
   if (answers.length === 0) return {};
   return {
-    resolutions: answers.map(r => ({
-      ...r,
-      tableName: table,
-      columnName: toSnakeCase(r.column),
-      ...(r.kind === "fill" && storesJson(save, r.column)
-        ? { json: true }
-        : {}),
-    })),
+    resolutions: answers.map(r => {
+      const perLanguage = perLanguageColumnOf(deps, save, table, r.column);
+      return {
+        ...r,
+        // The person's answer for a date kept per language too, as the push stores it.
+        ...(perLanguage !== undefined && r.kind === "fill"
+          ? { value: fillValueOf(answeredField(save, r.column)?.type, r.value) }
+          : {}),
+        tableName: table,
+        columnName: toSnakeCase(r.column),
+        ...(r.kind === "fill" && storesJson(save, r.column)
+          ? { json: true }
+          : {}),
+        ...(perLanguage === undefined ? {} : { perLanguage }),
+      };
+    }),
   };
+}
+
+/**
+ * Where an answer for field `name` settles rows, where the field is kept per language after the
+ * save (`keptPerLanguage`): the save's translations table, in the default language, whose value a
+ * required field kept per language needs. Undefined where the field's column is the main table's.
+ */
+function perLanguageColumnOf(
+  deps: Pick<CollectionSaveDeps, "config">,
+  save: CollectionSave,
+  table: string,
+  name: string
+): PerLanguageColumn | undefined {
+  if (save.entity === null) return undefined;
+  if (!keptPerLanguage(save.entity.localized, save.entity.fields).has(name)) {
+    return undefined;
+  }
+  return perLanguageColumn(
+    table,
+    defaultLanguage(deps.config.localization?.defaultLocale)
+  );
 }
 
 async function settledRows(
@@ -2064,80 +2142,225 @@ async function settledRows(
   await refuseRowFillsOutsideSingle(save, live);
   const settled: SettledRows[] = [];
   for (const resolution of save.resolutions ?? []) {
-    const field = answeredField(save, resolution.column);
-    if (field === undefined) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: resolution.column,
-            code: "RESOLUTION_FIELD_UNKNOWN",
-            message: `${resolution.column} is not a field of the saved collection.`,
-          },
-        ],
-      });
-    }
-    if (resolution.kind === "fill") {
-      // Unique by its Unique mark, or as a relationship stored one-to-one (`builderColumnIsUnique`):
-      // one value would repeat across the rows it fills either way.
-      if (builderColumnIsUnique(field)) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: resolution.column,
-              code: "FILL_ON_UNIQUE_FIELD",
-              message: `${resolution.column} is unique, so one value cannot fill its rows. Make it optional, or delete the rows that do not fit.`,
-            },
-          ],
-        });
-      }
-      const valid = validateDefaultValue(
-        { name: resolution.column, type: field.type },
-        resolution.value,
-        dialect
-      );
-      if (!valid.success) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: resolution.column,
-              code: "INVALID_DEFAULT_FOR_TYPE",
-              message: valid.error ?? "The fill value does not fit the field.",
-            },
-          ],
-        });
-      }
-    }
-    const column = toSnakeCase(resolution.column);
-    const liveColumn = live?.columns.find(c => c.name === column);
-    // An answer settles rows that do not fit a field this save makes
-    // required: one required now whose column is new, or nullable as it
-    // stands. Any other would delete or fill rows, and the generator would
-    // make the column NOT NULL, for a change the save does not make.
-    if (field.required !== true || liveColumn?.nullable === false) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: resolution.column,
-            code: "RESOLUTION_NOT_ASKED",
-            message: `This save does not make ${resolution.column} required, so it has no rows to fill or delete.`,
-          },
-        ],
-      });
-    }
-    const rows = exists
-      ? (
-          await countRowsBreakingNotNull(db, dialect, {
+    const field = answeredFieldOrRefuse(save, resolution.column);
+    refuseUnfitFill(field, resolution, dialect);
+    // Counted where the field's values are kept: its translations table's default-language rows
+    // for a field kept per language, its column of the main table otherwise; read under the name
+    // the save renames it from, which is the one the database still has.
+    const perLanguage = perLanguageColumnOf(
+      deps,
+      save,
+      table,
+      resolution.column
+    );
+    const source = sourceColumn(
+      save.renamedFields,
+      toSnakeCase(resolution.column)
+    );
+    const rows =
+      perLanguage === undefined
+        ? await settledOnMainTable(deps, {
             table,
-            column: liveColumn === undefined ? null : column,
+            exists,
+            live,
+            field,
+            resolution,
+            source,
           })
-        ).total
-      : 0;
+        : await settledPerLanguage(deps, save, {
+            table,
+            exists,
+            live,
+            perLanguage,
+            resolution,
+            source,
+          });
     if (resolution.kind === "delete_nonconforming") {
       assertDeleteWithinThreshold(rows);
     }
     settled.push({ column: resolution.column, rows, resolution });
   }
   return settled;
+}
+
+/** The saved collection's field an answer names; refused where it names none. */
+function answeredFieldOrRefuse(
+  save: CollectionSave,
+  column: string
+): UiSchemaEntity["fields"][number] {
+  const field = answeredField(save, column);
+  if (field === undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: column,
+          code: "RESOLUTION_FIELD_UNKNOWN",
+          message: `${column} is not a field of the saved collection.`,
+        },
+      ],
+    });
+  }
+  return field;
+}
+
+/** Refuses a fill one value cannot make: of a unique field, or of a value its type does not take. */
+function refuseUnfitFill(
+  field: UiSchemaEntity["fields"][number],
+  resolution: NonNullable<CollectionSave["resolutions"]>[number],
+  dialect: SupportedDialect
+): void {
+  if (resolution.kind !== "fill") return;
+  // Unique by its Unique mark, or as a relationship stored one-to-one (`builderColumnIsUnique`):
+  // one value would repeat across the rows it fills either way.
+  if (builderColumnIsUnique(field)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: resolution.column,
+          code: "FILL_ON_UNIQUE_FIELD",
+          message: `${resolution.column} is unique, so one value cannot fill its rows. Make it optional, or delete the rows that do not fit.`,
+        },
+      ],
+    });
+  }
+  const valid = validateDefaultValue(
+    { name: resolution.column, type: field.type },
+    resolution.value,
+    dialect
+  );
+  if (!valid.success) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: resolution.column,
+          code: "INVALID_DEFAULT_FOR_TYPE",
+          message: valid.error ?? "The fill value does not fit the field.",
+        },
+      ],
+    });
+  }
+}
+
+/** The refusal of an answer for field `name`, which the save does not ask. */
+function answerNotAsked(name: string): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: name,
+        code: "RESOLUTION_NOT_ASKED",
+        message: `This save does not make ${name} required, so it has no rows to fill or delete.`,
+      },
+    ],
+  });
+}
+
+/** How many rows of the main table an answer for a field with a column there settles. */
+async function settledOnMainTable(
+  deps: CollectionSaveDeps,
+  args: {
+    table: string;
+    exists: boolean;
+    live: TableSpec | undefined;
+    field: UiSchemaEntity["fields"][number];
+    resolution: NonNullable<CollectionSave["resolutions"]>[number];
+    /** The field's column as the database still names it (`sourceColumn`). */
+    source: string;
+  }
+): Promise<number> {
+  const liveColumn = args.live?.columns.find(c => c.name === args.source);
+  // An answer settles rows that do not fit a field this save makes
+  // required: one required now whose column is new, or nullable as it
+  // stands. Any other would delete or fill rows, and the generator would
+  // make the column NOT NULL, for a change the save does not make. A renamed
+  // field is judged and counted by the column it is renamed from.
+  if (args.field.required !== true || liveColumn?.nullable === false) {
+    throw answerNotAsked(args.resolution.column);
+  }
+  if (!args.exists) return 0;
+  return (
+    await countRowsBreakingNotNull(
+      deps.adapter.getDrizzle(),
+      deps.adapter.getCapabilities().dialect,
+      {
+        table: args.table,
+        column: liveColumn === undefined ? null : args.source,
+      }
+    )
+  ).total;
+}
+
+/**
+ * How many entries an answer for a field kept per language settles: those with no value in the
+ * default language (`countEntriesWithoutDefaultLanguageValue`), every entry where the translations
+ * table has no column for the field yet. Refused where the save does not make the field required
+ * (`madeRequired`): its translations column is nullable whatever the field says, so whether the
+ * answer is asked is read from the definition before and after the save.
+ */
+async function settledPerLanguage(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  args: {
+    table: string;
+    exists: boolean;
+    live: TableSpec | undefined;
+    perLanguage: PerLanguageColumn;
+    resolution: NonNullable<CollectionSave["resolutions"]>[number];
+    /** The field's column as the database still names it (`sourceColumn`). */
+    source: string;
+  }
+): Promise<number> {
+  const name = args.resolution.column;
+  if (
+    !madeRequired(
+      save.previous?.fields,
+      save.entity?.fields,
+      name,
+      save.renamedFields
+    )
+  ) {
+    throw answerNotAsked(name);
+  }
+  if (!args.exists) return 0;
+  const { companionTable, locale } = args.perLanguage;
+  const db = deps.adapter.getDrizzle();
+  const { dialect } = deps.adapter.getCapabilities();
+  const column = await liveCompanionColumn(deps, companionTable, args.source);
+  // A field this save moves into the translations table still has its column on the main table,
+  // with the values the move copies over before the answer runs: the entries without one are those
+  // whose main column is empty.
+  const movesFromMain =
+    column === null && args.live?.columns.some(c => c.name === args.source);
+  if (movesFromMain === true) {
+    return (
+      await countRowsBreakingNotNull(db, dialect, {
+        table: args.table,
+        column: args.source,
+      })
+    ).total;
+  }
+  return countEntriesWithoutDefaultLanguageValue(db, dialect, {
+    table: args.table,
+    companionTable,
+    column,
+    locale,
+  });
+}
+
+/** `column` where translations table `companionTable` has it, else null. */
+async function liveCompanionColumn(
+  deps: CollectionSaveDeps,
+  companionTable: string,
+  column: string
+): Promise<string | null> {
+  if (!(await deps.adapter.tableExists(companionTable))) return null;
+  const live = (
+    await introspectLiveSnapshot(
+      deps.adapter.getDrizzle(),
+      deps.adapter.getCapabilities().dialect,
+      [companionTable]
+    )
+  ).tables[0];
+  return live?.columns.some(c => c.name === column) === true ? column : null;
 }
 
 /** Whether field `name` of the saved collection keeps its value as JSON. */
@@ -2358,7 +2581,7 @@ async function writeFiles(
     table: plan.table,
     now: new Date(now.getTime() + offset),
     ...(await movesOf(deps, save, plan.table)),
-    ...fileResolutions(save, plan.table),
+    ...fileResolutions(deps, save, plan.table),
     ...(save.keys === undefined
       ? {}
       : { newTableKeys: new Map([[plan.table, save.keys.after]]) }),
@@ -3202,6 +3425,9 @@ async function generateFor(
     components: inputs.components,
     // The starting point the inputs were checked against, read once.
     previous: inputs.latest,
+    // The names the site's storage is on, which the save named its field groups under: a history
+    // on the other names is refused, naming the step between them, rather than planned across.
+    fieldGroupNaming: inputs.fieldGroupNaming,
     // Every permission the config declares, by owner, from the same entities and by the same
     // function `migrate:create` records them with. Left out, the snapshot carried the previous
     // one's record forward, without the permissions of an entity this save made or removed, and
@@ -4545,7 +4771,7 @@ async function recordUnits(
  *
  * On PostgreSQL and SQLite the count holds the tables itself (`deletionHoldOf`). On MySQL, whose
  * schema statements commit on their own, the collection is held instead, on the try's own
- * connection, before the count (`holdCollectionOnConnection`): an entry write that already read
+ * connection, before the count (`holdEntityOnConnection`): an entry write that already read
  * the collection's registry row commits first and is counted, and one that starts after waits at
  * the collection's named locks until the try is over, then meets the new shape. The locks belong
  * to the connection, so `settled` lets them go there, however the try ends.
@@ -4574,13 +4800,27 @@ function triedHoldOf(
   if (deps.adapter.getCapabilities().dialect !== "mysql") {
     return { before: check };
   }
-  const { slug } = hold;
   const standing = hold.standingIn(scope);
+  if (hold.heldOutside === true) {
+    // Held through the save's scope on a connection of its own for the whole run
+    // (`heldForFileRoad`): each try counts, and a resumed try counts again what still stands.
+    return {
+      before: check,
+      beforeResume: async db => {
+        try {
+          await standing(db);
+        } catch (error) {
+          throw resumedRefusal(error);
+        }
+      },
+    };
+  }
+  const { entity } = hold;
   // This try's hold: `before` (or `beforeResume`) and `settled` run in turn, one pair per try.
-  let held: Awaited<ReturnType<typeof holdCollectionOnConnection>> | undefined;
+  let held: Awaited<ReturnType<typeof holdEntityOnConnection>> | undefined;
   return {
     before: async db => {
-      held = await holdCollectionOnConnection(deps.adapter, db, slug);
+      held = await holdEntityOnConnection(deps.adapter, db, entity);
       await check(db);
     },
     beforeResume: async db => {
@@ -4589,16 +4829,10 @@ function triedHoldOf(
       // the step to settle it, so the file is kept rather than withdrawn. Any other failure, a
       // wait that ends the try among them, goes on as it is.
       try {
-        held = await holdCollectionOnConnection(deps.adapter, db, slug);
+        held = await holdEntityOnConnection(deps.adapter, db, entity);
         await standing(db);
       } catch (error) {
-        const refusal = holdRefusalOf(error);
-        throw NextlyError.is(refusal)
-          ? refusedPartway(
-              refusal,
-              "What of its migration file ran stayed applied, so the file is kept: settle it with `nextly migrate:resolve` before saving again."
-            )
-          : error;
+        throw resumedRefusal(error);
       }
     },
     settled: async () => {
@@ -4609,12 +4843,28 @@ function triedHoldOf(
       // (`runHeld`) rather than going back to the pool held.
       await releasing?.release().catch((error: unknown) => {
         deps.logger.warn(
-          `Collection '${slug}': its hold for the save could not be let go on the migration's connection (${error instanceof Error ? error.message : String(error)}); that connection is closed once the migration's try is over.`
+          `'${entity.kind}:${entity.slug}': its hold for the save could not be let go on the migration's connection (${error instanceof Error ? error.message : String(error)}); that connection is closed once the migration's try is over.`
         );
         leftHeld(releasing.connection);
       });
     },
   };
+}
+
+/**
+ * A failure met by a resumed MySQL try, which runs past statements an earlier try made durable: a
+ * hold's refusal there comes after part of the file landed, schema or data, so it is told as
+ * part-way (`refusedPartway`), with the step to settle it, and the file is kept rather than
+ * withdrawn. Any other failure, a wait that ends the try among them, goes on as it is.
+ */
+function resumedRefusal(error: unknown): unknown {
+  const refusal = holdRefusalOf(error);
+  return NextlyError.is(refusal)
+    ? refusedPartway(
+        refusal,
+        "What of its migration file ran stayed applied, so the file is kept: settle it with `nextly migrate:resolve` before saving again."
+      )
+    : error;
 }
 
 /**
@@ -4642,19 +4892,57 @@ async function runHeld<T>(
   }
 }
 
-/** `apply` under the save's count and hold (`countedThroughApply`), for the save's deletion hold. */
+/**
+ * The save's hold for its file road, where it deletes values (`hold`), and the hold its file's
+ * tries count under:
+ *
+ * - PostgreSQL and SQLite: taken through `scope` here, from before the file's count until the
+ *   caller has written the registry row, so an entry write that waited meets the definition the
+ *   save recorded (`heldOutside`).
+ * - MySQL, where the row is written in the file's last transaction (`registryInFile`): the file's
+ *   try holds the collection on its own connection instead (`triedHoldOf`), until that
+ *   transaction ends with the row written.
+ * - MySQL, where the caller writes the row after the file (a translations table brought in step
+ *   after it): taken through `scope` here, as on the other databases, on a session of its own
+ *   outside the pool, and the tries only count, so no write lands between the file and the row.
+ */
+async function heldForFileRoad(
+  deps: CollectionSaveDeps,
+  hold: SaveDeletionHold | undefined,
+  scope: SaveHoldScope,
+  registryInFile: boolean
+): Promise<SaveDeletionHold | undefined> {
+  if (hold === undefined) return undefined;
+  if (deps.adapter.getCapabilities().dialect === "mysql" && registryInFile) {
+    // Resolved before the try, which holds the collection on the connection its own statements
+    // run on (`withRegistryTable`).
+    return {
+      ...hold,
+      entity: await withRegistryTable(deps.adapter, hold.entity),
+    };
+  }
+  await scope.take(deps.adapter, hold.entity);
+  return { ...hold, heldOutside: true };
+}
+
+/**
+ * `apply` under the save's count and hold (`countedThroughApply`), for the save's deletion hold,
+ * the hold taken through `scope`, the save's.
+ */
 function comparedThenApplied<T>(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string,
-  apply: () => Promise<T>
+  apply: () => Promise<T>,
+  scope: SaveHoldScope
 ): Promise<T> {
   return countedThroughApply(
     deps.adapter,
-    save.slug,
+    entityOfSave(save),
     deletionHoldOfSave(deps, save, table),
     apply,
-    deps.logger
+    deps.logger,
+    scope
   );
 }
 
@@ -4663,42 +4951,34 @@ function comparedThenApplied<T>(
  * it deletes is compared with the one the person confirmed (`DeletionHold.compare`), where there
  * is a count (`hold`); without one, `apply` alone.
  *
- * On MySQL collection `slug` is held first, on a connection of its own, from before the count
- * until `apply` has ended, however it ended (`holdCollectionOnSession`): `apply` runs on
- * connections of its own, and an entry write waits at the collection's named locks wherever it
- * runs, so a write under way at the count is counted, and one sent after it meets the new shape.
- * On PostgreSQL and SQLite nothing more is held, as before.
+ * `entity` is held first (`SaveHoldScope.take`), from before the count: `apply` runs on
+ * connections of its own, and an entry write waits at the hold wherever it runs, so a write under
+ * way at the count is counted, and one sent after it meets the new shape. Through `scope`, the
+ * caller that writes the registry row after `apply` keeps the hold until it is written, and lets
+ * it go; without one, it is let go once `apply` has ended, however it ended.
  */
 export async function countedThroughApply<T>(
   adapter: DrizzleAdapter,
-  slug: string,
+  entity: EntityRef,
   hold: DeletionHold | undefined,
   apply: () => Promise<T>,
   /** Told a release that failed, which changes nothing of what `apply` did. */
-  logger: { warn(message: string): void }
+  logger: { warn(message: string): void },
+  scope?: SaveHoldScope
 ): Promise<T> {
   if (hold === undefined) return apply();
-  const compare = () => hold.compare(adapter.getDrizzle());
-  if (adapter.getCapabilities().dialect !== "mysql") {
-    await compare();
-    return apply();
+  const held = scope ?? saveHoldScope(logger);
+  try {
+    await held.take(adapter, entity);
+    // On SQLite the count takes a turn on the one connection, as a transaction: one the flow has
+    // open when the hold is taken has ended first, so its writes are counted.
+    await (adapter.getCapabilities().dialect === "sqlite"
+      ? adapter.transaction(tx => hold.compare(tx.getDrizzle()))
+      : hold.compare(adapter.getDrizzle()));
+    return await held.during(apply);
+  } finally {
+    if (scope === undefined) await held.end();
   }
-  return adapter.withSession(async session => {
-    const { release } = await holdCollectionOnSession(adapter, session, slug);
-    try {
-      await compare();
-      return await apply();
-    } finally {
-      // A release that fails is told and passed over: what `apply` did, or how it failed, is
-      // what the caller sees, and the session's connection is closed once this ends, which lets
-      // its named locks go.
-      await release().catch((error: unknown) => {
-        logger.warn(
-          `Collection '${slug}': its hold for the save could not be let go on its own connection (${error instanceof Error ? error.message : String(error)}); closing that connection lets it go.`
-        );
-      });
-    }
-  });
 }
 
 /**
@@ -4829,13 +5109,27 @@ function deletionHoldOfSave(
     next: (save.entity?.fields ?? []) as unknown as FieldDefinition[],
     renamed: save.renamedFields,
     confirmed: save.confirmedDeletions,
+    // Where the kind keeps a removed many-to-many's values: a field group in its own row.
+    builtBy: SAVE_KINDS[save.kind ?? "collection"].builtBy,
   });
-  return hold === undefined ? undefined : { ...hold, slug: save.slug };
+  return hold === undefined
+    ? undefined
+    : { ...hold, entity: entityOfSave(save) };
 }
 
-/** A save's deletion hold, with the collection it holds on MySQL (`triedHoldOf`). */
+/** The entity `save` is of, as its hold names it. */
+function entityOfSave(save: CollectionSave): EntityRef {
+  return { kind: save.kind ?? "collection", slug: save.slug };
+}
+
+/** A save's deletion hold, with the entity it holds (`triedHoldOf`). */
 interface SaveDeletionHold extends DeletionHold {
-  readonly slug: string;
+  readonly entity: EntityRef;
+  /**
+   * Held through the save's scope on a connection of its own for the whole file run
+   * (`heldForFileRoad`), so a MySQL try takes no hold of its own and only counts.
+   */
+  readonly heldOutside?: boolean;
 }
 
 /**

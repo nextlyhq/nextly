@@ -33,12 +33,12 @@ import {
 } from "../../../../plugins/test-nextly";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
 import { applyDesiredSchema } from "../../pipeline/index";
-import { resolveComponentTableName } from "../../utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../../field-groups/services/field-group-storage-names";
 import { col } from "../dsl";
 
 const POSTS_TABLE = "dc_posts";
 const SITE_TABLE = resolveSingleTableName({ slug: "site" });
-const SEO_TABLE = resolveComponentTableName("seo");
+const SEO_TABLE = fieldGroupTableNameFor("current", "seo");
 
 const siteFields = () => [text({ name: "tagline" })];
 const seoFields = () => [text({ name: "metaTitle" })];
