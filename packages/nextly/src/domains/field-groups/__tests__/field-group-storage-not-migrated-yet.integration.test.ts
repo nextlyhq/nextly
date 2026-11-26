@@ -473,7 +473,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await rowsIn(CURRENT), "the two Singles' rows alone").toBe(2);
     });
 
-    it("loses nothing to a rollback under a server on the current names, and saves on a retry", async () => {
+    it("refuses a save a rollback meets under a server on the current names, loses nothing, and saves on the retry", async () => {
       const { save, heading } = await openSite({ migrated: true });
       await rename("dynamic_field_groups", "dynamic_components");
       await pointRegistryAt("dynamic_components", TABLE);
@@ -484,7 +484,7 @@ describe.each(getConfiguredTestDialects())(
         const answer = await save("Back");
         expect(await rowsIn(TABLE), "what the group held is there").toBe(3);
         return answer;
-      }, [MOVING, "INTERNAL_ERROR"]);
+      }, [MOVING]);
       expect(await heading()).toBe("Back");
       expect(await rowsIn(TABLE)).toBe(3);
     });
