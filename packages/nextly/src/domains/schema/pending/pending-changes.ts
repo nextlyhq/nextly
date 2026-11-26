@@ -41,8 +41,6 @@ export interface BesideFile {
   overlays?: true;
   /** Turns the entity's translation off, its translations table dropped. */
   removes?: true;
-  /** Its entity is the Schema Builder's, which the configuration does not declare. */
-  builder?: true;
 }
 
 /** Everything a run of `migrate:create` would write a migration for. */
@@ -70,27 +68,18 @@ export interface PendingChanges {
 /** The changes a planned run would write a migration for. */
 export function pendingChangesOf(planned: PlannedRun): PendingChanges {
   const { args } = planned;
-  const builders = new Set(
-    planned.entities
-      .filter(({ entity }) => entity.settings?.source === "builder")
-      .map(({ entity }) => entity.tableName)
-  );
-  const fileOf = (kind: BesideFile["kind"], table: string): BesideFile => ({
-    kind,
-    table,
-    ...(builders.has(table) ? { builder: true as const } : {}),
-  });
   const beside = (
     kind: BesideFile["kind"],
     plans: readonly { spec: { mainTable: string } }[]
-  ): BesideFile[] => plans.map(({ spec }) => fileOf(kind, spec.mainTable));
+  ): BesideFile[] => plans.map(({ spec }) => ({ kind, table: spec.mainTable }));
   return {
     tables: planned.operations,
     diffed: planned.diffed,
     beside: [
       ...planned.companionPlans.map(
         ({ spec, plan, overlays }): BesideFile => ({
-          ...fileOf("translations table", spec.mainTable),
+          kind: "translations table",
+          table: spec.mainTable,
           ...(overlays === true ? { overlays } : {}),
           ...(plan.kind === "disable" ? { removes: true } : {}),
         })
@@ -144,8 +133,13 @@ function besideLine(file: BesideFile): string {
   return `~ ${file.kind} ${file.table}`;
 }
 
-/** Whether `file` makes a translations table, its columns or its unique indexes, and no more. */
-export function makesTranslationsTable(file: BesideFile): boolean {
+/**
+ * Whether `nextly migrate`, and a production start that runs migrations, makes what `file` would where
+ * the database lacks it, with no file (`ensureLocalizedCompanions`): a translations table, its columns
+ * and its unique indexes, of the configuration's entities and the Schema Builder's alike. Neither
+ * moves a field's values between the two tables, retypes a column nor turns translation off.
+ */
+export function madeByMigrate(file: BesideFile): boolean {
   return (
     (file.kind === "translations table" && file.removes !== true) ||
     file.kind === "per-language unique indexes"
@@ -153,40 +147,19 @@ export function makesTranslationsTable(file: BesideFile): boolean {
 }
 
 /**
- * Whether `nextly migrate`, and a production start that runs migrations, makes what `file` would where
- * the database lacks it, with no file (`ensureLocalizedCompanions`): a translations table, its columns
- * and its unique indexes, of what the configuration declares. Neither moves a field's values between
- * the two tables nor retypes a column, and what the Schema Builder declares is made by its saves and
- * by the migrations written of it.
- */
-export function madeByMigrate(file: BesideFile): boolean {
-  return makesTranslationsTable(file) && file.builder !== true;
-}
-
-/**
  * The notice every surface gives of the files a run would write beside the main migration where the
- * newest snapshot recorded none and nothing declared since asks for them (`besideNotRecorded`). It
- * names no migration to write: what `nextly migrate` makes it makes with no file, and the rest is
- * named as not made by it.
+ * newest snapshot recorded none and nothing declared since asks for them (`besideNotRecorded`):
+ * `nextly migrate` makes what is missing with no file, and the file `migrate:create` writes for them
+ * records them, filling in only what is empty.
  */
 export function translationsNotRecordedNotice(
   files: readonly BesideFile[]
 ): string {
-  const lines = (said: string, named: readonly BesideFile[]): string[] =>
-    named.length === 0
-      ? []
-      : [said, ...named.map(file => `  ${besideLine(file)}`)];
   return [
     "Translations tables not recorded yet in a migration: the newest snapshot does not say whether " +
-      "these are made, so they are not compared.",
-    ...lines(
-      "`nextly migrate` makes what is missing:",
-      files.filter(madeByMigrate)
-    ),
-    ...lines(
-      "These are the Schema Builder's, which `nextly migrate` does not make:",
-      files.filter(file => !madeByMigrate(file))
-    ),
+      "these are made, so they are not compared. `nextly migrate` makes what is missing; " +
+      "`nextly migrate:create` records it in its next migration.",
+    ...files.map(file => `  ${besideLine(file)}`),
   ].join("\n");
 }
 

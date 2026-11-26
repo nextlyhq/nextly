@@ -443,42 +443,6 @@ describe("compareWithNewestSnapshot", () => {
       expect(changes.besideNotRecorded).toBeUndefined();
     });
 
-    // `nextly migrate` makes what the configuration declares, and nothing of the Schema Builder's.
-    it("are a change for a Schema Builder entity's overlays, and a notice apart where no settings are recorded", () => {
-      const built = { ...OVERLAYS, builder: true as const };
-      const pendingBuilt = { ...NO_TABLES, beside: [built] };
-      const recorded = overlaysOver(snapshotOf(posts), {
-        pending: pendingBuilt,
-      });
-      expect(unwrittenChangeLines(recorded)).toEqual([
-        "~ translations table dc_posts",
-      ]);
-      expect(recorded.besideNotRecorded).toBeUndefined();
-
-      const none = overlaysOver(snapshotOf(posts, { entities: undefined }), {
-        pending: pendingBuilt,
-      });
-      expect(unwrittenChangeLines(none)).toEqual([]);
-      expect(none.besideNotRecorded).toEqual([built]);
-    });
-
-    it("are named apart in the notice, the Schema Builder's never as made by nextly migrate", () => {
-      const built = { ...OVERLAYS, table: "dc_built", builder: true as const };
-      const alone = translationsNotRecordedNotice([built]);
-      expect(alone).toContain("not recorded yet");
-      expect(alone).toContain("~ translations table dc_built");
-      expect(alone).not.toContain("`nextly migrate` makes what is missing");
-
-      const [made, notMade] = translationsNotRecordedNotice([
-        built,
-        OVERLAYS,
-      ]).split("Schema Builder");
-      expect(made).toContain("`nextly migrate` makes what is missing");
-      expect(made).toContain("~ translations table dc_posts");
-      expect(made).not.toContain("dc_built");
-      expect(notMade).toContain("~ translations table dc_built");
-    });
-
     it("are a change for overlays too over no snapshot, where everything is new", () => {
       expect(overlaysOver(null).besideNotRecorded).toBeUndefined();
     });

@@ -85,16 +85,16 @@ them as changes: they alone do not fail `migrate:check`. The next migration `mig
 writes records them, and from then on a change to them is reported like any other.
 
 Such a snapshot, and the one `nextly migrate:baseline` writes, does not say what a translations table
-holds either: its columns, and its unique indexes. The files `migrate:create` would write for them are
-named in a notice ("Translations tables not recorded yet in a migration") by `nextly migrate:check`,
-`nextly migrate` and a production start that runs migrations, and none of them is refused. The notice
-says which `nextly migrate` makes itself. A change to the main table is still refused.
+holds either: its columns, and its unique indexes. What `nextly migrate` would make there is named in
+a notice ("Translations tables not recorded yet in a migration") by `nextly migrate:check`,
+`nextly migrate` and a production start that runs migrations, and none of it is refused:
+`nextly migrate` makes what is missing, and the next migration `nextly migrate:create` writes records
+it. A change to the main table is still refused.
 
 The notice is given over any later snapshot too for the column a repeater's or group's translated text
 is kept in, where a release that keeps it there asks for it and nothing of that collection, Single or
-field group in your configuration has changed: `nextly migrate` makes it. Where something did change,
-it is reported with that change. One of the Schema Builder's is reported like any other change, since
-`nextly migrate` does not make it.
+field group has changed, the Schema Builder's included. Where something did change, it is reported
+with that change.
 
 ### A migration that deletes data
 

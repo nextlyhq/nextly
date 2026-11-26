@@ -56,7 +56,6 @@ import type { SnapshotFile } from "../migrate-create/snapshot-io";
 import {
   type BesideFile,
   madeByMigrate,
-  makesTranslationsTable,
   pendingChangeLines,
   type PendingChanges,
   recordsForTheFirstTime,
@@ -232,12 +231,12 @@ const DECLARED_LIST = {
 /**
  * The files beside the main migration that are no change of what the newest snapshot recorded.
  *
- * - Over a snapshot that does not say what the translations tables hold: each that makes one, its
- *   columns or its unique indexes.
- * - Over one that does: only what a repeater's or group's text is kept in, where `nextly migrate`
- *   makes it (`madeByMigrate`) and nothing declared of its entity changed, neither a setting nor its
- *   main table. A release that keeps such text apart asks for it under an unchanged declaration, and
- *   `nextly migrate` makes it and records nothing. Every other file is a change.
+ * - Over a snapshot that does not say what the translations tables hold: each `nextly migrate` makes
+ *   (`madeByMigrate`).
+ * - Over one that does: only what a repeater's or group's text is kept in, where nothing declared of
+ *   its entity changed, neither a setting nor its main table. A release that keeps such text apart
+ *   asks for it under an unchanged declaration, and `nextly migrate` makes it and records nothing.
+ *   Every other file is a change.
  */
 function besideNotRecorded(args: {
   pending: Pick<PendingChanges, "beside" | "diffed">;
@@ -248,7 +247,7 @@ function besideNotRecorded(args: {
   const { pending, latest, entities } = args;
   if (latest === null) return [];
   if (!recordsTranslationsTables(latest)) {
-    return pending.beside.filter(makesTranslationsTable);
+    return pending.beside.filter(madeByMigrate);
   }
   const changed = new Set([
     ...pending.diffed.map(operationTableName),
