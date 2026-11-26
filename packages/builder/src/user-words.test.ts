@@ -4,7 +4,9 @@
  * A saved part of a page is a "saved section", never a pattern; a header and
  * footer set is never a "Layout", a word the Style tab keeps for its Layout
  * section; a design copied once is a "Starter", and "template" means only a
- * linked design of a collection's entries. Code names stay as they are
+ * linked design of a collection's entries (a bare "Template" as a name is
+ * the repository's retired-words test's, with the editor's other retired
+ * words, `scripts/retired-words.test.mjs`). Code names stay as they are
  * (`"pattern"`, `"save-as-pattern"`, `kind: "pattern"`), so this reads only
  * what an author can see: string literals, template text and JSX text in the
  * shipped source.
@@ -36,9 +38,6 @@ const fromSrc = (file: string): string =>
 const RULES: readonly RegExp[] = [
   /\blayouts?\b/i,
   /\bpatterns?\b/i,
-  // A bare "Template(s)" as a name; "its template" in a sentence is the
-  // linked design of a collection's entries, which is what the word means.
-  /(?<![Cc]ollection )\bTemplates?\b/,
   /\b(?:starter|page|site)s? templates?\b/i,
   /\bstarters?\b(?! (?:header|footer|pages?|sites?)\b)/i,
 ];

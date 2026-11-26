@@ -28,6 +28,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { HEADER_FOOTER_WORDS } from "@nextlyhq/builder";
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 import type { Node as AstNode } from "oxc-parser";
 import { describe, expect, it } from "vitest";
@@ -111,7 +112,8 @@ const DECIDED: readonly { word: string | RegExp; file: string }[] = [
     "Start from",
     "Blank",
     "Address",
-    "Header & footer",
+    // The editor's word for it, read from the builder's glossary.
+    HEADER_FOOTER_WORDS.headerAndFooter,
   ].map(word => ({
     word,
     file: "plugin-page-builder/src/admin/new-page/new-page-words.ts",
