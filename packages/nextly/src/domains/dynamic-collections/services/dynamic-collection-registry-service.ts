@@ -22,6 +22,7 @@ import type {
   MigrationStatus,
   StoredWebhookRecording,
 } from "../../../schemas/dynamic-collections/types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import { listStoredRegistry } from "../../../shared/base-registry-service";
@@ -56,6 +57,7 @@ import {
   registryReadTransaction,
   registryRowOnTransaction,
 } from "./collection-row-cache";
+import { ENTITY_NOUN, type EntityRef } from "./entity-hold";
 
 export interface CollectionMetadata {
   id: string;
@@ -949,6 +951,37 @@ export function namedCollectionLockNames(
 }
 
 /**
+ * The named locks a hold of `entity` takes on MySQL, in the order it takes them, in the database
+ * named `database`: a collection's ({@link namedCollectionLockNames}), or a Single's or a field
+ * group's one name, a hash of the database, its kind and its slug, kept apart by a NUL as a
+ * collection's are. Those two kinds had no hold under an earlier name, so none is taken beside it.
+ */
+export function namedEntityLockNames(
+  database: string | null,
+  entity: EntityRef
+): string[] {
+  if (entity.kind === "collection") {
+    return namedCollectionLockNames(database, [entity.slug]);
+  }
+  const hash = createHash("sha256")
+    .update(`${database ?? ""}\u0000${entity.kind}\u0000${entity.slug}`)
+    .digest("hex");
+  return [`nextly:${entity.kind}:${hash.slice(0, 40)}`];
+}
+
+/** The registry table that holds one row per entity of each kind. */
+const REGISTRY_TABLE: Readonly<Record<EntityRef["kind"], string>> = {
+  collection: "dynamic_collections",
+  single: "dynamic_singles",
+  fieldGroup: STORAGE_FORMAT.registryTable,
+};
+
+/** The registry table `entity`'s row is in: the one it names, or its kind's. */
+function registryTableOf(entity: EntityRef): string {
+  return entity.registryTable ?? REGISTRY_TABLE[entity.kind];
+}
+
+/**
  * The database each adapter's connections are in (`DATABASE()`), read once: every connection of
  * one adapter's pool is opened on the database its configuration names, so one read answers for
  * all of them, and a hold costs no statement for it after the first. A read that fails is not
@@ -1009,7 +1042,7 @@ function takeInOrder(
  * that fails part way, whatever it got, releases every name, since `RELEASE_LOCK` of a name the
  * connection does not hold changes nothing.
  */
-async function takeNamedCollectionLocks(
+function takeNamedCollectionLocks(
   adapter: object,
   rowsOn: RowsOn,
   slugs: readonly string[],
@@ -1019,10 +1052,29 @@ async function takeNamedCollectionLocks(
    */
   waitMs?: number
 ): Promise<{ release: () => Promise<void>; kept: () => Promise<boolean> }> {
-  const names = namedCollectionLockNames(
-    await databaseNameOf(adapter, rowsOn),
-    slugs
+  return takeNamedLocks(
+    adapter,
+    rowsOn,
+    database => namedCollectionLockNames(database, slugs),
+    ENTITY_NOUN.collection,
+    waitMs
   );
+}
+
+/**
+ * The named locks `namesIn` gives for the connection's database, taken as
+ * {@link takeNamedCollectionLocks} takes a collection's: in one statement, in order, every one
+ * released however the take ends short. A refusal names the entity as `noun`.
+ */
+async function takeNamedLocks(
+  adapter: object,
+  rowsOn: RowsOn,
+  namesIn: (database: string | null) => string[],
+  noun: string,
+  /** As `takeNamedCollectionLocks`'s: one wait over every name; left out, each waits on its own. */
+  waitMs?: number
+): Promise<{ release: () => Promise<void>; kept: () => Promise<boolean> }> {
+  const names = namesIn(await databaseNameOf(adapter, rowsOn));
   // The names held: the first `held` of `names`.
   let held = 0;
   const release = async (): Promise<void> => {
@@ -1071,8 +1123,7 @@ async function takeNamedCollectionLocks(
   await release();
   throw new NextlyError({
     code: "COLLECTION_BEING_CHANGED",
-    publicMessage:
-      "This collection is being changed elsewhere. Try again in a moment.",
+    publicMessage: `This ${noun} is being changed elsewhere. Try again in a moment.`,
     logContext: {
       reason: "collection-named-lock-timeout",
       ...(counted ? { lock: names[got] } : { taken: String(got) }),
@@ -1106,9 +1157,10 @@ function rowsOnSession(session: StatementSession): RowsOn {
 }
 
 /**
- * Collection `slug` held as a collection delete holds it (`holdCollectionsIn` for `"update"`), on
- * the connection `rowsOn` runs on: its named locks first, then its registry row `FOR UPDATE`, which
- * waits for every entry write that already read the row for share to commit. An entry write that
+ * `entity` held as a collection delete holds a collection (`holdCollectionsIn` for `"update"`), on
+ * the connection `rowsOn` runs on: its named locks first (`namedEntityLockNames`), then its
+ * registry row `FOR UPDATE`, which waits for every entry write that already read the row for share
+ * to commit. An entry write that
  * starts after waits at the named locks until `release`, which must run on the same connection. A
  * take that fails releases what it got before it throws.
  *
@@ -1118,18 +1170,23 @@ function rowsOnSession(session: StatementSession): RowsOn {
  * how a read under autocommit takes its locks; the row's lock then ends and the named locks stay.
  * Inside the caller's transaction (`"in-transaction"`) the read runs there.
  */
-async function holdCollectionWith(
+async function holdEntityWith(
   adapter: object,
   rowsOn: RowsOn,
-  slug: string,
+  entity: EntityRef,
   rowRead: "in-transaction" | "own-transaction"
 ): Promise<{ release: () => Promise<void>; kept: () => Promise<boolean> }> {
-  const named = await takeNamedCollectionLocks(adapter, rowsOn, [slug]);
+  const named = await takeNamedLocks(
+    adapter,
+    rowsOn,
+    database => namedEntityLockNames(database, entity),
+    ENTITY_NOUN[entity.kind]
+  );
   const own = rowRead === "own-transaction";
   try {
     if (own) await rowsOn(sql`START TRANSACTION`);
     await rowsOn(
-      sql`SELECT ${sql.identifier("id")} FROM ${sql.identifier("dynamic_collections")} WHERE ${sql.identifier("slug")} = ${slug} FOR UPDATE`
+      sql`SELECT ${sql.identifier("id")} FROM ${sql.identifier(registryTableOf(entity))} WHERE ${sql.identifier("slug")} = ${entity.slug} FOR UPDATE`
     );
     if (own) await rowsOn(sql`COMMIT`);
   } catch (error) {
@@ -1141,46 +1198,70 @@ async function holdCollectionWith(
 }
 
 /**
- * A deleting save's hold of collection `slug` on MySQL, on a connection held for it alone
- * (`session`, from `withSession`, outside any transaction), for a save whose change runs on other
- * connections (a push): the named locks belong to the server by name, so an entry write waits for
- * them wherever it runs, and the registry row's lock ends with its statement, so the change may
- * write the row. Released on `session` by `release` ({@link holdCollectionWith}).
+ * A deleting save's hold of `entity` on MySQL, on a connection held for it alone (`session`, from
+ * `withSession`, outside any transaction), for a save whose change runs on other connections (a
+ * push): the named locks belong to the server by name, so an entry write waits for them wherever it
+ * runs, and the registry row's lock ends with its statement, so the change may write the row.
+ * Released on `session` by `release` ({@link holdEntityWith}).
  */
-export function holdCollectionOnSession(
+export function holdEntityOnSession(
   adapter: object,
   session: StatementSession,
-  slug: string
+  entity: EntityRef
 ): Promise<{ release: () => Promise<void>; kept: () => Promise<boolean> }> {
-  return holdCollectionWith(
+  return holdEntityWith(
     adapter,
     rowsOnSession(session),
-    slug,
+    entity,
     "own-transaction"
   );
 }
 
 /**
- * A deleting save's hold of collection `slug` on MySQL, taken on the migration try's own connection
+ * An entry write's share of a Single's or a field group's hold on MySQL, in the write's
+ * transaction (`rowsOn` runs there), as a collection's write shares its collection's
+ * (`holdCollectionsIn` for `"share"`): the entity's named lock, taken and released across a read
+ * of its registry row `FOR SHARE`, which then lasts until the write's transaction ends. A save
+ * holding the entity holds the named lock, so the write waits for it. Answers the row read, or none
+ * where the entity is gone.
+ */
+export async function shareEntityOnMysql(
+  adapter: object,
+  rowsOn: RowsOn,
+  entity: EntityRef
+): Promise<{ id: unknown; schema_version: unknown } | undefined> {
+  const named = await takeNamedLocks(
+    adapter,
+    rowsOn,
+    database => namedEntityLockNames(database, entity),
+    ENTITY_NOUN[entity.kind]
+  );
+  try {
+    const [row] = await rowsOn<{ id: unknown; schema_version: unknown }>(
+      sql`SELECT ${sql.identifier("id")}, ${sql.identifier("schema_version")} FROM ${sql.identifier(registryTableOf(entity))} WHERE ${sql.identifier("slug")} = ${entity.slug} FOR SHARE`
+    );
+    return row;
+  } finally {
+    await named.release();
+  }
+}
+
+/**
+ * A deleting save's hold of `entity` on MySQL, taken on the migration try's own connection
  * (`db`, the handle the runner gives the try's `before`), as a collection delete holds it
  * (`holdCollectionsIn` for `"update"`): its named locks first, then its registry row `FOR UPDATE`,
  * which waits for every entry write that already read the row for share to commit. An entry write
  * that starts after waits at the named locks until `release`, which runs on the same connection in
  * the try's `settled`. A take that fails releases what it got before it throws.
  */
-export async function holdCollectionOnConnection(
+export async function holdEntityOnConnection(
   adapter: object,
   db: unknown,
-  slug: string
+  entity: EntityRef
 ): Promise<{ release: () => Promise<void>; connection: string }> {
   const rowsOn = rowsOnConnection(db);
   // The migration try's transaction, which the runner opens before `before` runs.
-  const hold = await holdCollectionWith(
-    adapter,
-    rowsOn,
-    slug,
-    "in-transaction"
-  );
+  const hold = await holdEntityWith(adapter, rowsOn, entity, "in-transaction");
   try {
     // The connection the hold belongs to, for `closeHoldingConnection` where its release fails.
     const [row] = await rowsOn<{ id: unknown }>(

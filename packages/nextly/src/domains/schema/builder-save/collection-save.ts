@@ -63,9 +63,10 @@ import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { AddressKind } from "../../../shared/address-rule";
 import {
   closeHoldingConnection,
-  holdCollectionOnConnection,
+  holdEntityOnConnection,
 } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
+import type { EntityRef } from "../../dynamic-collections/services/entity-hold";
 import { statedMoment } from "../../dynamic-collections/services/stated-default";
 import {
   resolveFieldGroupStorageNames,
@@ -234,7 +235,11 @@ import {
   isDeletionCountRefusal,
 } from "./deletion-counts";
 import { nextSteps, partlyAppliedChange } from "./landing-push";
-import { type SaveHoldScope, saveHoldScope } from "./save-hold";
+import {
+  type SaveHoldScope,
+  saveHoldScope,
+  withRegistryTable,
+} from "./save-hold";
 import {
   openSaveRecords,
   recordSaveStarted,
@@ -619,7 +624,6 @@ async function writeCollectionSaveHeld(
         // Where the caller writes the registry row after the file, the hold lasts until it does.
         const hold = await heldForFileRoad(
           deps,
-          save.slug,
           deletionHoldOfSave(deps, save, written.table),
           scope,
           options.inLastTransaction !== undefined
@@ -4579,7 +4583,7 @@ async function recordUnits(
  *
  * On PostgreSQL and SQLite the count holds the tables itself (`deletionHoldOf`). On MySQL, whose
  * schema statements commit on their own, the collection is held instead, on the try's own
- * connection, before the count (`holdCollectionOnConnection`): an entry write that already read
+ * connection, before the count (`holdEntityOnConnection`): an entry write that already read
  * the collection's registry row commits first and is counted, and one that starts after waits at
  * the collection's named locks until the try is over, then meets the new shape. The locks belong
  * to the connection, so `settled` lets them go there, however the try ends.
@@ -4623,12 +4627,12 @@ function triedHoldOf(
       },
     };
   }
-  const { slug } = hold;
+  const { entity } = hold;
   // This try's hold: `before` (or `beforeResume`) and `settled` run in turn, one pair per try.
-  let held: Awaited<ReturnType<typeof holdCollectionOnConnection>> | undefined;
+  let held: Awaited<ReturnType<typeof holdEntityOnConnection>> | undefined;
   return {
     before: async db => {
-      held = await holdCollectionOnConnection(deps.adapter, db, slug);
+      held = await holdEntityOnConnection(deps.adapter, db, entity);
       await check(db);
     },
     beforeResume: async db => {
@@ -4637,7 +4641,7 @@ function triedHoldOf(
       // the step to settle it, so the file is kept rather than withdrawn. Any other failure, a
       // wait that ends the try among them, goes on as it is.
       try {
-        held = await holdCollectionOnConnection(deps.adapter, db, slug);
+        held = await holdEntityOnConnection(deps.adapter, db, entity);
         await standing(db);
       } catch (error) {
         throw resumedRefusal(error);
@@ -4651,7 +4655,7 @@ function triedHoldOf(
       // (`runHeld`) rather than going back to the pool held.
       await releasing?.release().catch((error: unknown) => {
         deps.logger.warn(
-          `Collection '${slug}': its hold for the save could not be let go on the migration's connection (${error instanceof Error ? error.message : String(error)}); that connection is closed once the migration's try is over.`
+          `'${entity.kind}:${entity.slug}': its hold for the save could not be let go on the migration's connection (${error instanceof Error ? error.message : String(error)}); that connection is closed once the migration's try is over.`
         );
         leftHeld(releasing.connection);
       });
@@ -4716,16 +4720,20 @@ async function runHeld<T>(
  */
 async function heldForFileRoad(
   deps: CollectionSaveDeps,
-  slug: string,
   hold: SaveDeletionHold | undefined,
   scope: SaveHoldScope,
   registryInFile: boolean
 ): Promise<SaveDeletionHold | undefined> {
   if (hold === undefined) return undefined;
   if (deps.adapter.getCapabilities().dialect === "mysql" && registryInFile) {
-    return hold;
+    // Resolved before the try, which holds the collection on the connection its own statements
+    // run on (`withRegistryTable`).
+    return {
+      ...hold,
+      entity: await withRegistryTable(deps.adapter, hold.entity),
+    };
   }
-  await scope.take(deps.adapter, slug);
+  await scope.take(deps.adapter, hold.entity);
   return { ...hold, heldOutside: true };
 }
 
@@ -4742,7 +4750,7 @@ function comparedThenApplied<T>(
 ): Promise<T> {
   return countedThroughApply(
     deps.adapter,
-    save.slug,
+    entityOfSave(save),
     deletionHoldOfSave(deps, save, table),
     apply,
     deps.logger,
@@ -4755,7 +4763,7 @@ function comparedThenApplied<T>(
  * it deletes is compared with the one the person confirmed (`DeletionHold.compare`), where there
  * is a count (`hold`); without one, `apply` alone.
  *
- * Collection `slug` is held first (`SaveHoldScope.take`), from before the count: `apply` runs on
+ * `entity` is held first (`SaveHoldScope.take`), from before the count: `apply` runs on
  * connections of its own, and an entry write waits at the hold wherever it runs, so a write under
  * way at the count is counted, and one sent after it meets the new shape. Through `scope`, the
  * caller that writes the registry row after `apply` keeps the hold until it is written, and lets
@@ -4763,7 +4771,7 @@ function comparedThenApplied<T>(
  */
 export async function countedThroughApply<T>(
   adapter: DrizzleAdapter,
-  slug: string,
+  entity: EntityRef,
   hold: DeletionHold | undefined,
   apply: () => Promise<T>,
   /** Told a release that failed, which changes nothing of what `apply` did. */
@@ -4773,7 +4781,7 @@ export async function countedThroughApply<T>(
   if (hold === undefined) return apply();
   const held = scope ?? saveHoldScope(logger);
   try {
-    await held.take(adapter, slug);
+    await held.take(adapter, entity);
     // On SQLite the count takes a turn on the one connection, as a transaction: one the flow has
     // open when the hold is taken has ended first, so its writes are counted.
     await (adapter.getCapabilities().dialect === "sqlite"
@@ -4914,12 +4922,19 @@ function deletionHoldOfSave(
     renamed: save.renamedFields,
     confirmed: save.confirmedDeletions,
   });
-  return hold === undefined ? undefined : { ...hold, slug: save.slug };
+  return hold === undefined
+    ? undefined
+    : { ...hold, entity: entityOfSave(save) };
 }
 
-/** A save's deletion hold, with the collection it holds on MySQL (`triedHoldOf`). */
+/** The entity `save` is of, as its hold names it. */
+function entityOfSave(save: CollectionSave): EntityRef {
+  return { kind: save.kind ?? "collection", slug: save.slug };
+}
+
+/** A save's deletion hold, with the entity it holds (`triedHoldOf`). */
 interface SaveDeletionHold extends DeletionHold {
-  readonly slug: string;
+  readonly entity: EntityRef;
   /**
    * Held through the save's scope on a connection of its own for the whole file run
    * (`heldForFileRoad`), so a MySQL try takes no hold of its own and only counts.
