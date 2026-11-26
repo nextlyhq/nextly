@@ -235,6 +235,97 @@ const SEEDERS: Record<
       plain: [],
     };
   },
+  "nextly_jobs.last_error": async insert => {
+    const value = seed();
+    const plain = seed();
+    await insert("nextly_jobs", {
+      id: randomUUID(),
+      slug: plain,
+      state: "failed",
+      last_error: `request refused for key ${value}`,
+    });
+    return {
+      secrets: [{ label: "nextly_jobs.last_error", value }],
+      plain: [plain],
+    };
+  },
+  "nextly_plugin_events.payload": async insert => {
+    const value = seed();
+    const plain = seed();
+    await insert("nextly_plugin_events", {
+      id: randomUUID(),
+      owner: "fixture",
+      name: plain,
+      payload: JSON.stringify({ resetLink: `https://example.test/r/${value}` }),
+      created_at: new Date(),
+    });
+    return {
+      secrets: [{ label: "nextly_plugin_events.payload", value }],
+      plain: [plain],
+    };
+  },
+  "nextly_plugin_event_deliveries.last_error": async insert => {
+    const value = seed();
+    const plain = seed();
+    const eventId = randomUUID();
+    await insert("nextly_plugin_events", {
+      id: eventId,
+      owner: "fixture",
+      name: "fixture.sent",
+      payload: "{}",
+      created_at: new Date(),
+    });
+    await insert("nextly_plugin_event_deliveries", {
+      id: randomUUID(),
+      event_id: eventId,
+      subscriber: plain,
+      subscriber_key: plain,
+      status: "failed",
+      next_attempt_at: new Date(),
+      created_at: new Date(),
+      last_error: `upstream said: ${value}`,
+    });
+    return {
+      secrets: [{ label: "nextly_plugin_event_deliveries.last_error", value }],
+      plain: [plain],
+    };
+  },
+  "email_deliveries.error": async insert => {
+    const value = seed();
+    const plain = seed();
+    await insert("email_deliveries", {
+      id: randomUUID(),
+      provider_type: "resend",
+      template_slug: plain,
+      recipient_hash: randomBytes(32).toString("hex"),
+      recipient_kind: "to",
+      status: "failed",
+      retention_class: "transactional",
+      error: `provider rejected: ${value}`,
+      created_at: new Date(),
+    });
+    return {
+      secrets: [{ label: "email_deliveries.error", value }],
+      plain: [plain],
+    };
+  },
+  "email_queue.failure": async insert => {
+    const value = seed();
+    const plain = seed();
+    await insert("email_queue", {
+      id: randomUUID(),
+      scope: "site",
+      state: "failed",
+      template_slug: plain,
+      failure: JSON.stringify({ message: `provider said ${value}` }),
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    });
+    return {
+      secrets: [{ label: "email_queue.failure", value }],
+      plain: [plain],
+    };
+  },
   "nextly_jobs.input": async insert => {
     const value = seed();
     const plain = seed();
@@ -286,14 +377,18 @@ const WEBHOOK_PLACES = [
   "nextly_webhooks.secret_hash",
   "nextly_webhooks.secret_prefix",
   "nextly_webhooks.headers",
+  "nextly_webhook_deliveries.last_response_snippet",
 ] as const;
 async function seedWebhook(insert: Insert): Promise<Seeded> {
   const signing = seed();
   const prefix = seed();
   const header = seed();
   const plain = seed();
+  const snippet = seed();
+  const webhookId = randomUUID();
+  const eventId = randomUUID();
   await insert("nextly_webhooks", {
-    id: randomUUID(),
+    id: webhookId,
     name: plain,
     url: "https://example.test/hook",
     event_types: ["entry.published"],
@@ -308,8 +403,25 @@ async function seedWebhook(insert: Insert): Promise<Seeded> {
     ],
     secret_prefix: prefix,
   });
+  // One delivery of one event to it, whose receiver replied with a token.
+  await insert("nextly_events", {
+    id: eventId,
+    type: "entry.published",
+    resource_kind: "collection",
+    payload: {},
+  });
+  await insert("nextly_webhook_deliveries", {
+    id: randomUUID(),
+    webhook_id: webhookId,
+    event_id: eventId,
+    last_response_snippet: `{"access_token":"${snippet}"}`,
+  });
   return {
     secrets: [
+      {
+        label: "nextly_webhook_deliveries.last_response_snippet",
+        value: snippet,
+      },
       { label: "nextly_webhooks.secret_hash", value: signing },
       { label: "nextly_webhooks.secret_prefix", value: prefix },
       { label: "nextly_webhooks.headers", value: header },

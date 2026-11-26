@@ -16,10 +16,13 @@
  *
  * What counts as a secret: a value that lets whoever holds it act as a
  * person, a key or the site (a token, a key, a code, a credential sealed
- * under the site's secret), and a value core cannot read that a plugin may
- * fill with one (a job's input). A lease or lock holder that only the server
- * ever sees is not one; a token handed to a browser to prove it holds a lock
- * is.
+ * under the site's secret); a value core cannot read that a plugin may fill
+ * with one (a job's input, a plugin event's payload); and text that something
+ * outside core wrote verbatim (a plugin's error, a webhook receiver's reply, a
+ * mail provider's message), which may quote a credential back. Text core
+ * composes itself (a delivery's status line) is not. A lease or lock holder
+ * that only the server ever sees is not one either; a token handed to a
+ * browser to prove it holds a lock is.
  *
  * Tables Nextly has retired (`sessions`, `accounts` on an upgraded install)
  * are not core tables and have no answer here, so the guard refuses their
@@ -200,8 +203,26 @@ export const CORE_SECRET_ANSWERS: Readonly<Record<string, SecretAnswer>> = {
   // Its claim token is a lease only the server holds, like the job and
   // delivery leases beside it: nothing outside the server is handed it.
   nextly_received_webhooks: NOTHING,
-  nextly_plugin_events: NOTHING,
-  nextly_plugin_event_deliveries: NOTHING,
+  nextly_plugin_events: {
+    holds: "columns",
+    columns: [
+      {
+        name: "payload",
+        kind: "secret",
+        why: "what a plugin recorded with its event, which core cannot read",
+      },
+    ],
+  },
+  nextly_plugin_event_deliveries: {
+    holds: "columns",
+    columns: [
+      {
+        name: "last_error",
+        kind: "secret",
+        why: "a subscriber's own error text, redacted only of the credentials core recognises",
+      },
+    ],
+  },
   nextly_limit_store: NOTHING,
   nextly_cache_tag_expiries: NOTHING,
   nextly_spent_challenges: NOTHING,
@@ -223,7 +244,16 @@ export const CORE_SECRET_ANSWERS: Readonly<Record<string, SecretAnswer>> = {
     ],
   },
   email_templates: NOTHING,
-  email_deliveries: NOTHING,
+  email_deliveries: {
+    holds: "columns",
+    columns: [
+      {
+        name: "error",
+        kind: "secret",
+        why: "the mail provider's own message about a failure",
+      },
+    ],
+  },
   email_brand: NOTHING,
   nextly_external_identities: NOTHING,
   email_send_claims: NOTHING,
@@ -234,6 +264,11 @@ export const CORE_SECRET_ANSWERS: Readonly<Record<string, SecretAnswer>> = {
         name: "message",
         kind: "secret",
         why: "a queued email, sealed, which may carry a sign-in or reset link",
+      },
+      {
+        name: "failure",
+        kind: "secret",
+        why: "the mail provider's own message about the last failed attempt",
       },
     ],
   },
@@ -262,6 +297,11 @@ export const CORE_SECRET_ANSWERS: Readonly<Record<string, SecretAnswer>> = {
         kind: "secret",
         why: "what a job was given, which core cannot read and a plugin may fill with a live link or code",
       },
+      {
+        name: "last_error",
+        kind: "secret",
+        why: "a job handler's own error text, which may quote what it was given",
+      },
     ],
   },
   nextly_events: NOTHING,
@@ -285,7 +325,16 @@ export const CORE_SECRET_ANSWERS: Readonly<Record<string, SecretAnswer>> = {
       },
     ],
   },
-  nextly_webhook_deliveries: NOTHING,
+  nextly_webhook_deliveries: {
+    holds: "columns",
+    columns: [
+      {
+        name: "last_response_snippet",
+        kind: "secret",
+        why: "the start of the receiver's reply, as the receiver wrote it",
+      },
+    ],
+  },
   nextly_notices: NOTHING,
   nextly_dashboard_pins: NOTHING,
   nextly_dashboard_preferences: NOTHING,
