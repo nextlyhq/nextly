@@ -9,6 +9,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  clearFieldTypes,
+  hasFieldType,
+  registerFieldType,
+} from "../../../domains/schema/field-types/field-type-registry";
 import { clearConfigCache, loadConfig } from "../config-loader";
 
 const exported = vi.hoisted(() => ({ config: {} as unknown }));
@@ -286,5 +291,556 @@ describe("a configuration cached from one project, asked for by a caller that ke
 
     expect(loaded.configPath).toBeUndefined();
     expect(loaded.config.collections ?? []).toEqual([]);
+  });
+});
+
+describe("a Builder definition with a problem the same rules refuse", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // Judged as the configuration's entities are, at its place in the definition file. A command
+  // that reads the entities refuses it with the rest; a running site is told of it and goes on.
+  const withDefinitions = () => {
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "ui-schema.json"),
+      JSON.stringify({
+        collections: [
+          {
+            slug: "cases",
+            fields: [
+              { name: "body", type: "text" },
+              { name: "body", type: "text" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+    return cwd;
+  };
+
+  it("is refused, at its place in the file, by a command that reads the entities", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+
+    const refused = await loadConfig({
+      cwd: withDefinitions(),
+      missing: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toEqual(["ui-schema.json collections[0].fields"]);
+  });
+
+  it("is warned of, and the configuration loads, where the caller keeps the default", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const warned: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation((...parts: unknown[]) => {
+      warned.push(parts.map(String).join(" "));
+    });
+
+    const loaded = await loadConfig({ cwd: withDefinitions() });
+
+    expect(loaded.configPath).toBeDefined();
+    expect(
+      warned.some(line =>
+        line.includes("ui-schema.json collections[0].fields")
+      ),
+      warned.join("\n")
+    ).toBe(true);
+  });
+});
+
+describe("a Builder definition file the load cannot read", () => {
+  // A file with an entry the definition format refuses (here, one with no slug) cannot be read
+  // into entities at all; a command that reads the entities says so with the rest.
+  it("is refused, naming the file, by a command that reads the entities", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "ui-schema.json"),
+      JSON.stringify({
+        collections: [{ fields: [] }],
+        singles: [],
+        components: [],
+      })
+    );
+
+    const refused = await loadConfig({ cwd, missing: "refuse" }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toEqual(["ui-schema.json"]);
+  });
+});
+
+describe("a load that warns of the Builder's problems, then one that refuses them", () => {
+  // The cached load warned; a caller that refuses is not answered by it.
+  it("refuses on the second load", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "ui-schema.json"),
+      JSON.stringify({
+        collections: [
+          {
+            slug: "cases",
+            fields: [
+              { name: "body", type: "text" },
+              { name: "body", type: "text" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await loadConfig({ cwd, builderDefinitions: "warn" });
+
+    const refused = await loadConfig({
+      cwd,
+      builderDefinitions: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    vi.restoreAllMocks();
+
+    expect(refused).toMatchObject({ logContext: { reason: "config-invalid" } });
+  });
+});
+
+describe("a Builder definition file the load cannot read, beside a plugin's extend of a Builder entity", () => {
+  // The extend's target is in the file that could not be read: the file is the problem named, not
+  // a target nothing declares.
+  it("is refused at the file", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+      plugins: [
+        {
+          name: "@test/extends",
+          version: "1.0.0",
+          nextly: "*",
+          contributes: {
+            extend: [
+              { target: "cases", fields: [{ name: "seo", type: "text" }] },
+            ],
+          },
+        },
+      ],
+    };
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "ui-schema.json"),
+      JSON.stringify({
+        collections: [{ fields: [] }],
+        singles: [],
+        components: [],
+      })
+    );
+
+    const refused = await loadConfig({ cwd, missing: "refuse" }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toEqual(["ui-schema.json"]);
+  });
+});
+
+describe("a Builder definition with a problem, in a project with no configuration file", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // The default configuration is loaded, and the Builder's definitions beside it are judged as
+  // they are beside a configuration file.
+  const withoutConfig = () => {
+    const dir = realpathSync(
+      mkdtempSync(join(tmpdir(), "nextly-config-gate-bare-"))
+    );
+    made.push(dir);
+    writeFileSync(
+      join(dir, "ui-schema.json"),
+      JSON.stringify({
+        collections: [
+          {
+            slug: "cases",
+            fields: [
+              { name: "body", type: "text" },
+              { name: "body", type: "text" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+    return dir;
+  };
+
+  it("is refused, at its place in the file, where the caller refuses the Builder's problems", async () => {
+    const refused = await loadConfig({
+      cwd: withoutConfig(),
+      builderDefinitions: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toEqual(["ui-schema.json collections[0].fields"]);
+  });
+
+  it("is warned of, and the default configuration loads, where the caller keeps the default", async () => {
+    const warned: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation((...parts: unknown[]) => {
+      warned.push(parts.map(String).join(" "));
+    });
+
+    const loaded = await loadConfig({ cwd: withoutConfig() });
+
+    expect(loaded.configPath).toBeUndefined();
+    expect(
+      warned.some(line =>
+        line.includes("ui-schema.json collections[0].fields")
+      ),
+      warned.join("\n")
+    ).toBe(true);
+  });
+});
+
+describe("default configurations of two projects with no configuration file", () => {
+  // The cached default is the first project's: the second's definitions are judged, and its root
+  // is its own.
+  it("judges the second project's definitions, not the first's cached answer", async () => {
+    const bare = (prefix: string) => {
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+      made.push(dir);
+      return dir;
+    };
+    const first = bare("nextly-config-gate-first-");
+    await loadConfig({ cwd: first, builderDefinitions: "refuse" });
+    const second = bare("nextly-config-gate-second-");
+    writeFileSync(
+      join(second, "ui-schema.json"),
+      JSON.stringify({
+        collections: [
+          {
+            slug: "cases",
+            fields: [
+              { name: "body", type: "text" },
+              { name: "body", type: "text" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+
+    const refused = await loadConfig({
+      cwd: second,
+      builderDefinitions: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({ logContext: { reason: "config-invalid" } });
+  });
+});
+
+describe("a default configuration refused for the Builder's definitions", () => {
+  afterEach(() => {
+    clearFieldTypes();
+  });
+
+  // The load installs nothing: the field types the running configuration registered stay.
+  it("leaves the registered field types as they were", async () => {
+    registerFieldType({ type: "rating", storage: "json" } as Parameters<
+      typeof registerFieldType
+    >[0]);
+    const dir = realpathSync(
+      mkdtempSync(join(tmpdir(), "nextly-config-gate-registry-"))
+    );
+    made.push(dir);
+    writeFileSync(
+      join(dir, "ui-schema.json"),
+      JSON.stringify({
+        collections: [
+          {
+            slug: "cases",
+            fields: [
+              { name: "body", type: "text" },
+              { name: "body", type: "text" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+
+    const refused = await loadConfig({
+      cwd: dir,
+      builderDefinitions: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({ logContext: { reason: "config-invalid" } });
+    expect(hasFieldType("rating")).toBe(true);
+  });
+});
+
+describe("a Builder definition file the load cannot read, beside a code relationship to a Builder entity", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const unreadable = () => {
+    exported.config = {
+      collections: [
+        {
+          slug: "notes",
+          fields: [
+            { name: "about", type: "relationship", relationTo: "cases" },
+          ],
+        },
+      ],
+    };
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "ui-schema.json"),
+      JSON.stringify({
+        collections: [{ fields: [] }],
+        singles: [],
+        components: [],
+      })
+    );
+    return cwd;
+  };
+
+  // The file may declare the target, so the relationship is not judged: a running site is told
+  // of the file and goes on, which leaves the Builder reachable to repair it.
+  it("is warned of, and the configuration loads, for a running site", async () => {
+    const warned: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation((...parts: unknown[]) => {
+      warned.push(parts.map(String).join(" "));
+    });
+
+    const loaded = await loadConfig({
+      cwd: unreadable(),
+      missing: "refuse",
+      builderDefinitions: "warn",
+    });
+
+    expect(loaded.config.collections?.map(entity => entity.slug)).toContain(
+      "notes"
+    );
+    expect(
+      warned.filter(line => line.includes("ui-schema.json")),
+      warned.join("\n")
+    ).toHaveLength(1);
+  });
+
+  it("is refused at the file by a command that reads the entities", async () => {
+    const refused = await loadConfig({
+      cwd: unreadable(),
+      missing: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        ?.publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toEqual(["ui-schema.json"]);
+  });
+});
+
+describe("a Builder problem a load warns of, loaded again in the same process", () => {
+  // A development start loads the configuration more than once, and a save loads it again: the
+  // same problems are said once, and changed ones are said anew.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("is said once, and again when an edit changes what is wrong", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const cwd = project();
+    const write = (slug: string) =>
+      writeFileSync(
+        join(cwd, "ui-schema.json"),
+        JSON.stringify({
+          collections: [
+            { slug: "fine", fields: [{ name: "body", type: "text" }] },
+            {
+              slug,
+              fields: [
+                { name: slug, type: "text" },
+                { name: slug, type: "text" },
+              ],
+            },
+          ],
+          singles: [],
+          components: [],
+        })
+      );
+    const warned: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation((...parts: unknown[]) => {
+      const line = parts.map(String).join(" ");
+      if (line.includes("ui-schema.json")) warned.push(line);
+    });
+    const load = async () => {
+      clearConfigCache();
+      await loadConfig({ cwd, builderDefinitions: "warn" });
+    };
+
+    write("cases");
+    await load();
+    await load();
+    expect(warned).toHaveLength(1);
+
+    write("matters");
+    await load();
+    expect(warned).toHaveLength(2);
+
+    // Back to the first problem: it changed again, so it is said again.
+    write("cases");
+    await load();
+    expect(warned).toHaveLength(3);
+  });
+});
+
+describe("a Builder definition file a release saved with a repeater translatable as a whole", () => {
+  const marked = () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "ui-schema.json"),
+      JSON.stringify({
+        collections: [
+          {
+            slug: "cases",
+            localized: true,
+            fields: [
+              {
+                name: "rows",
+                type: "repeater",
+                localized: true,
+                fields: [{ name: "inner", type: "text" }],
+              },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+    return cwd;
+  };
+
+  it("is refused, at the field, by a command that reads the entities", async () => {
+    const refused = await loadConfig({
+      cwd: marked(),
+      missing: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    const problems =
+      (
+        refused as {
+          publicData?: { errors?: Array<{ path?: string; code?: string }> };
+        }
+      )?.publicData?.errors ?? [];
+    expect(problems.map(({ path, code }) => [path, code])).toEqual([
+      [
+        "ui-schema.json collections[0].fields[0].localized",
+        "FIELD_STRUCTURE_NOT_TRANSLATABLE",
+      ],
+    ]);
+  });
+
+  it("is warned of, and loads, for a running site", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const loaded = await loadConfig({
+      cwd: marked(),
+      missing: "refuse",
+      builderDefinitions: "warn",
+    });
+    vi.restoreAllMocks();
+
+    expect(loaded.configPath).toBeDefined();
   });
 });

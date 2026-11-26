@@ -49,3 +49,23 @@ describe("two cycles among field groups that share no group", () => {
     ]);
   });
 });
+
+describe("a cycle through the earlier of two field groups with one slug", () => {
+  // Each definition's placements count: the cycle is reported beside the duplicate slug, not
+  // once the duplicate is renamed.
+  it("is reported beside the duplicate", () => {
+    const group = (slug: string, inner?: string) => ({
+      slug,
+      fields: inner
+        ? [{ name: inner, type: "component", component: inner }]
+        : [{ name: "title", type: "text" }],
+    });
+
+    const codes = crossEntityProblems({
+      fieldGroups: [group("a", "b"), group("b", "a"), group("a")],
+    }).map(problem => problem.code);
+
+    expect(codes).toContain("SLUG_DUPLICATE");
+    expect(codes).toContain("FIELD_GROUP_CYCLE");
+  });
+});

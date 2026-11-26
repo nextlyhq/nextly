@@ -8,7 +8,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import type {
+  BuilderField,
+  FieldCondition,
+} from "@admin/components/features/schema-builder/types";
 
 import { brokenConditions, followRename } from "../condition-identity";
 
@@ -303,5 +306,200 @@ describe("a condition following a rename", () => {
     );
     expect(followRename(fields, "f-summary", "summary")).toBe(fields);
     expect(followRename(fields, "f-missing", "summary")).toBe(fields);
+  });
+});
+
+describe("a condition a type change leaves comparing in a way its source can't", () => {
+  it("a number source changed to text breaks a greater-than condition", () => {
+    const broken = brokenConditions([
+      field("teaser", {
+        admin: {
+          condition: { field: "views", operator: "greaterThan", value: 10 },
+        },
+      }),
+      // Was a number; now text, which has no "greater than".
+      field("views", { type: "text" }),
+    ]);
+    expect(broken.get("f-teaser")?.reason).toBe("operator-unsupported");
+  });
+
+  it("an older equality condition on a checkbox is not broken", () => {
+    const broken = brokenConditions([
+      field("teaser", {
+        admin: { condition: { field: "featured", equals: "true" } },
+      }),
+      field("featured", { type: "checkbox" }),
+    ]);
+    expect(broken.has("f-teaser")).toBe(false);
+  });
+
+  it("a source whose type still offers the operator is not broken", () => {
+    const broken = brokenConditions([
+      field("teaser", {
+        admin: {
+          condition: { field: "views", operator: "greaterThan", value: 10 },
+        },
+      }),
+      field("views", { type: "number" }),
+    ]);
+    expect(broken.has("f-teaser")).toBe(false);
+  });
+});
+
+describe("a saved dropdown source whose type changes", () => {
+  // The last saved definition: Status a dropdown, Teaser shown while it equals "archived".
+  const saved = [
+    gated("teaser", "status", "archived"),
+    status(["draft", "archived"]),
+  ];
+
+  it("changed to text, breaks a condition naming one of its former options", () => {
+    const now = [
+      gated("teaser", "status", "archived"),
+      field("status", { type: "text" }),
+    ];
+    expect(brokenConditions(now, saved).get("f-teaser")?.reason).toBe(
+      "option-removed"
+    );
+  });
+
+  // A comparison made or repaired after the change reads the field as it is now: a text can equal
+  // "archived", and no option was ever compared with it by this condition.
+  it("changed to text, does not break a condition made after, or changed to name another value", () => {
+    const asText = field("status", { type: "text" });
+    const saidNothing = [field("teaser"), status(["draft", "archived"])];
+    expect(
+      brokenConditions(
+        [gated("teaser", "status", "archived"), asText],
+        saidNothing
+      ).has("f-teaser")
+    ).toBe(false);
+    // A saved condition the person has since changed to another value or operator.
+    const draft = [gated("teaser", "status", "draft"), status(["draft"])];
+    expect(
+      brokenConditions(
+        [gated("teaser", "status", "archived"), asText],
+        draft
+      ).get("f-teaser")?.reason
+    ).toBeUndefined();
+  });
+
+  // An id can repeat across containers: the saved source is the one on the reader's own level.
+  it("reads the saved source on the reader's own level where an id repeats", () => {
+    const teaser = gated("teaser", "status", "archived");
+    const saved = [
+      field("first", {
+        type: "group",
+        fields: [teaser, status(["draft", "archived"])],
+      }),
+      // Another container whose fields share ids, with no such option.
+      field("second", {
+        type: "group",
+        fields: [teaser, field("status", { type: "select", options: [] })],
+      }),
+    ];
+    const nowStatus = field("status", { type: "text" });
+    const now = [
+      field("first", { type: "group", fields: [teaser, nowStatus] }),
+      field("second", { type: "group", fields: [teaser, nowStatus] }),
+    ];
+    // Read in each group alone, whichever the id lookup would reach first.
+    const groupFirst = now.map(each =>
+      each.name === "first" ? each : { ...each, fields: [] }
+    );
+    const groupSecond = now.map(each =>
+      each.name === "second" ? each : { ...each, fields: [] }
+    );
+    expect(
+      brokenConditions(groupFirst as BuilderField[], saved).get("f-teaser")
+        ?.reason
+    ).toBe("option-removed");
+    expect(
+      brokenConditions(groupSecond as BuilderField[], saved).has("f-teaser")
+    ).toBe(false);
+  });
+
+  it("not yet saved, is judged from the fields as they stand", () => {
+    const now = [
+      gated("teaser", "status", "archived"),
+      field("status", { type: "text" }),
+    ];
+    // Nothing saved under that name: a text source compared with a value reads it.
+    expect(brokenConditions(now, []).has("f-teaser")).toBe(false);
+  });
+});
+
+// The entry form reads a document as no text at all, so a comparison made of a text would answer the
+// same of every document.
+describe("a saved source that became rich text", () => {
+  const reading = (
+    condition: Partial<FieldCondition>,
+    source: Partial<BuilderField>
+  ) => [
+    field("teaser", {
+      admin: { condition: { field: "summary", ...condition } },
+    }),
+    field("summary", source),
+  ];
+  const brokenNow = (
+    condition: Partial<FieldCondition>,
+    was: Partial<BuilderField> = {}
+  ) =>
+    brokenConditions(
+      reading(condition, { type: "richText" }),
+      reading(condition, was)
+    ).get("f-teaser");
+
+  it.each([
+    "equals",
+    "notEquals",
+    "contains",
+    "notContains",
+    "startsWith",
+    "endsWith",
+  ] as const)("breaks a comparison by %s inherited from it", operator => {
+    expect(brokenNow({ operator, value: "news" })).toEqual({
+      reason: "operator-unsupported",
+      message:
+        "Teaser's condition compares the value of Summary, whose rich text it cannot read. Choose another field for it, or remove the condition.",
+    });
+  });
+
+  it("breaks an older equality condition, and one comparing with nothing", () => {
+    expect(brokenNow({ equals: "news" })?.reason).toBe("operator-unsupported");
+    expect(brokenNow({ operator: "equals", value: "" })?.reason).toBe(
+      "operator-unsupported"
+    );
+  });
+
+  it("breaks one naming a dropdown's former option, which no other value would mend", () => {
+    expect(
+      brokenNow(
+        { operator: "equals", value: "draft" },
+        { type: "select", options: status(["draft"]).options }
+      )?.reason
+    ).toBe("operator-unsupported");
+  });
+
+  it.each(["isEmpty", "isNotEmpty"] as const)(
+    "leaves a comparison by %s, which reads no text",
+    operator => {
+      expect(brokenNow({ operator })).toBeUndefined();
+    }
+  );
+
+  it("leaves a source saved as rich text, and a comparison made or changed since", () => {
+    const now = reading(
+      { operator: "equals", value: "news" },
+      { type: "richText" }
+    );
+    const was = (condition: Partial<FieldCondition>, type: string) =>
+      brokenConditions(now, reading(condition, { type })).has("f-teaser");
+    expect(was({ operator: "equals", value: "news" }, "richText")).toBe(false);
+    expect(was({ operator: "equals", value: "views" }, "text")).toBe(false);
+    expect(was({ operator: "contains", value: "news" }, "text")).toBe(false);
+    expect(
+      brokenConditions(now, [field("teaser"), field("summary")]).has("f-teaser")
+    ).toBe(false);
   });
 });

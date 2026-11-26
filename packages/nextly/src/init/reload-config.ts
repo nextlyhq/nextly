@@ -33,6 +33,7 @@ import type {
   CollectionConfig,
   CollectionHooks,
 } from "../collections/config/define-collection";
+import { dropHeldBuilderWarning } from "../di/builder-problems-at-start";
 import { container } from "../di/container";
 import { loadBuilderEntities } from "../di/load-dynamic-tables";
 import type { NextlyServiceConfig } from "../di/register";
@@ -2119,7 +2120,14 @@ async function applyReloadHolding(
     // own reload keeps the default, as a site without one starts today.
     const result = await loadConfig({
       missing: opts?.atStart === true ? "defaults" : "refuse",
+      // A running site: a problem in the Builder's definitions is warned of, not refused.
+      builderDefinitions: "warn",
     });
+    // A load that judged a definition file has said what is wrong in it; where there was none, what
+    // the start held of its stored definitions is still to be said.
+    if (opts?.atStart === true && result.judgedDefinitionFile === true) {
+      dropHeldBuilderWarning();
+    }
     loadedConfig = result.config;
     // Watch exactly what this read: the config and every file it imported. Set
     // before the checks below, which may still refuse the edit; the fix for a

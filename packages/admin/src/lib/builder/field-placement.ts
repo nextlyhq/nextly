@@ -32,33 +32,39 @@ export function findFieldPlacement(
   fields: readonly BuilderField[],
   fieldId: string
 ): FieldPlacement | null {
-  const found = findWithAncestors(fields, fieldId, []);
-  if (!found) return null;
-  const level = namingLevel(found.ancestors);
-  const onLevel = namedFieldsIn(level ? (level.fields ?? []) : fields);
-  return {
-    ...found,
-    siblings: onLevel.filter(other => other.id !== fieldId),
-  };
+  return findFieldPlacements(fields, fieldId)[0] ?? null;
 }
 
-/** The field with this id and the containers above it, outermost first. */
-function findWithAncestors(
+/**
+ * Every field with this id and where it sits, in the order of the tree: an id is not unique in the
+ * whole tree, so a field can be found in more than one place.
+ */
+export function findFieldPlacements(
+  fields: readonly BuilderField[],
+  fieldId: string
+): FieldPlacement[] {
+  return withAncestors(fields, fieldId, []).map(found => {
+    const level = namingLevel(found.ancestors);
+    const onLevel = namedFieldsIn(level ? (level.fields ?? []) : fields);
+    return {
+      ...found,
+      siblings: onLevel.filter(other => other.id !== fieldId),
+    };
+  });
+}
+
+/** Every field with this id and the containers above it, outermost first. */
+function withAncestors(
   fields: readonly BuilderField[],
   fieldId: string,
   ancestors: BuilderField[]
-): Omit<FieldPlacement, "siblings"> | null {
-  for (const field of fields) {
-    if (field.id === fieldId) return { field, ancestors };
-    if (field.fields && field.fields.length > 0) {
-      const found = findWithAncestors(field.fields, fieldId, [
-        ...ancestors,
-        field,
-      ]);
-      if (found) return found;
-    }
-  }
-  return null;
+): Omit<FieldPlacement, "siblings">[] {
+  return fields.flatMap(field => [
+    ...(field.id === fieldId ? [{ field, ancestors }] : []),
+    ...(field.fields && field.fields.length > 0
+      ? withAncestors(field.fields, fieldId, [...ancestors, field])
+      : []),
+  ]);
 }
 
 /** The id of every field in a tree, nested ones included. */

@@ -1624,6 +1624,63 @@ export async function ensureLocalizedCompanions(
       );
     }
   }
+  // The Schema Builder's own entities, which the configuration does not declare: after the push,
+  // each one stored per language has its existing translations table brought into step, as the
+  // configuration's are, so a container's overlay column an earlier release never made is made,
+  // and seeded with the default language's text, here, by `nextly migrate` and a start alike. The
+  // Builder makes and drops those tables itself, so nothing is created for them.
+  if (phase === "afterApply") {
+    const [{ readLayoutScanEntities }, { builtByFor }] = await Promise.all([
+      import("../../di/layout-scan-entities"),
+      import("../../domains/schema/pipeline/registered-collections"),
+    ]);
+    const declared = new Set(
+      groups.flatMap(([, group, resolveTableName]) =>
+        group.map(entity => resolveTableName(entity))
+      )
+    );
+    for (const entity of await readLayoutScanEntities(
+      adapter as unknown as DrizzleAdapter,
+      declared
+    )) {
+      if (!storesPerLanguage(entity)) continue;
+      const companionTableName = `${entity.tableName}_locales`;
+      if (
+        !(await (adapter as unknown as DrizzleAdapter).tableExists(
+          companionTableName
+        ))
+      ) {
+        continue;
+      }
+      // A field group's transitions are recorded as `fieldGroup`, as its builder is named.
+      const kind = entity.kind === "component" ? "fieldGroup" : entity.kind;
+      await reconcileCompanionColumns(
+        adapter as unknown as DrizzleAdapter,
+        {
+          builtBy: builtByFor(kind, entity.builderOwned),
+          slug: entity.slug,
+          tableName: entity.tableName,
+          fields: entity.fields as { name: string; type: string }[],
+          dialect,
+          status: publishesPerLanguage(entity),
+          versionScope: versionScopeForEntityKind(kind),
+          defaultLocale: transitions?.defaultLocale,
+        },
+        error => {
+          logger.error(
+            `Could not update the translations table for "${entity.slug}" (${companionTableName}). ` +
+              `Its containers' text cannot be read until it matches: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+          failures.push(entity.slug);
+        },
+        message =>
+          logger.warn(
+            `The translations table for "${entity.slug}" (${companionTableName}): ${message}`
+          )
+      );
+    }
+  }
   // Fail the command. Exiting 0 here would tell deployment automation the schema is
   // in step while the registry advertises localization the database cannot store, so
   // every translation write is refused — unlike a failure from the main auto-sync

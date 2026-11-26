@@ -169,14 +169,17 @@ const moves = () =>
     .map(([, , , choice]) => choice)
     .filter(choice => choice.describe !== true);
 
-function refusal(errors: { path: string; code: string; message: string }[]) {
+function refusal(
+  errors: { path: string; code: string; message: string }[],
+  described?: { _rev: string; marks: unknown }
+) {
   return parseApiError(
     {
       error: {
         code: "VALIDATION_ERROR",
         message: "Validation failed.",
         requestId: "r1",
-        data: { errors },
+        data: { errors, ...(described === undefined ? {} : { described }) },
       },
     },
     400
@@ -561,6 +564,43 @@ describe("Publish without review", () => {
         }),
       ])
     );
+  });
+
+  it("sends what the description refused for want of approval was made from, and reads no version", async () => {
+    const user = userEvent.setup();
+    const unapproved = refusal(
+      [{ path: "es", code: "NOT_APPROVED", message: "Not approved." }],
+      { _rev: "9.es:4", marks: { languages: { es: "m" }, rest: "r" } }
+    );
+    api.publishParts.mockImplementation(
+      (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
+        choice.describe === true
+          ? Promise.reject(unapproved)
+          : Promise.resolve(describing(choice))
+    );
+    open(review([IN_REVIEW_ES], true));
+    await screen.findByText("Not approved.");
+
+    await pressConfirm(
+      screen.getByRole("button", { name: "Publish without review…" })
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Reason" }),
+      "Legal deadline today."
+    );
+    await pressConfirm(
+      screen.getByRole("button", { name: "Publish without review" })
+    );
+
+    await waitFor(() =>
+      expect(moves()).toEqual([
+        expect.objectContaining({
+          version: "9.es:4",
+          withoutReview: { reason: "Legal deadline today." },
+        }),
+      ])
+    );
+    expect(api.findByID).not.toHaveBeenCalled();
   });
 
   it("does not offer it to a person who does not hold it", async () => {

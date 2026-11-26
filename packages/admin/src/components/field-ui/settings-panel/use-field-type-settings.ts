@@ -15,7 +15,7 @@ import {
 import { isSurfaceBuiltInType } from "@admin/lib/builder/field-type-label";
 import { pluginFieldTypeSettings } from "@admin/lib/builder/plugin-field-type-entries";
 
-import { coreFieldTypeSettings } from "./core-type-settings";
+import { surfaceTypeSettings } from "./core-type-settings";
 import { declaredTypeSettings } from "./DeclaredTypeSettings";
 import type { FieldSettingsSurface, FieldTypeSettings } from "./types";
 
@@ -52,10 +52,8 @@ export function useFieldTypeSettings(
     [declared]
   );
 
-  const own = ownEntry(surface.typeSettings, type);
-  if (own) return { status: "known", settings: own };
-  const core = coreFieldTypeSettings(type);
-  if (core) return { status: "known", settings: core };
+  const builtIn = surfaceTypeSettings(surface, type);
+  if (builtIn) return { status: "known", settings: builtIn };
   if (isSurfaceBuiltInType(surface.surface, type))
     return { status: "known", settings: {} };
   if (fromPlugin) {
@@ -66,17 +64,4 @@ export function useFieldTypeSettings(
   if (isPending) return { status: "loading" };
   if (isUnavailable) return { status: "unavailable", retry };
   return { status: "known", settings: undefined };
-}
-
-/**
- * The surface's settings for the type, only when the surface names it: a type
- * spelled like an inherited member (`toString`) is not one the surface set.
- */
-function ownEntry(
-  table: FieldSettingsSurface["typeSettings"],
-  type: string
-): FieldTypeSettings | undefined {
-  return table && Object.prototype.hasOwnProperty.call(table, type)
-    ? table[type]
-    : undefined;
 }

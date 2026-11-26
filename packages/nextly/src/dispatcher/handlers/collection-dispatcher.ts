@@ -159,6 +159,7 @@ import {
   toPaginationMeta,
   unwrapServiceResult,
 } from "../helpers/service-envelope";
+import { respondTypeChangeTargets } from "../helpers/type-change-targets";
 import {
   isTruthyParam,
   parseCountParam,
@@ -985,6 +986,30 @@ const COLLECTIONS_METHODS: Record<
       );
       // Read for this caller's dialog only; no shared cache keeps it.
       return withSessionCacheHeaders(respondData({ impact }));
+    },
+  },
+  // The type picker's answer for a saved field: what each other type would do to its values, read
+  // from the conversion rules (`respondTypeChangeTargets`).
+  typeChangeTargets: {
+    execute: async (_svc, p, body) => {
+      const slug = requireParam(p, "collectionName");
+      const collection =
+        await getCollectionRegistryFromDI()?.getCollectionBySlug(slug);
+      if (!collection) {
+        throw NextlyError.notFound({ message: "Collection not found" });
+      }
+      refuseChangeDefinedInCode(collection, "collection", slug);
+      return respondTypeChangeTargets({
+        fields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        body,
+        builtBy: "collection",
+        // A collection's save file retypes a translated field's translations column, where the save
+        // writes one; with no writer, its push does not, and refuses the change.
+        layout: {
+          perLanguage: storesPerLanguage(collection),
+          fileRetypes: container.has("builderSaveSetup"),
+        },
+      });
     },
   },
   // Preview schema changes (dry-run diff with row-count impact)
