@@ -48,6 +48,7 @@ import { entityPermissionSpelling } from "../../auth/services/entity-permission-
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { recordContentEvent } from "../../content-events/record";
 import { documentLockKey } from "../../document-lock/lock-key";
+import { fieldUnit, unitKey } from "../../i18n/pipeline/unit-address";
 import {
   documentEventPayload,
   documentOfReleaseEvent,
@@ -281,7 +282,8 @@ async function writeMasthead(): Promise<string> {
  * a working draft, a pin, a marker, an event with parts, a release member, a
  * schema event, a kept permission answer, an
  * activity row (and, for a collection, one from before kinds were recorded),
- * an archived translation, a translated value's provenance, a lock and a preview link.
+ * an archived translation, a translated value's provenance, a suggested translation, a lock and a
+ * preview link.
  */
 async function seedHistory(
   kind: RenamedEntityKind,
@@ -381,6 +383,21 @@ async function seedHistory(
     fingerprint: "s1",
     content: { value: "hello" },
     recordedAt: now,
+  });
+  await adapter.insert("nextly_translation_suggestions", {
+    id: randomUUID(),
+    scopeKind: kind,
+    scopeSlug: slug,
+    entryId,
+    targetLocale: "es",
+    sourceLocale: "en",
+    fieldPath: "title",
+    unitKey: unitKey(fieldUnit("title")),
+    unitAddress: fieldUnit("title"),
+    value: { value: "hola" },
+    origin: "machine",
+    sourceFingerprint: "f1",
+    createdAt: now,
   });
   await adapter.insert("nextly_document_lock", {
     id: documentLockKey(kind, slug, entryId),
@@ -601,6 +618,14 @@ async function expectMoved(
     events.some(event => event.id === row.eventId)
   );
   expect(parts.length).toBeGreaterThan(0);
+
+  // The suggestion is found under the new name by the key of its text, which no slug is part of.
+  const suggestions = (await rowsOf("nextly_translation_suggestions")).filter(
+    row => row.entryId === entryId && row.scopeKind === kind
+  );
+  expect(suggestions.map(row => [row.scopeSlug, row.unitKey])).toEqual([
+    [names.to, unitKey(fieldUnit("title"))],
+  ]);
 
   // The release still holds the document, by the key its writer computes.
   const members = await new ReleasesRepository(adapter).listMembers(releaseId);

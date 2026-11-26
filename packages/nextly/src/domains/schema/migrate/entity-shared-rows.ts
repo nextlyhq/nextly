@@ -3,13 +3,15 @@
  * it from tables every entity shares, listed before the consent is asked.
  *
  * Deleting an entity removes its rows from each shared table: its field-group
- * values, its archived translations and the record of where its translations
- * came from, its history rows (autosaves, version pins and readers' "seen"
- * markers), its readers' dashboard pins, the record of the media its documents
- * use, and its documents' review state where workflows keep one. Each is listed as that entity's rows in that table, belonging to
- * its main table, so a consent naming the main table covers them and naming
- * the shared table still covers every deletion in it. The record of content
- * events is not among them: a deletion leaves those events in place.
+ * values, its archived translations, the record of where its translations
+ * came from and the translations suggested for its documents, its history rows
+ * (autosaves, version pins and readers' "seen" markers), its readers' dashboard
+ * pins, the record of the media its documents use, and its documents' review
+ * state where workflows keep one. Each is listed as that entity's rows in that
+ * table, belonging to its main table, so a consent naming the main table covers
+ * them and naming the shared table still covers every deletion in it. The
+ * record of content events is not among them: a deletion leaves those events in
+ * place.
  *
  * A run reads the entities from the registry (`readCoveredEntities`), and
  * lists, in the file that drops an entity's main table, one entry for each
@@ -82,6 +84,13 @@ const SHARED_TABLES: readonly SharedTable[] = [
     // Purged with it.
     table: "nextly_translation_sources",
     reason: "the source text its translations were made from",
+    kindColumn: "scope_kind",
+    slugColumn: "scope_slug",
+  },
+  {
+    // Purged with it.
+    table: "nextly_translation_suggestions",
+    reason: "the translations suggested for its documents",
     kindColumn: "scope_kind",
     slugColumn: "scope_slug",
   },

@@ -530,6 +530,32 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_translation_sources_uidx"
       ON "nextly_translation_sources" ("scope_kind", "scope_slug", "entry_id", "source_locale", "field_path", "fingerprint")`,
+    // The translation suggested for each text. Columns match
+    // schemas/translation-suggestions/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_translation_suggestions" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "target_locale" TEXT NOT NULL,
+      "source_locale" TEXT NOT NULL,
+      "field_path" TEXT NOT NULL,
+      "unit_key" TEXT NOT NULL,
+      "unit_address" TEXT NOT NULL,
+      "value" TEXT NOT NULL,
+      "origin" TEXT NOT NULL,
+      "engine" TEXT,
+      "model" TEXT,
+      "source_fingerprint" TEXT NOT NULL,
+      "created_by_kind" TEXT,
+      "created_by_id" TEXT,
+      "created_by_principal_kind" TEXT,
+      "created_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_translation_suggestions_uidx"
+      ON "nextly_translation_suggestions" ("scope_kind", "scope_slug", "entry_id", "target_locale", "unit_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_translation_suggestions_field_idx"
+      ON "nextly_translation_suggestions" ("scope_kind", "scope_slug", "field_path")`,
     // What admins change for each workflow. Columns match schemas/workflow-settings/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_workflow_settings" (
       "id" TEXT PRIMARY KEY NOT NULL,

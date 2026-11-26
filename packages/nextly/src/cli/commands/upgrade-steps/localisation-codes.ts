@@ -11,9 +11,10 @@
  * What is rewritten, for each code: each translation table's `_locale`; each version's language
  * and the key of a pending change (`workingDraftKey`); the language a version records it changed;
  * each pinned base held for a language (`pending:<code>`) and its key; each translation's record of
- * where it came from; the archive of removed translations; each release member's language and
- * key; each media use and preview link in that language. The history of events and the audit
- * trail keep what they recorded at the time.
+ * where it came from; each suggested translation's language and the one it was made from; the
+ * archive of removed translations; each release member's language and key; each media use and
+ * preview link in that language. The history of events and the audit trail keep what they recorded
+ * at the time.
  *
  * @module cli/commands/upgrade-steps/localisation-codes
  */
@@ -28,6 +29,7 @@ import {
   storedOlderSpellings,
   tablesHoldingCode,
 } from "../../../domains/i18n/older-codes";
+import { convertSuggestionCodes } from "../../../domains/i18n/pipeline/suggestion-rows";
 import { releaseMemberKey } from "../../../domains/releases/release-member-key";
 import { runStatement } from "../../../domains/schema/pipeline/_internal/run-statement";
 import { versionPinKey } from "../../../domains/versions/version-pins";
@@ -37,6 +39,7 @@ import { LANGUAGES_TABLE } from "../../../schemas/languages/table-name";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 import { TRANSLATION_PROVENANCE_TABLE } from "../../../schemas/translation-provenance/table-name";
 import { TRANSLATION_SOURCES_TABLE } from "../../../schemas/translation-sources/table-name";
+import { TRANSLATION_SUGGESTIONS_TABLE } from "../../../schemas/translation-suggestions/table-name";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import {
@@ -132,7 +135,11 @@ interface KeyedTarget {
 
 const asWritten = (code: string) => code;
 
-/** The rewritten tables kept unique per language besides the translation tables. */
+/**
+ * The rewritten tables kept unique per language besides the translation tables, where two rows of
+ * one thing are refused. Suggested translations are not among them: of two for one text the newer
+ * is kept (`convertSuggestionCodes`), as a newer suggestion takes an older one's place anyway.
+ */
 const KEYED_TARGETS: readonly KeyedTarget[] = [
   // One pending change per document per language (`draft_key`); a durable version has no key.
   {
@@ -444,6 +451,9 @@ export async function convertLanguageCodes(
     await convertPins(context, from, to);
     await convertReleaseMembers(context, from, to);
     await convertLanguageRegistry(context, from, to, foldsCase);
+    if (await context.adapter.tableExists(TRANSLATION_SUGGESTIONS_TABLE)) {
+      await adapter.transaction(tx => convertSuggestionCodes(tx, { from, to }));
+    }
     // The tables that record a language and nothing computed from it.
     for (const [table, columns] of [
       [TRANSLATION_PROVENANCE_TABLE, ["locale", "sourceLocale"]],

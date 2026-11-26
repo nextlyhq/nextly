@@ -25,7 +25,7 @@ import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import type { Params } from "../types";
 
 /** One translated field, as a request names it. */
-const FieldNamed = z.object({
+export const FieldNamed = z.object({
   locale: z.string().min(1).max(64),
   field: z.string().min(1).max(255),
 });
@@ -39,14 +39,14 @@ const KeepCurrentBody = FieldNamed.extend({
 }).strict();
 
 /** `input` as `schema` reads it, refused as every request body is. */
-function parsed<T>(schema: z.ZodType<T>, input: unknown): T {
+export function parsed<T>(schema: z.ZodType<T>, input: unknown): T {
   const result = schema.safeParse(input);
   if (!result.success) throw nextlyValidationFromZod(result.error);
   return result.data;
 }
 
 /** The request's caller, judged by every gate: a route attests none of them. */
-function requestCaller(request: Request | undefined): DocumentCaller {
+export function requestCaller(request: Request | undefined): DocumentCaller {
   return {
     user: readAuthenticatedUser(),
     authenticatedScope: readAuthenticatedScope(),

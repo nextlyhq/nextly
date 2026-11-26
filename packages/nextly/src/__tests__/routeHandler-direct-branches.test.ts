@@ -516,6 +516,19 @@ describe("needsResolvedRoles", () => {
     ).toBe(true);
   });
 
+  it("resolves roles for reading a document's units of translation, as for reading the document", () => {
+    expect(
+      _needsResolvedRolesForTest(
+        "collections",
+        "getEntryTranslationUnits",
+        "GET"
+      )
+    ).toBe(true);
+    expect(
+      _needsResolvedRolesForTest("singles", "getSingleTranslationUnits", "GET")
+    ).toBe(true);
+  });
+
   it("skips the lookup for reads that consume no roles", () => {
     // A permissions query on every one of these would be paid for nothing.
     expect(_needsResolvedRolesForTest("media", "listMedia", "GET")).toBe(false);

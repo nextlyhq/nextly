@@ -835,12 +835,13 @@ type OperationLanguage =
  *   document gate behind it asks the rule in each language the history holds
  *   and returns those alone, and told every language at once, a rule
  *   admitting one language would refuse the history it may read.
- * - `translation-read`: a read of one translation beside its source, judged
- *   in the translation's language, which `?locale=` names, and in no other:
- *   nothing is filled from another language, and the service behind it asks
- *   of the source's.
- * - `translation-write`: a change to one translation that writes no content,
- *   whose language is in the body, which the gate does not see. It is admitted
+ * - `translation-read`: a read of one language's translations beside their
+ *   sources, judged in the translations' language, which `?locale=` names, and
+ *   in no other: nothing is filled from another language, and the service
+ *   behind it asks of the sources'.
+ * - `translation-write`: a change to one translation whose language is in the
+ *   body, which the gate does not see: keeping it as it is, or accepting or
+ *   dismissing a suggestion for it. It is admitted
  *   where the rule admits a write in any one language, each asked alone
  *   ({@link admittingLanguages}): the service behind it asks the rule in the
  *   language the body names, and told every language at once, a rule
@@ -873,6 +874,12 @@ const OPERATION_LANGUAGES: ReadonlyMap<string, OperationLanguage> = new Map([
   ["getSingleSourceChange", "translation-read"],
   ["keepEntryTranslation", "translation-write"],
   ["keepSingleTranslation", "translation-write"],
+  ["getEntryTranslationUnits", "translation-read"],
+  ["getSingleTranslationUnits", "translation-read"],
+  ["acceptEntrySuggestion", "translation-write"],
+  ["acceptSingleSuggestion", "translation-write"],
+  ["dismissEntrySuggestion", "translation-write"],
+  ["dismissSingleSuggestion", "translation-write"],
 ]);
 
 /** What a request names about its languages, as it is dispatched. */

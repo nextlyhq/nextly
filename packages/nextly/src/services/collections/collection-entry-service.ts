@@ -74,6 +74,7 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../domains/i18n/localization-source";
+import type { SuggestionAcceptance } from "../../domains/i18n/pipeline/acceptance";
 import {
   readInFirstPublishedLanguage,
   readOfEveryLanguage,
@@ -1021,6 +1022,12 @@ export class CollectionEntryService extends BaseService {
        * recorded per field on the version it captures (see `restored-from`).
        */
       restoredFrom?: FieldSources;
+      /**
+       * The suggestion this write accepts (see `pipeline/acceptance`).
+       *
+       * @internal
+       */
+      acceptance?: SuggestionAcceptance;
       /**
        * Set when this write restores a version: held as the working draft, and
        * refused where the document cannot hold one rather than written live.

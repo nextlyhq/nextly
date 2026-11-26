@@ -94,6 +94,8 @@ export interface TeardownEntityI18nResult {
   provenanceRowsPurged: number;
   /** The source text its translations were made from, removed as its provenance is. */
   sourceRowsPurged: number;
+  /** Translations suggested for this entity's documents, removed as its provenance is. */
+  suggestionRowsPurged: number;
 }
 
 /**
@@ -174,8 +176,8 @@ function dependentObjects(error: unknown): string | undefined {
 }
 
 /**
- * Drops `<tableName>_locales` and purges the entity's `nextly_i18n_archive` rows and its records
- * of where its translated values came from.
+ * Drops `<tableName>_locales` and purges the entity's `nextly_i18n_archive` rows, its records of
+ * where its translated values came from and the translations suggested for its documents.
  *
  * Call this BEFORE dropping the entity's main table. Errors propagate: callers drop the
  * main table and delete the registry row only after this resolves, so a failure here
@@ -195,14 +197,15 @@ export async function teardownEntityI18n(
 
   // A null slug means the caller could not identify the entity (the catalog sweep), and every row
   // outside the translations table is keyed by kind and slug, so there is no safe row set to
-  // remove: the archive, the transition record and the provenance records are left alone rather
-  // than removed on a guess about whose they are.
+  // remove: the archive, the transition record, the provenance records and the suggestions are left
+  // alone rather than removed on a guess about whose they are.
   if (slug === null || kind === undefined) {
     return {
       companionDropped,
       archiveRowsPurged: 0,
       provenanceRowsPurged: 0,
       sourceRowsPurged: 0,
+      suggestionRowsPurged: 0,
     };
   }
   // An archive from before rows recorded their kind is brought up to date first, since its rows

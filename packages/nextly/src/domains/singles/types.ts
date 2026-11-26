@@ -17,6 +17,7 @@ import type {
   HookExemptRead,
   TrustBound,
 } from "../../services/collections/trust-grant";
+import type { SuggestionAcceptance } from "../i18n/pipeline/acceptance";
 import type { FieldSources } from "../versions/restored-from";
 
 /**
@@ -265,6 +266,14 @@ export interface UpdateSingleOptions {
    * at the write's boundary when this is absent.
    */
   restoredFrom?: FieldSources;
+  /**
+   * The suggestion this write accepts, as server code states it: recorded over
+   * what the body claims, and taken out in the write's own transaction. No
+   * client can state one.
+   *
+   * @internal
+   */
+  acceptance?: SuggestionAcceptance;
   /**
    * Set when this write restores a recorded save of a working draft: its
    * content was never live, so on a published Single it must be held as the

@@ -194,6 +194,11 @@ import {
   respondSourceChange,
 } from "./source-review-handlers";
 import {
+  respondAcceptSuggestion,
+  respondDismissSuggestion,
+  respondTranslationUnits,
+} from "./translation-units-handlers";
+import {
   discardWorkingDraftForDocument,
   takeLiveSharedValuesForDocument,
   getVersionDiffForDocument,
@@ -2068,6 +2073,18 @@ const COLLECTIONS_METHODS: Record<
   keepEntryTranslation: {
     execute: async (_svc, p, body, request) =>
       respondKeepCurrent(entryOf(p), body, request),
+  },
+  getEntryTranslationUnits: {
+    execute: async (_svc, p, _body, request) =>
+      respondTranslationUnits(entryOf(p), p, request),
+  },
+  acceptEntrySuggestion: {
+    execute: async (_svc, p, body, request) =>
+      respondAcceptSuggestion(entryOf(p), p, body, request),
+  },
+  dismissEntrySuggestion: {
+    execute: async (_svc, p, body, request) =>
+      respondDismissSuggestion(entryOf(p), p, body, request),
   },
 
   previewPublishAllLocales: {

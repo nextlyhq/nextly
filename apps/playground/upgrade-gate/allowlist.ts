@@ -26,6 +26,10 @@ import type { AllowedOperation } from "./catalog";
 const FORM_RECORD_SHARED =
   "A form builder record field stops being translated: its default-language value moves to the entity's own table and other languages go to the localization archive before its translations column is dropped, with consent. No value is lost.";
 
+/** Why the suggestions table is created. */
+const SUGGESTIONS_TABLE =
+  "The table suggested translations are kept in (`nextly_translation_suggestions`) is created empty: no release before it kept any.";
+
 /** Why a submission's form column becomes nullable. */
 const FORM_ID_NULLABLE =
   "A submission's form column becomes nullable (#5104), so an installation holding a submission without one can upgrade; the form builder refuses a submission without its form when it is written. Dropping NOT NULL keeps every value.";
@@ -323,5 +327,9 @@ export const ALLOWED_OPERATIONS: readonly AllowedOperation[] = [
       "change column dc_form_submissions.form: varchar(36) not null collate utf8mb4_0900_ai_ci -> varchar(36) null collate utf8mb4_0900_ai_ci",
     dialects: ["mysql"],
     reason: FORM_ID_NULLABLE,
+  },
+  {
+    operation: "create table nextly_translation_suggestions",
+    reason: SUGGESTIONS_TABLE,
   },
 ];

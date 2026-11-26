@@ -3,8 +3,8 @@
  * Builder removes in development: its tables, from the migration file, and, once the file is
  * recorded applied, the rows other tables hold for it: its registry row with its autosaves, version
  * pins and "seen" markers, in the registry write, then, once that has committed, its field-group
- * values, archived translations and translation provenance. Another collection's rows in the same
- * shared tables stay.
+ * values, archived translations, translation provenance and suggested translations. Another
+ * collection's rows in the same shared tables stay.
  *
  * A run stopped part-way leaves what the dialect can promise. Inside the file, PostgreSQL and
  * SQLite roll the file back, so nothing is removed and the next run applies it whole; MySQL keeps
@@ -372,6 +372,21 @@ async function seedSharedRows(
     content: { value: "a" },
     recordedAt: now,
   });
+  await adapter.insert("nextly_translation_suggestions", {
+    id: randomUUID(),
+    scopeKind: "collection",
+    scopeSlug: slug,
+    entryId: "e1",
+    targetLocale: "fr",
+    sourceLocale: "en",
+    fieldPath: "title",
+    unitKey: "k",
+    unitAddress: [{ field: "title" }],
+    value: { value: "b" },
+    origin: "machine",
+    sourceFingerprint: "f",
+    createdAt: now,
+  });
 }
 
 /** How many rows of each kind `slug` (whose table is `table`) holds on `adapter`. */
@@ -426,6 +441,11 @@ async function rowsOf(
       "collection",
       slug,
     ]),
+    translationSuggestions: await count(
+      "nextly_translation_suggestions",
+      scoped,
+      ["collection", slug]
+    ),
   };
 }
 
@@ -439,6 +459,7 @@ const NONE = {
   translationArchive: 0,
   translationProvenance: 0,
   translationSources: 0,
+  translationSuggestions: 0,
 };
 
 /** How many migrations the deployed database's ledger records applied. */

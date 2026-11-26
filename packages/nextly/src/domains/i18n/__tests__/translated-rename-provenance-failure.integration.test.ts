@@ -22,6 +22,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { getLoggerFromDI } from "../../../dispatcher/helpers/di";
+import { renameFieldSuggestionsStatements } from "../pipeline/suggestion-rows";
+import { fieldUnit, unitKey } from "../pipeline/unit-address";
 import {
   renameFieldProvenance,
   renameFieldProvenanceStatements,
@@ -56,7 +58,8 @@ const RENAMED = [
  * The statements the server log gives for moving an entity's records of `heading` to `title2` by
  * hand: the field's own records; each row's record whose new path would pass the column's 255
  * characters dropped (none can here, as `title2` is the shorter name); then each row's record
- * under `heading#`.
+ * under `heading#`. Last, the suggestions for the field's texts removed, which no statement can
+ * give the key of their new address.
  */
 function finishingStatements(
   dialect: TestDialect,
@@ -72,12 +75,14 @@ function finishingStatements(
       `UPDATE \`nextly_translation_provenance\` SET \`field_path\` = 'title2' WHERE ${scope} AND \`field_path\` = 'heading';`,
       `DELETE FROM \`nextly_translation_provenance\` WHERE ${scope} AND SUBSTRING(\`field_path\`, 1, 8) = 'heading#' AND CHAR_LENGTH(\`field_path\`) > 256;`,
       `UPDATE \`nextly_translation_provenance\` SET \`field_path\` = CONCAT('title2#', SUBSTRING(\`field_path\`, 9)) WHERE ${scope} AND SUBSTRING(\`field_path\`, 1, 8) = 'heading#';`,
+      `DELETE FROM \`nextly_translation_suggestions\` WHERE ${scope} AND \`field_path\` = 'heading';`,
     ];
   }
   return [
     `UPDATE "nextly_translation_provenance" SET "field_path" = 'title2' WHERE ${scope} AND "field_path" = 'heading';`,
     `DELETE FROM "nextly_translation_provenance" WHERE ${scope} AND SUBSTR("field_path", 1, 8) = 'heading#' AND LENGTH("field_path") > 256;`,
     `UPDATE "nextly_translation_provenance" SET "field_path" = 'title2#' || SUBSTR("field_path", 9) WHERE ${scope} AND SUBSTR("field_path", 1, 8) = 'heading#';`,
+    `DELETE FROM "nextly_translation_suggestions" WHERE ${scope} AND "field_path" = 'heading';`,
   ];
 }
 
@@ -444,13 +449,15 @@ describeEachDialect(
       expect(await provenancePaths(), "the provenance").toContain("title2");
       expect(await sourcePaths(), "the source text").toEqual(["heading"]);
 
-      const statements = finishingStatements(dialect).map(statement =>
-        statement.replace(PROVENANCE, SOURCES)
-      );
+      // The suggestions moved with the records: none is left to finish.
+      const statements = finishingStatements(dialect)
+        .filter(statement => statement.includes(PROVENANCE))
+        .map(statement => statement.replace(PROVENANCE, SOURCES));
       const log = logged().join("\n");
       for (const statement of statements) {
         expect(log, "the server log").toContain(statement);
       }
+      expect(log).not.toContain("nextly_translation_suggestions");
       await dropTrigger();
       for (const statement of statements) await query(statement);
       expect(await sourcePaths(), "the source text").toEqual(["title2"]);
@@ -703,6 +710,46 @@ describeEachDialect(
         "views, as the save's answer left it"
       ).toBe(false);
       expect(Number(row?.schemaVersion)).toBe(before.schemaVersion + 1);
+    });
+
+    it("gives a statement that removes the renamed field's suggestions, and no other field's or entity's", async () => {
+      // A statement cannot hash an address again, so what the move would have kept is removed.
+      for (const [id, scopeSlug, field] of [
+        ["gone", SLUG, "heading"],
+        ["field", SLUG, "summary"],
+        ["entity", "trp_other", "heading"],
+      ]) {
+        await t.adapter.insert("nextly_translation_suggestions", {
+          id,
+          scopeKind: "single",
+          scopeSlug,
+          entryId: "e1",
+          targetLocale: "es",
+          sourceLocale: "en",
+          fieldPath: field,
+          unitKey: unitKey(fieldUnit(field)),
+          unitAddress: fieldUnit(field),
+          value: { value: "Hola" },
+          origin: "machine",
+          sourceFingerprint: "f",
+          createdAt: new Date(),
+        });
+      }
+
+      for (const statement of renameFieldSuggestionsStatements(dialect, {
+        scopeKind: "single",
+        scopeSlug: SLUG,
+        from: "heading",
+        to: "title2",
+      })) {
+        await query(statement);
+      }
+
+      const left = await t.adapter.select<{ id: string }>(
+        "nextly_translation_suggestions",
+        { columns: ["id"] }
+      );
+      expect(left.map(row => row.id).sort()).toEqual(["entity", "field"]);
     });
 
     it("gives statements that move the records as the move itself does, dropping a path that no longer fits", async () => {

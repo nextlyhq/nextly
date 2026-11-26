@@ -35,6 +35,8 @@ import {
 } from "../../singles/services/single-document-access";
 import { rowKeys } from "../shared-structure";
 
+import { applyComponentUpdateRules } from "./component-field-access";
+
 /** An entry of a collection, or a Single's one document. */
 export type TranslatedDocument =
   | { readonly kind: "collection"; readonly slug: string; readonly id: string }
@@ -253,9 +255,9 @@ function notEditable(document: TranslatedDocument, locale: string) {
  *
  * `body` holds containers as values, as a read gives them, since the rules see no field inside
  * JSON text; it is copied, as they take what they refuse out of what they are handed. A field of a
- * component held inside a row is judged by the component's own rules, which this does not run.
+ * component held inside a row is judged by the component's own rules too.
  */
-async function editablePaths(
+export async function editablePaths(
   document: TranslatedDocument,
   caller: DocumentCaller,
   locale: string,
@@ -275,7 +277,7 @@ async function editablePaths(
       user: caller.user,
       authenticatedScope: caller.authenticatedScope,
       ...(id === null ? {} : { id }),
-    })
+    }).then(() => applyComponentUpdateRules(document, caller, data))
   );
   return paths.filter(path => holdsPath(data, path));
 }

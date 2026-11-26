@@ -198,6 +198,22 @@ export const TRANSLATION_SOURCES_INDEXES = [
   },
 ] as const satisfies readonly CoreIndex<string>[];
 
+export const TRANSLATION_SUGGESTIONS_INDEXES = [
+  // One open suggestion per text and language of a document. It also serves
+  // reading or removing a document's suggestions by its leading columns.
+  {
+    name: "nextly_translation_suggestions_uidx",
+    columns: ["scopeKind", "scopeSlug", "entryId", "targetLocale", "unitKey"],
+    unique: true,
+  },
+  // One field's suggestions across every document, which a field's rename or
+  // removal reaches.
+  {
+    name: "nextly_translation_suggestions_field_idx",
+    columns: ["scopeKind", "scopeSlug", "fieldPath"],
+  },
+] as const satisfies readonly CoreIndex<string>[];
+
 export const DASHBOARD_PREFERENCES_INDEXES = [
   // One value per reader per key.
   {

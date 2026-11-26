@@ -30,6 +30,7 @@ import { MetaService } from "../../meta/services/meta-service";
 import { OLDER_CODES_CHECKED_KEY } from "../older-codes";
 import { ensureI18nArchive } from "../migration/ensure-archive";
 import { _resetPerLanguageStorage } from "../per-language-storage";
+import { fieldUnit, unitKey } from "../pipeline/unit-address";
 
 import {
   ARTICLES,
@@ -267,6 +268,107 @@ describeEachDialect(
         { columns: ["locale"] }
       );
       expect(rows.map(row => row.locale)).toEqual(["pt-BR"]);
+    });
+
+    // A suggested translation names two languages, its own and the one it was made from, and either
+    // can be the only place an older spelling is kept. One text's suggestions under both spellings
+    // become one text's: the newer is kept, and the run is not refused, as a newer suggestion takes
+    // an older one's place anyway. Broken, the unique key stops the run part-way, or the older
+    // text stands.
+    it("converts the languages of suggested translations, keeping the newer of one text's two", async () => {
+      database = await openUpgradeDatabase(dialect);
+      await bootSite(database, "legacy", STANDARD);
+      const suggest = (
+        id: string,
+        field: string,
+        over: Record<string, unknown>
+      ) =>
+        database!.adapter.insert(
+          "nextly_translation_suggestions",
+          {
+            id,
+            scopeKind: "collection",
+            scopeSlug: ARTICLES,
+            entryId: "e1",
+            targetLocale: "pt-BR",
+            sourceLocale: "en",
+            fieldPath: field,
+            unitKey: unitKey(fieldUnit(field)),
+            unitAddress: fieldUnit(field),
+            value: { value: id },
+            origin: "machine",
+            sourceFingerprint: "f",
+            createdAt: new Date("2026-08-01T10:00:00Z"),
+            ...over,
+          },
+          { returning: [] }
+        );
+      const later = { createdAt: new Date("2026-08-02T10:00:00Z") };
+      await suggest("title-older", "title", {
+        targetLocale: "pt_BR",
+        ...later,
+      });
+      await suggest("title-standard", "title", {});
+      await suggest("summary-older", "summary", { targetLocale: "pt_BR" });
+      await suggest("summary-standard", "summary", later);
+      await suggest("code-older", "code", { targetLocale: "pt_BR" });
+      await suggest("from-older", "title", {
+        targetLocale: "en",
+        sourceLocale: "pt_BR",
+      });
+
+      expect(
+        await refusalBeforeSchemaChanges(database.adapter, STANDARD)
+      ).toBeUndefined();
+      await migrateData(database.adapter as never, STANDARD);
+
+      const rows = await database.adapter.select<{
+        id: string;
+        targetLocale: string;
+        sourceLocale: string;
+      }>("nextly_translation_suggestions");
+      expect(
+        rows
+          .map(row => [row.id, row.targetLocale, row.sourceLocale].join(" "))
+          .sort()
+      ).toEqual([
+        "code-older pt-BR en",
+        "from-older en pt-BR",
+        "summary-standard pt-BR en",
+        "title-older pt-BR en",
+      ]);
+    });
+
+    it("converts an older spelling only a suggestion's source language holds, under a configuration that no longer names it", async () => {
+      database = await openUpgradeDatabase(dialect);
+      await bootSite(database, "legacy", STANDARD);
+      await database.adapter.insert(
+        "nextly_translation_suggestions",
+        {
+          id: "only",
+          scopeKind: "collection",
+          scopeSlug: ARTICLES,
+          entryId: "e1",
+          targetLocale: "en",
+          sourceLocale: "pt_BR",
+          fieldPath: "title",
+          unitKey: unitKey(fieldUnit("title")),
+          unitAddress: fieldUnit("title"),
+          value: { value: "hello" },
+          origin: "machine",
+          sourceFingerprint: "f",
+          createdAt: new Date("2026-08-01T10:00:00Z"),
+        },
+        { returning: [] }
+      );
+
+      await migrateData(database.adapter as never, STANDARD);
+
+      const rows = await database.adapter.select<{ sourceLocale: string }>(
+        "nextly_translation_suggestions",
+        { columns: ["sourceLocale"] }
+      );
+      expect(rows.map(row => row.sourceLocale)).toEqual(["pt-BR"]);
     });
 
     it("converts an older spelling only a version's changed languages hold, under a configuration that no longer names it", async () => {

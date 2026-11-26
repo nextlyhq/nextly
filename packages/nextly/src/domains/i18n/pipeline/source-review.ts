@@ -6,6 +6,8 @@
  *
  * @module domains/i18n/pipeline/source-review
  */
+import { isDeepStrictEqual } from "node:util";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getService } from "../../../di";
@@ -23,6 +25,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../per-language-storage";
+import { reviewTexts } from "../provenance/container-review";
 import { translationProvenancePresent } from "../provenance/record-provenance";
 import {
   sourceReaderOf,
@@ -35,6 +38,7 @@ import {
   liveFingerprint,
   reviewField,
   shownRecords,
+  type FieldRecord,
   type SourceUnavailable,
   type TranslatedField,
 } from "../provenance/translation-review";
@@ -45,6 +49,7 @@ import {
   type CompanionSchema,
 } from "../runtime/companion-io";
 import { isCompanionReady } from "../runtime/companion-readiness";
+import { withComponentShapesOf } from "../runtime/component-shapes";
 
 import {
   assertFieldsEditable,
@@ -55,6 +60,7 @@ import {
   type DocumentCaller,
   type TranslatedDocument,
 } from "./document-access";
+import { translationSuggestionsPresent } from "./suggestion-rows";
 
 /** One translated field, as a caller names it. */
 export interface FieldInLanguage {
@@ -135,7 +141,7 @@ function notFound(
 }
 
 /** The language named, as configured: a translation's, and so not the default one. */
-function translationLanguage(
+export function translationLanguage(
   localization: SanitizedLocalizationConfig | undefined,
   named: string
 ): string {
@@ -161,7 +167,7 @@ function translationLanguage(
 }
 
 /** The document's collection or Single, as it is registered. */
-function registeredEntity(document: TranslatedDocument) {
+export function registeredEntity(document: TranslatedDocument) {
   return document.kind === "collection"
     ? getService("collectionRegistryService").getCollectionBySlug(document.slug)
     : getService("singleRegistryService").getSingleBySlug(document.slug);
@@ -192,11 +198,10 @@ function readThroughHook(
   return (own?.hooks?.afterRead?.length ?? 0) > 0;
 }
 
-/** The translation table that stores `field`, or null where the entity does not translate it. */
-async function translationsOf(
+/** The entity's translation table, or null where it has none or it is not there yet. */
+export async function translationTableOf(
   adapter: DrizzleAdapter,
-  record: NonNullable<Awaited<ReturnType<typeof registeredEntity>>>,
-  field: string
+  record: NonNullable<Awaited<ReturnType<typeof registeredEntity>>>
 ): Promise<CompanionSchema | null> {
   if (!storesPerLanguage(record)) return null;
   const companion = buildCompanionSchema({
@@ -208,8 +213,7 @@ async function translationsOf(
     dialect: adapter.dialect,
     status: publishesPerLanguage(record),
   });
-  const stored = companion?.localizedFields.some(ref => ref.name === field);
-  if (!companion || stored !== true) return null;
+  if (!companion) return null;
   return (await isCompanionReady(adapter, companion.companionTableName))
     ? companion
     : null;
@@ -231,8 +235,10 @@ async function translationStore(
     throw notFound(document, named);
   }
   const adapter = getService("adapter");
-  const companion = await translationsOf(adapter, record, named.field);
-  if (companion === null) {
+  const companion = await withComponentShapesOf(
+    await translationTableOf(adapter, record)
+  );
+  if (!companion?.localizedFields.some(ref => ref.name === named.field)) {
     refuse("field", "FIELD_NOT_TRANSLATED", "That field is not translated.");
   }
   const source: SourceDocument = {
@@ -320,6 +326,49 @@ function isConfigured(locale: string): boolean {
 }
 
 /**
+ * A reading of something that may be saved as it is read: read once more where the first was, and
+ * answered as it is where that one was too, which its `settled` tells.
+ */
+export async function readSettled<T extends { settled: boolean }>(
+  attempt: () => Promise<T>
+): Promise<T> {
+  const first = await attempt();
+  return first.settled ? first : attempt();
+}
+
+/**
+ * The record of the translation the caller is shown, and that value's fingerprint. A translation
+ * saved at each reading of it is answered with no fingerprint, so none is kept as it is in a version
+ * the caller was not shown.
+ */
+async function translationNow(
+  store: TranslationStore,
+  recorded: boolean,
+  read: () => Promise<{ value: unknown; heldDraft: boolean }>
+): Promise<{ record?: FieldRecord; fingerprint?: string }> {
+  const { adapter, field } = store;
+  const keptNow = async () => ({
+    records: recorded ? await fieldRecords(adapter, field) : {},
+    stored: (await storedReader(store)(field.locale)).get(field.fieldPath)
+      ?.fingerprint,
+  });
+  const { value, heldDraft, kept, settled } = await readSettled(async () => {
+    const before = await keptNow();
+    const shown = await read();
+    const kept = await keptNow();
+    return { ...shown, kept, settled: isDeepStrictEqual(before, kept) };
+  });
+  if (heldDraft && clearedIn(store, value)) return {};
+  const record = shownRecords(kept.records, heldDraft).at(0);
+  return {
+    record,
+    fingerprint: settled
+      ? (record?.valueFingerprint ?? kept.stored)
+      : undefined,
+  };
+}
+
+/**
  * The source's live value as the caller reads it, and that value's fingerprint. A source saved
  * while it is read is read once more; saved again, it is answered with no fingerprint, so nothing
  * is reviewed against a version the caller was not shown.
@@ -336,16 +385,12 @@ async function sourceNow(
       ? await liveFingerprint(adapter, field, sourceLocale)
       : undefined) ??
     (await storedReader(store)(sourceLocale)).get(field.fieldPath)?.fingerprint;
-  const attempt = async () => {
+  const { after, fingerprint, settled } = await readSettled(async () => {
     const before = await fingerprintNow();
     const after = await read();
     const fingerprint = await fingerprintNow();
     return { after, fingerprint, settled: before === fingerprint };
-  };
-  const first = await attempt();
-  const { after, fingerprint, settled } = first.settled
-    ? first
-    : await attempt();
+  });
   return settled ? { after, fingerprint } : { after };
 }
 
@@ -366,30 +411,20 @@ export async function sourceChange(
   named: FieldInLanguage
 ): Promise<SourceChange> {
   const locale = translationLanguage(appLocalization(), named.locale);
-  const { value, heldDraft } = await shownTranslation(
-    document,
-    caller,
-    named,
-    locale
-  );
+  // Asked first: the store answers more of the field than one who may not read it is told.
+  await readableField(document, caller, named, locale, true);
   const store = await translationStore(document, named);
   const { adapter, field } = store;
   const recorded = await translationProvenancePresent(adapter, store.logger);
-  const cleared = heldDraft && clearedIn(store, value);
-  const record =
-    recorded && !cleared
-      ? shownRecords(await fieldRecords(adapter, field), heldDraft).at(0)
-      : undefined;
+  const { record, fingerprint } = await translationNow(store, recorded, () =>
+    shownTranslation(document, caller, named, locale)
+  );
   const source = await fieldSource(
     adapter,
     field,
     record,
     await translationSourcesPresent(adapter, store.logger)
   );
-  const fingerprint = cleared
-    ? undefined
-    : (record?.valueFingerprint ??
-      (await storedReader(store)(locale)).get(named.field)?.fingerprint);
   const shown: ReviewFingerprints =
     fingerprint === undefined ? {} : { valueFingerprint: fingerprint };
   const { sourceLocale } = source;
@@ -511,6 +546,21 @@ export async function keepCurrent(
     // Held as a save holds it, so the records cannot move between their read and their write.
     await tx.lockRow(store.mainTable, store.document.entryId);
     await assertStillEditable(tx);
+    const sources = {
+      db: tx,
+      read: storedReader(store, tx.getDrizzle()),
+      kept: await translationSourcesPresent(
+        adapter,
+        store.logger,
+        transactionTableProbe(adapter, tx)
+      ),
+      suggestionsKept: await translationSuggestionsPresent(
+        adapter,
+        store.logger,
+        transactionTableProbe(adapter, tx)
+      ),
+    };
+    const now = new Date();
     await reviewField(
       tx,
       {
@@ -520,16 +570,9 @@ export async function keepCurrent(
         valueFingerprint: input.valueFingerprint,
         sourceFingerprint: input.sourceFingerprint,
       },
-      {
-        db: tx,
-        read: storedReader(store, tx.getDrizzle()),
-        kept: await translationSourcesPresent(
-          adapter,
-          store.logger,
-          transactionTableProbe(adapter, tx)
-        ),
-      },
-      new Date()
+      sources,
+      now
     );
+    await reviewTexts(tx, { ...field, heldDraft, sourceLocale }, sources, now);
   });
 }

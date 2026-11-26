@@ -199,6 +199,10 @@ import {
 } from "../../i18n/provenance/provenance-claims";
 import { discardDraftProvenance } from "../../i18n/provenance/record-provenance";
 import {
+  assertSourcesEligible,
+  refuseTranslatedCreate,
+} from "../../i18n/provenance/translated-sources";
+import {
   configuredLocale,
   isValidLocale,
   resolveRequestedLocale,
@@ -398,7 +402,7 @@ import {
   dropRemovedRowsText,
   recordSingleProvenance,
   singleProvenanceRecorded,
-  singleSourceTextKept,
+  singleSourcePruning,
   type SingleProvenanceDeps,
 } from "./single-provenance";
 import {
@@ -1612,9 +1616,7 @@ export class SingleMutationService extends BaseService {
             await discardDraftProvenance(
               tx,
               { ...discardedRef, locale: draftLocale },
-              (await singleSourceTextKept(this.provenanceDeps, tx))
-                ? tx
-                : undefined
+              await singleSourcePruning(this.provenanceDeps, tx)
             );
           }
           // The discarded part has nothing unpublished left to review: its
@@ -2643,22 +2645,22 @@ export class SingleMutationService extends BaseService {
     // it, and it is never stored, so it is dropped with the version below. Malformed, it is
     // refused as a version is.
     let withoutReview: { reason: string } | undefined;
-    let provenanceClaims: ProvenanceClaims | undefined;
+    // What the body claims about where its translated values came from.
+    let bodyClaims: ProvenanceClaims | undefined;
     try {
       versionCheck = versionCheckFor(data, {
         exempt: releaseRunExemptFor({ scopeKind: "single", scopeSlug: slug }),
       });
       restoredFrom = rawOptions.restoredFrom ?? restoredFromOf(data);
       withoutReview = withoutReviewOfBody(data);
-      // What the save claims about where its translated values came from,
-      // read before the key is dropped with the version below.
-      provenanceClaims = provenanceClaimsOf(data);
+      // Read before the key is dropped with the version below.
+      bodyClaims = provenanceClaimsOf(data);
       assertClaimsAllowed(
-        provenanceClaims,
+        bodyClaims,
         actorForWrite(rawOptions.actor, rawOptions.user)
       );
       // A copy's source must be another of the site's languages, as for a collection's save.
-      assertCopySources(provenanceClaims, {
+      assertCopySources(bodyClaims, {
         configured: this.localization?.locales.map(l => l.code) ?? [],
         target:
           rawOptions.locale === EVERY_LOCALE
@@ -2668,6 +2670,10 @@ export class SingleMutationService extends BaseService {
     } catch (error) {
       return buildSingleErrorResult(error, "Failed to update Single document");
     }
+    // An accepted suggestion's claims are server code's own, over the body's.
+    const provenanceClaims = rawOptions.acceptance
+      ? { ...bodyClaims, ...rawOptions.acceptance.claims }
+      : bodyClaims;
     // The version a client sends back with what it read is the server's to
     // decide, so it is dropped before any hook or gate reads the body.
     data = withoutDocumentVersionKeys(data);
@@ -2910,6 +2916,22 @@ export class SingleMutationService extends BaseService {
         singleMeta.fields,
         singleMeta.tableName
       );
+      // A language the body says a value was translated from must be one it may be, as the caller
+      // may know of it: asked once they may update the Single, and before any hook.
+      const claimed = {
+        claims: bodyClaims,
+        locale: options.locale,
+        defaultLocale: this.localization?.defaultLocale,
+      };
+      if (existingDoc) {
+        await assertSourcesEligible({
+          ...claimed,
+          document: { kind: "single", slug },
+          caller: options,
+        });
+      } else {
+        refuseTranslatedCreate(claimed);
+      }
 
       // 2. Resolve the document to write against. When the Single has never been
       // written, build its default in memory but DO NOT persist it yet. The
@@ -6740,6 +6762,9 @@ export class SingleMutationService extends BaseService {
             user: options.user,
             context: sharedContext,
           });
+          // What an accepted suggestion does beside the save, on each attempt
+          // too.
+          await options.acceptance?.onWritten(tx);
           // After the in-transaction phase, whose writes go through this `tx`
           // too, so the after-hooks see what the transaction commits; read
           // only where there are after-hooks to hand it to. Decoded as the
@@ -7779,7 +7804,10 @@ export class SingleMutationService extends BaseService {
       // A container's overlay is recorded with the structure the rewrite put
       // on the main row, as a save records it.
       structures: main,
-      localizedFields: companion.localizedFields,
+      localizedFields: await withComponentShapes(
+        companion.localizedFields,
+        tx.getDrizzle()
+      ),
       languagesTable: companion.companionTableName,
       companionTable: companion.table,
       savedBy: args.actor,

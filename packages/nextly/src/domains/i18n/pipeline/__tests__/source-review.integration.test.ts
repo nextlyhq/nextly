@@ -631,6 +631,47 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    // Broken by naming the fingerprint the translation has once it was read, whatever it was then.
+    it("names the fingerprint of the translation that was shown, where that is saved as it is read", async () => {
+      await boot(dialect);
+      const post = await entry("posts", { title: "Hi" });
+      await save(post, "es", { title: "Hola" });
+      const getEntry = handler().getEntry.bind(handler());
+      let shown: unknown;
+      let saved = 0;
+      let left = 0;
+      vi.spyOn(handler(), "getEntry").mockImplementation(async params => {
+        const answer = await getEntry(params);
+        if (params.locale === "es" && left > 0) {
+          left -= 1;
+          saved += 1;
+          shown = (answer.data as { title?: unknown }).title;
+          await save(post, "es", { title: `Hola ${saved}` });
+        } else if (params.locale === "es") {
+          shown = (answer.data as { title?: unknown }).title;
+        }
+        return answer;
+      });
+
+      // Saved at the first reading of it, and at the first two.
+      for (const times of [1, 2]) {
+        left = times;
+        const { valueFingerprint: named } = await sourceChange(
+          post,
+          ANN,
+          inSpanish()
+        );
+        expect(left).toBe(0);
+        expect(named).toBe(valueFingerprint(shown));
+      }
+
+      // Saved at every one: no fingerprint is given of a value that was not shown.
+      left = 99;
+      expect(await sourceChange(post, ANN, inSpanish())).not.toHaveProperty(
+        "valueFingerprint"
+      );
+    });
+
     it("tells of no source in a language the site no longer has", async () => {
       await boot(dialect);
       const post = await entry("posts", { title: "Hi" });

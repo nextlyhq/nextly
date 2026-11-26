@@ -1155,8 +1155,9 @@ export interface Nextly {
   notices: NoticesNamespace;
 
   /**
-   * @experimental A translated field and its source: what changed in the source since the
-   * translation was made, and keeping the translation as it is.
+   * @experimental A translated document's texts: what changed in a field's source since its
+   * translation was made, keeping the translation as it is, the units to translate, and accepting
+   * or dismissing a suggestion for one.
    */
   translations: TranslationsNamespace;
 

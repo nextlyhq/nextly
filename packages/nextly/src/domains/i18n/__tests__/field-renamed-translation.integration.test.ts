@@ -26,6 +26,7 @@ import { applyCollectionSchemaChange } from "../../schema/services/collection-sc
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { archiveFieldsLeavingTranslation } from "../migration/archive-preflight";
 import { restoreI18nArchive } from "../migration/restore-archive";
+import { fieldUnit, unitKey, type UnitAddress } from "../pipeline/unit-address";
 import { reconcileCompanionColumns } from "../runtime/companion-io";
 
 const LOCALES = ["en", "es"];
@@ -1270,6 +1271,118 @@ describeEachDialect("a translated field that is renamed", dialect => {
     expect(await pathsOf()).toEqual(["en:title2", "es:title2"]);
   });
 
+  it("keeps where each text inside a container came from under the renamed field, and no other's", async () => {
+    // Broken by moving the field's own record alone, and by matching its name as a pattern, where
+    // `_` is any character.
+    await seedShortHeading();
+    for (const fieldPath of [
+      "heading#r1.caption",
+      "heading#r1.points#p1.label",
+      "heading#.lead",
+      "headings#r1.caption",
+    ]) {
+      await current.adapter.insert("nextly_translation_provenance", {
+        id: fieldPath,
+        scopeKind: "collection",
+        scopeSlug: "posts",
+        entryId: "e1",
+        locale: "es",
+        partState: "live",
+        fieldPath,
+        valueFingerprint: "f",
+        origin: "person",
+        writtenAt: new Date(),
+      });
+    }
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [shortText("title2", 64)] }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    const rows = await current.adapter.select<{
+      entryId: string;
+      fieldPath: string;
+    }>("nextly_translation_provenance");
+    expect(
+      rows
+        .filter(row => row.entryId === "e1")
+        .map(row => row.fieldPath)
+        .sort()
+    ).toEqual([
+      "headings#r1.caption",
+      "title2#.lead",
+      "title2#r1.caption",
+      "title2#r1.points#p1.label",
+    ]);
+  });
+
+  /** A Spanish suggestion for the text at `address` of one document of `slug`, under `id`. */
+  async function suggest(
+    id: string,
+    address: UnitAddress,
+    slug = "posts"
+  ): Promise<void> {
+    await current.adapter.insert("nextly_translation_suggestions", {
+      id,
+      scopeKind: "collection",
+      scopeSlug: slug,
+      entryId: "e1",
+      targetLocale: "es",
+      sourceLocale: "en",
+      fieldPath: address[0].field,
+      unitKey: unitKey(address),
+      unitAddress: address,
+      value: { value: "Hola" },
+      origin: "machine",
+      sourceFingerprint: "f",
+      createdAt: new Date(),
+    });
+  }
+
+  /** What each suggestion kept is of, by its id. */
+  async function suggestions() {
+    const rows = await current.adapter.select<{
+      id: string;
+      fieldPath: string;
+      unitKey: string;
+      unitAddress: unknown;
+    }>("nextly_translation_suggestions");
+    return Object.fromEntries(
+      rows.map(row => [row.id, [row.fieldPath, row.unitKey, row.unitAddress]])
+    );
+  }
+
+  it("moves the suggestions for the renamed field's texts, and no other field's or entity's", async () => {
+    // A suggestion is found by a key hashed from its text's address, which starts in the field:
+    // moved by its path alone, it would be found under no text of the renamed field.
+    const caption = (field: string): UnitAddress => [
+      { field },
+      { row: "r1" },
+      { field: "caption" },
+    ];
+    await seedShortHeading();
+    await suggest("own", fieldUnit("heading"));
+    await suggest("inside", caption("heading"));
+    await suggest("field", fieldUnit("summary"));
+    await suggest("entity", fieldUnit("heading"), "pages");
+    const before = await suggestions();
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [shortText("title2", 64)] }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await suggestions()).toEqual({
+      own: ["title2", unitKey(fieldUnit("title2")), fieldUnit("title2")],
+      inside: ["title2", unitKey(caption("title2")), caption("title2")],
+      field: before.field,
+      entity: before.entity,
+    });
+  });
+
   it("keeps every language through the rename and then the storage change, saved one after the other", async () => {
     const id = await seedShortHeading();
 
@@ -2312,6 +2425,8 @@ describeEachDialect("a translated field that is renamed", dialect => {
       );
     expect(entry.success, JSON.stringify(entry)).toBe(true);
     const id = String((entry.data as { id: unknown }).id);
+    await suggest("gone", fieldUnit("heading"));
+    await suggest("kept", fieldUnit("heading"), "pages");
 
     const saved = await handler().updateCollection(
       { collectionName: "posts" },
@@ -2324,5 +2439,8 @@ describeEachDialect("a translated field that is renamed", dialect => {
     expect(saved.success, JSON.stringify(saved)).toBe(true);
     expect(await mainValue("dc_posts", "heading", id)).toBe("Hello");
     expect(await isNotNull("dc_posts", "heading")).toBe(true);
+    // Its translations table is gone, and the suggestions for its translations with it.
+    expect(await columnsOf("dc_posts_locales")).toEqual([]);
+    expect(Object.keys(await suggestions())).toEqual(["kept"]);
   });
 });

@@ -3,7 +3,8 @@
  * `nextly migrate` once the entity is gone: its field-group values (rows of
  * the shared `comp_*` tables whose parent is the entity's table) and its
  * translation rows outside its translations table (archived translations,
- * translation provenance and its translation transition record).
+ * translation provenance, suggested translations and its translation
+ * transition record).
  *
  * The Builder's delete in development removes these before it drops the
  * entity's tables. A deployed database receives the delete as a migration
@@ -157,6 +158,7 @@ export async function removeDroppedEntityLeftovers(args: {
             translations.archiveRowsPurged +
             translations.provenanceRowsPurged +
             translations.sourceRowsPurged +
+            translations.suggestionRowsPurged +
             translations.transitionRecordsPurged,
         };
       });

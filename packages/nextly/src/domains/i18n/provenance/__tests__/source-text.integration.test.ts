@@ -381,13 +381,15 @@ describe.each(getConfiguredTestDialects())(
       expect(await keptOf(id)).toEqual([]);
     });
 
-    it("keeps no text for a container, whose column holds an overlay of its structure", async () => {
+    it("keeps each text inside a container, and none for the container itself", async () => {
       await boot(dialect);
       const id = await create("menus", {
         items: [{ id: "r1", label: "Home" }],
       });
       await save(id, "es", { items: [{ id: "r1", label: "Inicio" }] }, "menus");
-      expect(await keptOf(id)).toEqual([]);
+      expect(
+        (await keptOf(id)).map(row => [row.fieldPath, row.content.value])
+      ).toEqual([["items#r1.label", "Home"]]);
     });
 
     it("writes nothing on a site with one language", async () => {

@@ -706,6 +706,7 @@ const FILTERED_READ_METHODS: ReadonlySet<string> = new Set([
   "countEntries",
   "getEntry",
   "getEntrySourceChange",
+  "getEntryTranslationUnits",
 ]);
 
 /**
@@ -722,6 +723,8 @@ const FILTERED_WRITE_METHODS: ReadonlySet<string> = new Set([
   "takeLiveSharedValues",
   "autosaveEntry",
   "keepEntryTranslation",
+  "acceptEntrySuggestion",
+  "dismissEntrySuggestion",
   "bulkUpdateEntries",
   "bulkDeleteEntries",
   "bulkUpdateByQuery",
@@ -790,6 +793,12 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   // content; keeping its translation is authorized as an update of it.
   "getEntrySourceChange",
   "keepEntryTranslation",
+  // The entry's translatable texts are a read of it; accepting a suggestion
+  // writes one of them, and dismissing one decides about it, so each is
+  // authorized as an update.
+  "getEntryTranslationUnits",
+  "acceptEntrySuggestion",
+  "dismissEntrySuggestion",
 ]);
 
 /**
@@ -841,6 +850,10 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   // A read, named in the read branch below; keeping a translation is an update.
   "getSingleSourceChange",
   "keepSingleTranslation",
+  // The same for its translatable texts, and for a suggestion for one.
+  "getSingleTranslationUnits",
+  "acceptSingleSuggestion",
+  "dismissSingleSuggestion",
 ]);
 
 /**
@@ -890,9 +903,12 @@ const ROLE_AWARE_READ_METHODS = new Set([
   // A document's events run the same document gate, which reads roles.
   "listEntryEvents",
   "listSingleEvents",
-  // What changed in a field's source is read through the document's own read.
+  // What changed in a field's source is read through the document's own read,
+  // and so are its translatable texts.
   "getEntrySourceChange",
   "getSingleSourceChange",
+  "getEntryTranslationUnits",
+  "getSingleTranslationUnits",
   // Where a field group is used, and the field-group list's use counts, name
   // only the collections and Singles the reader may read, by the read
   // decision that reads roles: without them a role-admitted owner is left out
@@ -1153,6 +1169,7 @@ async function resolveAuthorization(
         method === "getSingleVersionDiff" ||
         method === "getSingleAutosave" ||
         method === "getSingleSourceChange" ||
+        method === "getSingleTranslationUnits" ||
         method === "markSingleVersionSeen"
           ? "read"
           : "update";
@@ -2590,9 +2607,12 @@ const SESSION_PRIVATE_METHODS = new Set([
   // the list nor the refusal is shared between callers.
   "listEntryEvents",
   "listSingleEvents",
-  // Which fields a caller may read decides what they are told of a source.
+  // Which fields a caller may read decides what they are told of a source,
+  // and which texts they are listed.
   "getEntrySourceChange",
   "getSingleSourceChange",
+  "getEntryTranslationUnits",
+  "getSingleTranslationUnits",
   // What a publish of every language would do is told only to a caller who
   // may publish, naming only the fields they may read.
   "previewPublishAllSingleLocales",
