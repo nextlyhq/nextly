@@ -21,6 +21,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 
+import { rewritesValuesOn } from "../../../domains/schema/value-conversion/type-change/field-type-changes";
 import { dispatchCollections } from "../../handlers/collection-dispatcher";
 
 import {
@@ -98,23 +99,22 @@ describe.each(getConfiguredTestDialects())(
       return instance;
     }
 
+    // Where the save converts a pair's values itself (`rewritesValuesOn`), the conversion gives a
+    // translated field's translations column its new type, on any entity, so no change here is
+    // refused for that column. Elsewhere (MySQL) a collection's save file retypes the column where it
+    // changes on this database, and a Single's and a field group's push retypes none.
+    const converts = rewritesValuesOn(dialect);
     it.each([
       {
         of: collection,
-        // A collection's save file retypes a translations column where it changes on this
-        // database, which a checkbox's does not on SQLite.
-        expected: [
-          "joins-translation",
-          "leaves-translation",
-          ...(dialect === "sqlite" ? ["translations-column"] : []),
-        ],
+        expected: ["joins-translation", "leaves-translation"],
       },
       {
         of: single,
         expected: [
           "joins-translation",
           "leaves-translation",
-          "translations-column",
+          ...(converts ? [] : ["translations-column"]),
         ],
       },
       {
@@ -122,7 +122,7 @@ describe.each(getConfiguredTestDialects())(
         expected: [
           "joins-translation",
           "leaves-translation",
-          "translations-column",
+          ...(converts ? [] : ["translations-column"]),
         ],
       },
     ])(
