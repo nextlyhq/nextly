@@ -2076,6 +2076,13 @@ exports[`each code, as a command ends with it > SETUP_TOKEN_SET_BY_ENV 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/setup-token-set-by-env  (SETUP_TOKEN_SET_BY_ENV)"
 `;
 
+exports[`each code, as a command ends with it > SNAPSHOT_WITHOUT_ENTITIES 1`] = `
+"✗ The applied migration \`20261024_120000_make_author_required\` has a snapshot that records no entities, and the older \`20261020_120000_add_posts\` has one that does.
+  Why:  An earlier release's \`migrate:create\` wrote it. Its migration changed the tables after \`20261020_120000_add_posts\`, so judging the columns by \`20261020_120000_add_posts\` would convert them back.
+  Next: Run \`nextly migrate:create --name="<migration-name>"\`, then \`nextly migrate\`: the migration it writes records the entities as they are. Then run \`nextly repair-columns\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/snapshot-without-entities  (SNAPSHOT_WITHOUT_ENTITIES)"
+`;
+
 exports[`each code, as a command ends with it > SYNC_CONFIRMATION_REQUIRED 1`] = `
 "✗ \`db:sync --promote posts\` changed nothing: it asks before it changes anything.
   Why:  No terminal is attached to ask (or \`--non-interactive\` was given, or \`CI\` is set), and \`--yes\` was not given.

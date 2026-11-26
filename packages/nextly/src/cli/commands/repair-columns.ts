@@ -242,6 +242,15 @@ async function report(
       if (read.beforeLock === true) return;
       await refuseUnresolvedAppAttempts(history);
     };
+    // Said once a run, however many times the run reads the entities (a dry run reads them again
+    // where a migration may have ended, an apply before the lock and under it), on standard error,
+    // which a `--json` run keeps clear of its document.
+    let noticed = false;
+    const notice = (line: string) => {
+      if (noticed) return;
+      noticed = true;
+      process.stderr.write(`${line}\n`);
+    };
     const readEntities = (
       waits: TableWaits | undefined,
       read: EntitiesRead = {}
@@ -257,6 +266,7 @@ async function report(
         ...(deferredExtends !== undefined ? { deferredExtends } : {}),
         migrationsDir,
         checkHistory: declared => checkHistory(declared, read),
+        notice,
         logger: { debug, info: debug, warn: debug, error: debug },
         ...(waits === undefined ? {} : { waits }),
       });

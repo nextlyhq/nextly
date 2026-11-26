@@ -227,6 +227,7 @@
     "setup-already-complete",
     "setup-in-progress",
     "setup-token-set-by-env",
+    "snapshot-without-entities",
     "sync-confirmation-required",
     "table-busy",
     "translations-unrecorded",
