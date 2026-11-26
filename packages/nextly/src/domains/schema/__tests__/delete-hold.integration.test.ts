@@ -532,8 +532,10 @@ async function endHoldingConnection(
 ): Promise<boolean> {
   const holder = async (): Promise<unknown> => {
     if (dialect === "postgresql") {
+      // `pg_locks` lists every database's locks, and another worker's database holds the same keys:
+      // only this database's holder is this case's.
       const [row] = await rows<{ pid: number | string | null }>(
-        `SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND mode = 'ExclusiveLock' AND objsubid = 2 AND classid = hashtext('nextly:entity')::oid AND objid = hashtext('collection:${SLUG}')::oid`
+        `SELECT pid FROM pg_locks WHERE database = (SELECT oid FROM pg_database WHERE datname = current_database()) AND locktype = 'advisory' AND granted AND mode = 'ExclusiveLock' AND objsubid = 2 AND classid = hashtext('nextly:entity')::oid AND objid = hashtext('collection:${SLUG}')::oid`
       );
       return row?.pid ?? null;
     }
@@ -2610,11 +2612,12 @@ describe.each(getConfiguredTestDialects())(
           return Number(row?.n);
         };
         // On PostgreSQL the push's drops are seen by no other connection until it commits: between
-        // two of them, its transaction holds the table's exclusive lock.
+        // two of them, its transaction holds the table's exclusive lock. Asked of this database's
+        // locks alone, as another worker's database can hold a table of the same name.
         const altered = async () => {
           const [row] = await sql<{ n: number | string }>(
             t,
-            `SELECT COUNT(*) AS n FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE c.relname = '${TABLE}' AND l.mode = 'AccessExclusiveLock' AND l.granted AND l.pid <> pg_backend_pid()`
+            `SELECT COUNT(*) AS n FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE l.database = (SELECT oid FROM pg_database WHERE datname = current_database()) AND c.relname = '${TABLE}' AND l.mode = 'AccessExclusiveLock' AND l.granted AND l.pid <> pg_backend_pid()`
           );
           return Number(row?.n) > 0;
         };
