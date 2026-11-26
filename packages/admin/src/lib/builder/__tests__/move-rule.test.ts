@@ -238,36 +238,127 @@ describe("moves the rule refuses", () => {
             ...ctx,
             surface: host,
             describeFieldGroup: () => ({
-              label: "SEO",
-              usedBy: ["Posts", "Pages", "Card"],
+              uses: [
+                { entityType: "collection", entitySlug: "posts" },
+                { entityType: "collection", entitySlug: "pages" },
+                { entityType: "fieldGroup", entitySlug: "card" },
+              ],
+              complete: true,
             }),
           }
         )
       );
       expect(reason).toBe("into-field-group");
-      expect(message).toContain("the field group SEO");
-      expect(message).toContain("changed only in its own editor");
-      expect(message).toContain("Posts, Pages, Card");
+      expect(message).toBe(
+        "Summary cannot be moved into or out of the field group seo: a field group is changed only in its own editor. It is used by the collection posts, the collection pages, the field group card."
+      );
     }
   });
 
-  it("out of a field group, by the same refusal", () => {
-    const seo = nestedFixtureFields().find(each => each.id === "f-seo")!;
+  it("out of a field group, by the same refusal, naming the field moved", () => {
+    const fields = nestedFixtureFields();
+    const seo = fields.find(each => each.id === "f-seo")!;
+    const metaTitle = plain("f-seo/meta_title", "meta_title", {
+      label: "Meta title",
+    });
     const { reason, message } = refusal(
       judgeMove(
-        nestedFixtureFields(),
+        fields,
         "f-seo/meta_title",
         {},
         {
           ...ctx,
           fieldGroupFieldHolding: id =>
             id.startsWith("f-seo/") ? seo : undefined,
-          describeFieldGroup: () => ({ label: "SEO", usedBy: ["Posts"] }),
+          fieldOfRow: id => (id === metaTitle.id ? metaTitle : undefined),
+          describeFieldGroup: () => ({
+            uses: [{ entityType: "collection", entitySlug: "posts" }],
+            complete: true,
+          }),
         }
       )
     );
     expect(reason).toBe("into-field-group");
-    expect(message).toContain("the field group SEO");
+    expect(message).toBe(
+      "Meta title cannot be moved into or out of the field group seo: a field group is changed only in its own editor. It is used by the collection posts."
+    );
+  });
+
+  // The server refuses the same move in the same words (`checkMove` in packages/nextly, its case
+  // "refuses a move into or out of a field group held by reference, naming its users" in
+  // check-move.test.ts, over this fixture), so the refusal a gesture gives and the one a save gives
+  // read alike. The sentence is written twice and held to one string; only the clause naming the
+  // users is shared code.
+  it("says the server's words for a move into or out of a field group", () => {
+    const placed = plain("f-card", "card", {
+      label: "Card",
+      type: "component",
+      component: "card_box",
+      fields: [],
+    } as Partial<BuilderField>);
+    const summary = plain("f-summary", "summary");
+    const { message } = refusal(
+      judgeMove(
+        [summary, placed],
+        "f-summary",
+        { parentFieldId: "f-card" },
+        {
+          ...ctx,
+          describeFieldGroup: () => ({
+            uses: [{ entityType: "collection", entitySlug: "posts" }],
+            complete: false,
+          }),
+        }
+      )
+    );
+    expect(message).toBe(
+      "summary cannot be moved into or out of the field group card_box: a field group is changed only in its own editor. It is used by the collection posts, and others you may not read."
+    );
+  });
+
+  // A field group used by c1, c2 and the field group b, and b by the Single s: s reaches it through
+  // b, as the server's used-by list gives it (`via`).
+  it("names a user reaching the field group through another one, both ways", () => {
+    const fields = nestedFixtureFields();
+    const seo = fields.find(each => each.id === "f-seo")!;
+    const through = {
+      ...ctx,
+      fieldGroupFieldHolding: (id: string) =>
+        id.startsWith("f-seo/") ? seo : undefined,
+      describeFieldGroup: () => ({
+        uses: [
+          { entityType: "collection" as const, entitySlug: "c1" },
+          { entityType: "collection" as const, entitySlug: "c2" },
+          { entityType: "fieldGroup" as const, entitySlug: "b" },
+          { entityType: "single" as const, entitySlug: "s", via: ["b"] },
+        ],
+        complete: true,
+      }),
+    };
+    const users =
+      "It is used by the collection c1, the collection c2, the field group b, the Single s (through b).";
+    const into = refusal(
+      judgeMove(fields, "f-summary-a", { parentFieldId: "f-seo" }, through)
+    );
+    const out = refusal(judgeMove(fields, "f-seo/meta_title", {}, through));
+    expect(into.message.endsWith(users)).toBe(true);
+    expect(out.message.endsWith(users)).toBe(true);
+  });
+
+  // A list not yet read, or one whose read failed, is no list of users: naming none would read as
+  // a field group nothing else uses.
+  it("says the users could not be read while their list is not there", () => {
+    const { message } = refusal(
+      judgeMove(
+        nestedFixtureFields(),
+        "f-summary-a",
+        { parentFieldId: "f-seo" },
+        { ...ctx, describeFieldGroup: () => ({ uses: null, complete: false }) }
+      )
+    );
+    expect(message).toBe(
+      "Summary cannot be moved into or out of the field group seo: a field group is changed only in its own editor. Where else it is used could not be read."
+    );
   });
 
   it("a read-only row: built in, owned by code, owned by a plugin, or in a read-only entity", () => {

@@ -79,6 +79,8 @@ export function MoveHarness({
   const ctx: MoveContext = {
     ...context,
     fieldGroupFieldHolding: rowId => fieldGroupFieldHolding(byId, rowId),
+    // And names the row's own field, as the page's context does.
+    fieldOfRow: rowId => byId.get(rowId)?.field,
   };
   const callbacks: OutlineCallbacks = {
     select: id => setSelectedId(id),
