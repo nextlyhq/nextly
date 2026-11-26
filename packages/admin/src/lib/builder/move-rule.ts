@@ -301,6 +301,18 @@ function containerRefusal(
     : null;
 }
 
+/**
+ * The refusal of moving a row the entity's fields do not hold: a field group's own row, whose move
+ * out of the field group is refused as a move into it is, naming the row; or a field no longer
+ * there.
+ */
+function notAmongTheFields(fieldId: string, ctx: MoveContext): MoveVerdict {
+  const holder = ctx.fieldGroupFieldHolding?.(fieldId);
+  return holder
+    ? fieldGroupRefusal(ctx.fieldOfRow?.(fieldId), holder, ctx)
+    : refuse("not-found", "That field is no longer here.");
+}
+
 /** Said in place of a field group's users while the list of them has not been read. */
 const USERS_UNREAD = "Where else it is used could not be read.";
 
@@ -631,13 +643,7 @@ export function judgeMove(
   ctx: MoveContext
 ): MoveVerdict {
   const chain = chainTo(fields, fieldId);
-  if (!chain) {
-    // A field group's own row: the move out of it is refused as a move into it is, naming the row.
-    const holder = ctx.fieldGroupFieldHolding?.(fieldId);
-    return holder
-      ? fieldGroupRefusal(ctx.fieldOfRow?.(fieldId), holder, ctx)
-      : refuse("not-found", "That field is no longer here.");
-  }
+  if (!chain) return notAmongTheFields(fieldId, ctx);
   const field = chain[chain.length - 1];
   const from = chain.slice(0, -1);
   const into = target.parentFieldId

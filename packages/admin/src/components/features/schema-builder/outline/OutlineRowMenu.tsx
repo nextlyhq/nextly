@@ -63,15 +63,9 @@ export function OutlineRowMenu({
   open: boolean;
   actions: OutlineActions;
 }): JSX.Element {
-  const { id, field, readOnly, container } = node;
+  const { id, field, readOnly } = node;
   const subject = field.label || field.name || "this field";
   const group = fieldGroupOf(node);
-  const holdsFields = container === "group" || container === "repeater";
-  const reasonId = useId();
-  // Asked only while the menu is open: the rule's reason a field group's own field stays, whatever
-  // place it is moved to.
-  const stays =
-    open && isFieldGroupOwnRow(node) ? actions.judgeMoveTo(id, {}) : undefined;
 
   return (
     <DropdownMenu
@@ -117,78 +111,125 @@ export function OutlineRowMenu({
           </DropdownMenuItem>
         )}
         {readOnly ? (
-          <>
-            <DropdownMenuSeparator />
-            {stays && !stays.allowed && (
-              <DropdownMenuItem disabled aria-describedby={reasonId}>
-                Move to…
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuLabel
-              id={reasonId}
-              className="font-normal text-muted-foreground"
-            >
-              {stays && !stays.allowed
-                ? stays.message
-                : describeReadOnly(readOnly)}
-            </DropdownMenuLabel>
-          </>
+          <ReadOnlyItems
+            node={node}
+            readOnly={readOnly}
+            open={open}
+            actions={actions}
+          />
         ) : (
-          <>
-            <DropdownMenuSeparator />
-            {holdsFields && (
-              <DropdownMenuItem onSelect={() => actions.addInside(id)}>
-                Add a field inside
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuItem onSelect={() => actions.addAfter(id)}>
-              Add a field after
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={!actions.canMove(id, "up")}
-              onSelect={() => actions.move(id, "up")}
-            >
-              Move up
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={!actions.canMove(id, "down")}
-              onSelect={() => actions.move(id, "down")}
-            >
-              Move down
-            </DropdownMenuItem>
-            {/* Every place, with why not for the ones it may not go, so it
-                is offered whenever the field itself may move. */}
-            <DropdownMenuItem onSelect={() => actions.openMoveTo(id)}>
-              Move to…
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => actions.duplicate(id)}>
-              Duplicate
-            </DropdownMenuItem>
-            {actions.rename && actions.canRename?.(id) && (
-              <DropdownMenuItem onSelect={() => actions.rename?.(id)}>
-                Rename…
-              </DropdownMenuItem>
-            )}
-            {actions.changeType && actions.canChangeType?.(id) && (
-              <DropdownMenuItem onSelect={() => actions.changeType?.(id)}>
-                Change type…
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuItem
-              onSelect={() => actions.setHidden(id, !field.admin?.hidden)}
-            >
-              {field.admin?.hidden ? "Show" : "Hide"}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="text-destructive"
-              onSelect={() => actions.remove(id)}
-            >
-              Delete
-            </DropdownMenuItem>
-          </>
+          <EditableItems node={node} actions={actions} />
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * What a read-only row's menu says after its other items: why it stays as it is. A field group's
+ * own field also offers Move to…, disabled, described by the move rule's reason it stays, so a
+ * person who looks for it learns why.
+ */
+function ReadOnlyItems({
+  node,
+  readOnly,
+  open,
+  actions,
+}: {
+  node: OutlineNode;
+  readOnly: NonNullable<OutlineNode["readOnly"]>;
+  open: boolean;
+  actions: OutlineActions;
+}): JSX.Element {
+  const reasonId = useId();
+  // Asked only while the menu is open: the rule's reason a field group's own field stays, whatever
+  // place it is moved to.
+  const stays =
+    open && isFieldGroupOwnRow(node)
+      ? actions.judgeMoveTo(node.id, {})
+      : undefined;
+  const refused = stays && !stays.allowed ? stays.message : undefined;
+  return (
+    <>
+      <DropdownMenuSeparator />
+      {refused && (
+        <DropdownMenuItem disabled aria-describedby={reasonId}>
+          Move to…
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuLabel
+        id={reasonId}
+        className="font-normal text-muted-foreground"
+      >
+        {refused ?? describeReadOnly(readOnly)}
+      </DropdownMenuLabel>
+    </>
+  );
+}
+
+/** What an editable row's menu offers after its other items: every change to the field. */
+function EditableItems({
+  node,
+  actions,
+}: {
+  node: OutlineNode;
+  actions: OutlineActions;
+}): JSX.Element {
+  const { id, field, container } = node;
+  const holdsFields = container === "group" || container === "repeater";
+  return (
+    <>
+      <DropdownMenuSeparator />
+      {holdsFields && (
+        <DropdownMenuItem onSelect={() => actions.addInside(id)}>
+          Add a field inside
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuItem onSelect={() => actions.addAfter(id)}>
+        Add a field after
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        disabled={!actions.canMove(id, "up")}
+        onSelect={() => actions.move(id, "up")}
+      >
+        Move up
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        disabled={!actions.canMove(id, "down")}
+        onSelect={() => actions.move(id, "down")}
+      >
+        Move down
+      </DropdownMenuItem>
+      {/* Every place, with why not for the ones it may not go, so it
+          is offered whenever the field itself may move. */}
+      <DropdownMenuItem onSelect={() => actions.openMoveTo(id)}>
+        Move to…
+      </DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => actions.duplicate(id)}>
+        Duplicate
+      </DropdownMenuItem>
+      {actions.rename && actions.canRename?.(id) && (
+        <DropdownMenuItem onSelect={() => actions.rename?.(id)}>
+          Rename…
+        </DropdownMenuItem>
+      )}
+      {actions.changeType && actions.canChangeType?.(id) && (
+        <DropdownMenuItem onSelect={() => actions.changeType?.(id)}>
+          Change type…
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuItem
+        onSelect={() => actions.setHidden(id, !field.admin?.hidden)}
+      >
+        {field.admin?.hidden ? "Show" : "Hide"}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        className="text-destructive"
+        onSelect={() => actions.remove(id)}
+      >
+        Delete
+      </DropdownMenuItem>
+    </>
   );
 }

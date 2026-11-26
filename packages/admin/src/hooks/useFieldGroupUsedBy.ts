@@ -71,10 +71,9 @@ export function fieldGroupUsedThroughQuery(slug: string | undefined) {
 
 /**
  * The query reading where a field group is used, for one slug: what
- * `useFieldGroupUsedBy` reads, and what a page asking about several field
- * groups at once reads for each.
+ * `useFieldGroupUsedBy` reads for the field group's own editor.
  */
-export function fieldGroupUsedByQuery(slug: string | undefined) {
+function fieldGroupUsedByQuery(slug: string | undefined) {
   return {
     queryKey: [...fieldGroupKeys.detail(slug ?? ""), "used-by"],
     queryFn: async () => {
