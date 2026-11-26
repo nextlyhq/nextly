@@ -80,7 +80,7 @@ const refs = defineTable(
       },
       {
         columns: ["partId"],
-        references: { table: "comp_cf_part", columns: ["id"] },
+        references: { table: "fg_cf_part", columns: ["id"] },
       },
     ],
   }
@@ -157,7 +157,7 @@ describeEachDialect(
       const adapter = current.adapter;
 
       expect(await foreignKeysOf(adapter, dialect, "cf_refs")).toEqual([
-        "part_id->comp_cf_part.id",
+        "part_id->fg_cf_part.id",
         "post_id->dc_cf_posts.id",
         "site_id->single_cf_site.id",
       ]);

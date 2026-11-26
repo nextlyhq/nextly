@@ -242,7 +242,7 @@ describe.each(getConfiguredTestDialects())(
         depth: 0,
       } as never)) as Doc;
       const holderId = String((read.one as Doc | undefined)?.id);
-      await storeRaw("comp_upholder", { id: holderId }, "box", {
+      await storeRaw("fg_upholder", { id: holderId }, "box", {
         held: { heading: "i", pin: "inner-plain" },
       });
 
@@ -275,7 +275,7 @@ describe.each(getConfiguredTestDialects())(
         lines: valuesAt((await rowOf("dc_upentries", { id })).lines, "pin"),
         box: valuesAt((await rowOf("dc_upentries", { id })).myBox, "pin"),
         inner: valuesAt(
-          (await rowOf("comp_upholder", { id: holderId })).box,
+          (await rowOf("fg_upholder", { id: holderId })).box,
           "pin"
         ),
         site: valuesAt(

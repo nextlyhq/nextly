@@ -110,7 +110,7 @@ async function pushGroup(
   })) {
     desired.components[groupSlug] = {
       slug: groupSlug,
-      tableName: `comp_${groupSlug}`,
+      tableName: `fg_${groupSlug}`,
       fields: groupFields as DesiredFieldGroup["fields"],
       localized: false,
       builderOwned: true,
@@ -328,7 +328,7 @@ describe.each(getConfiguredTestDialects())(
         ]);
         actual[kind] =
           status === "applied"
-            ? await subjectIndexKinds(t, dialect, `comp_${slug}`)
+            ? await subjectIndexKinds(t, dialect, `fg_${slug}`)
             : `create ${String(status)}`;
       }
       expect(actual).toEqual(expected);
@@ -349,7 +349,7 @@ describe.each(getConfiguredTestDialects())(
         };
         earlier[slug] = fields;
         actual[kind] = pushed.success
-          ? await subjectIndexKinds(t, dialect, `comp_${slug}`)
+          ? await subjectIndexKinds(t, dialect, `fg_${slug}`)
           : pushed;
       }
       expect(actual).toEqual(expected);
@@ -370,7 +370,7 @@ describe.each(getConfiguredTestDialects())(
       // The recorded outcome first: a failed DDL is recorded on the row, not raised.
       expect(await createGroup(t, slug, [HEADING, RELATED])).toBe("applied");
       expect(
-        (await liveTable(t, dialect, `comp_${slug}`)).relatedIndexes
+        (await liveTable(t, dialect, `fg_${slug}`)).relatedIndexes
       ).toEqual([]);
 
       const { saved, ids } = await writeTwoIds(t, slug);
@@ -384,7 +384,7 @@ describe.each(getConfiguredTestDialects())(
     it("is added to an existing field group by the schema push, unindexed", async () => {
       const t = await boot(dialect);
       const slug = `${prefix}_m2m_alter`;
-      const tableName = `comp_${slug}`;
+      const tableName = `fg_${slug}`;
 
       expect(await createGroup(t, slug, [HEADING])).toBe("applied");
       expect(await pushGroup(t, dialect, slug, [HEADING, RELATED])).toEqual({
@@ -404,7 +404,7 @@ describe.each(getConfiguredTestDialects())(
       async () => {
         const t = await boot(dialect);
         const slug = `${prefix}_m2m_site`;
-        const tableName = `comp_${slug}`;
+        const tableName = `fg_${slug}`;
         const indexName = `idx_${tableName}_related`;
 
         expect(await createGroup(t, slug, [HEADING, RELATED])).toBe("applied");
@@ -451,7 +451,7 @@ describe.each(getConfiguredTestDialects())(
       async () => {
         const t = await boot(dialect);
         const slug = `${prefix}_poly_site`;
-        const tableName = `comp_${slug}`;
+        const tableName = `fg_${slug}`;
         const indexName = `idx_${tableName}_subject`;
         const fields = [
           HEADING,

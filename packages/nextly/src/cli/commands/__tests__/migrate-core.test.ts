@@ -11,6 +11,18 @@ import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-los
 import { CliError } from "../../errors";
 import { migrateCore, migrateExitCode } from "../migrate";
 
+// These databases hold nothing, so a run records a new site's field-group names: a write of the meta
+// service's, exercised against real databases in its own suites.
+vi.mock(
+  "../../../domains/field-groups/services/field-group-new-site",
+  async original => ({
+    ...(await original<
+      typeof import("../../../domains/field-groups/services/field-group-new-site")
+    >()),
+    recordNewSiteOnCurrentNames: vi.fn(async () => {}),
+  })
+);
+
 function deps(over: Record<string, unknown> = {}) {
   return {
     extensionSchema: undefined,

@@ -51,7 +51,7 @@ import {
 } from "../../pipeline/pushschema-pipeline-stubs";
 import { RegexRenameDetector } from "../../pipeline/rename-detector";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
-import { resolveComponentTableName } from "../../utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../../field-groups/services/field-group-storage-names";
 import * as keptElements from "../kept-elements";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
 
@@ -474,7 +474,7 @@ describeEachDialect(
 
     it("applies removing a field group's field, keeping the plugin's column, its index and its values on the shared table", async () => {
       const GROUP = "rk_kept_cards";
-      const groupTable = resolveComponentTableName(GROUP);
+      const groupTable = fieldGroupTableNameFor("current", GROUP);
       const card = (withNote: boolean) =>
         defineFieldGroup({
           slug: GROUP,
@@ -590,7 +590,7 @@ describeEachDialect(
 
     it("refuses removing a field group's field whose column in its shared table a plugin's recorded index stands on", async () => {
       const GROUP = "rk_cards";
-      const groupTable = resolveComponentTableName(GROUP);
+      const groupTable = fieldGroupTableNameFor("current", GROUP);
       const group = (withCode: boolean) =>
         defineFieldGroup({
           slug: GROUP,

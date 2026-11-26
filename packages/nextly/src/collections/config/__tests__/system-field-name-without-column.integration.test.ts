@@ -422,7 +422,7 @@ describe.each(getConfiguredTestDialects())(
         collections: [plainPosts()],
         plugins: [reshaping("collections", POSTS, fields => fields)],
       });
-      expect(await current.adapter.tableExists("comp_sfncard")).toBe(true);
+      expect(await current.adapter.tableExists("fg_sfncard")).toBe(true);
     });
 
     it("writes and reads the field under another name through the Direct API and REST", async () => {

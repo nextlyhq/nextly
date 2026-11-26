@@ -12,6 +12,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { assertSaveHoldKept } from "../save-hold-check";
 import { assertSchemaLockHeld, markedSqlForSchemaLock } from "../schema-lock";
 
 interface AsyncExecuteHandle {
@@ -33,8 +34,10 @@ export async function runStatement(
   dialect: SupportedDialect,
   stmt: unknown
 ): Promise<void> {
-  // A run that lost the schema lock starts no further statement (`assertSchemaLockHeld`).
+  // A run that lost the schema lock starts no further statement (`assertSchemaLockHeld`), nor a
+  // save that lost its hold.
   await assertSchemaLockHeld();
+  await assertSaveHoldKept();
   if (dialect === "sqlite") {
     (txOrDb as SyncRunHandle).run(stmt);
     return;

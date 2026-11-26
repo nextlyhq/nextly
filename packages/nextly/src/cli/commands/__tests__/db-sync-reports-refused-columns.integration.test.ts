@@ -80,8 +80,8 @@ import { runDbSync } from "../db-sync";
 import { openCollectionRegistry } from "../db-sync-registry";
 import { createDebouncedSync } from "../dev-watcher";
 
-const SEO = { slug: "rc_seo", table: "comp_rc_seo" };
-const TWO = { slug: "rc_two", table: "comp_rc_two" };
+const SEO = { slug: "rc_seo", table: "fg_rc_seo" };
+const TWO = { slug: "rc_two", table: "fg_rc_two" };
 
 /** Two field groups; `edited` gives each one more shared field. */
 function configuration(edited: boolean, groups: readonly string[] = ["seo"]) {
@@ -243,7 +243,7 @@ describeEachDialect("db:sync and what the database refuses", dialect => {
 
   async function statusOf(slug: string): Promise<string> {
     const [row] = await adapter.executeQuery<{ st: string }>(
-      `SELECT migration_status AS st FROM dynamic_components WHERE slug = '${slug}'`
+      `SELECT migration_status AS st FROM dynamic_field_groups WHERE slug = '${slug}'`
     );
     return row.st;
   }
@@ -315,7 +315,7 @@ describeEachDialect("db:sync and what the database refuses", dialect => {
       await dbSync(configuration(true));
       // As an earlier release left it: the column refused, the group recorded applied.
       await adapter.executeQuery(
-        `UPDATE ${q("dynamic_components")} SET ${q("migration_status")} = 'applied' WHERE ${q("slug")} = '${SEO.slug}'`
+        `UPDATE ${q("dynamic_field_groups")} SET ${q("migration_status")} = 'applied' WHERE ${q("slug")} = '${SEO.slug}'`
       );
       expect(await columnsOf(SEO.table)).not.toContain("priority");
 
@@ -341,7 +341,7 @@ describeEachDialect("db:sync and what the database refuses", dialect => {
 
   it("a table a new field group needs is refused: names the group, and syncs the rest", async () => {
     await dbSync(configuration(false, []));
-    refuse = /CREATE TABLE .*comp_rc_seo\b/;
+    refuse = /CREATE TABLE .*fg_rc_seo\b/;
     const run = await dbSync(configuration(true));
 
     expect(run.error?.code).toBe("ENTITIES_NOT_SYNCED");

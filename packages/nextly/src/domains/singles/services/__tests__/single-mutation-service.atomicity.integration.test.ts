@@ -22,7 +22,7 @@
  * registry.
  *
  * Failure injection: after establishing an initial value via one successful
- * update, `DROP TABLE comp_hero` so the next update's
+ * update, `DROP TABLE fg_hero` so the next update's
  * `saveComponentDataInTransaction` call throws from inside the same
  * transaction as the scalar update.
  *
@@ -116,7 +116,7 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
 
     // Drop the component's table so the next update's component save fails
     // from inside the same transaction as the scalar update.
-    await adapter.executeQuery(`DROP TABLE "comp_hero"`);
+    await adapter.executeQuery(`DROP TABLE "fg_hero"`);
 
     const second = await singles.update(
       "preferences",
@@ -168,7 +168,7 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
     // write would throw on the missing table. With recording off, that assembly
     // is skipped and the scalar write must still succeed.
     setWebhookRecording("single", "preferences", false);
-    await adapter.executeQuery(`DROP TABLE "comp_hero"`);
+    await adapter.executeQuery(`DROP TABLE "fg_hero"`);
 
     const scalar = await singles.update(
       "preferences",

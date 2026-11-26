@@ -32,7 +32,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { indexNameForColumn } from "../../schema/services/index-name";
-import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../field-groups/services/field-group-storage-names";
 
 let current: TestNextly | undefined;
 
@@ -150,7 +150,7 @@ for (const dialect of getConfiguredTestDialects()) {
         fields: EVERY_SHAPE,
       });
       await current.adapter.executeQuery(
-        statement.replace("{t}", resolveComponentTableName(slug))
+        statement.replace("{t}", fieldGroupTableNameFor("current", slug))
       );
       const { reconcileFieldGroup } = await import(
         "../services/field-group-reconcile-service"
@@ -213,7 +213,7 @@ function dropIndexSql(dialect: string, name: string): string {
 for (const dialect of getConfiguredTestDialects()) {
   describe(`a Builder field group's generator-decided index and default — ${dialect}`, () => {
     const slug = `decided_${dialect.slice(0, 2)}`;
-    const table = resolveComponentTableName(slug);
+    const table = fieldGroupTableNameFor("current", slug);
 
     /** A Builder-made group with the fields above, altered by `statements`, and its reconcile. */
     async function reconcileAfter(...statements: string[]) {

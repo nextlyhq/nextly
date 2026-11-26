@@ -98,7 +98,7 @@ function titlesOf(value: unknown): string[] {
 async function rowCounts(t: TestNextly): Promise<number[]> {
   const counts: number[] = [];
   for (const slug of LEVELS) {
-    counts.push((await t.adapter.select(`comp_${slug}`, {})).length);
+    counts.push((await t.adapter.select(`fg_${slug}`, {})).length);
   }
   return counts;
 }

@@ -123,7 +123,7 @@ type StoredField = {
 /** Parsed `fields` JSON for a row in one of the dynamic_* registry tables. */
 async function registryFieldsIn(
   adapter: Awaited<ReturnType<typeof createAdapter>>,
-  table: "dynamic_collections" | "dynamic_singles" | "dynamic_components",
+  table: "dynamic_collections" | "dynamic_singles" | "dynamic_field_groups",
   slug: string
 ): Promise<StoredField[]> {
   const rows = await adapter.executeQuery<{ fields: string }>(
@@ -269,10 +269,10 @@ describe("plugin extend → UI-Builder single + component parity", () => {
       plugins: [seoPlugin(["hero"])],
     });
 
-    expect(await columnsOf(adapter, "comp_hero")).toContain("meta_title");
+    expect(await columnsOf(adapter, "fg_hero")).toContain("meta_title");
     const fields = await registryFieldsIn(
       adapter,
-      "dynamic_components",
+      "dynamic_field_groups",
       "hero"
     );
     expect(fields.find(f => f.name === "meta_title")).toMatchObject({

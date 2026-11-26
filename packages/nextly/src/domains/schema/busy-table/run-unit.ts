@@ -36,6 +36,7 @@ import {
   assertSchemaLockHeld,
   schemaLockConfirmedUntil,
 } from "../pipeline/schema-lock";
+import { assertSaveHoldKept } from "../pipeline/save-hold-check";
 
 import type { BusyTableBounds } from "./bounds";
 import { endedWaiting } from "./ended-waiting";
@@ -510,7 +511,11 @@ export async function runUnitInTries(
             settle: async () => {
               await watchdog.stop();
             },
-            beforeStatement: () => watchdog.idle(),
+            beforeStatement: async () => {
+              await watchdog.idle();
+              // Not past the last statement: what follows it records what ran.
+              if (reached < statements.length) await assertSaveHoldKept();
+            },
             onSend: index => {
               sentIndex = index;
             },

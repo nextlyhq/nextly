@@ -36,8 +36,8 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ServiceContainer } from "../../../services";
+import { MIGRATION_TARGET } from "../migration/target";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
@@ -55,7 +55,7 @@ const cardRef: Field = { name: "card", type: "component", component: CARD };
 const HOST: Record<Kind, { slug: string; registry: string }> = {
   collection: { slug: "ferw_posts", registry: "dynamic_collections" },
   single: { slug: "ferw_home", registry: "dynamic_singles" },
-  fieldGroup: { slug: "ferw_frame", registry: STORAGE_FORMAT.registryTable },
+  fieldGroup: { slug: "ferw_frame", registry: MIGRATION_TARGET.registryTable },
 };
 
 /** A host's fields with the field group's fields copied in: unchanged, or with one added. */

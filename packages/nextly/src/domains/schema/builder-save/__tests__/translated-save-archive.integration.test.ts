@@ -109,7 +109,7 @@ const KINDS: Kind[] = [
   },
   {
     name: "a field group",
-    table: "comp_band",
+    table: "fg_band",
     // Its rows belong to the entries that embed it, written as an embedding entry's save writes them.
     seed: async (_t, exec, q) => {
       await dispatchComponents(
@@ -119,11 +119,11 @@ const KINDS: Kind[] = [
       );
       const id = "band-1";
       await exec(
-        `INSERT INTO ${q("comp_band")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(q).join(", ")}) ` +
+        `INSERT INTO ${q("fg_band")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(q).join(", ")}) ` +
           `VALUES ('${id}', 'entry-1', 'dc_pages', 'band', 7)`
       );
       await exec(
-        `INSERT INTO ${q("comp_band_locales")} (${["_parent", "_locale", "title"].map(q).join(", ")}) ` +
+        `INSERT INTO ${q("fg_band_locales")} (${["_parent", "_locale", "title"].map(q).join(", ")}) ` +
           `VALUES ('${id}', 'en', 'Hello'), ('${id}', 'es', 'Hola')`
       );
       return id;

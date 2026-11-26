@@ -85,6 +85,30 @@ export function fieldGroupTableNameFor(
 }
 
 /**
+ * Both tables a field group with `slug` can be stored in, the legacy name first: for a reader of
+ * a record that does not say which names it was written under, and that errs to counting a table
+ * as the group's.
+ */
+export function fieldGroupTableNames(slug: string): [string, string] {
+  return [
+    fieldGroupTableNameFor("legacy", slug),
+    fieldGroupTableNameFor("current", slug),
+  ];
+}
+
+/**
+ * The table a record holds the field group `slug` in, given whether the record holds a table: the
+ * current name only where the record holds it and not the legacy one.
+ */
+export function recordedFieldGroupTable(
+  slug: string,
+  holds: (table: string) => boolean
+): string {
+  const [legacy, current] = fieldGroupTableNames(slug);
+  return !holds(legacy) && holds(current) ? current : legacy;
+}
+
+/**
  * A table name derived under the legacy prefix, moved to `naming`'s prefix.
  *
  * For a caller whose derivation is the legacy prefix and the slug's table form (the migration

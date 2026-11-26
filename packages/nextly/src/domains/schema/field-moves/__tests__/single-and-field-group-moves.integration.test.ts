@@ -31,8 +31,8 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 import type { CollectionService } from "../../../collections/services/collection-service";
-import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
+import { MIGRATION_TARGET } from "../../../field-groups/migration/target";
 import { databaseState } from "./refused-moves-state";
 import {
   type DataLossConsent,
@@ -752,11 +752,11 @@ describe.each(getConfiguredTestDialects())(
         databaseState({
           run: <T>(statement: string) => run<T>(t, statement),
           dialect,
-          tablePrefixes: ["dc_rfm_", "single_rfm_", "comp_rfm_"],
+          tablePrefixes: ["dc_rfm_", "single_rfm_", "fg_rfm_"],
           registries: [
             { table: "dynamic_collections", slugs: [POSTS, ARTICLES] },
             { table: "dynamic_singles", slugs: [HERO] },
-            { table: STORAGE_FORMAT.registryTable, slugs: [CARD, FRAME] },
+            { table: MIGRATION_TARGET.registryTable, slugs: [CARD, FRAME] },
           ],
           migrations: join(basePath, "migrations"),
           definitionFile: join(basePath, "ui-schema.json"),

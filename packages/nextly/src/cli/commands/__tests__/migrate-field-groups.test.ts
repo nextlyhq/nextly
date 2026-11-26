@@ -23,6 +23,12 @@ vi.mock("../../../domains/field-groups/migration/run", () => ({
   runFieldGroupMigration,
 }));
 
+// Judged from the database's ledger, which this file has none of.
+const refuseRollback = vi.hoisted(() => vi.fn());
+vi.mock("../../../domains/schema/migrate/field-group-rollback", () => ({
+  refuseRollbackUnderCurrentHistory: refuseRollback,
+}));
+
 const setTableResolver = vi.fn();
 
 // The site's config, as the loader reads it: only its evaluation is stood in for, so the
@@ -97,6 +103,7 @@ const DRY_RUN_OUTCOME = {
 beforeEach(() => {
   printed.length = 0;
   runFieldGroupMigration.mockReset();
+  refuseRollback.mockReset();
   setTableResolver.mockReset();
   runFieldGroupMigration.mockResolvedValue(DRY_RUN_OUTCOME);
   // A fresh process: nothing has chosen the storage layout yet.
@@ -115,6 +122,21 @@ describe("migrate:field-groups — what it asks the engine for", () => {
       dryRun: true,
       direction: "up",
       backupConfirmed: false,
+    });
+  });
+
+  it("asks whether the storage may move back before the engine runs, and only for a move back", async () => {
+    await runMigrateFieldGroups({}, context);
+    expect(refuseRollback).not.toHaveBeenCalled();
+
+    refuseRollback.mockRejectedValueOnce(new Error("refused"));
+    runFieldGroupMigration.mockClear();
+    await expect(
+      runMigrateFieldGroups({ down: true, cwd: "/project" }, context)
+    ).rejects.toThrow("refused");
+    expect(runFieldGroupMigration).not.toHaveBeenCalled();
+    expect(refuseRollback.mock.calls[0]![0]).toMatchObject({
+      migrationsDir: resolve("/project", "src/db/migrations"),
     });
   });
 

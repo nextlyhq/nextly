@@ -82,6 +82,23 @@ describe("a blog scaffold's migrations", () => {
     );
   }, 60_000);
 
+  // A new project starts its field groups on the current names. The template's own migration makes
+  // none and names none of their storage, or its word would be wrong.
+  it("say a visual blog starts on the current field-group names, and name none of their storage", async () => {
+    const target = await scaffold("visual");
+    const meta = join(target, "migrations", "meta");
+    const [snapshot] = await readdir(meta);
+    const content = await readFile(join(meta, snapshot!), "utf8");
+    expect(JSON.parse(content)).toMatchObject({ fieldGroupStorage: "current" });
+    const files = await readdir(join(target, "migrations"));
+    for (const file of files.filter(f => f.endsWith(".sql"))) {
+      const sql = await readFile(join(target, "migrations", file), "utf8");
+      expect(sql, file).not.toMatch(
+        /\b(?:comp|fg)_|dynamic_(?:components|field_groups)|_(?:component|field_group)_type/
+      );
+    }
+  }, 60_000);
+
   it("are none of the template's SQL for a code-first blog", async () => {
     const target = await scaffold("code-first");
     const config = await readFile(join(target, "nextly.config.ts"), "utf8");

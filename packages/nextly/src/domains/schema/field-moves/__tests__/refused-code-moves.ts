@@ -32,7 +32,7 @@ export const SLUG_OF: Record<EntityKind, string> = {
 };
 
 /** Every table this module's entities own starts with one of these. */
-export const TABLE_PREFIXES = ["dc_rcm_", "single_rcm_", "comp_rcm_"];
+export const TABLE_PREFIXES = ["dc_rcm_", "single_rcm_", "fg_rcm_"];
 
 /** A field the database keeps unique, as a code-first config declares it. */
 export interface UniqueKind {

@@ -142,8 +142,7 @@
     "Another block on this page already uses that id. Two elements with one id give a link, a label and a style rule two possible targets."
   ],
   "packages/builder/src/inspector/component-fields-panel.tsx": [
-    "The name each page’s editor shows for this field.",
-    "Field {…}",
+    "Field The name each page’s editor shows for this field.",
     "no fields yet",
     "field",
     "fields",
@@ -153,6 +152,8 @@
     "Remove the field {…}",
     "Remove field",
     "Remove the field {…}",
+    "Remove field",
+    "Remove the field “{…}”?",
     "Remove field",
     "No variant sets this field."
   ],
@@ -409,19 +410,19 @@
     "Remove header & footer set",
     "Checking which pages use this header & footer set…",
     "No page uses this header & footer set. Unpublishing takes it off the site and keeps it here; deleting removes it for good.",
-    "At least {…} {…} this header & footer set. Not every page could be checked.",
+    "At least {…} page uses this header & footer set. Not every page could be checked.",
     "Delete header & footer set"
   ],
   "packages/plugin-page-builder/src/admin/RemoveLayoutMove.tsx": [
-    "Ask someone who can edit {…} to choose another header & footer set, then try again.",
+    "Ask someone who can edit it to choose another header & footer set, then try again.",
     "Remove header & footer set",
-    "{…} {…} this header & footer set. Move {…} to , and then {…} it, or close and choose another header & footer set for {…} yourself.",
+    "{…} {…} this header & footer set. Move {…} to , and then delete or unpublish it, or close and choose another header & footer set for {…} yourself.",
     "Moving pages to . Keep this open; the header & footer set is {…} when every page has moved. If you close this, moving stops; pages already moved stay on {…}.",
     "{…} now {…} . {…} still {…} this header & footer set, so it was not {…}.",
     "Header & footer set deleted",
     "Header & footer set unpublished",
     "{…} moved to the site default{…}, and the header & footer set was {…}.",
-    "{…} of {…} moved to . The header & footer set was not {…}, because {…} it:",
+    "{…} of {…} moved to . The header & footer set was not {…}, because one page still uses it:",
     "Remove header & footer set",
     "{…} moved to the site default. The header & footer set was not {…}."
   ],
@@ -439,8 +440,7 @@
     "A field or block changed after these were bound. Each shows its fallback until it’s fixed."
   ],
   "packages/plugin-page-builder/src/admin/bindings-report/BindingsToFixChip.tsx": [
-    "binding",
-    "bindings",
+    "{…} binding to fix",
     "Bindings to fix on this page",
     "1 binding no longer fits",
     "Until you bind each again or unbind it, visitors see what its row says: its fallback, the block’s own value or nothing.",
@@ -501,8 +501,7 @@
     "This page bound a setting that {…} doesn't have, which was never made, so that binding was taken off before saving."
   ],
   "packages/plugin-page-builder/src/admin/editor/editor-top-bar.tsx": [
-    "Untitled set",
-    "{…} Header & footer set"
+    "Untitled set Header & footer set"
   ],
   "packages/plugin-page-builder/src/admin/editor/header-footer-group.tsx": [
     "Couldn&rsquo;t load the header & footer sets.",

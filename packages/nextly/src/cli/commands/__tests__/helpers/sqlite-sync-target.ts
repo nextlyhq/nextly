@@ -13,6 +13,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { getDialectTables } from "../../../../database/index";
 import { createAdapter } from "../../../../database/factory";
 import { SchemaRegistry } from "../../../../database/schema-registry";
+import { getFieldGroupRegistryAliases } from "../../../../domains/field-groups/storage/registry-schemas";
 import type { CommandContext } from "../../../program";
 import type { CLIDatabaseAdapter } from "../../../utils/adapter";
 import { createLogger } from "../../../utils/logger";
@@ -48,7 +49,11 @@ export async function openSqliteSyncTarget(
   // Without a resolver the ORM cannot address `dynamic_collections`, so the sync
   // fails before it reaches anything a test is about.
   const registry = new SchemaRegistry("sqlite");
-  registry.registerStaticSchemas(getDialectTables("sqlite"));
+  // Both registry names, as the command registers them: a new site's is the current one.
+  registry.registerStaticSchemas({
+    ...getDialectTables("sqlite"),
+    ...getFieldGroupRegistryAliases("sqlite"),
+  });
   (adapter as unknown as DrizzleAdapter).setTableResolver(registry);
   await ensureCoreTables(cli, options, context);
 
