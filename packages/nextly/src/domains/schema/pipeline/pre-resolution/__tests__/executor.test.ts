@@ -380,6 +380,37 @@ describe("executePreResolutionOps - MySQL string narrowing", () => {
     expect(executed.filter(s => !s.includes("COUNT(*)"))).toEqual([]);
   });
 
+  // What the caller records of an apply about to start (its owner rows, on MySQL, where a statement
+  // commits as it runs) is recorded between the two: never for an apply refused, and before
+  // anything of it can stay.
+  it("tells its caller once every refusal has passed, before its first statement", async () => {
+    const { tx, executed } = countingTx(0);
+    const told: string[] = [];
+    await executePreResolutionOps(tx, [narrowingRename], "mysql", [], {
+      starting: () => told.push("statement"),
+      finished: () => undefined,
+      refusalsPassed: async () => {
+        told.push("refusals passed");
+      },
+    });
+    expect(told[0]).toBe("refusals passed");
+    expect(told.filter(each => each === "refusals passed")).toHaveLength(1);
+    expect(executed.some(s => s.includes("RENAME COLUMN"))).toBe(true);
+  });
+
+  it("tells its caller of no refusal passed where it refuses", async () => {
+    const { tx } = countingTx(2);
+    const refusalsPassed = vi.fn(async () => undefined);
+    await expect(
+      executePreResolutionOps(tx, [narrowingRename], "mysql", [], {
+        starting: () => undefined,
+        finished: () => undefined,
+        refusalsPassed,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(refusalsPassed).not.toHaveBeenCalled();
+  });
+
   it("runs a rename's narrowing type change in strict mode once the values fit", async () => {
     const { tx, executed } = countingTx(0);
     await executePreResolutionOps(tx, [narrowingRename], "mysql");

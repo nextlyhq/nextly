@@ -1,0 +1,24 @@
+---
+title: OWNER_RECORD_UNREADABLE
+description: "The record of what other owners built on the app's tables could not be read, so the command changed nothing."
+---
+
+## Cause
+
+The record of what other owners built on the app's tables could not be read, so the command changed nothing.
+
+Nextly records in `nextly_schema_owners` what each plugin, and the app, built on tables another owner declares. Before a change removes a field, it reads that record, so that it takes nothing of another owner's with it. A record that is there but cannot be read is not counted as empty: what would be lost is unknown, so `nextly migrate` and `nextly migrate:create` refuse. A database with no such table has recorded nothing, and is not refused.
+
+## Fix
+
+- Read the cause in the output with `--verbose`, or in the server log. A table that was changed by hand, or a database account without permission to read it, is the usual one.
+- Restore the table, or the permission, and run the command again.
+
+## Example
+
+```text
+✗ The database was not changed, because the record of what other owners built on its tables could not be read, so whether the change removes any of it is unknown.
+  Why:  Nothing was removed.
+  Next: Fix the cause in the server log and try again.
+  Docs: https://nextlyhq.com/docs/cli/errors/owner-record-unreadable  (OWNER_RECORD_UNREADABLE)
+```

@@ -11,6 +11,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineSingle, number, text } from "../../../config";
 import {
   createTestNextly,
@@ -18,6 +19,8 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { createDynamicHandlers } from "../../../routeHandler";
+import type { ApiKeyService } from "../../auth/services/api-key-service";
 import { VersionsRepository } from "../../versions/versions-repository";
 import type { SingleEntryService } from "../services/single-entry-service";
 
@@ -94,7 +97,7 @@ function save(
   }) as Promise<Result>;
 }
 
-/** The version a read of `locale` gives, `*` for every language; drafts included. */
+/** The version a read of `locale` gives, `*` or `all` for every language; drafts included. */
 async function readRev(
   t: TestNextly,
   slug: string,
@@ -152,6 +155,18 @@ const publishAll = (t: TestNextly, data: Doc) =>
     overrideAccess: true,
     data,
   }) as Promise<Result>;
+
+/** Publishes or unpublishes the languages chosen, from `_rev`. */
+const moveChosen = (
+  t: TestNextly,
+  direction: "publish" | "unpublish",
+  locales: string[],
+  _rev: string
+) =>
+  singlesOf(t).publishParts(
+    { slug: BANNER, overrideAccess: true, data: { _rev } },
+    { direction, locales }
+  ) as Promise<Result>;
 
 const overwritesOf = async (t: TestNextly, slug: string) => {
   const [row] = await t.adapter.select<Doc>(`single_${slug}`, {});
@@ -239,6 +254,75 @@ describe.each(getConfiguredTestDialects())(
   "publishing a Single and rewriting its pending change, judged by version (%s)",
   dialect => {
     describe("publishing every language", () => {
+      it("spells the version of every language for a read of every language (`all`), and publishes from it", async () => {
+        const t = await boot(dialect);
+        const every = await translatedBanner(t);
+        const english = await readRev(t, BANNER, "en");
+
+        expect(every).toMatch(/en:\d+.*es:\d+/);
+        const read = await readRev(t, BANNER, "all");
+        expect(read).toBe(every);
+        // One language's read is left as it is.
+        expect(english).not.toContain("es:");
+
+        const published = await publishAll(t, { _rev: read });
+        expect(published.success, JSON.stringify(published)).toBe(true);
+      });
+
+      it("spells a one-language read's version for that language, whatever its caller asks of the version", async () => {
+        const t = await boot(dialect);
+        await translatedBanner(t);
+        const english = await readRev(t, BANNER, "en");
+        const asked = { locale: "en", status: "all", revisionLocale: "all" };
+        const trusted = { ...asked, overrideAccess: true };
+
+        const read = (await singlesOf(t).get(
+          BANNER,
+          trusted as never
+        )) as Result;
+        const found = (await t.nextly.findSingle({
+          slug: BANNER,
+          ...trusted,
+        } as never)) as unknown as Doc;
+
+        const keys = t.getService("apiKeyService") as unknown as ApiKeyService;
+        const { key } = await keys.createApiKey(
+          await superAdminUser(t, "user-sv-admin"),
+          { name: "sv", tokenType: "full-access", expiresIn: "unlimited" }
+        );
+        const path = ["singles", BANNER];
+        const query = new URLSearchParams(asked).toString();
+        const response = await createDynamicHandlers().GET(
+          new Request(`http://localhost/api/${path.join("/")}?${query}`, {
+            headers: { authorization: `Bearer ${key}` },
+          }),
+          { params: Promise.resolve({ params: path }) } as never
+        );
+        expect(response.status).toBe(200);
+
+        expect({
+          service: read.data?._rev,
+          directApi: found._rev,
+          rest: ((await response.json()) as Doc)._rev,
+        }).toEqual({ service: english, directApi: english, rest: english });
+      });
+
+      it("refuses that publish once a language changed since the read of every language (`all`)", async () => {
+        const t = await boot(dialect);
+        await translatedBanner(t);
+        const read = await readRev(t, BANNER, "all");
+        await save(t, BANNER, "es", {
+          headline: "hola otra vez",
+          _overwrite: true,
+        });
+        const before = await lifecycleOf(t, BANNER);
+
+        expect((await publishAll(t, { _rev: read })).code).toBe(
+          "STALE_VERSION"
+        );
+        expect(await lifecycleOf(t, BANNER)).toEqual(before);
+      });
+
       it("refuses a publish of every language after one of them changed", async () => {
         const t = await boot(dialect);
         const read = await translatedBanner(t);
@@ -324,6 +408,101 @@ describe.each(getConfiguredTestDialects())(
             replaced: expect.objectContaining({ kind: "person", id: ANA.id }),
           }),
         ]);
+      });
+    });
+
+    describe("publishing chosen languages", () => {
+      const editBanner = async (
+        t: TestNextly,
+        locale: string,
+        headline: string
+      ) => {
+        const before = await readRev(t, BANNER, locale);
+        const saved = await save(t, BANNER, locale, {
+          headline,
+          _overwrite: true,
+        });
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+        // A save that moved nothing would leave the test below nothing to tell apart.
+        expect(await readRev(t, BANNER, locale)).not.toBe(before);
+      };
+
+      it("publishes from a read of every language (`all`) though one not chosen was saved since", async () => {
+        const t = await boot(dialect);
+        await translatedBanner(t);
+        const read = await readRev(t, BANNER, "all");
+        await editBanner(t, "en", "hello again");
+
+        // English is chosen too, and is what changed.
+        const both = await moveChosen(t, "publish", ["en", "es"], read);
+        expect(both.code, JSON.stringify(both)).toBe("STALE_VERSION");
+
+        const spanish = await moveChosen(t, "publish", ["es"], read);
+        expect(spanish.success, JSON.stringify(spanish)).toBe(true);
+        expect((await lifecycleOf(t, BANNER)).languages).toMatchObject({
+          en: expect.stringMatching(/^draft#/),
+          es: expect.stringMatching(/^published#/),
+        });
+      });
+
+      it("refuses that once the chosen language was saved since", async () => {
+        const t = await boot(dialect);
+        await translatedBanner(t);
+        const read = await readRev(t, BANNER, "all");
+        await editBanner(t, "es", "hola otra vez");
+        const before = await lifecycleOf(t, BANNER);
+        expect((await moveChosen(t, "publish", ["es"], read)).code).toBe(
+          "STALE_VERSION"
+        );
+        expect(await lifecycleOf(t, BANNER)).toEqual(before);
+      });
+
+      it("takes a chosen language down from it, though one not chosen was saved since", async () => {
+        const t = await boot(dialect);
+        const every = await translatedBanner(t);
+        const live = await publishAll(t, { _rev: every });
+        expect(live.success, JSON.stringify(live)).toBe(true);
+        const read = await readRev(t, BANNER, "all");
+        await editBanner(t, "en", "hello again");
+        const down = await moveChosen(t, "unpublish", ["es"], read);
+        expect(down.success, JSON.stringify(down)).toBe(true);
+        expect((await lifecycleOf(t, BANNER)).languages).toMatchObject({
+          en: expect.stringMatching(/^published#/),
+          es: expect.stringMatching(/^draft#/),
+        });
+      });
+
+      it("still publishes from a read of the chosen language alone, judged on it", async () => {
+        const t = await boot(dialect);
+        await translatedBanner(t);
+        const stale = await readRev(t, BANNER, "es");
+        expect(stale).not.toContain("en:");
+        await editBanner(t, "es", "hola otra vez");
+        expect((await moveChosen(t, "publish", ["es"], stale)).code).toBe(
+          "STALE_VERSION"
+        );
+
+        const read = await readRev(t, BANNER, "es");
+        await editBanner(t, "en", "hello again");
+        const published = await moveChosen(t, "publish", ["es"], read);
+        expect(published.success, JSON.stringify(published)).toBe(true);
+        // A version of another language says nothing of the one chosen.
+        const english = await readRev(t, BANNER, "en");
+        expect(
+          await codeOf(() => moveChosen(t, "publish", ["es"], english))
+        ).toBe("VALIDATION_ERROR");
+      });
+
+      it("saves one language from it, though another was saved since, and refuses once that language was", async () => {
+        const t = await boot(dialect);
+        await translatedBanner(t);
+        const read = await readRev(t, BANNER, "all");
+        await editBanner(t, "en", "hello again");
+        const saveSpanish = (headline: string) =>
+          save(t, BANNER, "es", { headline, _rev: read });
+        const saved = await saveSpanish("hola 2");
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+        expect((await saveSpanish("hola 3")).code).toBe("STALE_VERSION");
       });
     });
 

@@ -325,6 +325,23 @@ describe("BuilderPageLayout", () => {
     ).toHaveTextContent("Excerpt cannot move yet.");
   });
 
+  // The page hands its Change type… to the field's settings, which open it on the field.
+  it("opens Change type… on the field from its settings", async () => {
+    const user = userEvent.setup();
+    const { onActiveChange } = renderLayout({
+      active: { kind: "edit", fieldId: "u1" },
+    });
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Change type…",
+      })
+    );
+    expect(onActiveChange).toHaveBeenCalledWith({
+      kind: "change-type",
+      fieldId: "u1",
+    });
+  });
+
   it("carries the lock through to the field list", () => {
     renderLayout({ locked: true });
     // Every editing affordance on a row is gone when the entity is code-first.

@@ -320,5 +320,61 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await defaultOverlay(adapter)).toEqual([STORED]);
     });
+
+    // The column and its seed are two steps. When the column lands and the seed does not, the run
+    // must say so, and the next run must seed it: left to the column's presence alone, every later
+    // run sees the companion in step and the default language's text is lost at the next save in
+    // another language.
+    it("fails the run when the overlay's seed fails, and seeds it on the next run", async () => {
+      const t = await bootUnlocalized([text({ name: "title" }), SLIDES]);
+      const adapter = await withSlides(t);
+      await ensureCompanionTable(
+        t.adapter as Parameters<typeof ensureCompanionTable>[0],
+        {
+          builtBy: "codeFirst" as const,
+          slug: "seedsrc",
+          tableName: "dc_seedsrc",
+          fields: [{ name: "title", type: "text", localized: true }],
+          dialect,
+          sourceLocale: "en",
+        }
+      );
+      const args = {
+        builtBy: "codeFirst" as const,
+        slug: "seedsrc",
+        tableName: "dc_seedsrc",
+        fields: [
+          { name: "title", type: "text", localized: true },
+          SLIDES_FIELD,
+        ],
+        dialect,
+        defaultLocale: "en",
+      };
+      // The seed's first statement fails, as a lost connection would fail it; everything else,
+      // the column's addition included, runs as it would.
+      const real = t.adapter as Parameters<typeof reconcileCompanionColumns>[0];
+      const failingSeed = new Proxy(real, {
+        get(target, prop, receiver) {
+          if (prop !== "executeQuery") {
+            const value: unknown = Reflect.get(target, prop, receiver);
+            return typeof value === "function" ? value.bind(target) : value;
+          }
+          return (sql: string) =>
+            sql.startsWith(`UPDATE ${q("dc_seedsrc_locales")}`)
+              ? Promise.reject(new Error("connection lost"))
+              : real.executeQuery(sql);
+        },
+      });
+      const errors: unknown[] = [];
+
+      const first = await reconcileCompanionColumns(failingSeed, args, error =>
+        errors.push(error)
+      );
+
+      expect(first).toBe(false);
+      expect(errors).toHaveLength(1);
+      expect(await reconcileCompanionColumns(real, args)).toBe(true);
+      expect(await defaultOverlay(adapter)).toEqual([STORED]);
+    });
   }
 );

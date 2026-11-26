@@ -3,7 +3,8 @@
  * configured dialect, with nothing about the database changed: the tables, their columns, indexes
  * and rows, the definition file, the registry rows and the migrations folder. Beside them, the
  * moves that are the way round the refusals: a one-to-one made many-to-one and then moved into a
- * group, and a one-to-one moved out of a group onto its entity's row, which makes it unique.
+ * group, and a one-to-one moved out of a group onto its entity's row, which makes it unique; and a
+ * translated entity's number moved into and out of a group that keeps its text for each language.
  *
  * Run from one file per storage layout: the layout the suites default to, and the per-language
  * layout every installation runs. A translated one-to-one is among the fields, whose values the
@@ -97,7 +98,7 @@ const ITEMS = (inside: Field[] = []) =>
 const CONTAINERS = [META(), OUTER(), ITEMS()];
 /**
  * The group a field is moved into or out of where the move is allowed: its text is shared, so it
- * keeps none for each language, which a move would leave behind.
+ * keeps none for each language.
  */
 const SHARED_META = (inside: Field[] = []) =>
   group("meta", [{ ...NOTE, localized: false }, ...inside]);
@@ -608,6 +609,15 @@ export function describeRefusedMoves(): void {
         },
       ];
 
+      /** The road's entity's schema version, which an apply is checked against. */
+      async function roadVersion(t: TestNextly, road: Road): Promise<number> {
+        const [row] = await run<{ version: number | string | null }>(
+          t,
+          `SELECT schema_version AS version FROM ${road.registry.table} WHERE slug = '${road.registry.slug}'`
+        );
+        return Number(row?.version ?? 1);
+      }
+
       /** Each case, refused in `operations`, its message as given, nothing changed. */
       async function expectRoadRefuses(
         t: TestNextly,
@@ -616,11 +626,7 @@ export function describeRefusedMoves(): void {
         cases: { fields: Field[]; moves: Move[]; message: string }[]
       ): Promise<void> {
         for (const { fields, moves, message } of cases) {
-          const [row] = await run<{ version: number | string | null }>(
-            t,
-            `SELECT schema_version AS version FROM ${road.registry.table} WHERE slug = '${road.registry.slug}'`
-          );
-          const version = Number(row?.version ?? 1);
+          const version = await roadVersion(t, road);
           const before = await state(t);
           for (const operation of operations) {
             await expect(
@@ -646,7 +652,7 @@ export function describeRefusedMoves(): void {
       // A translated entity's save goes to the push, which carries no values, so the road refuses
       // every move of it: one its fields alone refuse is told why first, and one they would allow is
       // told it waits, as before. The Single's and the field group's say so in their planner's words:
-      // the group keeps its text for each language, whatever the field.
+      // the group keeps its text for each language, and the field moved is one such text.
       describe("a translated entity's moves, on each road", () => {
         const UNIQUE = person({ unique: true, localized: true });
         const WORDS_HERE: Field = { ...WORDS, localized: true };
@@ -696,36 +702,163 @@ export function describeRefusedMoves(): void {
             );
           }
         );
+      });
 
-        // Of the container's, not the field's: a number holds no text of its own in any language.
+      // A field kept once for every language is held in the group's structure, beside which each
+      // language keeps its text: the move carries it, and leaves every language's text as it was.
+      // Broken, the number is left at its old place, or a language's note goes with the move; or it
+      // is carried where only the language that saves next still reads it.
+      describe("a shared number of a translated entity, and a group that keeps its text for each language", () => {
         const VIEWS: Field = { name: "views", type: "number" };
         const ON_ROW = [VIEWS, HEADLINE, META()];
         const GROUPED = [HEADLINE, META([VIEWS])];
-        it.each<[string, Field[], Field[], Move[]]>([
-          [
-            "into",
-            ON_ROW,
-            GROUPED,
-            [{ from: ["views"], to: ["meta", "views"] }],
-          ],
-          [
-            "out of",
-            GROUPED,
-            ON_ROW,
-            [{ from: ["meta", "views"], to: ["views"] }],
-          ],
-        ])(
-          "refuses a shared number %s a translated Single's group that keeps its text for each language, nothing changed",
-          async (_way, created, fields, moves) => {
+        const INTO: Move = { from: ["views"], to: ["meta", "views"] };
+        const OUT_OF: Move = { from: ["meta", "views"], to: ["views"] };
+        /** Each way, and whether the number ends in the group. */
+        const WAYS = [
+          {
+            way: "into",
+            created: ON_ROW,
+            sent: GROUPED,
+            move: INTO,
+            ends: true,
+          },
+          {
+            way: "out of",
+            created: GROUPED,
+            sent: ON_ROW,
+            move: OUT_OF,
+            ends: false,
+          },
+        ];
+        type Values = Record<string, unknown>;
+        const inside = (value: unknown): Values => (value ?? {}) as Values;
+
+        /** The Single's values in `locale`, and a save of them as that language reads them. */
+        const readHome = async (t: TestNextly, locale: string) =>
+          (await t.nextly.findSingle({
+            slug: HOME as never,
+            overrideAccess: true,
+            locale,
+          })) as Values;
+        const saveHome = (t: TestNextly, locale: string, data: Values) =>
+          t.nextly.updateSingle({
+            slug: HOME as never,
+            data: { ...data, _overwrite: true },
+            locale,
+            overrideAccess: true,
+          });
+
+        /** Where the moved number is held: the Single itself, or the field group the Single uses. */
+        const HOLDERS = [
+          {
+            holder: "a Single",
+            at: 1,
+            create: async (_t: TestNextly) => {},
+            // Its own fields: a read carries the row's system values beside them.
+            held: ({ views, headline, meta }: Values): Values => ({
+              ...(views === undefined ? {} : { views }),
+              headline,
+              meta,
+            }),
+            holding: (values: Values): Values => values,
+          },
+          {
+            holder: "a field group",
+            at: 2,
+            create: async (_t: TestNextly) => {
+              await dispatchSingles(
+                "createSingle",
+                {},
+                {
+                  slug: HOME,
+                  label: "Home",
+                  localized: true,
+                  fields: [
+                    { name: "frame", type: "component", component: FRAME },
+                  ],
+                }
+              );
+            },
+            held: (home: Values) => inside(home.frame),
+            holding: (values: Values): Values => ({ frame: values }),
+          },
+        ];
+
+        it.each(
+          HOLDERS.flatMap(holder => WAYS.map(way => ({ ...holder, ...way })))
+        )(
+          "on $holder, $way it: the number and each language's note kept, and kept when one language is saved next",
+          async ({ at, create, held, holding, created, sent, move, ends }) => {
             const t = await boot();
-            const [, single] = roadsFor(created, true);
-            await single.create(t);
-            await expectRoadRefuses(
+            const road = roadsFor(created, true)[at];
+            if (road === undefined) throw new Error("no such road");
+            await road.create(t);
+            await create(t);
+
+            /** `values` with the note `note`, as the language's whole save of it. */
+            const noted = (values: Values, note: string): Values => ({
+              ...values,
+              meta: { ...inside(values.meta), note },
+            });
+            await saveHome(
               t,
-              single,
-              ["preview", "apply"],
-              [{ fields, moves, message: `views ${KEEPS_TEXT}` }]
+              "en",
+              holding(
+                noted(ends ? { views: 4 } : { meta: { views: 4 } }, "English")
+              )
             );
+            await saveHome(
+              t,
+              "es",
+              holding(noted(held(await readHome(t, "es")), "Nota"))
+            );
+
+            /** What each language reads: the number where it belongs, where it was, and its note. */
+            const read = async (grouped: boolean) => {
+              const of = async (locale: string) => {
+                const values = held(await readHome(t, locale));
+                const meta = inside(values.meta);
+                const [here, there] = grouped
+                  ? [meta.views, values.views]
+                  : [values.views, meta.views];
+                return {
+                  views: here,
+                  elsewhere: there ?? null,
+                  note: meta.note,
+                };
+              };
+              return { en: await of("en"), es: await of("es") };
+            };
+            const kept = (es: string) => ({
+              en: { views: 4, elsewhere: null, note: "English" },
+              es: { views: 4, elsewhere: null, note: es },
+            });
+            expect(await read(!ends)).toEqual(kept("Nota"));
+
+            await road.send(
+              t,
+              "preview",
+              sent,
+              [move],
+              await roadVersion(t, road)
+            );
+            await road.send(
+              t,
+              "apply",
+              sent,
+              [move],
+              await roadVersion(t, road)
+            );
+            clearRegistryRowCache();
+            expect(await read(ends)).toEqual(kept("Nota"));
+
+            await saveHome(
+              t,
+              "es",
+              holding(noted(held(await readHome(t, "es")), "Nota nueva"))
+            );
+            expect(await read(ends)).toEqual(kept("Nota nueva"));
           }
         );
       });

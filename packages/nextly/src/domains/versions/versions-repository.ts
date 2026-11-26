@@ -304,6 +304,13 @@ export interface VersionRef {
   entryId: string;
 }
 
+/** A working draft without its content: `revision` moves with every write of it. */
+export interface WorkingDraftIdentity {
+  id: string;
+  locale: string | null;
+  revision: number;
+}
+
 /** Input to insert one version row. */
 export interface InsertVersionInput {
   ref: VersionRef;
@@ -877,6 +884,16 @@ export class VersionsRepository {
           { column: "status", op: "=", value: "draft" },
         ],
       },
+    });
+  }
+
+  /** Which working drafts a document has, and how often each was written, without their content. */
+  async findWorkingDraftIdentities(
+    ref: VersionRef
+  ): Promise<WorkingDraftIdentity[]> {
+    return this.db.select<WorkingDraftIdentity>(TABLE, {
+      columns: ["id", "locale", "revision"],
+      where: { and: [...this.docWhere(ref), ...WORKING_DRAFT_SHAPE] },
     });
   }
 

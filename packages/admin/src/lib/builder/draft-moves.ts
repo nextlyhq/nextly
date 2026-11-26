@@ -11,13 +11,13 @@
  */
 import { fieldColumnName } from "nextly/config";
 
-import { validationIssues } from "@admin/lib/api/parseApiError";
 import type {
   SchemaPreviewResponse,
   SchemaSaveHints,
 } from "@admin/services/schemaApi";
 
 import type { PendingChange } from "./pending-changes";
+import { refusalsAtFields } from "./refusals-at-fields";
 import { classificationOf } from "./rename-answers";
 import { reviewDeletesData } from "./review-deletes-data";
 
@@ -89,7 +89,7 @@ export function movePath(path: readonly string[]): string {
 }
 
 /** The code the server's refusal of a move carries, at the path the field moves to. */
-const MOVE_REFUSED = "FIELD_MOVE_REFUSED";
+const MOVE_REFUSED: ReadonlySet<string> = new Set(["FIELD_MOVE_REFUSED"]);
 
 /**
  * The server's refusals of a save's moves, by the moved field's id, each with its message as the
@@ -101,16 +101,7 @@ export function refusedMovesOf(
   moves: readonly DraftMove[]
 ): ReadonlyMap<string, string> {
   const fieldAt = new Map(moves.map(move => [movePath(move.to), move.fieldId]));
-  const refused = new Map<string, string>();
-  for (const issue of validationIssues(error)) {
-    if (issue.code !== MOVE_REFUSED || issue.message === undefined) continue;
-    const fieldId =
-      issue.path === undefined ? undefined : fieldAt.get(issue.path);
-    if (fieldId !== undefined && !refused.has(fieldId)) {
-      refused.set(fieldId, issue.message);
-    }
-  }
-  return refused;
+  return refusalsAtFields(error, MOVE_REFUSED, fieldAt);
 }
 
 /**

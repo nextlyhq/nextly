@@ -13,7 +13,7 @@
   <a href="https://nextlyhq.com/docs"><strong>Docs</strong></a> ·
   <a href="https://github.com/nextlyhq/nextly/discussions"><strong>Discussions</strong></a> ·
   <a href="https://github.com/nextlyhq/nextly/issues"><strong>Issues</strong></a> ·
-  <a href="https://discord.gg/hJUg9AZMn"><strong>Discord</strong></a> ·
+  <a href="https://discord.gg/t2qN6H5tMj"><strong>Discord</strong></a> ·
   <a href="https://nextlyhq.com"><strong>Website</strong></a>
 </p>
 
@@ -243,7 +243,7 @@ See [`nextlyhq.com/roadmap`](https://nextlyhq.com/roadmap) for what's next.
 
 - [**GitHub Discussions**](https://github.com/nextlyhq/nextly/discussions) for questions, ideas, and show-and-tell
 - [**Issues**](https://github.com/nextlyhq/nextly/issues) for bug reports and feature requests
-- [**Discord**](https://discord.gg/hJUg9AZMn) for real-time chat with the team and other users
+- [**Discord**](https://discord.gg/t2qN6H5tMj) for real-time chat with the team and other users
 - [**Contributing guide**](./CONTRIBUTING.md) for local setup, the dev workflow, and PR conventions
 - [**Code of Conduct**](./CODE_OF_CONDUCT.md) for how we behave as a community
 

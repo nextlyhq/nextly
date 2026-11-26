@@ -108,6 +108,14 @@ export interface GetSingleOptions {
   translations?: "all";
 
   /**
+   * The language the version is spelled for, where it is not the read's own
+   * (`readOfEveryLanguage`).
+   *
+   * @internal
+   */
+  revisionLocale?: string;
+
+  /**
    * The fields to answer with, as a collection read selects them
    * (`shared/lib/field-selection`): a field named `true` is included, a `false`
    * entry is ignored, and a selection that includes nothing answers the whole

@@ -17,7 +17,7 @@ import {
 } from "./error-codes";
 import { NextlyError } from "./nextly-error";
 import { originalErrorOf, withOriginalError } from "./original-error";
-import type { PublicData } from "./public-data";
+import type { PublicData, ValidationPublicData } from "./public-data";
 import { ruleCouldNotRunIn } from "./rule-could-not-run";
 
 /** The failure fields a service envelope can carry. */
@@ -63,6 +63,14 @@ export interface ServiceErrorEnvelope {
  * form fields; the generic single-issue shape is only the fallback for
  * detail-less 400s.
  */
+/** What a refused description was made from, where the envelope's public data carries it. */
+function describedOf(
+  publicData: unknown
+): Pick<ValidationPublicData, "described"> {
+  const described = (publicData as ValidationPublicData | undefined)?.described;
+  return typeof described?._rev === "string" ? { described } : {};
+}
+
 function validationFromEnvelope(
   envelope: ServiceErrorEnvelope,
   logContext: Record<string, unknown>,
@@ -114,7 +122,7 @@ function validationFromEnvelope(
     statusCode: envelope.statusCode ?? NEXTLY_ERROR_STATUS.VALIDATION_ERROR,
     messageKey:
       envelope.code === "VALIDATION_ERROR" ? envelope.messageKey : undefined,
-    publicData: { errors: normalized },
+    publicData: { errors: normalized, ...describedOf(envelope.publicData) },
     logContext,
     // Forwarded like every other branch: a field-transform failure carries
     // the operator context that says which transform rejected the value.
