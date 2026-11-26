@@ -26,16 +26,16 @@ npx nextly repair-columns
 
 Run the dry run once if your site holds tables that an earlier release made in the Schema Builder, or field groups from an earlier release. These are the columns the report recognises as made by an earlier release, each with the first release that no longer makes it:
 
-| Column                                         | Held as                                              | Made before      |
-| ---------------------------------------------- | ---------------------------------------------------- | ---------------- |
-| A repeater or group                            | `text`, where the field is JSON (PostgreSQL, MySQL)  | `0.0.2-alpha.67` |
-| A float number                                 | `decimal(10,2)`                                      | `0.0.2-alpha.66` |
-| A select, radio, upload or text field on MySQL | `text`, where the field is a `varchar`               | `0.0.2-alpha.66` |
-| A many-to-many relationship in a field group   | one text or id value, where the field is a JSON list | `0.0.2-alpha.69` |
-| Other columns of a field group                 | the types the field group's creator gave them        | `0.0.2-alpha.77` |
-| A required relationship or upload of a Single  | `NOT NULL`, where the column allows a null           | `0.0.2-alpha.79` |
+| Column                                                          | Held as                                              | Made before      |
+| --------------------------------------------------------------- | ---------------------------------------------------- | ---------------- |
+| A repeater or group                                             | `text`, where the field is JSON (PostgreSQL, MySQL)  | `0.0.2-alpha.67` |
+| A float number                                                  | `decimal(10,2)`                                      | `0.0.2-alpha.66` |
+| A select, radio, upload or text field on MySQL                  | `text`, where the field is a `varchar`               | `0.0.2-alpha.66` |
+| A many-to-many relationship in a field group                    | one text or id value, where the field is a JSON list | `0.0.2-alpha.69` |
+| Other columns of a field group                                  | the types the field group's creator gave them        | `0.0.2-alpha.77` |
+| A Single's required relationship or upload that names one entry | `NOT NULL`, where the column allows a null           | `0.0.2-alpha.79` |
 
-A Single's one entry is created before anything is chosen, so the column of its required relationship or upload allows a null, and converting an old one drops the `NOT NULL`. The entry's requirement is still checked when it is saved. A collection's required relationship or upload is `NOT NULL` on purpose since `0.0.2-alpha.79`. There the reverse is reported: a column an earlier migration created nullable. So is a required user field added to a site that already had user fields. Converting it sets `NOT NULL`, and is blocked while a row holds a null. For a collection, the next `nextly migrate:create` plans the same change.
+A Single's one entry is created before anything is chosen, so the column of its required relationship or upload that names one entry allows a null, and converting an old one drops the `NOT NULL`. A list (`hasMany`) keeps its required column. The entry's requirement is still checked when it is saved. A collection's required relationship or upload is `NOT NULL` on purpose since `0.0.2-alpha.79`. There the reverse is reported: a column an earlier migration created nullable. So is a required user field added to a site that already had user fields. Converting it sets `NOT NULL`, and is blocked while a row holds a null. For a collection, the next `nextly migrate:create` plans the same change.
 
 A site first made on this release holds none of the columns in the table. When nothing differs, the dry run answers "Every column matches its field."
 
@@ -69,7 +69,7 @@ Each line gets one outcome. Where several hold, the first in this table is the o
 | `would convert`          | Dry run: every value converts.                                                                                                                                                                                                                                                               |
 | `converted`              | This run converted the column.                                                                                                                                                                                                                                                               |
 
-A dry run takes no lock on schema changes and writes nothing. While another schema change runs, it still reports, and says that the report may change once that change ends.
+A dry run takes no lock on schema changes and writes nothing. While another schema change runs, it still reports, and says that the report may change once that change ends. The exception is a migration, or its rollback, that runs outside a transaction or on MySQL, a Schema Builder save's migration included: until it ends, the dry run stops with [`NEXTLY_MIGRATE_LOCK_BUSY`](/docs/cli/errors/nextly-migrate-lock-busy), naming the run. Wait for it, then run the dry run again.
 
 ## Safe, lossy and blocked
 
@@ -187,6 +187,8 @@ The command stops in these cases, naming what it found and how to put it right:
 - [`MISSING_MIGRATION`](/docs/cli/errors/missing-migration)
 - [`MIGRATION_MISSING`](/docs/cli/errors/migration-missing)
 - [`MISSING_SNAPSHOT`](/docs/cli/errors/missing-snapshot)
+- [`NEXTLY_MIGRATION_PARTIALLY_APPLIED`](/docs/cli/errors/nextly-migration-partially-applied)
+- [`NEXTLY_MIGRATE_LOCK_BUSY`](/docs/cli/errors/nextly-migrate-lock-busy)
 
 A statement that the database refuses is reported on its own column as `failed`, with the database's reason, and the run goes on.
 
