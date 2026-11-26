@@ -440,9 +440,10 @@ const SAVE_KINDS: Record<AddressKind, SaveKind> = {
 export function saveKindOf(kind: AddressKind): {
   manifest: SaveKind["manifest"];
   prefix: SaveKind["prefix"];
+  builtBy: SaveKind["builtBy"];
 } {
-  const { manifest, prefix } = SAVE_KINDS[kind];
-  return { manifest, prefix };
+  const { manifest, prefix, builtBy } = SAVE_KINDS[kind];
+  return { manifest, prefix, builtBy };
 }
 
 /** The kind of entity `save` writes. */
@@ -5105,6 +5106,8 @@ function deletionHoldOfSave(
     next: (save.entity?.fields ?? []) as unknown as FieldDefinition[],
     renamed: save.renamedFields,
     confirmed: save.confirmedDeletions,
+    // Where the kind keeps a removed many-to-many's values: a field group in its own row.
+    builtBy: SAVE_KINDS[save.kind ?? "collection"].builtBy,
   });
   return hold === undefined
     ? undefined

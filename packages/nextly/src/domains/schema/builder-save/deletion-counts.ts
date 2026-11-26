@@ -34,6 +34,7 @@ import {
 } from "../pipeline/classifier/count-helpers";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import {
+  type ColumnOrigin,
   fieldProducesColumn,
   fieldsStoredOnRow,
   junctionTableNameFor,
@@ -74,6 +75,24 @@ function valuesTableOf(
 }
 
 /**
+ * Whether `field`'s values are in a column of the entity's own row, by the generator that built the
+ * table (`builtBy`): every field that has a column (`fieldProducesColumn`), and on a field group's
+ * row a many-to-many too, which keeps its ids there with no link table
+ * (`componentRelationshipStoresJson`). A collection's or a Single's many-to-many keeps its links in a
+ * link table. A virtual field stores nothing.
+ */
+function storedOnTheRow(
+  field: FieldDefinition,
+  builtBy: ColumnOrigin
+): boolean {
+  if (isVirtualField(field)) return false;
+  return (
+    fieldProducesColumn(field) ||
+    (builtBy === "fieldGroup" && usesJunctionTable(field))
+  );
+}
+
+/**
  * Count each removed field's non-null values where they are stored:
  * - a field with no storage (a virtual field) holds nothing;
  * - a many-to-many relationship's links are counted in its link table
@@ -93,7 +112,9 @@ export async function computeNonNullCounts(
   dialect: SupportedDialect,
   tableName: string,
   localized: boolean,
-  removed: FieldDefinition[]
+  removed: FieldDefinition[],
+  /** The generator that built the table, which decides where a many-to-many's values are. */
+  builtBy: ColumnOrigin = "collection"
 ): Promise<Record<string, RemovedCount>> {
   const counts: Record<string, RemovedCount> = {};
 
@@ -102,7 +123,7 @@ export async function computeNonNullCounts(
       counts[field.name] = { rowCount: 0, unknown: false };
       continue;
     }
-    if (!fieldProducesColumn(field)) {
+    if (!storedOnTheRow(field, builtBy)) {
       counts[field.name] = usesJunctionTable(field)
         ? await countJunctionLinks(db, dialect, tableName, field)
         : UNCOUNTED;
@@ -253,16 +274,19 @@ export function deletionHoldOf(args: {
   /** The fields the save renames, by name before and after: kept, with their values. */
   renamed?: ReadonlyArray<{ from: string; to: string }>;
   confirmed: readonly ConfirmedDeletion[] | undefined;
+  /** The generator that built the entity's table (`storedOnTheRow`); a collection's by default. */
+  builtBy?: ColumnOrigin;
 }): DeletionHold | undefined {
   const { dialect, tableName, localized, confirmed } = args;
+  const builtBy = args.builtBy ?? "collection";
   if (confirmed === undefined) return undefined;
   // By column, as the save's statements name them: a name written in another case or spelling
   // is the same column.
   const columnOf = (name: string): string => toSnakeCase(name);
-  // A field stored in a column of the row, by the shared rule (`fieldProducesColumn`); a virtual
+  // A field stored in a column of the row, by the entity's own storage (`storedOnTheRow`); a virtual
   // field stores nothing.
   const inAColumn = (field: FieldDefinition): boolean =>
-    !isVirtualField(field) && fieldProducesColumn(field);
+    storedOnTheRow(field, builtBy);
   // Kept: a column the save leaves, which a field after it still stores in. A field that keeps its
   // name but no longer has a column (a relationship made many-to-many, a field made virtual) keeps
   // nothing: its column goes.
@@ -295,12 +319,12 @@ export function deletionHoldOf(args: {
   // a column's values are counted in their column. Which ones go is the save's own decision
   // (`relationshipsDroppingLinks`): a field renamed under the same target is carried, its table
   // renamed with every link, only where the save pairs the two itself, so a rename answer that
-  // pairs nothing leaves the old field's links counted. A Builder collection's table is built by
-  // the collection's generator.
+  // pairs nothing leaves the old field's links counted. A field group has no link table, so none
+  // goes with it.
   const linksDropped = relationshipsDroppingLinks(
     args.previous,
     args.next,
-    "collection",
+    builtBy,
     dialect
   ).filter(usesJunctionTable);
   const removed = [
@@ -312,9 +336,9 @@ export function deletionHoldOf(args: {
   if (removed.length === 0) return undefined;
   // Where each removed field's values are: its link table, or the column's table (`valuesTableOf`).
   const storedIn = (field: FieldDefinition): string =>
-    usesJunctionTable(field)
-      ? junctionTableNameFor(tableName, field)
-      : valuesTableOf(tableName, localized, field);
+    storedOnTheRow(field, builtBy)
+      ? valuesTableOf(tableName, localized, field)
+      : junctionTableNameFor(tableName, field);
   const tables = [...new Set(removed.map(storedIn))];
   const confirmedOf = new Map(
     confirmed.map(entry => [entry.field, entry.count])
@@ -326,7 +350,8 @@ export function deletionHoldOf(args: {
       dialect,
       tableName,
       localized,
-      fields
+      fields,
+      builtBy
     );
     const changed = fields.flatMap(field => {
       const counted = counts[field.name] ?? UNCOUNTED;
@@ -386,9 +411,9 @@ export function deletionHoldOf(args: {
       const standing: FieldDefinition[] = [];
       for (const field of removedIn(changed)) {
         const table = storedIn(field);
-        const stands = usesJunctionTable(field)
-          ? await tableStands(db, dialect, table)
-          : await columnStands(db, dialect, table, columnOf(field.name));
+        const stands = storedOnTheRow(field, builtBy)
+          ? await columnStands(db, dialect, table, columnOf(field.name))
+          : await tableStands(db, dialect, table);
         if (stands) standing.push(field);
       }
       if (standing.length > 0) await compareOf(standing)(db);

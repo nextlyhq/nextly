@@ -134,12 +134,15 @@ export async function translatePipelinePreviewToLegacy(
   // Step 2: what each removed field holds, counted where its values are
   // stored. A count that cannot be read never fails the translation, and never
   // reads as "nothing is deleted" either: it comes back as unknown.
+  // Where each is stored is the table's own generator's (`builtBy`): a field group's many-to-many
+  // keeps its ids in its row.
   const fieldRowCounts = await computeNonNullCounts(
     db,
     dialect,
     tableName,
     localized,
-    diff.removed
+    diff.removed,
+    context.builtBy
   );
 
   // Step 3: map pipeline events.

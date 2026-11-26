@@ -254,10 +254,11 @@ async function countedWithoutWriter(
     await apply();
     return;
   }
-  const [{ countedThroughApply }, { deletionHoldOf }] = await Promise.all([
-    loadCollectionSave(),
-    import("../../domains/schema/builder-save/deletion-counts"),
-  ]);
+  const [{ countedThroughApply, saveKindOf }, { deletionHoldOf }] =
+    await Promise.all([
+      loadCollectionSave(),
+      import("../../domains/schema/builder-save/deletion-counts"),
+    ]);
   const hold = deletionHoldOf({
     dialect: adapter.getCapabilities().dialect,
     tableName: change.table,
@@ -266,6 +267,8 @@ async function countedWithoutWriter(
     next: change.fields,
     renamed: renamedFieldsOf(change.answers.renameResolutions ?? []),
     confirmed,
+    // Where the kind keeps a removed many-to-many's values: a field group in its own row.
+    builtBy: saveKindOf(change.kind).builtBy,
   });
   await countedThroughApply(
     adapter,
