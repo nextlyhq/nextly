@@ -204,23 +204,23 @@ export function pairOutcome(
     from,
     to,
     valuesOf(from, to).map(value => ({ value }))
-  ).outcome;
+  );
 }
 
 /**
  * `pairOutcome` for a field held inside a named group's or a repeater's JSON (`fieldTypeInJson`),
  * where no save rewrites a value into the new type's form: each value is judged as its JSON writing
- * stands, as the save judges it (`heldInJson`). `"needs-rewrite"` where every value it may hold would
- * have to be rewritten, which the save refuses whatever the values are; a value of them that would,
- * among others that would not, may be lost.
+ * stands, as the save judges it (`heldInJson`). A value that would have to be rewritten marks the pair
+ * as one that may lose values, even where every value would: the save refuses it only where a row
+ * stores one, so a field holding no value takes the change.
  */
 export function pairOutcomeHeldInJson(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect
-): PairOutcome | "needs-rewrite" | null {
+): PairOutcome | null {
   if (pairBlocked(from, to) !== null) return null;
   if (choiceMayRefuse(from, to)) return "may-lose";
-  const { outcome, everyValueUnread } = outcomeOver(
+  return outcomeOver(
     from,
     to,
     valuesOf(from, to).flatMap(value => {
@@ -231,30 +231,26 @@ export function pairOutcomeHeldInJson(
     }),
     heldInJson(from, to)
   );
-  return everyValueUnread ? "needs-rewrite" : outcome;
 }
 
 /**
  * The mark over `values`, those of them a field of `from` holds: those the rules keep for the type
  * itself. None of them held means no value is judged, so nothing says every value is kept. With `read`,
  * a value kept or changed whose stored writing is not what `to` reads is one no save rewrites, which
- * may be lost; `everyValueUnread` says every value held is one.
+ * may be lost.
  */
 function outcomeOver(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect,
   values: readonly { value: OldValue; stored?: string }[],
   read?: StoredAsRead
-): { outcome: PairOutcome; everyValueUnread: boolean } {
+): PairOutcome {
   const held = values.filter(
     ({ value }) => judgeValue(from, from, value).outcome === "kept"
   );
-  if (held.length === 0) {
-    return { outcome: "may-lose", everyValueUnread: false };
-  }
+  if (held.length === 0) return "may-lose";
   let converts = false;
   let lost = false;
-  let unread = 0;
   for (const { value, stored } of held) {
     const verdict = judgeValue(from, to, value);
     if (verdict.outcome === "lost" || verdict.outcome === "blocked") {
@@ -265,15 +261,13 @@ function outcomeOver(
       verdict.readsAs !== undefined &&
       !read.value(stored, verdict.readsAs, verdict.outcome)
     ) {
-      unread += 1;
+      lost = true;
     } else if (verdict.outcome === "changed") {
       converts = true;
     }
   }
-  return {
-    outcome: lost || unread > 0 ? "may-lose" : converts ? "converts" : "keeps",
-    everyValueUnread: unread === held.length,
-  };
+  if (lost) return "may-lose";
+  return converts ? "converts" : "keeps";
 }
 
 /**

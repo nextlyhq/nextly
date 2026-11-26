@@ -90,8 +90,6 @@ export type TypeChangeBlock =
   | "leaves-translation-inside"
   /** A value every language shares in its containers would become each language's own there. */
   | "joins-translation-inside"
-  /** Every value it may hold there would have to be rewritten into the new type's form, which no save does. */
-  | "needs-rewrite-inside"
   /** It would stay translated there, its values not all kept, which the save does not judge yet. */
   | "unjudged-inside";
 
@@ -412,15 +410,6 @@ export function typeChangeTargets(args: {
         return judged === "keeps" && !saveMayRefuse(args.field, candidate)
           ? { type, blocked: null, refusal: null, outcome: judged }
           : { type, blocked: "unjudged-inside", refusal: null, outcome: null };
-      }
-      // Every value it may hold there would need rewriting, which the save refuses, whatever they are.
-      if (judged === "needs-rewrite") {
-        return {
-          type,
-          blocked: "needs-rewrite-inside",
-          refusal: null,
-          outcome: null,
-        };
       }
       const outcome = saveMayRefuse(args.field, candidate)
         ? "may-lose"
