@@ -1035,6 +1035,53 @@ describe("plugins uninstall over what it added to a collection's table, which th
     expect(states).toEqual(["uninstalling", "uninstalled"]);
   });
 
+  it("names each part it leaves in place, after it finishes and in its dry run", async () => {
+    const said = () =>
+      [...logger.info.mock.calls, ...logger.warn.mock.calls]
+        .map(call => String(call[0]))
+        .join("\n");
+    const leftLine =
+      /L(?:eft|eaves) in place[^\n]*column "fx_score" on dc_posts[^\n]*index "dc_posts_fx_idx" on dc_posts/;
+    logger.info.mockClear();
+    logger.warn.mockClear();
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      deps({
+        db: reading(carriedByTheApp),
+        plugins: deps({}).plugins.map(p => ({ ...p, modules: [] })),
+        liveElements: stillThere(),
+      })
+    );
+    expect(said()).toMatch(leftLine);
+
+    const { notes } = await previewPluginUninstall(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      deps({
+        db: reading(carriedByTheApp),
+        plugins: deps({}).plugins.map(p => ({ ...p, modules: [] })),
+        liveElements: stillThere(),
+      })
+    );
+    expect(notes.join("\n")).toMatch(leftLine);
+  });
+
+  it("CONTROL: names nothing left where the app's migrations carry nothing of it", async () => {
+    logger.info.mockClear();
+    logger.warn.mockClear();
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      deps({ plugins: deps({}).plugins.map(p => ({ ...p, modules: [] })) })
+    );
+    expect(
+      [...logger.info.mock.calls, ...logger.warn.mock.calls]
+        .map(call => String(call[0]))
+        .join("\n")
+    ).not.toContain("Left in place");
+  });
+
   it("asks no consent for the column, which no DOWN drops", async () => {
     const { changes } = await previewPluginUninstall(
       "@acme/fx",
