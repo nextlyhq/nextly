@@ -39,6 +39,10 @@ import {
 } from "../../api/response-shapes";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { container } from "../../di/container";
+import type {
+  ConfirmedEntries,
+  ReviewedEntries,
+} from "../../domains/collections/services/collection-entry-counts";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { DynamicCollectionService } from "../../domains/dynamic-collections/services/dynamic-collection-service";
@@ -387,6 +391,41 @@ const TogetherParam = z
       .max(500)
   );
 
+/**
+ * The `confirmedEntries` query parameter of a collection delete: `slug:count` pairs separated by
+ * commas, each collection's entries as its delete review showed them. A count that is not a whole
+ * number of entries is refused, never read as none.
+ */
+const ConfirmedEntriesParam = z
+  .string()
+  .max(20_000)
+  .transform(value =>
+    value
+      .split(",")
+      .map(pair => pair.trim())
+      .filter(pair => pair !== "")
+      .map(pair => {
+        const at = pair.lastIndexOf(":");
+        const count = at === -1 ? "" : pair.slice(at + 1);
+        return {
+          collection: at === -1 ? pair : pair.slice(0, at),
+          count: /^\d{1,15}$/.test(count) ? Number(count) : Number.NaN,
+        };
+      })
+  )
+  .pipe(
+    z
+      .array(
+        z.object({
+          collection: z
+            .string()
+            .regex(SLUG_PATTERN, "Each collection must be named by its slug."),
+          count: z.number().int().nonnegative(),
+        })
+      )
+      .max(500)
+  );
+
 /** The dialog's confirmations as the change's `confirmedBeside`, where it sent any. */
 function dialogConfirmationsBeside(
   tableName: string,
@@ -444,13 +483,59 @@ async function pipelinePushCounted<T>(args: {
 }
 
 function parseTogetherParam(value: string | undefined): string[] {
-  if (value === undefined) return [];
+  return value === undefined ? [] : parseQueryParam(TogetherParam, value);
+}
+
+/** The delete's `confirmedEntries`, or undefined where it sent none. */
+function parseConfirmedEntriesParam(
+  value: string | undefined
+): ConfirmedEntries[] | undefined {
+  return value === undefined
+    ? undefined
+    : parseQueryParam(ConfirmedEntriesParam, value);
+}
+
+/** A query parameter read by `schema`, refused as a validation error naming what is wrong. */
+function parseQueryParam<T>(schema: z.ZodType<T>, value: string): T {
   try {
-    return TogetherParam.parse(value);
+    return schema.parse(value);
   } catch (error) {
     if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
     throw error;
   }
+}
+
+/**
+ * Each collection's entries for its delete review, counted as the delete counts them again
+ * (`reviewedEntries`). A collection that is not registered, or an app with no database to count
+ * in, is shown with its count unknown rather than as empty.
+ */
+async function deleteReviewEntries(
+  slugs: readonly string[]
+): Promise<ReviewedEntries[]> {
+  const { reviewedEntries } = await import(
+    "../../domains/collections/services/collection-entry-counts"
+  );
+  const registry = getCollectionRegistryFromDI();
+  const adapter = getAdapterFromDI();
+  const unknown = (slug: string): ReviewedEntries => ({
+    collection: slug,
+    rowCount: 0,
+    rowCountUnknown: true,
+  });
+  if (!registry || !adapter) return slugs.map(unknown);
+  const entries: ReviewedEntries[] = [];
+  for (const slug of slugs) {
+    const collection = await registry.getCollectionBySlug(slug);
+    entries.push(
+      ...(collection
+        ? await reviewedEntries(adapter, [
+            { slug, tableName: collection.tableName },
+          ])
+        : [unknown(slug)])
+    );
+  }
+  return entries;
 }
 
 /**
@@ -894,10 +979,19 @@ const COLLECTIONS_METHODS: Record<
       requireParam(p, "collectionName");
       // A variable rather than an inline literal: `CollectionsHandler` types
       // its parameter by the one key it reads and forwards the object, whole,
-      // to the metadata service, which reads `together` from it.
-      const request: { collectionName: string; together: string[] } = {
+      // to the metadata service, which reads `together` and `confirmedEntries`
+      // from it. `?confirmedEntries=` carries each collection's entries as the
+      // delete review showed them, for the delete to count again where it holds
+      // the collections; absent, it compares none.
+      const confirmedEntries = parseConfirmedEntriesParam(p.confirmedEntries);
+      const request: {
+        collectionName: string;
+        together: string[];
+        confirmedEntries?: ConfirmedEntries[];
+      } = {
         collectionName: p.collectionName,
         together: parseTogetherParam(p.together),
+        ...(confirmedEntries === undefined ? {} : { confirmedEntries }),
       };
       const result = await svc.deleteCollection(request);
       const collection = unwrapServiceResult(result, {
@@ -911,8 +1005,10 @@ const COLLECTIONS_METHODS: Record<
   },
   // What deleting a collection takes with it besides its own entries, by the
   // plugin that holds it (`ctx.hooks.onCollectionDelete`), for the delete
-  // dialog to list before the confirm. `?together=a,b` names the collections
-  // a bulk delete removes with this one, as on the delete. Reads only.
+  // dialog to list before the confirm, and each collection's entries
+  // (`entries`), which the dialog sends back with the delete to be counted
+  // again there. `?together=a,b` names the collections a bulk delete removes
+  // with this one, as on the delete. Reads only.
   previewCollectionDelete: {
     execute: async (_svc, p) => {
       const collectionName = requireParam(p, "collectionName");
@@ -930,8 +1026,9 @@ const COLLECTIONS_METHODS: Record<
         getActiveHookRegistry(),
         slugs
       );
+      const entries = await deleteReviewEntries(slugs);
       // Read for this caller's dialog only; no shared cache keeps it.
-      return withSessionCacheHeaders(respondData({ impact }));
+      return withSessionCacheHeaders(respondData({ impact, entries }));
     },
   },
   // Preview schema changes (dry-run diff with row-count impact)
