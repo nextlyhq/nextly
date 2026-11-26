@@ -38,6 +38,14 @@ export interface StoredContentServices {
 }
 
 /**
+ * A field with a name: only such a field has a column, in the main table or
+ * the translations table.
+ */
+function isNamed(field: FieldConfig): field is FieldConfig & { name: string } {
+  return typeof (field as { name?: unknown }).name === "string";
+}
+
+/**
  * The entity a registry row describes. Its translatable values are in its
  * translations table where it keeps values per language, has a field to
  * translate, and the table is there; before the translations migration has
@@ -55,7 +63,7 @@ async function entityOf(
   const translationsTable = `${record.tableName}_locales`;
   const translates =
     storesPerLanguage(record) &&
-    localizedFieldRefs(record.fields).length > 0 &&
+    localizedFieldRefs(record.fields.filter(isNamed)).length > 0 &&
     (await tableExists(translationsTable));
   return translates ? { ...entity, translationsTable } : entity;
 }
@@ -67,7 +75,10 @@ export async function describeStoredContent(
   const all = async (records: RegistryRecord[]) => {
     const entities: StoredEntity[] = [];
     for (const record of records) {
-      entities.push(await entityOf(record, services.tableExists));
+      // Called through the services, so an adapter's method keeps its `this`.
+      entities.push(
+        await entityOf(record, table => services.tableExists(table))
+      );
     }
     return entities;
   };
