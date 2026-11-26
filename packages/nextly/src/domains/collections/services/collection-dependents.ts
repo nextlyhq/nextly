@@ -99,6 +99,12 @@ export interface EntityToDelete {
    * references as this collection's.
    */
   readonly fieldSlug?: string | null;
+  /**
+   * The plugin that declares it, where one does. What that plugin added to the entity's own tables
+   * is its own and goes with it, as its collection does when it is pruned; what any other owner
+   * added still refuses the delete. Absent for the app's own and the Builder's entities.
+   */
+  readonly plugin?: string;
 }
 
 /** How a set of deletes is judged. */
@@ -449,7 +455,15 @@ export async function findEntityDependents(
         kind === "collection"
           ? []
           : retainedKeysInto(own, records, new Set(records.tables)),
-      elements: records.elements.filter(element => own.has(element.table)),
+      elements: records.elements.filter(
+        element =>
+          own.has(element.table) &&
+          !(
+            entity.plugin !== undefined &&
+            element.owner.kind === "plugin" &&
+            element.owner.id === entity.plugin
+          )
+      ),
     };
     if (hasAny(dependents)) {
       // Entities of different kinds may share a slug and be deleted together; a later one is
