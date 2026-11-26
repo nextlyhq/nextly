@@ -335,7 +335,13 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     versionNo: null,
     status: "draft",
     isAutosave: false,
-    snapshot: { title: "held", author: old.posts[0], cover: old.media[0] },
+    // A snapshot keeps its document's own id beside its fields.
+    snapshot: {
+      id: old.doc,
+      title: "held",
+      author: old.posts[0],
+      cover: old.media[0],
+    },
     draftKey: workingDraftKey(
       { scopeKind: "collection", scopeSlug: "docs", entryId: old.doc },
       null
@@ -599,6 +605,12 @@ describe.each(getConfiguredTestDialects())(
         typeof snapshot === "string" ? (JSON.parse(snapshot) as Doc) : snapshot
       ).toMatchObject(moveAll(fx, fx.docData));
       const held = versions.find(v => v.id === fx.ids.version);
+      const heldSnapshot = held?.snapshot;
+      expect(
+        typeof heldSnapshot === "string"
+          ? (JSON.parse(heldSnapshot) as Doc)
+          : heldSnapshot
+      ).toMatchObject({ id: fx.moved.doc, author: fx.moved.posts[0] });
       expect(held).toMatchObject({
         entryId: fx.moved.doc,
         draftKey: workingDraftKey(

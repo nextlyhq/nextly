@@ -148,6 +148,22 @@ describe("relationships", () => {
     });
   });
 
+  // A Schema Builder many-to-many names its target in `options.target`, which
+  // wins over a stale `relationTo` beside it, as everywhere the field is read.
+  it("reads a many-to-many's id in the collection its options name", () => {
+    const tagged = [
+      f({
+        type: "relationship",
+        name: "tags",
+        relationTo: "old-tags",
+        options: { relationType: "manyToMany", target: "tags" },
+      }),
+    ];
+    expect(listContentReferences(tagged, { tags: [A] })).toEqual([
+      { kind: "link", fieldPath: "tags", collection: "tags", id: A },
+    ]);
+  });
+
   // An id in a field that may point at several collections, held without
   // naming one, cannot be placed in any of them.
   it("keeps an id whose collection the value and field do not name", () => {
@@ -198,6 +214,8 @@ describe("rich text", () => {
           images: [
             { src: `/api/media/${B}/raw?w=200` },
             { src: "https://elsewhere.example/c.png" },
+            // The same route on another host names that site's item.
+            { src: `https://source.example/api/media/${A}/raw` },
           ],
         },
         // A link names a page, not a file...
@@ -221,6 +239,11 @@ describe("rich text", () => {
         kind: "address",
         fieldPath: "body",
         url: "https://elsewhere.example/c.png",
+      },
+      {
+        kind: "address",
+        fieldPath: "body",
+        url: `https://source.example/api/media/${A}/raw`,
       },
       {
         kind: "address",
@@ -249,6 +272,7 @@ describe("rich text", () => {
       images: [
         { src: `/api/media/${NEW_B}/raw?w=200` },
         { src: "https://elsewhere.example/c.png" },
+        { src: `https://source.example/api/media/${A}/raw` },
       ],
     });
     expect(rewritten.root.children[2]).toEqual(body.root.children[2]);

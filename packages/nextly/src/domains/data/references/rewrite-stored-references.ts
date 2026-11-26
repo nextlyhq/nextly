@@ -393,14 +393,20 @@ function versionChanges(pass: Pass, fieldsOf: VersionFields, row: Row): Row {
   const scopeKind = row.scopeKind === "single" ? "single" : "collection";
   const scopeSlug = String(row.scopeSlug);
   const changes: Row = {};
-  const fields = fieldsOf[scopeKind].get(scopeSlug);
-  if (fields !== undefined) {
-    const walked = rewriteSnapshot(pass, fields, row.snapshot);
-    if (walked !== row.snapshot) changes.snapshot = walked;
-  }
   // A Single's version names its one row, which an import never moves.
-  if (scopeKind !== "collection") return changes;
-  const entryId = mappedId(pass.map, scopeSlug, String(row.entryId));
+  const entryId =
+    scopeKind === "collection"
+      ? mappedId(pass.map, scopeSlug, String(row.entryId))
+      : undefined;
+  const walked = rewriteSnapshot(
+    pass,
+    fieldsOf[scopeKind].get(scopeSlug),
+    row.snapshot,
+    entryId === undefined
+      ? undefined
+      : { from: String(row.entryId), to: entryId }
+  );
+  if (walked !== row.snapshot) changes.snapshot = walked;
   if (entryId === undefined) return changes;
   changes.entryId = entryId;
   if (row.draftKey !== null && row.draftKey !== undefined) {
@@ -416,8 +422,9 @@ function versionChanges(pass: Pass, fieldsOf: VersionFields, row: Row): Row {
 /** A snapshot rewritten, kept as a string when the dialect stored it so. */
 function rewriteSnapshot(
   pass: Pass,
-  fields: readonly FieldConfig[],
-  snapshot: unknown
+  fields: readonly FieldConfig[] | undefined,
+  snapshot: unknown,
+  moved?: { from: string; to: string }
 ): unknown {
   // Read as every stored JSON value is: a string that is not JSON is kept.
   const parsed = parseStoredJson(snapshot);
@@ -425,10 +432,18 @@ function rewriteSnapshot(
     return snapshot;
   }
   const document = parsed as Row;
-  const next = rewriteContentReferences(fields, document, pass.map, {
-    fieldGroupSchemas: pass.schemas,
-    pluginShapes: pass.deps.pluginShapes,
-  });
+  let next =
+    fields === undefined
+      ? document
+      : rewriteContentReferences(fields, document, pass.map, {
+          fieldGroupSchemas: pass.schemas,
+          pluginShapes: pass.deps.pluginShapes,
+        });
+  // The snapshot keeps its document's own id beside its fields, where the walk
+  // does not read: it moves with the entry the version is of.
+  if (moved !== undefined && document.id === moved.from) {
+    next = { ...next, id: moved.to };
+  }
   if (next === document) return snapshot;
   return typeof snapshot === "string" ? JSON.stringify(next) : next;
 }
@@ -466,6 +481,21 @@ async function rewriteReleaseMembers(pass: Pass): Promise<void> {
       countChanged(pass, RELEASE_MEMBERS_TABLE);
     }
   }
+}
+
+/**
+ * The rows one read pages through: a positive whole number, since a page of
+ * none would read the same empty page for ever.
+ */
+function pageSizeOf(deps: RewriteStoredReferencesDeps): number {
+  const size = deps.pageSize ?? PAGE;
+  if (Number.isInteger(size) && size > 0) return size;
+  throw NextlyError.internal({
+    logContext: {
+      reason: "a reference rewrite's page size is not a positive whole number",
+      pageSize: size,
+    },
+  });
 }
 
 /** The table media items are stored in. */
@@ -526,7 +556,7 @@ export async function rewriteStoredReferences(
     schemas: new Map(
       site.fieldGroups.map(g => [g.slug, { fields: [...g.fields] }])
     ),
-    pageSize: deps.pageSize ?? PAGE,
+    pageSize: pageSizeOf(deps),
     changed: {},
   };
   await assertMovedIdsAreNotHeld(pass);

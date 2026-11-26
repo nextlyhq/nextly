@@ -31,9 +31,10 @@
  */
 
 import type { FieldConfig } from "../../../collections/fields/types";
+import { asRowBackedRelationFields } from "../../field-groups/services/field-group-utils";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
-import { mediaIdOfRouteAddress } from "../../media/media-route-address";
+import { mediaIdOfCopySource } from "../../media/copies/media-copies";
 import {
   isBlockDocument,
   MEDIA_ID_SHAPE,
@@ -126,7 +127,11 @@ function withKey(
  * the Schema Builder's `options.target`. An upload naming none points at
  * media.
  */
-function linkTargets(field: FieldConfig): string[] {
+function linkTargets(declared: FieldConfig): string[] {
+  // A many-to-many names its target in `options.target`, which it prefers to
+  // any `relationTo` beside it; read as the row-backed field it is, the target
+  // is the one in `relationTo`.
+  const [field] = asRowBackedRelationFields([declared]);
   const relationTo = (field as { relationTo?: unknown }).relationTo;
   if (typeof relationTo === "string") return [relationTo];
   if (Array.isArray(relationTo)) {
@@ -193,7 +198,9 @@ function walkLinkValue(
 
 function visitAddress(url: string, fieldPath: string, walk: Walk): string {
   if (url === "") return url;
-  const mediaId = mediaIdOfRouteAddress(url);
+  // Only a path names one of this site's media items: a full address may be
+  // on any host, and the same route on another site names that site's item.
+  const mediaId = mediaIdOfCopySource({ url });
   return (
     walk.answer({
       kind: "address",
@@ -219,7 +226,7 @@ function walkRichText(value: unknown, fieldPath: string, walk: Walk): unknown {
     const next =
       typeof child === "string" &&
       (key === "src" ||
-        (key === "url" && mediaIdOfRouteAddress(child) !== undefined))
+        (key === "url" && mediaIdOfCopySource({ url: child }) !== undefined))
         ? visitAddress(child, fieldPath, walk)
         : walkRichText(child, fieldPath, walk);
     out = withKey(out, key, next);
