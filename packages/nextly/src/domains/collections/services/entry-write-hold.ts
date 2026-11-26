@@ -46,7 +46,6 @@ import {
   shareEntityOnPostgres,
   tryShareEntityOnPostgres,
 } from "../../dynamic-collections/services/entity-hold";
-import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
 import { fieldsStoredDifferently } from "../../schema/services/fields-stored-differently";
 
@@ -625,7 +624,7 @@ function storedDifferently(
     dialect,
     // A collection's table is built by the collection's generator.
     builtBy: "collection",
-    perLanguage: storesPerLanguage({ localized: loaded.localized }),
+    entity: { localized: loaded.localized },
   });
 }
 
