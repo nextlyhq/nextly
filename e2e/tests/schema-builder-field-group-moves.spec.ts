@@ -151,7 +151,8 @@ test.describe("moves between a host and a field group it uses", () => {
     const sentence = `${field} cannot be moved into or out of the field group ${fieldGroup}: a field group is changed only in its own editor\\. ${named}It is used by (?:the [^,.]+(?:, |\\.)){4}`;
     return {
       shown: new RegExp(`^${sentence}$`),
-      announced: new RegExp(`^${sentence} Nothing moved\\.$`),
+      // A refusal announced twice in a row ends with a space, so a screen reader says it again.
+      announced: new RegExp(`^${sentence} Nothing moved\\.\\s*$`),
     };
   }
 

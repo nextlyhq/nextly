@@ -89,9 +89,12 @@ const row = (path: string) =>
 /** The handle a pointer drags a row by, drawn just before the row. */
 const handleOf = (path: string) => row(path)?.previousElementSibling ?? null;
 
-/** What the outline last announced. */
+/**
+ * What the outline last announced. Trimmed: the same refusal announced twice in a row is changed by
+ * a space, so a screen reader says it again.
+ */
 const announced = () =>
-  document.querySelector('[aria-live="polite"]')?.textContent ?? "";
+  (document.querySelector('[aria-live="polite"]')?.textContent ?? "").trim();
 
 describe.each(EDITORS)("in $editor", ({ surface }) => {
   describe("a field group's own field", () => {
