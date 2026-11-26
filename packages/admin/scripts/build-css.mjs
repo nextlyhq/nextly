@@ -17,6 +17,7 @@ import path from "path";
 
 import {
   ADMIN_NAME_PREFIX,
+  findUnconfinedVariants,
   findUnscopedRules,
   hasHostElementShield,
   isolateAdminStylesheet,
@@ -50,9 +51,10 @@ try {
   // Step 2: Post-process CSS to scope utilities within .nextly-admin
   let css = fs.readFileSync(tempFile, "utf-8");
 
-  // Scope every selector, namespace the names a document resolves globally,
-  // and refuse a rule that escaped: the one sequence `@nextlyhq/admin-css`
-  // defines for every compile of this sheet, the playground's included.
+  // Scope every selector, confine the variant ancestor references to the
+  // wrapper, namespace the names a document resolves globally, and refuse a
+  // rule that escaped: the one sequence `@nextlyhq/admin-css` defines for
+  // every compile of this sheet, the playground's included.
   css = isolateAdminStylesheet(css, { prefix: NAME_PREFIX });
 
   // Write scoped CSS to temp file
@@ -69,10 +71,14 @@ try {
   // Clean up scoped temp file
   fs.unlinkSync(scopedTempFile);
 
+  // What ships, read back after the minifier: every gate below reads the
+  // file, not the in-memory string, because the minifier runs between them.
+  const built = fs.readFileSync(outputFile, "utf-8");
+
   // Step 4: Guard the isolation invariant. The admin mounts inside the host
   // app's document, so any style rule that escapes .nextly-admin restyles the
   // host page. Fail the build rather than ship a leak.
-  const unscoped = findUnscopedRules(fs.readFileSync(outputFile, "utf-8"));
+  const unscoped = findUnscopedRules(built);
   if (unscoped.length) {
     console.error(
       `\n❌ ${unscoped.length} style rule(s) escaped the .nextly-admin scope:\n`
@@ -86,12 +92,32 @@ try {
     process.exit(1);
   }
 
-  // Step 5: Guard the naming invariant, for the same reason and on the same
+  // Step 5: Guard the variant confinement invariant. The check above reads the
+  // rule's own subject; a variant's ancestor reference (the `.dark` inside
+  // `:where(.dark, .dark *)`, the `.group` inside `:is(:where(.group):hover *)`)
+  // can reach outside the wrapper from within an otherwise-scoped rule, so it
+  // needs its own gate. A host doing class-based dark mode would activate
+  // every dark utility inside the admin while its tokens stay light.
+  const unconfined = findUnconfinedVariants(built);
+  if (unconfined.length) {
+    console.error(
+      `\n❌ ${unconfined.length} selector(s) reference a dark/group/peer variant ` +
+        `outside the .nextly-admin scope:\n`
+    );
+    for (const sel of unconfined) console.error("  " + sel);
+    console.error(
+      "\nisolateAdminStylesheet confines these references under\n" +
+        ".nextly-admin before the minifier runs; one surviving means a\n" +
+        "variant shape confineVariantClasses does not cover.\n"
+    );
+    process.exit(1);
+  }
+
+  // Step 6: Guard the naming invariant, for the same reason and on the same
   // terms. A selector that escapes restyles the host page; a NAME that escapes
   // is resolved for the whole document and changes what the host's own rules
   // mean. Reading the built file rather than the in-memory string, because the
   // minifier runs between them and the file is what ships.
-  const built = fs.readFileSync(outputFile, "utf-8");
   const escapedNames = [
     ...[
       ...built.matchAll(/@(?:-webkit-)?keyframes\s+("[^"]*"|'[^']*'|[\w-]+)/gi),
@@ -116,7 +142,7 @@ try {
     process.exit(1);
   }
 
-  // Step 6: Guard the same invariant from the other side. Steps 4 and 5 read
+  // Step 7: Guard the same invariant from the other side. Steps 4-6 read
   // the stylesheet, and a keyframe name can also be written in JSX — an inline
   // `animation` style never passes through the rename above, so it silently
   // names a definition that no longer exists and the element just does not
@@ -162,7 +188,7 @@ try {
     process.exit(1);
   }
 
-  // Step 7: Guard the shield against the host's element rules, on the file
+  // Step 8: Guard the shield against the host's element rules, on the file
   // that ships. `isolateAdminStylesheet` adds it before the minifier runs, and
   // its whole effect rides on its selector's weight, which a minifier could
   // simplify away while keeping the rule: the admin would lose to a host's
