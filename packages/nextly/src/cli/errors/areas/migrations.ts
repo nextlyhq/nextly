@@ -5,6 +5,7 @@
  * @module cli/errors/areas/migrations
  */
 
+import { ANSWER_LANGUAGE_REASON } from "../../../domains/i18n/migration/answer-language-names";
 import {
   perLanguageDriftNext,
   perLanguageMoveWhy,
@@ -567,6 +568,20 @@ function placeStatedTwiceParts(error: NextlyError): CliErrorParts {
 }
 
 /**
+ * A file whose answers are decided in another language, as the three parts the refusal was built
+ * from (`answerLanguageError`); the whole message stands where they are not there.
+ */
+function answerLanguageParts(error: NextlyError): CliErrorParts {
+  return (
+    contextParts(error) ?? {
+      what: error.publicMessage,
+      why: "A migration's answers settle entries by their values in one language, which is not this project's default language.",
+      next: "Where no environment has applied it, delete it and make the save again with this project's default language.",
+    }
+  );
+}
+
+/**
  * A refusal over what another owner built on the app's tables, as its three parts: its first
  * sentence says what was refused, its last the step, and those between name each element.
  */
@@ -659,6 +674,17 @@ export const MIGRATION_CODES = defineCodes({
         code: "CONFLICT",
         reason: MIGRATION_PLACE_STATED_TWICE_REASON,
         describe: placeStatedTwiceParts,
+      },
+    ],
+  },
+  MIGRATION_LANGUAGE_DIFFERS: {
+    cause:
+      "A migration fills or deletes entries by their values in one language, and that language is not recorded as this project's default language, so the command refused it before any of its statements.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: ANSWER_LANGUAGE_REASON,
+        describe: answerLanguageParts,
       },
     ],
   },

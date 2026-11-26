@@ -86,6 +86,7 @@
     "migration-create-cancelled",
     "migration-drift",
     "migration-irreversible",
+    "migration-language-differs",
     "migration-missing",
     "migration-name-required",
     "migration-not-proven",

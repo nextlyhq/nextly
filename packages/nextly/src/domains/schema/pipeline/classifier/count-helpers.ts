@@ -439,3 +439,32 @@ export async function countRowsBreakingNotNull(
   }
   return { total, byParentTable };
 }
+
+/**
+ * How many entries hold no value in the default language for a field kept per language: those
+ * whose row in that language in the translations table holds NULL, or that have no row in it. The
+ * count a save's review shows for an answer on such a field, of the entries its statements settle
+ * (`resolutionStatements`). Where the translations table has no column for the field yet
+ * (`column: null`, a field the save adds), every entry, since none holds a value.
+ */
+export async function countEntriesWithoutDefaultLanguageValue(
+  db: unknown,
+  dialect: SupportedDialect,
+  target: {
+    table: string;
+    companionTable: string;
+    column: string | null;
+    locale: string;
+  }
+): Promise<number> {
+  const table = sql.identifier(target.table);
+  if (target.column === null) {
+    return readCount(db, dialect, sql`SELECT COUNT(*) AS count FROM ${table}`);
+  }
+  const parent = sql.identifier("_parent");
+  return readCount(
+    db,
+    dialect,
+    sql`SELECT COUNT(*) AS count FROM ${table} WHERE ${sql.identifier("id")} NOT IN (SELECT ${parent} FROM ${sql.identifier(target.companionTable)} WHERE ${sql.identifier("_locale")} = ${target.locale} AND ${sql.identifier(target.column)} IS NOT NULL)`
+  );
+}
