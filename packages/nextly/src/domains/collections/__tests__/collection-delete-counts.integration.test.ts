@@ -16,6 +16,7 @@
  * entry in between; one that counts only the collection named first passes a set whose other member
  * moved; one that drops a malformed count deletes uncompared.
  */
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
@@ -281,6 +282,82 @@ for (const perLanguage of [false, true]) {
           expect(await stateOf(t, POSTS)).toEqual({
             registered: true,
             entries: 2,
+          });
+        },
+        60_000
+      );
+
+      /**
+       * Fails the delete's drop of `table` once, where the delete runs it in its own transaction:
+       * on MySQL a drop commits as it runs, so the drops before it are kept.
+       */
+      function failDropOnce(t: TestNextly, table: string): void {
+        let failed = false;
+        const transaction = t.adapter.transaction.bind(t.adapter);
+        vi.spyOn(t.adapter, "transaction").mockImplementation((work, options) =>
+          transaction(
+            tx =>
+              work(
+                new Proxy(tx, {
+                  get(target, key) {
+                    if (key === "execute") {
+                      return async (
+                        statement: string,
+                        params?: Parameters<TransactionContext["execute"]>[1]
+                      ) => {
+                        if (
+                          !failed &&
+                          new RegExp(`DROP TABLE[^;]*\`${table}\``).test(
+                            statement
+                          )
+                        ) {
+                          failed = true;
+                          throw new Error(`injected failure: ${statement}`);
+                        }
+                        return target.execute(statement, params);
+                      };
+                    }
+                    const value: unknown = Reflect.get(target, key);
+                    return typeof value === "function"
+                      ? value.bind(target)
+                      : value;
+                  },
+                })
+              ),
+            options
+          )
+        );
+      }
+
+      // A set deleted together on MySQL whose later table's drop failed: the first table is gone and
+      // still registered. Sent again with the counts the review showed, the delete finishes: a table
+      // that no longer stands holds no entries to count, and the one that stands is counted.
+      it.runIf(dialect === "mysql")(
+        "finishes a delete stopped part way, sent again with the counts its review showed",
+        async () => {
+          const t = await boot();
+          withoutWriter(t);
+          await write(t, POSTS, 1);
+          await write(t, PAGES, 1);
+          failDropOnce(t, `dc_${PAGES}`);
+          expect(
+            await remove([POSTS, PAGES], `${POSTS}:1,${PAGES}:1`)
+          ).not.toBe("deleted");
+          expect(await stateOf(t, POSTS)).toEqual({
+            registered: true,
+            entries: "gone",
+          });
+
+          expect(await remove([POSTS, PAGES], `${POSTS}:1,${PAGES}:1`)).toBe(
+            "deleted"
+          );
+          expect(await stateOf(t, POSTS)).toEqual({
+            registered: false,
+            entries: "gone",
+          });
+          expect(await stateOf(t, PAGES)).toEqual({
+            registered: false,
+            entries: "gone",
           });
         },
         60_000
