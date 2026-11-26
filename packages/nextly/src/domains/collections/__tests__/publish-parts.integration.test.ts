@@ -299,6 +299,61 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect((live as Doc).title).toBe("Hola 3");
   });
 
+  it("publishes past the review from a description refused for approval alone, and refuses once it changed", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    // Holds Spanish back for approval, unless the publish is made without review.
+    container.registerSingleton<PublishGate>("publishGate", () => ({
+      refusals: question =>
+        Promise.resolve(
+          question.withoutReview
+            ? []
+            : question.parts
+                .filter(part => part.kind === "language")
+                .map(part => ({
+                  part,
+                  code: "NOT_APPROVED" as const,
+                  message: "Waiting for approval.",
+                }))
+        ),
+      judge: () =>
+        Promise.resolve({ refusals: [], settle: () => Promise.resolve() }),
+    }));
+    /** What a description of Spanish's publish was made from, as its refusal says. */
+    const describedFrom = async () => {
+      const refusal = await t!.nextly
+        .publish({ collection: "posts", id, locales: ["es"], describe: true })
+        .then(
+          () => undefined,
+          (error: unknown) => error as { code?: string; publicData?: Doc }
+        );
+      expect(refusal?.code).toBe("VALIDATION_ERROR");
+      return (refusal?.publicData?.described as { _rev: string })._rev;
+    };
+    const pastReview = (rev: string) =>
+      t!.nextly
+        .publish({
+          collection: "posts",
+          id,
+          locales: ["es"],
+          withoutReview: { reason: "Due today." },
+          data: { _rev: rev },
+        })
+        .then(
+          () => "moved",
+          (error: unknown) => String((error as { code?: string }).code)
+        );
+
+    const first = await describedFrom();
+    expect(first).toMatch(/es:\d+/);
+    await save(id, "es", { title: "Hola otra vez" });
+    expect(await pastReview(first)).toBe("STALE_VERSION");
+    expect(await states(id)).toMatchObject({ es: "draft" });
+
+    expect(await pastReview(await describedFrom())).toBe("moved");
+    expect(await states(id)).toMatchObject({ es: "published" });
+  });
+
   it("unpublishes from a description what it described, and refuses once it changed", async () => {
     await boot(posts());
     const id = await entry({ es: { title: "Hola" } });

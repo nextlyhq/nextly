@@ -295,6 +295,67 @@ describe("publishing chosen parts, rule by rule", () => {
     expect(result.data).toMatchObject({ _rev: "7.es:3" });
   });
 
+  it("says what a description refused for want of approval alone was made from, and refuses it still", async () => {
+    const holding = (
+      code: "NOT_APPROVED" | "WITHOUT_REVIEW_REFUSED"
+    ): PublishGate => ({
+      ...OPEN_GATE,
+      refusals: question =>
+        Promise.resolve(
+          question.parts.map(part => ({ part, code, message: "Held." }))
+        ),
+    });
+    const standing = () =>
+      Promise.resolve({ main: 7, languages: { en: 2, es: 3 }, drafts: [] });
+    const describedIn = (result: CollectionServiceResult) =>
+      (result.publicData as { described?: { _rev?: string } } | undefined)
+        ?.described;
+    const asked: PublishPartsRequest = {
+      direction: "publish",
+      locales: ["es"],
+      describe: true,
+    };
+
+    const held = await run(
+      asked,
+      { state: stateOf() },
+      holding("NOT_APPROVED"),
+      standing
+    );
+    expect(held.result.success).toBe(false);
+    expect(held.issues.map(issue => issue.code)).toEqual(["NOT_APPROVED"]);
+    expect(held.moves).toEqual([]);
+    expect(describedIn(held.result)).toMatchObject({ _rev: "7.es:3" });
+
+    // Any other refusal says nothing more.
+    for (const other of [
+      await run(
+        asked,
+        {
+          state: stateOf(),
+          languageRefusals: new Map([["es", "No."]]),
+        },
+        holding("NOT_APPROVED"),
+        standing
+      ),
+      await run(
+        asked,
+        { state: stateOf() },
+        holding("WITHOUT_REVIEW_REFUSED"),
+        standing
+      ),
+      await run(
+        { ...asked, describe: false },
+        { state: stateOf() },
+        holding("NOT_APPROVED"),
+        standing
+      ),
+    ]) {
+      expect(other.result.success).toBe(false);
+      expect(describedIn(other.result)).toBeUndefined();
+    }
+  });
+
   it("reads what it stands at for a description alone", async () => {
     const standing = vi.fn(() => Promise.resolve(undefined));
     const { result } = await run(

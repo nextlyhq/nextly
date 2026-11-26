@@ -37,7 +37,12 @@ import type {
 
 import type { LifecycleParts } from "./all-locales-lifecycle";
 import type { CollectionServiceResult } from "./collection-types";
-import type { PublishCaller, PublishGate, PublishPart } from "./publish-gate";
+import type {
+  PublishCaller,
+  PublishGate,
+  PublishGateRefusalCode,
+  PublishPart,
+} from "./publish-gate";
 
 /** Which way the chosen parts move. */
 export type PublishDirection = "publish" | "unpublish";
@@ -179,6 +184,9 @@ export interface PublishPartsEngines {
 type Issue = ValidationPublicData["errors"][number];
 
 const SHARED_PATH = "shared";
+
+/** The code the publish gate holds a part back with while it waits for approval. */
+const NOT_APPROVED: PublishGateRefusalCode = "NOT_APPROVED";
 
 /** A language's English name, or its code when the runtime cannot name it. */
 function languageName(code: string): string {
@@ -452,9 +460,18 @@ async function refusalsOf(
   ];
 }
 
-/** The request refused whole, every issue in the validation error's public data. */
-function refused(issues: Issue[]): CollectionServiceResult {
-  const error = NextlyError.validation({ errors: issues });
+/**
+ * The request refused whole, every issue in the validation error's public data, with what a
+ * description refused for want of approval alone was made from (`described`).
+ */
+function refused(
+  issues: Issue[],
+  described?: DescribedFrom
+): CollectionServiceResult {
+  const error = NextlyError.validation({
+    errors: issues,
+    ...(described === undefined ? {} : { described }),
+  });
   return {
     ...errorEnvelopeFields(error),
     success: false,
@@ -676,7 +693,16 @@ export async function publishParts(
   };
 
   const issues = await refusalsOf(judged, engines);
-  if (issues.length > 0) return refused(issues);
+  if (issues.length > 0) {
+    // Refused for want of approval alone, the parts can still be published past the review: that
+    // move is made from what was described too. Any other refusal tells nothing more.
+    const pastReview =
+      stood !== undefined && issues.every(issue => issue.code === NOT_APPROVED);
+    return refused(
+      issues,
+      pastReview ? describedFromOf(stood[0], judged) : undefined
+    );
+  }
 
   const parts: LifecycleParts | undefined = everyLanguage
     ? undefined

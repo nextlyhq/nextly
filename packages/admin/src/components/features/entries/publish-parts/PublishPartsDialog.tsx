@@ -82,6 +82,7 @@ import {
   type PartsChoice,
 } from "./publish-parts-choice";
 import {
+  describedPastReview,
   readyProblems,
   refusedForApprovalAlone,
   type ReadyProblem,
@@ -231,6 +232,11 @@ interface DescribedParts {
   describedPastReview: boolean;
   /** Why the server refuses the request, if it does. */
   error: Error | null;
+  /**
+   * What the description of the request was made from: its own, or, where it was refused for
+   * want of approval alone, what the refusal says it was made from.
+   */
+  from: { _rev?: string; marks?: PartMarks } | undefined;
 }
 
 /** Whether what publishing every language would do is asked: for a publish among languages. */
@@ -306,6 +312,7 @@ function useDescribedParts({
       answered &&
       (!description.isError || refusedForApprovalAlone(description.error)),
     error: description.error,
+    from: answerOf(description) ?? describedPastReview(description.error),
   };
 }
 
@@ -447,14 +454,16 @@ function usePartsMove({
     marks: PartMarks | undefined;
   } | null>(null);
   const confirm = async (withoutReview?: string): Promise<void> => {
-    // As they were when the person confirmed them. Past a review the server refuses to describe,
-    // what publishing every language does is all that was described.
-    const made = parts.chosenAnswer ?? parts.everyLanguageAnswer;
+    // As they were when the person confirmed them, past a review the server refuses to describe
+    // too: it says what it described them from.
+    // A server that said neither leaves what publishing every language was described from.
+    const made = parts.from;
+    const described = made?._rev ?? parts.everyLanguageAnswer?._rev;
     try {
       const done = await move.mutateAsync({
         locales: request.locales,
         shared: request.shared,
-        ...(made?._rev === undefined ? {} : { described: made._rev }),
+        ...(described === undefined ? {} : { described }),
         ...(withoutReview === undefined
           ? {}
           : { withoutReview: { reason: withoutReview } }),
@@ -479,7 +488,7 @@ function usePartsMove({
       onOpenChange(false);
     } catch {
       // Shown in the dialog beside the parts it names; the dialog stays open, back on the parts.
-      setRefused({ choice, marks: parts.chosenAnswer?.marks });
+      setRefused({ choice, marks: made?.marks });
       onRefused();
     }
   };
@@ -558,7 +567,7 @@ function changedSentence(
   if (refusal === null || !refusedAsChangedSince(refusal)) return null;
   // Said once the parts are described as they are now.
   if (parts.checking) return null;
-  const now = parts.described ? parts.chosenAnswer?.marks : undefined;
+  const now = parts.describedPastReview ? parts.from?.marks : undefined;
   return before !== undefined &&
     now !== undefined &&
     movedSinceDescribed(refusal, before, now)
