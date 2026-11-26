@@ -113,8 +113,23 @@ describe("relationships", () => {
   it("rewrites each id by its own collection's map, in its stored form", () => {
     const map: ReferenceMap = {
       ids: new Map([
-        ["people", new Map([[A, NEW_A], [B, NEW_B], [C, NEW_C], ["7", "8"]])],
-        ["tags", new Map([[A, "tag-a"], [B, "tag-b"], [C, "tag-c"]])],
+        [
+          "people",
+          new Map([
+            [A, NEW_A],
+            [B, NEW_B],
+            [C, NEW_C],
+            ["7", "8"],
+          ]),
+        ],
+        [
+          "tags",
+          new Map([
+            [A, "tag-a"],
+            [B, "tag-b"],
+            [C, "tag-c"],
+          ]),
+        ],
       ]),
     };
     expect(rewriteContentReferences(fields, values, map)).toEqual({
@@ -142,9 +157,9 @@ describe("relationships", () => {
       { kind: "link", fieldPath: "either", collection: null, id: A },
     ]);
     const values = { either: A };
-    expect(
-      rewriteContentReferences(either, values, mapOf(["a", "b"]))
-    ).toBe(values);
+    expect(rewriteContentReferences(either, values, mapOf(["a", "b"]))).toBe(
+      values
+    );
   });
 });
 
@@ -162,9 +177,11 @@ describe("uploads", () => {
       { kind: "link", fieldPath: "gallery", collection: "media", id: A },
       { kind: "link", fieldPath: "gallery", collection: "media", id: C },
     ]);
-    expect(
-      rewriteContentReferences(fields, values, mapOf(["media"]))
-    ).toEqual({ image: NEW_A, file: B, gallery: JSON.stringify([NEW_A, NEW_C]) });
+    expect(rewriteContentReferences(fields, values, mapOf(["media"]))).toEqual({
+      image: NEW_A,
+      file: B,
+      gallery: JSON.stringify([NEW_A, NEW_C]),
+    });
   });
 });
 
@@ -295,19 +312,22 @@ describe("groups and repeaters", () => {
     f({
       type: "repeater",
       name: "links",
-      fields: [
-        f({ type: "relationship", name: "page", relationTo: "pages" }),
-      ],
+      fields: [f({ type: "relationship", name: "page", relationTo: "pages" })],
     }),
     // A nameless group keeps its fields on the row that holds it.
     f({
       type: "group",
-      fields: [f({ type: "relationship", name: "owner", relationTo: "people" })],
+      fields: [
+        f({ type: "relationship", name: "owner", relationTo: "people" }),
+      ],
     }),
   ];
   const values = {
     hero: JSON.stringify({ image: A }),
-    links: [{ id: "row-1", page: B }, { id: "row-2", page: C }],
+    links: [
+      { id: "row-1", page: B },
+      { id: "row-2", page: C },
+    ],
     owner: A,
   };
 
@@ -351,7 +371,11 @@ describe("field groups", () => {
     ],
     [
       "cta",
-      { fields: [f({ type: "relationship", name: "page", relationTo: "pages" })] },
+      {
+        fields: [
+          f({ type: "relationship", name: "page", relationTo: "pages" }),
+        ],
+      },
     ],
   ]);
   const fields = [

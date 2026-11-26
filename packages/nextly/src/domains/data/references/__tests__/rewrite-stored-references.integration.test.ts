@@ -150,7 +150,11 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
         slug: "card",
         fields: [
           text({ name: "heading" }),
-          relationship({ name: "cardPosts", relationTo: "posts", hasMany: true }),
+          relationship({
+            name: "cardPosts",
+            relationTo: "posts",
+            hasMany: true,
+          }),
           upload({ name: "cardImage", relationTo: "media" }),
         ],
       }),
@@ -329,7 +333,11 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
   };
   const home = await t
     .getService("singleEntryService")
-    .update("home", { ...homeData, _overwrite: true }, { overrideAccess: true });
+    .update(
+      "home",
+      { ...homeData, _overwrite: true },
+      { overrideAccess: true }
+    );
   expect(home.success).toBe(true);
   const guide = await t.nextly.create({
     collection: "guides",

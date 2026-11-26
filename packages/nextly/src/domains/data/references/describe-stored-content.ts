@@ -15,7 +15,10 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { localizedFieldRefs } from "../../i18n/runtime/companion-io";
 
-import type { StoredContentSite, StoredEntity } from "./rewrite-stored-references";
+import type {
+  StoredContentSite,
+  StoredEntity,
+} from "./rewrite-stored-references";
 
 /** One registry row, as each of the three registries gives it. */
 interface RegistryRecord {

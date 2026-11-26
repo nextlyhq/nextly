@@ -41,7 +41,10 @@
  * @module domains/data/references/rewrite-stored-references
  */
 
-import type { SqlParam, TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SqlParam,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -167,7 +170,11 @@ async function* pagesOf(
                     op: "=" as const,
                     value: after?.[earlier] as SqlParam,
                   })),
-                  { column: key, op: ">" as const, value: after?.[key] as SqlParam },
+                  {
+                    column: key,
+                    op: ">" as const,
+                    value: after?.[key] as SqlParam,
+                  },
                 ],
               })),
             },
@@ -271,7 +278,9 @@ async function rewriteEntityRows(
   const parentColumns = collectionOfTable ? [parentId, parentTable] : [];
   const columns = [...onRow.map(f => toSnakeCase(nameOf(f))), ...parentColumns];
   if (columns.length === 0) return;
-  for await (const rows of pagesOf(pass.deps.db, entity.table, columns, ["id"])) {
+  for await (const rows of pagesOf(pass.deps.db, entity.table, columns, [
+    "id",
+  ])) {
     for (const row of rows) {
       const changes = rewrittenColumns(pass, entity.fields, onRow, row);
       if (collectionOfTable) {
@@ -360,7 +369,10 @@ async function rewriteJunction(
       const nextTarget =
         mappedId(pass.map, targetCollection, String(row.target)) ??
         String(row.target);
-      if (nextSource === String(row.source) && nextTarget === String(row.target)) {
+      if (
+        nextSource === String(row.source) &&
+        nextTarget === String(row.target)
+      ) {
         continue;
       }
       await db.runStatement(
@@ -522,7 +534,9 @@ export async function rewriteStoredReferences(
   const pass: Pass = {
     deps,
     map,
-    schemas: new Map(site.fieldGroups.map(g => [g.slug, { fields: [...g.fields] }])),
+    schemas: new Map(
+      site.fieldGroups.map(g => [g.slug, { fields: [...g.fields] }])
+    ),
     changed: {},
   };
   for (const collection of site.collections) {
@@ -538,7 +552,12 @@ export async function rewriteStoredReferences(
     site.collections.map(c => [c.table, c.slug])
   );
   for (const group of site.fieldGroups) {
-    await rewriteEntityRows(pass, group, componentFieldHasColumn, collectionOfTable);
+    await rewriteEntityRows(
+      pass,
+      group,
+      componentFieldHasColumn,
+      collectionOfTable
+    );
   }
   await rewriteVersions(pass);
   await rewriteReleaseMembers(pass);

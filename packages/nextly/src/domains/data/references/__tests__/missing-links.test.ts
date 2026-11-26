@@ -29,7 +29,13 @@ const link = (
   id: string,
   extra: Partial<ContentReference> = {}
 ): ContentReference =>
-  ({ kind: "link", fieldPath: "f", collection, id, ...extra }) as ContentReference;
+  ({
+    kind: "link",
+    fieldPath: "f",
+    collection,
+    id,
+    ...extra,
+  }) as ContentReference;
 const address = (url: string, mediaId?: string): ContentReference => ({
   kind: "address",
   fieldPath: "f",
@@ -41,11 +47,7 @@ describe("missingLinks", () => {
   it("lists a link the import does not bring and the target does not have", () => {
     const dangling = link("people", GONE);
     expect(
-      missingLinks(
-        [link("people", A), link("people", B), dangling],
-        map,
-        holds
-      )
+      missingLinks([link("people", A), link("people", B), dangling], map, holds)
     ).toEqual([dangling]);
   });
 

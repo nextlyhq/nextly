@@ -130,7 +130,9 @@ function linkTargets(field: FieldConfig): string[] {
   const relationTo = (field as { relationTo?: unknown }).relationTo;
   if (typeof relationTo === "string") return [relationTo];
   if (Array.isArray(relationTo)) {
-    return relationTo.filter((slug): slug is string => typeof slug === "string");
+    return relationTo.filter(
+      (slug): slug is string => typeof slug === "string"
+    );
   }
   const target = (field as { options?: { target?: unknown } }).options?.target;
   if (typeof target === "string") return [target];
@@ -466,7 +468,11 @@ function walkFields(
     }
     const raw = out[name];
     if (raw === null || raw === undefined) continue;
-    out = withKey(out, name, walkStored(field, raw, joinPath(prefix, name), walk));
+    out = withKey(
+      out,
+      name,
+      walkStored(field, raw, joinPath(prefix, name), walk)
+    );
   }
   return out;
 }
