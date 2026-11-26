@@ -25,6 +25,7 @@
     "build-migrations-not-applied",
     "build-strict-warnings",
     "checksum-mismatch",
+    "collection-being-changed",
     "component-map-out-of-date",
     "config-import-not-found",
     "config-invalid",

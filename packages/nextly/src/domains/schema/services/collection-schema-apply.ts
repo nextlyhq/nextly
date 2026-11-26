@@ -15,6 +15,8 @@
  *
  * @module domains/schema/services/collection-schema-apply
  */
+import { isDeepStrictEqual } from "node:util";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
@@ -1391,6 +1393,70 @@ async function refuseCompanionTakingOthersElements(
 }
 
 /**
+ * The drops of `change`'s removed translated fields, run on the transaction the caller has open, for
+ * a change whose translations step would do nothing else; undefined for any other, whose step runs
+ * after the file. The file's transaction then holds the count, the drop and the registry row
+ * together: all of it lands, or none. The step still follows the file, and finds the columns gone.
+ *
+ * Nothing else: the step plans nothing for the fields as they stand, and for the change it plans
+ * exactly what removing those fields alone would. Never on MySQL, which commits each schema
+ * statement as it runs.
+ */
+async function removedTranslationsDrops(
+  change: CollectionSchemaChange,
+  companionRename: CollectionCompanionRename
+): Promise<(() => Promise<void>) | undefined> {
+  const { adapter } = requireSchemaChangeDeps(change.slug);
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
+  if (adapter.dialect === "mysql" || !wasLocalized || !isLocalized) {
+    return undefined;
+  }
+  const oldFields = (change.collection.fields ??
+    []) as unknown as FieldDefinition[];
+  const kept = new Set(change.fields.map(field => field.name));
+  const left = oldFields.filter(field => kept.has(field.name));
+  if (left.length === oldFields.length || companionRename) return undefined;
+  const planFor = (fields: FieldDefinition[]) =>
+    companionPlanOf({
+      change: { ...change, fields },
+      adapter,
+      oldFields,
+      companionRename,
+      defaultLocale: appLocalization()?.defaultLocale ?? "en",
+      joinedBefore: [],
+      holdLeavingDrops: false,
+    });
+  const planned = await planFor(change.fields);
+  const removing = await planFor(left);
+  const standing = await planFor(oldFields);
+  if (
+    planned.statements.length === 0 ||
+    planned.needsArchive ||
+    standing.statements.length > 0 ||
+    !isDeepStrictEqual(planned, removing)
+  ) {
+    return undefined;
+  }
+  return async () => {
+    // A precondition: the transaction below joins the one the calling flow is inside, the file's,
+    // through the adapter (`joinableFrame`), as the registry rows written with a file do
+    // (`writesInFileTransaction`). With none open it would commit on its own, whatever the file and
+    // the registry row then did.
+    if (!adapter.inTransaction()) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "translated columns dropped outside their file's transaction",
+          slug: change.slug,
+        },
+      });
+    }
+    await adapter.transaction(async tx => {
+      for (const statement of planned.statements) await tx.execute(statement);
+    });
+  };
+}
+
+/**
  * Every collection table the desired schema manages, with the columns it is meant to have: what a
  * rebuild of it creates, so the SQLite recovery can tell its copy from another owner's table.
  */
@@ -1469,7 +1535,8 @@ export interface CollectionFileRoad {
   /**
    * Whether the caller's registry write joins the file's own transaction (`inLastTransaction`):
    * not where the translations table is brought in step after the file (`after`), as the row would
-   * then record the change before that step holds it (`registryInFileTransaction`).
+   * then record the change before that step holds it (`registryInFileTransaction`), unless that
+   * transaction does all the step would (`inFile`).
    */
   registryInFile: boolean;
   /**
@@ -1480,6 +1547,11 @@ export interface CollectionFileRoad {
   judge: () => Promise<void>;
   /** What is written ahead of the file, once every check has passed: a field leaving translation's archive. */
   before: () => Promise<void>;
+  /**
+   * What the file's own transaction does of `after`, its registry row with it
+   * (`removedTranslationsDrops`); undefined where `after` does all of it.
+   */
+  inFile: () => Promise<(() => Promise<void>) | undefined>;
   /**
    * What the file does not reach, done as the push does it once it has run: the translations table
    * brought in step. A unique index a field that stops being unique still has under a name the file
@@ -1532,6 +1604,8 @@ export function collectionFileRoad(
         change,
         await companionRename()
       ),
+    inFile: async () =>
+      removedTranslationsDrops(change, await companionRename()),
     after: async () =>
       reconcileCollectionCompanionAfterFile(change, await companionRename()),
   };

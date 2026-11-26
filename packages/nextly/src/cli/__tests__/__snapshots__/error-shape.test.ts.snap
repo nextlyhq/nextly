@@ -609,6 +609,13 @@ exports[`each code, as a command ends with it > CHECKSUM_MISMATCH 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/checksum-mismatch  (CHECKSUM_MISMATCH)"
 `;
 
+exports[`each code, as a command ends with it > COLLECTION_BEING_CHANGED 1`] = `
+"✗ The change stopped before its next statement.
+  Why:  It no longer held its collection, so other writes could go ahead, and what it would delete was counted under a hold that is gone.
+  Next: Review the change and make it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/collection-being-changed  (COLLECTION_BEING_CHANGED)"
+`;
+
 exports[`each code, as a command ends with it > COMPONENT_MAP_OUT_OF_DATE 1`] = `
 "✗ The component map is out of date (src/types/generated/plugin-admin-imports.generated.ts and src/types/generated/plugin-admin-components.generated.ts).
   Why:  - missing: plugin "@acme/shop", widget "acme/revenue": @acme/shop/admin#Revenue
