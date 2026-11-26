@@ -172,7 +172,7 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
             ],
           }),
           repeater({
-            name: "rows",
+            name: "lines",
             fields: [relationship({ name: "rowPost", relationTo: "posts" })],
           }),
           fieldGroup({ name: "card", component: "card" }),
@@ -293,7 +293,7 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
       nodes: [{ id: "node-1", type: "image", props: { src: old.address } }],
     },
     meta: { metaPost: old.posts[1], metaImage: old.media[1] },
-    rows: [{ rowPost: old.posts[2] }, { rowPost: old.posts[0] }],
+    lines: [{ rowPost: old.posts[2] }, { rowPost: old.posts[0] }],
     card: card("single", old.posts[0], old.media[2]),
     blocks: [
       typed("card", card("in a zone", old.posts[1], old.media[3])),
@@ -325,7 +325,8 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     collection: "guides",
     id: guideId,
     locale: "fr",
-    data: { title: "Guide fr", cover: old.media[1] },
+    // The French values are written over the document's only revision.
+    data: { title: "Guide fr", cover: old.media[1], _overwrite: true },
   });
 
   // A junction row written with the old ids on both sides.
