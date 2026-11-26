@@ -7,6 +7,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import {
   clickBlock,
+  emptyHomepage,
   openEditorWith,
   pressSave,
   selection,
@@ -138,6 +139,8 @@ test("a typed name connects the colour variable, and it is still that variable a
       again.locator('[data-property="color"]').getByText("Yellow 500")
     ).toBeVisible();
   } finally {
+    // Off the homepage first: a variable a page still uses cannot be removed.
+    await emptyHomepage(page);
     await storeTokens(page, kept ?? { tokens: [] });
   }
 });

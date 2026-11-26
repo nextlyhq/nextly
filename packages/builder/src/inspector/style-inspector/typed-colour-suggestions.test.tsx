@@ -85,6 +85,13 @@ const TOKENS: SiteTokenSet = {
       kind: "color",
       values: { light: "#fde68a" },
     },
+    // A variable named as a CSS colour is.
+    {
+      name: "color.red",
+      label: "Red",
+      kind: "color",
+      values: { light: "#cc0000" },
+    },
     // Two variables an author named alike.
     {
       name: "color.accent.one",
@@ -378,5 +385,31 @@ describe("what a colour box says, and where it leaves focus", () => {
     });
     expect(box.value).toBe("#fde68a");
     expect(suggestions()).toEqual([]);
+  });
+});
+
+describe("a colour box over a variable's own typing", () => {
+  it('writes the colour "red", not the variable called "Red", on Enter or blur', () => {
+    const box = mount();
+    typeInto(box, "red");
+    // Offered, and not highlighted: the text is a colour of its own.
+    expect(suggestions()).toEqual(["Red"]);
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(colourOf()).toBe("red");
+    typeInto(box, "Red");
+    fireEvent.blur(box);
+    expect(colourOf()).toBe("Red");
+  });
+
+  it("makes a hex typed live and the variable chosen for it one step of undo", () => {
+    const box = mount();
+    typeInto(box, "#fde68a");
+    // Written as it was typed.
+    expect(colourOf()).toBe("#fde68a");
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(colourOf()).toEqual({ $token: "color.yellow.300" });
+    act(() => editor().undo());
+    expect(colourOf()).toBe("#0000ff");
   });
 });

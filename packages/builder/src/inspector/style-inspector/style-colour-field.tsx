@@ -342,6 +342,7 @@ export function ColourField({
   const typedCommit = useTypedColourCommit({
     choices,
     stored,
+    draft,
     typesLive: live !== undefined,
     onCommit,
     commitColour,
@@ -458,7 +459,15 @@ export function ColourField({
               const row = document
                 .getElementById(id)
                 ?.closest<HTMLElement>(".nx-style-inspector__colour");
-              commitInstead({ $token: variable.identity });
+              const token = { $token: variable.identity };
+              if (live === undefined) commitInstead(token);
+              else {
+                // In the edit's own run of typing, so a hex written as it was
+                // typed and the variable chosen for it are one step of undo.
+                setRefused(undefined);
+                live.join(() => commitColour(token));
+                live.end();
+              }
               // The box gives way to the trigger naming the variable: focus
               // goes there, rather than falling to the page with the box.
               focusAfterUnlink(() =>
@@ -531,16 +540,19 @@ function refusalWords(refused: TypedRefusal): string {
 /**
  * The colour box's end-of-edit write.
  *
- * A variable's whole name connects it, ignoring case, spaces and hyphens, as
- * the list under the box matches it. Text the engine's colour check takes is
- * written as typed, and a refusal of the write itself (a locked design, a
- * page at its size limit) is the write's to say. Text that is neither a
+ * Text the engine's colour check takes is written as typed, even where a
+ * variable has the same name ("red" and a variable "Red"): only a choice from
+ * the list connects that variable. Otherwise a variable's whole name connects
+ * it, ignoring case, spaces and hyphens, as the list under the box matches it.
+ * A refusal of the write itself (a locked design, a page at its size limit)
+ * is the write's to say. Text that is neither a
  * colour nor a variable's name is refused here, in the box's own words, and
  * nothing is written: the document keeps the value from before the edit.
  */
 function useTypedColourCommit({
   choices,
   stored,
+  draft,
   typesLive,
   onCommit,
   commitColour,
@@ -548,6 +560,8 @@ function useTypedColourCommit({
 }: {
   choices: readonly SiteVariable[];
   stored: StyleValue | undefined;
+  /** The text the box holds, which the field may have read as a variable. */
+  draft: string;
   /** Whether the box writes as it is typed, so a keystroke's refusal may show. */
   typesLive: boolean;
   onCommit: (value: StyleValue | null) => CommitOutcome;
@@ -556,13 +570,19 @@ function useTypedColourCommit({
 }): (value: StyleValue | null) => CommitOutcome {
   return value => {
     setRefused(undefined);
+    const typed = draft.trim();
+    // The field reads a variable's typed name before the text: a colour the
+    // text already is wins here.
+    if (isTokenRef(value) && typed !== "" && checkColorValue(typed) === null) {
+      return commitColour(typed);
+    }
     if (typeof value !== "string") return commitColour(value);
+    if (checkColorValue(value.trim()) === null) return commitColour(value);
     const matches = colourVariablesMatching(value, choices);
     const named = matches.find(match => match.exact);
     if (named !== undefined) {
       return commitColour({ $token: named.variable.identity });
     }
-    if (checkColorValue(value.trim()) === null) return commitColour(value);
     // A keystroke's write may have left its own refusal beside the box ("half
     // a hex colour"). Asking for the stored value clears it and moves nothing
     // on a block, the only target written as it is typed.
