@@ -19,7 +19,14 @@ import {
   Textarea,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Check, ChevronRight, Lock, TriangleAlert } from "lucide-react";
-import { useEffect, useId, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from "react";
 
 import type { SeoAnswer, Sourced } from "../resolver/order";
 import {
@@ -44,6 +51,7 @@ import {
   SourceRow,
 } from "./parts";
 import { keyOf, Row, RowButton, useOutsideChange } from "./rows";
+import type { ShareImageMaking } from "./share-image-making";
 import { ShareImageRow } from "./share-image-row";
 import {
   isTyped,
@@ -73,11 +81,16 @@ export interface AdvancedProps {
   /** The file of the picture shown while none is chosen, where it was read. */
   shownImageFile?: ChosenImage | undefined;
   /**
-   * Makes a share image of the right size from the picture shown and sets it
-   * as the page's; answers the made image's id, or none where it did not.
-   * Absent where none can be made.
+   * The panel's one state for making a share image of the right size from
+   * the picture shown, shared with the notice above the fields. Absent where
+   * none can be made.
    */
-  onMakeShareImage?: (() => Promise<string | undefined>) | undefined;
+  making?: ShareImageMaking | undefined;
+  /**
+   * Asks the section to open at the share image row: each new value opens
+   * it, as "Show it under Advanced" beside a copy made from the notice does.
+   */
+  revealShareImage?: number;
   /** Opens the page's own content at one of its fields. */
   onGoToField?: ((field: string) => void) | undefined;
 }
@@ -92,6 +105,19 @@ export function AdvancedSection(props: AdvancedProps): ReactNode {
   useEffect(() => {
     if (refused) setOpen(true);
   }, [refused]);
+  // Opened at the share image row when asked, and scrolled to it once drawn.
+  const body = useRef<HTMLDivElement>(null);
+  const reveal = props.revealShareImage ?? 0;
+  useEffect(() => {
+    if (reveal === 0) return;
+    setOpen(true);
+    const frame = requestAnimationFrame(() => {
+      body.current
+        ?.querySelector("[data-seo-share-image-row]")
+        ?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [reveal]);
   const rows = advancedRows(props);
   // Nothing to put under it where the group declares only the two fields.
   if (rows.length === 0) return null;
@@ -101,6 +127,7 @@ export function AdvancedSection(props: AdvancedProps): ReactNode {
       problemCount={props.problemCount}
       open={open}
       onOpenChange={setOpen}
+      bodyRef={body}
     >
       {rows.map(({ key, Row: Drawn }) => (
         <Drawn key={key} {...props} />
@@ -119,12 +146,15 @@ export function AdvancedFrame({
   problemCount = 0,
   open,
   onOpenChange,
+  bodyRef,
   children,
 }: {
   summary: string;
   problemCount?: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The body's element, for a section that scrolls to a row inside. */
+  bodyRef?: Ref<HTMLDivElement>;
   children: ReactNode;
 }): ReactNode {
   const id = useId();
@@ -159,7 +189,7 @@ export function AdvancedFrame({
           </span>
         ) : null}
       </button>
-      <div id={`${id}-body`} hidden={!open}>
+      <div id={`${id}-body`} ref={bodyRef} hidden={!open}>
         {children}
       </div>
     </section>
@@ -229,7 +259,12 @@ function SharingRows(props: AdvancedProps): ReactNode {
       {has("socialTitle") || has("socialDescription") ? (
         <SharedTitleRow {...props} />
       ) : null}
-      {has("ogImage") ? <ShareImageRow {...props} /> : null}
+      {has("ogImage") ? (
+        // Marked so the section can scroll to it when asked to show it.
+        <div data-seo-share-image-row="">
+          <ShareImageRow {...props} />
+        </div>
+      ) : null}
     </>
   );
 }

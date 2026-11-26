@@ -275,7 +275,9 @@ The tab shows, in order:
   from, such as "Empty uses the Posts pattern: `{Title} | {Site name}`" or "Empty uses the
   post's excerpt": the content type's pattern, one of the page's own fields, or the site's
   defaults. Typing marks it **Typed for this page**, with one action, **Go back to
-  automatic**, that empties it again.
+  automatic**, that empties it again. While a field is automatic it is empty, so its text
+  can't be selected or edited in place: **Edit the automatic text**, under it, puts that
+  text in the field with the cursor at its end, to change from there.
 - **Advanced**, closed until opened: hiding the page from search, its official address
   (the canonical), a different title and description when shared, the share image, the
   [structured data type](#structured-data), with what the type still lacks, and
@@ -1282,9 +1284,13 @@ install it with `npm install sharp`.
 
 In the SEO tab, the **When shared** preview says how the share image fits the card: the size every
 network shows in full, or where a picture of another shape is cut, with a dashed line where the card
-cuts a taller one. Under **Advanced**, a share image of the wrong size offers **Make a share image**.
-Once made, the copy is the page's share image, the row says **Made for this page** and what it was
-made from, and **Go back to automatic** returns to the page's own picture.
+cuts a taller one. Under **Advanced**, a share image of the wrong size offers **Make a share image**, as the
+notice above the fields does. While the copy is being made, both buttons say **Making…** and
+wait, so a second click makes no second copy. Once made, the copy is the page's share image, the
+row says **Made for this page** and what it was made from, and **Go back to automatic** returns to
+the page's own picture. Made from the notice, a note in its place says so, shows the copy, and
+**Show it under Advanced** opens Advanced at its row. A copy that can't be made is said where it
+was asked for, with the route's reason, such as a picture the site does not serve publicly.
 
 ## Structured data
 

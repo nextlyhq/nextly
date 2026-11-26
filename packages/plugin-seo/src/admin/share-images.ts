@@ -31,21 +31,19 @@ function chosenImageOf(
 
 /**
  * A share image made from a picture: the new media document's id, or none
- * where the person may not add to the media library or the copy could not be
- * made.
+ * where the route answered no item. A refusal, such as a picture the site
+ * does not serve publicly or a person who may not add to the media library,
+ * is thrown as it came, so the tab can say why rather than only that it
+ * failed.
  */
 async function madeShareImage(mediaId: string): Promise<string | undefined> {
-  try {
-    const made = await writePluginRoute<{ item?: { id?: unknown } }>({
-      plugin: SEO_PLUGIN_NAME,
-      path: SHARE_IMAGE_ROUTE_PATH,
-      body: { media: mediaId },
-    });
-    const id = made?.item?.id;
-    return typeof id === "string" ? id : undefined;
-  } catch {
-    return undefined;
-  }
+  const made = await writePluginRoute<{ item?: { id?: unknown } }>({
+    plugin: SEO_PLUGIN_NAME,
+    path: SHARE_IMAGE_ROUTE_PATH,
+    body: { media: mediaId },
+  });
+  const id = made?.item?.id;
+  return typeof id === "string" ? id : undefined;
 }
 
 /**
