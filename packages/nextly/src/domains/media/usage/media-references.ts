@@ -526,3 +526,15 @@ function childReferences(
   collectField(child, raw, path, schemas, found);
   for (const ref of found) into.push({ ...ref, translated });
 }
+
+/**
+ * How content stores a reference, shared with the walker that lists and
+ * rewrites every reference content holds (`domains/data/references`), so the
+ * two read a stored value one way: a JSON value as each dialect returns it,
+ * what a block document is, and the shape of a media item's id.
+ */
+export {
+  ID_SHAPE as MEDIA_ID_SHAPE,
+  isBlockDocument,
+  parsed as parseStoredJson,
+};
