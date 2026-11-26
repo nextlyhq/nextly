@@ -86,6 +86,8 @@ const BUILDER_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "previewCollectionDelete",
       "previewSchemaChanges",
       "applySchemaChanges",
+      // The type picker's answer, which feeds the builder alone, as the previews do.
+      "typeChangeTargets",
       "checkCollectionAddress",
     ]),
   ],
@@ -97,6 +99,7 @@ const BUILDER_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "deleteSingle",
       "previewSingleSchemaChanges",
       "applySingleSchemaChanges",
+      "singleTypeChangeTargets",
       "checkSingleAddress",
     ]),
   ],
@@ -108,6 +111,7 @@ const BUILDER_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "deleteComponent",
       "previewComponentSchemaChanges",
       "applyComponentSchemaChanges",
+      "componentTypeChangeTargets",
       // Rewrites the stored definition, so it is builder surface exactly as the apply is: where
       // the builder cannot run, the repair it feeds cannot either — and leaving it out would let
       // a direct call rewrite schema on a deployment whose builder is disabled.

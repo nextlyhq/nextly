@@ -133,7 +133,10 @@ export interface UseFieldBuilderReturn<T extends FieldValues = FieldValues> {
   handleEditorClose: () => void;
 
   // Validation helper
-  validateFields: (userFields: BuilderField[]) => FieldBuilderValidationResult;
+  validateFields: (
+    userFields: BuilderField[],
+    saved?: readonly BuilderField[]
+  ) => FieldBuilderValidationResult;
 
   // Undo history
   /** The entity's settings as shown, null until they are loaded. */
@@ -591,7 +594,8 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
   // Judged against every field held, built-in ones included, since a
   // condition may read one the user's fields leave out.
   const validateFields = useCallback(
-    (userFields: BuilderField[]) => validateBuilderFields(userFields, fields),
+    (userFields: BuilderField[], saved?: readonly BuilderField[]) =>
+      validateBuilderFields(userFields, fields, saved),
     [fields]
   );
 

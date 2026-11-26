@@ -20,7 +20,7 @@ import {
 import { ddlType } from "../../../i18n/migration/ddl-types";
 import { fieldToLocalizedColumnSpec } from "../../../i18n/migration/field-to-column-spec";
 import { storesPerLanguage } from "../../../i18n/per-language-storage";
-import { keepsTranslationsInside } from "../../../i18n/shared-structure";
+import { sharedStructureShape } from "../../../i18n/shared-structure";
 import { querySqlRows } from "../../pipeline/classifier/count-helpers";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
@@ -1140,6 +1140,15 @@ function emptiesOf(change: JudgedFieldTypeChange): EmptiesLeft {
 }
 
 /**
+ * Why a change of a field kept per language is refused where its translations column would keep its
+ * old type (`changesTranslationsColumn`), in the save's words: the Schema Builder's type picker
+ * shows the same sentence for a type it offers as unavailable, so the two cannot say different
+ * things.
+ */
+export const TRANSLATIONS_COLUMN_KEEPS_ITS_TYPE =
+  "It is kept per language, in a translations table whose column a type change does not convert, so the change can't be deployed yet.";
+
+/**
  * Why a refused change can't go ahead as it stands, beyond its values' own reasons: its translations
  * column, its entity leaving translation, and a value the deploying cast would not clear or rewrite.
  * A change the save converts itself (`converted`) is deployed by its own file, so a value it would
@@ -1166,11 +1175,7 @@ function refusalReasons(of: {
       "Its values take the new type while the old Unique setting's index still holds the column, so values that read as one cannot both be written: turn Unique off and save first, then change the field's type."
     );
   }
-  if (of.translated) {
-    why.push(
-      "It is kept per language, in a translations table whose column a type change does not convert, so the change can't be deployed yet."
-    );
-  }
+  if (of.translated) why.push(TRANSLATIONS_COLUMN_KEEPS_ITS_TYPE);
   if (of.leaving) {
     why.push(
       "Its entity stops being translated in the same save, which moves each language's value out of the translations table as it is stored: turn off translation and save first, then change the field's type."
@@ -1433,21 +1438,23 @@ export async function judgeEntityTypeChanges(
  * out of such a container is. A change between two translated types keeps the text where it is
  * read, and a field there that keeps no text (shared, or not text), is judged as before.
  */
-function textHeldPerLanguageRefusals(
+export function textHeldPerLanguageRefusals(
   entity: EntityTypeChangeInput,
   changes: readonly FieldTypeChange[]
 ): TypeChangeRefusal[] {
-  if (entity.translationsTable === undefined) return [];
+  // Only an entity keeping its values per language before the change (`perLanguageBefore`): on
+  // the earlier layout every value, a container's text among them, is on its row.
+  if (entity.translatedBefore === undefined) return [];
   return changes.flatMap(change => {
-    const container = change.within?.container.from;
+    const within = change.within;
     if (
-      container === undefined ||
-      !keepsTranslationsInside(container, true) ||
-      !isFieldLocalized(change.from, true) ||
+      within === undefined ||
+      !heldAsContainerText(within) ||
       isFieldLocalized(change.to, true)
     ) {
       return [];
     }
+    const container = within.container.from;
     const name = changedFieldName(change);
     return [
       {
@@ -1461,6 +1468,29 @@ function textHeldPerLanguageRefusals(
       },
     ];
   });
+}
+
+/**
+ * Whether the field at the end of `within.path` is one of its container's texts, as the container's
+ * one structure reads it (`sharedStructureShape`): kept in the overlay, for each language. Not a
+ * field a container inside it marks shared, nor a row's own `id`: those are on the structure.
+ */
+function heldAsContainerText(
+  within: NonNullable<FieldTypeChange["within"]>
+): boolean {
+  let shape = sharedStructureShape(within.container.from);
+  // The path names the container itself first, then each container inside it, then the field.
+  const inside = within.path.slice(1);
+  const leaf = inside.at(-1);
+  if (shape === null || leaf === undefined) return false;
+  for (const step of inside.slice(0, -1)) {
+    // Own entries only: a container named like an object's built-ins (`constructor`) is no shape.
+    shape = Object.hasOwn(shape.inner, step.name)
+      ? (shape.inner[step.name] ?? null)
+      : null;
+    if (shape === null) return false;
+  }
+  return shape.texts.includes(leaf.name);
 }
 
 /** A refusal as a validation error lists it: by the field's path under `fields`. */

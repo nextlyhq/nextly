@@ -30,13 +30,13 @@ import {
 import { Info, Loader2 } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import { settingsFittingType } from "@admin/lib/builder/change-type";
 import type { UserFieldDefinitionRecord } from "@admin/services/userFieldsApi";
 
 import {
   buildUserFieldSchema,
   DEFAULT_VALUES,
   fieldToFormValues,
-  LENGTH_BOUND_TYPES,
   type UserFieldFormValues,
 } from "./schemas/userFieldSchema";
 import {
@@ -62,33 +62,29 @@ export interface UserFieldFormProps {
   readOnly?: boolean;
 }
 
-/** The types whose placeholder a user field keeps. */
-const PLACEHOLDER_TYPES: readonly string[] = [
-  "text",
-  "textarea",
-  "email",
-  "url",
-  "phone",
-];
-
 /**
  * The type-specific values that fit `type`, so a default or bound declared for
- * one type never survives into one it cannot fit.
+ * one type never survives into one it cannot fit: those the settings panel
+ * shows for it on this surface (`settingsFittingType`), the question the Schema
+ * Builder asks when a field's type changes there too. A user field's type is
+ * chosen before it is saved, and user fields take no plugin's types.
  */
 function keptFor(
   values: UserFieldFormValues,
   type: string
 ): Partial<UserFieldFormValues> {
-  const lengths = LENGTH_BOUND_TYPES.includes(type);
-  const numeric = type === "number";
+  const fits = settingsFittingType(type, {
+    surface: usersFieldSurface(false),
+    plugins: undefined,
+  });
   return {
-    options: type === "select" || type === "radio" ? values.options : [],
-    hasMany: type === "select" ? values.hasMany : false,
-    placeholder: PLACEHOLDER_TYPES.includes(type) ? values.placeholder : "",
-    minLength: lengths ? values.minLength : "",
-    maxLength: lengths ? values.maxLength : "",
-    minValue: numeric ? values.minValue : "",
-    maxValue: numeric ? values.maxValue : "",
+    options: fits.options ? values.options : [],
+    hasMany: fits.hasMany ? values.hasMany : false,
+    placeholder: fits.placeholder ? values.placeholder : "",
+    minLength: fits.validation.has("minLength") ? values.minLength : "",
+    maxLength: fits.validation.has("maxLength") ? values.maxLength : "",
+    minValue: fits.validation.has("min") ? values.minValue : "",
+    maxValue: fits.validation.has("max") ? values.maxValue : "",
     defaultValue: "",
   };
 }

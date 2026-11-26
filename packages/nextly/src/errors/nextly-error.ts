@@ -619,13 +619,19 @@ export class NextlyError extends Error {
      * to be taken again, and the counts now, beside the errors.
      */
     review?: ReviewAgainPublicData;
+    /** See {@link ValidationPublicData.described}. */
+    described?: ValidationPublicData["described"];
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "VALIDATION_ERROR",
       publicMessage: "Validation failed.",
-      publicData: { errors: opts.errors, ...opts.review },
+      publicData: {
+        errors: opts.errors,
+        ...opts.review,
+        ...(opts.described === undefined ? {} : { described: opts.described }),
+      },
       cause: opts.cause,
       logContext: opts.logContext,
     });

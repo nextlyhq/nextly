@@ -68,7 +68,7 @@ export function useBuilderFieldActions(
       const userFields = builder.fields.filter(
         f => !f.isSystem && !builtInNames.includes(f.name)
       );
-      const validation = builder.validateFields(userFields);
+      const validation = builder.validateFields(userFields, saved);
       if (!validation.valid) {
         // `errorMessage` is optional on the result, so a validator reporting
         // invalid without saying why would raise an empty toast — a refusal the

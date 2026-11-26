@@ -47,6 +47,8 @@ function callbacks(entityReadOnly = false) {
     duplicate: vi.fn(),
     rename: vi.fn(),
     canRename: vi.fn(() => true),
+    changeType: vi.fn(),
+    canChangeType: vi.fn(() => true),
     remove: vi.fn(),
     setHidden: vi.fn(),
     openFieldGroup: vi.fn(),
@@ -233,6 +235,28 @@ describe("the outline of the nested fixture", () => {
     expect(on.rename).toHaveBeenCalledWith("f-internal-note");
   });
 
+  // Change type… opens the picker on the field, where the page says the field's type can change.
+  it("offers Change type… on a row, for the page to open on the field", async () => {
+    const { on } = renderOutline();
+    (row("internal_note") as HTMLElement).focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Change type…" })
+    );
+    expect(on.changeType).toHaveBeenCalledWith("f-internal-note");
+  });
+
+  it("offers no Change type… where the page says the field's type cannot change", async () => {
+    const { on } = renderOutline();
+    on.canChangeType.mockReturnValue(false);
+    (row("internal_note") as HTMLElement).focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu).queryByRole("menuitem", { name: "Change type…" })
+    ).toBeNull();
+  });
+
   it("shows each accepted field group's own count, on its own row", () => {
     renderOutline({
       nodes: buildOutline(
@@ -350,6 +374,7 @@ describe("a read-only row", () => {
     "Move down",
     "Duplicate",
     "Rename…",
+    "Change type…",
     "Hide",
     "Show",
     "Delete",
