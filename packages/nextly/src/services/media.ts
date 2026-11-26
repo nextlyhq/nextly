@@ -41,6 +41,7 @@ import {
 // Actor threading + outbox recording for media writes. Each write records a
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
+import { contentHashOf } from "../domains/media/hash-backfill/content-hash";
 import {
   lockMediaFolders,
   lockMediaItems,
@@ -702,6 +703,11 @@ export class MediaService extends BaseService {
         originalFilename: filename,
         mimeType,
         size: storedSize,
+        // The fingerprint of the bytes stored, measured here beside their size
+        // for the same reason: every upload path ends in this insert, the
+        // server action included, so every record gets one. The bytes are the
+        // ones handed to storage, after an SVG was sanitized.
+        sha256: contentHashOf(file),
         width,
         height,
         duration: null,

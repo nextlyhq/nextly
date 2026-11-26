@@ -35,6 +35,7 @@ import type { UploadOptions, UploadResult } from "../../storage/types";
 import { isImageMimeType, type Media } from "../../types/media";
 import { recordMutationEvent } from "../webhooks/record-mutation-event";
 
+import { contentHashOf } from "./hash-backfill/content-hash";
 import {
   errorForLog,
   filesKeptByOthers,
@@ -168,6 +169,9 @@ function replacementChanges(
     ),
     mimeType: file.mimeType,
     size: file.buffer.length,
+    // The new file's fingerprint, of the bytes handed to storage: the record
+    // now describes that file, not the one it replaced.
+    sha256: contentHashOf(file.buffer),
     width: dimensions?.width ?? null,
     height: dimensions?.height ?? null,
     url: stored.url,

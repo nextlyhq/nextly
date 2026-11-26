@@ -33,6 +33,9 @@ export const MEDIA_INDEXES = [
   { name: "media_uploaded_at_idx", columns: ["uploadedAt"] },
   // Filter by folder.
   { name: "media_folder_id_idx", columns: ["folderId"] },
+  // Find the records of one stored file by its fingerprint. Not unique: two
+  // records may share one file.
+  { name: "media_sha256_idx", columns: ["sha256"] },
 ] as const satisfies readonly CoreIndex<string>[];
 
 export const NEXTLY_JOBS_INDEXES = [
