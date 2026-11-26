@@ -24,7 +24,7 @@
  * ```
  */
 
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
@@ -190,6 +190,7 @@ import {
   type RegisteredWorkflow,
 } from "../domains/workflows/registry";
 import { recheckReleasesInWorkflowScopes } from "../domains/workflows/release-recheck-signal";
+import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";
 import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
@@ -364,6 +365,7 @@ import type {
   AuthConfig,
   SanitizedRateLimitingConfig,
 } from "../shared/types/config";
+import { DEFAULT_MIGRATIONS_DIR } from "../shared/types/migrations-dir-default";
 import type { SingleConfig } from "../singles/config/types";
 import type { ImageProcessor } from "../storage/image-processor";
 import { initializeMediaStorage, type MediaStorage } from "../storage/storage";
@@ -1138,11 +1140,19 @@ async function registerServicesOnce(
   publishLedgerIfAt("before the schema reads", ledgerAt, adapter);
   await refuseUnmigratedDatabaseInBuildPhase(adapter);
 
+  // The names an empty database starts its field groups on, one value for the compile below and
+  // the setup: its history's (`new-database-naming`). Asked here, where a history whose names
+  // cannot be told refuses the start before anything is set up, and only of a start that may set
+  // a database up.
+  const newSiteFieldGroupNaming = structure.mayDefine
+    ? await newSiteNamingAtStart(adapter, resolvedBasePath, transformedConfig)
+    : undefined;
   const bootSchema = await prepareBootSchema(
     adapter,
     transformedConfig,
     transformedPlugins,
-    resolvedLogger
+    resolvedLogger,
+    newSiteFieldGroupNaming
   );
 
   let bootExtensionSchema = bootSchema.schema;
@@ -1259,6 +1269,10 @@ async function registerServicesOnce(
         {
           createMissingCompanions: !structure.productionStart,
           completeness,
+          // The names the compile above read a new database's groups on.
+          ...(newSiteFieldGroupNaming === undefined
+            ? {}
+            : { newSiteFieldGroupNaming }),
         }
       );
 
@@ -2052,7 +2066,9 @@ async function prepareBootSchema(
   adapter: DrizzleAdapter,
   transformedConfig: NextlyServiceConfig,
   transformedPlugins: PluginDefinition[],
-  logger: Logger
+  logger: Logger,
+  /** The names an empty database starts its field groups on, as its setup does. */
+  newSiteFieldGroupNaming: "legacy" | "current" | undefined
 ): Promise<{
   schema: ExtensionSchema | undefined;
   /** The schema as it is now, published again if it is another (`compiledForNow`). */
@@ -2104,7 +2120,11 @@ async function prepareBootSchema(
     plugins: transformedPlugins,
     config: transformedConfig,
   })
-    ? await declaredFieldGroupStorage(adapter, transformedConfig.fieldGroups)
+    ? await declaredFieldGroupStorage(
+        adapter,
+        transformedConfig.fieldGroups,
+        newSiteFieldGroupNaming
+      )
     : undefined;
   const input = {
     ...(fieldGroups === undefined
@@ -2622,10 +2642,13 @@ async function materializeBuilderKind(
       }
       ctx.materialized.add(`${args.kind}:${ent.slug}`);
     } catch (err) {
+      // Described whole: a refused column's table, name and reason are in the error's log fields
+      // (`ColumnsNotAddedError`), not its message.
       ctx.logger.warn?.(
-        `[plugins] Failed to materialize plugin fields onto Builder ${args.kind} "${ent.slug}": ${
-          err instanceof Error ? err.message : String(err)
-        }. Skipping; will retry next boot.`
+        `[plugins] Failed to materialize plugin fields onto Builder ${args.kind} "${ent.slug}": ${describeError(
+          err,
+          { context: false }
+        )}. Skipping; will retry next boot.`
       );
     }
   }
@@ -4003,6 +4026,27 @@ export async function createSchemaRegistry(
 }
 
 /**
+ * The names an empty database starts its field groups on (`new-database-naming`), or undefined
+ * for one already set up. A probe that fails refuses nothing: first-run setup makes the same probe
+ * and reports it, and takes the history's names where it answers there.
+ */
+async function newSiteNamingAtStart(
+  adapter: DrizzleAdapter,
+  projectRoot: string,
+  config: { db?: { migrationsDir?: string } }
+): Promise<"legacy" | "current" | undefined> {
+  const { databaseIsEmpty, emptyDatabaseFieldGroupNaming } = await import(
+    "../domains/schema/migrate/new-database-naming"
+  );
+  const empty = await databaseIsEmpty(adapter).catch(() => undefined);
+  if (empty === false) return undefined;
+  const naming = emptyDatabaseFieldGroupNaming(
+    resolve(projectRoot, config.db?.migrationsDir ?? DEFAULT_MIGRATIONS_DIR)
+  );
+  return empty === true ? naming : naming.catch(() => undefined);
+}
+
+/**
  * Completes the SchemaRegistry {@link createSchemaRegistry} set up with the
  * dynamic collections/singles/components, so that Drizzle CRUD queries work
  * for every table in every adapter context (CLI + API routes), running
@@ -4034,6 +4078,11 @@ export async function initializeSchemaRegistry(
      * its reads and writes say the table is not ready.
      */
     createMissingCompanions: boolean;
+    /**
+     * The names a new database's field-group storage starts on, where this
+     * start sets one up (`ensureFirstRunSetup`). Absent, the current names.
+     */
+    newSiteFieldGroupNaming?: "legacy" | "current";
   }
 ): Promise<SchemaRegistry | undefined> {
   if (registry === undefined) return undefined;
@@ -4069,6 +4118,9 @@ export async function initializeSchemaRegistry(
         logger: consoleLogger,
         // Several processes may start on the same new database at once.
         holdSchemaLock: firstStartSchemaLock(adapter, consoleLogger),
+        ...(options.newSiteFieldGroupNaming === undefined
+          ? {}
+          : { newSiteFieldGroupNaming: options.newSiteFieldGroupNaming }),
       });
       // A start that set a new database up changed what the start's shared
       // reads found: they are read again.
@@ -4804,6 +4856,7 @@ async function syncCodeFirstCollections(
     "../domains/schema/services/runtime-schema-generator"
   );
   const syncDialect = adapter.getCapabilities().dialect;
+  const createdHere = new Set(syncResult.created);
 
   for (const collection of transformedConfig.collections) {
     if (!collectionsNeedingTableSync.includes(collection.slug)) continue;
@@ -4827,10 +4880,14 @@ async function syncCodeFirstCollections(
     }
     if (tableExists) {
       logger.info?.(`Table ${tableName} already exists for ${slug}, skipping`);
-      // Still mark as applied so the registry status reflects reality.
-      await collectionRegistry
-        .updateMigrationStatus(slug, "applied")
-        .catch(() => {});
+      // A row this sync created over a table already there describes that table, so it is applied.
+      // One it updated says what the registry decided: a changed definition is pending until a
+      // migration makes it, as this start changes no table.
+      if (createdHere.has(slug)) {
+        await collectionRegistry
+          .updateMigrationStatus(slug, "applied")
+          .catch(() => {});
+      }
       continue;
     }
 
@@ -5035,6 +5092,7 @@ async function syncCodeFirstComponents(
     ...componentSyncResult.created,
     ...componentSyncResult.updated,
   ];
+  const componentsCreatedHere = new Set(componentSyncResult.created);
 
   // The table each group's registry row names after the sync, so the probe below and the create
   // further down address the group's own storage. Derived again from the slug, the name would be
@@ -5112,10 +5170,18 @@ async function syncCodeFirstComponents(
         logger.warn?.(`Failed to create table for component ${slug}`);
       },
       afterCreate: async () => {
-        await componentRegistry
-          .updateMigrationStatus(slug, "applied")
-          .catch(() => {});
-        logger.info?.(`Created table ${tableName} for component ${slug}`);
+        // Applied where this start made the table, or wrote a new row over a table already there,
+        // which that row describes, as a collection's is. A row it updated over a table already
+        // there says what the registry decided: a changed definition is pending until a
+        // migration makes it.
+        if (!tableExists || componentsCreatedHere.has(slug)) {
+          await componentRegistry
+            .updateMigrationStatus(slug, "applied")
+            .catch(() => {});
+        }
+        if (!tableExists) {
+          logger.info?.(`Created table ${tableName} for component ${slug}`);
+        }
 
         try {
           // 🔴 Resolved, not assumed. A component whose *fields* changed

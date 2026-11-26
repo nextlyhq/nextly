@@ -47,11 +47,13 @@ const source = (
   before: EntitySettingsRecord | undefined,
   target: EntitySettingsRecord | undefined,
   statements: string[] = [],
-  dialect: FileTypeChangeSource["dialect"] = "postgresql"
+  dialect: FileTypeChangeSource["dialect"] = "postgresql",
+  fieldGroupNaming: FileTypeChangeSource["fieldGroupNaming"] = "legacy"
 ): FileTypeChangeSource => ({
   filename: "20261118_change.sql",
   before,
   target,
+  fieldGroupNaming,
   statements,
   dialect,
 });
@@ -281,6 +283,23 @@ describe("fileTypeChangesOf", () => {
         "comp_meta",
         "Field group 'meta' (migration 20261118_change.sql)",
       ],
+    ]);
+  });
+
+  // Read under the legacy name, the change would be judged on a table the database does not have.
+  it("names a field group's table under the current names on a history there", () => {
+    const found = fileTypeChangesOf(
+      source(
+        record({ fieldGroups: { meta: declared({ fields: [TEXT] }) } }),
+        record({ fieldGroups: { meta: declared({ fields: [SELECT] }) } }),
+        [],
+        "postgresql",
+        "current"
+      )
+    );
+
+    expect(found.map(({ kind, input }) => [kind, input.table])).toEqual([
+      ["fieldGroup", "fg_meta"],
     ]);
   });
 

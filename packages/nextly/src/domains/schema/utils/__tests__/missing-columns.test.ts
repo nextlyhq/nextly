@@ -12,7 +12,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import type { FieldConfig } from "../../../../collections/fields/types/index";
 import type { Logger } from "../../../../shared/types/index";
-import { addMissingColumnsForFields } from "../missing-columns";
+import {
+  addMissingColumnsForFields,
+  ColumnsNotAddedError,
+} from "../missing-columns";
 
 interface FakeAdapter {
   getCapabilities: () => { dialect: "postgresql" | "mysql" | "sqlite" };
@@ -246,8 +249,8 @@ describe("addMissingColumnsForFields", () => {
     expect(calls.find(c => c.sql.startsWith("ALTER TABLE"))).toBeUndefined();
   });
 
-  it("logs a warning and continues when one ALTER throws", async () => {
-    const { adapter } = makeAdapter({
+  it("warns of each refused column, tries the rest, then throws naming every refused one", async () => {
+    const { adapter, calls } = makeAdapter({
       dialect: "postgresql",
       existingColumns: ["id"],
       alterShouldThrow: true,
@@ -257,7 +260,7 @@ describe("addMissingColumnsForFields", () => {
       { name: "body", type: "text" } as FieldConfig,
     ];
 
-    const added = await addMissingColumnsForFields(
+    const outcome = addMissingColumnsForFields(
       adapter as unknown as Parameters<typeof addMissingColumnsForFields>[0],
       fakeLogger,
       "dc_posts",
@@ -265,8 +268,18 @@ describe("addMissingColumnsForFields", () => {
       { timestamps: false, builtBy: "codeFirst" }
     );
 
-    expect(added).toEqual([]);
-    expect(fakeLogger.warn).toHaveBeenCalled();
+    await expect(outcome).rejects.toBeInstanceOf(ColumnsNotAddedError);
+    await expect(outcome).rejects.toMatchObject({
+      tableName: "dc_posts",
+      refused: [
+        { column: "title", reason: "simulated DDL failure" },
+        { column: "body", reason: "simulated DDL failure" },
+      ],
+      added: [],
+    });
+    // Both were tried, the second after the first was refused.
+    expect(calls.filter(c => c.sql.startsWith("ALTER TABLE"))).toHaveLength(2);
+    expect(fakeLogger.warn).toHaveBeenCalledTimes(2);
   });
 
   it("converts camelCase field names to snake_case columns", async () => {

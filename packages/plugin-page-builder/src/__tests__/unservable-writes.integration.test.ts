@@ -50,7 +50,7 @@ const NOTES = "notes";
  * templates, every table of its own and the component registry.
  */
 const PAGE_BUILDER_TABLES =
-  /["`](dc_templates|dc_nx_pb_\w+|page_builder__\w+|dynamic_components)["`]/;
+  /["`](dc_templates|dc_nx_pb_\w+|page_builder__\w+|dynamic_components|dynamic_field_groups)["`]/;
 
 /** Whether `statement` names one of {@link PAGE_BUILDER_TABLES}. */
 const reachesPageBuilder = (statement: string): boolean =>

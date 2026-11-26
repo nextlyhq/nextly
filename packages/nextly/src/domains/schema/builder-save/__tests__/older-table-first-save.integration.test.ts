@@ -138,7 +138,7 @@ const KINDS: Kind[] = [
   },
   {
     name: "a field group",
-    table: "comp_card",
+    table: "fg_card",
     create: () =>
       dispatchComponents(
         "createComponent",

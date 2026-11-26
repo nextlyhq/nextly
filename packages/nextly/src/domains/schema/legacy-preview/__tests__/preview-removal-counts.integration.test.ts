@@ -307,7 +307,7 @@ describeEachDialect("the preview of a removed field's values", dialect => {
       ["seo-2", "NULL"],
     ]) {
       await query(
-        `INSERT INTO ${quote(dialect, "comp_seo")} (${[...columns, "meta_title"].map(c => quote(dialect, c)).join(", ")}) ` +
+        `INSERT INTO ${quote(dialect, "fg_seo")} (${[...columns, "meta_title"].map(c => quote(dialect, c)).join(", ")}) ` +
           `VALUES ('${id}', 'entry-1', 'dc_pages', 'seo', ${metaTitle})`
       );
     }
@@ -487,7 +487,7 @@ describeEachDialect("the preview of a removed field's values", dialect => {
       }
     );
     await query(
-      `INSERT INTO ${quote(dialect, "comp_promo")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
+      `INSERT INTO ${quote(dialect, "fg_promo")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
         `VALUES ('promo-1', 'entry-1', 'dc_pages', 'promo', 7)`
     );
     for (const [locale, value] of [
@@ -495,7 +495,7 @@ describeEachDialect("the preview of a removed field's values", dialect => {
       ["es", "Hola"],
     ]) {
       await query(
-        `INSERT INTO ${quote(dialect, "comp_promo_locales")} (${["_parent", "_locale", "heading"].map(c => quote(dialect, c)).join(", ")}) ` +
+        `INSERT INTO ${quote(dialect, "fg_promo_locales")} (${["_parent", "_locale", "heading"].map(c => quote(dialect, c)).join(", ")}) ` +
           `VALUES ('promo-1', '${locale}', '${value}')`
       );
     }

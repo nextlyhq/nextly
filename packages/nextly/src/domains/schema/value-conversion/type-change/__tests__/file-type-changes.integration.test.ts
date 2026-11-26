@@ -140,6 +140,7 @@ function cases(open: () => { connection: Connection; slug: string }) {
       filename: next.filename,
       before: first.snapshot.entities,
       target: next.snapshot.entities,
+      fieldGroupNaming: "legacy",
       statements: next.statements,
       dialect: connection.dialect,
     });
@@ -257,6 +258,7 @@ function cases(open: () => { connection: Connection; slug: string }) {
         filename: next.filename,
         before: first.snapshot.entities,
         target: next.snapshot.entities,
+        fieldGroupNaming: "legacy",
         statements: [rename],
         dialect: connection.dialect,
       })
@@ -282,6 +284,7 @@ function cases(open: () => { connection: Connection; slug: string }) {
       filename: next.filename,
       before: first.snapshot.entities,
       target: next.snapshot.entities,
+      fieldGroupNaming: "legacy",
       statements: next.statements,
       dialect: connection.dialect,
     });
@@ -383,6 +386,7 @@ function cases(open: () => { connection: Connection; slug: string }) {
         filename: next.filename,
         before: first.snapshot.entities,
         target: next.snapshot.entities,
+        fieldGroupNaming: "legacy",
         statements,
         dialect: connection.dialect,
       });
@@ -430,6 +434,7 @@ function cases(open: () => { connection: Connection; slug: string }) {
       filename: "20261118_transfer.sql",
       before: owned("builder"),
       target: owned("code"),
+      fieldGroupNaming: "legacy",
       statements: [],
       dialect: connection.dialect,
     });
@@ -478,6 +483,7 @@ function cases(open: () => { connection: Connection; slug: string }) {
         filename: next.filename,
         before: undefined,
         target: next.snapshot.entities,
+        fieldGroupNaming: "legacy",
         statements: next.statements,
         dialect: connection.dialect,
       })

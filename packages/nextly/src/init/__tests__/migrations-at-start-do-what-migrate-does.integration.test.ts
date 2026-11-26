@@ -64,10 +64,23 @@ import type { mergeSetupResultIntoConfig as MergeSetupResultIntoConfig } from ".
 import { createLogger } from "../../cli/utils/logger";
 import { runMigrate } from "../../cli/commands/migrate";
 import { runMigrateCreate } from "../../cli/commands/migrate-create";
-import { defineCollection, defineConfig, text } from "../../config";
+import { writeLegacyFieldGroupMigration } from "../../__tests__/helpers/legacy-field-group-history";
+import {
+  defineCollection,
+  defineConfig,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../config";
 import { createAdapter } from "../../database/factory";
 import { shutdownServices } from "../../di/register";
+import { columnsOf } from "../../domains/field-groups/__tests__/helpers/storage-generation-site";
+import {
+  fieldGroupTableNameFor,
+  storageNamesFor,
+} from "../../domains/field-groups/services/field-group-storage-names";
 import { _resetPerLanguageStorage } from "../../domains/i18n/per-language-storage";
+import { col } from "../../domains/schema/extension/dsl";
 import { setNonInteractive } from "../../domains/schema/migrate/can-prompt";
 import { getNextly, shutdownNextly, startSettled } from "../../init";
 import {
@@ -571,6 +584,91 @@ describe.each(getConfiguredTestDialects())(
       expect(
         started.warnings.filter(line => line.includes("Run `nextly migrate`"))
       ).toEqual([]);
+    }, 600_000);
+
+    // The names an empty database starts its field groups on are its history's, at a production
+    // start as in `nextly migrate`, and the compile beside it reads a column the app adds on the same.
+    // (A plugin's cannot be there yet: one with a schema is refused until it is installed.)
+    for (const naming of ["current", "legacy"] as const) {
+      it(`sets an empty database up on the ${naming} field-group names its history keeps, with the app's own column on a group`, async () => {
+        const { registryTable, typeColumn } = storageNamesFor(naming);
+        const group = fieldGroupTableNameFor(naming, "mas_card");
+        const card = defineFieldGroup({
+          slug: "mas_card",
+          fields: [text({ name: "heading" })],
+        });
+        const config = defineConfig({
+          collections: [
+            defineCollection({
+              slug: "mas-placed",
+              access: { read: () => true },
+              fields: [
+                text({ name: "title" }),
+                fieldGroup({ name: "card", component: "mas_card" }),
+              ],
+            }),
+          ],
+          fieldGroups: [card],
+          db: {
+            schema: {
+              extend: [
+                ({ schema }) => {
+                  schema.extendTable(group, {
+                    columns: { marker: col.shortText({ nullable: true }) },
+                  });
+                },
+              ],
+            },
+            migrationsDir: join(state.dir, "migrations"),
+            runMigrationsOnBoot: true,
+          },
+        });
+        const url = await emptyDatabase();
+        use(url);
+        if (naming === "current") {
+          await migrateCreate("initial", config);
+        } else {
+          await writeLegacyFieldGroupMigration({
+            config,
+            projectRoot: state.dir,
+            migrationsDir: join(state.dir, "migrations"),
+            dialect,
+            name: "initial",
+          });
+        }
+
+        const started = await productionStart(url, config, "mas-placed");
+
+        expect(started.refusal).toBeUndefined();
+        const adapter = await open(url);
+        try {
+          expect(await adapter.tableExists(registryTable)).toBe(true);
+          expect(
+            await adapter.tableExists(
+              storageNamesFor(naming === "current" ? "legacy" : "current")
+                .registryTable
+            )
+          ).toBe(false);
+          const columns = await columnsOf(adapter, dialect, group);
+          expect(columns).toContain(typeColumn);
+          expect(columns).toContain("marker");
+        } finally {
+          await adapter.disconnect().catch(() => undefined);
+        }
+      }, 600_000);
+    }
+
+    it("sets an empty database up on the current names where the project has no history", async () => {
+      const url = await emptyDatabase();
+      const started = await productionStart(url, migratedAtStart());
+      expect(started.refusal).toBeUndefined();
+      const adapter = await open(url);
+      try {
+        expect(await adapter.tableExists("dynamic_field_groups")).toBe(true);
+        expect(await adapter.tableExists("dynamic_components")).toBe(false);
+      } finally {
+        await adapter.disconnect().catch(() => undefined);
+      }
     }, 600_000);
 
     it("applies a pending migration as nextly migrate does", async () => {

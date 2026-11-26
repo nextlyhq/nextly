@@ -59,7 +59,7 @@ for (const dialect of getConfiguredTestDialects()) {
       );
       const q = dialect === "mysql" ? "`" : '"';
       await app().adapter.executeQuery(
-        `INSERT INTO ${q}comp_fgown${q} (${q}id${q}, ${q}_parent_id${q}, ${q}_parent_table${q}, ${q}_parent_field${q}, ${q}_order${q}, ${q}title${q}, ${q}slug${q}, ${q}body${q}) VALUES ('fgown-1', 'p-1', 'dc_parent', 'card', 0, 'Kept title', 'kept-slug', 'Body')`
+        `INSERT INTO ${q}fg_fgown${q} (${q}id${q}, ${q}_parent_id${q}, ${q}_parent_table${q}, ${q}_parent_field${q}, ${q}_order${q}, ${q}title${q}, ${q}slug${q}, ${q}body${q}) VALUES ('fgown-1', 'p-1', 'dc_parent', 'card', 0, 'Kept title', 'kept-slug', 'Body')`
       );
 
       const before = await stored("fgown");
@@ -77,14 +77,14 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(
         ((after?.fields ?? []) as Array<{ name: string }>).map(f => f.name)
       ).toEqual(["title", "slug", "body", "note"]);
-      expect(await liveColumns("comp_fgown")).toEqual(
+      expect(await liveColumns("fg_fgown")).toEqual(
         expect.arrayContaining(["title", "slug", "body", "note"])
       );
       const [row] = await app().adapter.executeQuery<{
         title: unknown;
         slug: unknown;
       }>(
-        `SELECT ${q}title${q} AS title, ${q}slug${q} AS slug FROM ${q}comp_fgown${q} WHERE ${q}id${q} = 'fgown-1'`
+        `SELECT ${q}title${q} AS title, ${q}slug${q} AS slug FROM ${q}fg_fgown${q} WHERE ${q}id${q} = 'fgown-1'`
       );
       expect(row).toMatchObject({ title: "Kept title", slug: "kept-slug" });
     });

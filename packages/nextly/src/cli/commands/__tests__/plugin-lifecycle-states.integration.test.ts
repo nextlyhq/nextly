@@ -25,6 +25,7 @@ import { SchemaEventsRepository } from "../../../domains/schema/events/schema-ev
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
 import { canPrompt } from "../../../domains/schema/migrate/can-prompt";
 import { splitSqlStatements } from "../../../domains/schema/migrate/split-sql";
+import { resolveRegistryNameFromCatalog } from "../../../domains/field-groups/storage/resolve-storage-names";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import {
   countDeletions,
@@ -239,6 +240,11 @@ describe.each(getConfiguredTestDialects())(
       await reconcileCore({
         db: db(),
         dialect,
+        // The registry the database holds, as `nextly migrate` resolves it.
+        fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+          dialect,
+          getDrizzle: <T>() => db() as T,
+        }),
         logger: { info: () => {}, warn: () => {} },
       });
       run.dialect = dialect;

@@ -28,6 +28,12 @@ import {
   withoutRemovedFromCode,
 } from "../../domains/dynamic-collections/services/removed-from-code";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
+import { recordNewSiteOrWarn } from "../../domains/field-groups/services/field-group-new-site";
+import {
+  type FieldGroupNaming,
+  storageNamesFor,
+} from "../../domains/field-groups/services/field-group-storage-names";
+import { readStoredFieldGroupTables } from "../../domains/field-groups/services/field-group-stored-tables";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
   forgetFieldGroupStorageNames,
@@ -114,6 +120,7 @@ import type { LoadConfigResult } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
 import type { ResolvedDevOptions } from "./db-sync";
+import { noteEntityNotSynced, noteEntitySynced } from "./entities-not-synced";
 
 // ============================================================================
 // Core Table Creation
@@ -161,6 +168,34 @@ async function resolveRegistryTable(
 }
 
 /**
+ * The field-group registry the bootstrap declares, with a new site's names: a database holding
+ * neither registry starts on those its project gives an empty one (`new-database-naming`), as a
+ * first start sets one up. Decided by one reading. Null where the catalog cannot be read.
+ */
+async function bootstrapRegistry(
+  adapter: DrizzleAdapter,
+  logger: CommandContext["logger"],
+  newDatabaseNaming: () => Promise<FieldGroupNaming>
+): Promise<{ registryTable: string; newSite?: FieldGroupNaming } | null> {
+  const registryTable = await resolveRegistryTable(adapter, logger);
+  if (registryTable === null) return null;
+  const { absent } = await readStoredFieldGroupTables(adapter);
+  if (absent !== true) return { registryTable };
+  const newSite = await newDatabaseNaming();
+  return { registryTable: storageNamesFor(newSite).registryTable, newSite };
+}
+
+/** The CLI's logger as a service takes one: an information line is the command's detail. */
+function serviceLoggerFor(logger: CommandContext["logger"]): ServiceLogger {
+  return {
+    info: (m: string) => logger.debug(m),
+    warn: (m: string) => logger.warn(m),
+    error: (m: string) => logger.error(m),
+    debug: (m: string) => logger.debug(m),
+  };
+}
+
+/**
  * Create the system tables this bootstrap does not, under the right spelling.
  *
  * `SystemTableService` resolves the registry before creating it, so a database
@@ -171,25 +206,23 @@ async function resolveRegistryTable(
  */
 async function ensureSystemTables(
   drizzleAdapter: DrizzleAdapter,
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  /** A new site's names, where this sets one up; otherwise the service reads the site's own. */
+  fieldGroupNaming?: FieldGroupNaming
 ): Promise<boolean> {
   try {
     const { SystemTableService } = await import(
       "../../services/system/system-table-service"
     );
-    const serviceLogger: ServiceLogger = {
-      info: (m: string) => logger.debug(m),
-      warn: (m: string) => logger.warn(m),
-      error: (m: string) => logger.error(m),
-      debug: (m: string) => logger.debug(m),
-    };
     // The result is READ. `ensureSystemTables` catches its own failures and
     // reports `{ success: false }` rather than throwing, so discarding it lets
     // a repair that did nothing be reported as one that worked.
     const result = await new SystemTableService(
       drizzleAdapter,
-      serviceLogger
-    ).ensureSystemTables();
+      serviceLoggerFor(logger)
+    ).ensureSystemTables(
+      fieldGroupNaming === undefined ? {} : { fieldGroupNaming }
+    );
     if (!result.success) {
       logger.debug(`System table creation: ${result.error ?? "unknown error"}`);
     }
@@ -251,7 +284,10 @@ export async function applyCoreStatements(
 export async function ensureCoreTables(
   adapter: CLIDatabaseAdapter,
   options: ResolvedDevOptions,
-  context: CommandContext
+  context: CommandContext,
+  /** The names an empty database starts its field groups on. Absent, the current names. */
+  newDatabaseNaming: () => Promise<FieldGroupNaming> = () =>
+    Promise.resolve("current")
 ): Promise<void> {
   const { logger } = context;
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
@@ -400,11 +436,16 @@ export async function ensureCoreTables(
       // push naming the spelling that was just moved away from — and the push
       // is the one caller that creates rather than retargets. Re-reading here
       // costs one catalog query and is the only value the push may trust.
-      const pushRegistry = await resolveRegistryTable(drizzleAdapter, logger);
-      if (pushRegistry === null) {
+      const registry = await bootstrapRegistry(
+        drizzleAdapter,
+        logger,
+        newDatabaseNaming
+      );
+      if (registry === null) {
         pushFailure = { catalog: true };
         return;
       }
+      const { registryTable: pushRegistry, newSite } = registry;
       // F8 PR 2: use the freshPushSchema helper for the static-tables push.
       // No diff, no prompts, no journal — this is fresh-DB setup, not a user
       // schema change. Behavior matches the legacy DrizzlePushService.apply
@@ -448,7 +489,7 @@ export async function ensureCoreTables(
           );
 
           // Also create system tables (dynamic_collections, etc.)
-          await ensureSystemTables(drizzleAdapter, logger);
+          await ensureSystemTables(drizzleAdapter, logger, newSite);
 
           logger.success("Core tables created (fallback)");
         } else {
@@ -459,6 +500,10 @@ export async function ensureCoreTables(
           // happens after the exclusion has unwound.
           pushFailure = { push: pushError };
         }
+      }
+      // A new site's storage is settled on the names just created, as a first start records it.
+      if (newSite === "current" && pushFailure === undefined) {
+        await recordNewSiteOrWarn(drizzleAdapter, serviceLoggerFor(logger));
       }
     }
   );
@@ -988,6 +1033,27 @@ export function registerSingleTableInResolver(
 }
 
 /**
+ * `changed`, with every slug the configuration still declares whose registry row an earlier run
+ * recorded `failed` (`recordedFailed`, read filtered on that status), each once. A failed entity whose
+ * configuration did not change since is otherwise never visited again, so its missing column would
+ * never be added and its status never cleared. One this run's registry sync refused is left out:
+ * its row was not written, so nothing is built against it.
+ */
+function withRecordedFailed(
+  changed: readonly string[],
+  recordedFailed: ReadonlyArray<{ slug: string }>,
+  declared: ReadonlyArray<{ slug: string }>,
+  refused: ReadonlyArray<{ slug: string }>
+): string[] {
+  const declaredSlugs = new Set(declared.map(entity => entity.slug));
+  const refusedSlugs = new Set(refused.map(entity => entity.slug));
+  const failed = recordedFailed
+    .map(row => row.slug)
+    .filter(slug => declaredSlugs.has(slug) && !refusedSlugs.has(slug));
+  return [...new Set([...changed, ...failed])];
+}
+
+/**
  * Perform auto-sync for Singles: create data tables and update migration status
  */
 export async function performSinglesAutoSync(
@@ -1000,8 +1066,14 @@ export async function performSinglesAutoSync(
 ): Promise<void> {
   const { logger } = context;
 
-  // Get Singles that need table creation (created or updated)
-  const singlesToSync = [...syncResult.created, ...syncResult.updated];
+  // Singles that need their table brought up to date: created or updated, and any the configuration
+  // still declares that an earlier run recorded failed, so a refused column is tried again.
+  const singlesToSync = withRecordedFailed(
+    [...syncResult.created, ...syncResult.updated],
+    await singleRegistry.getAllSingles({ migrationStatus: "failed" }),
+    config.singles,
+    syncResult.errors
+  );
 
   if (singlesToSync.length === 0) {
     return;
@@ -1039,6 +1111,7 @@ export async function performSinglesAutoSync(
     const singleConfig = config.singles.find(s => s.slug === slug);
     if (!singleConfig) {
       errors.push({ slug, error: "Single config not found" });
+      noteEntityNotSynced("single", slug, "its configuration was not found");
       continue;
     }
 
@@ -1096,6 +1169,7 @@ export async function performSinglesAutoSync(
 
         await singleRegistry.updateMigrationStatus(slug, "applied");
         synced.push(slug);
+        noteEntitySynced("single", slug);
       } else {
         // Table doesn't exist — create it
         const migrationSQL = schemaService.generateMigrationSQL(
@@ -1121,13 +1195,13 @@ export async function performSinglesAutoSync(
           );
           await singleRegistry.updateMigrationStatus(slug, "applied");
           synced.push(slug);
+          noteEntitySynced("single", slug);
           logger.debug(`Created table and set status to 'applied' for ${slug}`);
         } else {
           await singleRegistry.updateMigrationStatus(slug, "failed");
-          errors.push({
-            slug,
-            error: `Table creation SQL executed but table '${tableName}' does not exist`,
-          });
+          const missing = `Table creation SQL executed but table '${tableName}' does not exist`;
+          errors.push({ slug, error: missing });
+          noteEntityNotSynced("single", slug, missing);
         }
       }
     } catch (error) {
@@ -1138,6 +1212,8 @@ export async function performSinglesAutoSync(
         // Ignore status update error
       }
       errors.push({ slug, error: errorMsg });
+      // For the run's closing error, which ends it with exit code 1 once everything else has run.
+      noteEntityNotSynced("single", slug, error);
     }
   }
 
@@ -1286,8 +1362,14 @@ export async function performComponentsAutoSync(
 ): Promise<void> {
   const { logger } = context;
 
-  // Get Components that need table creation (created or updated)
-  const componentsToSync = [...syncResult.created, ...syncResult.updated];
+  // Field groups that need their table brought up to date: created or updated, and any the
+  // configuration still declares that an earlier run recorded failed.
+  const componentsToSync = withRecordedFailed(
+    [...syncResult.created, ...syncResult.updated],
+    await componentRegistry.getAllComponents({ migrationStatus: "failed" }),
+    config.fieldGroups,
+    syncResult.errors
+  );
 
   if (componentsToSync.length === 0) {
     return;
@@ -1322,6 +1404,11 @@ export async function performComponentsAutoSync(
     const componentConfig = config.fieldGroups.find(c => c.slug === slug);
     if (!componentConfig) {
       errors.push({ slug, error: "Component config not found" });
+      noteEntityNotSynced(
+        "field group",
+        slug,
+        "its configuration was not found"
+      );
       continue;
     }
 
@@ -1334,6 +1421,11 @@ export async function performComponentsAutoSync(
         slug,
         error: "Component table name not recorded by the sync",
       });
+      noteEntityNotSynced(
+        "field group",
+        slug,
+        "its table name was not recorded by the sync"
+      );
       continue;
     }
 
@@ -1359,6 +1451,7 @@ export async function performComponentsAutoSync(
 
         await componentRegistry.updateMigrationStatus(slug, "applied");
         synced.push(slug);
+        noteEntitySynced("field group", slug);
       } else {
         // Table doesn't exist — create it
         const migrationSQL = schemaService.generateMigrationSQL(
@@ -1375,13 +1468,13 @@ export async function performComponentsAutoSync(
         if (tableActuallyExists) {
           await componentRegistry.updateMigrationStatus(slug, "applied");
           synced.push(slug);
+          noteEntitySynced("field group", slug);
           logger.debug(`Created table and set status to 'applied' for ${slug}`);
         } else {
           await componentRegistry.updateMigrationStatus(slug, "failed");
-          errors.push({
-            slug,
-            error: `Table creation SQL executed but table '${tableName}' does not exist`,
-          });
+          const missing = `Table creation SQL executed but table '${tableName}' does not exist`;
+          errors.push({ slug, error: missing });
+          noteEntityNotSynced("field group", slug, missing);
         }
       }
     } catch (error) {
@@ -1392,6 +1485,8 @@ export async function performComponentsAutoSync(
         // Ignore status update error
       }
       errors.push({ slug, error: errorMsg });
+      // For the run's closing error, which ends it with exit code 1 once everything else has run.
+      noteEntityNotSynced("field group", slug, error);
     }
   }
 

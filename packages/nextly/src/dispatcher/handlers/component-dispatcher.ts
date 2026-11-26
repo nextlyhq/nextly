@@ -52,6 +52,7 @@ import {
   FirstQuestionWatch,
   landingPush,
 } from "../../domains/schema/builder-save/landing-push";
+import { settleKeptPerLanguage } from "../../domains/schema/builder-save/per-language-answers";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
   renamedFieldsOf,
@@ -104,6 +105,11 @@ import {
   reconcileBuilderCompanion,
   type BuilderCompanionReconcile,
 } from "../helpers/builder-schema-push";
+import {
+  confirmedDeletionsAnswer,
+  readConfirmedDeletions,
+  withCountedDrops,
+} from "../helpers/confirmed-deletions";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -706,6 +712,9 @@ export const COMPONENTS_METHODS: Record<
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
       if (!fields) throw new Error("fields is required in request body");
+      // The counts of removed fields' values the review showed and the person confirmed, compared
+      // by the save just before it deletes them; refused here where malformed.
+      const confirmedDeletions = readConfirmedDeletions(body);
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
@@ -800,9 +809,13 @@ export const COMPONENTS_METHODS: Record<
           assertSchemaVersionMatch(schemaVersion, currentVersion, slug);
           const tableName = component.tableName;
 
-          const legacyBundle = resolutions
-            ? { tableName, byFieldName: resolutions }
-            : undefined;
+          // A removed field whose count the person confirmed is its drop confirmed, as on a
+          // collection's save, unless the field answers itself.
+          const legacyBundle = withCountedDrops(
+            tableName,
+            resolutions ? { tableName, byFieldName: resolutions } : undefined,
+            confirmedDeletions
+          );
 
           const adapter = getAdapterFromDI();
           if (!adapter) throw new Error("Database adapter not initialized");
@@ -1068,10 +1081,35 @@ export const COMPONENTS_METHODS: Record<
             "component",
             companion
           );
+          // The push, then the answers for fields kept per language, which the push's questions, asked
+          // of the main table's columns, never reach: settled once the translations table is in
+          // step, as a Single's push settles its own. A field group's push states no row fills.
+          const pushThenSettle = async () => {
+            const pushed = await pushAndReconcileCompanion(
+              push,
+              desired,
+              "component",
+              companion
+            );
+            await settleKeptPerLanguage(
+              { db: adapter.getDrizzle(), dialect, entity: "field group" },
+              {
+                tableName,
+                localized: isLocalized,
+                oldFields: component.fields,
+                newFields: fields as unknown as FieldDefinition[],
+                eventResolutions,
+                legacy: legacyBundle,
+                fills: undefined,
+                rowFills: undefined,
+                renameResolutions,
+              }
+            );
+            return pushed;
+          };
           const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
-            () =>
-              pushAndReconcileCompanion(push, desired, "component", companion),
+            pushThenSettle,
             {
               kind: "fieldGroup",
               slug,
@@ -1088,6 +1126,7 @@ export const COMPONENTS_METHODS: Record<
                 ...(acknowledgedConversions === undefined
                   ? {}
                   : { acknowledgedConversions }),
+                ...confirmedDeletionsAnswer(confirmedDeletions),
               },
               // What the push moves beside the table, as a collection's save writes it: a renamed
               // nested field group's rows moved to its new name, and any junction tables.

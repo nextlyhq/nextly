@@ -44,7 +44,7 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { resolveFieldGroupRegistryName } from "../../field-groups/storage/resolve-storage-names";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
-import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../field-groups/services/field-group-storage-names";
 import type { CollectionRegistryService } from "../services/collection-registry-service";
 
 import {
@@ -157,7 +157,7 @@ async function tagsState(t: TestNextly, translated: boolean) {
             `SELECT COUNT(*) AS n FROM ${q(`${TAGS_TABLE}_locales`)}`
           ),
           fieldGroupValues: await count(
-            `SELECT COUNT(*) AS n FROM ${q(resolveComponentTableName(META))} WHERE ${q("_parent_table")} = '${TAGS_TABLE}'`
+            `SELECT COUNT(*) AS n FROM ${q(fieldGroupTableNameFor("current", META))} WHERE ${q("_parent_table")} = '${TAGS_TABLE}'`
           ),
         }
       : {}),

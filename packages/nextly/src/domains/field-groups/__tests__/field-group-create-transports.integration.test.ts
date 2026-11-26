@@ -5,7 +5,7 @@
  *
  * A field group is creatable through three transports, and only the dispatcher made the table. The
  * REST route answered `201 Field group created.` and the Direct API resolved normally, both having
- * written a registry row describing a `comp_<slug>` that did not exist. Every later read and write
+ * written a registry row describing a `fg_<slug>` that did not exist. Every later read and write
  * to that field group then failed against the database.
  *
  * Nothing caught it because the coverage was per transport rather than per outcome: the dispatcher
@@ -90,7 +90,7 @@ for (const dialect of getConfiguredTestDialects()) {
       // The recorded outcome FIRST: it names the problem, where a bare "table missing" only says
       // the end state is wrong.
       expect(row?.migrationStatus).toBe("applied");
-      expect(await current.adapter.tableExists(`comp_${viaDispatcher}`)).toBe(
+      expect(await current.adapter.tableExists(`fg_${viaDispatcher}`)).toBe(
         true
       );
     });
@@ -106,14 +106,14 @@ for (const dialect of getConfiguredTestDialects()) {
 
       const row = await registryRow(current, viaDirect);
       expect(row?.migrationStatus).toBe("applied");
-      expect(await current.adapter.tableExists(`comp_${viaDirect}`)).toBe(true);
+      expect(await current.adapter.tableExists(`fg_${viaDirect}`)).toBe(true);
     });
 
     it("refuses a create whose slug names a table another field group owns", async () => {
       current = await createTestNextly({ dialect });
 
       // Two DIFFERENT slugs naming ONE physical table, which is the case a slug-keyed check cannot
-      // see: a slug is normalised on its way to a table name, so these two are `comp_<...>_held`
+      // see: a slug is normalised on its way to a table name, so these two are `fg_<...>_held`
       // alike while looking like two free slugs.
       const held = `fg_${dialect.slice(0, 2)}_held`;
       const collides = held.replace(/_held$/, "-held");
@@ -144,7 +144,7 @@ for (const dialect of getConfiguredTestDialects()) {
       // buys. Its own fields still describe it.
       const row = await registryRow(current, held);
       expect(row?.migrationStatus).toBe("applied");
-      expect(await current.adapter.tableExists(`comp_${held}`)).toBe(true);
+      expect(await current.adapter.tableExists(`fg_${held}`)).toBe(true);
     });
   });
 }

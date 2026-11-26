@@ -10,6 +10,7 @@ import {
   type PreparedFile,
 } from "../../schema/migrate-create/writer-hold";
 
+import { answersHeaderLine } from "./answer-language-names";
 import { buildLocalizationDownSql } from "./generate-down";
 import { buildLocalizationUpSql } from "./generate-up";
 import {
@@ -99,6 +100,8 @@ export interface WriteCompanionMigrationOpts {
   upSql: string;
   /** Pre-planned DOWN SQL (from `planCompanionMigration`). */
   downSql: string;
+  /** The language the answers among its statements are decided in, where it has any. */
+  answersIn?: string;
   /** injectable clock for deterministic file names in tests. */
   now: Date;
 }
@@ -157,6 +160,7 @@ export function prepareCompanionMigrationFile(
     // Scoped by construction: a companion file is about one entity.
     `${SCOPED_ENTITIES_MARKER}\n` +
     `${LOCALIZATION_MIGRATION_MARKER} companion (${opts.kind}) (i18n)\n` +
+    answersHeaderLine(opts.answersIn) +
     `${formatLocalizationIntent({ kind: opts.kind, entity: opts.entity, spec })}\n`;
   const content = `${header}\n-- UP\n${opts.upSql}\n\n-- DOWN\n${opts.downSql}\n`;
 

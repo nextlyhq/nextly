@@ -499,6 +499,10 @@ describe.each(getConfiguredTestDialects())(
       await unrecord(seo, "/blog/quiet");
       await earlierWrites(t, [earlierClaim("/blog/quiet", "posts", id)]);
       expect((await catchUp()).ran).toBe(true);
+      // The check the publish started runs after it, and its row's write tells
+      // the caches: over before the writes of a quiet start are counted.
+      await pagesChecked(t, [id]);
+      await t.events.settle();
 
       const statements = await statementsOf(dialect, async () => {
         // Read as far from the newest write as a later start would.

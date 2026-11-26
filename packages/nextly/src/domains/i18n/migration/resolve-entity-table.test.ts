@@ -4,6 +4,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { withStoredTable } from "../../field-groups/services/field-group-stored-tables";
+
 import {
   chooseRestoreEntity,
   resolveEntityTables,
@@ -165,5 +167,56 @@ describe("a slug more than one kind of entity uses", () => {
     ).toEqual({
       problem: '--kind must be collection, single or field-group, not "page".',
     });
+  });
+});
+
+// A site on the current field-group names stores a group as fg_<slug>, which no config rule
+// derives: the registry's row is what names the table a restore writes to.
+describe("withStoredTable", () => {
+  const stored = { tables: new Map([["hero", "fg_hero"]]), usable: true };
+
+  it("takes a field group's tables from its stored row", () => {
+    const [group] = resolveEntityTables(
+      { fieldGroups: [{ slug: "hero" }] },
+      "hero"
+    );
+    expect(group && withStoredTable(group, "hero", stored)).toEqual({
+      tableName: "fg_hero",
+      companionTableName: "fg_hero_locales",
+      kind: "fieldGroup",
+    });
+  });
+
+  // An unreadable registry says nothing about where a group is stored: the configuration's name
+  // would be the legacy one, and a stale legacy table there would take the values instead.
+  it("refuses a field group where the registry could not be read", () => {
+    const [group] = resolveEntityTables(
+      { fieldGroups: [{ slug: "hero" }] },
+      "hero"
+    );
+    expect(() =>
+      group
+        ? withStoredTable(group, "hero", {
+            tables: new Map(),
+            usable: false,
+            reason: "no answer",
+          })
+        : undefined
+    ).toThrow(/field-group registry could not be read/);
+  });
+
+  it("keeps a collection's tables, and a group's where the registry holds no row", () => {
+    const [collection] = resolveEntityTables(
+      { collections: [{ slug: "hero" }] },
+      "hero"
+    );
+    expect(collection && withStoredTable(collection, "hero", stored)).toEqual(
+      collection
+    );
+    const [group] = resolveEntityTables(
+      { fieldGroups: [{ slug: "card" }] },
+      "card"
+    );
+    expect(group && withStoredTable(group, "card", stored)).toEqual(group);
   });
 });

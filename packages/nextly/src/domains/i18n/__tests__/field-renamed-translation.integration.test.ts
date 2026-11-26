@@ -282,11 +282,11 @@ describeEachDialect("a translated field that is renamed", dialect => {
     );
     const id = "banner-1";
     await query(
-      `INSERT INTO ${quote(dialect, "comp_banner")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
+      `INSERT INTO ${quote(dialect, "fg_banner")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
         `VALUES ('${id}', 'entry-1', 'dc_pages', 'banner', 7)`
     );
     await query(
-      `INSERT INTO ${quote(dialect, "comp_banner_locales")} (${["_parent", "_locale", "heading"].map(c => quote(dialect, c)).join(", ")}) ` +
+      `INSERT INTO ${quote(dialect, "fg_banner_locales")} (${["_parent", "_locale", "heading"].map(c => quote(dialect, c)).join(", ")}) ` +
         `VALUES ('${id}', 'en', 'Hello'), ('${id}', 'es', 'Hola')`
     );
     return id;
@@ -372,7 +372,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "a field group's schema dialog applies it as a rename",
-      table: "comp_banner",
+      table: "fg_banner",
       seed: seedFieldGroup,
       change: async () => {
         await dispatchComponents(
@@ -382,9 +382,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
             fields: RENAMED,
             confirmed: true,
             localized: true,
-            renameResolutions: renamedOnCompanion("comp_banner"),
+            renameResolutions: renamedOnCompanion("fg_banner"),
             schemaVersion: await schemaVersionOf(
-              "dynamic_components",
+              "dynamic_field_groups",
               "banner"
             ),
           }
@@ -551,7 +551,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     {
       path: "a field group's schema dialog applies it",
       takesAnswers: false,
-      table: "comp_banner",
+      table: "fg_banner",
       seed: seedFieldGroup,
       save: async (fields: unknown[]) =>
         dispatchComponents(
@@ -563,7 +563,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
             localized: true,
             renameResolutions: [],
             schemaVersion: await schemaVersionOf(
-              "dynamic_components",
+              "dynamic_field_groups",
               "banner"
             ),
           }
@@ -898,7 +898,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
         (error: unknown) => error
       );
 
-      expect(await companionValues("comp_banner", "heading", id)).toEqual({
+      expect(await companionValues("fg_banner", "heading", id)).toEqual({
         en: "Hello",
         es: "Hola",
       });
@@ -917,7 +917,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
       { fields: [{ name: "views", type: "number" }] }
     );
 
-    expect(await columnsOf("comp_banner_locales")).not.toContain("heading");
+    expect(await columnsOf("fg_banner_locales")).not.toContain("heading");
   });
 
   // A field group keeps a many-to-many relationship on its own row, as a column, where a
@@ -938,7 +938,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
       adapter: current.adapter,
       entity: "banner",
       kind: "fieldGroup",
-      tableName: "comp_banner",
+      tableName: "fg_banner",
       builtBy: "fieldGroup",
       defaultLocale: "en",
       oldFields: TRANSLATED,
@@ -951,7 +951,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     );
 
     expect(reported(refusal)).toMatch(/TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/);
-    expect(await companionValues("comp_banner", "heading", id)).toEqual({
+    expect(await companionValues("fg_banner", "heading", id)).toEqual({
       en: "Hello",
       es: "Hola",
     });
@@ -1029,7 +1029,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "a field group's schema dialog",
-      table: "comp_banner",
+      table: "fg_banner",
       seed: seedFieldGroup,
       apply: async () =>
         dispatchComponents(
@@ -1039,9 +1039,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
             fields: TWO_ADDED,
             confirmed: true,
             localized: true,
-            renameResolutions: unoffered("comp_banner"),
+            renameResolutions: unoffered("fg_banner"),
             schemaVersion: await schemaVersionOf(
-              "dynamic_components",
+              "dynamic_field_groups",
               "banner"
             ),
           }
@@ -1460,7 +1460,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     {
       path: "a field group's schema dialog applies it as a rename",
       sqliteSkipsColumnModification: false,
-      table: "comp_banner",
+      table: "fg_banner",
       seed: seedFieldGroup,
       change: async (fields: unknown[]) => {
         await dispatchComponents(
@@ -1470,9 +1470,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
             fields,
             confirmed: true,
             localized: true,
-            renameResolutions: renamedOnCompanion("comp_banner"),
+            renameResolutions: renamedOnCompanion("fg_banner"),
             schemaVersion: await schemaVersionOf(
-              "dynamic_components",
+              "dynamic_field_groups",
               "banner"
             ),
           }
@@ -1727,7 +1727,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "a field group's schema dialog applies it",
-      table: "comp_banner",
+      table: "fg_banner",
       seed: seedFieldGroup,
       change: async () => {
         await dispatchComponents(
@@ -1737,9 +1737,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
             fields: renamedShared(),
             confirmed: true,
             localized: true,
-            renameResolutions: renamedOnCompanion("comp_banner"),
+            renameResolutions: renamedOnCompanion("fg_banner"),
             schemaVersion: await schemaVersionOf(
-              "dynamic_components",
+              "dynamic_field_groups",
               "banner"
             ),
           }
@@ -1772,7 +1772,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
   it.each([
     {
       path: "a field group's schema dialog applies it",
-      table: "comp_banner",
+      table: "fg_banner",
       seed: seedFieldGroup,
       change: async () => {
         await dispatchComponents(
@@ -1782,9 +1782,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
             fields: renamedShared(),
             confirmed: true,
             localized: true,
-            renameResolutions: renamedOnCompanion("comp_banner"),
+            renameResolutions: renamedOnCompanion("fg_banner"),
             schemaVersion: await schemaVersionOf(
-              "dynamic_components",
+              "dynamic_field_groups",
               "banner"
             ),
           }
@@ -2016,7 +2016,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "a field group's schema dialog",
-      table: "comp_banner",
+      table: "fg_banner",
       seed: seedFieldGroup,
       reshape: { maxLength: 32 },
       answers: [
@@ -2034,9 +2034,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
             fields,
             confirmed: true,
             localized: true,
-            renameResolutions: answered("comp_banner", answer as Answer),
+            renameResolutions: answered("fg_banner", answer as Answer),
             schemaVersion: await schemaVersionOf(
-              "dynamic_components",
+              "dynamic_field_groups",
               "banner"
             ),
           }

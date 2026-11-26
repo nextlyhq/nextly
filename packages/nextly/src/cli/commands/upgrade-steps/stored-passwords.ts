@@ -62,13 +62,20 @@ export const storedPasswordTotal = (
 ) => counts.reduce((sum, entry) => sum + entry.count, 0);
 
 /**
- * The line `nextly migrate` prints while passwords stored before this release
- * are still held as given, or `null` when none is. One wording, so the
- * notice and the step cannot drift.
+ * The line a run prints while passwords stored before this release are still
+ * held as given, or `null` when none is: the count, and when the run's own
+ * command hashes them. One wording, so the notice and the step cannot drift.
  */
-export function storedPasswordsNotice(count: number): string | null {
+export function storedPasswordsNotice(
+  count: number,
+  command: "nextly migrate" | "nextly db:sync" = "nextly migrate"
+): string | null {
   if (count === 0) return null;
-  return `${String(count)} password(s) stored before this release are not yet hashed. \`nextly migrate\` hashes them once every migration has applied.`;
+  const when =
+    command === "nextly db:sync"
+      ? "`nextly db:sync` hashes them once it has synced every entity."
+      : "`nextly migrate` hashes them once every migration has applied.";
+  return `${String(count)} password(s) stored before this release are not yet hashed. ${when}`;
 }
 
 const sourceOf = (context: UpgradeStepContext) =>

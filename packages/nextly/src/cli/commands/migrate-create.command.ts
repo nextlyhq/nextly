@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 
+import { CURRENT_NAMES_SHOWN } from "../../domains/field-groups/services/field-group-names-shown";
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { dialectOption } from "../dialect-option";
 import { withDryRun } from "../dry-run";
@@ -46,6 +47,10 @@ export function registerMigrateCreateCommand(program: Command): void {
         "--record-snapshot",
         "Write a migration that changes nothing, whose snapshot records which fields are translated, for a project whose latest snapshot predates that record. Run it with the config as last migrated",
         false
+      )
+      .option(
+        "--field-group-names <naming>",
+        `Move the migration history's field groups to the current names (${CURRENT_NAMES_SHOWN}): writes one migration that changes nothing. Move each database first with \`nextly migrate:field-groups --apply --backup-confirmed\`. The only value is \`current\``
       )
       .option(
         "--no-transaction",

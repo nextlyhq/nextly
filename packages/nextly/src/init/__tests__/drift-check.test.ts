@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { runDriftCheck } from "../drift-check";
+import { driftCheckFieldGroups, runDriftCheck } from "../drift-check";
 
 interface FakeAdapter {
   dialect: "postgresql" | "mysql" | "sqlite";
@@ -314,5 +314,30 @@ describe("runDriftCheck", () => {
       expect(result.kind).toBe("drift");
       expect((result as { pending: number }).pending).toBe(1);
     });
+  });
+});
+
+// A field group's table is the one its registry row names: `fg_<slug>` on a site on the current
+// field-group names, which a derivation from the slug would miss, previewing a table the database
+// does not have.
+describe("driftCheckFieldGroups", () => {
+  const card = { slug: "card", fields: [] };
+
+  it("checks a group under the table its registry row names", () => {
+    expect(
+      driftCheckFieldGroups([card], {
+        tables: new Map([["card", "fg_card"]]),
+        naming: "current",
+      })
+    ).toEqual([{ slug: "card", tableName: "fg_card", fields: [] }]);
+  });
+
+  it("checks a group the registry does not hold yet under its slug's name for the site's names", () => {
+    expect(
+      driftCheckFieldGroups([card], { tables: new Map(), naming: "current" })
+    ).toEqual([{ slug: "card", tableName: "fg_card", fields: [] }]);
+    expect(
+      driftCheckFieldGroups([card], { tables: new Map(), naming: "legacy" })
+    ).toEqual([{ slug: "card", tableName: "comp_card", fields: [] }]);
   });
 });

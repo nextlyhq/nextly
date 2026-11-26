@@ -459,6 +459,7 @@ export type UnwrittenChangesArgs = Pick<
   | "migrationsDir"
   | "dialect"
   | "logger"
+  | "firstFieldGroupNaming"
 > & {
   /**
    * What the database records, asked only where the newest snapshot predates
@@ -496,6 +497,11 @@ export async function unwrittenChangesOf(
     migrationsDir: args.migrationsDir,
     dialect: args.dialect,
     logger: args.logger,
+    // Where the folder has no migration yet, the names the caller's database is on, as
+    // `migrate:create` writes them; absent (`migrate:check`, which reads no database), the current.
+    ...(args.firstFieldGroupNaming === undefined
+      ? {}
+      : { firstFieldGroupNaming: args.firstFieldGroupNaming }),
   });
   const entities: DeclaredEntities = {
     collections: inputs.collections,

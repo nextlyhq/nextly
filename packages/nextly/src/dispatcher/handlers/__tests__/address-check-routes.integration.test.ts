@@ -17,7 +17,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import { ServiceContainer } from "../../../services/index";
 import { seedLiveAuthor } from "../../../domains/releases/__tests__/helpers/live-author";
 
@@ -25,7 +25,7 @@ import { seedLiveAuthor } from "../../../domains/releases/__tests__/helpers/live
 const REGISTRIES = new Set([
   "dynamic_collections",
   "dynamic_singles",
-  STORAGE_FORMAT.registryTable,
+  MIGRATION_TARGET.registryTable,
 ]);
 
 /** Each kind's check route. */

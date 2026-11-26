@@ -26,12 +26,15 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { CURRENT_NAMES_SHOWN } from "../../field-groups/services/field-group-names-shown";
+import { answersHeaderLine } from "../../i18n/migration/answer-language-names";
 import {
   consentToCover,
   describeDeletion,
   type Deletion,
 } from "../migrate/data-loss-consent";
 import { BLANK_FILE_LINE } from "../migrate/history-line";
+import { GENERATED_FILE_LINE } from "../migrate/history-line-names";
 import { NO_TRANSACTION_MARKER } from "../migrate/split-sql";
 
 import { getDialectDisplayName } from "./dialect-name";
@@ -193,6 +196,8 @@ export interface FormatArgs {
    * headers for the same reason as the settings: no table changes with them.
    */
   permissionChanges?: readonly string[];
+  /** The language the file's answers for fields kept per language are decided in, where it has any. */
+  answersIn?: string;
   /**
    * Whether the file changes no table. Its UP may still hold statements: a
    * Builder entity's registry row travels with its settings.
@@ -274,7 +279,7 @@ export function formatMigrationFile(args: FormatArgs): string {
   const downBody = downBodyOf(args);
 
   return `-- Migration: ${args.name}
-${destructiveLines(args.deletions ?? [])}${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}-- Generated at: ${now}
+${destructiveLines(args.deletions ?? [])}${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}${answersHeaderLine(args.answersIn)}${GENERATED_FILE_LINE} ${now}
 -- Dialect: ${getDialectDisplayName(args.dialect)}
 
 -- UP
@@ -300,7 +305,7 @@ export function formatSnapshotRecordFile(
   return `-- Migration: ${name}
 -- Generated: snapshot record
 ${SCOPED_ENTITIES_MARKER}
--- Generated at: ${now.toISOString()}
+${GENERATED_FILE_LINE} ${now.toISOString()}
 -- Dialect: ${getDialectDisplayName(dialect)}
 --
 -- Written by \`nextly migrate:create --record-snapshot\`. It changes nothing in
@@ -313,6 +318,40 @@ ${SCOPED_ENTITIES_MARKER}
 -- DOWN
 -- Nothing to undo. A rollback needs a statement to run, so this one reads nothing.
 SELECT 1;
+`;
+}
+
+/**
+ * The migration `nextly migrate:create --field-group-names=current` writes beside its snapshot:
+ * the point where the project's history moves its field groups to the current names. It holds no
+ * statement. The storage itself moves only through `nextly migrate:field-groups`, never inside
+ * `nextly migrate`, so applying this file checks that the database already moved and records it
+ * (`refuseFieldGroupTransitionOnLegacy`). Its DOWN is empty on purpose: `nextly migrate:down`
+ * refuses a file with nothing to run, and rolling the record back would leave a database on the
+ * current names behind a history that says legacy.
+ */
+export function formatFieldGroupTransitionFile(
+  name: string,
+  dialect: SupportedDialect,
+  now: Date
+): string {
+  return `-- Migration: ${name}
+-- Generated: field-group names
+${SCOPED_ENTITIES_MARKER}
+-- Generated at: ${now.toISOString()}
+-- Dialect: ${getDialectDisplayName(dialect)}
+--
+-- Written by \`nextly migrate:create --field-group-names=current\`. It changes
+-- nothing in the database: from this migration on, the history keeps field
+-- groups under the current names (${CURRENT_NAMES_SHOWN}). Move each
+-- database first with \`nextly migrate:field-groups --apply --backup-confirmed\`;
+-- \`nextly migrate\` refuses this file on a database that has not moved.
+
+-- UP
+
+
+-- DOWN
+-- Cannot be rolled back: the field-group storage stays on the current names.
 `;
 }
 
@@ -340,7 +379,7 @@ export function formatBlankFile(
 ): string {
   const outside = options.transaction === false;
   return `${outside ? `${NO_TRANSACTION_MARKER}\n` : ""}-- Migration: ${name}
--- Generated at: ${now.toISOString()}
+${GENERATED_FILE_LINE} ${now.toISOString()}
 -- Dialect: ${getDialectDisplayName(dialect)}
 ${options.line ?? ""}--
 ${BLANK_FILE_LINE}

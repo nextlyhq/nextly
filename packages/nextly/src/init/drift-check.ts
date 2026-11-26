@@ -30,16 +30,17 @@
 // while still finishing in ~ceil(N/3)× per-call latency for N
 // collections (vs N× serial).
 
+import {
+  storedOrNewTableName,
+  type StoredFieldGroupTables,
+} from "../domains/field-groups/services/field-group-stored-tables";
 import type {
   DesiredCollection,
   DesiredFieldGroup,
   DesiredSchema,
   DesiredSingle,
 } from "../domains/schema/pipeline/types";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../domains/schema/utils/resolve-table-name";
+import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../domains/singles/services/resolve-single-table-name";
 
 interface AdapterLike {
@@ -127,13 +128,19 @@ export function driftCheckSingles(
   }));
 }
 
-/** The drift check's input, reduced from the config's field groups. */
+/**
+ * The drift check's input, reduced from the config's field groups: each under the table its
+ * registry row names (`stored`), which is `fg_<slug>` on a site on the current field-group names,
+ * or for a group the registry does not hold yet, its slug's name under the site's names. Derived
+ * from the slug alone, it would preview a table the database does not have.
+ */
 export function driftCheckFieldGroups(
-  groups: readonly ConfigEntityLike[]
+  groups: readonly ConfigEntityLike[],
+  stored: Pick<StoredFieldGroupTables, "tables" | "naming">
 ): DriftCheckEntity[] {
   return groups.map(g => ({
     slug: g.slug,
-    tableName: resolveComponentTableName(g.slug),
+    tableName: storedOrNewTableName(stored, g.slug),
     fields: g.fields ?? [],
   }));
 }

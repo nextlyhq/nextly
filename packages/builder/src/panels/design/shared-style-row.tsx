@@ -7,17 +7,13 @@
  */
 
 import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  TooltipProvider,
-} from "@nextlyhq/ui";
+import { Popover, PopoverTrigger, TooltipProvider } from "@nextlyhq/ui";
 import { Lock, Moon } from "lucide-react";
 import * as React from "react";
 
 import { usePrefersDark } from "../../canvas/prefers-dark";
 import { ChromeTooltip } from "../../chrome-tooltip";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import {
   sharedStyleTile,
   SHARED_STYLE_DARK_UNREADABLE,
@@ -122,7 +118,7 @@ export function StyleRow({
             </button>
           </PopoverTrigger>
         </DarkModeTip>
-        <PopoverContent
+        <BuilderPopoverContent
           side="right"
           align="start"
           sideOffset={12}
@@ -144,7 +140,7 @@ export function StyleRow({
             name={name}
             sentence={sentence}
           />
-        </PopoverContent>
+        </BuilderPopoverContent>
       </Popover>
     </li>
   );

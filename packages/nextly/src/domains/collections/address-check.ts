@@ -32,7 +32,10 @@ import {
   type AddressKind,
   type UsedAddress,
 } from "../../shared/address-rule";
-import { resolveComponentTableName } from "../schema/utils/resolve-table-name";
+import {
+  fieldGroupTableNameFor,
+  resolveFieldGroupStorageNames,
+} from "../field-groups/services/field-group-storage-names";
 import { resolveSingleTableName } from "../singles/services/resolve-single-table-name";
 
 /** A refusal as the create reports it: its code and its public message. */
@@ -80,10 +83,12 @@ async function assertCreateAccepts(
     });
   }
   if (kind === "fieldGroup") {
-    // The table the field-group create derives from the address, which its check is keyed on.
+    // The table the field-group create derives from the address, which its check is keyed on:
+    // under the names the site's storage is on, as the create names it (`newTableName`).
+    const { naming } = await resolveFieldGroupStorageNames(deps.adapter);
     await deps.fieldGroups.assertNewAddressAvailable(
       address,
-      resolveComponentTableName(address)
+      fieldGroupTableNameFor(naming, address)
     );
     return address;
   }

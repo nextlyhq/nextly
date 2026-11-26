@@ -51,6 +51,7 @@ import { dirname, relative, resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import type { FieldGroupNaming } from "../../domains/field-groups/services/field-group-storage-names";
 import { refuseWhileSaveLeftPartWay } from "../../domains/schema/builder-save/save-in-progress";
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
@@ -123,6 +124,7 @@ import {
   consentTookTheName,
   migrationCreateCancelled,
   migrationDeletionsDeclined,
+  fieldGroupNamesOptionInvalid,
   migrationNameRequired,
   recordSnapshotNeedsAppMigration,
 } from "../errors/areas/migrate-create";
@@ -221,6 +223,14 @@ export interface MigrateCreateCommandOptions {
    * @default false
    */
   recordSnapshot?: boolean;
+
+  /**
+   * `--field-group-names=current`: write the migration that moves the history's field groups to
+   * the current names (`dynamic_field_groups`, `fg_<slug>`). It changes nothing in the database,
+   * whose storage `nextly migrate:field-groups` moves. Refused while the config has changes to
+   * migrate. The name defaults to `field_group_current_names`.
+   */
+  fieldGroupNames?: string;
 
   /**
    * `--dry-run`: plan the migration as a real run does, rename questions included, print it and
@@ -326,16 +336,12 @@ function refuseRecordingAnotherDialect(
 }
 
 /**
- * What the file is written against for an older unique index a field that stops being unique
- * leaves holding its column (`liveUniqueIndexes`): the database `DATABASE_URL` names, opened
- * read-only on the first read, as the deletion counts open it, and closed by `close`. Nothing is
- * opened for a run with no field that stops being unique. One that cannot be read within the counts'
- * connect limit answers undefined, which the run says, and the file drops only Nextly's own index.
+ * The database `DATABASE_URL` names, opened read-only on the first ask, as the deletion counts open
+ * it, and closed by `close`. One that cannot be reached within the counts' connect limit answers
+ * undefined.
  */
-function uniqueIndexReader(dialect: SupportedDialect): {
-  read: (
-    tableName: string
-  ) => Promise<ReadonlyMap<string, readonly (string | null)[]> | undefined>;
+function reachableDatabase(dialect: SupportedDialect): {
+  open: () => Promise<CLIDatabaseAdapter | undefined>;
   close: () => Promise<void>;
 } {
   let opening: Promise<CLIDatabaseAdapter | MissingDatabase> | undefined;
@@ -365,8 +371,58 @@ function uniqueIndexReader(dialect: SupportedDialect): {
     return opened;
   };
   return {
+    open,
+    close: async () => {
+      await opened?.disconnect().catch(() => undefined);
+    },
+  };
+}
+
+/**
+ * The field-group names the database is on, for the first migration of a project
+ * (`AppMigrationInputsArgs.firstFieldGroupNaming`): a site an earlier release set up by its
+ * development starts holds its groups under the legacy names, and a migration that made them under
+ * the current ones would be one its own database could not record. Undefined where the database
+ * holds no registry or cannot be read.
+ */
+async function databaseFieldGroupNaming(
+  dialect: SupportedDialect
+): Promise<FieldGroupNaming | undefined> {
+  // A URL whose scheme names another database is not the one this migration is for.
+  const url = process.env.DATABASE_URL;
+  const named = url ? detectDialectFromUrl(url) : undefined;
+  if (named !== undefined && named !== dialect) return undefined;
+  const database = reachableDatabase(dialect);
+  try {
+    const adapter = await database.open();
+    if (adapter === undefined) return undefined;
+    const { standingRegistryNaming } = await import(
+      "../../domains/field-groups/services/field-group-new-site"
+    );
+    return await standingRegistryNaming(adapter as unknown as DrizzleAdapter);
+  } catch {
+    return undefined;
+  } finally {
+    await database.close();
+  }
+}
+
+/**
+ * What the file is written against for an older unique index a field that stops being unique
+ * leaves holding its column (`liveUniqueIndexes`), read from {@link reachableDatabase}. Nothing is
+ * opened for a run with no field that stops being unique. One that cannot be read answers
+ * undefined, which the run says, and the file drops only Nextly's own index.
+ */
+function uniqueIndexReader(dialect: SupportedDialect): {
+  read: (
+    tableName: string
+  ) => Promise<ReadonlyMap<string, readonly (string | null)[]> | undefined>;
+  close: () => Promise<void>;
+} {
+  const database = reachableDatabase(dialect);
+  return {
     read: async tableName => {
-      const adapter = await open();
+      const adapter = await database.open();
       if (adapter === undefined) return undefined;
       const { readUniqueIndexesByColumn } = await import(
         "../../domains/schema/pipeline/live-table-facts"
@@ -383,9 +439,7 @@ function uniqueIndexReader(dialect: SupportedDialect): {
         return undefined;
       }
     },
-    close: async () => {
-      await opened?.disconnect().catch(() => undefined);
-    },
+    close: database.close,
   };
 }
 
@@ -771,6 +825,19 @@ export async function runMigrateCreate(
   if (options.recordSnapshot === true && (options.blank || options.plugin)) {
     exitWithError(logger, recordSnapshotNeedsAppMigration());
   }
+  // The transition writes the app's migration and snapshot alone, and only to the current names.
+  if (
+    options.fieldGroupNames !== undefined &&
+    (options.fieldGroupNames !== "current" ||
+      options.blank === true ||
+      options.plugin !== undefined ||
+      options.recordSnapshot === true)
+  ) {
+    exitWithError(
+      logger,
+      fieldGroupNamesOptionInvalid(options.fieldGroupNames)
+    );
+  }
 
   if (options.plugin) {
     // A plugin's module is never generated with a drop, so the consent has nothing to cover here.
@@ -807,7 +874,11 @@ export async function runMigrateCreate(
   const name =
     options.name ??
     nameArg ??
-    (options.recordSnapshot === true ? "record_translated_fields" : undefined);
+    (options.recordSnapshot === true
+      ? "record_translated_fields"
+      : options.fieldGroupNames === "current"
+        ? "field_group_current_names"
+        : undefined);
   if (!options.blank && !name) {
     // `--accept-data-loss` takes an optional list, so a name written after it is read as the list.
     if (typeof options.acceptDataLoss === "string") {
@@ -952,6 +1023,7 @@ export async function runMigrateCreate(
         migrationsDir,
         dialect,
         logger,
+        firstFieldGroupNaming: () => databaseFieldGroupNaming(dialect),
       });
     } catch (error) {
       // A field declaration Nextly cannot use ends the run as `migrate:check`
@@ -993,7 +1065,13 @@ export async function runMigrateCreate(
     // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
     if (nothing && options.recordSnapshot === true)
       nothingToRecord(logger, options.dryRun);
-    if (nothing && !declaresPermissions) {
+    // The move to the current field-group names is written even for a project that has nothing
+    // left: its history still records names, which the first entity it gains is written under.
+    if (
+      nothing &&
+      !declaresPermissions &&
+      options.fieldGroupNames !== "current"
+    ) {
       logger.warn(
         "No collections, singles, components, or extension tables defined in config."
       );
@@ -1036,6 +1114,9 @@ export async function runMigrateCreate(
         components,
         // The starting point the inputs were checked against, read once.
         previous: inputs.latest,
+        // The names the inputs resolved field groups under: the history's, or the current names
+        // for a new project, whose history starts on them.
+        fieldGroupNaming: inputs.fieldGroupNaming,
         metadataUpserts,
         previousMetadataUpserts,
         permissions,
@@ -1044,6 +1125,7 @@ export async function runMigrateCreate(
         // Fields moved into or out of a group are looked for, and asked about as renames are.
         codeMoves: { acceptAll: options.acceptMoves === true },
         recordSnapshot: options.recordSnapshot === true,
+        fieldGroupTransition: options.fieldGroupNames === "current",
         liveCompanionColumns: live.read,
         liveUniqueIndexes: uniques.read,
         dryRun: options.dryRun === true,

@@ -9,10 +9,8 @@
  * at a time of the operator's choosing, rather than a flag day. It runs only when an operator asks
  * for it here: no start, `nextly migrate` or deploy step reaches it.
  *
- * A rollback (`--down`) serves a running site the same way, with one difference. On PostgreSQL, a
- * server whose storage is already on the current names pays nothing to watch for a move, so a save
- * of its that meets a rollback may fail once with an internal error instead of the refusal. It
- * loses nothing and writes nothing under a wrong name, and the same save succeeds when retried.
+ * A rollback (`--down`) serves a running site the same way: a save that meets it is refused with
+ * the same message to retry, on a server already on the current names too.
  *
  * Content a server saves while the run rewrites stored documents keeps the key it was saved under.
  * A save that began before the last rewrite and commits after it either makes the run refuse, naming
@@ -42,6 +40,8 @@
  *
  * @module cli/commands/migrate-field-groups
  */
+
+import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
@@ -121,11 +121,6 @@ export async function runMigrateFieldGroups(
     logger.warn(
       "While this runs, content saves to field groups may be refused with a message to retry them. Reads keep working."
     );
-    if (direction === "down") {
-      logger.warn(
-        "On PostgreSQL, a save on a server already on the current names may instead fail once with an internal error. Nothing is lost; save again."
-      );
-    }
   }
   logger.newline();
 
@@ -147,6 +142,20 @@ export async function runMigrateFieldGroups(
         ...getFieldGroupRegistryAliases(dialect),
       });
       drizzleAdapter.setTableResolver(schemaRegistry);
+
+      // A preview too: it names what a real run would do, and this one would refuse.
+      if (direction === "down") {
+        const { refuseRollbackUnderCurrentHistory } = await import(
+          "../../domains/schema/migrate/field-group-rollback"
+        );
+        await refuseRollbackUnderCurrentHistory({
+          adapter: drizzleAdapter,
+          migrationsDir: resolve(
+            options.cwd ?? process.cwd(),
+            configResult.config.db.migrationsDir
+          ),
+        });
+      }
 
       const { runFieldGroupMigration } = await import(
         "../../domains/field-groups/migration/run"

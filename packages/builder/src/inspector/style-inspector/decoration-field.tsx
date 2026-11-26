@@ -25,7 +25,6 @@ import {
 import {
   Input,
   Popover,
-  PopoverContent,
   PopoverTrigger,
   Select,
   SelectContent,
@@ -37,6 +36,7 @@ import { MoreHorizontal } from "lucide-react";
 import * as React from "react";
 
 // Enter commits without submitting the entry form the builder sits in.
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import { useStoredDraft } from "../../stored-draft";
 import { commitOnEnter } from "../commit-on-enter";
 import { useFieldDescription } from "../css-hint";
@@ -241,7 +241,7 @@ export function DecorationField({
             on the Style tab, which this layer is drawn outside of and so
             does not inherit from: a thickness, a colour code or a line of
             CSS is not words to correct. */}
-        <PopoverContent
+        <BuilderPopoverContent
           className="nx-builder-tokens nx-style-inspector__decoration-popover"
           spellCheck={false}
         >
@@ -259,7 +259,7 @@ export function DecorationField({
               onCommit={value => parts.writeCss(value, onCommit)}
             />
           </DecorationStyle>
-        </PopoverContent>
+        </BuilderPopoverContent>
       </Popover>
     </div>
   );

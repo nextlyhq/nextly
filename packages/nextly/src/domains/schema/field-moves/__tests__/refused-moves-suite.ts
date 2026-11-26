@@ -28,10 +28,10 @@ import { dispatchCollections } from "../../../../dispatcher/handlers/collection-
 import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import type { ServiceContainer } from "../../../../services";
-import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import type { CollectionService } from "../../../collections/services/collection-service";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 
+import { MIGRATION_TARGET } from "../../../field-groups/migration/target";
 import { databaseState } from "./refused-moves-state";
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
@@ -41,7 +41,7 @@ const POSTS = "rfx_posts";
 const HOME = "rfx_home";
 const FRAME = "rfx_frame";
 /** Every table this suite owns, and each language table beside one, starts with one of these. */
-const TABLE_PREFIXES = ["dc_rfx_", "single_rfx_", "comp_rfx_"];
+const TABLE_PREFIXES = ["dc_rfx_", "single_rfx_", "fg_rfx_"];
 
 type Field = Record<string, unknown>;
 type Move = { from: string[]; to: string[] };
@@ -273,7 +273,7 @@ export function describeRefusedMoves(): void {
           registries: [
             { table: "dynamic_collections", slugs: [PEOPLE, POSTS] },
             { table: "dynamic_singles", slugs: [HOME] },
-            { table: STORAGE_FORMAT.registryTable, slugs: [FRAME] },
+            { table: MIGRATION_TARGET.registryTable, slugs: [FRAME] },
           ],
           migrations: join(basePath, "migrations"),
           definitionFile: join(basePath, "ui-schema.json"),
@@ -582,7 +582,7 @@ export function describeRefusedMoves(): void {
         },
         {
           road: "a field group",
-          registry: { table: STORAGE_FORMAT.registryTable, slug: FRAME },
+          registry: { table: MIGRATION_TARGET.registryTable, slug: FRAME },
           create: async t => {
             await createEntities(t, [HEADLINE]);
             await dispatchComponents(

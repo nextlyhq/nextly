@@ -16,7 +16,8 @@
 //     Application-layer Zod validation enforces required-on-new-rows;
 //     the DB constraint can be tightened later via an explicit migration.
 //   - Idempotent: skips columns that already exist.
-//   - Per-column failures log a warning and continue (best-effort).
+//   - A refused column is warned of, the rest are still tried, then one
+//     error names every refused column.
 //
 // The raw `ALTER TABLE` SQL is technically a `feedback_drizzle_only`
 // violation. The violation already exists in the codebase; we are
@@ -25,6 +26,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types/index";
+import { NextlyError } from "../../../errors/nextly-error";
 import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections/legacy-types";
 import type { Logger } from "../../../shared/types/index";
@@ -320,9 +322,48 @@ async function getExistingColumns(
   return columns;
 }
 
+/** A column the database refused to add, and the reason it gave. */
+export interface RefusedColumn {
+  column: string;
+  reason: string;
+}
+
+/**
+ * Some of a table's missing columns could not be added. Every other one was tried, and those added
+ * stay. Thrown so the caller does not record the entity as synced: its table lacks a column its
+ * fields need, and nothing would ask again once its fields were recorded. The table, the columns
+ * and the database's reasons are internals, so they are in `logMessage` and `logContext`, not in
+ * the public message.
+ */
+export class ColumnsNotAddedError extends NextlyError {
+  readonly tableName: string;
+  readonly refused: readonly RefusedColumn[];
+  readonly added: readonly string[];
+
+  constructor(
+    tableName: string,
+    refused: readonly RefusedColumn[],
+    added: readonly string[]
+  ) {
+    super({
+      code: "DATABASE_ERROR",
+      publicMessage: "A column could not be added to a table.",
+      logMessage: `The database refused ${refused.length === 1 ? "a column" : "columns"} of ${tableName}: ${refused
+        .map(({ column, reason }) => `${column} (${reason})`)
+        .join("; ")}`,
+      logContext: { tableName, refused, added },
+    });
+    this.name = "ColumnsNotAddedError";
+    this.tableName = tableName;
+    this.refused = refused;
+    this.added = added;
+  }
+}
+
 // Issue ALTER TABLE ADD COLUMN for every entry in `expectedColumns` that
 // isn't already present on the table. Returns the names of columns that
-// were successfully added.
+// were added; throws `ColumnsNotAddedError` after trying them all when the
+// database refused any.
 async function addMissingColumnsFromMap(
   adapter: DrizzleAdapter,
   logger: Logger,
@@ -332,6 +373,7 @@ async function addMissingColumnsFromMap(
   const dialect = adapter.getCapabilities().dialect as string;
   const existingColumns = await getExistingColumns(adapter, tableName);
   const addedColumns: string[] = [];
+  const refused: RefusedColumn[] = [];
   const quotedTable =
     dialect === "mysql" ? `\`${tableName}\`` : `"${tableName}"`;
 
@@ -354,15 +396,18 @@ async function addMissingColumnsFromMap(
         await adapter.executeQuery(sql);
         addedColumns.push(colName);
       } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
         logger.warn(
-          `Failed to add column ${colName} to ${tableName}: ${
-            error instanceof Error ? error.message : String(error)
-          }`
+          `Failed to add column ${colName} to ${tableName}: ${reason}`
         );
+        refused.push({ column: colName, reason });
       }
     }
   }
 
+  if (refused.length > 0) {
+    throw new ColumnsNotAddedError(tableName, refused, addedColumns);
+  }
   return addedColumns;
 }
 
@@ -370,7 +415,9 @@ async function addMissingColumnsFromMap(
  * Add the columns that are missing from `tableName` so it matches the
  * given `fields` config. Used by the boot-time singles + components
  * auto-sync paths. NOT NULL is silently stripped on every added column;
- * pre-existing rows would otherwise fail the constraint check.
+ * pre-existing rows would otherwise fail the constraint check. A column the
+ * database refuses is warned of, the rest are still tried, and then
+ * `ColumnsNotAddedError` is thrown naming each refused one.
  *
  * @param adapter   The Drizzle adapter for the live DB.
  * @param logger    Logger for per-column failure warnings.
@@ -380,6 +427,7 @@ async function addMissingColumnsFromMap(
  *                  `created_at` / `updated_at` are present in the
  *                  expected-column set so the introspection skip works.
  * @returns         Names of columns that were added in this call.
+ * @throws          `ColumnsNotAddedError` when the database refused any.
  */
 export async function addMissingColumnsForFields(
   adapter: DrizzleAdapter,

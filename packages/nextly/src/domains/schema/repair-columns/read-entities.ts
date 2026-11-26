@@ -27,6 +27,7 @@ import type { Logger } from "../../../shared/types";
 import { CollectionRegistryService } from "../../collections/services/collection-registry-service";
 import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
+import { recordedFieldGroupTable } from "../../field-groups/services/field-group-storage-names";
 import { LOCALIZATION_MIGRATION_MARKER } from "../../i18n/migration/write-migration-file";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { UserExtSchemaService } from "../../users/services/user-ext-schema-service";
@@ -38,8 +39,13 @@ import {
   type SchemaEventRow,
 } from "../events/schema-events-repository";
 import { blankMigrationNames } from "../migrate/history-line";
+import { GENERATED_FILE_LINE } from "../migrate/history-line-names";
 import { compareMigrationRecency } from "../migrate/migration-order";
 import { readOldBuilderLedger } from "../migrate/old-builder-ledger";
+import {
+  readRegistryRecord,
+  type RegistryBaseline,
+} from "../migrate/registry-record";
 import {
   DEFAULT_TABLE_NAME_RESOLVERS,
   resolveDeclaredSchema,
@@ -70,12 +76,14 @@ import {
 import {
   appliedMigrationFileMissingError,
   appliedSnapshotInvalidError,
+  appliedSnapshotsLostError,
   appliedSnapshotsMissingError,
   rowsDivergedError,
   rowsWithoutTableError,
   snapshotFileUnreadableError,
   snapshotFolderUnreadableError,
   snapshotReadFailedOnceError,
+  snapshotWithoutEntitiesError,
   type StoppingRow,
 } from "./stop-errors";
 import type { TableWaits } from "./table-wait";
@@ -427,10 +435,13 @@ function snapshotEntityOf(
   const settings: Record<string, unknown> = entry.settings;
   const dbName =
     typeof settings.dbName === "string" ? settings.dbName : undefined;
-  const table = tableFor[kind]({
-    slug,
-    ...(dbName !== undefined ? { dbName } : {}),
-  });
+  const table =
+    kind === "fieldGroup"
+      ? recordedFieldGroupTable(slug, name => tables.has(name))
+      : tableFor[kind]({
+          slug,
+          ...(dbName !== undefined ? { dbName } : {}),
+        });
   const columnTypes = tables.get(table);
   return {
     kind,
@@ -617,15 +628,18 @@ async function assertAppliedSnapshotsRead(
  * The entity record of the newest applied snapshot that has one, or undefined where none does.
  *
  * Its file is named beside it. A snapshot whose migration has not been applied is skipped, and so
- * is one written before
- * snapshots recorded entities: its silence says nothing about what was applied. One that has an
- * entity record this version cannot read stops the run rather than be passed over for an older one.
+ * is one written before snapshots recorded entities: its silence says nothing about what was
+ * applied. One that has an entity record this version cannot read stops the run rather than be
+ * passed over for an older one, and so does a silent one newer than the record found: its
+ * migration changed the tables after that record, which would convert them back.
  */
 function newestAppliedRecord(
   loaded: readonly LoadedSnapshot[]
 ):
   | { file: string; record: EntitySettingsRecord; snapshot: object }
   | undefined {
+  // The newest applied snapshot that records nothing, passed over on the way to a record.
+  let silentNewer: string | undefined;
   // Ordered by recency, so the newest is the last one that qualifies.
   for (const { file, snapshot, applied } of [...loaded].reverse()) {
     if (!applied) continue;
@@ -637,9 +651,18 @@ function newestAppliedRecord(
     ) {
       throw appliedSnapshotInvalidError(file, "It is not a snapshot.");
     }
-    if (!Object.hasOwn(parsed, "entities")) continue;
+    if (!Object.hasOwn(parsed, "entities")) {
+      silentNewer ??= file;
+      continue;
+    }
     const record = (parsed as { entities?: unknown }).entities;
     if (isEntitySettingsRecord(record)) {
+      if (silentNewer !== undefined) {
+        throw snapshotWithoutEntitiesError(
+          migrationOf(silentNewer),
+          migrationOf(file)
+        );
+      }
       return { file, record, snapshot: parsed };
     }
     throw appliedSnapshotInvalidError(
@@ -658,21 +681,75 @@ interface SnapshotArgs {
   /** What the configuration and the manifest declare, of the one read of them. */
   declared: () => Promise<DeclaredNames>;
   checkHistory?: (declared: DeclaredNames) => Promise<void>;
+  /** Told, once per read, where registry rows stand in for applied snapshots nothing records. */
+  notice?: (line: string) => void;
 }
 
 /**
- * The localization migrations of the folder, by name, as the file this dialect runs says: another
- * dialect's variant says nothing of it.
+ * What the folder's migration files say of themselves, by name, as the file this dialect runs
+ * says (another dialect's variant says nothing of it): which are localization migrations, and
+ * which `migrate:create` wrote (`GENERATED_FILE_LINE`), as opposed to SQL written by hand.
  */
-async function localizationMigrations(
+async function folderMarks(
   { migrationsDir, dialect }: Pick<SnapshotArgs, "migrationsDir" | "dialect">,
   declared: DeclaredNames
-): Promise<ReadonlySet<string>> {
+): Promise<{
+  localization: ReadonlySet<string>;
+  generated: ReadonlySet<string>;
+}> {
   const files = await readableMigrationFiles(migrationsDir, dialect, declared);
-  return new Set(
-    files
-      .filter(file => file.content.includes(LOCALIZATION_MIGRATION_MARKER))
-      .map(file => file.baseName)
+  const named = (holds: (content: string) => boolean) =>
+    new Set(files.filter(f => holds(f.content)).map(f => f.baseName));
+  return {
+    localization: named(content =>
+      content.includes(LOCALIZATION_MIGRATION_MARKER)
+    ),
+    generated: named(content =>
+      content.split(/\r?\n/).some(line => line.startsWith(GENERATED_FILE_LINE))
+    ),
+  };
+}
+
+/** The ledger as one read of it holds it, beside the migrations that have a snapshot. */
+interface LedgerRead {
+  events: SchemaEventsRepository;
+  rows: readonly SchemaEventRow[];
+  withSnapshot: ReadonlySet<string>;
+}
+
+/**
+ * Those of `candidates`, applied migrations with no snapshot, that should have one: neither a blank
+ * migration nor a localization migration, which have none by design, as `migrate:check` judges
+ * them, nor an earlier Schema Builder's file, which is no app migration for any check. With
+ * `generatedOnly`, only those `migrate:create` wrote: a file written by hand is owed none either.
+ */
+async function migrationsOwingSnapshot(
+  args: SnapshotArgs,
+  read: LedgerRead,
+  candidates: readonly string[],
+  generatedOnly = false
+): Promise<string[]> {
+  if (candidates.length === 0) return [];
+  const { migrationsDir, dialect } = args;
+  const declared = await args.declared();
+  const [blank, oldBuilder] = await Promise.all([
+    blankMigrationNames(migrationsDir, read.withSnapshot),
+    readOldBuilderLedger(
+      { migrationsDir, dialect, declared },
+      read.events,
+      read.rows
+    ),
+  ]);
+  const marks = await folderMarks(args, {
+    ...declared,
+    ...(oldBuilder.marked !== undefined ? { marks: oldBuilder.marked } : {}),
+  });
+  return candidates.filter(
+    name =>
+      !blank.has(name) &&
+      !marks.localization.has(name) &&
+      !oldBuilder.ignoredRows.has(ledgerFilename(name)) &&
+      (!generatedOnly || marks.generated.has(name))
   );
 }
 
@@ -684,13 +761,7 @@ async function localizationMigrations(
  */
 async function assertNewestHasSnapshot(
   args: SnapshotArgs,
-  read: {
-    events: SchemaEventsRepository;
-    rows: readonly SchemaEventRow[];
-    newest: string;
-    withSnapshot: ReadonlySet<string>;
-    applied: ReadonlySet<string>;
-  }
+  read: LedgerRead & { newest: string; applied: ReadonlySet<string> }
 ): Promise<void> {
   const { newest, withSnapshot } = read;
   const without = [...read.applied]
@@ -699,28 +770,58 @@ async function assertNewestHasSnapshot(
         compareMigrationRecency(name, newest) > 0 && !withSnapshot.has(name)
     )
     .sort(compareMigrationRecency);
-  if (without.length === 0) return;
-  const { migrationsDir, dialect } = args;
-  const declared = await args.declared();
-  const [blank, oldBuilder] = await Promise.all([
-    blankMigrationNames(migrationsDir, withSnapshot),
-    readOldBuilderLedger(
-      { migrationsDir, dialect, declared },
-      read.events,
-      read.rows
-    ),
-  ]);
-  const localization = await localizationMigrations(args, {
-    ...declared,
-    ...(oldBuilder.marked !== undefined ? { marks: oldBuilder.marked } : {}),
-  });
-  const missing = without.filter(
-    name =>
-      !blank.has(name) &&
-      !localization.has(name) &&
-      !oldBuilder.ignoredRows.has(ledgerFilename(name))
-  );
+  const missing = await migrationsOwingSnapshot(args, read, without);
   if (missing.length > 0) throw appliedSnapshotsMissingError(missing, newest);
+}
+
+/** What a run says where registry rows stand in and nothing can tell a rewritten one. */
+export const REGISTRY_STANDS_IN_NOTICE =
+  "⚠ No applied migration's snapshot records the entities, and the database has no registry record yet, so what each entity last had applied is read from its registry row, which a start may have rewritten. Run `nextly migrate` first, which records the registry.";
+
+/**
+ * Where no applied snapshot records entities, what the database's registry record says in their
+ * place (`registry-record.ts`), written by the first `nextly migrate` of a release that keeps one.
+ *
+ * Its point is the newest applied migration then. A record that keeps no baseline was taken where
+ * an applied snapshot recorded the entities, at or before the point (a blank migration may be the
+ * point itself): with none read now, it was lost, and the run stops rather than judge by a
+ * registry row a start may have rewritten since. A record that keeps a baseline was taken where
+ * none did, and every migration `migrate:create` wrote after its point has one: an applied one
+ * with none was lost. Otherwise the baseline, the rows as they stood at the point, is what the
+ * rows are checked against. With no record at all, nothing can tell a rewritten row: the rows
+ * stand in, and the run says so.
+ */
+async function silentHistory(
+  args: SnapshotArgs,
+  read: LedgerRead & { applied: ReadonlySet<string> }
+): Promise<{ baseline?: RegistryBaseline }> {
+  if (read.applied.size === 0) return {};
+  const { adapter, dialect } = args;
+  const record = (await adapter.tableExists("nextly_meta"))
+    ? await readRegistryRecord(adapter.getDrizzle(), dialect)
+    : undefined;
+  if (record === undefined) {
+    args.notice?.(REGISTRY_STANDS_IN_NOTICE);
+    return {};
+  }
+  const { point, baseline } = record;
+  const without = [...read.applied]
+    .filter(name => !read.withSnapshot.has(name))
+    .sort(compareMigrationRecency);
+  if (baseline === undefined) {
+    // A history rolled back past the record's point holds no migration it speaks of: the rows are
+    // what `migrate:down` wrote from the snapshots it rolled back to.
+    if (point === null || !read.applied.has(point)) return {};
+    const lost = await migrationsOwingSnapshot(args, read, without, true);
+    // Named by what `migrate:create` wrote where it can be, else by the record's own point.
+    throw appliedSnapshotsLostError(lost.length > 0 ? lost : [point]);
+  }
+  const owed = without.filter(
+    name => point === null || compareMigrationRecency(name, point) > 0
+  );
+  const lost = await migrationsOwingSnapshot(args, read, owed, true);
+  if (lost.length > 0) throw appliedSnapshotsLostError(lost);
+  return { baseline };
 }
 
 /**
@@ -731,10 +832,16 @@ async function assertNewestHasSnapshot(
  * record had been removed by then, and an older snapshot's record of it is out of date, so it has
  * no snapshot record at all.
  */
-async function snapshotEntities(args: SnapshotArgs): Promise<SnapshotEntity[]> {
+async function snapshotEntities(args: SnapshotArgs): Promise<{
+  snapshots: SnapshotEntity[];
+  /** The registry rows as the registry record keeps them, where no snapshot speaks. */
+  baseline?: RegistryBaseline;
+}> {
   const { adapter, dialect, migrationsDir } = args;
   // With no ledger nothing has been applied, so no snapshot speaks for the database.
-  if (!(await adapter.tableExists("nextly_schema_events"))) return [];
+  if (!(await adapter.tableExists("nextly_schema_events"))) {
+    return { snapshots: [] };
+  }
   const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
   // The ledger read once for every snapshot. A migration is applied where its latest outcome says
   // so, which is what `isFileApplied` asks of each file in turn: an attempt recorded after it that
@@ -764,15 +871,25 @@ async function snapshotEntities(args: SnapshotArgs): Promise<SnapshotEntity[]> {
   // Asked here, so a snapshot that is there is judged as what it is first, and every migration
   // judged below is one the folder holds or whose removal is recorded.
   await args.checkHistory?.(await args.declared());
-  if (newest === undefined) return [];
-  await assertNewestHasSnapshot(args, {
+  const ledger: LedgerRead & { applied: ReadonlySet<string> } = {
     events,
     rows,
-    newest: migrationOf(newest.file),
     withSnapshot: new Set(listed.map(migrationOf)),
     applied: migrations,
+  };
+  if (newest === undefined) {
+    return { snapshots: [], ...(await silentHistory(args, ledger)) };
+  }
+  await assertNewestHasSnapshot(args, {
+    ...ledger,
+    newest: migrationOf(newest.file),
   });
-  return recordedEntities(newest.record, recordedColumnTypes(newest.snapshot));
+  return {
+    snapshots: recordedEntities(
+      newest.record,
+      recordedColumnTypes(newest.snapshot)
+    ),
+  };
 }
 
 /**
@@ -823,6 +940,22 @@ async function userFieldSources(
   return { stored, configured: [...codeFields, ...adminFields] };
 }
 
+/**
+ * A configured field group at the table the registry stores it in, which is `fg_<slug>` on a site
+ * on the current names: no configuration names a field group's table, so none of its migrations
+ * moves it. Every other entity as configured.
+ */
+function atStoredTable(
+  entity: ConfiguredEntity,
+  registry: readonly RegistryEntity[]
+): ConfiguredEntity {
+  if (entity.kind !== "fieldGroup") return entity;
+  const table = registry.find(
+    row => row.kind === "fieldGroup" && row.slug === entity.slug
+  )?.tableName;
+  return table === undefined ? entity : { ...entity, table };
+}
+
 /** Every entity the comparison covers, with the definitions each is judged against. */
 export async function readRepairEntities(args: {
   adapter: DrizzleAdapter;
@@ -850,6 +983,12 @@ export async function readRepairEntities(args: {
    * file.
    */
   checkHistory?: (declared: DeclaredNames) => Promise<void>;
+  /**
+   * Told where registry rows stand in for what was applied and nothing can tell one a start
+   * rewrote: migrations are applied, none of their snapshots records entities, and the database
+   * has no registry record yet. A line for standard error.
+   */
+  notice?: (line: string) => void;
 }): Promise<RepairEntity[]> {
   const { adapter, dialect, logger } = args;
   const codeFields = args.config.users?.fields ?? [];
@@ -882,12 +1021,13 @@ export async function readRepairEntities(args: {
       ...(args.overrides !== undefined ? { overrides: args.overrides } : {}),
     });
   }
-  const [registry, snapshots, userFields] = read.value;
+  const [registry, { snapshots, baseline }, userFields] = read.value;
   return resolveRepairEntities({
-    configured,
+    configured: configured.map(entity => atStoredTable(entity, registry)),
     hasManifest,
     registry,
     snapshots,
+    ...(baseline !== undefined ? { baseline } : {}),
     userFields,
     ...(args.overrides !== undefined ? { overrides: args.overrides } : {}),
   });

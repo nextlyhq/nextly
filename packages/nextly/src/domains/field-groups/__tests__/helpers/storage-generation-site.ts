@@ -88,7 +88,7 @@ export interface SiteOptions {
  * which names the legacy registry. The first start then finds a database already set up and keeps
  * the storage it holds, as it does for every site that predates the current names.
  */
-async function seedLegacyCoreTables(
+export async function seedLegacyCoreTables(
   adapter: DrizzleAdapter,
   dialect: TestDialect
 ): Promise<void> {
@@ -164,7 +164,7 @@ export interface StorageGenerationSite {
   close(): Promise<void>;
 }
 
-async function openDatabase(
+export async function openDatabase(
   dialect: TestDialect,
   sqliteFile = false,
   poolMax?: number

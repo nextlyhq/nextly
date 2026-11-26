@@ -222,7 +222,7 @@ for (const dialect of getConfiguredTestDialects()) {
       // The deepest level's password is stored hashed once: not absent, not as it was sent, and the
       // password sent verifies against it, which a hash of a hash would not.
       const [deepest] = await t.adapter.select<{ pw?: unknown }>(
-        `comp_${slugAt(DEPTH)}`,
+        `fg_${slugAt(DEPTH)}`,
         {}
       );
       expect(typeof deepest?.pw).toBe("string");

@@ -23,7 +23,7 @@
  */
 
 import { DEFAULT_MAX_QUERIES } from "@nextlyhq/blocks-react";
-import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
+import { Popover, PopoverTrigger } from "@nextlyhq/ui";
 import {
   CircleAlert,
   CircleCheck,
@@ -42,6 +42,7 @@ import * as React from "react";
 import type { CanvasRegion } from "../canvas/canvas-regions";
 import type { EditorState } from "../editor-state";
 import { blockNameOf, type ComponentTitleOf } from "../panels/layers/layers";
+import { BuilderPopoverContent } from "../popups/builder-popover";
 import { BUILDER_TOKENS_CLASS } from "../shell-state";
 
 import {
@@ -163,7 +164,7 @@ export function ReadBudgetMeter({
           <MeterWords report={report} standing={standing} />
         </button>
       </PopoverTrigger>
-      <PopoverContent
+      <BuilderPopoverContent
         align={place === "bar" ? "start" : "end"}
         sideOffset={6}
         // Drawn in a portal, outside the shell, so it carries the editor's
@@ -179,7 +180,7 @@ export function ReadBudgetMeter({
           regions={regions ?? NO_REGIONS}
           onPicked={() => setOpen(false)}
         />
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

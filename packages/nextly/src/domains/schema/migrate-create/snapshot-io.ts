@@ -23,6 +23,13 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
+import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
+import {
+  fieldGroupTableNameFor,
+  type FieldGroupNaming,
+} from "../../field-groups/services/field-group-storage-names";
 import { normalizeContributions } from "../pipeline/diff/contributions";
 import type {
   ContributedElements,
@@ -39,9 +46,26 @@ import {
 } from "./entity-settings";
 import { prepareWhole, type PreparedFile } from "./writer-hold";
 
+/**
+ * The envelope version of a snapshot whose field groups are on the current names
+ * (`fieldGroupStorage: "current"`). Higher than a legacy snapshot's 1 on purpose: a CLI that
+ * predates the record refuses any version it does not know ("upgrade your CLI"), so it stops
+ * instead of reading the file as legacy and planning to drop every `fg_` table and create its
+ * `comp_` twin. A legacy snapshot stays version 1 and is written byte-identically.
+ */
+const CURRENT_NAMES_SNAPSHOT_VERSION = 2;
+
 export interface SnapshotFile {
-  version: 1;
+  /** 1 for a history on the legacy field-group names, 2 for one on the current names. */
+  version: 1 | typeof CURRENT_NAMES_SNAPSHOT_VERSION;
   migrationHash: string;
+  /**
+   * The names this point of the history keeps field groups under: `"current"` once the project
+   * moved to `dynamic_field_groups` / `fg_<slug>` / `_field_group_type`, and absent on the legacy
+   * names. Absent on every file written before the record existed, which were all legacy, so an
+   * existing history reads exactly as it did. Present exactly when `version` is 2.
+   */
+  fieldGroupStorage?: "current";
   snapshot: NextlySchemaSnapshot;
   /**
    * Elements the app contributed to tables another owner declares, by table.
@@ -108,6 +132,169 @@ export interface SnapshotFile {
    * history that was one line when it was written.
    */
   merges?: string[];
+}
+
+/**
+ * The field-group names a snapshot's point of the history is on: `"current"` when it says so,
+ * otherwise read from its field-group tables (those with a field group's system columns). The one
+ * reading of the record, for every command that follows the history's naming.
+ *
+ * Every snapshot written before the record existed is unmarked, and nearly all are legacy. But an
+ * earlier release could write one after the site's field groups moved, with the current names in
+ * it: its field-group tables then hold the current type column (`_field_group_type`), which only
+ * a moved database has, so it is read as current. Read as legacy, the next migration would plan
+ * to drop each `fg_` table and create a `comp_` copy. One that also holds a slug-derived `comp_`
+ * table on the legacy column is on neither naming and is refused. Another table's own column of
+ * that name says nothing about the names.
+ */
+export function snapshotFieldGroupNaming(
+  file: Pick<SnapshotFile, "fieldGroupStorage" | "snapshot" | "migration"> &
+    Partial<Pick<SnapshotFile, "entities">>
+): FieldGroupNaming {
+  if (file.fieldGroupStorage === "current") return "current";
+  const groupTables = file.snapshot.tables.filter(table =>
+    FIELD_GROUP_SYSTEM_COLUMNS.every(column => holdsColumn(table, column))
+  );
+  const slugNamedCurrent = currentNamesOfRecordedGroups(file);
+  const onCurrent = groupTables
+    .filter(
+      table =>
+        holdsColumn(table, MIGRATION_TARGET.columnType) ||
+        slugNamedCurrent.has(table.name)
+    )
+    .map(table => table.name);
+  if (onCurrent.length === 0) return "legacy";
+  const onLegacy = groupTables
+    .filter(
+      table =>
+        table.name.startsWith(STORAGE_FORMAT.tablePrefix) &&
+        holdsColumn(table, STORAGE_FORMAT.columns.type) &&
+        !holdsColumn(table, MIGRATION_TARGET.columnType)
+    )
+    .map(table => table.name);
+  if (onLegacy.length > 0) {
+    throw fieldGroupHistoryNamesUnrecordedError(
+      file.migration,
+      onCurrent,
+      onLegacy
+    );
+  }
+  return "current";
+}
+
+/** The columns every field group's table carries, whatever its names: what tells one apart. */
+const FIELD_GROUP_SYSTEM_COLUMNS = [
+  STORAGE_FORMAT.columns.parentId,
+  STORAGE_FORMAT.columns.parentTable,
+  STORAGE_FORMAT.columns.parentField,
+  STORAGE_FORMAT.columns.order,
+];
+
+/**
+ * The current name (`fg_<slug>`) of each field group the snapshot's own settings record holds under
+ * its slug's name, with no table name its author chose. Such a table can only be on the current
+ * names, whatever its type column: storage that moved before the group existed, and an earlier
+ * release that then made it, leave `fg_<slug>` on the legacy column.
+ */
+function currentNamesOfRecordedGroups(
+  file: Partial<Pick<SnapshotFile, "entities">>
+): ReadonlySet<string> {
+  return new Set(
+    Object.entries(file.entities?.fieldGroups ?? {})
+      .filter(([, recorded]) => recorded.settings.dbName === undefined)
+      .map(([slug]) => fieldGroupTableNameFor("current", slug))
+  );
+}
+
+/** Whether `table` has a column named `column`. */
+function holdsColumn(
+  table: { columns: readonly { name: string }[] },
+  column: string
+): boolean {
+  return table.columns.some(held => held.name === column);
+}
+
+/**
+ * The refusal of an unmarked snapshot that holds field groups under both namings: tables on the
+ * current type column, which only a moved database has, beside slug-derived legacy tables. The way
+ * on is a new history from the database as it stands.
+ */
+export function fieldGroupHistoryNamesUnrecordedError(
+  migration: string | undefined,
+  current: readonly string[],
+  legacy: readonly string[]
+): NextlyError {
+  const which =
+    migration === undefined
+      ? "A migration snapshot"
+      : `The snapshot of migration ${migration}`;
+  return new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage:
+      `${which} holds field groups under both the current names (${current.join(", ")} with ${MIGRATION_TARGET.columnType}) and the legacy ones (${legacy.join(", ")} with ${STORAGE_FORMAT.columns.type}), and does not record which names the history is on. ` +
+      "An earlier release wrote it after this site's field groups moved, and no reading of it plans against the tables the database holds. " +
+      "Nothing was written or applied. Re-baseline the history with `nextly migrate:baseline`: it lists how to clear the existing migrations, then records the tables as the database holds them.",
+    logContext: {
+      reason: "field-group-history-names-unrecorded",
+      ...(migration === undefined ? {} : { migration }),
+      current: [...current],
+      legacy: [...legacy],
+    },
+  });
+}
+
+/**
+ * The field-group names the history in `metaDir` is on: its newest snapshot's, and legacy where
+ * the folder holds none, or its newest is a template's older-format file, which records no tables
+ * and predates the record. Any other file that is no snapshot is refused, as every reader refuses
+ * it.
+ */
+export async function historyFieldGroupNamingIn(
+  metaDir: string
+): Promise<FieldGroupNaming> {
+  const newest = await newestSnapshotName(metaDir);
+  if (newest === undefined) return "legacy";
+  return snapshotFileNaming(
+    await readFile(resolve(metaDir, newest), "utf-8"),
+    newest
+  );
+}
+
+/**
+ * The field-group names a snapshot file's text says its history is on: a template's older-format
+ * file's own word (`olderFormatNaming`), and any other's as its tables or its record say. A file
+ * that is no snapshot is refused.
+ */
+export function snapshotFileNaming(
+  content: string,
+  filename: string
+): FieldGroupNaming {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    // Not JSON: `parseSnapshotFile` below says so.
+  }
+  if (isOlderFormatSnapshot(parsed)) return olderFormatNaming(parsed, filename);
+  return snapshotFieldGroupNaming(parseSnapshotFile(content, filename));
+}
+
+/**
+ * The names a template's older-format file says its project starts on. It records no tables, so it
+ * says so outright, and a file from before it could is on the legacy names, as every project made
+ * from one is. A word it does not know is refused rather than taken for either.
+ */
+function olderFormatNaming(
+  parsed: unknown,
+  filename: string
+): FieldGroupNaming {
+  const said = (parsed as { fieldGroupStorage?: unknown }).fieldGroupStorage;
+  if (said === undefined) return "legacy";
+  if (said === "current") return "current";
+  throw new SnapshotFileError(
+    filename,
+    `expected fieldGroupStorage to be "current" when present, got ${JSON.stringify(said)}`
+  );
 }
 
 /**
@@ -357,7 +544,12 @@ export async function loadLatestSnapshot(
       return {
         filename: latest,
         data: {
-          version: 1,
+          ...(olderFormatNaming(parsed, latest) === "current"
+            ? {
+                version: CURRENT_NAMES_SNAPSHOT_VERSION,
+                fieldGroupStorage: "current" as const,
+              }
+            : { version: 1 as const }),
           // The file's own content, hashed: it has no migration hash to carry.
           migrationHash: createHash("sha256").update(content).digest("hex"),
           snapshot: templateStart(templateEntitiesOf(parsed, latest)),
@@ -408,12 +600,19 @@ export function parseSnapshotFile(
     throw new SnapshotFileError(filename, "expected a JSON object");
   }
   const obj = raw as Record<string, unknown>;
-  if (obj.version !== 1) {
+  if (obj.version !== 1 && obj.version !== CURRENT_NAMES_SNAPSHOT_VERSION) {
     throw new SnapshotFileError(
       filename,
-      `expected version: 1, got ${JSON.stringify(obj.version)}. ` +
+      `expected version: 1 or ${CURRENT_NAMES_SNAPSHOT_VERSION}, got ${JSON.stringify(obj.version)}. ` +
         "If this snapshot was created by a newer nextly version, upgrade your CLI."
     );
+  }
+  const namingProblem = fieldGroupStorageProblem(
+    obj.version,
+    obj.fieldGroupStorage
+  );
+  if (namingProblem !== undefined) {
+    throw new SnapshotFileError(filename, namingProblem);
   }
   if (
     typeof obj.migrationHash !== "string" ||
@@ -438,6 +637,30 @@ export function parseSnapshotFile(
   const problem = optionalPartProblem(obj);
   if (problem !== undefined) throw new SnapshotFileError(filename, problem);
   return obj as unknown as SnapshotFile;
+}
+
+/**
+ * What is wrong with a snapshot's field-group naming record. The record and the version go
+ * together — version 2 exactly when the file says `"current"` — so a file whose two disagree was
+ * edited by hand, and reading either one alone could plan against the wrong names.
+ */
+function fieldGroupStorageProblem(
+  version: unknown,
+  fieldGroupStorage: unknown
+): string | undefined {
+  if (fieldGroupStorage !== undefined && fieldGroupStorage !== "current") {
+    return `expected fieldGroupStorage to be "current" when present, got ${JSON.stringify(fieldGroupStorage)}`;
+  }
+  if (
+    version === CURRENT_NAMES_SNAPSHOT_VERSION &&
+    fieldGroupStorage === undefined
+  ) {
+    return `expected fieldGroupStorage: "current" in a version ${CURRENT_NAMES_SNAPSHOT_VERSION} snapshot`;
+  }
+  if (version === 1 && fieldGroupStorage !== undefined) {
+    return `expected version: ${CURRENT_NAMES_SNAPSHOT_VERSION} for a snapshot on the current field-group names, got version: 1`;
+  }
+  return undefined;
 }
 
 /** What is wrong with the envelope's optional parts, each checked only when present. */
@@ -530,13 +753,24 @@ export async function prepareSnapshot(
    * caller that does not know which snapshot it started from, whose file
    * then records none.
    */
-  line?: { parent: string | null; merges: readonly string[] }
+  line?: { parent: string | null; merges: readonly string[] },
+  /**
+   * The field-group names this point of the history is on. Legacy writes the file exactly as
+   * before the record existed (version 1, no record); current writes version 2 with
+   * `fieldGroupStorage: "current"`.
+   */
+  fieldGroupNaming: FieldGroupNaming = "legacy"
 ): Promise<PreparedFile> {
   await mkdir(metaDir, { recursive: true });
   const byName = (a: { name: string }, b: { name: string }) =>
     a.name.localeCompare(b.name);
   const file: SnapshotFile = {
-    version: 1,
+    ...(fieldGroupNaming === "current"
+      ? {
+          version: CURRENT_NAMES_SNAPSHOT_VERSION,
+          fieldGroupStorage: "current" as const,
+        }
+      : { version: 1 as const }),
     migrationHash: computeMigrationHash(sqlContent),
     ...(Object.keys(contributions).length > 0
       ? {

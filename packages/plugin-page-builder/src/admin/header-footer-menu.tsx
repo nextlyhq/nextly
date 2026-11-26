@@ -18,6 +18,7 @@
  *
  * @module admin/header-footer-menu
  */
+import { BuilderPopoverContent } from "@nextlyhq/builder/shell";
 import {
   Button,
   Command,
@@ -27,7 +28,6 @@ import {
   CommandList,
   CommandSeparator,
   Popover,
-  PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
 import { Check, ChevronDown } from "lucide-react";
@@ -321,7 +321,7 @@ export function PictureMenuPopover({
           />
         </Button>
       </PopoverTrigger>
-      <PopoverContent
+      <BuilderPopoverContent
         align="start"
         // As wide as the trigger, and never narrower than a name and its
         // note read comfortably.
@@ -338,7 +338,7 @@ export function PictureMenuPopover({
         }}
       >
         {children}
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

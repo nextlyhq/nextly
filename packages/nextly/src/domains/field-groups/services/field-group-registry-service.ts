@@ -225,6 +225,23 @@ function declaredComponentMetadata(
 }
 
 /**
+ * Whether `config` changes the columns `existing` describes: its fields by
+ * hash, or its localization. The code-first sync writes such a change through
+ * and leaves the row pending; any other rewrite keeps the row's status, as a
+ * collection's does.
+ */
+function codeFirstSchemaChanged(
+  config: CodeFirstComponentConfig,
+  existing: DynamicFieldGroupRecord,
+  schemaHash: string
+): boolean {
+  return (
+    !schemaHashesMatch(schemaHash, existing.schemaHash) ||
+    (config.localized === true) !== (existing.localized === true)
+  );
+}
+
+/**
  * Where a stored table pointer stands against the one a Builder record's own
  * row names: in agreement (or no row yet), or diverged, which no write
  * resolves.
@@ -1248,12 +1265,23 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       repairedTableName
     );
     if (step === "update") {
+      // Judged as a collection's row is: only a schema change (hash or localization) leaves the
+      // row pending. Help text or a repaired table pointer changes no column, so the row keeps
+      // the status it had; writing the field list alone would otherwise mark it pending.
+      const schemaChanged = codeFirstSchemaChanged(
+        config,
+        existing,
+        schemaHash
+      );
       await this.updateComponent(
         config.slug,
         {
           ...declaredComponentRow(config, schemaHash, repairedTableName),
           configPath: config.configPath,
           locked: true,
+          ...(schemaChanged
+            ? {}
+            : { migrationStatus: existing.migrationStatus }),
         },
         { source: config.source }
       );
@@ -1327,11 +1355,10 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   ): "update" | "metadata" | "unchanged" {
     if (
       repairedTableName !== undefined ||
-      !schemaHashesMatch(schemaHash, existing.schemaHash) ||
+      codeFirstSchemaChanged(config, existing, schemaHash) ||
       // Field settings the hash omits (help text, placeholder, hidden): the
       // stored field list carries them, so a change to one alone rewrites it.
-      fieldSettingsChanged(config.fields, existing.fields) ||
-      (config.localized === true) !== (existing.localized === true)
+      fieldSettingsChanged(config.fields, existing.fields)
     ) {
       return "update";
     }

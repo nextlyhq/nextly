@@ -140,6 +140,40 @@ applied with:
 
 The Schema Builder's delete in development removes the same rows, before its drops.
 
+Every document a deleted collection or Single held ends its history with one `deleted` event. Which
+entities a migration deletes is read from the snapshot `migrate:create` writes beside it: the entity
+is in the snapshot before the migration and not in its own, its table is gone from its own, and the
+file drops that table. A table the migration only changes or rebuilds is still in its snapshot, so
+its documents get no event, and neither do those of a collection whose `dbName` changes. Just before
+the statement that drops the table, `nextly migrate` notes the id of every document in it, and once
+the file is recorded applied it records one `deleted` event for each. A document deleted some other
+way meanwhile keeps the one event it already has. `nextly migrate:down` does the same for a DOWN that
+drops a collection or Single: each document gets its event as soon as the DOWN commits.
+
+If you edit the generated file, or run a dialect's own variant of it (`<name>.mysql.sql`), keep the drop a plain `DROP TABLE` of that table, with no rename to or from it. A file whose
+snapshot says an entity is deleted, but which does not plainly drop its table, is refused before any
+statement runs, naming the file and the entity. Line endings are not an edit.
+
+A file with no snapshot (a blank migration, for one) says nothing of what it deletes, so it runs as it
+is and its documents get no event. Where it plainly drops the table of a collection or Single,
+`nextly migrate` warns once. To record the events, remove the entity from your configuration and let
+`nextly migrate:create` write the migration.
+
+How sure that list is depends on the database:
+
+- On PostgreSQL, the file runs in a transaction, and the table is locked before the ids are read.
+  A save from another instance waits for the drop, then fails, so no document is missed.
+- SQLite has one writer at a time, which gives the same.
+- On MySQL each drop commits as it runs, so `nextly migrate` locks the tables a statement drops with
+  `LOCK TABLES` while it reads the ids and drops them. A save from another instance waits, then
+  fails. The account needs the `LOCK TABLES` privilege, granted to it rather than through a role.
+  Where it has none, or a `DROP TABLE IF EXISTS` names a table that is not there as well, the run
+  says so once for the file, and a document another instance saves in that moment gets no event. Stop the
+  other instances' writes to the entity before the deploy if that matters.
+- A file [run outside a transaction](#running-a-file-outside-a-transaction) has its drop, and the
+  reading of the ids, in one short transaction of their own on PostgreSQL and SQLite; on MySQL it is
+  locked the same way.
+
 The consent naming the entity's table covers these rows (`--accept-data-loss=dc_posts`), and
 `nextly migrate` lists each before asking. A run that stops part-way is finished by the next
 `nextly migrate`, even with nothing pending, without running any drop again or recording anything
@@ -1099,8 +1133,7 @@ label, description and admin display settings. A database that has run
 `nextly migrate:field-groups --apply --backup-confirmed` holds the Field Group registry as
 `dynamic_field_groups` instead, and the runtime reads whichever of the two the database has.
 Undoing that move with `nextly migrate:field-groups --down --apply --backup-confirmed` keeps the
-site up too, with one difference on PostgreSQL: a save on a server already using the current names
-may fail once with an internal error. Nothing is lost, and saving again works.
+site up the same way: a save that meets it is refused with a message to retry.
 Collections and Singles additionally carry the Versions, Revalidate and Webhooks switches; Field
 Groups have none of those, and the Field Group registry has no columns for them under either name.
 The runtime reads its Drizzle table from that row, so the row matters as much as the columns do.
