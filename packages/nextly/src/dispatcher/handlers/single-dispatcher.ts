@@ -153,6 +153,11 @@ import {
   refuseRefusedLeavingSettings,
   type BuilderCompanionReconcile,
 } from "../helpers/builder-schema-push";
+import {
+  confirmedDeletionsAnswer,
+  readConfirmedDeletions,
+  withCountedDrops,
+} from "../helpers/confirmed-deletions";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -1646,6 +1651,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
       if (!sentFields) throw new Error("fields is required in request body");
+      // The counts of removed fields' values the review showed and the person confirmed, compared
+      // by the save just before it deletes them; refused here where malformed.
+      const confirmedDeletions = readConfirmedDeletions(body);
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
@@ -1748,7 +1756,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             hasStatus: single.status === true,
           });
           // The Single's row given each new field's stated default (`dialogRowAnswers`).
-          const { fileAnswers, legacyBundle } = dialogRowAnswers({
+          const { fileAnswers, legacyBundle: answered } = dialogRowAnswers({
             single,
             fields: fields as unknown as FieldDefinition[],
             renameResolutions,
@@ -1757,6 +1765,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             dialect: adapter.dialect,
             translatedAfter: layout.isStored,
           });
+          // A removed field whose count the person confirmed is its drop confirmed, as on a
+          // collection's save, unless the field answers itself.
+          const legacyBundle = withCountedDrops(
+            tableName,
+            answered,
+            confirmedDeletions
+          );
           // A precondition, so before anything changes: turning translation off drops each
           // language's own publish state, which loses nothing only where it is the entry's.
           if (layout.languagesMustAgreeWithEntry) {
@@ -2053,6 +2068,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 ...(acknowledgedConversions === undefined
                   ? {}
                   : { acknowledgedConversions }),
+                ...confirmedDeletionsAnswer(confirmedDeletions),
               },
               // Its junction tables and relationship keys, which the writer does not derive itself.
               ...(builderSave === undefined
