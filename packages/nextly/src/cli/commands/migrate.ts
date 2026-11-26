@@ -39,6 +39,11 @@ import { container } from "../../di/container";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
+  answerLanguageRefusals,
+  recordedAnswerLanguage,
+  refuseAnswersInAnotherLanguage,
+} from "../../domains/i18n/migration/answer-language";
+import {
   isLocalizationIntentRefusal,
   parseLocalizationIntent,
   type LocalizationMigrationIntent,
@@ -49,6 +54,7 @@ import {
   filesWithinStep,
   stepContinuedNotice,
 } from "../../domains/i18n/migration/step-windows";
+import { siteDefaultLanguage } from "../../domains/i18n/migration/transition-recorder";
 import { databaseIdentity } from "../../domains/schema/builder-save/saved-database";
 import {
   recheckBeforeFiles,
@@ -127,6 +133,7 @@ import {
   leftoverTranslationsTables,
   type LeftoverTranslations,
 } from "../../domains/schema/migrate/dropped-entity-leftovers";
+import { readCoveredEntities } from "../../domains/schema/migrate/entity-coverage";
 import {
   retiredByRun,
   withEntityCoverage,
@@ -187,7 +194,13 @@ import {
 } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import {
   asServiceLogger,
+  deletionEventsOfRetiredDocuments,
+  finishOwedRetirements,
+  leftoverPermissionsOf,
+  keptDespiteItsDrop,
   reconcileMigrationMetadata,
+  settleRetiredDocumentEvents,
+  unheldWhileDropped,
 } from "../../domains/schema/migrate/reconcile-metadata";
 import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import {
@@ -214,6 +227,13 @@ import {
   refuseRequiredColumnsOverNulls,
 } from "../../domains/schema/migrate/required-column-guard";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
+import type { RetirementContext } from "../../domains/schema/migrate/retired-documents";
+import {
+  droppedRegisteredEntities,
+  fileRetirements,
+  type Retirements,
+  unsettledRetirement,
+} from "../../domains/schema/migrate/retired-entities";
 import {
   constructsAdded,
   refuseUnitTheServerCannotHold,
@@ -270,6 +290,7 @@ import {
   readLiveElements,
   readLiveIndexTables,
   readLiveTables,
+  tablesDroppedIn,
 } from "../../domains/schema/ownership/drop-guard";
 import {
   createOwnerRegistry,
@@ -477,6 +498,8 @@ interface ParsedMigration {
   downSql: string;
   /** SHA-256 checksum of file content */
   checksum: string;
+  /** The file's whole text, as read */
+  content: string;
   /** Original checksum from file header (if present) */
   originalChecksum?: string;
   /** Collection slugs (if present in file header) */
@@ -492,6 +515,8 @@ interface ParsedMigration {
    * both apply verbatim, which is what they have always done.
    */
   localization?: LocalizationMigrationIntent;
+  /** The language its header records for its answers (`recordedAnswerLanguage`), where it does. */
+  answersIn?: string;
   /** Timestamp extracted from filename */
   timestamp: string;
   /** Source of the migration (core bundled or app) */
@@ -884,6 +909,11 @@ export async function runMigrate(
         plugins: configResult.config.plugins ?? [],
         step: options.step,
         logger,
+        defaultLanguage: () =>
+          siteDefaultLanguage(
+            adapter as unknown as DrizzleAdapter,
+            configResult.config
+          ),
         serverConstructs,
         extensionSchema,
       });
@@ -1428,6 +1458,11 @@ export interface MigrateCoreDeps {
   knownJunctions?: ReadonlySet<string>;
   /** What the declared schema names, which old Builder files are judged against. */
   declared?: DeclaredNames;
+  /**
+   * The database's default language, which a file's answers are judged against
+   * (`refuseAnswersInAnotherLanguage`). Absent, the one Settings stores, or the implicit one.
+   */
+  defaultLanguage?: () => Promise<string>;
   withLock?: typeof withMigrateLock;
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
@@ -1621,6 +1656,8 @@ export async function previewMigrate(args: {
   plugins: Parameters<typeof pluginMigrationArgs>[0];
   step?: number;
   logger: CommandContext["logger"];
+  /** As `MigrateCoreDeps.defaultLanguage`. */
+  defaultLanguage?: () => Promise<string>;
   /** As `MigrateCoreDeps.readEventTriggersFn`. */
   readEventTriggers?: () => Promise<readonly string[]>;
   /** Connected server capabilities, judged identically to execution. */
@@ -1760,6 +1797,23 @@ export async function previewMigrate(args: {
     db,
     dialect
   )) {
+    logger.info(`  ✖ a real run would refuse ${file}: ${message}`);
+  }
+  // The files a real run refuses for the language their answers are decided in.
+  const { refusals: languageRefusals } = await answerLanguageRefusals(
+    pendingFiles,
+    {
+      units: [
+        ...moduleRuns,
+        ...pendingFiles.map(file => fileUnit(file, dialect)),
+      ],
+      adapter: adapter as unknown as DrizzleAdapter,
+      db,
+      dialect,
+    },
+    () => defaultLanguageOf({ adapter, defaultLanguage: args.defaultLanguage })
+  );
+  for (const { file, message } of languageRefusals) {
     logger.info(`  ✖ a real run would refuse ${file}: ${message}`);
   }
   // The translations tables a real run checks before its first file, judged the same way.
@@ -2730,6 +2784,121 @@ function assertPluginTablesAreMigratable(
 }
 
 /**
+ * `deps.refuseUnwrittenChanges`, which refuses a configuration holding a change no migration
+ * records. Where it refuses, a retirement a stopped run left is finished first, under the lock, and
+ * then the refusal ends the run: a configuration declaring a retired entity again must not keep the
+ * run from removing what the retired one left, or the entity declared again would find it as its
+ * own. Finishing is Phase 3 as every run takes it, from the migrations recorded applied, and only
+ * where something is owed; a failure there is warned of, and the refusal still ends the run.
+ */
+async function refuseUnwrittenChangesOnceRetired(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  if (deps.refuseUnwrittenChanges === undefined) return;
+  try {
+    await deps.refuseUnwrittenChanges();
+  } catch (refusal) {
+    await finishRetirements(deps).catch((error: unknown) => {
+      deps.logger.warn(
+        `What a deleted entity left was not finished before the refusal below: ${
+          error instanceof Error ? error.message : String(error)
+        }.`
+      );
+    });
+    throw refusal;
+  }
+}
+
+/**
+ * Finishes, under the lock, the retirements the applied migrations owe; nothing, and no lock, where
+ * none is owed (`finishOwedRetirements`).
+ */
+async function finishRetirements(deps: MigrateCoreDeps): Promise<void> {
+  await finishOwedRetirements(
+    metadataArgsOf(deps, []),
+    deps.reconcileMetadataFn ?? reconcileMigrationMetadata,
+    work =>
+      (deps.withLock ?? withMigrateLock)(
+        deps.adapter as unknown as DrizzleAdapter,
+        deps.dialect,
+        work,
+        lockOptionsOf(deps)
+      )
+  );
+}
+
+/**
+ * Marks orphaned the permissions a removal applied in an earlier run left unmarked
+ * (`leftoverPermissionsOf`): its file was recorded applied by hand, or its run stopped first.
+ */
+async function markLeftoverPermissions(deps: MigrateCoreDeps): Promise<void> {
+  if (deps.markOrphanedPermissions === undefined) return;
+  const left = await leftoverPermissionsOf(metadataArgsOf(deps, []));
+  if (left === undefined) return;
+  await assertSchemaLockHeld();
+  await deps.markOrphanedPermissions(left.scope, left.migration);
+}
+
+/**
+ * Phase 3's arguments: the registry rows the applied migrations record, and what deleted entities
+ * left, for `deps`' run, with the translations tables its judgement covered (`judgedLeftovers`).
+ */
+function metadataArgsOf(
+  deps: MigrateCoreDeps,
+  judgedLeftovers: readonly string[]
+): Parameters<typeof reconcileMigrationMetadata>[0] {
+  return {
+    adapter: deps.adapter as unknown as DrizzleAdapter,
+    db: deps.db,
+    dialect: deps.dialect,
+    migrationsDir: deps.migrationsDir,
+    ...(deps.declared === undefined ? {} : { declared: deps.declared }),
+    ...(deps.registryRows === undefined
+      ? {}
+      : { registryRows: deps.registryRows }),
+    ...(deps.entitySources === undefined
+      ? {}
+      : { entitySources: deps.entitySources }),
+    ...(deps.prepareLeftoverTables === undefined
+      ? {}
+      : { prepareLeftoverTables: deps.prepareLeftoverTables }),
+    ...(judgedLeftovers.length === 0
+      ? {}
+      : { dropLeftoverTranslations: new Set(judgedLeftovers) }),
+    logger: {
+      info: (m: string) => deps.logger.debug(m),
+      warn: (m: string) => deps.logger.warn(m),
+      debug: (m: string) => deps.logger.debug(m),
+    },
+  };
+}
+
+/** The schema lock a run takes, as `nextly migrate` and the boot take it. */
+function lockOptionsOf(
+  deps: MigrateCoreDeps
+): Parameters<typeof withMigrateLock>[3] {
+  return {
+    command: deps.lockCommand ?? "nextly migrate",
+    mode: deps.lockMode ?? "wait",
+    ttlSeconds: deps.ttlSeconds,
+    waitMs: deps.lockWaitMs,
+    // Off unless the caller asks: a boot, production or development, runs inside a server whose
+    // shutdown may let the migration run on, and the lock must not be freed under it.
+    releaseOnInterrupt: deps.lockReleaseOnInterrupt === true,
+    isSettled: deps.isSettled,
+    logger: {
+      warn: m => deps.logger.warn(m),
+      info: m => deps.logger.info(m),
+    },
+    // The run's own bounds, its flags among them, for a busy SQLite database met while the
+    // lock is taken.
+    ...(deps.busyTable === undefined
+      ? {}
+      : { busyBounds: deps.busyTable.bounds }),
+  };
+}
+
+/**
  * Say what Phase 3 did, and what it could not do.
  *
  * Extracted from the command body because the reporting is four independent
@@ -2941,6 +3110,9 @@ async function runMigrationStreams(
       : {}),
     judged,
     ...(beforeApply === undefined ? {} : { beforeApply }),
+    ...(deps.defaultLanguage === undefined
+      ? {}
+      : { defaultLanguage: deps.defaultLanguage }),
     ...(afterApply === undefined ? {} : { afterApply }),
     ...(deps.entitySources === undefined
       ? {}
@@ -3040,7 +3212,7 @@ export async function migrateCore(
   // its migrations is refused, naming each change, before the lock or any
   // write. Asked once, since what it compares is the configuration and the
   // folder, which no other run changes.
-  await deps.refuseUnwrittenChanges?.();
+  await refuseUnwrittenChangesOnceRetired(deps);
   // And a database that lacks what its applied migrations made, read-only;
   // asked again under the lock, below.
   await refuseDatabaseBehindLedger(deps);
@@ -3087,31 +3259,7 @@ export async function migrateCore(
    * behind. Failing here would report a migration that worked as broken,
    * and the next invocation repairs the row because this runs every time.
    */
-  const metadataArgs = (): Parameters<
-    typeof reconcileMigrationMetadata
-  >[0] => ({
-    adapter: deps.adapter as unknown as DrizzleAdapter,
-    dialect: deps.dialect,
-    migrationsDir: deps.migrationsDir,
-    ...(deps.declared === undefined ? {} : { declared: deps.declared }),
-    ...(deps.registryRows === undefined
-      ? {}
-      : { registryRows: deps.registryRows }),
-    ...(deps.entitySources === undefined
-      ? {}
-      : { entitySources: deps.entitySources }),
-    ...(deps.prepareLeftoverTables === undefined
-      ? {}
-      : { prepareLeftoverTables: deps.prepareLeftoverTables }),
-    ...(judgedLeftovers.length === 0
-      ? {}
-      : { dropLeftoverTranslations: new Set(judgedLeftovers) }),
-    logger: {
-      info: (m: string) => deps.logger.debug(m),
-      warn: (m: string) => deps.logger.warn(m),
-      debug: (m: string) => deps.logger.debug(m),
-    },
-  });
+  const metadataArgs = () => metadataArgsOf(deps, judgedLeftovers);
   /**
    * The registry rows of the files that applied before one failed with `error`, except after a
    * test's stop at a point (`stop-points.ts`), which ends the run where it stands.
@@ -3174,6 +3322,7 @@ export async function migrateCore(
    * over a recorded file and nothing of it may be left for one.
    */
   const afterApplied = async (applied: AppliedAppMigration): Promise<void> => {
+    await reachStopPoint(`${applied.name}.sql: permissions not marked yet`);
     await markOrphans?.(applied);
     await reachStopPoint(`${applied.name}.sql: recorded applied`);
   };
@@ -3336,7 +3485,13 @@ export async function migrateCore(
       const firstRun = firstRunSteps(
         deps,
         await refuseMigrationsOutOfOrder(deps),
-        { commitFirstRun, commitRecordBefore, recordMetadata, seedAccess }
+        {
+          commitFirstRun,
+          commitRecordBefore,
+          recordMetadata,
+          seedAccess,
+          ...retirementSteps(metadataArgs),
+        }
       );
       // A file that deletes data runs only with consent covering each
       // deletion, judged from the database this run holds the lock on. The
@@ -3508,6 +3663,10 @@ export async function migrateCore(
       // without the metadata could not apply after it.
       await firstRun.recordMetadata();
 
+      // After Phase 3, which removes a dropped entity's registry row, and before Phase 4, which
+      // makes live what the configuration declares.
+      await markLeftoverPermissions(deps);
+
       // Each inline UNIQUE an earlier release gave a one-to-one no field makes unique any more goes
       // (`letGoOfEarlierInlineUniquesAfterFiles`). After Phase 3: a Builder row its own database left
       // `pending` is judged once this run has recorded it applied, not left to the next run.
@@ -3524,25 +3683,7 @@ export async function migrateCore(
       // A first run's commit above has done it already (`firstRunSteps`).
       await firstRun.seedAccess();
     },
-    {
-      command: deps.lockCommand ?? "nextly migrate",
-      mode: deps.lockMode ?? "wait",
-      ttlSeconds: deps.ttlSeconds,
-      waitMs: deps.lockWaitMs,
-      // Off unless the caller asks: a boot, production or development, runs inside a server whose
-      // shutdown may let the migration run on, and the lock must not be freed under it.
-      releaseOnInterrupt: deps.lockReleaseOnInterrupt === true,
-      isSettled: deps.isSettled,
-      logger: {
-        warn: m => deps.logger.warn(m),
-        info: m => deps.logger.info(m),
-      },
-      // The run's own bounds, its flags among them, for a busy SQLite database met while the
-      // lock is taken.
-      ...(deps.busyTable === undefined
-        ? {}
-        : { busyBounds: deps.busyTable.bounds }),
-    }
+    lockOptionsOf(deps)
   );
 
   return {
@@ -3551,6 +3692,21 @@ export async function migrateCore(
     coreChanged,
     ran: outcome.ran,
     metadata,
+  };
+}
+
+/** The steps of a run that finish retirements earlier runs left, from its Phase 3 arguments. */
+function retirementSteps(
+  metadataArgs: () => Parameters<typeof reconcileMigrationMetadata>[0]
+): {
+  retiredDocumentEvents: () => Promise<void>;
+  settleRetirements: () => Promise<void>;
+} {
+  return {
+    retiredDocumentEvents: () =>
+      deletionEventsOfRetiredDocuments(metadataArgs()),
+    settleRetirements: () =>
+      settleRetiredDocumentEvents(metadataArgs(), "down"),
   };
 }
 
@@ -3593,6 +3749,17 @@ function firstRunSteps(
     recordMetadata: () => Promise<void>;
     /** The run's own Phase 4. */
     seedAccess: () => Promise<void>;
+    /**
+     * The deletion events a retired entity's documents owe (`retired-documents.ts`), which Phase 3
+     * records once its registry write commits: after the first run's commit, which stands in for
+     * it, they are recorded on their own, and before the files, those of a DOWN.
+     */
+    retiredDocumentEvents: () => Promise<void>;
+    /**
+     * The same, failing when it cannot finish: before any file applies, so a file a DOWN's capture
+     * waits on is not applied again over it.
+     */
+    settleRetirements: () => Promise<void>;
   }
 ): {
   beforeFiles: () => Promise<void>;
@@ -3623,6 +3790,8 @@ function firstRunSteps(
   };
   return {
     beforeFiles: async () => {
+      // What a stopped `migrate:down` left to record is settled before any file applies again.
+      await commits.settleRetirements();
       if (plan.kind === "from-applied-snapshot") {
         await commits.commitFirstRun(standings);
       }
@@ -3639,6 +3808,7 @@ function firstRunSteps(
       if (configurationRows !== undefined && (await fromConfiguration())) {
         await commits.commitFirstRun(standings, configurationRows());
         committed = true;
+        await commits.retiredDocumentEvents();
         return;
       }
       await commits.recordMetadata();
@@ -3958,6 +4128,14 @@ async function judgeFileDeletions(
     deps.db,
     deps.dialect
   );
+  // So is a file whose snapshot says an entity is removed while its statements do not plainly drop
+  // its table: nothing would say whether its documents ended (`retired-entities.ts`).
+  await refuseUnsettledRetirements(
+    listed.map(({ file }) => file),
+    new Set(appFilesInStep(listed, appStepAfter(deps.step, modules.length))),
+    resolve(deps.migrationsDir, "meta"),
+    deps.dialect
+  );
   // A file turning translation on or off whose move would lose a column's comment, character set
   // or collation is refused here too, before any statement (`refuseMigrationFilesLosingDefinition`).
   await refuseMigrationFilesLosingDefinition(
@@ -3965,6 +4143,27 @@ async function judgeFileDeletions(
     appFilesInStep(listed, appStepAfter(deps.step, modules.length)),
     deps.db,
     deps.dialect
+  );
+  // A file whose answers are decided in another language than this database's default settles other
+  // rows than the ones they were given for, so it is refused here too, before any statement and
+  // before anyone is asked to consent to what it deletes (`refuseAnswersInAnotherLanguage`). One
+  // with no entry to settle here is not.
+  await refuseAnswersInAnotherLanguage(
+    appFilesInStep(listed, appStepAfter(deps.step, modules.length)),
+    {
+      units: [
+        ...modules,
+        ...appFileUnits(
+          listed,
+          appStepAfter(deps.step, modules.length),
+          deps.dialect
+        ),
+      ],
+      adapter: deps.adapter as unknown as DrizzleAdapter,
+      db: deps.db,
+      dialect: deps.dialect,
+    },
+    () => defaultLanguageOf(deps)
   );
   const units = [...modules, ...fileUnits];
   // The translations tables deleted entities left standing, asked about with the files' deletions
@@ -4023,6 +4222,16 @@ async function judgeFileDeletions(
     fileUnits.map(unit => [unit.label, textDigest(unit.text)])
   );
   return { agreement, files, leftovers: leftovers.map(left => left.table) };
+}
+
+/** The database's default language, as the run was given it or as Settings stores it. */
+function defaultLanguageOf(
+  deps: Pick<MigrateCoreDeps, "adapter" | "defaultLanguage">
+): Promise<string> {
+  return (
+    deps.defaultLanguage?.() ??
+    siteDefaultLanguage(deps.adapter as unknown as DrizzleAdapter, {})
+  );
 }
 
 /** The word a deletion's reason names each kind of entity by. */
@@ -5223,6 +5432,105 @@ function retypedByFiles(
   return retyped;
 }
 
+/** What `file` retires between the newest snapshot before it and its own (`fileRetirements`). */
+function retirementsOfFile(
+  file: ParsedMigration,
+  before: SnapshotFile | null,
+  target: SnapshotFile | null,
+  dialect: SupportedDialect
+): Retirements | undefined {
+  return fileRetirements({
+    content: file.content,
+    recordedHash: target?.migrationHash,
+    before,
+    after: target,
+    statements: splitSqlStatements(file.upSql, dialect, file),
+    dialect,
+  });
+}
+
+/**
+ * What the run tells the unit that runs `file` of the entities it retires, after saying what it drops
+ * where nothing says what it retires (`warnOfUnrecordedDrops`).
+ */
+async function retirementContextOf(
+  run: {
+    db: unknown;
+    dialect: SupportedDialect;
+    logger: Pick<CommandContext["logger"], "warn">;
+  },
+  file: ParsedMigration,
+  before: SnapshotFile | null,
+  target: SnapshotFile | null
+): Promise<RetirementContext> {
+  const judged = retirementsOfFile(file, before, target, run.dialect);
+  if (judged === undefined) {
+    await warnOfUnrecordedDrops(
+      run,
+      `${file.name}.sql`,
+      splitSqlStatements(file.upSql, run.dialect, file)
+    );
+  }
+  return {
+    entities: judged?.retired ?? [],
+    kept: ({ kind, slug }) =>
+      run.logger.warn(keptDespiteItsDrop(`${kind} ${slug}`)),
+    unheld: (source, reason) =>
+      run.logger.warn(unheldWhileDropped(source, reason)),
+  };
+}
+
+/**
+ * Refuses the first of `files` in `runs` that may retire an entity and does not say so plainly
+ * (`Retirements.unsettled`), before any statement of the run. `files` are every app file in run
+ * order, since each is judged after the snapshots before it.
+ */
+async function refuseUnsettledRetirements(
+  files: readonly ParsedMigration[],
+  runs: ReadonlySet<ParsedMigration>,
+  metaDir: string,
+  dialect: SupportedDialect
+): Promise<void> {
+  let before: SnapshotFile | null = null;
+  for (const file of files) {
+    const target = await loadTargetSnapshot(metaDir, file.name);
+    if (runs.has(file)) {
+      const judged = retirementsOfFile(file, before, target, dialect);
+      const refusal = unsettledRetirement(`${file.name}.sql`, judged);
+      if (refusal !== undefined) throw refusal;
+    }
+    before = target ?? before;
+  }
+}
+
+/**
+ * Says, of a file whose snapshots say nothing of what it retires, each registered collection or
+ * Single whose main table it plainly drops: its documents end with no event.
+ */
+async function warnOfUnrecordedDrops(
+  run: {
+    db: unknown;
+    dialect: SupportedDialect;
+    logger: Pick<CommandContext["logger"], "warn">;
+  },
+  filename: string,
+  statements: readonly string[]
+): Promise<void> {
+  const { db, dialect, logger } = run;
+  if (!statements.some(each => tablesDroppedIn(each, dialect).length > 0)) {
+    return;
+  }
+  for (const { kind, slug, table } of droppedRegisteredEntities(
+    await readCoveredEntities(db, dialect),
+    statements,
+    dialect
+  )) {
+    logger.warn(
+      `${filename} drops ${table}, the table of ${kind} ${slug}, and no snapshot records it as removed: its documents get no \`deleted\` event. To record them, remove ${slug} from the configuration and let \`nextly migrate:create\` write the migration and its snapshot.`
+    );
+  }
+}
+
 /** The newest snapshot of a file before `files[at]`, or null where none before it has one. */
 async function newestSnapshotBefore(
   files: readonly ParsedMigration[],
@@ -5520,6 +5828,8 @@ export async function runFileMigrations(args: {
    * the app's tables, read by the check that a file removes none of it.
    */
   extensionSchema?: ExtensionSchema;
+  /** As `MigrateCoreDeps.defaultLanguage`. */
+  defaultLanguage?: () => Promise<string>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -5815,15 +6125,32 @@ export async function runFileMigrations(args: {
       if (typeChanges !== undefined && !atItsEnd) {
         await refuseFileTypeChanges(db, typeChanges);
       }
+      // The language of the file's answers is judged again, over the database as the files before
+      // it left it: a row one of them put in is an entry now. The default language is read again
+      // too, since a file may have changed the one Settings holds.
+      await refuseAnswersInAnotherLanguage(
+        [m],
+        { units: [{ statements: upStatements }], adapter: dz, db, dialect },
+        () => defaultLanguageOf(args),
+        "file"
+      );
       // The caller's last word before the file applies, every refusal of it passed.
       await args.beforeApply?.(m.name);
+
+      // The entities this file retires, judged from the file as it runs.
+      const retirements = await retirementContextOf(
+        { db, dialect, logger },
+        m,
+        beforeFile,
+        targetFile
+      );
 
       // The statements of this file, sent through `executeSql`. Once the first is sent, a file
       // whose statements commit one by one (one outside a transaction, or any file on MySQL) may
       // stand part-way, so a lost lock names it; a refusal before then left it untouched.
-      const executeFileSql: typeof executeSql = (...statement) => {
+      const executeFileSql: typeof executeSql = (sqlText, unit, after) => {
         if (m.transaction === false || dialect === "mysql") running = filename;
-        return executeSql(...statement);
+        return executeSql(sqlText, { ...unit, retirements }, after);
       };
       if (!target || sides === undefined) {
         // No paired snapshot: run verbatim + record. A hand-written file is said to have no
@@ -6050,6 +6377,7 @@ function parseMigrationFile(
 
   const { upSql, downSql } = parseSqlSections(content);
   const localization = parseLocalizationIntent(content, `${name}.sql`);
+  const answersIn = recordedAnswerLanguage(content);
 
   return {
     name,
@@ -6057,6 +6385,7 @@ function parseMigrationFile(
     upSql,
     downSql,
     checksum,
+    content,
     originalChecksum,
     collections,
     singles,
@@ -6065,6 +6394,7 @@ function parseMigrationFile(
     source,
     transaction: !marksNoTransaction(content),
     ...(localization === null ? {} : { localization }),
+    ...(answersIn === undefined ? {} : { answersIn }),
   };
 }
 

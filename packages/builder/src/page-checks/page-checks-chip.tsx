@@ -15,7 +15,7 @@
  *
  * @module page-checks/page-checks-chip
  */
-import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
+import { Popover, PopoverTrigger } from "@nextlyhq/ui";
 import {
   Check,
   ChevronLeft,
@@ -27,6 +27,7 @@ import * as React from "react";
 
 import { revealNode } from "../canvas/reveal-node";
 import type { EditorState } from "../editor-state";
+import { BuilderPopoverContent } from "../popups/builder-popover";
 import { ShowInspectorContext } from "../shell/show-inspector";
 
 import { CORE_PAGE_CHECKS } from "./core-checks";
@@ -327,7 +328,7 @@ export function PageChecksChip({
             {chipWords(count)}
           </button>
         </PopoverTrigger>
-        <PopoverContent
+        <BuilderPopoverContent
           align="end"
           aria-label="Page checks"
           // Within the screen whatever its size, the list scrolling between
@@ -343,7 +344,7 @@ export function PageChecksChip({
             notRun={report.notRun}
             onFix={fix}
           />
-        </PopoverContent>
+        </BuilderPopoverContent>
       </Popover>
       {opened === "bar" && step !== undefined ? (
         <FixBar

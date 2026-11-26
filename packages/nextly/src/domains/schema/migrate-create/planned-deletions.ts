@@ -258,11 +258,14 @@ function reasonFor(deletion: Deletion, plan: DeletionPlan): string | undefined {
         : undefined;
     }
     case "rows": {
+      // A field kept per language has its entries' rows deleted from its translations table too.
       const emptied = (plan.resolutions ?? [])
         .filter(
           r =>
             r.kind === "delete_nonconforming" &&
-            same(r.tableName, deletion.table)
+            (same(r.tableName, deletion.table) ||
+              (r.perLanguage !== undefined &&
+                same(r.perLanguage.companionTable, deletion.table)))
         )
         .map(r => r.columnName);
       return emptied.length === 0

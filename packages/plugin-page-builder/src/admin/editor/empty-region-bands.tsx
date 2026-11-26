@@ -23,7 +23,8 @@ import type {
   EmptyRegionAnchor,
   EmptyRegionBandProps,
 } from "@nextlyhq/builder/shell";
-import { Popover, PopoverAnchor, PopoverContent, toast } from "@nextlyhq/ui";
+import { BuilderPopoverContent } from "@nextlyhq/builder/shell";
+import { Popover, PopoverAnchor, toast } from "@nextlyhq/ui";
 import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 
 import type { SiteHeaderFooter } from "../../site-header-footer";
@@ -285,7 +286,7 @@ function BandMenu({
       }}
     >
       <PopoverAnchor virtualRef={anchor} />
-      <PopoverContent
+      <BuilderPopoverContent
         align="start"
         className="w-72 p-0"
         onOpenAutoFocus={event => {
@@ -304,7 +305,7 @@ function BandMenu({
             void choose(component);
           }}
         />
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

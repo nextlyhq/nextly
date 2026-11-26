@@ -18,13 +18,13 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  PopoverContent,
 } from "@nextlyhq/ui";
 import { MoreHorizontal, X } from "lucide-react";
 import * as React from "react";
 
 import { isElement, isInput } from "../../canvas/dom-kind";
 import { useCanvasTokenMode } from "../../canvas/prefers-dark";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import type { StyleControl } from "../../styles/style-controls";
 import { SegmentChoices } from "../segment-choices";
 
@@ -152,7 +152,7 @@ export function SpacingSidePopover(
   // leaving it, and its refusal is still said under the side.
   const leave = (to: SideClose): void => props.onClose(to);
   return (
-    <PopoverContent
+    <BuilderPopoverContent
       ref={content}
       // Drawn at the page's end, outside the builder's element: the class
       // brings the builder's tokens (its borders, the shared green) with it.
@@ -290,7 +290,7 @@ export function SpacingSidePopover(
           }
         }}
       />
-    </PopoverContent>
+    </BuilderPopoverContent>
   );
 }
 

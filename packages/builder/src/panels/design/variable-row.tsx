@@ -19,17 +19,12 @@ import {
   type TokenKind,
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
-import {
-  Input,
-  Popover,
-  PopoverAnchor,
-  PopoverContent,
-  PopoverTrigger,
-} from "@nextlyhq/ui";
+import { Input, Popover, PopoverAnchor, PopoverTrigger } from "@nextlyhq/ui";
 import { Braces, Bold, Hash, Ruler, Timer, Type } from "lucide-react";
 import * as React from "react";
 
 import { DESKTOP_PREVIEW_WIDTH } from "../../canvas/canvas-width";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import { fluidRange, pxAtWidth } from "../../styles/fluid-size";
 import { colourHexOf } from "../../styles/style-colour";
 import { lengthInPx, variableValueText } from "../../styles/style-variables";
@@ -298,7 +293,7 @@ function RowEditor({
   handOff: ReturnType<typeof useHandOff>;
 }): React.JSX.Element {
   return (
-    <PopoverContent
+    <BuilderPopoverContent
       side="right"
       align="start"
       sideOffset={12}
@@ -314,7 +309,7 @@ function RowEditor({
           {...(usage === undefined ? {} : { usage })}
         />
       </CloseVariableEditor.Provider>
-    </PopoverContent>
+    </BuilderPopoverContent>
   );
 }
 

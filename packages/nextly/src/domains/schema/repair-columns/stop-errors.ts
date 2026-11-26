@@ -17,9 +17,11 @@ import {
   APPLIED_MIGRATION_FILE_MISSING_REASON,
   APPLIED_SNAPSHOT_INVALID_REASON,
   APPLIED_SNAPSHOT_MISSING_REASON,
+  APPLIED_SNAPSHOTS_LOST_REASON,
   MIGRATION_SNAPSHOTS_UNREADABLE_REASON,
   REGISTRY_ROW_DIVERGED_REASON,
   REGISTRY_ROW_WITHOUT_TABLE_REASON,
+  SNAPSHOT_WITHOUT_ENTITIES_REASON,
 } from "./stop-reasons";
 
 /** The kinds of entity a registry holds. */
@@ -215,6 +217,45 @@ export function appliedSnapshotsMissingError(
       next: `Restore ${snapshots} from version control. For SQL you wrote yourself, which has none, put its file back if it was removed and add the line \`${BLANK_FILE_LINE}\` to its header, above \`-- UP\`, then accept the edit with \`nextly migrate:resolve --applied ${one ? shellQuote(migrations[0]) : "<migration>"} --skip-verify\`. Then run \`nextly repair-columns\` again.`,
     },
     { migrations, newest }
+  );
+}
+
+/**
+ * Applied migrations `migrate:create` wrote that have no snapshot, where the database records that
+ * snapshots were written for them (its registry record) and none that records entities is left: an
+ * older record, or a registry row a start may have rewritten, would stand in for what was applied.
+ */
+export function appliedSnapshotsLostError(
+  migrations: readonly string[]
+): NextlyError {
+  const one = migrations.length === 1;
+  return stopError(
+    APPLIED_SNAPSHOTS_LOST_REASON,
+    {
+      what: `The applied ${one ? "migration" : "migrations"} ${listed(migrations.map(name => `\`${name}\``))} ${one ? "has" : "have"} no snapshot in \`meta/\`.`,
+      why: `The database records that snapshots were written for ${one ? "it" : "them"}, so what it last had applied cannot be known, and the registry rows may have been rewritten since.`,
+      next: "Restore `meta/` from version control, then run `nextly repair-columns` again. If they were never committed, then with the configuration as it was at the last `nextly migrate`, run `nextly migrate:create`, then `nextly migrate`, which records the entities as they are; then run `nextly repair-columns` again.",
+    },
+    { migrations }
+  );
+}
+
+/**
+ * The newest applied snapshot, `newer`'s, records no entities and the older `older`'s does: an
+ * earlier release's `migrate:create` wrote it, and judging by `older` would undo what it applied.
+ */
+export function snapshotWithoutEntitiesError(
+  newer: string,
+  older: string
+): NextlyError {
+  return stopError(
+    SNAPSHOT_WITHOUT_ENTITIES_REASON,
+    {
+      what: `The applied migration \`${newer}\` has a snapshot that records no entities, and the older \`${older}\` has one that does.`,
+      why: `An earlier release's \`migrate:create\` wrote it. Its migration changed the tables after \`${older}\`, so judging the columns by \`${older}\` would convert them back.`,
+      next: 'Run `nextly migrate:create --name="<migration-name>"`, then `nextly migrate`: the migration it writes records the entities as they are. Then run `nextly repair-columns` again.',
+    },
+    { newer, older }
   );
 }
 

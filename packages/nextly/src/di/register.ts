@@ -190,6 +190,7 @@ import {
   type RegisteredWorkflow,
 } from "../domains/workflows/registry";
 import { recheckReleasesInWorkflowScopes } from "../domains/workflows/release-recheck-signal";
+import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";
 import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
@@ -2622,10 +2623,13 @@ async function materializeBuilderKind(
       }
       ctx.materialized.add(`${args.kind}:${ent.slug}`);
     } catch (err) {
+      // Described whole: a refused column's table, name and reason are in the error's log fields
+      // (`ColumnsNotAddedError`), not its message.
       ctx.logger.warn?.(
-        `[plugins] Failed to materialize plugin fields onto Builder ${args.kind} "${ent.slug}": ${
-          err instanceof Error ? err.message : String(err)
-        }. Skipping; will retry next boot.`
+        `[plugins] Failed to materialize plugin fields onto Builder ${args.kind} "${ent.slug}": ${describeError(
+          err,
+          { context: false }
+        )}. Skipping; will retry next boot.`
       );
     }
   }
@@ -4804,6 +4808,7 @@ async function syncCodeFirstCollections(
     "../domains/schema/services/runtime-schema-generator"
   );
   const syncDialect = adapter.getCapabilities().dialect;
+  const createdHere = new Set(syncResult.created);
 
   for (const collection of transformedConfig.collections) {
     if (!collectionsNeedingTableSync.includes(collection.slug)) continue;
@@ -4827,10 +4832,14 @@ async function syncCodeFirstCollections(
     }
     if (tableExists) {
       logger.info?.(`Table ${tableName} already exists for ${slug}, skipping`);
-      // Still mark as applied so the registry status reflects reality.
-      await collectionRegistry
-        .updateMigrationStatus(slug, "applied")
-        .catch(() => {});
+      // A row this sync created over a table already there describes that table, so it is applied.
+      // One it updated says what the registry decided: a changed definition is pending until a
+      // migration makes it, as this start changes no table.
+      if (createdHere.has(slug)) {
+        await collectionRegistry
+          .updateMigrationStatus(slug, "applied")
+          .catch(() => {});
+      }
       continue;
     }
 
@@ -5035,6 +5044,7 @@ async function syncCodeFirstComponents(
     ...componentSyncResult.created,
     ...componentSyncResult.updated,
   ];
+  const componentsCreatedHere = new Set(componentSyncResult.created);
 
   // The table each group's registry row names after the sync, so the probe below and the create
   // further down address the group's own storage. Derived again from the slug, the name would be
@@ -5112,10 +5122,18 @@ async function syncCodeFirstComponents(
         logger.warn?.(`Failed to create table for component ${slug}`);
       },
       afterCreate: async () => {
-        await componentRegistry
-          .updateMigrationStatus(slug, "applied")
-          .catch(() => {});
-        logger.info?.(`Created table ${tableName} for component ${slug}`);
+        // Applied where this start made the table, or wrote a new row over a table already there,
+        // which that row describes, as a collection's is. A row it updated over a table already
+        // there says what the registry decided: a changed definition is pending until a
+        // migration makes it.
+        if (!tableExists || componentsCreatedHere.has(slug)) {
+          await componentRegistry
+            .updateMigrationStatus(slug, "applied")
+            .catch(() => {});
+        }
+        if (!tableExists) {
+          logger.info?.(`Created table ${tableName} for component ${slug}`);
+        }
 
         try {
           // 🔴 Resolved, not assumed. A component whose *fields* changed

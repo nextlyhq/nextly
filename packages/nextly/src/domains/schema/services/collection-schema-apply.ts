@@ -69,6 +69,7 @@ import {
   landingPush,
   type PushWatch,
 } from "../builder-save/landing-push";
+import { settleKeptPerLanguage } from "../builder-save/per-language-answers";
 import { pushCarriesValues } from "../builder-save/push-carries-values";
 import { renamedFieldsOf } from "../builder-save/schema-change-save";
 import { refuseCompanionPlanTakingOthersElements } from "../ownership/removed-elements";
@@ -1052,6 +1053,28 @@ async function applyHoldingSchemaLock(
         : undefined,
     });
   }
+  // The person's answers for fields kept per language that the change makes required, which the
+  // push's own questions, asked of the main table's columns, never reach: settled on the
+  // translations table's default-language rows once it is in step, so a field the change adds has
+  // its column there. The same statements the save's migration file carries for them.
+  await settleKeptPerLanguage(
+    {
+      db: adapter.getDrizzle(),
+      dialect: adapter.dialect,
+      entity: "collection",
+    },
+    {
+      tableName,
+      localized: change.isLocalized,
+      oldFields,
+      newFields: fields,
+      eventResolutions: change.eventResolutions,
+      legacy: change.legacyResolutions,
+      fills: change.fills,
+      rowFills: undefined,
+      renameResolutions: change.renameResolutions,
+    }
+  );
   // The unique index a field that stops being unique still has under a name the push does not
   // declare, as an older table carries, or one an earlier save took on as the field's: dropped,
   // so the column is no longer held unique while the change records it is not.
