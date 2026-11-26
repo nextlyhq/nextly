@@ -73,6 +73,22 @@ afterEach(async () => {
 
 type Doc = Record<string, unknown>;
 
+/**
+ * The tables that hold an old value as a record of something that already
+ * happened, not as content, and which the rewrite leaves as they are. The
+ * seeding writes reach both, so the search before the rewrite must find old
+ * values in them too; any other table that holds one is a place the rewrite
+ * misses.
+ */
+const KEPT_AS_RECORDED = new Map([
+  // The outbox of content changes: what each write sent, or will send, to
+  // webhooks, which a rewrite must not make say something else.
+  ["nextly_events", "a log of the writes"],
+  // The source text a translation was made from, named by a fingerprint of
+  // that very value: a copy of what the value was, not a link to follow.
+  ["nextly_translation_sources", "a past value, named by its fingerprint"],
+]);
+
 /** `n` fresh ids. */
 const ids = (n: number): string[] => Array.from({ length: n }, randomUUID);
 
@@ -546,16 +562,20 @@ describe.each(getConfiguredTestDialects())(
       const fx = await boot(dialect);
       const oldValues = fx.substitutions.map(([from]) => from);
       // The search finds every old value before the rewrite, in exactly the
-      // tables seeded, so it reaches each place a reference is stored.
+      // tables seeded and the records the writes kept of themselves, so it
+      // reaches each place a reference is stored.
       const before = await tablesHolding(fx, oldValues);
-      expect([...before.keys()]).toEqual(fx.seededTables);
+      expect([...before.keys()]).toEqual(
+        [...fx.seededTables, ...KEPT_AS_RECORDED.keys()].sort()
+      );
       expect(new Set([...before.values()].flat())).toEqual(new Set(oldValues));
 
       const result = await rewrite(fx);
 
-      expect(Object.fromEntries(await tablesHolding(fx, oldValues))).toEqual(
-        {}
-      );
+      // Only those records still hold an old value: everything content holds
+      // now points at the new ones.
+      const after = await tablesHolding(fx, oldValues);
+      expect([...after.keys()]).toEqual([...KEPT_AS_RECORDED.keys()].sort());
       expect(Object.keys(result.changedRows).sort()).toEqual(fx.seededTables);
       // A second pass finds nothing left to change.
       expect((await rewrite(fx)).changedRows).toEqual({});

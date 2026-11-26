@@ -28,6 +28,13 @@
  * of a plugin's pages (`scope_kind` "page") belong to the plugin and are left
  * as they are.
  *
+ * Two tables hold ids as a record of what already happened rather than as
+ * content, and are left as they are too: the outbox of content events
+ * (`nextly_events`), which says what each write sent or will send to
+ * webhooks, and the source text translations were made from
+ * (`nextly_translation_sources`), a copy of a past value named by its own
+ * fingerprint.
+ *
  * Everything runs on the `db` it is given, the caller's transaction, so the
  * rewrite commits or rolls back whole with the import that asked for it.
  *
