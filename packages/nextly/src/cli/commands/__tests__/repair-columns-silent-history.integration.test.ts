@@ -307,6 +307,43 @@ describe.each(getConfiguredTestDialects())(
         )
       );
 
+    /** What a run without `--json` writes to each stream, with the global options given. */
+    async function plainRun(shape: Shape, globals: Record<string, unknown>) {
+      state.config = configOf(shape);
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const spies = [
+        vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+          stdout.push(String(chunk));
+          return true;
+        }),
+        vi.spyOn(process.stderr, "write").mockImplementation(chunk => {
+          stderr.push(String(chunk));
+          return true;
+        }),
+        vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+          stdout.push(a.join(" "));
+        }),
+        vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+          stderr.push(a.join(" "));
+        }),
+      ];
+      process.exitCode = undefined;
+      try {
+        await repairColumnsAction(createContext)({ json: false }, {
+          optsWithGlobals: () => ({ cwd: state.dir, ...globals }),
+        } as unknown as Command);
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+      const lines = (chunks: string[]) =>
+        chunks
+          .join("\n")
+          .split("\n")
+          .filter(line => line.trim() !== "");
+      return { stdout: lines(stdout), stderr: lines(stderr) };
+    }
+
     /** `nextly repair-columns --json`, with or without `--apply`, as `shape` is configured. */
     async function repair(shape: Shape, apply: boolean, table = TABLE) {
       state.config = configOf(shape);
@@ -494,6 +531,19 @@ describe.each(getConfiguredTestDialects())(
           expect(run.outcomes).toEqual([]);
           expect(run.stderr).toEqual([REGISTRY_STANDS_IN_NOTICE]);
         }
+      }, 300_000);
+
+      it("says it once on standard error without --json, and nothing under --quiet", async () => {
+        await earlierProject();
+        const plain = await plainRun(SECOND, {});
+        expect(
+          plain.stderr.filter(line => line === REGISTRY_STANDS_IN_NOTICE)
+        ).toHaveLength(1);
+        expect(plain.stdout).not.toContain(REGISTRY_STANDS_IN_NOTICE);
+        const quiet = await plainRun(SECOND, { quiet: true });
+        expect([...quiet.stdout, ...quiet.stderr]).not.toContain(
+          REGISTRY_STANDS_IN_NOTICE
+        );
       }, 300_000);
 
       it("cannot take a configuration changed since into the record: nextly migrate, as advised, refuses it first", async () => {

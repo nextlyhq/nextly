@@ -244,8 +244,10 @@ async function report(
     };
     // Said once a run, however many times the run reads the entities (a dry run reads them again
     // where a migration may have ended, an apply before the lock and under it), on standard error,
-    // which a `--json` run keeps clear of its document.
-    let noticed = false;
+    // which a `--json` run keeps clear of its document. Not under `--quiet`, which shows errors
+    // only: the run goes on, so this is no error. Not through the logger either, which writes to
+    // standard output.
+    let noticed = context.options.quiet === true;
     const notice = (line: string) => {
       if (noticed) return;
       noticed = true;
