@@ -624,8 +624,11 @@ async function refuseRemovingOthersElementsIn(
   deletions: readonly Deletion[],
   dialect: SupportedDialect,
   logger: CommandContext["logger"],
-  /** What this run compiled of the configuration: which plugins it names, what each declares. */
-  extensionSchema: ExtensionSchema | null
+  /**
+   * What this run compiled of the configuration: which plugins it names, what each declares. None
+   * where nothing declares a schema.
+   */
+  extensionSchema: ExtensionSchema | undefined
 ): Promise<void> {
   if (!deletions.some(deletion => deletion.core !== true)) return;
   const opened = await openDryRunAdapter({ dialect }).catch(
@@ -651,7 +654,7 @@ async function refuseRemovingOthersElementsIn(
       sources: databaseRemovedElementsSources(
         opened as unknown as DrizzleAdapter,
         dialect,
-        () => Promise.resolve(extensionSchema)
+        () => Promise.resolve(extensionSchema ?? null)
       ),
       // The code-first change has the fields' columns: each column names its field.
       fieldOf: (_table, column) => column,
@@ -1003,7 +1006,7 @@ export async function runMigrateCreate(
             deletions,
             dialect,
             logger,
-            inputs.appStream.extensionSchema ?? null
+            inputs.appStream.extensionSchema
           );
           return judgeMigrationDeletions(deletions, {
             consent,
