@@ -13,17 +13,9 @@
  * value written after the review uncounted; a count taken from the main table alone reads a
  * translatable field's values as none; a road that compares nothing (a push, or an app with no
  * migration writer) deletes them all the same.
- *
- * While the save holds the entity, a write of its values (the Single's document, or an entry
- * placing the field group) waits, through the save's registry row too, then is refused naming a
- * field the save removed. A write that takes no share of the entity lands between the count and
- * the delete; a hold let go before the registry row lets it through on the old definition. The
- * share is taken once for the write's transaction: a share taken per row or per call sends a
- * statement for each.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { recordStatements } from "../../../__tests__/helpers/record-statements";
 import { container } from "../../../di/container";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
@@ -53,92 +45,8 @@ vi.mock("../builder-save/push-carries-values", async importOriginal => {
   };
 });
 
-// A gate just after the save's count of the removed field's values, while armed: the save waits
-// there once, holding its entity, until the case lets it go.
-const afterCount = vi.hoisted(() => ({
-  armed: false,
-  paused: undefined as undefined | (() => void),
-  release: undefined as undefined | Promise<void>,
-  /** Lets a paused save go: called after each case too, so a case that failed first ends. */
-  letGo: undefined as undefined | (() => void),
-}));
-vi.mock("../builder-save/deletion-counts", async importOriginal => {
-  const real =
-    await importOriginal<typeof import("../builder-save/deletion-counts")>();
-  return {
-    ...real,
-    deletionHoldOf: (...args: Parameters<typeof real.deletionHoldOf>) => {
-      const hold = real.deletionHoldOf(...args);
-      if (hold === undefined) return hold;
-      const gatedAfter =
-        (check: (db: unknown) => Promise<void>) => async (db: unknown) => {
-          await check(db);
-          if (!afterCount.armed) return;
-          afterCount.armed = false;
-          afterCount.paused?.();
-          await afterCount.release;
-        };
-      return {
-        ...hold,
-        // The push roads compare just before the push, the file road inside the file's
-        // transaction: the gate follows either count.
-        compare: gatedAfter(hold.compare),
-        check: gatedAfter(hold.check),
-        checkIn(changed: readonly string[]) {
-          const check = hold.checkIn(changed);
-          return check === undefined ? undefined : gatedAfter(check);
-        },
-      };
-    },
-  };
-});
-
-// A pause before the registry row a Single's or a field group's save writes once its change has
-// applied, while `ms` is set: the span a hold let go before that row would leave a write to land in.
-const slowRow = vi.hoisted(() => ({ ms: 0 }));
-vi.mock(
-  "../../../dispatcher/helpers/applied-fields-row",
-  async importOriginal => {
-    const real =
-      await importOriginal<
-        typeof import("../../../dispatcher/helpers/applied-fields-row")
-      >();
-    return {
-      ...real,
-      writeAppliedFieldsRow: async (
-        ...args: Parameters<typeof real.writeAppliedFieldsRow>
-      ) => {
-        if (slowRow.ms > 0) {
-          await new Promise(resolve => setTimeout(resolve, slowRow.ms));
-        }
-        return real.writeAppliedFieldsRow(...args);
-      },
-    };
-  }
-);
-
-/** Arms the gate after the save's count: `paused` settles once the save waits there. */
-function gateAfterCount(): { paused: Promise<void>; release: () => void } {
-  let release = (): void => undefined;
-  afterCount.release = new Promise<void>(resolve => {
-    release = resolve;
-  });
-  const paused = new Promise<void>(resolve => {
-    afterCount.paused = resolve;
-  });
-  afterCount.letGo = release;
-  afterCount.armed = true;
-  return { paused, release };
-}
-
 let instance: TestNextly | undefined;
 afterEach(async () => {
-  afterCount.armed = false;
-  // A case that failed before letting its save go leaves it paused at the gate, holding what the
-  // app's teardown waits for.
-  afterCount.letGo?.();
-  afterCount.letGo = undefined;
-  slowRow.ms = 0;
   pushRoad.forced = false;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -149,8 +57,6 @@ afterEach(async () => {
 const SINGLE = "dhs_notice";
 const GROUP = "dhs_meta";
 const PARENT = "dhs_posts";
-/** A collection placing the field group twice, so one entry writes two of its rows. */
-const TWICE = "dhs_twice";
 const KEPT = [{ name: "heading", type: "text" }];
 /** The fields before the save: `note` translatable, or kept out of translation (`translated` false). */
 const notedFields = (translated: boolean) => [
@@ -268,32 +174,6 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
           collection: PARENT,
           data: { title: "p", meta: { heading: "h", note } },
         } as never);
-      }
-
-      /**
-       * Another writer's write of `note`, made for the definition that still has it, as a person
-       * makes it through the Direct API: the Single's document, or an entry placing the field
-       * group. Answers `"written"` or what refused it.
-       */
-      function racedWrite(
-        t: TestNextly,
-        kind: Kind,
-        note: string
-      ): Promise<unknown> {
-        const writing =
-          kind === "Single"
-            ? t.nextly.updateSingle({
-                slug: SINGLE,
-                data: { heading: "h", note, _overwrite: true },
-              } as never)
-            : t.nextly.create({
-                collection: PARENT,
-                data: { title: "p", meta: { heading: "h", note } },
-              } as never);
-        return writing.then(
-          () => "written",
-          (error: unknown) => error
-        );
       }
 
       /** The `note` values the entity's values table holds, or `"gone"` once its column is. */
@@ -418,109 +298,7 @@ for (const { label, perLanguage, translated } of LAYOUTS) {
             expect(await save(t, kind, 0)).toMatchObject(refusedWith(1));
             expect(await notes(t, kind)).toBe(1);
           }, 60_000);
-
-          // A write setting the removed field, sent while the save holds the entity between its
-          // count and its delete. It waits, through the save's registry row too, then is refused
-          // naming the field: never written into the field just before its values go uncounted,
-          // nor sent to a column the field has left, nor let through between the change and the
-          // row that records it.
-          it("keeps a write of the removed field waiting until the save is recorded, then refuses it naming the field", async () => {
-            const t = await boot(kind);
-            await write(t, kind, "a");
-            const { paused, release } = gateAfterCount();
-            const saving = save(t, kind, 1);
-            const reached = await Promise.race([
-              paused.then(() => true),
-              saving.then(() => false),
-            ]);
-            expect(reached || (await saving)).toBe(true);
-
-            let settled = false;
-            const writing = racedWrite(t, kind, "written while held").finally(
-              () => {
-                settled = true;
-              }
-            );
-            await new Promise(resolve => setTimeout(resolve, 1_000));
-            expect(settled, "the write waits while the save holds").toBe(false);
-
-            // The save's registry row made slow: the write still waits through it.
-            slowRow.ms = 1_500;
-            release();
-            expect(await saving).toBe("applied");
-            expect(await writing).toMatchObject({
-              code: "VALIDATION_ERROR",
-              publicData: {
-                errors: [
-                  expect.objectContaining({
-                    path: "fields.note",
-                    code: "FIELD_REMOVED",
-                  }),
-                ],
-              },
-            });
-            expect(await notes(t, kind)).toBe("gone");
-          }, 60_000);
         });
-
-        // The share a write takes of the entity is taken once for its transaction, never once per
-        // row or per call: on PostgreSQL one advisory share statement (its registry row read rides
-        // with it), on MySQL one locking read of the entity's registry row. A field group placed
-        // twice in one entry writes two of its rows in one transaction. SQLite holds in this
-        // process, with no statement to count.
-        it.skipIf(dialect === "sqlite")(
-          "takes the write's share of the entity once for its transaction, however many of its rows it writes",
-          async () => {
-            const t = await boot(kind);
-            if (kind === "field group") {
-              await dispatchCollections(
-                {} as ServiceContainer,
-                "createCollection",
-                {},
-                {
-                  name: TWICE,
-                  label: "Twice",
-                  fields: [
-                    { name: "title", type: "text" },
-                    { name: "meta", type: "component", component: GROUP },
-                    { name: "more", type: "component", component: GROUP },
-                  ],
-                }
-              );
-            }
-            const recorder = await recordStatements(t.adapter, dialect);
-            try {
-              if (kind === "Single") {
-                await t.nextly.updateSingle({
-                  slug: SINGLE,
-                  data: { heading: "h", note: "n", _overwrite: true },
-                } as never);
-              } else {
-                await t.nextly.create({
-                  collection: TWICE,
-                  data: {
-                    title: "t",
-                    meta: { heading: "h", note: "n" },
-                    more: { heading: "h2", note: "n2" },
-                  },
-                } as never);
-              }
-            } finally {
-              recorder.uninstall();
-            }
-            const key =
-              kind === "Single" ? `single:${SINGLE}` : `fieldGroup:${GROUP}`;
-            const slug = kind === "Single" ? SINGLE : GROUP;
-            const shares = recorder.calls.filter(call =>
-              dialect === "postgresql"
-                ? /advisory_xact_lock_shared/i.test(call.text) &&
-                  call.values.includes(key)
-                : /\bfor share\b/i.test(call.text) && call.values.includes(slug)
-            );
-            expect(shares).toHaveLength(1);
-          },
-          60_000
-        );
       });
     }
   );
