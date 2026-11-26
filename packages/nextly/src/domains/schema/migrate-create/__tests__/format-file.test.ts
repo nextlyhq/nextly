@@ -10,6 +10,7 @@ import {
   ENTITY_HEADER_GUIDANCE,
   FIELD_GROUP_HEADER_PATTERN,
   formatBlankFile,
+  formatSnapshotRecordFile,
   parseEntityHeaders,
   SCOPED_ENTITIES_MARKER,
   formatMigrationFile,
@@ -574,5 +575,40 @@ describe("a caller can decline to declare scope", () => {
     const out = formatMigrationFile(base);
 
     expect(parseEntityHeaders(out).scoped).toBe(true);
+  });
+});
+
+describe("the generated line every file `migrate:create` writes carries", () => {
+  // Spelled out here, not read from the constant: files already written carry these bytes, and
+  // `repair-columns` tells a generated file from one written by hand by this line alone.
+  const NOW = new Date("2026-04-29T15:45:00.123Z");
+  const LINE = "-- Generated at: 2026-04-29T15:45:00.123Z";
+  const lines = (file: string) => file.split("\n");
+
+  it("is a line of a generated migration", () => {
+    const out = formatMigrationFile({
+      name: "add_excerpt",
+      dialect: "postgresql",
+      sqlStatements: ['ALTER TABLE "dc_posts" ADD COLUMN "excerpt" text'],
+      downSqlStatements: [],
+      collections: ["posts"],
+      singles: [],
+      components: [],
+      hasUserExt: false,
+      now: NOW,
+    });
+    expect(lines(out)).toContain(LINE);
+  });
+
+  it("is a line of a blank migration", () => {
+    expect(lines(formatBlankFile("custom_seed", "postgresql", NOW))).toContain(
+      LINE
+    );
+  });
+
+  it("is a line of a snapshot record's migration", () => {
+    expect(
+      lines(formatSnapshotRecordFile("record", "postgresql", NOW))
+    ).toContain(LINE);
   });
 });
