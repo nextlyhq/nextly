@@ -523,37 +523,17 @@ export async function runDbSync(
         })
     );
 
-    // Step 6: Data an earlier release stored, brought up to date under the
-    // schema lock, which the sync above has let go: once in a run, a watched
-    // one included. A backup refusal made only now, for work the check before
-    // the sync could not see, ends the run with the sync applied. Not where an
-    // entity could not be synced: the steps read the tables as the
-    // configuration describes them, so they wait for a run that syncs every
-    // entity, and the run names the passwords still stored as given.
-    if (takesDataSteps && notSynced.length > 0) {
-      logger.warn(
-        "The steps over data an earlier release stored were not taken: they wait for a `nextly db:sync` that syncs every entity."
-      );
-      await storedData.warnOfPasswordsLeft();
-    } else if (takesDataSteps) {
-      const schemaChanged = schemaBefore !== (await liveSchemaOf(adapter));
-      await runWithFieldTypes(configResult.fieldTypes, () =>
-        storedData.takeAfterSchemaChanges(
-          schemaChanged ? "the schema changes this sync applied" : undefined
-        )
-      );
-    }
-    const storedDataRefused = storedData.refusal();
-    if (storedDataRefused !== null) throw storedDataRefused;
-
-    // Everything else is done. A run ends with the entities it could not sync, and exit code 1; a
-    // watch reports them and goes on watching, as it does for a re-sync.
-    if (notSynced.length > 0) {
-      const failure = entitiesNotSynced(notSynced);
-      if (!options.watch) throw failure;
-      // In full, as a run ends with it: its next step and its page.
-      logger.error(formatCliError(failure));
-    }
+    // Step 6, and the entities the sync could not bring up to date (`finishAfterSync`).
+    await finishAfterSync({
+      takesDataSteps,
+      notSynced,
+      storedData,
+      schemaBefore,
+      adapter,
+      fieldTypes: configResult.fieldTypes,
+      watch: options.watch === true,
+      logger,
+    });
 
     // Step 7: Watch mode. Gated on any entity kind this command syncs, not just
     // collections and singles: `loadConfig({ watch: true })` has already opened
@@ -595,6 +575,62 @@ export async function runDbSync(
       clearConfigCache();
     }
   }
+}
+
+/**
+ * What a sync run does once the sync itself is done.
+ *
+ * Step 6: data an earlier release stored, brought up to date under the schema lock, which the sync
+ * has let go: once in a run, a watched one included. A backup refusal made only now, for work the
+ * check before the sync could not see, ends the run with the sync applied. Not where an entity could
+ * not be synced: the steps read the tables as the configuration describes them, so they wait for a
+ * run that syncs every entity, and the run names the passwords still stored as given.
+ *
+ * Then the entities the sync could not sync: a run ends with them, and exit code 1; a watch reports
+ * them and goes on watching, as it does for a re-sync.
+ */
+async function finishAfterSync(args: {
+  takesDataSteps: boolean;
+  notSynced: readonly EntityNotSynced[];
+  storedData: ReturnType<typeof storedDataOfRun>;
+  schemaBefore: Awaited<ReturnType<typeof liveSchemaOf>> | undefined;
+  adapter: CLIDatabaseAdapter;
+  fieldTypes: Parameters<typeof runWithFieldTypes>[0];
+  watch: boolean;
+  logger: CommandContext["logger"];
+}): Promise<void> {
+  const { storedData, notSynced, logger } = args;
+  if (args.takesDataSteps) {
+    await takeStoredDataSteps(args);
+  }
+  const storedDataRefused = storedData.refusal();
+  if (storedDataRefused !== null) throw storedDataRefused;
+
+  if (notSynced.length === 0) return;
+  const failure = entitiesNotSynced([...notSynced]);
+  if (!args.watch) throw failure;
+  // In full, as a run ends with it: its next step and its page.
+  logger.error(formatCliError(failure));
+}
+
+/** Step 6 of `finishAfterSync`: the steps, or, with an entity not synced, why they wait. */
+async function takeStoredDataSteps(
+  args: Parameters<typeof finishAfterSync>[0]
+): Promise<void> {
+  if (args.notSynced.length > 0) {
+    args.logger.warn(
+      "The steps over data an earlier release stored were not taken: they wait for a `nextly db:sync` that syncs every entity."
+    );
+    await args.storedData.warnOfPasswordsLeft();
+    return;
+  }
+  const schemaChanged =
+    args.schemaBefore !== (await liveSchemaOf(args.adapter));
+  await runWithFieldTypes(args.fieldTypes, () =>
+    args.storedData.takeAfterSchemaChanges(
+      schemaChanged ? "the schema changes this sync applied" : undefined
+    )
+  );
 }
 
 /**
