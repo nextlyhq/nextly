@@ -304,6 +304,49 @@ describe("a builder popup while it is open", () => {
     expect(placedAt(wrapper()).top).toBe(100);
   });
 
+  it("is placed again when reopened before its closing animation ends", async () => {
+    // A closing animation keeps the content mounted until it ends, as the
+    // popover's presence waits for it: an "enter" animation while open, an
+    // "exit" one once closed, and this one never ends.
+    const real = window.getComputedStyle.bind(window);
+    const kept = globalThis.getComputedStyle;
+    const closing = (element: Element, pseudo?: string | null) => {
+      const style = real(element, pseudo);
+      if (!isContent(element)) return style;
+      return new Proxy(style, {
+        get: (target, key) =>
+          key === "animationName"
+            ? element.getAttribute("data-state") === "closed"
+              ? "exit"
+              : "enter"
+            : (Reflect.get(target, key) as unknown),
+      });
+    };
+    // Both: the popover's presence asks the global one.
+    window.getComputedStyle = closing;
+    globalThis.getComputedStyle = closing;
+    try {
+      const view = await opened(BuilderPopoverContent);
+      expect(placedAt(wrapper()).top).toBe(anchorBox.top - 171);
+      const mounted = content();
+
+      view.rerender(<Popup as={BuilderPopoverContent} rows={3} open={false} />);
+      await waitFor(() =>
+        expect(mounted.getAttribute("data-state")).toBe("closed")
+      );
+      anchorBox = { ...anchorBox, top: 100 };
+      view.rerender(<Popup as={BuilderPopoverContent} rows={3} />);
+      await scrolled();
+
+      // The same content, still mounted: placed again, not left 171 px up.
+      expect(content()).toBe(mounted);
+      await waitFor(() => expect(placedAt(wrapper()).top).toBe(100));
+    } finally {
+      window.getComputedStyle = real;
+      globalThis.getComputedStyle = kept;
+    }
+  });
+
   it("is placed again beside a new anchor it is told it moved to", async () => {
     const view = render(
       <Popup as={BuilderPopoverContent} rows={3} anchorKey="first" />

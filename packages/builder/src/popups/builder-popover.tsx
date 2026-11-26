@@ -268,6 +268,28 @@ export const BuilderPopoverContent: React.ForwardRefExoticComponent<
       return () => view.cancelAnimationFrame(frame);
     }, [anchorKey, isHeld, place]);
 
+    // Opened again before its closing animation ended, the content never
+    // went, so the opening is placed again here from where it is held.
+    React.useEffect(() => {
+      if (!isHeld || node === null) return;
+      const view = node.ownerDocument.defaultView;
+      if (view === null) return;
+      let frame = 0;
+      const watch = new view.MutationObserver(() => {
+        if (node.getAttribute("data-state") !== "open") return;
+        view.cancelAnimationFrame(frame);
+        frame = view.requestAnimationFrame(place);
+      });
+      watch.observe(node, {
+        attributes: true,
+        attributeFilter: ["data-state"],
+      });
+      return () => {
+        view.cancelAnimationFrame(frame);
+        watch.disconnect();
+      };
+    }, [isHeld, node, place]);
+
     // Placed again only when the window changes size; nothing else moves it.
     React.useEffect(() => {
       if (!isHeld) return;

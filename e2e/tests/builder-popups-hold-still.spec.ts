@@ -130,23 +130,23 @@ async function expectInsideWindow(page: Page, popup: Locator): Promise<void> {
 
 /**
  * Opens `popup` from `opener`, which must sit in the lower half of the
- * window, makes `change`, and holds the popup to where it was: its side, its
- * top-left corner and `pointer` (the control the author just used) all
- * unmoved, and its content's height changed, so the
- * change did resize it.
+ * window, asks `using` which control the author uses and what that does, and
+ * holds the popup to where it was: its side, its top-left corner and that
+ * control, measured before the change and after it, all unmoved, and its
+ * content's height changed, so the change did resize it.
  */
 async function holdsThrough(
   page: Page,
   {
     opener,
     popup,
-    pointer,
-    change,
+    using,
   }: {
     opener: Locator;
     popup: Locator;
-    pointer: (popup: Locator) => Locator;
-    change: (popup: Locator) => Promise<void>;
+    using: (
+      popup: Locator
+    ) => Promise<{ pointer: Locator; change: () => Promise<void> }>;
   }
 ): Promise<void> {
   const from = await boxOf(opener);
@@ -163,8 +163,9 @@ async function holdsThrough(
   const side = await popup.getAttribute("data-nx-popup-side");
   const before = await boxOf(popup);
   const height = await popup.evaluate(element => element.scrollHeight);
-  await change(popup);
-  const at = await boxOf(pointer(popup));
+  const { pointer, change } = await using(popup);
+  const at = await boxOf(pointer);
+  await change();
   await settled(page);
   await expect
     .poll(() => popup.evaluate(element => element.scrollHeight))
@@ -180,7 +181,7 @@ async function holdsThrough(
     { x: before.x, y: before.y },
     "the popup's top-left corner"
   );
-  expectSamePlace(await boxOf(pointer(popup)), at, "the control just used");
+  expectSamePlace(await boxOf(pointer), at, "the control just used");
   await expectInsideWindow(page, popup);
 }
 
@@ -231,22 +232,49 @@ async function lowered(scroller: Locator, target: Locator): Promise<void> {
   }
 }
 
-async function storeClasses(
-  api: APIRequestContext,
-  classes: unknown[]
-): Promise<void> {
-  const written = await api.patch(SITE_STYLE, {
-    data: { classes, _overwrite: true },
-  });
-  expect(written.ok(), `writing the classes: ${written.status()}`).toBe(true);
-}
-
-async function storedClasses(api: APIRequestContext): Promise<unknown[]> {
+/** The site style's classes and variables, as stored. */
+async function storedSiteStyle(
+  api: APIRequestContext
+): Promise<{ classes: unknown[]; tokens: unknown }> {
   const response = await api.get(SITE_STYLE);
-  expect(response.ok()).toBe(true);
+  expect(response.ok(), `reading the site style: ${response.status()}`).toBe(
+    true
+  );
   const body = (await response.json()) as Record<string, unknown>;
   const item = (body.item ?? body) as Record<string, unknown>;
-  return (item.classes as unknown[] | undefined) ?? [];
+  const raw = item.tokens ?? null;
+  return {
+    classes: (item.classes as unknown[] | undefined) ?? [],
+    tokens: typeof raw === "string" ? (JSON.parse(raw) as unknown) : raw,
+  };
+}
+
+async function storeSiteStyle(
+  api: APIRequestContext,
+  data: { classes?: unknown[]; tokens?: unknown }
+): Promise<void> {
+  const written = await api.patch(SITE_STYLE, {
+    data: { ...data, _overwrite: true },
+  });
+  expect(written.ok(), `writing the site style: ${written.status()}`).toBe(
+    true
+  );
+}
+
+/**
+ * Runs `work`, which may change the site's classes and variables, and puts
+ * both back as they were stored, whatever it changed.
+ */
+async function keepingSiteStyle(
+  api: APIRequestContext,
+  work: () => Promise<void>
+): Promise<void> {
+  const kept = await storedSiteStyle(api);
+  try {
+    await work();
+  } finally {
+    await storeSiteStyle(api, kept);
+  }
 }
 
 /** A page of three sections, for the "+" between two of them. */
@@ -300,74 +328,87 @@ test.describe("a builder popup holds still while its content changes", () => {
   test("the type size editor, as a Reset row comes or goes", async ({
     page,
   }) => {
-    await openEditorWith(page, NODES, TEXT);
-    const panel = await openDesign(page);
-    await panel.getByRole("tab", { name: /^Type/ }).click();
-    const rows = panel
-      .getByRole("region", { name: "Site text" })
-      .getByRole("button", { name: /^Site text: / });
-    // The lowest of the type size rows, as low in the window as it goes.
-    const row = rows.filter({ hasNotText: /link/i }).last();
-    await lowered(panel.locator(".nx-vars__body").first(), row);
-    const label = (await row.getAttribute("aria-label")) ?? "";
-    const name = /^Site text: ([^,]+)/.exec(
-      (await row.textContent()) ?? label
-    )?.[1];
+    await keepingSiteStyle(page.request, async () => {
+      await openEditorWith(page, NODES, TEXT);
+      const panel = await openDesign(page);
+      await panel.getByRole("tab", { name: /^Type/ }).click();
+      const rows = panel
+        .getByRole("region", { name: "Site text" })
+        .getByRole("button", { name: /^Site text: / });
+      // The lowest of the type size rows, as low in the window as it goes.
+      const row = rows.filter({ hasNotText: /link/i }).last();
+      await lowered(panel.locator(".nx-vars__body").first(), row);
+      // The popup is named after the row's label.
+      const name = (await row.locator(".nx-vars__name").textContent())?.trim();
+      expect(name, "the row's label").toBeTruthy();
 
-    let used: Locator | undefined;
-    await holdsThrough(page, {
-      opener: row,
-      popup: page.getByRole("dialog", { name: `Edit ${name ?? ""}`.trim() }),
-      pointer: () => used ?? row,
-      change: async popup => {
-        const reset = popup.getByRole("button", { name: "Reset", exact: true });
-        if (await reset.isVisible()) {
-          used = popup.getByRole("radio").first();
-          await reset.click();
-          await expect(reset).toHaveCount(0);
-        } else {
-          used = popup.getByRole("radio", { checked: false }).first();
-          await used.check();
-          await expect(reset).toBeVisible();
-        }
-      },
+      await holdsThrough(page, {
+        opener: row,
+        popup: page.getByRole("dialog", { name: `Edit ${name}`, exact: true }),
+        using: async popup => {
+          const reset = popup.getByRole("button", {
+            name: "Reset",
+            exact: true,
+          });
+          if (await reset.isVisible()) {
+            return {
+              pointer: popup.getByRole("radio").first(),
+              change: async () => {
+                await reset.click();
+                await expect(reset).toHaveCount(0);
+              },
+            };
+          }
+          const radio = popup.getByRole("radio", { checked: false }).first();
+          return {
+            pointer: radio,
+            change: async () => {
+              await radio.check();
+              await expect(reset).toBeVisible();
+            },
+          };
+        },
+      });
     });
   });
 
   test("a colour variable, as its dark value is added or taken off", async ({
     page,
   }) => {
-    await openEditorWith(page, NODES, TEXT);
-    const panel = await openDesign(page);
-    await panel.getByRole("tab", { name: /^Colou?rs/ }).click();
-    const row = panel.locator(".nx-vars__row").last();
-    await lowered(panel.locator(".nx-vars__body").first(), row);
+    await keepingSiteStyle(page.request, async () => {
+      await openEditorWith(page, NODES, TEXT);
+      const panel = await openDesign(page);
+      await panel.getByRole("tab", { name: /^Colou?rs/ }).click();
+      const row = panel.locator(".nx-vars__row").last();
+      await lowered(panel.locator(".nx-vars__body").first(), row);
 
-    let used: Locator | undefined;
-    await holdsThrough(page, {
-      opener: row,
-      popup: page.locator('[data-slot="popover-content"].nx-vars-editor'),
-      pointer: () => used ?? row,
-      change: async popup => {
-        const remove = popup.getByRole("button", { name: "Remove dark value" });
-        if (await remove.isVisible()) {
-          used = popup.getByLabel("Light", { exact: true });
-          await remove.click();
-        } else {
-          used = popup.getByRole("button", { name: "Add dark value" });
-          await used.click();
-          used = popup.getByLabel("Light", { exact: true });
-        }
-      },
+      await holdsThrough(page, {
+        opener: row,
+        popup: page.locator('[data-slot="popover-content"].nx-vars-editor'),
+        using: async popup => {
+          const remove = popup.getByRole("button", {
+            name: "Remove dark value",
+          });
+          const add = popup.getByRole("button", { name: "Add dark value" });
+          const gone = await remove.isVisible();
+          return {
+            // The Light value, above the dark one that comes or goes.
+            pointer: popup.getByLabel("Light", { exact: true }),
+            change: async () => {
+              await (gone ? remove : add).click();
+              await expect(gone ? add : remove).toBeVisible();
+            },
+          };
+        },
+      });
     });
   });
 
   test("a text style editor, as a part is set and its reset appears", async ({
     page,
   }) => {
-    const kept = await storedClasses(page.request);
-    try {
-      await storeClasses(page.request, [LEAD]);
+    await keepingSiteStyle(page.request, async () => {
+      await storeSiteStyle(page.request, { classes: [LEAD] });
       await openEditorWith(page, NODES, TEXT);
       const panel = await openDesign(page);
       await panel.getByRole("tab", { name: /^Type/ }).click();
@@ -375,23 +416,26 @@ test.describe("a builder popup holds still while its content changes", () => {
       const row = section.getByRole("button", { name: /^Text styles: Lead\b/ });
       await lowered(panel.locator(".nx-vars__body").first(), row);
 
-      const spacing = (popup: Locator) =>
-        popup.getByRole("textbox", { name: "Letter spacing" });
       await holdsThrough(page, {
         opener: row,
         popup: page.getByRole("dialog", { name: "Edit Lead" }),
-        pointer: spacing,
-        change: async popup => {
-          await spacing(popup).fill("0.05");
-          await spacing(popup).press("Enter");
-          await expect(
-            popup.getByRole("button", { name: /^Reset Letter spacing/ })
-          ).toBeVisible();
+        using: async popup => {
+          const spacing = popup.getByRole("textbox", {
+            name: "Letter spacing",
+          });
+          return {
+            pointer: spacing,
+            change: async () => {
+              await spacing.fill("0.05");
+              await spacing.press("Enter");
+              await expect(
+                popup.getByRole("button", { name: /^Reset Letter spacing/ })
+              ).toBeVisible();
+            },
+          };
         },
       });
-    } finally {
-      await storeClasses(page.request, kept);
-    }
+    });
   });
 
   test("a block's colour picker, as its custom colour opens", async ({
@@ -406,17 +450,20 @@ test.describe("a builder popup holds still while its content changes", () => {
     });
     await lowered(page.locator(".nx-inspector"), opener);
 
-    const custom = (popup: Locator) =>
-      popup.getByRole("button", { name: "Custom colour" });
     await holdsThrough(page, {
       opener,
       popup: page.locator(
         '[data-slot="popover-content"].nx-style-inspector__picker'
       ),
-      pointer: custom,
-      change: async popup => {
-        await custom(popup).click();
-        await expect(page.getByLabel("Hex colour")).toBeVisible();
+      using: async popup => {
+        const custom = popup.getByRole("button", { name: "Custom colour" });
+        return {
+          pointer: custom,
+          change: async () => {
+            await custom.click();
+            await expect(page.getByLabel("Hex colour")).toBeVisible();
+          },
+        };
       },
     });
   });
@@ -431,16 +478,19 @@ test.describe("a builder popup holds still while its content changes", () => {
       .getByRole("button", { name: /^Padding bottom / });
     await lowered(page.locator(".nx-inspector"), opener);
 
-    const number = (popup: Locator) =>
-      popup.getByLabel("Value for Padding bottom");
     await holdsThrough(page, {
       opener,
       popup: page.getByRole("dialog", { name: "Padding bottom" }),
-      pointer: number,
-      change: async popup => {
-        await number(popup).fill("twelve");
-        await number(popup).press("Enter");
-        await expect(popup.getByRole("alert")).toBeVisible();
+      using: async popup => {
+        const number = popup.getByLabel("Value for Padding bottom");
+        return {
+          pointer: number,
+          change: async () => {
+            await number.fill("twelve");
+            await number.press("Enter");
+            await expect(popup.getByRole("alert")).toBeVisible();
+          },
+        };
       },
     });
   });
@@ -466,14 +516,12 @@ test.describe("a builder popup holds still while its content changes", () => {
       .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
       .toBe("1");
 
-    const search = (popup: Locator) =>
-      popup.getByRole("combobox", { name: "Search blocks" });
     await holdsThrough(page, {
       opener: add,
       popup: page.getByRole("dialog", { name: "Add a block" }),
-      pointer: search,
-      change: async popup => {
-        await search(popup).fill("he");
+      using: async popup => {
+        const search = popup.getByRole("combobox", { name: "Search blocks" });
+        return { pointer: search, change: () => search.fill("he") };
       },
     });
   });
@@ -548,6 +596,9 @@ test.describe("what may move a builder popup", () => {
   test("the add picker opened low stays inside and scrolls its list", async ({
     page,
   }) => {
+    // A short window, so the results are taller than the room they have.
+    const short = { width: WINDOW.width, height: 480 };
+    await page.setViewportSize(short);
     const id = await createPage(page.request);
     await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
     await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
@@ -573,13 +624,25 @@ test.describe("what may move a builder popup", () => {
     await popup.getByRole("combobox", { name: "Search blocks" }).fill("e");
     await settled(page);
 
-    await expectInsideWindow(page, popup);
-    // Its list of results scrolls inside it, rather than running it off the
-    // window.
+    const box = await boxOf(popup);
+    const bar = await boxOf(page.locator(".nx-builder-topbar").first());
+    expect(box.y).toBeGreaterThanOrEqual(bar.y + bar.height);
+    expect(box.y + box.height).toBeLessThanOrEqual(short.height);
+    // Its list of results is taller than the room, and scrolls inside it
+    // rather than running the picker off the window.
     const list = popup.getByRole("listbox", { name: "Matching blocks" });
     await expect(list).toBeVisible();
-    expect(
-      await list.evaluate(element => getComputedStyle(element).overflowY)
-    ).toMatch(/^(auto|scroll)$/);
+    const overflow = await list.evaluate(element => ({
+      scroll: element.scrollHeight,
+      client: element.clientHeight,
+    }));
+    expect(overflow.scroll, "the results overflow the list").toBeGreaterThan(
+      overflow.client
+    );
+    const moved = await list.evaluate(element => {
+      element.scrollTop += 40;
+      return element.scrollTop;
+    });
+    expect(moved, "the list scrolls").toBeGreaterThan(0);
   });
 });
