@@ -204,7 +204,7 @@ export function pairOutcome(
     from,
     to,
     valuesOf(from, to).map(value => ({ value }))
-  );
+  ).outcome;
 }
 
 /**
@@ -220,7 +220,7 @@ export function pairOutcomeHeldInJson(
 ): PairOutcome | "needs-rewrite" | null {
   if (pairBlocked(from, to) !== null) return null;
   if (choiceMayRefuse(from, to)) return "may-lose";
-  return outcomeOver(
+  const { outcome, everyValueUnread } = outcomeOver(
     from,
     to,
     valuesOf(from, to).flatMap(value => {
@@ -231,23 +231,27 @@ export function pairOutcomeHeldInJson(
     }),
     heldInJson(from, to)
   );
+  return everyValueUnread ? "needs-rewrite" : outcome;
 }
 
 /**
  * The mark over `values`, those of them a field of `from` holds: those the rules keep for the type
  * itself. None of them held means no value is judged, so nothing says every value is kept. With `read`,
- * a value kept or changed whose stored writing is not what `to` reads is one no save rewrites.
+ * a value kept or changed whose stored writing is not what `to` reads is one no save rewrites, which
+ * may be lost; `everyValueUnread` says every value held is one.
  */
 function outcomeOver(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect,
   values: readonly { value: OldValue; stored?: string }[],
   read?: StoredAsRead
-): PairOutcome | "needs-rewrite" {
+): { outcome: PairOutcome; everyValueUnread: boolean } {
   const held = values.filter(
     ({ value }) => judgeValue(from, from, value).outcome === "kept"
   );
-  if (held.length === 0) return "may-lose";
+  if (held.length === 0) {
+    return { outcome: "may-lose", everyValueUnread: false };
+  }
   let converts = false;
   let lost = false;
   let unread = 0;
@@ -266,9 +270,10 @@ function outcomeOver(
       converts = true;
     }
   }
-  if (unread === held.length) return "needs-rewrite";
-  if (lost || unread > 0) return "may-lose";
-  return converts ? "converts" : "keeps";
+  return {
+    outcome: lost || unread > 0 ? "may-lose" : converts ? "converts" : "keeps",
+    everyValueUnread: unread === held.length,
+  };
 }
 
 /**
