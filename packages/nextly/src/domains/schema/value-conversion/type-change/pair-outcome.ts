@@ -9,10 +9,19 @@
  *
  * @module domains/schema/value-conversion/type-change/pair-outcome
  */
+import { itemOf } from "./decode-stored";
 import { documentOfText } from "./document";
 import type { FieldTypeOnDialect, NumberFormat } from "./field-type";
-import { judgeValue, type OldValue, pairBlocked, readDateText } from "./judge";
-import { readNumber } from "./numbers";
+import {
+  instantWriting,
+  judgeValue,
+  type OldValue,
+  pairBlocked,
+  readDateText,
+} from "./judge";
+import { heldInJson } from "./judge-stored";
+import { decimalWriting, readNumber } from "./numbers";
+import type { StoredAsRead } from "./stored-as-read";
 
 /** What a type change can do to a field's values: none changed, some changed, or some lost. */
 export type PairOutcome = "keeps" | "converts" | "may-lose";
@@ -28,13 +37,19 @@ const TEXTS: readonly string[] = [
   "x".repeat(70_000),
 ];
 
-/** A number of each kind a column holds differently: whole, fraction, negative, beyond 64 bits. */
+/**
+ * A number of each kind a column holds differently: whole, fraction, negative, beyond 64 bits, and
+ * the infinities a double's column holds on some databases (judged only where the field's own column
+ * holds them).
+ */
 const NUMBERS: readonly string[] = [
   "0",
   "7",
   "-3",
   "3.5",
   "123456789012345678901234567890",
+  "Infinity",
+  "-Infinity",
 ];
 
 /** A number as long as any a column of `format` holds, written in full. */
@@ -185,17 +200,101 @@ export function pairOutcome(
 ): PairOutcome | null {
   if (pairBlocked(from, to) !== null) return null;
   if (choiceMayRefuse(from, to)) return "may-lose";
-  let converts = false;
-  // Only values a field of `from` can hold: those the rules keep for the type itself. None of them
-  // held means no value here is judged, so nothing says every value is kept.
-  const held = valuesOf(from, to).filter(
-    value => judgeValue(from, from, value).outcome === "kept"
+  return outcomeOver(
+    from,
+    to,
+    valuesOf(from, to).map(value => ({ value }))
+  );
+}
+
+/**
+ * `pairOutcome` for a field held inside a named group's or a repeater's JSON (`fieldTypeInJson`),
+ * where no save rewrites a value into the new type's form: each value is judged as its JSON writing
+ * stands, as the save judges it (`heldInJson`). `"needs-rewrite"` where every value it may hold would
+ * have to be rewritten, which the save refuses whatever the values are; a value of them that would,
+ * among others that would not, may be lost.
+ */
+export function pairOutcomeHeldInJson(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect
+): PairOutcome | "needs-rewrite" | null {
+  if (pairBlocked(from, to) !== null) return null;
+  if (choiceMayRefuse(from, to)) return "may-lose";
+  return outcomeOver(
+    from,
+    to,
+    valuesOf(from, to).flatMap(value => {
+      const held = asHeldInJson(value);
+      return held === undefined
+        ? []
+        : [{ value: itemOf(from, held), stored: JSON.stringify(held) }];
+    }),
+    heldInJson(from, to)
+  );
+}
+
+/**
+ * The mark over `values`, those of them a field of `from` holds: those the rules keep for the type
+ * itself. None of them held means no value is judged, so nothing says every value is kept. With `read`,
+ * a value kept or changed whose stored writing is not what `to` reads is one no save rewrites.
+ */
+function outcomeOver(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect,
+  values: readonly { value: OldValue; stored?: string }[],
+  read?: StoredAsRead
+): PairOutcome | "needs-rewrite" {
+  const held = values.filter(
+    ({ value }) => judgeValue(from, from, value).outcome === "kept"
   );
   if (held.length === 0) return "may-lose";
-  for (const value of held) {
-    const { outcome } = judgeValue(from, to, value);
-    if (outcome === "lost" || outcome === "blocked") return "may-lose";
-    if (outcome === "changed") converts = true;
+  let converts = false;
+  let lost = false;
+  let unread = 0;
+  for (const { value, stored } of held) {
+    const verdict = judgeValue(from, to, value);
+    if (verdict.outcome === "lost" || verdict.outcome === "blocked") {
+      lost = true;
+    } else if (
+      read !== undefined &&
+      stored !== undefined &&
+      verdict.readsAs !== undefined &&
+      !read.value(stored, verdict.readsAs, verdict.outcome)
+    ) {
+      unread += 1;
+    } else if (verdict.outcome === "changed") {
+      converts = true;
+    }
   }
+  if (unread === held.length) return "needs-rewrite";
+  if (lost || unread > 0) return "may-lose";
   return converts ? "converts" : "keeps";
+}
+
+/**
+ * `value` as a container's JSON would hold it, which its old field reads back as it (`itemOf`); none
+ * for a value JSON does not hold as written: no value, an infinity, or a number beyond a double.
+ */
+function asHeldInJson(value: OldValue): unknown {
+  switch (value.kind) {
+    case "text":
+      return value.text;
+    case "number":
+      return value.number.finite === true
+        ? Number(decimalWriting(value.number.value))
+        : undefined;
+    case "boolean":
+      return value.value;
+    case "date":
+      return instantWriting(value.date);
+    case "json":
+    case "document":
+      return value.value;
+    case "list": {
+      const items = value.items.map(asHeldInJson);
+      return items.includes(undefined) ? undefined : items;
+    }
+    default:
+      return undefined;
+  }
 }

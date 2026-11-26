@@ -23,6 +23,8 @@ import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { FIELD_TYPE_CATALOG } from "../../collections/fields/catalog";
 import { isFieldLocalized } from "../../domains/i18n/classify-fields";
 import { joiningFieldsLosingValues } from "../../domains/i18n/migration/archive-preflight";
+import { deriveCompanionTableSpec } from "../../domains/i18n/migration/derive-companion-spec";
+import { fieldTurningTranslatedRefusal } from "../../domains/i18n/migration/disable-keeping-overlays";
 import { fieldsJoiningTranslation } from "../../domains/i18n/migration/field-joins-translation";
 import {
   refusalsForFieldsJoiningTranslation,
@@ -31,9 +33,12 @@ import {
 } from "../../domains/i18n/migration/field-leaves-translation-rules";
 import { retypedCompanionColumns } from "../../domains/i18n/migration/plan-companion-type-change";
 import { fieldsLeavingTranslation } from "../../domains/i18n/migration/reconcile-companion";
+import type { I18nTransitionKind } from "../../domains/i18n/migration/transition-state";
 import {
+  fieldsTurningTranslatedInside,
   sharedStructureShape,
   type SharedStructureShape,
+  type StructuredField,
 } from "../../domains/i18n/shared-structure";
 import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import type {
@@ -45,6 +50,10 @@ import {
   fieldTypeOnDialect,
 } from "../../domains/schema/value-conversion/type-change/field-type";
 import {
+  entityLabel,
+  fieldTypeChangesOf,
+  perLanguageBefore,
+  textHeldPerLanguageRefusals,
   TRANSLATIONS_COLUMN_KEEPS_ITS_TYPE,
   translationsColumnChanges,
 } from "../../domains/schema/value-conversion/type-change/field-type-changes";
@@ -54,6 +63,7 @@ import {
 } from "../../domains/schema/value-conversion/type-change/judge";
 import {
   pairOutcome,
+  pairOutcomeHeldInJson,
   type PairOutcome,
 } from "../../domains/schema/value-conversion/type-change/pair-outcome";
 import { NextlyError } from "../../errors/nextly-error";
@@ -80,6 +90,8 @@ export type TypeChangeBlock =
   | "leaves-translation-inside"
   /** A value every language shares in its containers would become each language's own there. */
   | "joins-translation-inside"
+  /** Every value it may hold there would have to be rewritten into the new type's form, which no save does. */
+  | "needs-rewrite-inside"
   /** It would stay translated there, its values not all kept, which the save does not judge yet. */
   | "unjudged-inside";
 
@@ -310,13 +322,19 @@ function keptPerLanguageInside(
   );
 }
 
+/** Why a change is blocked, and the save's own words for it where the save gives them. */
+type Blocked = {
+  blocked: TypeChangeBlock;
+  refusal: TypeChangeRefusalWords | null;
+};
+
+/** Why a change of a field held in a container's JSON is blocked (`containerRefusal`), or null. */
+type InsideRefusal = (candidate: FieldDefinition) => Blocked | null;
+
 /**
  * Why a translation rule blocks changing the field into `candidate`, on an entity stored per language:
- * on its own row or column, the save's own (`translationRefusal`); inside a container, where the field
- * is text kept per language there and the candidate would not be, or the reverse: the container's values
- * are moved between its structure and each language's text by no save, so a value that stops being text
- * there is left behind in every language, and one that becomes it is taken from the others by the first
- * language to save the container. Null where none does.
+ * on its own row or column, the save's own (`translationRefusal`); inside a container, its rules there
+ * (`inside`, `containerRefusal`). Null where none does.
  */
 function refusalByTranslation(
   args: {
@@ -324,20 +342,13 @@ function refusalByTranslation(
     dialect: SupportedDialect;
     builtBy: ColumnOrigin;
     inJson?: boolean;
-    translatedInside?: TranslatedInside;
+    inside?: InsideRefusal;
     layout?: TranslationLayout;
   },
   candidate: FieldDefinition
-): { blocked: TypeChangeBlock; refusal: TypeChangeRefusalWords | null } | null {
+): Blocked | null {
   if (args.layout?.perLanguage !== true) return null;
-  if (args.inJson === true) {
-    const was = keptPerLanguageInside(args, args.field);
-    if (was === keptPerLanguageInside(args, candidate)) return null;
-    return {
-      blocked: was ? "leaves-translation-inside" : "joins-translation-inside",
-      refusal: null,
-    };
-  }
+  if (args.inJson === true) return args.inside?.(candidate) ?? null;
   return translationRefusal({
     from: args.field,
     to: candidate,
@@ -353,9 +364,11 @@ function refusalByTranslation(
  * values are kept, as the save that would make the change reads them; `inJson`, that they are held
  * inside a named group's or a repeater's JSON value, as the save judges such a field. `layout`, where
  * the entity keeps its translated values. A field held in a container's JSON has no translations column
- * of its own, so the rules of one are not asked of it: `translatedInside` says whether it is text its
- * containers keep per language beside their structure, as saved and as a change would make it
- * (`translatedInsideContainers`), and a change of one into the other is not open.
+ * of its own, so the rules of one are not asked of it: `inside` judges it by the rules of the
+ * container keeping it (`containerRefusal`), and `translatedInside` says whether it is text the
+ * container keeps per language beside its structure (`translatedInsideContainers`), whose values the
+ * save does not judge. A value held there is judged as its JSON writing stands (`pairOutcomeHeldInJson`),
+ * since no save rewrites one.
  */
 export function typeChangeTargets(args: {
   field: FieldDefinition;
@@ -365,6 +378,7 @@ export function typeChangeTargets(args: {
   componentRow?: boolean;
   inJson?: boolean;
   translatedInside?: TranslatedInside;
+  inside?: InsideRefusal;
   layout?: TranslationLayout;
 }): TypeChangeTarget[] {
   const at = args.componentRow === true ? { componentRow: true } : {};
@@ -388,14 +402,30 @@ export function typeChangeTargets(args: {
         return { type, blocked, refusal: null, outcome: null };
       const translation = refusalByTranslation(args, candidate);
       if (translation !== null) return { type, ...translation, outcome: null };
-      const outcome = saveMayRefuse(args.field, candidate)
-        ? "may-lose"
-        : pairOutcome(from, to);
+      const judged =
+        args.inJson === true
+          ? pairOutcomeHeldInJson(from, to)
+          : pairOutcome(from, to);
       // Text kept per language beside a container's structure is not among the values the save judges,
       // so until it is, a change there is open only where every value is kept.
-      return keptPerLanguageInside(args, args.field) && outcome !== "keeps"
-        ? { type, blocked: "unjudged-inside", refusal: null, outcome: null }
-        : { type, blocked: null, refusal: null, outcome };
+      if (keptPerLanguageInside(args, args.field)) {
+        return judged === "keeps" && !saveMayRefuse(args.field, candidate)
+          ? { type, blocked: null, refusal: null, outcome: judged }
+          : { type, blocked: "unjudged-inside", refusal: null, outcome: null };
+      }
+      // Every value it may hold there would need rewriting, which the save refuses, whatever they are.
+      if (judged === "needs-rewrite") {
+        return {
+          type,
+          blocked: "needs-rewrite-inside",
+          refusal: null,
+          outcome: null,
+        };
+      }
+      const outcome = saveMayRefuse(args.field, candidate)
+        ? "may-lose"
+        : judged;
+      return { type, blocked: null, refusal: null, outcome };
     });
 }
 
@@ -403,6 +433,21 @@ export function typeChangeTargets(args: {
  * A field as the change would save it. Of its settings, those the rules read are parsed here; a
  * choice's options are a list, a relationship's an object, and each is read as far as it is one.
  */
+/**
+ * The widest bounded text column any supported database makes: PostgreSQL's `varchar` limit. A width
+ * past it is no column a save could make, and a candidate stating one would have a text that long
+ * made to judge it, so it is refused as the request's own error.
+ */
+const WIDEST_TEXT_COLUMN = 10_485_760;
+
+/** A stated width, read as far as the column builders read one (`declaredMaxLength`): bounded here. */
+const StatedWidth = z
+  .unknown()
+  .refine(width => typeof width !== "number" || width <= WIDEST_TEXT_COLUMN, {
+    message: `A width is at most ${WIDEST_TEXT_COLUMN} characters.`,
+  })
+  .optional();
+
 const CandidateField = z.looseObject({
   hasMany: z.boolean().nullish(),
   unique: z.boolean().nullish(),
@@ -410,7 +455,9 @@ const CandidateField = z.looseObject({
   options: z
     .union([z.array(z.unknown()), z.record(z.string(), z.unknown())])
     .nullish(),
-  validation: z.record(z.string(), z.unknown()).nullish(),
+  // A field group's width is a top-level `maxLength`; a collection's, its rule's.
+  maxLength: StatedWidth,
+  validation: z.looseObject({ maxLength: StatedWidth }).nullish(),
 });
 
 /** The settings the page knows a field as saved by, each as the Builder loads it. */
@@ -546,6 +593,112 @@ function translatedInsideContainers(
   return shape?.texts.includes(held) === true;
 }
 
+/** The entity a route answers for, as its save names it in a refusal. */
+export interface TypeChangeEntity {
+  kind: I18nTransitionKind;
+  slug: string;
+}
+
+/**
+ * Why changing the field at `path` among `fields` into `candidate` is blocked by the rules of the
+ * container keeping it, on an entity stored per language, or null where none is. The save's own rules
+ * first, over the save's own reading of the change, in its own words: a translated text there that
+ * would stop being translated (`textHeldPerLanguageRefusals`), and a shared value there that would
+ * become translated (`fieldsTurningTranslatedInside`). Then one the save does not refuse, where the
+ * value is lost all the same: the container's first text on an entity keeping nothing per language yet,
+ * whose translations the save makes empty, so the first save in one language takes it from the others.
+ */
+function containerRefusal(
+  args: {
+    fields: readonly FieldDefinition[];
+    path: readonly string[];
+    entity: TypeChangeEntity;
+    dialect: SupportedDialect;
+    builtBy: ColumnOrigin;
+    componentRow?: boolean;
+  },
+  saved: FieldDefinition,
+  candidate: FieldDefinition
+): Blocked | null {
+  const at = args.path.join(".");
+  const next = withFieldAt(args.fields, args.path, candidate);
+  const [held] = textHeldPerLanguageRefusals(
+    {
+      label: entityLabel(args.entity.kind, args.entity.slug),
+      // Read for which fields the entity keeps per language before the change; no table is read.
+      table: "",
+      ...perLanguageBefore({ localized: true }, "", args.fields),
+      previous: args.fields,
+      next,
+      builtBy: args.builtBy,
+      ...(args.componentRow === true ? { componentRow: true } : {}),
+    },
+    fieldTypeChangesOf({
+      previous: args.fields,
+      next,
+      dialect: args.dialect,
+      builtBy: args.builtBy,
+      ...(args.componentRow === true ? { componentRow: true } : {}),
+      nested: true,
+    })
+  ).filter(refusal => refusal.path === at);
+  if (held !== undefined) {
+    return {
+      blocked: "leaves-translation-inside",
+      refusal: { code: held.code, reason: held.message, steps: [] },
+    };
+  }
+  const turning = fieldTurningTranslatedRefusal(
+    args.entity,
+    fieldsTurningTranslatedInside(
+      args.fields as unknown as StructuredField[],
+      next as unknown as StructuredField[]
+    ).filter(path => path === at)
+  );
+  if (turning !== undefined) {
+    return {
+      blocked: "joins-translation-inside",
+      refusal: {
+        code: turning.code,
+        reason: turning.publicMessage,
+        steps: [],
+      },
+    };
+  }
+  const firstText =
+    !translatedInsideContainers(args.fields, args.path, saved) &&
+    translatedInsideContainers(args.fields, args.path, candidate) &&
+    keepsNothingPerLanguage(args);
+  if (firstText) return { blocked: "joins-translation-inside", refusal: null };
+  return null;
+}
+
+/**
+ * Whether the entity keeps no translations table: none of `fields` has a column there, as the
+ * table is made (`deriveCompanionTableSpec`). Its first text inside a container gets one made empty.
+ */
+function keepsNothingPerLanguage(args: {
+  fields: readonly FieldDefinition[];
+  entity: TypeChangeEntity;
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+}): boolean {
+  return (
+    deriveCompanionTableSpec({
+      slug: args.entity.slug,
+      kind: args.entity.kind,
+      fields: args.fields as unknown as Parameters<
+        typeof deriveCompanionTableSpec
+      >[0]["fields"],
+      dialect: args.dialect,
+      // Neither names a column; only whether the table has one is asked.
+      defaultLocale: "en",
+      collectionLocalized: true,
+      builtBy: args.builtBy,
+    }) === null
+  );
+}
+
 /**
  * The type picker's answer for a saved field of an entity whose stored fields are `fields`, as a
  * list (`{ items, meta }`). Shared by the collection, Single and field-group routes, so the three
@@ -557,6 +710,8 @@ export function respondTypeChangeTargets(args: {
   builtBy: ColumnOrigin;
   componentRow?: boolean;
   layout: TranslationLayout;
+  /** The entity, as its save names it in a refusal the answer repeats. */
+  entity: TypeChangeEntity;
 }): Response {
   let request: z.infer<typeof TargetsRequest>;
   try {
@@ -585,15 +740,29 @@ export function respondTypeChangeTargets(args: {
       logContext: { reason: "adapter-not-initialized" },
     });
   }
+  const dialect = adapter.getCapabilities().dialect;
   const items = typeChangeTargets({
     field: found.field,
     inJson: found.inJson,
     translatedInside: field =>
       translatedInsideContainers(args.fields, request.field, field),
+    inside: candidate =>
+      containerRefusal(
+        {
+          fields: args.fields,
+          path: request.field,
+          entity: args.entity,
+          dialect,
+          builtBy: args.builtBy,
+          ...(args.componentRow === true ? { componentRow: true } : {}),
+        },
+        found.field,
+        candidate
+      ),
     candidates:
       request.candidates ??
       FIELD_TYPE_CATALOG.map(entry => ({ type: entry.type })),
-    dialect: adapter.getCapabilities().dialect,
+    dialect,
     builtBy: args.builtBy,
     ...(args.componentRow === true ? { componentRow: true } : {}),
     layout: args.layout,
