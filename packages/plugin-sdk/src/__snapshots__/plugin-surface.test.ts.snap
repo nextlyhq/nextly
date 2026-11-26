@@ -745,6 +745,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "OverridableDocumentAction (type)",
   "PENDING_CHANGE_KEY (value)",
   "PLUGIN_CATEGORIES (value)",
+  "PageArticle (type)",
   "PageImagePreview (type)",
   "PageListItem (type)",
   "PageMetadataAnswer (type)",

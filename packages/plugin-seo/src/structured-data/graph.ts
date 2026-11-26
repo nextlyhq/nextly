@@ -16,6 +16,7 @@ import {
   entryDateFieldNames,
   languageAddressOf,
   NextlyError,
+  type PageArticle,
   type PageMetadataAnswer,
   type PageMetadataImage,
   type PageMetadataInput,
@@ -53,6 +54,8 @@ import {
   dateOf,
   heldUnread,
   isRecord,
+  declaredFields,
+  keepsDayAlone,
   namedOf,
   namesOf,
   numberOf,
@@ -110,6 +113,12 @@ export interface PageStructuredData {
   offered: readonly StructuredDataTypeKey[];
   nodes: StructuredDataNode[];
   problems: StructuredDataProblem[];
+  /**
+   * An article's details as its social card states them, derived from the
+   * article's own markup: only where the page is described as an article
+   * of any kind, with every detail it needs.
+   */
+  article?: PageArticle;
 }
 
 /** The document a page was resolved to, and its content type's key. */
@@ -321,6 +330,21 @@ interface PageFacts {
    * date would be described from the row's own save stamp.
    */
   contentDate: () => Promise<string | undefined>;
+  /** The fields the page's content type declares: read once, when asked. */
+  declared: () => Promise<unknown>;
+}
+
+/**
+ * A date the page holds in one of its fields, as ISO 8601: the day alone
+ * where the field keeps a day with no time (`keepsDayAlone`).
+ */
+async function pageDateOf(
+  facts: PageFacts,
+  read: DetailRead
+): Promise<string | undefined> {
+  if (dateOf(read.value) === undefined) return undefined;
+  const dayOnly = keepsDayAlone(await facts.declared(), read.field);
+  return dateOf(read.value, { dayOnly });
 }
 
 /** A detail's value as the fact it is, or nothing where the page lacks it. */
@@ -477,6 +501,23 @@ const listedNames: DetailReader = async (facts, read) => {
   return names.length > 0 ? names.join(", ") : undefined;
 };
 
+/**
+ * The names the page lists in a field, as a list: an article's keywords are
+ * kept one by one, so its card can carry one tag each, and joined only where
+ * its markup states them (`joinedNames`).
+ */
+const namesList: DetailReader = async (facts, read) => {
+  const names = await namesOf(facts.ctx, facts.input, read);
+  return names.length > 0 ? names : undefined;
+};
+
+/** A list of names as structured data states keywords: in one line. */
+function joinedNames(names: Json | undefined): Json | undefined {
+  return Array.isArray(names)
+    ? names.filter(name => typeof name === "string").join(", ")
+    : names;
+}
+
 /** How each detail is read, as the kind of fact it is. */
 const DETAIL_READERS: Readonly<Record<StructuredDataDetail, DetailReader>> = {
   author: authorRead,
@@ -492,10 +533,10 @@ const DETAIL_READERS: Readonly<Record<StructuredDataDetail, DetailReader>> = {
         : await pictureOf(facts.ctx, read),
       facts.origin
     ),
-  datePublished: valueRead(dateOf),
+  datePublished: pageDateOf,
   dateModified: (facts, read) => modifiedOf(facts, read),
-  startDate: valueRead(dateOf),
-  uploadDate: valueRead(dateOf),
+  startDate: pageDateOf,
+  uploadDate: pageDateOf,
   price: valueRead(numberOf),
   rating: (facts, read) => ratingOf(facts, read.value),
   bestRating: valueRead(bestRatingOf),
@@ -509,7 +550,7 @@ const DETAIL_READERS: Readonly<Record<StructuredDataDetail, DetailReader>> = {
   itemType: valueRead(itemTypeOf),
   operatingSystem: valueRead(textOf),
   applicationCategory: valueRead(textOf),
-  keywords: listedNames,
+  keywords: namesList,
   // An article is filed under one section: the first the page names.
   articleSection: async (facts, read) =>
     (await namesOf(facts.ctx, facts.input, read))[0],
@@ -658,7 +699,7 @@ async function modifiedOf(
     read.field === undefined
       ? read.value === undefined
       : isSaveStamp(read.field);
-  const stated = stamp ? undefined : dateOf(read.value);
+  const stated = stamp ? undefined : await pageDateOf(facts, read);
   if (stated !== undefined) return stated;
   // Derived from the sitemap's own rule, so the two never give a page
   // different dates.
@@ -671,7 +712,7 @@ async function datesOf(
 ): Promise<{ published?: string; modified?: string }> {
   const read = (detail: "datePublished" | "dateModified") =>
     readDetail(facts.document, detail, facts.mapping[detail]);
-  const published = dateOf(read("datePublished").value);
+  const published = await pageDateOf(facts, read("datePublished"));
   const modified = await modifiedOf(facts, read("dateModified"));
   return {
     ...(published === undefined ? {} : { published }),
@@ -801,7 +842,7 @@ const articleFields: SubjectFields = (details, page, links) => ({
   dateModified: details.dateModified ?? page.modified,
   author: details.author,
   publisher: ref(links.organization),
-  keywords: details.keywords,
+  keywords: joinedNames(details.keywords),
   articleSection: details.articleSection,
   wordCount: details.wordCount,
   inLanguage: page.language,
@@ -1535,7 +1576,63 @@ async function graphOf(
     modified,
   });
   const nodes = await pageNodesOf(facts, page, description, site, founders);
-  return { ...decided, nodes: [...site.nodes, ...nodes], problems: missing };
+  const article = articleCardOf(description, page, site);
+  return {
+    ...decided,
+    nodes: [...site.nodes, ...nodes],
+    problems: missing,
+    ...(article === undefined ? {} : { article }),
+  };
+}
+
+/**
+ * An article's details for its social card, read from the fields its own
+ * markup states (`articleFields`), so the card and the markup never give the
+ * page different dates, authors or tags. None for a page that is not an
+ * article, or an article left out for a missing detail.
+ */
+function articleCardOf(
+  description: Description,
+  page: DescribedPage,
+  site: SiteNodes
+): PageArticle | undefined {
+  const { type, values, described } = description;
+  if (SUBJECT_FIELDS[type] !== articleFields || !described) return undefined;
+  const fields = articleFields(values, page, {
+    organization: site.organizationId,
+  });
+  const authors = authorsOf(fields.author, site.nodes);
+  const tags = Array.isArray(values.keywords)
+    ? values.keywords.filter(tag => typeof tag === "string")
+    : [];
+  return present({
+    publishedTime: textOf(fields.datePublished),
+    modifiedTime: textOf(fields.dateModified),
+    authors: authors.length === 0 ? undefined : authors,
+    tags: tags.length === 0 ? undefined : tags,
+  });
+}
+
+/**
+ * Who an article is by, as its card names each: a person's or the
+ * organisation's own page, else their name. A reference to the organisation
+ * is read from the site's own nodes.
+ */
+function authorsOf(
+  author: Json | undefined,
+  siteNodes: readonly StructuredDataNode[]
+): string[] {
+  const named = (Array.isArray(author) ? author : [author]).flatMap(each => {
+    if (!isRecord(each)) return [];
+    const id = each["@id"];
+    const held =
+      Object.keys(each).length === 1 && typeof id === "string"
+        ? siteNodes.find(node => node["@id"] === id)
+        : each;
+    const name = textOf(held?.url) ?? textOf(held?.name);
+    return name === undefined ? [] : [name];
+  });
+  return [...new Set(named)];
 }
 
 /**
@@ -1575,6 +1672,7 @@ export async function buildStructuredData(
       rules,
       hints,
       contentDate: once(() => contentDateOfPage(ctx, input, document)),
+      declared: once(() => declaredFields(ctx, input)),
     },
     decided
   );

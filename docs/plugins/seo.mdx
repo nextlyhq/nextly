@@ -1253,6 +1253,30 @@ seoPlugin({
 
 The image's alt text is the media item's own, so give share images alt text in the media library.
 
+Where a route's own metadata states a picture that is one of the page's own pictures (its cover or
+featured image, the same address, or its path at the site's production address), the card states the
+size the media library stores for it, never the size the route wrote. A route that writes every
+picture as `1200 × 630` would otherwise have the head claim a share card's size for a picture of
+another shape, and the check below would never say it is cropped. The route's own alt text for it
+stays, and the media item's fills in where the route gives none.
+
+### Article details on the card
+
+A page described as an article of any kind (Article, Blog post or Technical article, see
+[Structured data](#structured-data)) also gets the article details Open Graph reads, with
+`og:type` `article`:
+
+- `article:published_time`, its date published;
+- `article:modified_time`, the date its content last changed;
+- `article:author`, each author's own page where they have one, else their name;
+- `article:tag`, one per tag.
+
+They come from the same details its structured data states, so the two never give the page
+different dates, authors or tags, and they are stated only where its structured data is, with every
+detail its type needs. A value the route's own `openGraph` sets (`type`, `publishedTime`,
+`modifiedTime`, `authors` or `tags`) is kept as the route set it, and the plugin's is not added
+beside it, so no tag is served twice.
+
 ### Share images of the right size
 
 Networks show a share image in full at 1200 × 630. A picture narrower than 1200 pixels, or whose
@@ -1384,6 +1408,11 @@ holds a date. Where it is empty, as a correction date is on a page never correct
 page's [`<lastmod>`](#the-sitemap-and-robotstxt) date, when its content last changed, rather than
 the row's own `updatedAt`, which every save moves, an SEO-only one included. Map `dateModified`
 (or `datePublished`) to read another field.
+
+A date field that keeps a day alone, as `date()` does by default (`pickerAppearance: "dayOnly"`,
+or `"monthOnly"`), stores the day as midnight in UTC, a time nobody chose. Its value is stated as
+the date alone, `2026-11-26`, which schema.org and Open Graph both read as a date, rather than
+`2026-11-26T00:00:00.000Z`. A field that holds a time of day (`"dayAndTime"`) keeps it.
 
 A detail can also be read from one of the dates every entry holds by itself: `createdAt`, and
 `firstPublishedAt` on a type with drafts and publishing. A type with no publish date of its own can

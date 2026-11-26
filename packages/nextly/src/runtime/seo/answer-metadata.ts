@@ -11,6 +11,7 @@
 import type { Metadata } from "next";
 
 import type {
+  PageArticle,
   PageMetadataAnswer,
   PageMetadataImage,
   PageRobots,
@@ -90,8 +91,30 @@ function openGraphOf(answer: PageMetadataAnswer): OpenGraph | undefined {
     siteName: social.siteName,
     locale: social.locale,
     type: social.type,
+    ...articleOf(social.article),
   });
   return Object.keys(openGraph).length > 0 ? openGraph : undefined;
+}
+
+/** A list the card carries only while it holds something. */
+const listed = (values: string[] | undefined): string[] | undefined =>
+  values === undefined || values.length === 0 ? undefined : [...values];
+
+/**
+ * An article's details as Next.js's article card spells them, each left out
+ * where the answer states none. Next.js writes them only on a card whose
+ * `type` is `"article"`.
+ */
+function articleOf(
+  article: PageArticle | undefined
+): Partial<Record<string, string | string[]>> {
+  if (article === undefined) return {};
+  return defined({
+    publishedTime: article.publishedTime,
+    modifiedTime: article.modifiedTime,
+    authors: listed(article.authors),
+    tags: listed(article.tags),
+  });
 }
 
 /** A card image as the Twitter card names it: with its alt text, if any. */

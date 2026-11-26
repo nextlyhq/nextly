@@ -1064,3 +1064,79 @@ describe("the row's save stamp", () => {
     expect(isSaveStamp("meta.updatedAt")).toBe(false);
   });
 });
+
+describe("a date kept as a day alone", () => {
+  /** The same site, its posts declaring `fields` beside their own. */
+  function withFields(fields: readonly Record<string, unknown>[]) {
+    const ctx = context();
+    const read = ctx.services.collections.getCollection.bind(
+      ctx.services.collections
+    );
+    return {
+      ...ctx,
+      services: {
+        ...ctx.services,
+        collections: {
+          ...ctx.services.collections,
+          getCollection: async (...args: Parameters<typeof read>) => {
+            const collection = (await read(...args)) as unknown as {
+              schemaDefinition: { fields: unknown[] };
+            };
+            return {
+              ...collection,
+              schemaDefinition: {
+                fields: [...collection.schemaDefinition.fields, ...fields],
+              },
+            };
+          },
+        },
+      },
+    } as PluginContext;
+  }
+
+  /** A day-only date field, as `date()` declares one by default. */
+  const DAY = { name: "publishedAt", type: "date" };
+
+  it("is stated as the date alone, not midnight in UTC", async () => {
+    for (const stored of [
+      "2026-11-26T00:00:00.000Z",
+      new Date("2026-11-26T00:00:00.000Z"),
+    ]) {
+      const { nodes } = await buildStructuredData(
+        withFields([DAY]),
+        postInput({ ...POST, publishedAt: stored }),
+        ANSWER,
+        rules()
+      );
+      expect(nodeOf(nodes, "Article")?.datePublished).toBe("2026-11-26");
+      expect(nodeOf(nodes, "WebPage")?.datePublished).toBe("2026-11-26");
+    }
+  });
+
+  it("keeps its time where the field holds a time too", async () => {
+    const { nodes } = await buildStructuredData(
+      withFields([
+        {
+          ...DAY,
+          admin: { date: { pickerAppearance: "dayAndTime" } },
+        },
+      ]),
+      postInput({ ...POST, publishedAt: "2026-11-26T09:30:00.000Z" }),
+      ANSWER,
+      rules()
+    );
+    expect(nodeOf(nodes, "Article")?.datePublished).toBe(
+      "2026-11-26T09:30:00.000Z"
+    );
+  });
+
+  it("states a day-only correction date as the date alone too", async () => {
+    const { nodes } = await buildStructuredData(
+      withFields([DAY, { name: "correctedAt", type: "date" }]),
+      postInput({ ...POST, correctedAt: "2026-11-28T00:00:00.000Z" }),
+      ANSWER,
+      rules()
+    );
+    expect(nodeOf(nodes, "Article")?.dateModified).toBe("2026-11-28");
+  });
+});
