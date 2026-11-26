@@ -108,6 +108,17 @@ async function judged(
   }
 }
 
+/** A compiled schema declaring nothing, its configured plugins `configured`. */
+const configuring = (...configured: string[]): ExtensionSchemaRecord =>
+  ({
+    specs: [],
+    owners: new Map(),
+    entityColumns: new Map(),
+    entityIndexes: new Map(),
+    elementOwners: new Map(),
+    schemaPlugins: new Set(configured),
+  }) as unknown as ExtensionSchemaRecord;
+
 const recordedIndex: ElementOnTable = {
   owner: PLUGIN,
   kind: "index",
@@ -228,16 +239,85 @@ describe("a key pointing at several removed columns", () => {
     }
   });
 
-  it("goes with them where every one is its owner's", async () => {
+  it("goes with them where every one is its owner's, a plugin still configured", async () => {
     const refused = await judged(
       columns("extra"),
       sources({
+        schema: configuring(PLUGIN.id),
         recorded: [ownKey, ownColumn],
         keysInto: [{ ...key, referencesColumns: ["extra"] }],
       })
     );
 
     expect(refused).toBeUndefined();
+  });
+
+  it("is refused where its owner is no longer configured: an app's change removes nothing of a plugin's", async () => {
+    for (const schema of [configuring(), null]) {
+      const refused = await judged(
+        columns("extra"),
+        sources({
+          schema,
+          recorded: [ownKey, ownColumn],
+          keysInto: [{ ...key, referencesColumns: ["extra"] }],
+        })
+      );
+
+      expect(refused?.publicMessage).toContain('fk "fk_refs"');
+      expect(refused?.publicMessage).toContain(PLUGIN.id);
+    }
+  });
+});
+
+describe("a change that drops an entity's table whole", () => {
+  const recordedColumn: ElementOnTable = {
+    owner: PLUGIN,
+    kind: "column",
+    name: "plugin_note",
+    table: TABLE,
+  };
+  const dropped: Deletion[] = [{ kind: "table", table: TABLE }];
+
+  it("takes with it what a configured plugin added there and no longer declares", async () => {
+    expect(
+      await judged(
+        dropped,
+        sources({ schema: configuring(PLUGIN.id), recorded: [recordedColumn] })
+      )
+    ).toBeUndefined();
+  });
+
+  it("is refused over what a plugin no longer configured added there", async () => {
+    const refused = await judged(
+      dropped,
+      sources({ schema: configuring(), recorded: [recordedColumn] })
+    );
+    expect(refused?.publicMessage).toContain(PLUGIN.id);
+    expect(refused?.publicMessage).toContain("plugin_note");
+  });
+
+  it("is refused over what a configured plugin still declares there", async () => {
+    const declaring = {
+      ...configuring(PLUGIN.id),
+      entityColumns: new Map([
+        [
+          TABLE,
+          [
+            {
+              name: "plugin_note",
+              kind: "shortText",
+              nullable: true,
+              contributedBy: PLUGIN,
+            },
+          ],
+        ],
+      ]),
+    } as unknown as ExtensionSchemaRecord;
+    const refused = await judged(
+      dropped,
+      sources({ schema: declaring, recorded: [recordedColumn] })
+    );
+    expect(refused?.publicMessage).toContain(PLUGIN.id);
   });
 });
 

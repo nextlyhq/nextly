@@ -254,11 +254,17 @@ export async function readRecordedElementsThrough(
  */
 export function databaseRemovedElementsSources(
   adapter: RecordedElementsAdapter,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /**
+   * The compiled schema of the change's own configuration, where the caller compiled it: a command
+   * that publishes none would otherwise read whatever schema the process published last.
+   */
+  compiled?: () => Promise<ExtensionSchemaRecord | null>
 ): RemovedElementsSources {
   return {
-    extensionSchema: () =>
-      Promise.resolve().then(() => getActiveExtensionSchema(dialect)),
+    extensionSchema:
+      compiled ??
+      (() => Promise.resolve().then(() => getActiveExtensionSchema(dialect))),
     recordedElements: tables => readRecordedElementsOn(adapter, tables),
     tableOwners: async tables =>
       tables.length > 0 && (await schemaOwnersTableExists(adapter))
@@ -425,15 +431,18 @@ export async function refuseRemovingOthersElements(args: {
       args.exactNames === true
     );
     const tables = [...spellings.values()].flatMap(each => each.all);
+    const declared =
+      schema === null ? [] : await elementsAddedTo(schema, tables);
     const all = distinctElements([
-      ...(schema === null ? [] : await elementsAddedTo(schema, tables)),
+      ...declared,
       ...(await args.sources.recordedElements(tables)),
     ]);
     const removedBy = removedOwners(
       all,
       schema,
       await args.sources.tableOwners(tables),
-      spellings
+      spellings,
+      declared
     );
     const found: Taken[] = [];
     for (const element of all) {
@@ -564,6 +573,18 @@ export async function refuseRunRemovingOthersElements(args: {
 interface RemovedOwners {
   table(table: string): SchemaOwner | undefined;
   column(table: string, column: string): SchemaOwner;
+  /**
+   * Whether `owner` removes what is its own with the change, so it is not taken: the owner of what
+   * the change removes, and still configured (`schemaPlugins`). A plugin no longer configured
+   * removes nothing with an app's change: its element, even on its own column, is taken.
+   */
+  removesItsOwn(removed: SchemaOwner | undefined, owner: SchemaOwner): boolean;
+  /**
+   * Whether an element on a table the change drops whole goes with it: the table is an entity's
+   * own (no other owner is named for it), and the element's owner is still configured and no
+   * longer declares it. Another owner's still declared, or a plugin no longer configured, is taken.
+   */
+  goesWithTable(element: ElementOnTable): boolean;
 }
 
 /**
@@ -575,15 +596,25 @@ function removedOwners(
   all: readonly ElementOnTable[],
   schema: ExtensionSchemaRecord | null,
   recorded: ReadonlyMap<string, SchemaOwner>,
-  spellings: ReadonlyMap<string, TableSpellings>
+  spellings: ReadonlyMap<string, TableSpellings>,
+  declared: readonly ElementOnTable[]
 ): RemovedOwners {
   const compiled = new Map(
     [...(schema?.owners ?? [])].map(([name, owner]) => [fold(name), owner])
   );
   const tableOwner = (table: string) =>
     compiled.get(fold(table)) ?? recorded.get(fold(table));
+  const configured = (owner: SchemaOwner) =>
+    owner.kind === "app" || schema?.schemaPlugins?.has(owner.id) === true;
+  const declaredKeys = new Set(declared.map(elementKey));
   return {
     table: tableOwner,
+    removesItsOwn: (removed, owner) =>
+      sameOwner(removed, owner) && configured(owner),
+    goesWithTable: element =>
+      tableOwner(element.table) === undefined &&
+      configured(element.owner) &&
+      !declaredKeys.has(elementKey(element)),
     column: (table, column) =>
       all.find(
         element =>
@@ -593,6 +624,11 @@ function removedOwners(
       )?.owner ??
       tableOwner(table) ?? { kind: "app" },
   };
+}
+
+/** An element by its table, kind and name, names folded. */
+function elementKey(element: ElementOnTable): string {
+  return `${fold(element.table)}\u0000${element.kind}\u0000${fold(element.name)}`;
 }
 
 /** Whether two owners are one: the app, or the same plugin. */
@@ -621,14 +657,20 @@ async function elementTaken(
   const at = removedTableOf(removal.spellings, element.table);
   if (at === undefined) return undefined;
   if (removal.tablesRemoved.has(at)) {
-    return sameOwner(removedBy.table(element.table), element.owner)
+    return removedBy.removesItsOwn(
+      removedBy.table(element.table),
+      element.owner
+    ) || removedBy.goesWithTable(element)
       ? undefined
       : { element, ...fieldOf(args, element.table) };
   }
   const removed = new Set(
     [...(columnsRemoved.get(at) ?? [])].filter(
       column =>
-        !sameOwner(removedBy.column(element.table, column), element.owner)
+        !removedBy.removesItsOwn(
+          removedBy.column(element.table, column),
+          element.owner
+        )
     )
   );
   if (removed.size === 0 || element.kind === "column") return undefined;
@@ -790,9 +832,11 @@ function ownsWhatItPointsAt(
   removedBy: RemovedOwners
 ): boolean {
   if (owner === null) return false;
-  if (pointed.length === 0) return sameOwner(removedBy.table(target), owner);
+  if (pointed.length === 0) {
+    return removedBy.removesItsOwn(removedBy.table(target), owner);
+  }
   return pointed.every(column =>
-    sameOwner(removedBy.column(target, column), owner)
+    removedBy.removesItsOwn(removedBy.column(target, column), owner)
   );
 }
 

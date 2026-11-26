@@ -52,7 +52,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { refuseWhileSaveLeftPartWay } from "../../domains/schema/builder-save/save-in-progress";
-import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
+import {
+  buildExtensionSchema,
+  type ExtensionSchema,
+} from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
@@ -620,7 +623,9 @@ async function within<T>(
 async function refuseRemovingOthersElementsIn(
   deletions: readonly Deletion[],
   dialect: SupportedDialect,
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  /** What this run compiled of the configuration: which plugins it names, what each declares. */
+  extensionSchema: ExtensionSchema | null
 ): Promise<void> {
   if (!deletions.some(deletion => deletion.core !== true)) return;
   const opened = await openDryRunAdapter({ dialect }).catch(
@@ -645,7 +650,8 @@ async function refuseRemovingOthersElementsIn(
       // it treats it.
       sources: databaseRemovedElementsSources(
         opened as unknown as DrizzleAdapter,
-        dialect
+        dialect,
+        () => Promise.resolve(extensionSchema)
       ),
       // The code-first change has the fields' columns: each column names its field.
       fieldOf: (_table, column) => column,
@@ -993,7 +999,12 @@ export async function runMigrateCreate(
         judgeDeletions: async deletions => {
           // What the change removes takes no element another owner built there, judged before
           // the consent is asked for and before anything is written.
-          await refuseRemovingOthersElementsIn(deletions, dialect, logger);
+          await refuseRemovingOthersElementsIn(
+            deletions,
+            dialect,
+            logger,
+            inputs.appStream.extensionSchema ?? null
+          );
           return judgeMigrationDeletions(deletions, {
             consent,
             dialect,

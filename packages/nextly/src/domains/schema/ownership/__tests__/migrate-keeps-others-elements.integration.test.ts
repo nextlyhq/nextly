@@ -295,6 +295,14 @@ const holdingWith = (withPlugin: boolean, withCollection: boolean) =>
     db: { migrationsDir: "./migrations" },
   });
 
+/** The plugin, configured, its hook declaring nothing of its own any more. */
+const stoppedDeclaring = definePlugin({
+  name: PLUGIN,
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  contributes: { schema: { extend: [() => {}] } },
+});
+
 /** A column of the plugin's own, and the index on it. */
 const MARKER = "marker";
 const MARKER_INDEX = "mko_marker_idx";
@@ -951,10 +959,16 @@ describe.each(getConfiguredTestDialects())(
         edit?: (up: string) => string;
       } = {}
     ) {
+      // The plugin stays configured and stops declaring the part, so the change is the app's own
+      // and the part is judged as drift; a plugin no longer configured is refused before that.
+      const configured = (config: ReturnType<typeof shaped>) => ({
+        ...config,
+        plugins: [stoppedDeclaring],
+      });
       const url = await emptyDatabase();
       use(url);
-      wentThrough(await migrateCreate("add_posts", shaped({})));
-      wentThrough(await migrate(shaped({})));
+      wentThrough(await migrateCreate("add_posts", configured(shaped({}))));
+      wentThrough(await migrate(configured(shaped({}))));
       await plantMarker(url, TABLE, options.recorded, options.indexed);
       await on(url, async adapter => {
         await adapter.executeQuery(
@@ -967,7 +981,7 @@ describe.each(getConfiguredTestDialects())(
         marker: await markerOf(url),
         shape: await shapeOf(url, TABLE),
       };
-      const after = shaped(options.after ?? { without: ["extra"] });
+      const after = configured(shaped(options.after ?? { without: ["extra"] }));
       const written = new Set(files());
       wentThrough(
         await migrateCreate("change_posts", after, { acceptMoves: true })
@@ -1129,9 +1143,6 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
-    // WAITING, not yet decided how: `nextly migrate` writes no owner row for what a schema hook adds to
-    // an entity's table, and once the plugin has left the configuration nothing else says the index
-    // is its, so the removal is not refused and takes it.
     /** Each element row the record keeps for the plugin, whole, and when it was last written. */
     async function pluginRows(url: string) {
       return on(url, async adapter => {
