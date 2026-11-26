@@ -89,6 +89,13 @@ const staying = (withIndex: boolean, withColumn = true) =>
     },
   });
 
+/** The staying plugin's next version: still configured, with no schema declaration at all. */
+const stayingWithoutSchema = definePlugin({
+  name: "kept-elements-staying",
+  version: "0.0.1",
+  nextly: "*",
+});
+
 /**
  * The app's two collections, each field required at the first boot and
  * optional when a test changes it: a change only a real schema apply makes,
@@ -356,6 +363,43 @@ describeEachDialect("a plugin still configured", dialect => {
       vi.unstubAllEnvs();
     }
   });
+
+  // Its next version declares no schema at all: beside another plugin that still declares one, and
+  // with nothing left declaring a schema, so none is compiled. Still configured, it removes its own
+  // parts as it would by declaring them no more; the removed plugin's are kept.
+  it.each([
+    { form: "another plugin still declaring a schema", others: [removed] },
+    { form: "nothing declaring a schema", others: [] },
+  ])(
+    "has the column and index it added removed once its next version declares no schema, with the data-loss consent ($form)",
+    async ({ others }) => {
+      const adapter = await firstBoot(dialect);
+      // The control: the first boot's push made the column and its index.
+      expect(await columnsOf(adapter, dialect, POSTS)).toContain("mark");
+      expect(
+        (await indexesOf(adapter, dialect, POSTS)).some(name =>
+          name.includes("mark")
+        )
+      ).toBe(true);
+      vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", `${POSTS}.mark`);
+      try {
+        const pushed = await restartAndPush(
+          adapter,
+          [...others, stayingWithoutSchema],
+          true,
+          true
+        );
+        expect(pushed.success, JSON.stringify(pushed)).toBe(true);
+        expect(await columnsOf(adapter, dialect, POSTS)).not.toContain("mark");
+        const indexes = await indexesOf(adapter, dialect, POSTS);
+        expect(indexes.some(name => name.includes("mark"))).toBe(false);
+        expect(await columnsOf(adapter, dialect, POSTS)).toContain("stamp");
+        expect(indexes.some(name => name.includes("stamp"))).toBe(true);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }
+  );
 
   it("has the index it stops declaring removed, and nothing else", async () => {
     const adapter = await firstBoot(dialect);
