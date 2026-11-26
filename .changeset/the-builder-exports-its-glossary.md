@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The builder exports its glossary (`@experimental`): the words the editor says for each of its ideas, such as "Gap", "Screen sizes", "Properties" and "Overlap order", and the retired words each replaces, so a plugin screen can name the same ideas with the same words. Nothing on screen changes.
+The builder exports its glossary (`@experimental`): the words the editor says for each of its ideas, such as "Gap", "Screen sizes", "Properties" and "Overlap order", so a plugin screen can name the same ideas with the same words. Nothing on screen changes.

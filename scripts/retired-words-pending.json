@@ -8,6 +8,7 @@
   ],
   "packages/admin/src/components/features/email-hub/design/LayoutsList.tsx": [
     "Customised",
+    "Customised",
     "{…} changed since you customised {…}. Open {…} to review the change."
   ],
   "packages/admin/src/components/features/email-hub/design/MatchMySite.tsx": [
@@ -22,12 +23,14 @@
   ],
   "packages/admin/src/components/features/email-hub/messages/messages-model.ts": [
     "Customised",
+    "Customised",
     "The owner changed this email since you customised it."
   ],
   "packages/admin/src/components/features/entries/PreviewMode/PreviewViewportControl.tsx": [
     "Preview viewport"
   ],
   "packages/admin/src/components/features/entries/fields/special/RichTextButtonGroupPlugin.tsx": [
+    "Insert Button Group",
     "Insert Button Group"
   ],
   "packages/admin/src/components/features/entries/fields/special/RichTextButtonLinkPlugin.tsx": [
@@ -35,12 +38,14 @@
     "Insert Button"
   ],
   "packages/admin/src/components/features/entries/fields/special/RichTextLinkPlugin.tsx": [
+    "Insert Link",
     "Insert Link"
   ],
   "packages/admin/src/components/features/entries/fields/special/RichTextMediaPlugin.tsx": [
     "Insert Image"
   ],
   "packages/admin/src/components/features/entries/fields/special/RichTextTablePlugin.tsx": [
+    "Insert Table",
     "Insert Table"
   ],
   "packages/admin/src/components/features/entries/fields/special/RichTextToolbar/InsertDropdown.tsx": [
@@ -92,35 +97,75 @@
   "packages/admin/src/components/shared/auth/AuthRefusalNotice.tsx": [
     "This app doesn&apos;t recognise its own address"
   ],
+  "packages/blocks-engine/src/style/site-tokens.ts": [
+    "How wide a centred container may grow.",
+    "Space between blocks",
+    "Space between columns",
+    "The space between columns, and between gallery images.",
+    "The space between the paragraphs of rich text.",
+    "\"{…}\" is nested too deeply, so it was not written. A token name holds at most {…} dot-separated parts.",
+    "\"{…}\" is written under more than {…} characters, so it was not written. The {…} a token is written under is at most {…} characters.",
+    "\"{…}\" is not a token name, so it was not written. A name is dot-separated words of letters, digits and dashes, like \"color.primary\".",
+    "\"{…}\" has an id that is not a token name, so it was not written. An id is dot-separated words of letters, digits and dashes, like \"color.primary\".",
+    "\"{…}\" has no light value, so it was not written. Every token needs one: it is what a reader with no mode set resolves.",
+    "\"{…}\" has a value that would load a file, so it was not written. A token holds a colour, a length, a duration, a font or a number; put an image on the block that shows it, where the site's allowed hosts still apply.",
+    "\"{…}\" and \"{…}\" both become \"{…}\", so \"{…}\" was not written. Two tokens cannot share one custom property: rename one of them, or give one a different id.",
+    "\"{…}\" is a {…} token, but its {…} value \"{…}\" {…}.{…}",
+    "It was written as given, and will do nothing where the token is used.",
+    "The selector these tokens would be written under is longer than {…} characters, so none were written."
+  ],
   "packages/builder/src/bindings/binding-controls.tsx": [
     "Bind {…} to a field",
+    "Bind {…} to a field",
+    "Shown when the bound field has no image.",
     "The binding changed while the unbind was planned. Unbind it again.",
     "The unbind could not be planned. Try again.",
     "Unbind, keep the {…}",
     "{…}: bound to {…}"
   ],
   "packages/builder/src/bindings/binding-notes.tsx": ["Unbound. {…}"],
+  "packages/builder/src/bindings/image-binding-fallback.tsx": [
+    "Shown when the bound field has no image."
+  ],
   "packages/builder/src/canvas/page-start-words.ts": ["Insert a saved section"],
   "packages/builder/src/canvas/spacing-drag.ts": [
     "This side is set to a token. Change it in the Style panel."
   ],
+  "packages/builder/src/canvas/turn-into-verb.ts": [
+    "Its bound field is removed"
+  ],
   "packages/builder/src/editor-words.ts": [
     "Colours",
+    "colour",
     "Import design tokens…",
     "Export design tokens (.json)"
   ],
-  "packages/builder/src/glossary/retired-words.ts": ["colour(?:s|ed|ing|ful)?"],
   "packages/builder/src/inspector/advanced-panel.tsx": [
     "Another block on this page already uses that id. Two elements with one id give a link, a label and a style rule two possible targets."
   ],
-  "packages/builder/src/inspector/component-fields-panel.tsx": ["Fields"],
+  "packages/builder/src/inspector/component-fields-panel.tsx": [
+    "The name each page’s editor shows for this field.",
+    "Field",
+    "no fields yet",
+    "No fields yet",
+    "Fields",
+    "Name of the field {…}",
+    "Remove the field {…}",
+    "Remove field",
+    "Remove the field {…}",
+    "Remove field",
+    "No variant sets this field."
+  ],
   "packages/builder/src/inspector/component-variants-panel.tsx": [
     "Add a field first. A variant is a named set of values for the fields each use of the component can change.",
     "No variants yet. A variant is a named set of field values, like “Featured” or “Compact”, that each use of the component can choose.",
     "This component has no fields, so this variant presets nothing."
   ],
-  "packages/builder/src/inspector/content/form-fields-control.tsx": ["Fields"],
-  "packages/builder/src/inspector/content/form-sections.tsx": ["Fields"],
+  "packages/builder/src/inspector/content/image-controls.tsx": [
+    "Visitors can&apos;t read the bound field, so they see{…} {…}. Type alt text to describe the image they see.",
+    "The image comes from a bound library file, so its own alt text is used. Where the field is empty, visitors see{…} {…}. Type alt text to describe it here instead.",
+    "The image comes from a bound field. A library file it holds is described by its own alt text; an image address has none, so type alt text to describe it."
+  ],
   "packages/builder/src/inspector/hide-on.tsx": [
     "Reading the site's breakpoints…",
     "The site's breakpoints could not be read, so where this block shows can't be changed here. Reload to try again."
@@ -138,11 +183,13 @@
   "packages/builder/src/inspector/look-inspector.tsx": [
     "Another look or shared style on this site has the same id, so this one can't be edited here. Give one of them its own name in your site's code.",
     "Changes every {…} on every page. Where another look, a shared style or the block's own values set something, they win.",
+    "A look for {…} blocks",
     "This look can't be changed here: the site's shared styles aren't available."
   ],
   "packages/builder/src/inspector/make-component-setting-section.tsx": [
     "{…}. A new setting keeps showing what each one shows now, until a page binds it or sets it.",
     "“{…}” is a setting of {…} now, bound to that field here. The change to {…} is saved with the page.",
+    "Make {…} a setting, bound to a field",
     "Make {…} a setting, bound to a field"
   ],
   "packages/builder/src/inspector/style-inspector/block-style-words.ts": [
@@ -152,6 +199,9 @@
     "Colour",
     "Line colour",
     "Text colour"
+  ],
+  "packages/builder/src/inspector/style-inspector/editing-bar.tsx": [
+    "You are editing the {…} look. Normal stays as it is."
   ],
   "packages/builder/src/inspector/style-inspector/editing-chips.tsx": [
     "Keep the look on this block only"
@@ -194,9 +244,11 @@
     "Page data: counting…",
     "Page data: couldn’t count",
     "Over the page data limit: {…}",
+    "Over the page data limit: {…}",
     "Over the page data limit in {…}: {…}",
     "Page data over the limit"
   ],
+  "packages/builder/src/page-checks/heading-check.ts": ["Bound heading"],
   "packages/builder/src/page-checks/image-alt-check.ts": [
     "Write alt text here, bind Alt text to a field, or tick “Decorative, no alt text” if it only decorates."
   ],
@@ -207,10 +259,12 @@
   "packages/builder/src/panels/components/component-fields.ts": [
     "Fields can only be added in a component’s own view.",
     "That field is no longer on this component.",
+    "Give the field a name.",
     "This component’s fields are stored in a shape that can’t be edited here. Remove the broken field first.",
     "When you publish this component, every use of it that set this field loses its value.{…}"
   ],
   "packages/builder/src/panels/components/component-variants.ts": [
+    "Not saved: this field {…}.",
     "That field is no longer on this component."
   ],
   "packages/builder/src/panels/design/block-look-rows.ts": [
@@ -231,6 +285,7 @@
     "Show colours"
   ],
   "packages/builder/src/panels/design/site-text-panel.tsx": [
+    "Colour",
     "Colour",
     "Colour on hover"
   ],
@@ -260,6 +315,7 @@
     "That file is nested too deeply to read. A design-token file groups its tokens a few levels deep; this one goes thousands.",
     "No tokens in that file could be used by this site. Nothing was changed.",
     "{…} is not valid JSON, so nothing was imported. It may be truncated or may not be a token file at all.",
+    "That file is nested too deeply to read. A design-token file groups its tokens a few levels deep; this one goes thousands.",
     "\"{…}\" and \"{…}\" are one token in that file — both carry the identity \"{…}\" — so \"{…}\" was dropped in favour of \"{…}\".",
     "\"{…}\" and another token here both become \"{…}\", so it was not imported. Two tokens cannot share one custom property.",
     "\"{…}\" is already the name of a different token on this site, so it was not imported. Rename one of them and try again.",
@@ -277,6 +333,7 @@
     "Pick the {…} colour{…}",
     "(not a valid colour)"
   ],
+  "packages/builder/src/panels/design/variable-usage-view.tsx": ["{…} look"],
   "packages/builder/src/panels/design/variable-usage.ts": [
     "text colour",
     "link colour",
@@ -289,14 +346,17 @@
   ],
   "packages/builder/src/shell/breakpoint-editor.tsx": [
     "These breakpoints could not be saved.",
+    "breakpoint",
     "Add breakpoint",
     "Save breakpoints"
   ],
   "packages/builder/src/shell/breakpoint-manager.tsx": ["Edit breakpoints"],
+  "packages/builder/src/shell/exposure-picker.tsx": ["Give the field a name."],
   "packages/builder/src/shell/read-budget-meter.tsx": [
     "Page data",
     "Page data: couldn&apos;t count",
-    "Page data: counting…"
+    "Page data: counting…",
+    "Page data"
   ],
   "packages/builder/src/shell/read-budget.ts": [
     "Page data: {…} of {…}",
@@ -308,9 +368,6 @@
   "packages/builder/src/shell/shell-regions.tsx": [
     "Canvas and inspector",
     "Inspector"
-  ],
-  "packages/builder/src/shell/shell-stylesheet.ts": [
-    "without its colours, tooltips or drag handles. Import"
   ],
   "packages/builder/src/shell/shell-top-bar.tsx": ["Inspector"],
   "packages/builder/src/styles/block-style-actions.ts": [
@@ -334,7 +391,7 @@
   "packages/builder/src/styles/shared-style-target.ts": [
     "This look depends on screen and container width together, so it can't be detached yet."
   ],
-  "packages/builder/src/styles/style-controls.ts": ["Colour", "Fields"],
+  "packages/builder/src/styles/style-controls.ts": ["Colour"],
   "packages/plugin-page-builder/src/admin/ComponentActionPrompt.tsx": [
     "{…} replaces the saved section's content. Pages that inserted it earlier keep their own copies."
   ],
@@ -347,6 +404,7 @@
   ],
   "packages/plugin-page-builder/src/admin/RemoveLayoutAction.tsx": [
     "Remove header & footer set…",
+    "The header & footer set could not be checked.",
     "The header & footer set could not be checked.",
     "The header & footer set could not be removed.",
     "Remove header & footer set",
@@ -366,6 +424,7 @@
     "Header & footer set unpublished",
     "{…} moved to the site default{…}, and the header & footer set was {…}.",
     ". The header & footer set was not {…}, because {…} it:",
+    "Remove header & footer set",
     "{…} moved to the site default. The header & footer set was not {…}."
   ],
   "packages/plugin-page-builder/src/admin/SavePatternDialog.tsx": [
@@ -378,9 +437,12 @@
   ],
   "packages/plugin-page-builder/src/admin/bindings-report/BindingsToFixCard.tsx": [
     "Header & footer set",
-    "The bindings to fix couldn’t be read."
+    "The bindings to fix couldn’t be read.",
+    "A field or block changed after these were bound. Each shows its fallback until it’s fixed."
   ],
   "packages/plugin-page-builder/src/admin/bindings-report/BindingsToFixChip.tsx": [
+    "binding",
+    "bindings",
     "Bindings to fix on this page",
     "1 binding no longer fits",
     "{…} bindings no longer fit",
@@ -396,6 +458,8 @@
     "Checking every binding…",
     "Any binding that no longer fits its field shows up here as soon as the check finds it.",
     "Show bindings in",
+    "Bindings to fix",
+    "Bindings to fix",
     "A field, a Single or a block changed after these were bound, so none of them shows what it reads: visitors see its fallback, the block’s own value or nothing, as each row says, on the published page or in a draft not yet published. Open one to bind it to another field or unbind it."
   ],
   "packages/plugin-page-builder/src/admin/bindings-report/words.ts": [
@@ -440,6 +504,7 @@
     "This page bound a setting that {…} doesn't have, which was never made, so that binding was taken off before saving."
   ],
   "packages/plugin-page-builder/src/admin/editor/editor-top-bar.tsx": [
+    "Untitled set",
     "Header & footer set"
   ],
   "packages/plugin-page-builder/src/admin/editor/header-footer-group.tsx": [
@@ -447,23 +512,40 @@
     "Header & footer sets",
     "Showing the first {…}. See every header & footer set",
     "The header & footer set could not be changed. Try again.",
-    "Header & footer set name"
+    "Header & footer set name",
+    "{…} is the site default. Make another set the default before deleting it."
   ],
   "packages/plugin-page-builder/src/admin/editor/new-set-dialog.tsx": [
     "The header & footer set could not be made. Try again.",
+    "The set route answered without the set it made.",
     "A set of a header and a footer that pages can use.",
     "Give the header & footer set a name."
+  ],
+  "packages/plugin-page-builder/src/admin/editor/region-card.tsx": [
+    "To use a different {…} in this set, choose one in"
+  ],
+  "packages/plugin-page-builder/src/admin/editor/set-area-picker.tsx": [
+    "No {…} in this set"
   ],
   "packages/plugin-page-builder/src/admin/editor/set-builder-view.tsx": [
     "Every page that uses this header & footer set shows its header and footer as published here, as soon as you publish."
   ],
+  "packages/plugin-page-builder/src/admin/editor/set-separate-copy.tsx": [
+    "Also used by {…} and {…} other sets",
+    "Other sets may use this {…} too.",
+    "{…} is this set's own {…} now. Save or publish the set to keep it."
+  ],
   "packages/plugin-page-builder/src/admin/editor/set-settings-panel.tsx": [
     "The header & footer set could not be changed. Try again.",
-    "Header & footer set"
+    "Header & footer set",
+    "{…} was created as this set's {…}. Save or publish the set to keep it.",
+    "this set",
+    "{…} is the site default. Make another set the default before deleting it."
   ],
   "packages/plugin-page-builder/src/admin/editor/set-words.ts": [
     "Header & footer set",
-    "A header & footer set has no page of its own. Edit its header or footer instead."
+    "A header & footer set has no page of its own. Edit its header or footer instead.",
+    "The {…} is chosen in this set's settings. Pick another there, or None."
   ],
   "packages/plugin-page-builder/src/admin/editor/settings-dialog.tsx": [
     "Fields"
@@ -488,11 +570,18 @@
   "packages/plugin-page-builder/src/admin/editor/site-style-tokens-studio.tsx": [
     "The colours could not be removed. Try again."
   ],
+  "packages/plugin-page-builder/src/admin/editor/template-preview-strip.tsx": [
+    "{…}. Bound text shows its fallback until there is one.",
+    "{…} couldn’t be read. Bound text shows its fallback meanwhile."
+  ],
   "packages/plugin-page-builder/src/admin/editor/use-breakpoint-removal.ts": [
     "The breakpoints could not be saved."
   ],
   "packages/plugin-page-builder/src/admin/header-footer-menu.tsx": [
     "No header & footer sets match."
+  ],
+  "packages/plugin-page-builder/src/admin/layout-area-client.ts": [
+    "The set route answered without what it wrote."
   ],
   "packages/plugin-page-builder/src/admin/layout-choice-view.ts": [
     "A header & footer set you can't view",
@@ -504,14 +593,20 @@
     "Follows the site default: a header & footer set you can't view, or one that was deleted.",
     "Follows the site default, {…}, because this page doesn't choose its own header & footer set."
   ],
+  "packages/plugin-page-builder/src/admin/layout-writes-client.ts": [
+    "The set route answered without the set it wrote."
+  ],
   "packages/plugin-page-builder/src/admin/make-default-action.tsx": [
     "Making a header & footer set the site default needs the rights to manage the site's settings and to update and publish header & footer sets.",
+    "header & footer set",
     "header & footer set"
   ],
   "packages/plugin-page-builder/src/admin/overview/PageBuilderOverview.tsx": [
     "Ready-made parts of a page. Insert one, then change it freely. Changes stay on that page.",
     "The header and footer around your pages. A site can have more than one set, for example \"Main\" and \"Landing\".",
     "New header & footer set",
+    "binding",
+    "bindings",
     "A field changed after these blocks were bound to it."
   ],
   "packages/plugin-page-builder/src/admin/page-layout.tsx": [
@@ -549,6 +644,7 @@
     "breakpoints to decide"
   ],
   "packages/plugin-page-builder/src/admin/variables-client.ts": [
+    "by {…}'s built-in look",
     "The colours could not be removed."
   ],
   "packages/plugin-page-builder/src/binding-fields-route.ts": [
@@ -560,6 +656,7 @@
   "packages/plugin-page-builder/src/bindings-report/widget.ts": [
     "Bindings to fix",
     "Bindings whose field or block changed after they were saved",
+    "Bindings to fix",
     "Bindings whose field or block changed after they were saved, each showing its fallback until it is fixed."
   ],
   "packages/plugin-page-builder/src/breakpoint-removal/run-store.ts": [
@@ -704,6 +801,7 @@
     "This site has no default header & footer set to copy.",
     "The header & footer set was renamed.",
     "The header & footer set was copied.",
+    "new set",
     "The header & footer set was made."
   ],
   "packages/plugin-page-builder/src/overview/admin-panel.ts": [
@@ -745,11 +843,8 @@
     "The site's breakpoints were saved. The styles under the removed breakpoints are still being removed.",
     "The styles under the removed breakpoints were removed.",
     "The styles under the removed breakpoints are still being removed.",
+    "The request does not name a breakpoint removal.",
     "The request does not name a breakpoint removal."
-  ],
-  "packages/plugin-page-builder/src/site-style-record.ts": [
-    "The colour order must be a list of different code names, each used once.",
-    "Whether the built-in colours are shown must be true or false."
   ],
   "packages/plugin-page-builder/src/site-style-storage.ts": [
     "The site's breakpoints are changed in the page builder's Settings.",
@@ -771,8 +866,12 @@
   ],
   "packages/plugin-page-builder/src/unbind-kept.ts": [
     "The binding fills nothing for visitors now, so the block keeps its own value.",
+    "The bound image can't be found, so visitors see the fallback; it's kept in the image's address.",
+    "The bound image can't be found, so visitors see the fallback; it's kept.",
+    "The bound image can't be found, so visitors see no image here; the image is left empty.",
     "This binding reads through a relation of the list's items, which the list reads ahead: give the value to keep.",
     "This binding reads the entries of a list this block isn't inside: give the value to keep.",
+    "\"{…}\" of block \"{…}\" is not bound.",
     "“{…}” is bound as well, and its binding would fill it again: unbind it first."
   ],
   "packages/plugin-page-builder/src/unbind-plan-route.ts": [

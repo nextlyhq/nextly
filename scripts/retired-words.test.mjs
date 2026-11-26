@@ -11,11 +11,13 @@
  * - in a place listed below, where the word names another idea or the text
  *   is code, each with why; or
  * - in `retired-words-pending.json`, the texts shown today that a rename is
- *   still to change, by file and exact text.
+ *   still to change, by file and exact text, once per time each is shown.
  *
- * Both lists only shrink: a listed text that no longer appears fails, so a
- * rename removes its own entries, and a place that no longer holds the word
- * fails too. A new screen that uses a retired word fails here.
+ * Both lists only shrink. A listed text that is no longer shown fails, so a
+ * rename removes its own entries; a place that no longer holds the word
+ * fails; and the pending list's size is pinned, so a new text cannot join it
+ * without the pin changing in review. A new screen that uses a retired word
+ * fails here.
  *
  * @module retired-words.test
  */
@@ -32,26 +34,35 @@ import {
 import {
   ADD_PANEL_WORDS,
   POSITION_WORDS,
+  SCREEN_SIZE_WORDS,
+  SIZE_WORDS,
 } from "../packages/builder/src/glossary/words.ts";
 
 import {
   SCANNED,
   findRetired,
+  repoPath,
   retiredIn,
   shippedFiles,
   shownTexts,
-  stalePending,
   staleAllowed,
+  stalePending,
   unlisted,
-  repoPath,
 } from "./retired-words.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** The texts still to rename, by file. */
+/** The texts still to rename, by file, once per time each is shown. */
 const PENDING = JSON.parse(
   readFileSync(join(ROOT, "scripts/retired-words-pending.json"), "utf8")
 );
+
+/**
+ * How many texts are still to rename. A rename lowers it; raising it means a
+ * new text joined the list instead of being written in the glossary's words,
+ * which review should refuse.
+ */
+const PENDING_COUNT = 535;
 
 /**
  * Places where a retired word names another idea, or where the text is code
@@ -60,13 +71,8 @@ const PENDING = JSON.parse(
 const ALLOWED = [
   {
     place: "packages/builder/src/glossary/retired-words.ts",
-    rules: ["grey", "behaviour"],
+    rules: ["colour", "grey", "behaviour"],
     why: "The list of retired words has to spell them to find them.",
-  },
-  {
-    place: "packages/builder/src/canvas/canvas-frame-sheet.ts",
-    rules: ["space-between"],
-    why: "The canvas frame's own stylesheet, CSS held in a string.",
   },
   {
     place: "packages/plugin-page-builder/src/site-code/",
@@ -81,8 +87,8 @@ const ALLOWED = [
   },
   {
     place: "packages/plugin-page-builder/src/site-style-record.ts",
-    rules: ["token", "breakpoint", "viewport"],
-    why: "The stored style record's checks, which name its stored keys (tokens, breakpoints, viewport) for a developer writing it.",
+    rules: ["token", "breakpoint", "viewport", "colour"],
+    why: "The stored style record's checks, read by a developer writing the record, which name its stored keys (tokens, breakpoints, viewport, colour values).",
   },
   {
     place: "packages/plugin-page-builder/src/starter-pages/",
@@ -106,15 +112,11 @@ const ALLOWED = [
     rules: ["token"],
     why: "A development warning to the developer passing SearchBar its classes.",
   },
-  ...[
-    "packages/admin/src/components/features/entries/fields/FieldWrapper.tsx",
-    "packages/admin/src/components/features/settings/SettingsRow.tsx",
-    "packages/admin/src/lib/forms/label-landing.ts",
-  ].map(place => ({
-    place,
+  {
+    place: "packages/admin/src/lib/forms/label-landing.ts",
     rules: ["element"],
-    why: "A development-only message to the developer of a form control, about the HTML element a label names.",
-  })),
+    why: "A development-only check, which tells the developer of a form control which HTML element its label names.",
+  },
   {
     place:
       "packages/admin/src/components/features/widgets/preview/preview-findings.tsx",
@@ -124,33 +126,90 @@ const ALLOWED = [
 ];
 
 /**
- * One text per retired word that must fail, in a builder file, so a rule
- * that stops matching fails here.
+ * Texts that must fail, in a builder file, for every rule and every way a
+ * rule finds its word, so a branch that stops matching fails here.
  */
 const FAILS = {
-  token: "Import design tokens…",
-  breakpoint: "Edit breakpoints",
-  bind: "Unbind, keep the text",
-  insert: "Insert a block",
-  inspector: "Inspector",
-  "header-footer-set": "New header & footer set",
-  look: "Keep the look on this block only",
-  element: "How solid the element is",
-  logical: "Space inside, per logical side.",
-  viewport: "Fixed to the viewport",
-  "normal-flow": "Normal flow",
-  "layer-order": "Layer order",
-  "space-between": "Space between blocks",
-  "component-fields": "Feature card · {…} fields",
-  "page-data": "Page data: {…} of {…}",
-  "bare-template": "Templates",
+  token: ["Import design tokens…", "A token needs a name."],
+  breakpoint: ["Edit breakpoints", "Add breakpoint"],
+  bind: [
+    "Bind {…} to a field",
+    "Unbind, keep the text",
+    "{…}: bound to {…}",
+    "Bound heading",
+    "Unbound. {…}",
+    "Bindings to fix",
+  ],
+  insert: ["Insert a block", "Press to read · lift to insert"],
+  inspector: ["Inspector", "Canvas and inspector"],
+  "header-footer-set": [
+    "New header & footer set",
+    "Header & footer sets",
+    "A site can have more than one set of a header and footer.",
+  ],
+  look: [
+    "Keep the look on this block only",
+    "A look for {…} blocks",
+    "Default · every {…} starts from this look; other looks are laid on top",
+    "{…} look",
+    "Button look",
+    "by {…}'s built-in look",
+    "Rename look",
+    "Looks",
+  ],
+  element: ["How solid the element is"],
+  logical: ["Space inside, per logical side."],
+  viewport: ["Fixed to the viewport"],
+  "normal-flow": ["Normal flow"],
+  "layer-order": ["Layer order"],
+  "space-between": [
+    "Space between",
+    "Space between blocks",
+    "Space between the columns",
+  ],
+  "component-fields": [
+    "This component has no fields to change on this page.",
+    "Checking which fields this component’s published version uses…",
+    "Feature card · {…} fields",
+  ],
+  "page-data": ["Page data: {…} of {…}", "Over the page data limit"],
+  "bare-template": ["Templates", "Template"],
   ...Object.fromEntries(
     Object.keys(BRITISH_SPELLINGS).map(british => [
       british,
-      `${british[0].toUpperCase()}${british.slice(1)}`,
+      [`${british[0].toUpperCase()}${british.slice(1)}`],
     ])
   ),
+  colour: ["Colours", "colour", "Recently coloured", "Colourless"],
+  grey: ["Grey", "Greyscale"],
+  customise: ["Customised", "Customiser", "customisable"],
+  recognise: ["recognise", "Recognisable"],
 };
+
+/** Where a rule finds its word only on certain screens: a text and its place. */
+const FAILS_IN_PLACE = [
+  {
+    rule: "header-footer-set",
+    file: "packages/plugin-page-builder/src/admin/editor/editor-top-bar.tsx",
+    texts: [
+      "Untitled set",
+      "Make another set the default before deleting it.",
+      "No {…} in this set",
+      "Also used by {…} and {…} other sets",
+      "{…} is this set's own {…} now.",
+    ],
+  },
+  {
+    rule: "component-fields",
+    file: "packages/builder/src/inspector/component-fields-panel.tsx",
+    texts: ["No fields yet", "Remove field", "Field", "Give the field a name."],
+  },
+  {
+    rule: "fields-tab",
+    file: "packages/plugin-page-builder/src/admin/editor/settings-dialog.tsx",
+    texts: ["Fields"],
+  },
+];
 
 /**
  * Texts that keep a retired word's letters but not its idea, and must pass
@@ -160,8 +219,13 @@ const PASSES = [
   "Space between paragraphs",
   "Space between the blocks inside",
   "Set a width for the header",
+  "The header sets the page title",
+  "A set of screen sizes",
   "Look for a block",
   "A tab that looks empty",
+  "This looks fine",
+  "Which looks best?",
+  "Choose Copy style on the block that looks right.",
   "Collection templates",
   "Its template is linked to every entry",
   "Color",
@@ -170,8 +234,10 @@ const PASSES = [
   "Behavior",
   "Customize",
   "Emphasis",
-  "Upper bound",
+  "Upper bound on width",
   "Adds a field to the form",
+  "This form has 3 fields",
+  "Fields",
 ];
 
 const BUILDER_FILE = "packages/builder/src/probe.tsx";
@@ -190,6 +256,7 @@ describe("the retired words", () => {
         "packages/builder/src/shell/shell-top-bar.tsx",
         "packages/plugin-page-builder/src/admin/editor/settings-dialog.tsx",
         "packages/admin/src/components/features/api-keys/CreateApiKeyForm.tsx",
+        "packages/blocks-engine/src/style/site-tokens.ts",
       ])
     );
     // Test code, fixtures and migrations are never read as shown text.
@@ -204,8 +271,12 @@ describe("the retired words", () => {
     expect(unlisted(findings, PENDING, ALLOWED)).toEqual([]);
   });
 
-  it("list nothing still to rename that no longer appears", () => {
+  it("list nothing still to rename that is no longer shown", () => {
     expect(stalePending(findings, PENDING)).toEqual([]);
+  });
+
+  it("list no more texts still to rename than the pin", () => {
+    expect(Object.values(PENDING).flat()).toHaveLength(PENDING_COUNT);
   });
 
   it("allow no place that no longer says the word", () => {
@@ -213,13 +284,32 @@ describe("the retired words", () => {
   });
 
   it("have a failing text for every rule", () => {
-    expect(Object.keys(FAILS).sort()).toEqual(
-      RETIRED_WORDS.map(rule => rule.id).sort()
-    );
+    expect(
+      [
+        ...new Set([
+          ...Object.keys(FAILS),
+          ...FAILS_IN_PLACE.map(({ rule }) => rule),
+        ]),
+      ].sort()
+    ).toEqual(RETIRED_WORDS.map(rule => rule.id).sort());
   });
 
-  it.each(Object.entries(FAILS))("finds %s", (id, text) => {
+  it.each(
+    Object.entries(FAILS).flatMap(([id, texts]) =>
+      texts.map(text => [id, text])
+    )
+  )("finds %s in %s", (id, text) => {
     expect(retiredIn(text, BUILDER_FILE, RETIRED_WORDS)).toContain(id);
+  });
+
+  it.each(
+    FAILS_IN_PLACE.flatMap(({ rule, file, texts }) =>
+      texts.map(text => [rule, text, file])
+    )
+  )("finds %s in %s on its own screen", (rule, text, file) => {
+    expect(retiredIn(text, file, RETIRED_WORDS)).toContain(rule);
+    // The same text elsewhere names another idea.
+    expect(retiredIn(text, ADMIN_FILE, RETIRED_WORDS)).not.toContain(rule);
   });
 
   it.each(PASSES)("passes %s", text => {
@@ -240,31 +330,22 @@ describe("the retired words", () => {
     ).toEqual(["bare-template"]);
   });
 
-  it("reads shown text, tooltips, placeholders and accessible names, not code, search keywords or logs", () => {
+  it("reads shown text, tooltips, placeholders and accessible names", () => {
     const texts = shownTexts(
       [
-        // Comments are never shown.
-        "// Insert a block",
-        // Code names: a literal type, an object key, a lone lower-case name,
-        // an attribute only code reads.
-        'type Kind = "breakpoint";',
-        'const ids = { "design token": 1, kind: "token" };',
-        'const C = () => <div className="inspector panel" data-x="a token" />;',
-        // Search keywords, under a key or in a constant so named.
-        'const entry = { label: "Gap", keywords: ["space between", "insert"] };',
-        'const SYNONYMS = [["z-index", "layer order"]];',
-        // Logs, by their call or their package tag.
-        'console.warn("the token could not be read");',
-        'args.logger.error("the breakpoint was missing");',
-        'deps.warn("[page-builder] the default header & footer set was made");',
-        // Shown: a string, template text, an element's line, a tooltip, a
-        // placeholder and an accessible name.
         'const a = "Insert a block";',
         "const b = `Edit ${n} breakpoints`;",
-        "const D = () => <p>Unbind {field} now</p>;",
-        'const E = () => <button title="Inspector" aria-label="Design tokens" />;',
-        'const F = () => <input placeholder="Paste a token" />;',
-        'const G = () => <input aria-label="viewport" name="viewport" />;',
+        "const C = () => <p>Unbind {field} now</p>;",
+        'const D = () => <button title="Inspector" aria-label="Design tokens" />;',
+        'const E = () => <input placeholder="Paste a token" />;',
+        // A lone lower-case word where it is shown: a shown attribute or key,
+        // one whose name ends in a shown word, or a branch of a choice in an
+        // element's text or a shown template.
+        'const F = () => <input aria-label="viewport" name="viewport" />;',
+        'const G = { emptyText: "inspector", ariaLabel: "breakpoints" };',
+        'const H = () => <p>{n === 1 ? "colour" : "colours"}</p>;',
+        'const I = `Remove ${name || "breakpoint"}`;',
+        'const J = () => <Row name={x ?? "Layer order"} value="Insert a row" />;',
       ].join("\n"),
       "probe.tsx"
     );
@@ -280,15 +361,72 @@ describe("the retired words", () => {
       "Design tokens",
       "Paste a token",
       "viewport",
+      "inspector",
+      "breakpoints",
+      "colour",
+      "colours",
+      "breakpoint",
+      "Layer order",
+      "Insert a row",
     ]);
   });
 
-  it("fails a listed text that no longer appears, so the list only shrinks", () => {
+  it("reads a lone word anywhere in a words module, but not its codes or comparisons", () => {
+    const source = [
+      'export const LOSS = { color: "colour", size: "size" };',
+      'const CODES = ["binding-prop-missing"];',
+      'const pick = (s) => (s === "tokens" ? 1 : 2);',
+    ].join("\n");
+    expect(shownTexts(source, "packages/builder/src/editor-words.ts")).toEqual([
+      "colour",
+      "size",
+    ]);
+    expect(shownTexts(source, "packages/builder/src/probe.ts")).toEqual([]);
+    // The list of retired words holds rules, not words.
+    expect(
+      shownTexts(source, "packages/builder/src/glossary/retired-words.ts")
+    ).toEqual([]);
+  });
+
+  it("never reads code, search keywords, logs or comments as shown text", () => {
+    const texts = shownTexts(
+      [
+        "// Insert a block",
+        // Code: a literal type, an object key, an attribute only code reads,
+        // a stylesheet held in a string.
+        'type Kind = "Edit breakpoints";',
+        'const ids = { "Design tokens": 1 };',
+        'const C = () => <div className="Inspector panel" data-x="A token" />;',
+        'const sheet = "body { margin: 0; color: grey; justify-content: space-between; }";',
+        // Search keywords, under a key or in a constant so named.
+        'const entry = { label: "Gap", keywords: ["Space between", "Insert"] };',
+        'const SYNONYMS = [["z-index", "Layer order"]];',
+        // Logs, by their call, their package tag, or a development check's
+        // remedies.
+        'console.warn("The token could not be read");',
+        'args.logger.error("The breakpoint was missing");',
+        'devWarnOnce(true, "The Inspector has no width");',
+        'deps.warn("[page-builder] the default header & footer set was made");',
+        "const message = `[Nextly] The label names no element`;",
+        'check({ remedies: { absent: "Wrap the element in FormControl." } });',
+      ].join("\n"),
+      "probe.tsx"
+    );
+    expect(
+      texts.filter(
+        text => retiredIn(text, BUILDER_FILE, RETIRED_WORDS).length > 0
+      )
+    ).toEqual([]);
+    // Positive control: the same file still yields its one shown text.
+    expect(texts).toEqual(["Gap"]);
+  });
+
+  it("fails a listed text that is no longer shown, so the list only shrinks", () => {
     const shown = [
       {
         file: "packages/builder/src/a.tsx",
         text: "Insert a block",
-        rule: "insert",
+        rules: ["insert"],
       },
     ];
     const listed = {
@@ -297,45 +435,50 @@ describe("the retired words", () => {
     expect(stalePending(shown, listed)).toEqual([
       "packages/builder/src/a.tsx: Edit breakpoints",
     ]);
-    // And a text neither listed nor allowed is a finding.
+    // A text neither listed nor allowed is a finding.
+    const inspector = {
+      file: "packages/builder/src/b.tsx",
+      text: "Inspector",
+      rules: ["inspector"],
+    };
+    expect(unlisted([...shown, inspector], listed, [])).toEqual([inspector]);
+  });
+
+  it("counts a listed text once per showing", () => {
+    const once = {
+      file: "packages/builder/src/a.tsx",
+      text: "Inspector",
+      rules: ["inspector"],
+    };
+    const listed = { "packages/builder/src/a.tsx": ["Inspector"] };
+    // Shown a second time: the second showing is a finding.
+    expect(unlisted([once, once], listed, [])).toEqual([once]);
+    // Listed twice and shown once: the extra entry is stale.
     expect(
-      unlisted(
-        [
-          ...shown,
-          {
-            file: "packages/builder/src/b.tsx",
-            text: "Inspector",
-            rule: "inspector",
-          },
-        ],
-        listed,
-        []
-      )
-    ).toEqual([
-      {
-        file: "packages/builder/src/b.tsx",
-        text: "Inspector",
-        rule: "inspector",
-      },
-    ]);
+      stalePending([once], {
+        "packages/builder/src/a.tsx": ["Inspector", "Inspector"],
+      })
+    ).toEqual(["packages/builder/src/a.tsx: Inspector"]);
   });
 
   it("allows a place only for the words it names", () => {
-    const shown = [
-      {
-        file: "packages/admin/src/auth/x.tsx",
-        text: "Setup token",
-        rule: "token",
-      },
-      { file: "packages/admin/src/auth/x.tsx", text: "Insert", rule: "insert" },
-    ];
+    const token = {
+      file: "packages/admin/src/auth/x.tsx",
+      text: "Setup token",
+      rules: ["token"],
+    };
+    const insert = {
+      file: "packages/admin/src/auth/x.tsx",
+      text: "Insert",
+      rules: ["insert"],
+    };
     const allowed = [{ place: "packages/admin/src/auth/", rules: ["token"] }];
-    expect(unlisted(shown, {}, allowed)).toEqual([shown[1]]);
+    expect(unlisted([token, insert], {}, allowed)).toEqual([insert]);
     expect(
-      staleAllowed(shown, [
-        ...allowed,
-        { place: "packages/admin/src/other/", rules: ["token"] },
-      ])
+      staleAllowed(
+        [token, insert],
+        [...allowed, { place: "packages/admin/src/other/", rules: ["token"] }]
+      )
     ).toEqual(["packages/admin/src/other/ (token)"]);
   });
 });
@@ -355,6 +498,22 @@ const DRAWN_TODAY = [
     word,
     file: "packages/builder/src/inspector/style-inspector/style-keyword-labels.ts",
   })),
+  {
+    word: SCREEN_SIZE_WORDS.desktop,
+    file: "packages/builder/src/styles/breakpoints.ts",
+  },
+  {
+    word: SCREEN_SIZE_WORDS.tablet,
+    file: "packages/builder/src/shell/breakpoint-editor.tsx",
+  },
+  {
+    word: SCREEN_SIZE_WORDS.mobile,
+    file: "packages/builder/src/inspector/content/columns-layout-field.tsx",
+  },
+  {
+    word: SIZE_WORDS.width,
+    file: "packages/builder/src/inspector/style-inspector/content-width-control.tsx",
+  },
   {
     word: ADD_PANEL_WORDS.collectionTemplates,
     file: "packages/plugin-page-builder/src/overview/admin-panel.ts",

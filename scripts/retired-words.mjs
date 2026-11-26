@@ -20,10 +20,20 @@
  * - search keywords: the value of a `keywords`, `aliases`, `synonyms` or
  *   `searchTerms` key, or of a constant so named (`SYNONYMS`), where an
  *   industry word is how an author finds a renamed thing;
- * - log messages: any argument of a `console`, `logger` or `log` call, and
- *   a line tagged with its package the way every log line here is
+ * - log messages: any argument of a `console`, `logger` or `log` call or of
+ *   a development warning (`devWarnOnce`), a value under a `remedies` key
+ *   (what a development check tells the developer to do), and a line
+ *   tagged with its package the way every log line here is
  *   (`"[page-builder] …"`), whichever function it is handed to;
- * - SQL in a migration, which no author reads.
+ * - CSS held in a string (`"body { margin: 0; }"`), and SQL in a
+ *   migration, which no author reads.
+ *
+ * A lower-case word with no space is a code name, except where it lands in
+ * shown text: under a shown key or attribute, as a branch of a choice inside
+ * a shown template or an element's text (`{n === 1 ? "colour" : "colours"}`),
+ * or as a lone word anywhere in a words module (`*-words.ts`), which holds
+ * nothing but shown words. A string compared or matched in a `case` is code
+ * everywhere.
  *
  * Plain JavaScript, so it loads under the scripts suite with no build.
  *
@@ -41,6 +51,8 @@ export const SCANNED = [
   "packages/builder/src",
   "packages/plugin-page-builder/src",
   "packages/admin/src",
+  // The built-in spacing variables' names, drawn in the Design panel.
+  "packages/blocks-engine/src/style/site-tokens.ts",
 ];
 
 /** Test code, stories, declarations and fixtures: never shipped, never shown. */
@@ -82,23 +94,42 @@ const CODE_NAME = /^[a-z0-9_\-:./#@*${}…[\]="'?&%+~>(),]*$/;
 
 /**
  * Where a string is always shown, a lone lower-case word included: a value
- * under one of these keys, or one of these attributes on an element.
+ * under one of these keys or attributes, or one whose name ends in one of
+ * them (`emptyText`, `ariaLabel`, `confirmLabel`).
  */
 const SHOWN_PLACE =
-  /^(?:header|heading|label|title|placeholder|description|tooltip|hint|note|caption|message|alt|aria-label|aria-description|aria-valuetext)$/;
+  /^(?:header|heading|label|title|placeholder|description|tooltip|hint|note|caption|message|summary|text|alt|aria-label|aria-description|aria-valuetext)$|[a-z](?:Label|Text|Title|Hint|Message|Description|Placeholder|Tooltip|Caption|Summary|Heading|Header|Note)$/;
+
+/**
+ * A module that holds only shown words: `*-words.ts`, the glossary's
+ * `words.ts`. The retired-words list holds rules, not words.
+ */
+const WORDS_MODULE = /(?:^|\/)(?!retired-words\.)[\w-]*words\.[cm]?[jt]sx?$/;
+
+/** A lone lower-case word, which a words module may say: "colour". */
+const LONE_WORD = /^[a-z]+$/;
+
+/** CSS declarations held in a string: `body { margin: 0; }`. */
+const CSS_TEXT = /\{[^{}]*:[^{}]*;[^{}]*\}/;
+
+/** The keys whose values tell a developer how to fix a development check. */
+const DEVELOPER_PLACE = /^remedies$/;
 
 /** The keys and constants whose values are search keywords, never drawn. */
 const SEARCH_PLACE = /^(?:keywords|aliases|synonyms|searchTerms)$/i;
 
 /** The attributes only code reads; anything else on an element may be shown. */
 const CODE_ATTRIBUTE =
-  /^(?:className|class|style|id|key|ref|role|type|name|value|href|to|src|htmlFor|form|method|target|rel|tabIndex|autoComplete|inputMode|pattern|side|align|variant|size|data-.*|aria-(?:controls|describedby|labelledby|owns|haspopup|live|current|expanded|selected|pressed|hidden|modal|atomic|relevant|orientation|sort))$/;
+  /^(?:className|class|style|id|key|ref|role|type|href|to|src|htmlFor|form|method|target|rel|tabIndex|autoComplete|inputMode|pattern|data-.*|aria-(?:controls|describedby|labelledby|owns|haspopup|live|current|expanded|selected|pressed|hidden|modal|atomic|relevant|orientation|sort))$/;
 
 /** The objects whose calls write a log, read by a developer only. */
 const LOG_OBJECT = /^(?:console|logger|log)$/;
 
+/** The functions that write a development warning: `devWarnOnce(…)`. */
+const LOG_FUNCTION = /^(?:devWarn\w*|warnOnce)$/;
+
 /** A log line's tag, its package in brackets: `[page-builder] …`. */
-const LOG_TAG = /^\[[a-z][a-z0-9-]*\] /;
+const LOG_TAG = /^\[[A-Za-z][\w-]*\] /;
 
 /** The name of a property's key or an element's attribute, when plain. */
 function placeName(holder) {
@@ -113,19 +144,48 @@ function placeName(holder) {
   return null;
 }
 
+/** The nodes a value passes through unchanged on its way to its slot. */
+function passesThrough(above, below) {
+  if (above.type === "ConditionalExpression") return above.test !== below;
+  return (
+    above.type === "LogicalExpression" ||
+    above.type === "ParenthesizedExpression" ||
+    above.type === "TSAsExpression" ||
+    above.type === "TSSatisfiesExpression"
+  );
+}
+
 /**
- * Whether a string sits where it is shown however it is spelled: the value
- * of a shown key (`label: "token"`), or a shown attribute, given directly or
- * as an expression (`aria-label="token"`, `aria-label={"token"}`).
+ * Whether a string lands where it is shown however it is spelled, directly
+ * or as a branch of a choice: the value of a shown key (`label: "token"`), a
+ * shown attribute (`aria-label="token"`, `aria-label={x ?? "token"}`), an
+ * expression in an element's text, or an expression in a template whose own
+ * text is shown (`` `Remove ${name || "breakpoint"}` ``).
  */
 function inShownPlace(node, ancestors) {
-  const parent = ancestors.at(-1);
-  const holder =
-    parent?.type === "JSXExpressionContainer" ? ancestors.at(-2) : parent;
-  if (holder === undefined) return false;
-  if (holder.type === "Property" && holder.value !== node) return false;
-  const name = placeName(holder);
-  return name !== null && SHOWN_PLACE.test(name);
+  let below = node;
+  let at = ancestors.length - 1;
+  while (at >= 0 && passesThrough(ancestors[at], below)) {
+    below = ancestors[at];
+    at -= 1;
+  }
+  const slot = ancestors[at];
+  if (slot === undefined) return false;
+  if (slot.type === "TemplateLiteral") {
+    const own = tidy(
+      slot.quasis.map(quasi => quasi.value.cooked ?? "").join(" ")
+    );
+    return own !== "" && !CODE_NAME.test(own);
+  }
+  if (slot.type === "JSXExpressionContainer") {
+    const holder = ancestors[at - 1];
+    if (holder?.type === "JSXElement" || holder?.type === "JSXFragment") {
+      return true;
+    }
+    return holder !== undefined && SHOWN_PLACE.test(placeName(holder) ?? "");
+  }
+  if (slot.type === "Property" && slot.value !== below) return false;
+  return SHOWN_PLACE.test(placeName(slot) ?? "");
 }
 
 /** An attribute only code reads (`className`, `data-*`, `xlink:href`). */
@@ -148,11 +208,21 @@ function isModuleSpecifier(above, node) {
   );
 }
 
-/** A call that writes a log: `console.warn(…)`, `logger.error(…)`. */
+/**
+ * A call that writes a log: `console.warn(…)`, `logger.error(…)`,
+ * `devWarnOnce(…)`.
+ */
 function isLogCall(above) {
   if (above.type !== "CallExpression") return false;
   const callee = above.callee;
+  if (callee.type === "Identifier") return LOG_FUNCTION.test(callee.name);
   if (callee.type !== "MemberExpression") return false;
+  if (
+    callee.property.type === "Identifier" &&
+    LOG_FUNCTION.test(callee.property.name)
+  ) {
+    return true;
+  }
   const object = callee.object;
   if (object.type === "Identifier") return LOG_OBJECT.test(object.name);
   // `args.logger.warn(…)`, `this.log.error(…)`.
@@ -186,16 +256,36 @@ function isKey(node, parent) {
   );
 }
 
+/** A value under a `remedies` key: what a development check tells a developer. */
+function isDeveloperRemedy(above, node) {
+  return (
+    above.type === "Property" &&
+    above.key !== node &&
+    DEVELOPER_PLACE.test(placeName(above) ?? "")
+  );
+}
+
+/** A string compared with a value, or a `case` label: code, never shown. */
+function isCompared(node, parent) {
+  return (
+    (parent?.type === "BinaryExpression" &&
+      /^(?:===|!==|==|!=|in)$/.test(parent.operator)) ||
+    (parent?.type === "SwitchCase" && parent.test === node)
+  );
+}
+
 /** Whether a string at this place in the tree is never shown to an author. */
 function notShown(node, ancestors) {
   if (isKey(node, ancestors.at(-1))) return true;
+  if (isCompared(node, ancestors.at(-1))) return true;
   return ancestors.some(
     above =>
       above.type === "TSLiteralType" ||
       isCodeAttribute(above) ||
       isModuleSpecifier(above, node) ||
       isLogCall(above) ||
-      isSearchKeyword(above, node)
+      isSearchKeyword(above, node) ||
+      isDeveloperRemedy(above, node)
   );
 }
 
@@ -228,9 +318,8 @@ function stringText(node) {
 }
 
 /** An element's own line, or null where its children are only expressions. */
-function elementLine(node, ancestors) {
+function elementLine(node) {
   if (node.type !== "JSXElement" && node.type !== "JSXFragment") return null;
-  if (ancestors.some(above => isLogCall(above))) return null;
   const line = tidy(elementText(node.children));
   return line.replace(/\{…\}/g, "").trim() === "" ? null : line;
 }
@@ -242,8 +331,9 @@ function elementLine(node, ancestors) {
  */
 export function shownTexts(source, fileName) {
   const texts = [];
+  const wordsModule = WORDS_MODULE.test(fileName.split("\\").join("/"));
   walk(parseSource(source, fileName).program, (node, ancestors) => {
-    const line = elementLine(node, ancestors);
+    const line = elementLine(node);
     if (line !== null) {
       texts.push(line);
       return;
@@ -252,8 +342,14 @@ export function shownTexts(source, fileName) {
     if (raw === null) return;
     const text = tidy(raw.replace(/\/\*[\s\S]*?\*\//g, " "));
     if (text === "") return;
-    if (CODE_NAME.test(text) && !inShownPlace(node, ancestors)) return;
-    if (LOG_TAG.test(text)) return;
+    if (
+      CODE_NAME.test(text) &&
+      !(wordsModule && LONE_WORD.test(text)) &&
+      !inShownPlace(node, ancestors)
+    ) {
+      return;
+    }
+    if (LOG_TAG.test(text) || CSS_TEXT.test(text)) return;
     if (notShown(node, ancestors)) return;
     texts.push(text);
   });
@@ -266,7 +362,7 @@ export function shownTexts(source, fileName) {
  *
  * @param {string} text
  * @param {string} path repository-relative, with "/"
- * @param {readonly { id: string, where?: readonly string[], test: (text: string) => boolean }[]} rules
+ * @param {readonly { id: string, where?: readonly string[], test: (text: string, path: string) => boolean }[]} rules
  */
 export function retiredIn(text, path, rules) {
   return rules
@@ -274,14 +370,14 @@ export function retiredIn(text, path, rules) {
       rule =>
         (rule.where === undefined ||
           rule.where.some(prefix => path.startsWith(prefix))) &&
-        rule.test(text)
+        rule.test(text, path)
     )
     .map(rule => rule.id);
 }
 
 /**
- * Every retired word an author can read in the scanned folders: one finding
- * per file, text and rule.
+ * Every shown text that uses a retired word in the scanned folders: one
+ * finding per time the text is shown, with every rule it breaks.
  */
 export function findRetired(root, rules, folders = SCANNED) {
   const findings = [];
@@ -289,9 +385,9 @@ export function findRetired(root, rules, folders = SCANNED) {
     for (const file of shippedFiles(join(root, folder))) {
       const path = repoPath(root, file);
       for (const text of shownTexts(readFileSync(file, "utf8"), file)) {
-        for (const id of retiredIn(text, path, rules)) {
-          findings.push({ file: path, text, rule: id });
-        }
+        const broken = retiredIn(text, path, rules);
+        if (broken.length > 0)
+          findings.push({ file: path, text, rules: broken });
       }
     }
   }
@@ -306,32 +402,65 @@ function covers(place, file) {
   return place.endsWith("/") ? file.startsWith(place) : file === place;
 }
 
-/**
- * The findings neither allowed by their place nor listed as still to rename.
- *
- * @param {readonly { file: string, text: string, rule: string }[]} findings
- * @param {Readonly<Record<string, readonly string[]>>} pending texts by file
- * @param {readonly { place: string, rules: readonly string[] }[]} allowed
- */
-export function unlisted(findings, pending, allowed) {
-  return findings.filter(
-    f =>
-      !allowed.some(a => covers(a.place, f.file) && a.rules.includes(f.rule)) &&
-      !(pending[f.file] ?? []).includes(f.text)
+/** Whether every word a finding breaks is allowed at its place. */
+function allowedHere(finding, allowed) {
+  return finding.rules.every(rule =>
+    allowed.some(a => covers(a.place, finding.file) && a.rules.includes(rule))
+  );
+}
+
+/** How many times each `file` and `text` pair occurs in a list of them. */
+function tally(pairs) {
+  const counts = new Map();
+  for (const { file, text } of pairs) {
+    const key = JSON.stringify([file, text]);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** The pending list as pairs, one per listed occurrence. */
+function pendingPairs(pending) {
+  return Object.entries(pending).flatMap(([file, texts]) =>
+    texts.map(text => ({ file, text }))
   );
 }
 
 /**
- * Listed texts still to rename that no longer use a retired word there, so
+ * The findings neither allowed by their place nor listed as still to rename.
+ * The list counts: a text listed once and shown twice in one file leaves the
+ * second showing a finding.
+ *
+ * @param {readonly { file: string, text: string, rules: readonly string[] }[]} findings
+ * @param {Readonly<Record<string, readonly string[]>>} pending texts by file, once per showing
+ * @param {readonly { place: string, rules: readonly string[] }[]} allowed
+ */
+export function unlisted(findings, pending, allowed) {
+  const left = tally(pendingPairs(pending));
+  return findings.filter(finding => {
+    if (allowedHere(finding, allowed)) return false;
+    const key = JSON.stringify([finding.file, finding.text]);
+    const listed = left.get(key) ?? 0;
+    if (listed === 0) return true;
+    left.set(key, listed - 1);
+    return false;
+  });
+}
+
+/**
+ * Listed texts still to rename that are no longer shown there as often, so
  * the list can only shrink: a rename that forgets its entry fails, and so
  * does an entry for a text that was never shown.
  */
 export function stalePending(findings, pending) {
-  return Object.entries(pending).flatMap(([file, texts]) =>
-    texts
-      .filter(text => !findings.some(f => f.file === file && f.text === text))
-      .map(text => `${file}: ${text}`)
-  );
+  const shown = tally(findings.filter(f => f.rules.length > 0));
+  const stale = [];
+  for (const [key, listed] of tally(pendingPairs(pending))) {
+    const extra = listed - (shown.get(key) ?? 0);
+    const [file, text] = JSON.parse(key);
+    for (let n = 0; n < extra; n += 1) stale.push(`${file}: ${text}`);
+  }
+  return stale;
 }
 
 /** Allowed places and rules that no longer hold a finding to allow. */
@@ -339,7 +468,8 @@ export function staleAllowed(findings, allowed) {
   return allowed.flatMap(a =>
     a.rules
       .filter(
-        rule => !findings.some(f => f.rule === rule && covers(a.place, f.file))
+        rule =>
+          !findings.some(f => f.rules.includes(rule) && covers(a.place, f.file))
       )
       .map(rule => `${a.place} (${rule})`)
   );

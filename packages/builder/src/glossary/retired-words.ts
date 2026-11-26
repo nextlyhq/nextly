@@ -43,8 +43,12 @@ export interface RetiredWord {
    * the builder, the Page Builder plugin and the admin.
    */
   readonly where?: readonly string[];
-  /** Whether a shown text uses the retired word. */
-  readonly test: (text: string) => boolean;
+  /**
+   * Whether a shown text uses the retired word, in the file at `path`
+   * (repository-relative, with "/"), for a word retired in one sense whose
+   * sense a place decides.
+   */
+  readonly test: (text: string, path: string) => boolean;
 }
 
 /**
@@ -88,21 +92,24 @@ export const BRITISH_SPELLINGS: Readonly<Record<string, string>> = {
 /** The endings a spelling is matched with, after its last letter is dropped. */
 const ENDINGS: Readonly<Record<string, string>> = {
   // colour, colours, coloured, colouring, colourful
-  colour: "colour(?:s|ed|ing|ful)?",
+  colour: "colour(?:s|ed|ing|ful|less)?",
   // centre, centres, centred, centring
   centre: "centr(?:e|es|ed|ing)",
   behaviour: "behaviour(?:s|al)?",
-  grey: "grey(?:s|ed|ing|ish)?",
+  grey: "grey(?:s|ed|ing|ish|scale)?",
 };
 
 /** A British spelling's pattern, US forms ("color") excluded. */
 function britishPattern(british: string): RegExp {
   const ending = ENDINGS[british];
   if (ending === undefined) {
-    // An -ise verb: customise, customises, customised, customising,
-    // customisation.
+    // An -ise verb and its forms: customise, customises, customised,
+    // customising, customisation, customiser, customisable.
     const stem = british.slice(0, -1);
-    return new RegExp(`\\b${stem}(?:e|es|ed|ing|ation|ations)\\b`, "i");
+    return new RegExp(
+      `\\b${stem}(?:e|es|ed|ing|ation|ations|er|ers|able)\\b`,
+      "i"
+    );
   }
   return new RegExp(`\\b${ending}\\b`, "i");
 }
@@ -110,6 +117,15 @@ function britishPattern(british: string): RegExp {
 /** A rule that is one pattern. */
 function matching(pattern: RegExp): (text: string) => boolean {
   return text => pattern.test(text);
+}
+
+/** Whether a repository-relative path is one of `places` or beneath one. */
+function inPlaces(path: string, places: readonly string[]): boolean {
+  return places.some(place =>
+    place.endsWith("/") || place.endsWith("-")
+      ? path.startsWith(place)
+      : path === place
+  );
 }
 
 /** The builder and the Page Builder plugin, without the admin. */
@@ -120,35 +136,80 @@ const BUILDER_AND_PLUGIN = [
 
 /** "Header", "footer", "header & footer" and their plurals. */
 const HEADER_OR_FOOTER = /\b(?:header|footer)s?\b/i;
-/** "set" as a noun: "a set", "this set", "footer set", "sets". */
+/**
+ * "set" as a noun: "a set", "this set", "footer sets", "{…} set", never
+ * the verb ("Set a width", "the header sets the title").
+ */
 const SET_NOUN =
-  /\b(?:header|footer|a|an|the|one|this|that|each|every|another|new|default|other|which|its|no|than one)\s+sets?\b|\bsets\b/i;
-
-/** What follows "look" when it is the verb: "look at", "looks right". */
-const LOOK_VERB = String.raw`(?!\s+(?:at|for|like|up|into|through|over|right|wrong|empty|exactly|good|the same|different)\b)`;
+  /\b(?:footer|a|an|the|one|this|each|every|another|new|default|other|which|its|no|than one|untitled)\s+sets?\b|\{…\}\s+sets?\b|\bthis set's\b/i;
 
 /**
- * "look" as a noun naming a block style: "a look", "other looks", "Looks",
- * never the verb ("Look for", "a tab that looks empty").
+ * The header & footer screens, where "set" means a header & footer even when
+ * the text doesn't say which.
+ */
+const HEADER_FOOTER_PLACES = [
+  "packages/plugin-page-builder/src/admin/editor/set-",
+  "packages/plugin-page-builder/src/admin/editor/new-set-dialog.tsx",
+  "packages/plugin-page-builder/src/admin/editor/region-card.tsx",
+  "packages/plugin-page-builder/src/admin/editor/header-footer-group.tsx",
+  "packages/plugin-page-builder/src/admin/editor/editor-top-bar.tsx",
+  "packages/plugin-page-builder/src/admin/layout-area-client.ts",
+  "packages/plugin-page-builder/src/admin/layout-writes-client.ts",
+  "packages/plugin-page-builder/src/layout-writes-route.ts",
+  "packages/plugin-page-builder/src/layout-removal/",
+  "packages/plugin-page-builder/src/default-layout/",
+] as const;
+
+/** What follows "look" when it is the verb: "looks right", "look at". */
+const LOOK_VERB = String.raw`(?!\s+(?:at|for|like|up|into|through|over|right|wrong|empty|exactly|good|fine|best|better|great|ok|okay|the same|different)\b)`;
+
+/**
+ * "look" as a noun naming a block style: "a look for buttons", "other
+ * looks", "Default look", "Button look", "Looks". Never the verb: "Look
+ * for", "This looks fine", "Which looks best?", "a block that looks right".
  */
 const LOOK_NOUN = new RegExp(
-  String.raw`\b(?:a|an|the|this|its|each|every|new|saved|another|which|no|other|your)\s+looks?\b${LOOK_VERB}|^looks?\b${LOOK_VERB}`,
+  [
+    String.raw`\b(?:a|an|the|its|each|every|new|saved|another|no|other|your|default|built-in|one|rename|delete|edit)\s+looks?\b(?!\s+at\b)`,
+    String.raw`\b(?:this|which)\s+look\b(?!\s+(?:at|for|like|up)\b)`,
+    String.raw`(?:\bblock|\bbutton|\{…\}['’]?s?)\s+looks?\b${LOOK_VERB}`,
+    String.raw`^looks?\b${LOOK_VERB}`,
+  ].join("|"),
   "i"
 );
 
 /**
- * "Space between" as a layout name, the gap or a Spread choice. Not a
- * sentence about the space between named things: "Space between
- * paragraphs" and "Space between the blocks inside" stay.
+ * "Space between" as a layout name, the gap or a Spread choice. "Space
+ * between paragraphs" names no gap, and "Space between the blocks inside" is
+ * the gap's own hint; both stay.
  */
-const SPACE_BETWEEN_NAME = /\bspace[ -]between\b(?!\s+(?:paragraphs|the)\b)/i;
+const SPACE_BETWEEN_NAME =
+  /\bspace[ -]between\b(?!\s+(?:paragraphs|the blocks inside)\b)/i;
 
 /**
- * "Fields" naming a component's per-copy settings: the bare label, or
- * fields counted or spoken of beside a component.
+ * The screens of a component's per-copy settings, where "field" means one of
+ * them even when the text doesn't say "component".
  */
+const COMPONENT_PROPERTY_PLACES = [
+  "packages/builder/src/inspector/component-fields-panel.tsx",
+  "packages/builder/src/inspector/component-variants-panel.tsx",
+  "packages/builder/src/inspector/instance-inspector-panel.tsx",
+  "packages/builder/src/panels/components/component-fields.ts",
+  "packages/builder/src/panels/components/component-variants.ts",
+  "packages/builder/src/shell/exposure-picker.tsx",
+] as const;
+
+/** Fields spoken of beside a component, or counted on one ("· 2 fields"). */
 const COMPONENT_FIELDS =
-  /^fields$|\bcomponent\b.*\bfields?\b|\bfields?\b.*\bcomponent\b|· \{…\} fields?\b|\b\d+ fields?\b/i;
+  /\bcomponent(?:['’]s)?\b.*\bfields?\b|\bfields?\b.*\bcomponent\b|· \{…\} fields?\b/i;
+
+/** The Page settings tab of a page's own extra fields, now "More details". */
+const PAGE_SETTINGS_DIALOG =
+  "packages/plugin-page-builder/src/admin/editor/settings-dialog.tsx";
+
+/** "bind" and its forms; "Upper bound" and "lower bound" are not. */
+const BIND =
+  /\b(?:un)?bind(?:s|ing|ings)?\b|(?<!\b(?:upper|lower) )\b(?:un)?bound\b/i;
 
 /** A bare "Template" as a name; "Collection templates" stays. */
 const BARE_TEMPLATE = /(?<![Cc]ollection )\bTemplates?\b/;
@@ -167,7 +228,7 @@ export const RETIRED_WORDS: readonly RetiredWord[] = [
   {
     id: "bind",
     says: `${CONNECT_WORDS.connect} · ${CONNECT_WORDS.disconnect}`,
-    test: matching(/\b(?:un)?bind(?:s|ing|ings)?\b|\bbound to\b|\bunbound\b/i),
+    test: matching(BIND),
   },
   {
     id: "insert",
@@ -182,7 +243,9 @@ export const RETIRED_WORDS: readonly RetiredWord[] = [
   {
     id: "header-footer-set",
     says: HEADER_FOOTER_WORDS.headerAndFooter,
-    test: text => HEADER_OR_FOOTER.test(text) && SET_NOUN.test(text),
+    test: (text, path) =>
+      SET_NOUN.test(text) &&
+      (HEADER_OR_FOOTER.test(text) || inPlaces(path, HEADER_FOOTER_PLACES)),
   },
   {
     id: "look",
@@ -224,7 +287,16 @@ export const RETIRED_WORDS: readonly RetiredWord[] = [
     id: "component-fields",
     says: PROPERTY_WORDS.properties,
     where: BUILDER_AND_PLUGIN,
-    test: matching(COMPONENT_FIELDS),
+    test: (text, path) =>
+      inPlaces(path, COMPONENT_PROPERTY_PLACES)
+        ? /\bfields?\b/i.test(text)
+        : COMPONENT_FIELDS.test(text),
+  },
+  {
+    id: "fields-tab",
+    says: PROPERTY_WORDS.moreDetails,
+    where: [PAGE_SETTINGS_DIALOG],
+    test: matching(/^fields$/i),
   },
   {
     id: "page-data",
