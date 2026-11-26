@@ -227,6 +227,12 @@ async function liveInEnglishAndSpanish(
   return id;
 }
 
+/** What a description says a publish does, without what it was made from, which it alone answers. */
+function whatItDoes<T extends object>(described: T): T {
+  expect(described).toHaveProperty("_rev");
+  return { ...described, _rev: undefined, marks: undefined };
+}
+
 describe.each(getConfiguredTestDialects())(
   "what the editor's publish reads, against what the publish does (%s)",
   dialect => {
@@ -316,7 +322,7 @@ describe.each(getConfiguredTestDialects())(
 
       // The choice as it opens: English and the shared fields, done as described.
       const applied = await publish(id, ["en"], true);
-      expect(applied).toEqual(described);
+      expect(applied).toEqual(whatItDoes(described));
 
       // The shared change reached readers of every language; Spanish's own change did not go.
       expect((await liveRead(stories, id, "en")).tagline).toBe(
@@ -335,7 +341,7 @@ describe.each(getConfiguredTestDialects())(
         { locale: "es", outcome: "goes-live-with-pending-change" },
       ]);
       const spanishDone = await publish(id, ["es"], false);
-      expect(spanishDone).toEqual(spanishNext);
+      expect(spanishDone).toEqual(whatItDoes(spanishNext));
       expect((await liveRead(stories, id, "es")).title).toBe("Hola otra vez");
     }, 120_000);
 
