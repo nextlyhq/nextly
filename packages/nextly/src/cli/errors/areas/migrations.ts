@@ -35,7 +35,9 @@ import {
   APPLIED_MIGRATION_FILE_MISSING_REASON,
   APPLIED_SNAPSHOT_INVALID_REASON,
   APPLIED_SNAPSHOT_MISSING_REASON,
+  APPLIED_SNAPSHOTS_LOST_REASON,
   MIGRATION_SNAPSHOTS_UNREADABLE_REASON,
+  SNAPSHOT_WITHOUT_ENTITIES_REASON,
 } from "../../../domains/schema/repair-columns/stop-reasons";
 import { NextlyError } from "../../../errors/nextly-error";
 import { CliError, type CliErrorParts } from "../cli-error";
@@ -1367,6 +1369,22 @@ export const MIGRATION_CODES = defineCodes({
       {
         code: "CONFIGURATION_ERROR",
         reason: APPLIED_SNAPSHOT_MISSING_REASON,
+        describe: snapshotStopParts,
+      },
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: APPLIED_SNAPSHOTS_LOST_REASON,
+        describe: snapshotStopParts,
+      },
+    ],
+  },
+  SNAPSHOT_WITHOUT_ENTITIES: {
+    cause:
+      "The newest applied migration's snapshot, written by an earlier release, records no entities, while an older applied one does.",
+    from: [
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: SNAPSHOT_WITHOUT_ENTITIES_REASON,
         describe: snapshotStopParts,
       },
     ],

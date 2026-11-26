@@ -120,6 +120,7 @@ import type { LoadConfigResult } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
 import type { ResolvedDevOptions } from "./db-sync";
+import { noteEntityNotSynced, noteEntitySynced } from "./entities-not-synced";
 
 // ============================================================================
 // Core Table Creation
@@ -1032,6 +1033,27 @@ export function registerSingleTableInResolver(
 }
 
 /**
+ * `changed`, with every slug the configuration still declares whose registry row an earlier run
+ * recorded `failed` (`recordedFailed`, read filtered on that status), each once. A failed entity whose
+ * configuration did not change since is otherwise never visited again, so its missing column would
+ * never be added and its status never cleared. One this run's registry sync refused is left out:
+ * its row was not written, so nothing is built against it.
+ */
+function withRecordedFailed(
+  changed: readonly string[],
+  recordedFailed: ReadonlyArray<{ slug: string }>,
+  declared: ReadonlyArray<{ slug: string }>,
+  refused: ReadonlyArray<{ slug: string }>
+): string[] {
+  const declaredSlugs = new Set(declared.map(entity => entity.slug));
+  const refusedSlugs = new Set(refused.map(entity => entity.slug));
+  const failed = recordedFailed
+    .map(row => row.slug)
+    .filter(slug => declaredSlugs.has(slug) && !refusedSlugs.has(slug));
+  return [...new Set([...changed, ...failed])];
+}
+
+/**
  * Perform auto-sync for Singles: create data tables and update migration status
  */
 export async function performSinglesAutoSync(
@@ -1044,8 +1066,14 @@ export async function performSinglesAutoSync(
 ): Promise<void> {
   const { logger } = context;
 
-  // Get Singles that need table creation (created or updated)
-  const singlesToSync = [...syncResult.created, ...syncResult.updated];
+  // Singles that need their table brought up to date: created or updated, and any the configuration
+  // still declares that an earlier run recorded failed, so a refused column is tried again.
+  const singlesToSync = withRecordedFailed(
+    [...syncResult.created, ...syncResult.updated],
+    await singleRegistry.getAllSingles({ migrationStatus: "failed" }),
+    config.singles,
+    syncResult.errors
+  );
 
   if (singlesToSync.length === 0) {
     return;
@@ -1083,6 +1111,7 @@ export async function performSinglesAutoSync(
     const singleConfig = config.singles.find(s => s.slug === slug);
     if (!singleConfig) {
       errors.push({ slug, error: "Single config not found" });
+      noteEntityNotSynced("single", slug, "its configuration was not found");
       continue;
     }
 
@@ -1140,6 +1169,7 @@ export async function performSinglesAutoSync(
 
         await singleRegistry.updateMigrationStatus(slug, "applied");
         synced.push(slug);
+        noteEntitySynced("single", slug);
       } else {
         // Table doesn't exist — create it
         const migrationSQL = schemaService.generateMigrationSQL(
@@ -1165,13 +1195,13 @@ export async function performSinglesAutoSync(
           );
           await singleRegistry.updateMigrationStatus(slug, "applied");
           synced.push(slug);
+          noteEntitySynced("single", slug);
           logger.debug(`Created table and set status to 'applied' for ${slug}`);
         } else {
           await singleRegistry.updateMigrationStatus(slug, "failed");
-          errors.push({
-            slug,
-            error: `Table creation SQL executed but table '${tableName}' does not exist`,
-          });
+          const missing = `Table creation SQL executed but table '${tableName}' does not exist`;
+          errors.push({ slug, error: missing });
+          noteEntityNotSynced("single", slug, missing);
         }
       }
     } catch (error) {
@@ -1182,6 +1212,8 @@ export async function performSinglesAutoSync(
         // Ignore status update error
       }
       errors.push({ slug, error: errorMsg });
+      // For the run's closing error, which ends it with exit code 1 once everything else has run.
+      noteEntityNotSynced("single", slug, error);
     }
   }
 
@@ -1330,8 +1362,14 @@ export async function performComponentsAutoSync(
 ): Promise<void> {
   const { logger } = context;
 
-  // Get Components that need table creation (created or updated)
-  const componentsToSync = [...syncResult.created, ...syncResult.updated];
+  // Field groups that need their table brought up to date: created or updated, and any the
+  // configuration still declares that an earlier run recorded failed.
+  const componentsToSync = withRecordedFailed(
+    [...syncResult.created, ...syncResult.updated],
+    await componentRegistry.getAllComponents({ migrationStatus: "failed" }),
+    config.fieldGroups,
+    syncResult.errors
+  );
 
   if (componentsToSync.length === 0) {
     return;
@@ -1366,6 +1404,11 @@ export async function performComponentsAutoSync(
     const componentConfig = config.fieldGroups.find(c => c.slug === slug);
     if (!componentConfig) {
       errors.push({ slug, error: "Component config not found" });
+      noteEntityNotSynced(
+        "field group",
+        slug,
+        "its configuration was not found"
+      );
       continue;
     }
 
@@ -1378,6 +1421,11 @@ export async function performComponentsAutoSync(
         slug,
         error: "Component table name not recorded by the sync",
       });
+      noteEntityNotSynced(
+        "field group",
+        slug,
+        "its table name was not recorded by the sync"
+      );
       continue;
     }
 
@@ -1403,6 +1451,7 @@ export async function performComponentsAutoSync(
 
         await componentRegistry.updateMigrationStatus(slug, "applied");
         synced.push(slug);
+        noteEntitySynced("field group", slug);
       } else {
         // Table doesn't exist — create it
         const migrationSQL = schemaService.generateMigrationSQL(
@@ -1419,13 +1468,13 @@ export async function performComponentsAutoSync(
         if (tableActuallyExists) {
           await componentRegistry.updateMigrationStatus(slug, "applied");
           synced.push(slug);
+          noteEntitySynced("field group", slug);
           logger.debug(`Created table and set status to 'applied' for ${slug}`);
         } else {
           await componentRegistry.updateMigrationStatus(slug, "failed");
-          errors.push({
-            slug,
-            error: `Table creation SQL executed but table '${tableName}' does not exist`,
-          });
+          const missing = `Table creation SQL executed but table '${tableName}' does not exist`;
+          errors.push({ slug, error: missing });
+          noteEntityNotSynced("field group", slug, missing);
         }
       }
     } catch (error) {
@@ -1436,6 +1485,8 @@ export async function performComponentsAutoSync(
         // Ignore status update error
       }
       errors.push({ slug, error: errorMsg });
+      // For the run's closing error, which ends it with exit code 1 once everything else has run.
+      noteEntityNotSynced("field group", slug, error);
     }
   }
 

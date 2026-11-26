@@ -391,7 +391,9 @@ describe.each(getConfiguredTestDialects())(
       expect(entity?.applied?.fields.map(f => f.name)).toEqual(["price"]);
     });
 
-    it("reads past an applied snapshot written before snapshots recorded entities", async () => {
+    it("stops where an applied snapshot newer than the record read records no entities", async () => {
+      // An earlier release's `migrate:create` wrote 0002 after 0001, which records them: judged by
+      // 0001, the columns 0002 changed would be converted back.
       await snapshot("0001_first", [{ name: "price", type: "number" }], true);
       await snapshot(
         "0002_older_format",
@@ -399,6 +401,20 @@ describe.each(getConfiguredTestDialects())(
         true,
         JSON.stringify({ version: 1, snapshot: { tables: [] } })
       );
+      expect(await stopped()).toMatchObject({
+        code: "SNAPSHOT_WITHOUT_ENTITIES",
+        what: "The applied migration `0002_older_format` has a snapshot that records no entities, and the older `0001_first` has one that does.",
+      });
+    });
+
+    it("reads past an applied snapshot written before snapshots recorded entities, older than the record", async () => {
+      await snapshot(
+        "0001_older_format",
+        null,
+        true,
+        JSON.stringify({ version: 1, snapshot: { tables: [] } })
+      );
+      await snapshot("0002_first", [{ name: "price", type: "number" }], true);
       const entity = await posts();
       expect(entity?.applied?.fields.map(f => f.name)).toEqual(["price"]);
     });

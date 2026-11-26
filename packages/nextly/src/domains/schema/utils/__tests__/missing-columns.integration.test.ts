@@ -83,7 +83,7 @@ describeEachDialect("adding the columns a table misses", dialect => {
     expect(warned).toEqual([]);
   });
 
-  it("still reports a column the database refuses, by name, and only that one", async () => {
+  it("adds the rest, then throws naming only the column the database refused", async () => {
     const refusing = new Proxy(adapter, {
       get(target, key, receiver) {
         if (key !== "executeQuery") return Reflect.get(target, key, receiver);
@@ -95,7 +95,7 @@ describeEachDialect("adding the columns a table misses", dialect => {
         };
       },
     });
-    const added = await addMissingColumnsForFields(
+    const outcome = addMissingColumnsForFields(
       refusing,
       logger,
       TABLE,
@@ -104,7 +104,16 @@ describeEachDialect("adding the columns a table misses", dialect => {
       ),
       { timestamps: true, builtBy: "codeFirst" }
     );
-    expect(added).toEqual(["depth"]);
+    await expect(outcome).rejects.toMatchObject({
+      tableName: TABLE,
+      refused: [{ column: "rank", reason: "refused by the database" }],
+      added: ["depth"],
+    });
+    // The one after the refused column was still added.
+    const [row] = await adapter.executeQuery<Record<string, unknown>>(
+      `SELECT ${q("depth")} FROM ${q(TABLE)} WHERE ${q("id")} = 'a'`
+    );
+    expect(row).toEqual({ depth: null });
     expect(warned).toEqual([
       `Failed to add column rank to ${TABLE}: refused by the database`,
     ]);

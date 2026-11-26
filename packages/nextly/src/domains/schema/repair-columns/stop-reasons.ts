@@ -24,6 +24,15 @@ export const APPLIED_MIGRATION_FILE_MISSING_REASON =
 /** An applied migration newer than the newest snapshot read has none. */
 export const APPLIED_SNAPSHOT_MISSING_REASON = "applied snapshot missing";
 
+/**
+ * Applied migrations `migrate:create` wrote have no snapshot, where the database records that their
+ * snapshots were written, and no applied snapshot that records entities is left.
+ */
+export const APPLIED_SNAPSHOTS_LOST_REASON = "applied snapshots lost";
+
+/** The newest applied snapshot records no entities, and an older applied one does. */
+export const SNAPSHOT_WITHOUT_ENTITIES_REASON = "snapshot without entities";
+
 /** The snapshots are there and the disk does not give them. */
 export const MIGRATION_SNAPSHOTS_UNREADABLE_REASON =
   "migration snapshots unreadable";

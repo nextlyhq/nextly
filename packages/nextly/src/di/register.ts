@@ -190,6 +190,7 @@ import {
   type RegisteredWorkflow,
 } from "../domains/workflows/registry";
 import { recheckReleasesInWorkflowScopes } from "../domains/workflows/release-recheck-signal";
+import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";
 import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
@@ -2641,10 +2642,13 @@ async function materializeBuilderKind(
       }
       ctx.materialized.add(`${args.kind}:${ent.slug}`);
     } catch (err) {
+      // Described whole: a refused column's table, name and reason are in the error's log fields
+      // (`ColumnsNotAddedError`), not its message.
       ctx.logger.warn?.(
-        `[plugins] Failed to materialize plugin fields onto Builder ${args.kind} "${ent.slug}": ${
-          err instanceof Error ? err.message : String(err)
-        }. Skipping; will retry next boot.`
+        `[plugins] Failed to materialize plugin fields onto Builder ${args.kind} "${ent.slug}": ${describeError(
+          err,
+          { context: false }
+        )}. Skipping; will retry next boot.`
       );
     }
   }
