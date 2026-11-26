@@ -2,7 +2,7 @@
 // Verifies that field definitions are correctly mapped to Drizzle table objects
 // and that the return shape includes schemaRecord for pushSchema() consumption.
 import { getTableName, getColumns } from "drizzle-orm";
-import { describe, it, expect } from "vitest";
+import { beforeAll, describe, it, expect } from "vitest";
 
 import { MIGRATE_STEP_COLUMN_NAMES } from "../../../lib/system-columns";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -11,6 +11,15 @@ import {
   languageRevisionTable,
   type RuntimeSchemaResult,
 } from "../services/runtime-schema-generator";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 describe.each(["postgresql", "mysql", "sqlite"] as const)(
   "languageRevisionTable (%s)",

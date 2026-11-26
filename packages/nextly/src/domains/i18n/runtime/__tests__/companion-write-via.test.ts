@@ -17,9 +17,18 @@
  *
  * @module domains/i18n/runtime/__tests__/companion-write-via.test
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { companionWriteVia, upsertCompanionRow } from "../companion-io";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 /** A transaction double that records the raw SQL it is handed. */
 function txSpy() {

@@ -28,7 +28,7 @@ import {
   ACTIVITY_LOG_INDEXES,
   AUDIT_LOG_INDEXES,
   mysqlIndexes,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-mysql";
 
 import {
   AUDIT_ACTOR_KIND_LENGTH,

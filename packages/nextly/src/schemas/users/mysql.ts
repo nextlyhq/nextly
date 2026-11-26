@@ -22,7 +22,7 @@ import {
   timestamp,
 } from "drizzle-orm/mysql-core";
 
-import { USERS_INDEXES, mysqlIndexes } from "../_internal/core-indexes";
+import { USERS_INDEXES, mysqlIndexes } from "../_internal/core-indexes-mysql";
 
 /** `users` columns, a fresh builder record per call (see `core-table-contributions`). */
 export function usersColumns() {
