@@ -694,7 +694,7 @@ export async function pushElementOwners(input: {
   const managed = new Set(input.managedTables.map(t => t.toLowerCase()));
   const retired = retiredElementRows({
     rows: rows.filter(row => managed.has(row.tableName.toLowerCase())),
-    declared: groupByTable(contributed),
+    declared: contributedByTable(contributed),
     live: input.live,
   });
   const gone = new Set(retired.map(row => ownerRecordKey(row)));
@@ -723,8 +723,11 @@ export async function pushElementOwners(input: {
   return { rows: [...rows, ...added], declaring, write };
 }
 
-/** Contributed elements grouped by table, as `retiredElementRows` reads them. */
-function groupByTable(
+/**
+ * Contributed elements grouped by table, as `retiredElementRows` reads them: what the configuration
+ * declares, which the push and `nextly migrate` retire rows against alike.
+ */
+export function contributedByTable(
   contributed: readonly ContributedElement[]
 ): Map<string, Array<Omit<ContributedElement, "table">>> {
   const out = new Map<string, Array<Omit<ContributedElement, "table">>>();
