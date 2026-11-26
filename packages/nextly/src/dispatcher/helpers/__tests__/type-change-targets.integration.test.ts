@@ -125,9 +125,14 @@ describe.each(getConfiguredTestDialects())(
           t,
         ])
       );
+      // A number held in the group's JSON is no text until rewritten, which no save does yet.
       expect(inGroup.get("text")).toMatchObject({
+        blocked: "needs-rewrite-inside",
+        outcome: null,
+      });
+      expect(inGroup.get("json")).toMatchObject({
         blocked: null,
-        outcome: "converts",
+        outcome: "keeps",
       });
       await expect(
         targetsOf("tct_nested", ["meta", "missing"], "number")
