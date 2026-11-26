@@ -3,8 +3,9 @@
 /**
  * The top of Design → Type: "Body font" and "Headings font". Each lists the
  * site's fonts, the system's and the entry writing nothing ("Your site's own
- * font", "Same as body" for Headings); a pick is one token set; and a
- * Headings font with no bold says so, with "Add Bold" for a catalogue font.
+ * font", "Same as body" for Headings); a pick is one token set. A "Fonts"
+ * header heads them, with "Manage fonts…" at its end, and a Headings font
+ * with no bold draws no warning.
  */
 import {
   resolveSiteTokens,
@@ -16,7 +17,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
   within,
 } from "@testing-library/react";
 import * as React from "react";
@@ -161,75 +161,96 @@ describe("the Body and Headings fonts", () => {
     expect(set.siteText?.h2).toBeUndefined();
   });
 
-  it("shows the fonts read-only, with nothing to open", () => {
-    render(<Hosted readOnly />);
-    expect(screen.queryByRole("button")).toBeNull();
+  it("shows the fonts read-only, with nothing to open but the Fonts screen", () => {
+    render(<Hosted readOnly onManageFonts={() => {}} />);
+    expect(screen.getAllByRole("button").map(b => b.textContent)).toEqual([
+      "Manage fonts…",
+    ]);
     expect(screen.getByText("Body font")).toBeTruthy();
     expect(screen.getByText("Same as body")).toBeTruthy();
   });
 });
 
 describe("a Headings font with no bold", () => {
-  it("says so, and adds the catalogue font's Bold", async () => {
-    const onAddCut = vi.fn(async () => undefined);
+  it("draws no missing-Bold line and offers no Add Bold", () => {
+    // Lora is loaded at 400 only, so a browser fakes its bold headings.
     render(
       <Hosted
+        faces={[LORA]}
         tokens={withFontRole(SITE, "heading", '"Lora", serif')}
-        onAddCut={onAddCut}
+        onManageFonts={() => {}}
       />
     );
+    // The row draws Lora as the Headings font, so a missing bold is in play.
     expect(
-      screen.getByText("Lora has no Bold, so browsers draw a fake bold")
+      screen.getByRole("button", { name: "Headings font, Lora" })
     ).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Add Bold" }));
-    await waitFor(() =>
-      expect(onAddCut).toHaveBeenCalledWith({
-        id: "lora",
-        weights: [700],
-        styles: ["normal"],
-        subsets: ["latin"],
-      })
-    );
-  });
-
-  it("says why an add was refused", async () => {
-    render(
-      <Hosted
-        tokens={withFontRole(SITE, "heading", '"Lora", serif')}
-        onAddCut={async () => "The font service could not be reached."}
-      />
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Add Bold" }));
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "The font service could not be reached."
-    );
-  });
-
-  it("offers no Add Bold for an uploaded font, and says nothing once it has a bold", () => {
-    const uploaded: FontFaceDef = {
-      ...LORA,
-      family: "Mine",
-      source: { kind: "upload" },
-    };
-    const { unmount } = render(
-      <Hosted
-        faces={[uploaded]}
-        tokens={withFontRole(SITE, "heading", '"Mine", sans-serif')}
-        onAddCut={async () => undefined}
-      />
-    );
-    expect(
-      screen.getByText("Mine has no Bold, so browsers draw a fake bold")
-    ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Add Bold" })).toBeNull();
-    unmount();
-    render(
-      <Hosted
-        faces={[LORA, { ...LORA, weight: "700" }]}
-        tokens={withFontRole(SITE, "heading", '"Lora", serif')}
-      />
-    );
     expect(screen.queryByText(/has no Bold/)).toBeNull();
+    expect(screen.queryByText(/fake bold/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add Bold" })).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("the Fonts header", () => {
+  it("heads the two rows, with Manage fonts… at its end", () => {
+    const onManageFonts = vi.fn();
+    render(<Hosted onManageFonts={onManageFonts} />);
+    const section = screen.getByRole("region", { name: "Fonts" });
+    const heading = within(section).getByRole("heading", { name: "Fonts" });
+    const head = heading.parentElement;
+    expect(head?.classList.contains("nx-vars__group-head")).toBe(true);
+    const manage = within(section).getByRole("button", {
+      name: "Manage fonts…",
+    });
+    // In the header row, after the heading: its last part.
+    expect(manage.parentElement).toBe(head);
+    expect(head?.lastElementChild).toBe(manage);
+    // The rows come after the header, inside the same section.
+    const body = within(section).getByRole("button", { name: /^Body font,/ });
+    expect(
+      head!.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    // Where focus returns when the Fonts screen closes.
+    expect(manage.getAttribute("data-fonts-manage")).toBe("");
+    fireEvent.click(manage);
+    expect(onManageFonts).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the header and Manage fonts… while the site's variables are not there", () => {
+    // Being read, or failed to read: the rows wait, the way to the Fonts
+    // screen does not, and it is still where focus returns.
+    const onManageFonts = vi.fn();
+    render(
+      <SiteFontRoles
+        tokens={undefined}
+        onChange={() => undefined}
+        readOnly={false}
+        faces={undefined}
+        fromCode={[]}
+        onManageFonts={onManageFonts}
+      />
+    );
+    const section = screen.getByRole("region", { name: "Fonts" });
+    expect(
+      within(section).getByRole("heading", { name: "Fonts" })
+    ).toBeTruthy();
+    const manage = within(section).getByRole("button", {
+      name: "Manage fonts…",
+    });
+    expect(manage.getAttribute("data-fonts-manage")).toBe("");
+    fireEvent.click(manage);
+    expect(onManageFonts).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /^Body font,/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^Headings font,/ })
+    ).toBeNull();
+  });
+
+  it("keeps the header, with no link, where nothing opens the Fonts screen", () => {
+    render(<Hosted />);
+    expect(screen.getByRole("heading", { name: "Fonts" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Manage fonts…" })).toBeNull();
   });
 });
 
