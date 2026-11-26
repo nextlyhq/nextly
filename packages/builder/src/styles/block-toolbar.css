@@ -90,11 +90,12 @@
   position: absolute;
   z-index: 3;
   /*
-   * Only the buttons take the pointer: the bar sits over the block above the
-   * selection, and a press in a gap between two buttons, or on the bar's
-   * edge, reaches that block instead of landing on nothing.
+   * The whole bar takes the pointer while it is shown, its gaps and edges
+   * too, so a pointer moving up from the selected block reaches the buttons
+   * however the bar overlaps the blocks around it. It lets the pointer
+   * through only while it steps aside for another block (below).
    */
-  pointer-events: none;
+  pointer-events: auto;
   transition: opacity 120ms ease-out;
   display: flex;
   align-items: center;
@@ -122,10 +123,6 @@
     color-mix(in srgb, var(--nx-builder-ink) 40%, transparent);
 }
 
-.nx-block-toolbar button {
-  pointer-events: auto;
-}
-
 /*
  * Faded while the pointer is over another block, so the block it points at is
  * not covered; still there to press, and back once the pointer is on it or the
@@ -144,19 +141,35 @@
   opacity: 0;
 }
 
-.nx-block-toolbar[data-typing]:not(:focus-within) button {
+.nx-block-toolbar[data-typing]:not(:focus-within) {
   pointer-events: none;
 }
 
 /*
- * A bar drawn inside a block shorter than itself runs over the top of the
- * next block. While it is faded for that block, a press there goes to the
- * block, not to a button the author cannot see. Its part over its own block is
- * still reached: pointing there is pointing at the selected block, which
- * brings the bar back.
+ * Faded over a block the bar may be drawn over (above, beside or below the
+ * selection, or after a short block it is drawn inside), the whole bar lets
+ * the pointer through, so a press there goes to that block, not to a button
+ * the author cannot see. `pointer-events` is inherited, so the buttons let it
+ * through with the bar. Faded over the selection's own parents, the bar keeps
+ * the pointer, so a pointer heading for it still reaches its buttons; pointing
+ * at the selected block brings it back too.
  */
-.nx-block-toolbar[data-side="inside"][data-faded]:not(:focus-within) button {
+.nx-block-toolbar[data-lets-through]:not(:focus-within) {
   pointer-events: none;
+}
+
+/*
+ * The strip between a bar drawn above its block and that block, part of the
+ * bar: a pointer moving up from the selected block onto the bar never passes
+ * over the block above on the way, which would make the bar step aside just
+ * before it is reached. Below the bar's border, as tall as the placement's gap.
+ */
+.nx-block-toolbar[data-side="above"]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: calc(100% + 1px);
+  height: var(--nx-block-toolbar-gap, 0px);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -442,6 +455,37 @@
  * where the space is too small to hold it — so the chip overflows and stays
  * centred on the band it names.
  */
+/*
+ * A block that holds no blocks (a Button, a Heading) gets its bands as
+ * outlines with no fill, so a fill never tints the block's own color: a yellow
+ * Button still looks yellow while selected. The outline keeps the band's hue,
+ * from the same tokens the fills mix. Containers keep the fills above.
+ */
+.nx-spacing-overlay[data-outlines] .nx-spacing-overlay__band::before {
+  background-color: transparent;
+  background-image: none;
+  box-shadow: inset 0 0 0 1px
+    color-mix(
+      in srgb,
+      var(--nx-spacing-band-hue, var(--nx-chart-3)) 70%,
+      transparent
+    );
+}
+
+.nx-spacing-overlay[data-outlines]
+  .nx-spacing-overlay__band[data-box="margin"]:not([data-gap]) {
+  --nx-spacing-band-hue: var(--nx-chart-4);
+}
+
+/*
+ * A number thicker than its band would cover the block it measures, so it
+ * hides until the pointer is over that band (the component marks both).
+ */
+.nx-spacing-overlay__band[data-tight]:not([data-pointed])
+  .nx-spacing-overlay__value {
+  visibility: hidden;
+}
+
 .nx-spacing-overlay__value {
   /*
    * Positioned so it paints ABOVE the fill. The fill is an absolutely positioned

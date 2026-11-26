@@ -1376,3 +1376,120 @@ describe("the space a container puts between its children", () => {
     expect(labels(container)).toEqual(["18"]);
   });
 });
+
+describe("small blocks keep their own label and color under the bands", () => {
+  /*
+   * jsdom lays nothing out, so the bands and their chips are given the boxes a
+   * browser would: a band where its own inline size says, a chip 24 x 16 px.
+   * Everything else keeps jsdom's answer.
+   */
+  const REAL_RECT = Element.prototype.getBoundingClientRect;
+  function stubOverlayBoxes() {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        if (this instanceof HTMLElement) {
+          if (this.classList.contains("nx-spacing-overlay__value")) {
+            const band = this.parentElement;
+            const left = parseFloat(band?.style.left ?? "0") || 0;
+            const top = parseFloat(band?.style.top ?? "0") || 0;
+            return new DOMRect(left, top, 24, 16);
+          }
+          if (this.classList.contains("nx-spacing-overlay__band")) {
+            return new DOMRect(
+              parseFloat(this.style.left) || 0,
+              parseFloat(this.style.top) || 0,
+              parseFloat(this.style.width) || 0,
+              parseFloat(this.style.height) || 0
+            );
+          }
+        }
+        return REAL_RECT.call(this);
+      }
+    );
+  }
+  function band(
+    container: HTMLElement,
+    box: string,
+    side: string
+  ): HTMLElement {
+    const found = container.querySelector<HTMLElement>(
+      `.nx-spacing-overlay__band[data-box="${box}"][data-side="${side}"]`
+    );
+    if (found === null) throw new Error(`no ${box} band on the ${side}`);
+    return found;
+  }
+  function pointAt(x: number, y: number): void {
+    act(() => {
+      document.dispatchEvent(
+        new MouseEvent("pointermove", { clientX: x, clientY: y, bubbles: true })
+      );
+    });
+  }
+
+  it("hides a number thinner than its band until the pointer is over that band", () => {
+    stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
+    stubOverlayBoxes();
+    const { container } = mount(editorOf("a"));
+    const thin = band(container, "margin", "top");
+    const wide = band(container, "margin", "bottom");
+    // A 16 px number on a 12 px band hides; on a 64 px band it shows.
+    expect(thin.hasAttribute("data-tight")).toBe(true);
+    expect(wide.hasAttribute("data-tight")).toBe(false);
+    expect(thin.hasAttribute("data-pointed")).toBe(false);
+
+    const box = thin.getBoundingClientRect();
+    pointAt(box.x + box.width / 2, box.y + box.height / 2);
+    expect(thin.hasAttribute("data-pointed")).toBe(true);
+    expect(wide.hasAttribute("data-pointed")).toBe(false);
+
+    pointAt(box.x + box.width / 2, box.y + box.height + 200);
+    expect(thin.hasAttribute("data-pointed")).toBe(false);
+  });
+
+  it("draws the bands of a block that holds no blocks as outlines", () => {
+    stubComputedStyle({ a: { paddingTop: "12px" } });
+    const { container } = mount(editorOf("a"));
+    const layer = container.querySelector(".nx-spacing-overlay");
+    expect(layer?.hasAttribute("data-outlines")).toBe(true);
+  });
+
+  it("keeps filled bands on a block that holds blocks", () => {
+    if (!hasBlock("acme/box")) {
+      registerBlocks(
+        [
+          {
+            name: "acme/box",
+            version: 1,
+            description: "A box holding blocks.",
+            example: { props: {} },
+            supports: { spacing: { margin: true, padding: true } },
+            slots: { children: {} },
+            render: () => React.createElement("div", null, "box"),
+          },
+        ] as never,
+        { source: "spacing-overlay-test" }
+      );
+    }
+    const withBox = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "x",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: { children: [] },
+        },
+      ],
+    } as unknown as BlockDocument;
+    stubComputedStyle({ x: { paddingTop: "64px" } });
+    const { container } = mount({
+      ...editorOf("x"),
+      document: withBox,
+    } as EditorState);
+    const layer = container.querySelector(".nx-spacing-overlay");
+    expect(container.querySelector(".nx-spacing-overlay__band")).not.toBeNull();
+    expect(layer?.hasAttribute("data-outlines")).toBe(false);
+  });
+});

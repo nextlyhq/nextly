@@ -167,23 +167,41 @@ function typingMark(aside: boolean): { "data-typing"?: "" } {
 }
 
 /**
- * The bar's fade marker: present while the pointer is over a block that is
- * not selected.
+ * The bar's fade markers: `data-faded` while the pointer is over a block that
+ * is not selected, and `data-lets-through` while that block is one the bar
+ * may be drawn over.
  *
- * Not over a block inside the selection when the bar is drawn inside it:
- * there the bar sits over what it names, and pointing under it is pointing
- * at the selected block's own content, so it stays, and stays pressable.
+ * Not faded over a block inside the selection when the bar is drawn inside
+ * it: there the bar sits over what it names, and pointing under it is
+ * pointing at the selected block's own content, so it stays, and stays
+ * pressable.
+ *
+ * Faded but still pressable over the selection's own parents. The bar is
+ * always drawn over one of them, so that is where a pointer heading for the
+ * bar comes from; its buttons go on catching the pointer there, and reaching
+ * one is pointing at chrome, which brings the bar back.
+ *
+ * Over any other block, above, beside or below the selection, it also lets
+ * the pointer through its buttons: that block may sit under the bar, and a
+ * press there selects it rather than pressing a button the author cannot
+ * see. One rule for every side the bar is drawn on.
  */
 function fadedAside(
   hovered: string | null,
   selectedIds: readonly string[],
   over: { inside: boolean; document: EditorState["document"] }
-): { "data-faded"?: "" } {
+): { "data-faded"?: ""; "data-lets-through"?: "" } {
   if (hovered === null || selectedIds.includes(hovered)) return {};
-  const within =
-    over.inside &&
-    pathTo(over.document, hovered).some(node => selectedIds.includes(node.id));
-  return within ? {} : { "data-faded": "" };
+  const within = pathTo(over.document, hovered).some(node =>
+    selectedIds.includes(node.id)
+  );
+  if (within) return over.inside ? {} : { "data-faded": "" };
+  const parent = selectedIds.some(id =>
+    pathTo(over.document, id).some(node => node.id === hovered)
+  );
+  return parent
+    ? { "data-faded": "" }
+    : { "data-faded": "", "data-lets-through": "" };
 }
 
 /**
@@ -933,10 +951,17 @@ export function BlockToolbar({
         // Kept out of sight rather than unmounted until the first measurement.
         // The bar has to be in the DOM to be measured at all, and mounting it at
         // a default position would show it in the wrong place for one frame.
+        // The gap the placement leaves under a bar drawn above its block goes
+        // to the stylesheet as the same number, so the strip that spans it
+        // (`block-toolbar.css`) is exactly as tall as the gap.
         style={
           placement === null
             ? { visibility: "hidden" }
-            : { left: placement.x, top: placement.y }
+            : ({
+                left: placement.x,
+                top: placement.y,
+                "--nx-block-toolbar-gap": `${String(TOOLBAR_GAP_PX)}px`,
+              } as React.CSSProperties)
         }
         onKeyDown={onKeyDown}
       >

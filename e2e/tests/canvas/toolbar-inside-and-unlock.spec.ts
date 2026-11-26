@@ -459,3 +459,98 @@ test.describe("the block toolbar with no room above, and on a locked block", () 
     await expect(layerRow(page, HERO).first()).toContainText("Locked");
   });
 });
+
+const INTRO = "a0000000-0000-4000-8000-00000000f007";
+const BADGE = "a0000000-0000-4000-8000-00000000f008";
+const HERO_TITLE = "a0000000-0000-4000-8000-00000000f009";
+
+/** A large page title: the hero Heading a small badge sits above. */
+function heroHeading(id: string, words: string): Record<string, unknown> {
+  return { ...heading(id, words), props: { text: words, level: "h1" } };
+}
+
+test.describe("the block toolbar over a block above the selection", () => {
+  test.describe.configure({ timeout: 180_000 });
+
+  test("fades over a small badge above a selected hero Heading, and a click there selects the badge", async ({
+    page,
+  }) => {
+    // Room above the hero, so the bar is drawn above it, over the badge.
+    const id = await createPage(page.request, [
+      roomyHeading(INTRO, "Spring at the allotment"),
+      text(BADGE, "New"),
+      heroHeading(HERO_TITLE, "Everything you need to plant this spring"),
+    ]);
+    await openBuilder(page, id, INTRO);
+    await select(page, HERO_TITLE);
+
+    const bar = await barOn(page, "above");
+    const badge = await boxOf(page, BADGE);
+    // The case this is about: the bar is drawn over the badge.
+    expect(overlaps(bar, badge)).toBe(true);
+    await expect(toolbar(page)).not.toHaveAttribute("data-faded", "");
+
+    // Pointing at the badge where the bar does not reach fades the bar.
+    await page.mouse.move(
+      badge.x + badge.width - 12,
+      badge.y + badge.height / 2
+    );
+    await expect(toolbar(page)).toHaveAttribute("data-faded", "");
+    await expect(toolbar(page)).toHaveCSS("opacity", "0");
+
+    // On into the bar, right where Duplicate is drawn over the badge: the bar
+    // stays faded, and a press there selects the badge, not Duplicate.
+    const duplicate = await toolbarControl(page, "Duplicate").boundingBox();
+    if (duplicate === null) throw new Error("[e2e] Duplicate has no box");
+    const top = Math.max(badge.y, duplicate.y);
+    const bottom = Math.min(
+      badge.y + badge.height,
+      duplicate.y + duplicate.height
+    );
+    expect(bottom, "Duplicate is drawn over the badge").toBeGreaterThan(top);
+    await page.mouse.move(
+      duplicate.x + duplicate.width / 2,
+      (top + bottom) / 2,
+      {
+        steps: 8,
+      }
+    );
+    await expect(toolbar(page)).toHaveCSS("opacity", "0");
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect.poll(() => selection(page)).toEqual([BADGE]);
+    await expect(
+      page.getByRole("button", { name: "Undo", exact: true })
+    ).toBeDisabled();
+  });
+
+  test("still reaches its buttons from the selected block, across the gap under it", async ({
+    page,
+  }) => {
+    // The control: moving up from the selected hero onto the bar must never
+    // pass over the badge on the way and lose the bar.
+    const id = await createPage(page.request, [
+      roomyHeading(INTRO, "Spring at the allotment"),
+      text(BADGE, "New"),
+      heroHeading(HERO_TITLE, "Everything you need to plant this spring"),
+    ]);
+    await openBuilder(page, id, INTRO);
+    await select(page, HERO_TITLE);
+    await barOn(page, "above");
+
+    const hero = await boxOf(page, HERO_TITLE);
+    const duplicate = await toolbarControl(page, "Duplicate").boundingBox();
+    if (duplicate === null) throw new Error("[e2e] Duplicate has no box");
+    const x = duplicate.x + duplicate.width / 2;
+    await page.mouse.move(x, hero.y + hero.height / 2);
+    await page.mouse.move(x, duplicate.y + duplicate.height / 2, { steps: 12 });
+    await expect(toolbar(page)).not.toHaveAttribute("data-faded", "");
+    await expect(toolbar(page)).toHaveCSS("opacity", "1");
+    await page.mouse.down();
+    await page.mouse.up();
+    // Duplicate ran: there is something to undo, and the hero stays selected.
+    await expect(
+      page.getByRole("button", { name: "Undo", exact: true })
+    ).toBeEnabled();
+  });
+});

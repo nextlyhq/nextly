@@ -1478,6 +1478,77 @@ describe("BlockToolbar", () => {
     expect(bar.hasAttribute("data-faded")).toBe(false);
   });
 
+  describe("over a block it may cover, wherever it is drawn", () => {
+    // A small badge above a selected hero, or any block beside or below the
+    // bar: pointing at it must reach it through the faded bar. Pointing at the
+    // selection's own parent, which the bar always sits over, must not: there
+    // the faded buttons still catch the pointer, which is how they are reached.
+    function PointAt({ id }: { id: string | null }) {
+      const point = useHoveredBlockSetter();
+      React.useEffect(() => point(id), [id, point]);
+      return null;
+    }
+    const nested = () =>
+      documentOf([
+        {
+          id: "hero",
+          type: "acme/leaf",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              { id: "badge", type: "acme/leaf", version: 1, props: {} },
+              { id: "title", type: "acme/leaf", version: 1, props: {} },
+            ],
+          },
+        } as BlockNode,
+      ]);
+    const barPointingAt = (
+      doc: BlockDocument,
+      selected: string,
+      at: string
+    ) => {
+      render(
+        <HoveredBlockProvider>
+          <PointAt id={at} />
+          {tree(editorSpy(doc, selected), {})}
+        </HoveredBlockProvider>
+      );
+      // Found by its attributes, not its role: a block nested in an
+      // `acme/leaf` is not drawn here, so its bar is mounted unmeasured and
+      // out of sight, where no accessible name is computed. The fade markers
+      // are set all the same.
+      const bar = document.querySelector(
+        '[role="toolbar"][aria-label="Block actions"]'
+      );
+      if (bar === null) throw new Error("no block toolbar mounted");
+      return bar;
+    };
+
+    it("lets the pointer through its buttons over a block beside the selection", () => {
+      const bar = barPointingAt(nested(), "title", "badge");
+      expect(bar.hasAttribute("data-faded")).toBe(true);
+      expect(bar.hasAttribute("data-lets-through")).toBe(true);
+    });
+
+    it("lets the pointer through over a block on the page's top level too", () => {
+      const bar = barPointingAt(pair(), "a", "b");
+      expect(bar.hasAttribute("data-lets-through")).toBe(true);
+    });
+
+    it("fades over the selection's own parent but keeps its buttons pressable", () => {
+      const bar = barPointingAt(nested(), "title", "hero");
+      expect(bar.hasAttribute("data-faded")).toBe(true);
+      expect(bar.hasAttribute("data-lets-through")).toBe(false);
+    });
+
+    it("neither fades nor lets through over the selection itself", () => {
+      const bar = barPointingAt(nested(), "title", "title");
+      expect(bar.hasAttribute("data-faded")).toBe(false);
+      expect(bar.hasAttribute("data-lets-through")).toBe(false);
+    });
+  });
+
   it("keeps its height clear at the top of the scroller while it is drawn", () => {
     // `scroll-padding-top`, so a block scrolled or focused into view is not
     // left under the bar (WCAG 2.4.11): the bar's 40px and its 6px gap.
