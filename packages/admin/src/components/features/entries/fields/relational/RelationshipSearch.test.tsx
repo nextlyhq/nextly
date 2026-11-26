@@ -29,6 +29,14 @@ interface Answer {
 let answers: Record<string, Answer> = {};
 /** The terms whose answers have arrived. */
 let arrived = new Set<string>();
+/** The terms whose requests have failed, retries and all. */
+let failing = new Set<string>();
+/** Asks again, as the query's `refetch` does: the next answer arrives. */
+const refetch = vi.fn(() => {
+  for (const key of failing) arrived.add(key);
+  failing = new Set();
+  return Promise.resolve();
+});
 /** The term the debounce has passed on so far. */
 let debounced = "";
 /** The last term asked of `useEntries`. */
@@ -61,6 +69,18 @@ vi.mock("@admin/hooks/queries", () => ({
         isLoading: false,
         isFetching: false,
         isPlaceholderData: false,
+        isError: false,
+        refetch,
+      };
+    }
+    if (failing.has(key)) {
+      return {
+        data: held,
+        isLoading: false,
+        isFetching: false,
+        isPlaceholderData: held !== undefined,
+        isError: true,
+        refetch,
       };
     }
     return {
@@ -68,6 +88,8 @@ vi.mock("@admin/hooks/queries", () => ({
       isLoading: held === undefined,
       isFetching: true,
       isPlaceholderData: held !== undefined,
+      isError: false,
+      refetch,
     };
   },
 }));
@@ -136,6 +158,8 @@ beforeEach(() => {
     "Nextly#1": { items: [] },
   };
   arrived = new Set();
+  failing = new Set();
+  refetch.mockClear();
   debounced = "";
   held = undefined;
   cached = new Map();
@@ -242,6 +266,35 @@ describe("the relationship picker's search", () => {
     expect(screen.getByRole("button", { name: "Open Source" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open Data" })).toBeNull();
     expect(screen.getByRole("button", { name: /Load More/ })).toBeTruthy();
+  });
+
+  it("says a failed search with a way to ask again, never that it is still searching", () => {
+    const view = picker();
+    arrive(view, "");
+    failing.add("Open#1");
+    type(view, "Open");
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The search couldn't be completed."
+    );
+    expect(screen.queryByText("No results found")).toBeNull();
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(refetch).toHaveBeenCalledTimes(1);
+    arrive(view, "Open");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open Data" })).toBeTruthy();
+  });
+
+  it("says the first search failed, with nothing shown before it", () => {
+    failing.add("#1");
+    picker();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.queryByText("Type to search...")).toBeNull();
   });
 
   it("names the matches already added when they are all it found", () => {

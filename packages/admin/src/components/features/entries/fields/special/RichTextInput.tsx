@@ -49,6 +49,7 @@ import { cn } from "@admin/lib/utils";
 // Custom nodes
 import { CodeHighlightPlugin } from "./CodeHighlightPlugin";
 import { DraggableBlockMenuPlugin } from "./DraggableBlockMenuPlugin";
+import { offersRichTextFeature } from "./rich-text-features";
 import {
   RICH_TEXT_NODES,
   RICH_TEXT_THEME as editorTheme,
@@ -242,11 +243,9 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
   );
 
   const isEditable = !disabled && !readOnly;
-  // The toolbar's own reading of `features`: none listed offers them all.
-  const offersLinks =
-    field.features === undefined ||
-    field.features.length === 0 ||
-    field.features.includes("link");
+  // The toolbar's own reading of `features`, so the links made by themselves
+  // are made only where the toolbar offers the way to remove one.
+  const offersLinks = offersRichTextFeature(field.features, "link");
   const placeholder = field.admin?.placeholder ?? "Start writing...";
   const [editorAnchor, setEditorAnchor] = useState<HTMLDivElement | null>(null);
 

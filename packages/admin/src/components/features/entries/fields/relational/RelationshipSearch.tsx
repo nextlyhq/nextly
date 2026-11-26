@@ -11,31 +11,24 @@
  */
 
 import { Button, Input } from "@nextlyhq/ui";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import type { JSX } from "react";
 
 import { Loader2, Search, X } from "@admin/components/icons";
-import { UI } from "@admin/constants/ui";
-import { useEntries } from "@admin/hooks/queries";
-import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { cn } from "@admin/lib/utils";
+
+import {
+  useRelationshipSearch,
+  type SearchResultItem,
+} from "./useRelationshipSearch";
 
 // ============================================================
 // Types
 // ============================================================
 
-/**
- * A result item from the search.
- */
-export interface SearchResultItem {
-  id: string;
-  title?: string;
-  name?: string;
-  label?: string;
-  email?: string;
-  description?: string;
-  [key: string]: unknown;
-}
+// The item type lives beside the search that answers it; re-exported here,
+// where the picker's callers have always imported it.
+export type { SearchResultItem } from "./useRelationshipSearch";
 
 export interface RelationshipSearchProps {
   /**
@@ -104,6 +97,60 @@ function alreadyAddedWords(items: readonly SearchResultItem[]): string {
     : `Already added: ${named.join(", ")}`;
 }
 
+/** A search still out, or one that failed with a way to ask again. */
+function SearchProgress({
+  searching,
+  failed,
+  retry,
+}: {
+  searching: boolean;
+  failed: boolean;
+  retry: () => void;
+}): JSX.Element | null {
+  if (searching) {
+    return (
+      <div
+        role="status"
+        className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground"
+      >
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+        Searching…
+      </div>
+    );
+  }
+  if (!failed) return null;
+  return (
+    <div
+      role="alert"
+      className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground"
+    >
+      {"The search couldn't be completed."}
+      <Button type="button" variant="outline" size="sm" onClick={retry}>
+        Retry
+      </Button>
+    </div>
+  );
+}
+
+/** What an answered search with nothing to offer says. */
+function EmptyResults({
+  alreadyAdded,
+  searched,
+}: {
+  alreadyAdded: readonly SearchResultItem[];
+  searched: boolean;
+}): JSX.Element {
+  return (
+    <p className="text-sm text-muted-foreground text-center py-4">
+      {alreadyAdded.length > 0
+        ? alreadyAddedWords(alreadyAdded)
+        : searched
+          ? "No results found"
+          : "Type to search..."}
+    </p>
+  );
+}
+
 // ============================================================
 // Component
 // ============================================================
@@ -149,91 +196,22 @@ export function RelationshipSearch({
 }: RelationshipSearchProps): JSX.Element {
   const [search, setSearch] = useState("");
   const [selectedCollection, setSelectedCollection] = useState(collections[0]);
-  const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
-  // Which search the results belong to: a collection and the term sent.
-  const searchKey = `${selectedCollection ?? ""}\u0000${debouncedSearch}`;
-  // Not `usePagination`, because this list does not paginate: it ACCUMULATES.
-  // The page number only ever increments to fetch more, results append to what
-  // is already shown, and there is no page size selector and no way back to a
-  // previous page. The hook models navigation between pages of a fixed set,
-  // which is a different thing that happens to count with the same word.
-  // The page is kept with the search it was counted for, so a new term reads
-  // its first page, and never another term's page number, with no reset to
-  // run first.
-  const [paging, setPaging] = useState({ key: searchKey, page: 1 });
-  const currentPage = paging.key === searchKey ? paging.page : 1;
-  // Leaving a search forgets its pages: coming back to it reads its first
-  // page again, since the results shown by then are another search's, and a
-  // later page alone would leave out the matches before it.
-  useEffect(() => {
-    setPaging(previous =>
-      previous.key === searchKey ? previous : { key: searchKey, page: 1 }
-    );
-  }, [searchKey]);
-  // The results shown, with the search they answer. They stay on screen
-  // until the next search answers, so typing never blanks the list. Nothing
-  // has answered yet at first, which no search's key matches.
-  const [shown, setShown] = useState<{
-    key: string;
-    items: SearchResultItem[];
-  }>({ key: "", items: [] });
-
-  const { data, isLoading, isFetching, isPlaceholderData } = useEntries({
-    collectionSlug: selectedCollection,
-    params: {
-      search: debouncedSearch,
-      limit,
-      page: currentPage,
-      // Editors relate to draft content too, so the picker must not be limited
-      // to the REST published-only default — request all statuses.
-      status: "all",
-    },
-    enabled: !!selectedCollection,
-  });
-
-  // An answer for this search: its first page replaces what is shown, a later
-  // page adds the entries not already shown. A placeholder is the previous
-  // search's answer, held while this one loads, so it changes nothing.
-  useEffect(() => {
-    if (data?.items === undefined || isPlaceholderData) return;
-    const items = data.items as SearchResultItem[];
-    setShown(previous => {
-      if (currentPage === 1 || previous.key !== searchKey) {
-        return { key: searchKey, items };
-      }
-      const existingIds = new Set(previous.items.map(item => item.id));
-      return {
-        key: searchKey,
-        items: [
-          ...previous.items,
-          ...items.filter(item => !existingIds.has(item.id)),
-        ],
-      };
-    });
-  }, [data, isPlaceholderData, currentPage, searchKey]);
-
-  // Another collection's results are never offered: picking one would relate
-  // an entry of that collection under this one's slug.
-  const shownHere = shown.key.startsWith(`${selectedCollection ?? ""}\u0000`)
-    ? shown.items
-    : [];
+  const {
+    debouncedSearch,
+    shownHere,
+    answered,
+    failed,
+    searching,
+    hasMore,
+    totalDocs,
+    isFetching,
+    loadMore,
+    retry,
+  } = useRelationshipSearch(selectedCollection, search, limit);
   // Already-selected entries are not offered again, but are said by name when
   // they are all the search matched.
   const results = shownHere.filter(item => !excludeIds.includes(item.id));
   const alreadyAdded = shownHere.filter(item => excludeIds.includes(item.id));
-
-  // Whether the answer for what is typed is still to come: the term is
-  // waiting out the debounce, or its first page is not in yet. Until it
-  // comes, no empty result is said, since none has been answered. A later
-  // page loading is said on its own button instead.
-  const answered = shown.key === searchKey;
-  const searching = search !== debouncedSearch || !answered || isLoading;
-
-  // Check if there are more pages to load (canonical meta per spec §5.1).
-  // While a later page loads, the data held is the page before it, whose
-  // answer still stands.
-  const hasMore = answered && (data?.meta.hasNext ?? false);
-  const totalDocs = data?.meta.total ?? 0;
 
   const handleSelect = useCallback(
     (item: SearchResultItem) => {
@@ -246,10 +224,6 @@ export function RelationshipSearch({
   const handleCollectionChange = useCallback((collection: string) => {
     setSelectedCollection(collection);
   }, []);
-
-  const handleLoadMore = useCallback(() => {
-    setPaging({ key: searchKey, page: currentPage + 1 });
-  }, [searchKey, currentPage]);
 
   // The previous results stay until the new term's answer replaces them.
   const handleSearchChange = useCallback((value: string) => {
@@ -311,24 +285,13 @@ export function RelationshipSearch({
 
       {/* Results list */}
       <div className="max-h-60 overflow-y-auto space-y-1" aria-busy={searching}>
-        {searching ? (
-          <div
-            role="status"
-            className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground"
-          >
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-            Searching…
-          </div>
-        ) : null}
+        <SearchProgress searching={searching} failed={failed} retry={retry} />
         {results.length === 0 ? (
-          searching ? null : (
-            <p className="text-sm text-muted-foreground text-center py-4">
-              {alreadyAdded.length > 0
-                ? alreadyAddedWords(alreadyAdded)
-                : debouncedSearch
-                  ? "No results found"
-                  : "Type to search..."}
-            </p>
+          searching || (failed && !answered) ? null : (
+            <EmptyResults
+              alreadyAdded={alreadyAdded}
+              searched={debouncedSearch !== ""}
+            />
           )
         ) : (
           results.map(item => (
@@ -360,7 +323,7 @@ export function RelationshipSearch({
               type="button"
               variant="outline"
               size="md"
-              onClick={handleLoadMore}
+              onClick={loadMore}
               disabled={isFetching}
               className="w-full"
             >
