@@ -42,6 +42,17 @@ export type PartsLanguageOutcome =
   | PublishLanguageOutcome
   | UnpublishLanguageOutcome;
 
+/**
+ * A mark of each part a description describes, and one of the rest of the document: equal in two
+ * descriptions where nothing of that part was saved between them.
+ */
+export interface PartMarks {
+  languages: Readonly<Record<string, string>>;
+  /** The shared fields', where they are described. */
+  shared?: string;
+  rest: string;
+}
+
 /** What a request did, or would do, to each part it chose. */
 export interface PublishPartsResult {
   id: string;
@@ -52,6 +63,10 @@ export interface PublishPartsResult {
     /** Whether the shared fields were added to the request: the document's first publish. */
     added: boolean;
   };
+  /** In a description, the version it was made from, which a move of the same parts sends. */
+  _rev?: string;
+  /** In a description, what says which part changed since. */
+  marks?: PartMarks;
 }
 
 /** The parts chosen, and how the request is made. */

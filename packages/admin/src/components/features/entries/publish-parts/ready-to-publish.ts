@@ -13,7 +13,8 @@
  * @module components/features/entries/publish-parts/ready-to-publish
  */
 
-import { validationIssues } from "@admin/lib/api/parseApiError";
+import { isApiError, validationIssues } from "@admin/lib/api/parseApiError";
+import type { PartMarks } from "@admin/services/publishParts";
 import type { PartReview, ReviewStep } from "@admin/types/workflows";
 
 import { leadingReviewStep } from "../EntryForm/document-actions";
@@ -30,6 +31,35 @@ export function refusedForApprovalAlone(refusal: unknown): boolean {
   const issues = validationIssues(refusal);
   return (
     issues.length > 0 && issues.every(issue => issue.code === NOT_APPROVED)
+  );
+}
+
+/**
+ * What a description refused for want of approval alone was made from: the version a publish past
+ * the review sends, and the marks that say which part changed since. None for any other refusal.
+ */
+export function describedPastReview(
+  refusal: unknown
+): { _rev: string; marks: PartMarks } | undefined {
+  if (!isApiError(refusal) || !refusedForApprovalAlone(refusal)) {
+    return undefined;
+  }
+  const described = refusal.data?.described as
+    | { _rev?: unknown; marks?: unknown }
+    | undefined;
+  return typeof described?._rev === "string" && isMarks(described.marks)
+    ? { _rev: described._rev, marks: described.marks }
+    : undefined;
+}
+
+/** Whether `value` is a description's marks, as the server spells them. */
+function isMarks(value: unknown): value is PartMarks {
+  if (typeof value !== "object" || value === null) return false;
+  const { languages, rest } = value as { languages?: unknown; rest?: unknown };
+  return (
+    typeof rest === "string" &&
+    typeof languages === "object" &&
+    languages !== null
   );
 }
 

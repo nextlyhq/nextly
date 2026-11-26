@@ -348,6 +348,10 @@ import {
 } from "../../versions/changed-parts";
 import type { VersionsDbApi } from "../../versions/db-api";
 import {
+  type DocumentStanding,
+  readDocumentStanding,
+} from "../../versions/described-from";
+import {
   bumpDocumentRevision,
   changerColumns,
   documentVersionOn,
@@ -14330,6 +14334,46 @@ export class CollectionMutationService extends BaseService {
       requireEveryLanguage: requiresEveryLanguage(args.collectionName),
     };
     return state;
+  }
+
+  /**
+   * The entry's counters and drafts as they stand, for a description of its parts to say what it
+   * was made from. Its languages only where each moves on its own, as a move of them is judged.
+   *
+   * @experimental
+   */
+  async entryStanding(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<DocumentStanding | undefined> {
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const companion = await this.fileManager.loadCompanionSchema(
+      params.collectionName
+    );
+    const languagesTable = translationTableOf(
+      companion,
+      companion?.hasStatus === true &&
+        (await isCompanionReady(this.adapter, companion.companionTableName))
+    );
+    return readDocumentStanding(this.adapter, {
+      dialect: this.dialect,
+      ref: {
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId: params.entryId,
+      },
+      table: collectionTableName(collection, params.collectionName),
+      languages: languagesJudged(
+        languagesTable,
+        versionLanguagesFor({
+          localized: languagesTable !== null,
+          localization: this.localization,
+          locale: EVERY_LOCALE,
+        })
+      ),
+    });
   }
 
   /**
