@@ -147,6 +147,11 @@ describe("a declaration plain JavaScript got wrong", () => {
     ["input", noValidate, "its input schema is not a Standard Schema"],
     ["output", noValidate, "its output schema is not a Standard Schema"],
     ["chatExposed", "yes", 'its chat mark is "yes", not true or false'],
+    [
+      "source",
+      { kind: "plugni", name: "posts" },
+      "it says it comes from nowhere, but core registered it",
+    ],
   ] satisfies [string, unknown, string][])(
     "refuses %s set to %j by name",
     async (fact, value, refusal) => {
