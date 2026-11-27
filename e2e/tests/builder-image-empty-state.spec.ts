@@ -534,6 +534,11 @@ test.describe("an Image in the starter header's row", () => {
         expect(target.x + target.width).toBeLessThanOrEqual(
           plateBox.x + plateBox.width + 1
         );
+        // Clear of the box's dashed edge above and below, not drawn on it.
+        expect(target.y).toBeGreaterThanOrEqual(plateBox.y + 2);
+        expect(target.y + target.height).toBeLessThanOrEqual(
+          plateBox.y + plateBox.height - 2
+        );
       }
     }
     // Link opens its address field below the box, whole and usable.
