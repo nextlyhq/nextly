@@ -32,6 +32,7 @@ vi.mock("./use-palette-results", () => ({
     singles: [],
     pages: [],
     actions: [],
+    lists: { complete: true, failed: false, retry: () => {} },
   }),
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({

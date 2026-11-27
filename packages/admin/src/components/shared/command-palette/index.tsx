@@ -237,26 +237,53 @@ function PaletteResultsList({
     { heading: "Actions", rows: results.actions },
   ];
   const drawn = groups.filter(group => group.rows.length > 0);
+  const { lists } = results;
   return (
-    <CommandList>
-      <CommandEmpty>No results found.</CommandEmpty>
-      {drawn.map((group, index) => (
-        <PaletteGroup
-          key={group.heading}
-          heading={group.heading}
-          rows={group.rows}
-          separated={index > 0}
-          onPick={pick}
-        />
-      ))}
-      {/* People, by name, for a reader who may list them. */}
-      {search && hasPermission("read-users") && (
-        <>
-          <CommandSeparator />
-          <UserSearchResults search={search} onSelect={onSelect} />
-        </>
+    <>
+      <CommandList>
+        {/* "Nothing matched" only once every collection and Single is in: one
+          still arriving, or on a page that failed, may be the one searched. */}
+        <CommandEmpty>
+          {lists.failed
+            ? "No results among what loaded."
+            : lists.complete
+              ? "No results found."
+              : "Still loading collections and Singles…"}
+        </CommandEmpty>
+        {drawn.map((group, index) => (
+          <PaletteGroup
+            key={group.heading}
+            heading={group.heading}
+            rows={group.rows}
+            separated={index > 0}
+            onPick={pick}
+          />
+        ))}
+        {/* People, by name, for a reader who may list them. */}
+        {search && hasPermission("read-users") && (
+          <>
+            <CommandSeparator />
+            <UserSearchResults search={search} onSelect={onSelect} />
+          </>
+        )}
+      </CommandList>
+      {/* Below the results whatever matched, so what loaded stays in reach. */}
+      {lists.failed && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 border-t border-border px-4 py-2 text-sm text-muted-foreground"
+        >
+          <span>Some collections or Singles could not be loaded.</span>
+          <button
+            type="button"
+            onClick={lists.retry}
+            className="min-h-6 rounded-sm px-2 font-medium text-foreground underline underline-offset-2 hover-unified focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Retry
+          </button>
+        </div>
       )}
-    </CommandList>
+    </>
   );
 }
 

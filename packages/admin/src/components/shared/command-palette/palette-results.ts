@@ -101,7 +101,7 @@ export function paletteResults(
   nav: readonly SettingsNavGroup[] = SETTINGS_NAV
 ): PaletteResults {
   const { hasPermission } = sources;
-  return {
+  return withUniqueValues({
     collections: sources.collections.map(collection => ({
       id: `collection:${collection.name}`,
       label: collectionDisplayName(collection),
@@ -197,6 +197,34 @@ export function paletteResults(
         })
       ),
     ],
+  });
+}
+
+/**
+ * The rows with no search value shared. The palette's list selects rows by
+ * value, so two rows sharing one (a Single named "Account" with the slug
+ * `settings`, and the Account settings page) would be selected together and
+ * only the first could be chosen by keyboard. A repeat takes its row's id,
+ * which no other row has; a value seen first keeps its words as they are.
+ */
+function withUniqueValues(results: PaletteResults): PaletteResults {
+  const seen = new Set<string>();
+  const unique = (rows: PaletteRow[]) =>
+    rows.map(row => {
+      const key = row.value.trim().toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        return row;
+      }
+      const value = `${row.value} ${row.id}`;
+      seen.add(value.trim().toLowerCase());
+      return { ...row, value };
+    });
+  return {
+    collections: unique(results.collections),
+    singles: unique(results.singles),
+    pages: unique(results.pages),
+    actions: unique(results.actions),
   };
 }
 

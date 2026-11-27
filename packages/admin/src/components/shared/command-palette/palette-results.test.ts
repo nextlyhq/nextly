@@ -312,3 +312,24 @@ describe("the go-to sequences' destinations", () => {
     );
   });
 });
+
+describe("each row's search value", () => {
+  // The palette's list selects rows by value, so two rows sharing one would
+  // be selected together and only the first could be chosen by keyboard.
+  it("is never shared, even where a Single's name and slug read as a page's", () => {
+    const results = paletteResults(
+      sources({
+        singles: [single("settings", "Account")],
+        hasPermission: () => true,
+        plugins: [reportsPlugin],
+      })
+    );
+    const values = [
+      ...results.collections,
+      ...results.singles,
+      ...results.pages,
+      ...results.actions,
+    ].map(row => row.value.toLowerCase());
+    expect(new Set(values).size).toBe(values.length);
+  });
+});

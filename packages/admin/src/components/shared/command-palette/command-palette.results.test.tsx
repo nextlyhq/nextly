@@ -31,9 +31,28 @@ let offered: Kind[] = [];
 let granted = new Set<string>();
 let mayCreate: string[] = [];
 
+/** How far the Content panel's lists have got: all in, unless a test says. */
+let listState = {
+  collectionsLoading: false,
+  collectionsError: null as Error | null,
+  singlesComplete: true,
+  singlesError: null as Error | null,
+};
+const retryCollections = vi.fn();
+const retrySingles = vi.fn();
 vi.mock("@admin/hooks/useSidebarContentLists", () => ({
-  useEveryListedCollection: () => ({ items: listed }),
-  useSidebarSingleList: () => ({ items: listedSingles }),
+  useEveryListedCollection: () => ({
+    items: listed,
+    isLoading: listState.collectionsLoading,
+    error: listState.collectionsError,
+    retry: retryCollections,
+  }),
+  useSidebarSingleList: () => ({
+    items: listedSingles,
+    isComplete: listState.singlesComplete,
+    error: listState.singlesError,
+    retry: retrySingles,
+  }),
 }));
 vi.mock("@admin/hooks/queries/useCollections", () => ({
   useEveryNavCollection: () => ({
@@ -106,6 +125,14 @@ const authors: Kind = {
 };
 
 beforeEach(() => {
+  listState = {
+    collectionsLoading: false,
+    collectionsError: null,
+    singlesComplete: true,
+    singlesError: null,
+  };
+  retryCollections.mockClear();
+  retrySingles.mockClear();
   navigateTo.mockClear();
   listedSingles = [{ slug: "homepage", label: "Homepage" }];
   branding = { showBuilder: true };
@@ -205,6 +232,49 @@ describe("the palette for an admin", () => {
         .getAllByRole("option")
         .filter(option => option.getAttribute("aria-selected") === "true")
     ).toHaveLength(1);
+  });
+});
+
+describe("what the palette says when nothing matches", () => {
+  beforeEach(() => {
+    listed = [posts];
+    offered = [posts];
+    mayCreate = [];
+    granted = new Set(["read-posts"]);
+  });
+
+  function search(text: string): void {
+    openPalette();
+    fireEvent.change(screen.getByPlaceholderText("Search or jump to…"), {
+      target: { value: text },
+    });
+  }
+
+  it("says nothing matched once every list is in", () => {
+    search("zzzz");
+    expect(screen.queryAllByText("No results found.")).not.toEqual([]);
+  });
+
+  // A Single on a page not read yet may be the one searched for.
+  it("says the lists are still arriving rather than that nothing matched", () => {
+    listState.singlesComplete = false;
+    search("zzzz");
+    expect(screen.queryAllByText("No results found.")).toEqual([]);
+    expect(
+      screen.queryAllByText("Still loading collections and Singles…")
+    ).not.toEqual([]);
+  });
+
+  it("says a list could not be loaded, and retries both on Retry", () => {
+    listState.singlesError = new Error("offline");
+    search("zzzz");
+    expect(screen.queryAllByText("No results found.")).toEqual([]);
+    expect(
+      screen.queryAllByText("Some collections or Singles could not be loaded.")
+    ).not.toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retrySingles).toHaveBeenCalledTimes(1);
+    expect(retryCollections).toHaveBeenCalledTimes(1);
   });
 });
 

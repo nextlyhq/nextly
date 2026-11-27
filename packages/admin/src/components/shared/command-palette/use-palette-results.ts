@@ -18,7 +18,23 @@ import type { ApiSingle } from "@admin/types/entities";
 
 import { paletteResults, type PaletteResults } from "./palette-results";
 
-export function usePaletteResults(): PaletteResults {
+/**
+ * How far the Content panel's lists have got, so the palette never says
+ * nothing matched while a collection or Single it would list is still on its
+ * way, or on a page that failed to load.
+ */
+export interface PaletteListState {
+  /** Every collection and every Single is in. */
+  complete: boolean;
+  /** A page of collections or Singles failed to load. */
+  failed: boolean;
+  /** Asks both lists again. */
+  retry: () => void;
+}
+
+export function usePaletteResults(): PaletteResults & {
+  lists: PaletteListState;
+} {
   const { hasPermission } = useCurrentUserPermissions();
   const branding = useBranding();
   // The Content panel's own lists: every collection it lists, past its first
@@ -27,7 +43,16 @@ export function usePaletteResults(): PaletteResults {
   const singles = useSidebarSingleList();
   const creatable = useCreatableCollections();
   const addressOf = useDocumentAddress();
-  return paletteResults({
+  const failed = Boolean(collections.error || singles.error);
+  const lists: PaletteListState = {
+    complete: !collections.isLoading && singles.isComplete && !failed,
+    failed,
+    retry: () => {
+      collections.retry();
+      singles.retry();
+    },
+  };
+  const results = paletteResults({
     collections: collections.items,
     singles: singles.items,
     // Opened by the one rule the Content panel's link follows.
@@ -41,4 +66,5 @@ export function usePaletteResults(): PaletteResults {
     // land on a page that cannot open.
     showBuilder: branding.showBuilder === true,
   });
+  return { ...results, lists };
 }
