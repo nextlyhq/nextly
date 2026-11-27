@@ -232,8 +232,47 @@ function mysqlSocket(
   folder: string
 ): string | null | typeof AMBIGUOUS {
   const named = oneParameter(parsed, "socketPath");
-  if (typeof named !== "string" || named.startsWith("/")) return named;
-  return RELATIVE_SOCKET.test(named) ? resolve(folder, named) : named;
+  if (typeof named !== "string") return named;
+  const value = asMysqlReads(named);
+  // `false`, `null`, `0`: no socket, so the driver connects to the host.
+  if (value === null) return null;
+  // `true` or a number names no path the driver could open.
+  if (typeof value !== "string") return AMBIGUOUS;
+  if (value.startsWith("/")) return value;
+  return RELATIVE_SOCKET.test(value) ? resolve(folder, value) : value;
+}
+
+/**
+ * A URL parameter as MySQL's driver reads it: as JSON where the text parses
+ * as JSON, else as the text. A value JSON reads as falsy comes back null.
+ */
+function asMysqlReads(text: string): unknown {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  return value ? value : null;
+}
+
+/**
+ * node-postgres's socket form, `/run/postgresql shop`: a socket's path, then
+ * the database, with the port its defaults give. Undefined where it is not
+ * that form, or a part is not what it should be.
+ */
+function pgSocketString(
+  url: string,
+  env: Readonly<Record<string, string | undefined>>
+): ServerParts | undefined {
+  if (!url.startsWith("/")) return undefined;
+  const [host, database = ""] = url.split(" ");
+  const parts = {
+    host,
+    port: driverDefaults("postgresql", env).port,
+    database,
+  };
+  return partsReadable(parts, null) ? parts : undefined;
 }
 
 /**
@@ -287,6 +326,14 @@ export function readDatabaseAddress(
     return {
       kind: "sqlite",
       file: sqliteFile(url, input.folder ?? process.cwd()),
+      disagrees,
+    };
+  }
+  if (dialect === "postgresql" && url.startsWith("/")) {
+    return {
+      kind: "server",
+      dialect,
+      parts: pgSocketString(url, input.env ?? {}),
       disagrees,
     };
   }

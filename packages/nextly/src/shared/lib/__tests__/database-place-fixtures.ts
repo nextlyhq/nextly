@@ -49,6 +49,12 @@ export const DATABASE_PLACE_FIXTURES: readonly DatabasePlaceFixture[] = [
     place: "local",
   },
   {
+    name: "node-postgres's socket form",
+    url: "/var/run/postgresql shop",
+    dialect: "postgresql",
+    place: "local",
+  },
+  {
     name: "localhost",
     url: "postgresql://app:pw@localhost:5432/shop",
     place: "local",
@@ -181,5 +187,12 @@ export const DATABASE_PLACE_FIXTURES: readonly DatabasePlaceFixture[] = [
     url: "postgresql://app:pw@db.prod.neon.tech/shop?host=localhost&host=localhost",
     place: "local",
   },
+  ...["false", "null", "0"].map(value => ({
+    // MySQL's driver reads the parameter as JSON: a falsy one is no socket,
+    // so it connects to the host the URL names.
+    name: `a MySQL socketPath of ${value}, beside a remote host`,
+    url: `mysql://app:pw@db.prod.example.com:3306/shop?socketPath=${value}`,
+    place: "live" as const,
+  })),
   { name: "no URL", url: undefined, place: "live" },
 ];
