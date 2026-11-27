@@ -159,6 +159,15 @@ jobs:
         working-directory: change
         run: node "$GITHUB_WORKSPACE/scripts/ai-credit.mjs"
 
+      # Core's packages hold no AI or MCP library anywhere in their resolved
+      # tree. The change's lockfile is read as text from `change/`; the checker
+      # comes from the root and runs nothing of the change's. Skipped until
+      # the branch being merged into has the checker.
+      - name: No AI or MCP library in core
+        if: ${{ !cancelled() && github.event_name != 'push' && hashFiles('scripts/check-core-ai-libraries.mjs') != '' }}
+        working-directory: change
+        run: node "$GITHUB_WORKSPACE/scripts/check-core-ai-libraries.mjs"
+
       - name: Install gitleaks
         if: ${{ !cancelled() }}
         run: |
