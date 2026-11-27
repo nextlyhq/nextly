@@ -221,7 +221,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       "folder_id" TEXT REFERENCES "media_folders"("id") ON DELETE SET NULL,
       "uploaded_by" TEXT REFERENCES "users"("id") ON DELETE CASCADE,
       "uploaded_at" INTEGER NOT NULL DEFAULT (unixepoch()),
-      "updated_at" INTEGER NOT NULL DEFAULT (unixepoch())
+      "updated_at" INTEGER NOT NULL DEFAULT (unixepoch()),
+      "sha256" TEXT
     )`,
     `CREATE INDEX IF NOT EXISTS "media_uploaded_by_idx"
       ON "media" ("uploaded_by")`,
@@ -231,6 +232,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "media" ("uploaded_at")`,
     `CREATE INDEX IF NOT EXISTS "media_folder_id_idx"
       ON "media" ("folder_id")`,
+    `CREATE INDEX IF NOT EXISTS "media_sha256_idx"
+      ON "media" ("sha256")`,
     // The counter every instance reads to decide whether a cached
     // authorization answer is still current. One row, keyed `global`: the
     // primary key is what makes a second counter unrepresentable, so nothing

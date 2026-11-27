@@ -66,6 +66,13 @@ export function mediaColumns() {
     }),
     uploadedAt: sqliteTimestamp("uploaded_at"),
     updatedAt: sqliteTimestamp("updated_at"),
+
+    // The SHA-256 of the stored file's bytes, as 64 lowercase hex characters:
+    // what tells two records of one file apart from two files. Null for a
+    // record stored before fingerprints, until the background fill reaches it.
+    // Last, as `nextly migrate` adds it to an existing table, so a new install
+    // and an upgraded one hold the same columns in the same order.
+    sha256: text("sha256"),
   };
 }
 

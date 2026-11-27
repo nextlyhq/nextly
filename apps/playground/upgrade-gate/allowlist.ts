@@ -65,7 +65,46 @@ export const UPGRADE_CONSENT: readonly string[] = [
 const TRANSLATION_SOURCES_KEPT =
   "The source text each translation is made from is kept from the first translation saved after the upgrade. The table is new, so nothing an installation held lives in it.";
 
+/** Why a media record's fingerprint column is added. */
+const MEDIA_FINGERPRINT_ADDED =
+  "A media record gains the SHA-256 of its stored file. The column is new and nullable, so every existing record keeps every value it had and reads as having no fingerprint until the background job fills it.";
+
+/** Why the index on a media record's fingerprint is created. */
+const MEDIA_FINGERPRINT_INDEXED =
+  "Finds the records of one stored file by its fingerprint. Not unique, since two records may share one file, so it refuses no existing row; an index changes no stored value.";
+
 export const ALLOWED_OPERATIONS: readonly AllowedOperation[] = [
+  {
+    operation: "add column media.sha256: text null",
+    dialects: ["sqlite"],
+    reason: MEDIA_FINGERPRINT_ADDED,
+  },
+  {
+    operation: "add column media.sha256: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: MEDIA_FINGERPRINT_ADDED,
+  },
+  {
+    operation:
+      "add column media.sha256: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: MEDIA_FINGERPRINT_ADDED,
+  },
+  {
+    operation: "create index media.media_sha256_idx: (sha256)",
+    dialects: ["sqlite"],
+    reason: MEDIA_FINGERPRINT_INDEXED,
+  },
+  {
+    operation: "create index media.media_sha256_idx: USING btree (sha256)",
+    dialects: ["postgresql"],
+    reason: MEDIA_FINGERPRINT_INDEXED,
+  },
+  {
+    operation: "create index media.media_sha256_idx: btree (sha256)",
+    dialects: ["mysql"],
+    reason: MEDIA_FINGERPRINT_INDEXED,
+  },
   {
     operation: "create table nextly_translation_sources",
     reason: TRANSLATION_SOURCES_KEPT,

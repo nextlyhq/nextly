@@ -1085,6 +1085,10 @@ export const nextlyTables: TableDefinition[] = [
         nullable: false,
         default: { sql: "CURRENT_TIMESTAMP" },
       },
+      {
+        name: "sha256",
+        type: "varchar(64)",
+      },
       { name: "focal_x", type: "integer" },
       { name: "focal_y", type: "integer" },
     ],
@@ -1108,6 +1112,10 @@ export const nextlyTables: TableDefinition[] = [
       {
         name: "media_folder_id_idx",
         columns: ["folder_id"],
+      },
+      {
+        name: "media_sha256_idx",
+        columns: ["sha256"],
       },
     ],
   },

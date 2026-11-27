@@ -36,13 +36,17 @@ interface SchemaTable {
 function ddlColumns(): Map<string, Set<string>> {
   const tables = new Map<string, Set<string>>();
   for (const statement of generateSqliteCoreTableStatements()) {
-    const table = /CREATE TABLE IF NOT EXISTS "([a-z_]+)"/.exec(statement)?.[1];
+    // Names may hold digits (`sha256`); a pattern of letters alone reads such
+    // a column as missing from the DDL, or such a table as absent.
+    const table = /CREATE TABLE IF NOT EXISTS "([a-z0-9_]+)"/.exec(
+      statement
+    )?.[1];
     if (table === undefined) continue;
     tables.set(
       table,
       new Set(
         [
-          ...statement.matchAll(/"([a-z_]+)"\s+(?:TEXT|INTEGER|REAL|BLOB)/g),
+          ...statement.matchAll(/"([a-z0-9_]+)"\s+(?:TEXT|INTEGER|REAL|BLOB)/g),
         ].map(m => m[1])
       )
     );

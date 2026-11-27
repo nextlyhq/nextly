@@ -37,6 +37,7 @@ import { JobRegistry } from "../../domains/jobs/job-registry";
 import { JobsRepository } from "../../domains/jobs/jobs-repository";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
 import { createMediaFinalizeDeletesJob } from "../../domains/media/finalize-deletes-job";
+import { createMediaHashBackfillJob } from "../../domains/media/hash-backfill/backfill-job";
 import type { DispatchAdapter } from "../../domains/plugin-events/dispatch";
 import { createDurableEventsDispatchJob } from "../../domains/plugin-events/dispatch-job";
 import { getDurableSubscribers } from "../../domains/plugin-events/subscribers";
@@ -333,6 +334,17 @@ export function registerJobServices(ctx: RegistrationContext): void {
           "../../domains/media/booted-pending-deletes"
         );
         return bootedPendingDeletes(() => now);
+      })
+    );
+    // Fingerprints for media stored before records carried one: kept queued,
+    // so every jobs run hashes what fits its time and the next carries on,
+    // until every stored file has one. The storage is the media collection's,
+    // asked per run of the storage manager the registration was handed.
+    registry.register(
+      createMediaHashBackfillJob({
+        db: () => adapter,
+        storage: () => ctx.mediaStorage.getAdapterForCollection("media"),
+        logger,
       })
     );
 
