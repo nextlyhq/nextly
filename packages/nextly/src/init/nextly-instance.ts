@@ -19,6 +19,7 @@ import type { EmailDeliveriesNamespace } from "../direct-api/namespaces/email";
 import type { FilesNamespace } from "../direct-api/namespaces/files";
 import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type { JobsNamespace } from "../direct-api/namespaces/jobs";
+import type { AINamespace } from "../direct-api/namespaces/ai";
 import type { NoticesNamespace } from "../direct-api/namespaces/notices";
 import type {
   AccessNamespace,
@@ -1153,6 +1154,23 @@ export interface Nextly {
    * ```
    */
   notices: NoticesNamespace;
+
+  /**
+   * AI: run a task, stream its text, embed text, report what AI can do here
+   * for a person, and hear every run's usage. Checked unless a call passes
+   * `overrideAccess: true`.
+   *
+   * @experimental With the AI contract.
+   *
+   * @example
+   * ```typescript
+   * const status = await nextly.ai.status({ user: { id: userId } });
+   * if (status.configured) {
+   *   // draw AI controls
+   * }
+   * ```
+   */
+  ai: AINamespace;
 
   /**
    * @experimental A translated field and its source: what changed in the source since the

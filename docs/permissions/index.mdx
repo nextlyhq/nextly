@@ -78,6 +78,33 @@ one to keep it as it is, or `presets: []` to close it, so your configuration say
 record does. One change has no record behind it: Viewer no longer reads users or API keys,
 from the first run of this release.
 
+### AI permissions
+
+Three permissions govern AI. They exist on every site, whether or not AI is set up, so the
+grants are in place the moment it is:
+
+| Permission           | Lets a person                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------- |
+| `use-ai`             | run AI tasks on content they may edit                                                             |
+| `run-bulk-ai-jobs`   | start, cancel and resume bulk AI jobs                                                             |
+| `manage-ai-settings` | manage AI providers, keys, model roles, budgets, instructions, what is never sent, and the usage page |
+
+Super-admins and Admin hold all three. Editor and Author hold `use-ai`, so the people who write
+content can use AI one item at a time; bulk jobs and the settings spend or steer the site's
+money, so they stay with Admin. Viewer holds none, and a role you made yourself holds none
+until you grant them. An upgraded site gets the same: the preset roles take these grants on
+its first start, and your own roles are left as they were.
+
+Running a task also needs the person's own rights over the content: to read what the task
+reads, and to edit where its result goes. An agent acting for someone is judged by that
+person's permissions, never more. On the **Roles** screen the three appear as their own rows,
+under the **Use**, **Run** and **Manage** columns.
+
+With no AI package configured, or with `NEXTLY_AI_DISABLED` set in the site's environment
+(any value but empty, `0` or `false`), no AI control is shown anywhere and every AI run is
+refused. The switch keeps every AI setting as it was; unset it to turn AI back on. All of this
+is `@experimental`.
+
 ## Collection access
 
 Grants say what a role may do. When a collection declares an `access` rule for an
@@ -660,6 +687,10 @@ keeps the public default, but a create, update or delete is refused; only a rule
 Field-level rules behave differently: they run whenever `overrideAccess` is `false`, user or
 not, because "which fields may this writer set" has a sensible answer for nobody. Internal
 code that genuinely needs to write a protected field says so with `overrideAccess: true`.
+
+`nextly.ai` is the exception: its calls are checked unless the call itself passes
+`overrideAccess: true`, whatever the instance's default, because an AI run sends content to
+an outside service and spends the site's money. A call that names no `user` is refused.
 
 ## Limits
 

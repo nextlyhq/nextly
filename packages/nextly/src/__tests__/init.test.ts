@@ -239,6 +239,7 @@ describe("init - Nextly API", () => {
     const PUBLIC_MEMBERS = [
       "access",
       "adapter",
+      "ai",
       "apiKeys",
       "bulkDelete",
       "changePassword",
