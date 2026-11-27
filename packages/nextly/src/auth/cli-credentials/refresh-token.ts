@@ -35,8 +35,20 @@ const PREFIX = "nxcli_";
 /** Separates the tag's key from any other key derived from the same secret. */
 const TAG_KEY_LABEL = "nextly cli sign-in refresh token tag v1";
 
-const TOKEN_PATTERN =
-  /^nxcli_(ncc_[0-9a-f]{32})\.(0|[1-9][0-9]{0,8})\.([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{43})$/;
+/**
+ * The shape of a credential's id, as {@link newCredentialId} makes it:
+ * `ncc_` and 32 lowercase hex digits. The one definition, read by the
+ * refresh token's own pattern below and by the activity log, which keeps a
+ * credential's id beside each action and must recognise this shape.
+ */
+export const CREDENTIAL_ID_PATTERN = /^ncc_[0-9a-f]{32}$/;
+
+/** The id's shape without its anchors, for building a longer pattern. */
+const CREDENTIAL_ID_SHAPE = CREDENTIAL_ID_PATTERN.source.slice(1, -1);
+
+const TOKEN_PATTERN = new RegExp(
+  `^nxcli_(${CREDENTIAL_ID_SHAPE})\\.(0|[1-9][0-9]{0,8})\\.([A-Za-z0-9_-]{43})\\.([A-Za-z0-9_-]{43})$`
+);
 
 /** A refresh token's parts, once its shape has been read. */
 export interface ParsedRefreshToken {
