@@ -322,6 +322,9 @@ test.describe("the Releases page's views", () => {
       await expect(
         page.getByRole("row", { name: new RegExp(name("Single")) })
       ).toContainText("Single document");
+      // The rows, the mark among them. The List's tab strip and search box
+      // are its own, unchanged here, and the list spec scans its states.
+      await expectNoAxeViolations(page, { include: "main table" });
       await page.getByRole("switch", { name: "Hide single documents" }).click();
       await expect(
         page.getByRole("row", { name: new RegExp(name("Scheduled")) })
@@ -329,7 +332,6 @@ test.describe("the Releases page's views", () => {
       await expect(
         page.getByRole("row", { name: new RegExp(name("Single")) })
       ).toHaveCount(0);
-      await expectNoAxeViolations(page);
 
       await showView(page, "board");
       const filtered = await expectColumnsAsTheList(page, "release");
