@@ -32,7 +32,8 @@ import {
 } from "../address-record/participant";
 import { codePages } from "../code-pages/answers";
 import { codePagesSlug } from "../code-pages/collection";
-import type { CodeRoute } from "../code-pages/routes";
+import type { CodeRoute, ReadCodeRoutes } from "../code-pages/routes";
+import type { StatedMarkdown } from "../code-pages/stated";
 import { onceEach, resolveIn, servedAt } from "../languages/versions";
 import { originOf } from "../origin";
 import { isRecord, textOf } from "../plain-values";
@@ -65,7 +66,17 @@ export interface AiOutputsConfig {
   /** The site's configured origin, where its settings name no address. */
   origin?: string;
   /** The pages built in code the sitemap lists, where any are known. */
-  codeRoutes?: () => readonly CodeRoute[];
+  codeRoutes?: ReadCodeRoutes;
+  /**
+   * The pages built in code the build's own files name, read with nothing
+   * started: what the Proxy claims a request by before it can read more.
+   */
+  builtRoutes?: () => readonly CodeRoute[];
+  /**
+   * The Markdown source the site states for the page built in code at a
+   * path, which its copy is made of rather than the rendered page.
+   */
+  codeMarkdown?: (path: string) => StatedMarkdown | undefined;
   /** The collections the sitemap is narrowed to, where it is. */
   collections?: readonly string[];
 }
@@ -489,17 +500,22 @@ async function publicHeads(
   return heads;
 }
 
-/** The head of each page built in code, by its address. */
+/**
+ * The head of each page built in code, by its address; of the one at
+ * `only` alone, where given, so a single copy works out one head.
+ */
 async function codeHeadsOf(
   ctx: PluginContext,
   config: AiOutputsConfig,
-  readRules: ReadRules
+  readRules: ReadRules,
+  only?: string
 ): Promise<Map<string, { title?: string; description?: string }>> {
   const heads = new Map<string, { title?: string; description?: string }>();
   if (config.codeRoutes === undefined) return heads;
+  const routes = await config.codeRoutes(ctx);
   for (const { route, answer } of await codePages(
     ctx,
-    config.codeRoutes(),
+    only === undefined ? routes : routes.filter(route => route.path === only),
     readRules
   )) {
     heads.set(route.path, {
@@ -610,6 +626,38 @@ async function renderedCopyFor(
   );
 }
 
+/**
+ * The copy of the page built in code `page` made from the Markdown the
+ * site's options give for it, with its front matter from its head; none
+ * where they give none, or theirs gives nothing, and the copy is then made
+ * from the rendered page. A source that fails is logged, and the rendered
+ * page tried instead.
+ */
+async function statedCopyFor(
+  ctx: PluginContext,
+  page: ListedPage,
+  config: AiOutputsConfig
+): Promise<string | null> {
+  const source = config.codeMarkdown?.(page.path);
+  if (source === undefined) return null;
+  let markdown: string | undefined;
+  try {
+    markdown = await source.markdown(source.page);
+  } catch (error) {
+    ctx.logger.warn(
+      "The Markdown codeAddresses gives for a page could not be made",
+      { path: page.path, error }
+    );
+    return null;
+  }
+  if (typeof markdown !== "string" || markdown.trim() === "") return null;
+  const heads = await codeHeadsOf(ctx, config, config.readRules, page.path);
+  return withFrontMatter(
+    aboutOf(page, heads.get(page.path) ?? {}),
+    markdown.trim()
+  );
+}
+
 /** Whether a copy says anything beyond its heading. */
 const holdsWords = (copy: string): boolean =>
   copy.replace(/^# [^\n]*\n*/, "").trim() !== "";
@@ -633,8 +681,10 @@ async function copyOf(
 ): Promise<string | null> {
   const { readRules } = config;
   if (page.holder.collection === codePagesSlug(ctx)) {
+    const stated = await statedCopyFor(ctx, page, config);
+    if (stated !== null) return stated;
     if (!render) return null;
-    const heads = await codeHeadsOf(ctx, config, readRules);
+    const heads = await codeHeadsOf(ctx, config, readRules, page.path);
     return renderedCopyFor(ctx, page, heads.get(page.path) ?? {});
   }
   const document = (await publicDocuments([page])).get(readingKey(page));
@@ -691,7 +741,9 @@ async function copiesTaken(
   config: Pick<AiOutputsConfig, "codeRoutes">
 ): Promise<Set<string>> {
   const taken = new Set<string>();
-  const built = new Set(config.codeRoutes?.().map(route => route.path) ?? []);
+  const built = new Set(
+    ((await config.codeRoutes?.(ctx)) ?? []).map(route => route.path)
+  );
   const byLanguage = new Map<string, { copy: string; path: string }[]>();
   for (const copy of copies) {
     if (built.has(new URL(copy).pathname)) {
@@ -819,7 +871,12 @@ export async function servedCopyAddress(
     const page = await copyServedAt(ctx, url, loc, config);
     if (page === null) continue;
     if (page.holder.collection === codePagesSlug(ctx)) {
-      return (await rendersPages(ctx, config)) ? url.href : undefined;
+      // Made from the Markdown the options give for it, or from the page
+      // as it renders, where the site lets it be.
+      return config.codeMarkdown?.(page.path) !== undefined ||
+        (await rendersPages(ctx, config))
+        ? url.href
+        : undefined;
     }
     return (await publicDocuments([page])).has(readingKey(page))
       ? url.href
@@ -945,12 +1002,26 @@ function copyAskedFor(
     : undefined;
 }
 
-/** Whether the site's code builds a page at `url`, as its build names them. */
+/**
+ * Whether the site's code builds a page at `url`, as its build's own files
+ * name them: read with nothing started, so the Proxy can claim by it.
+ */
 function builtAt(
-  config: Pick<AiOutputsConfig, "codeRoutes">,
+  config: Pick<AiOutputsConfig, "builtRoutes">,
   url: URL
 ): boolean {
-  return (config.codeRoutes?.() ?? []).some(
+  return (config.builtRoutes?.() ?? []).some(
+    route => route.path === url.pathname
+  );
+}
+
+/** Whether the site's code builds a page at `url`, as every source names them. */
+async function codeServesAt(
+  ctx: PluginContext,
+  config: Pick<AiOutputsConfig, "codeRoutes">,
+  url: URL
+): Promise<boolean> {
+  return ((await config.codeRoutes?.(ctx)) ?? []).some(
     route => route.path === url.pathname
   );
 }
@@ -995,7 +1066,13 @@ async function waitForRecord(
   atPage: boolean,
   config: AiOutputsConfig
 ): Promise<ProxyAnswer | undefined | "ready"> {
-  if (atPage || builtAt(config, url)) return undefined;
+  if (
+    atPage ||
+    builtAt(config, url) ||
+    (await codeServesAt(ctx, config, url))
+  ) {
+    return undefined;
+  }
   const rules = await config.readRules(ctx, undefined);
   if (rules.plainTextCopies !== true) return undefined;
   if (await addressRecordReadyWithin(COPY_RECORD_WAIT_MS)) return "ready";

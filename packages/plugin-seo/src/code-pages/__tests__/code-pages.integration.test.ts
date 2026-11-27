@@ -39,6 +39,7 @@ import {
   type SiteAddress,
 } from "../contract";
 import { seoMetadata, seoStructuredData } from "../metadata";
+import { seoStaticParams } from "../static-params";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
 const PAGES = "seocp_pages";
@@ -99,6 +100,27 @@ writeFileSync(
   })
 );
 
+/**
+ * The same site's build as a host that ships the server without the
+ * prerender manifest leaves it, with routes whose addresses only the build
+ * names: an optional catch-all, a route with `dynamicParams = false`, and
+ * one a route wrapped in `seoStaticParams` declares. Its `BUILD_ID` is the
+ * id its pages were recorded under while it was built.
+ */
+const RECORDED = mkdtempSync(join(tmpdir(), "seo-code-pages-recorded-"));
+mkdirSync(join(RECORDED, "server"), { recursive: true });
+writeFileSync(
+  join(RECORDED, "server/app-paths-manifest.json"),
+  JSON.stringify({
+    "/(site)/pricing/page": "app/(site)/pricing/page.js",
+    "/(site)/integrations/[name]/page":
+      "app/(site)/integrations/[name]/page.js",
+    "/docs/[[...slug]]/page": "app/docs/[[...slug]]/page.js",
+    "/(site)/compare/[slug]/page": "app/(site)/compare/[slug]/page.js",
+  })
+);
+writeFileSync(join(RECORDED, "BUILD_ID"), "build-one\n");
+
 let current: TestNextly | undefined;
 
 afterEach(async () => {
@@ -111,6 +133,7 @@ afterEach(async () => {
 afterAll(() => {
   rmSync(BUILD, { recursive: true, force: true });
   rmSync(PARTIAL, { recursive: true, force: true });
+  rmSync(RECORDED, { recursive: true, force: true });
 });
 
 /** A signed-in person holding exactly `permissions`, or every one. */
@@ -711,11 +734,13 @@ describe.each(getConfiguredTestDialects())(
       const { status, items } = await addressesFor(owner);
 
       expect(status).toBe(200);
+      // No id of the build, so nothing it recorded can be read either.
       expect((await buildFor(owner)).body).toEqual({
         unreadable: {
           file: join(PARTIAL, "prerender-manifest.json"),
           problem: "missing",
         },
+        dynamicRoutes: 1,
       });
       expect(
         items?.map(({ path, source, from, standing }) => ({
@@ -758,6 +783,97 @@ describe.each(getConfiguredTestDialects())(
       expect(llms).not.toContain(`${SITE}/integrations/wordpress`);
     });
 
+    it("lists the pages its own build recorded where the prerender manifest is not shipped, and none another build recorded", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const t = await boot(RECORDED);
+      // The build declares one page it never renders here, and renders the
+      // rest, each answering its head through seoMetadata.
+      process.env.NEXT_PHASE = "phase-production-build";
+      await seoStaticParams(
+        "/integrations/[name]",
+        () => [{ name: "webflow" }],
+        { buildDir: RECORDED }
+      )();
+      for (const path of [
+        "/pricing",
+        "/integrations/wordpress",
+        "/docs",
+        "/docs/a",
+        "/docs/a/b",
+        "/compare/x",
+      ]) {
+        await seoMetadata(path);
+      }
+      delete process.env.NEXT_PHASE;
+
+      const pages = [
+        "/compare/x",
+        "/docs",
+        "/docs/a",
+        "/docs/a/b",
+        "/integrations/webflow",
+        "/integrations/wordpress",
+      ].map(path => `${SITE}${path}`);
+      const locs = await listed();
+      expect(locs).toEqual(expect.arrayContaining(pages));
+      expect(locs).toContain(`${SITE}/pricing`);
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, llmsTxt: true },
+      });
+      const llms = await (
+        await createDynamicHandlers().GET(
+          new Request(`${SITE}/admin/api/llms.txt`),
+          { params: Promise.resolve({ params: ["llms.txt"] }) }
+        )
+      ).text();
+      for (const page of pages) expect(llms).toContain(page);
+
+      // Pages says where each came from, and what the build recorded.
+      const owner = await personWith(t, "owner", "all");
+      const { items } = await addressesFor(owner);
+      expect(
+        items
+          ?.filter(item => item.path.startsWith("/docs/a"))
+          .map(({ path, source, from, listedBy, build, standing }) => ({
+            path,
+            source,
+            from,
+            listedBy,
+            build,
+            standing,
+          }))
+      ).toEqual(
+        ["/docs/a", "/docs/a/b"].map(path => ({
+          path,
+          source: "dynamic",
+          from: "app/docs/[[...slug]]/page",
+          listedBy: "build-record",
+          build: "build-one",
+          standing: "listed",
+        }))
+      );
+      expect((await buildFor(owner)).body).toEqual({
+        unreadable: {
+          file: join(RECORDED, "prerender-manifest.json"),
+          problem: "missing",
+        },
+        // Six rendered and one declared.
+        recorded: { build: "build-one", pages: 7, at: expect.any(String) },
+        dynamicRoutes: 3,
+      });
+
+      // Served by a later build, which recorded nothing: none of them is
+      // confirmed, though every route still serves them.
+      writeFileSync(join(RECORDED, "BUILD_ID"), "build-two\n");
+      try {
+        const later = await listed();
+        for (const page of pages) expect(later).not.toContain(page);
+      } finally {
+        writeFileSync(join(RECORDED, "BUILD_ID"), "build-one\n");
+      }
+    });
+
     it("says nothing of the build, and lists only its routes, where its prerender manifest is read", async () => {
       const t = await boot();
       const owner = await personWith(t, "owner", "all");
@@ -767,7 +883,7 @@ describe.each(getConfiguredTestDialects())(
 
       const { items } = await addressesFor(owner);
 
-      expect((await buildFor(owner)).body).toEqual({});
+      expect((await buildFor(owner)).body).toEqual({ dynamicRoutes: 2 });
       expect(items?.some(item => item.path === "/retired")).toBe(false);
     });
 

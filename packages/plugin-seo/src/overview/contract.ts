@@ -22,6 +22,7 @@
  *
  * @module overview/contract
  */
+import { PAGES_PAGE_HREF } from "../code-pages/contract";
 import type {
   ConnectionAttempt,
   ConnectionsBody,
@@ -83,6 +84,7 @@ export const CHECKLIST_ITEMS = [
   "brand",
   "import",
   "searchConsole",
+  "codePages",
 ] as const;
 
 /** One of the checklist's items. */
@@ -94,6 +96,8 @@ export interface ChecklistItemState {
   done: boolean;
   /** For `patterns`: how many content types SEO is added to. */
   types?: number;
+  /** For `codePages`: how many pages built in code the site lists. */
+  pages?: number;
 }
 
 /** What the checklist route answers. */
@@ -162,6 +166,16 @@ export function checklistItemText(item: ChecklistItemState): ChecklistItemText {
         action: "Connect",
         href: `${SETTINGS_PAGE_HREF}?tab=connections`,
       };
+    case "codePages": {
+      const pages = item.pages ?? 0;
+      return {
+        label: item.done
+          ? `Pages built in code are listed: ${pages} ${pages === 1 ? "page" : "pages"}`
+          : "List the pages your routes with a variable part build",
+        action: "See why",
+        href: PAGES_PAGE_HREF,
+      };
+    }
   }
 }
 

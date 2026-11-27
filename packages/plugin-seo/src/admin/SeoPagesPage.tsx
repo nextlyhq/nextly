@@ -64,6 +64,7 @@ import { useLeaveWarning } from "./leave-warning";
 import type { PageEdits } from "./pages-edit";
 import { PagesEditor } from "./pages-editor";
 import {
+  buildLineOf,
   entryHref,
   linksText,
   problemsByPage,
@@ -73,6 +74,7 @@ import {
   STATUS_TEXT,
   titleSourceText,
   typeChoices,
+  type BuildLine,
   type PagesFilter,
   type PageStatus,
   type TypeChoice,
@@ -131,17 +133,18 @@ const STATUS_BADGE: Record<PageStatus, BadgeProps["variant"]> = {
 };
 
 /**
- * What the server could not read of the build's list of declared addresses,
- * where it could not: what a page listed as unconfirmed is explained by.
+ * What the line above the list says of the build being served: what it
+ * recorded, or, where nothing names its routes' addresses, why a page is
+ * listed as unconfirmed.
  */
-function useUnreadableBuild(): UnreadableBuild | undefined {
+function useBuildLine(): BuildLine | undefined {
   const build = usePluginRoute<BuildStatusBody>({
     plugin: SEO_PLUGIN_NAME,
     path: BUILD_ROUTE_PATH,
     // A new deploy can change it: read afresh each visit.
     staleTime: 0,
   });
-  return build.data?.unreadable;
+  return buildLineOf(build.data);
 }
 
 /** The pages, the problem list they are judged by, and what a read says. */
@@ -204,26 +207,50 @@ const BUILD_PROBLEM: Record<UnreadableBuild["problem"], string> = {
   "no-routes": "lists no pages on this server",
 };
 
+/** When the build recorded its pages, as a person reads a date and time. */
+function recordedWhen(at: string | undefined): string | null {
+  if (at === undefined) return null;
+  const date = new Date(at);
+  return Number.isNaN(date.getTime())
+    ? null
+    : new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(date);
+}
+
 /**
- * The banner saying the server couldn't read the build's list of the
- * addresses routes with a variable part declare, naming the file, and what
- * that means for the list and for what search engines are given.
+ * The line above the list about the build being served: a plain status
+ * line naming how many pages built in code it recorded, from which build
+ * and when; or, where it recorded none and the server couldn't read the
+ * build's list of the addresses routes with a variable part declare, a
+ * warning naming the file, and what that means for the list and for what
+ * search engines are given.
  */
-function UnreadableBuildBanner({
-  build,
-}: {
-  build: UnreadableBuild;
-}): JSX.Element {
+function BuildLineView({ line }: { line: BuildLine }): JSX.Element {
+  if (line.kind === "recorded") {
+    const { pages, build, at } = line.recorded;
+    const when = recordedWhen(at);
+    return (
+      <p className="mb-4 text-sm text-muted-foreground" role="status">
+        {pages} {pages === 1 ? "page" : "pages"} built in code from build{" "}
+        <code className="font-mono break-all">{build}</code>
+        {when === null ? "" : `, recorded ${when}`}.
+      </p>
+    );
+  }
+  const build = line.unreadable;
   return (
     <Alert variant="warning" className="mb-4">
       <AlertDescription>
         <code className="font-mono break-all">{build.file}</code>{" "}
-        {BUILD_PROBLEM[build.problem]}, so the pages your routes with a variable
-        part declare can&apos;t be confirmed. The ones those routes recorded
-        when they last rendered are listed as{" "}
+        {BUILD_PROBLEM[build.problem]}, and the build being served recorded no
+        pages when it was built, so the pages your routes with a variable part
+        declare can&apos;t be confirmed. The ones those routes recorded when
+        they last rendered are listed as{" "}
         <b className="font-semibold">Unconfirmed</b>, and the sitemap, llms.txt
-        and plain-text copies leave them out until the file is deployed with the
-        rest of the build.
+        and plain-text copies leave them out. Build the site with its database
+        reachable, or deploy the file with the rest of the build.
       </AlertDescription>
     </Alert>
   );
@@ -274,7 +301,7 @@ export function SeoPagesPage(): JSX.Element {
   const [saving, setSaving] = useState(false);
   useLeaveWarning(Object.keys(edits).length > 0);
   const pages = usePages(filter);
-  const unreadable = useUnreadableBuild();
+  const buildLine = useBuildLine();
   const filters = (
     <TypeAndStatus items={pages.items} filter={filter} onFilter={setFilter} />
   );
@@ -285,9 +312,7 @@ export function SeoPagesPage(): JSX.Element {
         description={DESCRIPTION[mode]}
         actions={<ModeActions mode={mode} saving={saving} onMode={setMode} />}
       />
-      {unreadable === undefined ? null : (
-        <UnreadableBuildBanner build={unreadable} />
-      )}
+      {buildLine === undefined ? null : <BuildLineView line={buildLine} />}
       {pages.problemsFailed === null ? null : (
         <Alert variant="warning" className="mb-4">
           <AlertDescription>{pages.problemsFailed}</AlertDescription>

@@ -123,6 +123,18 @@ describe("checklistItems", () => {
   it("needs Search Console connected", () => {
     expect(doneOf({ ...DONE, searchConsole: false }).searchConsole).toBe(false);
   });
+
+  it("lists the pages built in code only where the build has routes with a variable part, with their count", () => {
+    expect(checklistItems(DONE).map(i => i.id)).not.toContain("codePages");
+    expect(
+      checklistItems({ ...DONE, codePages: { listed: true, pages: 395 } }).at(
+        -1
+      )
+    ).toEqual({ id: "codePages", done: true, pages: 395 });
+    expect(
+      doneOf({ ...DONE, codePages: { listed: false, pages: 26 } }).codePages
+    ).toBe(false);
+  });
 });
 
 describe("holdsOldValues", () => {

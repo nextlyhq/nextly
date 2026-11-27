@@ -43,18 +43,11 @@ import type { SeoAnswer, Sourced } from "../resolver/order";
 import { SEO_PLUGIN_NAME } from "../settings/contract";
 
 import { AdvancedFrame } from "./advanced";
-import { developerNote, valueSource } from "./pages-view";
+import { addressSourceText, developerNote, valueSource } from "./pages-view";
 import { Chip, LinkAction, Note, SourceRow } from "./parts";
 import { PreviewCard } from "./previews";
 import { Row, RowButton } from "./rows";
 import { SeoTextField } from "./SeoPanel";
-
-/** Where each source of an address is said to come from. */
-const SOURCE_LABELS: Record<SiteAddress["source"], string> = {
-  entry: "Entry",
-  built: "Built route",
-  dynamic: "Declared by a dynamic route",
-};
 
 /** What the panel holds while a person edits. */
 interface Draft {
@@ -185,8 +178,10 @@ function ConnectionNote({ item }: { item: SiteAddress }): JSX.Element {
   if (item.source === "dynamic") {
     return (
       <Note icon={<Info className="size-4" />}>
-        Declared by <Code>{item.from}</Code>. What you set here applies to{" "}
-        {item.path} only.
+        {item.listedBy === "options"
+          ? "Stated in the plugin's options for"
+          : "Declared by"}{" "}
+        <Code>{item.from}</Code>. What you set here applies to {item.path} only.
       </Note>
     );
   }
@@ -508,7 +503,7 @@ export function CodePagePanel({
             SEO for {item.path}
           </SheetTitle>
           <SheetDescription>
-            {SOURCE_LABELS[item.source]} ·{" "}
+            {addressSourceText(item)} ·{" "}
             <span className="font-mono text-xs">{item.from}</span>
           </SheetDescription>
         </SheetHeader>

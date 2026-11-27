@@ -11,6 +11,7 @@ import {
   respondDoc,
   respondList,
   respondMutation,
+  type PluginContext,
   type PluginRoute,
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
@@ -24,6 +25,7 @@ import type { ReadRules } from "../resolver/provider";
 
 import { siteAddresses, type ReadableEntries } from "./addresses";
 import { heldByDocuments } from "./answers";
+import type { CodeListing } from "./code-listing";
 import {
   ADDRESSES_ROUTE_PATH,
   BUILD_ROUTE_PATH,
@@ -32,14 +34,13 @@ import {
   type BuildStatusBody,
   type CodePageSeoInput,
 } from "./contract";
-import type { CodeBuild } from "./routes";
 import { codeAddressOf, readCodePage, saveTypedValues } from "./store";
 
 /** What the routes read with. */
 export interface CodePageRoutesConfig {
   readRules: ReadRules;
-  /** What the running app's build says of its pages, read when asked. */
-  build: () => CodeBuild;
+  /** Every page built in code the running site has, read when asked. */
+  build: (ctx: PluginContext) => Promise<CodeListing>;
   /** The site's production origin, where the plugin was given one. */
   origin: () => string | undefined;
 }
@@ -123,7 +124,7 @@ function addressesRoute(config: CodePageRoutesConfig): PluginRoute {
     handler: async (req, ctx) => {
       const items = await siteAddresses(ctx, {
         origin: originFor(req, config),
-        build: config.build(),
+        build: await config.build(ctx),
         readRules: config.readRules,
         readable: await readableBy(ctx),
       });
@@ -140,21 +141,24 @@ function addressesRoute(config: CodePageRoutesConfig): PluginRoute {
 }
 
 /**
- * The route that says whether the running server could read the build's
- * list of the addresses routes with a variable part declared, and if not,
- * which file and why: what the list's unconfirmed pages are explained by.
+ * The route that says what the build being served recorded of its pages
+ * built in code, whether the running server could read the build's list of
+ * the addresses routes with a variable part declared, and if not, which file
+ * and why: what the list's unconfirmed pages are explained by.
  */
 function buildRoute(config: CodePageRoutesConfig): PluginRoute {
   return siteWide({
     method: "GET",
     path: BUILD_ROUTE_PATH,
     requiredPermission: MANAGE_SEO_PERMISSION,
-    // Read from files, so nothing is awaited; the route's answer is a promise.
-    handler: () => {
-      const { unreadable } = config.build();
-      const body: BuildStatusBody =
-        unreadable === undefined ? {} : { unreadable };
-      return Promise.resolve(respondDoc(body));
+    handler: async (_req, ctx) => {
+      const { unreadable, recorded, dynamic } = await config.build(ctx);
+      const body: BuildStatusBody = {
+        ...(unreadable === undefined ? {} : { unreadable }),
+        ...(recorded === undefined ? {} : { recorded }),
+        ...(dynamic.length === 0 ? {} : { dynamicRoutes: dynamic.length }),
+      };
+      return respondDoc(body);
     },
   });
 }
@@ -185,7 +189,9 @@ async function isCodePage(
   // Who holds it is read in the address's own language, as the list reads
   // it, so the screen offers only what a save takes.
   if ((await heldByDocuments(ctx, [path], origin)).has(path)) return false;
-  if (config.build().routes.some(route => route.path === path)) return true;
+  if ((await config.build(ctx)).routes.some(route => route.path === path)) {
+    return true;
+  }
   return (await readCodePage(ctx, path)) !== undefined;
 }
 

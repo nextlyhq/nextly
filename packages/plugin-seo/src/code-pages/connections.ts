@@ -16,9 +16,10 @@ import type {
 
 import { textOf } from "../plain-values";
 
+import { recordBuiltPage } from "./build-record";
 import { isNextBuild } from "./building";
 import { codePagesSlug } from "./collection";
-import type { CodeRoute } from "./routes";
+import type { ReadCodeRoutes } from "./routes";
 import {
   nameOfAddress,
   readCodePage,
@@ -29,17 +30,25 @@ import {
 } from "./store";
 
 /**
- * The code routes the running site has, as the plugin was configured to
- * read them, on `globalThis` so every module the plugin is loaded in reads
- * the one reader the started plugin kept.
+ * The started plugin's reader of the site's pages built in code, and where
+ * its build is, on `globalThis` so every module the plugin is loaded in
+ * reads the one the started plugin kept.
  */
 const shared = globalThis as unknown as {
-  __nextly_seoCodeRoutes?: () => CodeRoute[];
+  __nextly_seoCodeRoutes?: KeptCodeRoutes;
 };
 
-/** Keep the started plugin's reader of the site's code routes. */
-export function keepCodeRoutes(read: () => CodeRoute[]): void {
-  shared.__nextly_seoCodeRoutes = read;
+/** What the started plugin keeps of the site's pages built in code. */
+export interface KeptCodeRoutes {
+  /** Every page built in code the running site has. */
+  read: ReadCodeRoutes;
+  /** The build directory, where `next build` writes its id. */
+  buildDir: () => string;
+}
+
+/** Keep the started plugin's reader of the site's pages built in code. */
+export function keepCodeRoutes(kept: KeptCodeRoutes): void {
+  shared.__nextly_seoCodeRoutes = kept;
 }
 
 /**
@@ -48,10 +57,17 @@ export function keepCodeRoutes(read: () => CodeRoute[]): void {
  * of. A request for any other address must not make a row, or each made-up
  * address a visitor asks for would add one.
  */
-function mayRecord(path: string, row: CodePageRow | undefined): boolean {
+async function mayRecord(
+  ctx: PluginContext,
+  path: string,
+  row: CodePageRow | undefined
+): Promise<boolean> {
   if (isNextBuild() || row !== undefined) return true;
-  const read = shared.__nextly_seoCodeRoutes;
-  return read !== undefined && read().some(route => route.path === path);
+  const kept = shared.__nextly_seoCodeRoutes;
+  return (
+    kept !== undefined &&
+    (await kept.read(ctx)).some(route => route.path === path)
+  );
 }
 
 /** The address and what the call says, for a page built in code. */
@@ -87,9 +103,16 @@ async function record(
 ): Promise<void> {
   const call = callOf(ctx, input);
   if (call === undefined) return;
+  // While the site is built, the page is recorded as one this build has,
+  // whatever its row already says: the running site lists its own build's.
+  const kept = shared.__nextly_seoCodeRoutes;
+  if (isNextBuild() && kept !== undefined) {
+    await recordBuiltPage(ctx, kept.buildDir(), call.path);
+  }
   try {
     const row = await readCodePage(ctx, call.path);
-    if (recorded(row, call.connection) || !mayRecord(call.path, row)) return;
+    if (recorded(row, call.connection)) return;
+    if (!(await mayRecord(ctx, call.path, row))) return;
     await recordConnection(ctx, call.path, row, call.connection);
   } catch (error) {
     // The page's head is answered whatever happens to the record.

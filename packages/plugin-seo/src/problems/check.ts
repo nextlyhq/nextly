@@ -26,7 +26,7 @@ import {
   type KnownHolders,
 } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
-import type { CodeRoute } from "../code-pages/routes";
+import type { ReadCodeRoutes } from "../code-pages/routes";
 import { readConnections } from "../connections/store";
 import { refreshContentDates } from "../content-dates/record";
 import { pruneContentDates } from "../content-dates/store";
@@ -139,7 +139,7 @@ export interface ProblemChecks {
    * The pages the site's routes render from their own code, which the
    * sitemap lists beside the entries, where the site has any.
    */
-  codeRoutes?: () => readonly CodeRoute[];
+  codeRoutes?: ReadCodeRoutes;
   /**
    * What the sitemap lists, where the site serves one: its collections
    * where it names only some.

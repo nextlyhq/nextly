@@ -16,7 +16,11 @@
  *   field group other than the plugin's own with a value one of its fields
  *   maps to, or where an import has been applied; done once one has;
  * - `searchConsole`: Search Console is connected to the site's property,
- *   with no failure since.
+ *   with no failure since;
+ * - `codePages`: listed only where the build has routes with a variable
+ *   part, whose addresses only the build names; done where the running
+ *   site can list them: the build being served recorded its pages, or its
+ *   prerender manifest is read.
  *
  * @module overview/checklist
  */
@@ -31,6 +35,7 @@ import {
 import { z } from "nextly/zod";
 
 import { productionAddressesOf } from "../canonical";
+import type { CodeListing } from "../code-pages/code-listing";
 import {
   readConnections,
   writeConnections,
@@ -69,6 +74,12 @@ export interface ChecklistFacts {
    * was applied.
    */
   imports: "none" | "waiting" | "imported";
+  /**
+   * The site's pages built in code, where its build has routes with a
+   * variable part: whether the running site can list their addresses, and
+   * how many pages built in code it lists.
+   */
+  codePages?: { listed: boolean; pages: number };
 }
 
 /** Text with something in it. */
@@ -98,6 +109,13 @@ export function checklistItems(facts: ChecklistFacts): ChecklistItemState[] {
     items.push({ id: "import", done: facts.imports === "imported" });
   }
   items.push({ id: "searchConsole", done: facts.searchConsole });
+  if (facts.codePages !== undefined) {
+    items.push({
+      id: "codePages",
+      done: facts.codePages.listed,
+      pages: facts.codePages.pages,
+    });
+  }
   return items;
 }
 
@@ -139,6 +157,22 @@ export interface ChecklistSetup {
   readSetupWaiting: (ctx: PluginContext) => Promise<boolean>;
   /** What the import reads the site's field groups with. */
   importSetup: ImportSetup;
+  /** Every page built in code the running site has, and how it knows. */
+  codeListing?: (ctx: PluginContext) => Promise<CodeListing>;
+}
+
+/** How the site's pages built in code stand, where its build has routes with a variable part. */
+async function codePagesOf(
+  ctx: PluginContext,
+  setup: ChecklistSetup
+): Promise<ChecklistFacts["codePages"]> {
+  const listing = await setup.codeListing?.(ctx);
+  if (listing === undefined || listing.dynamic.length === 0) return undefined;
+  return {
+    listed:
+      listing.unreadable === undefined || (listing.recorded?.pages ?? 0) > 0,
+    pages: listing.routes.length,
+  };
 }
 
 /** Whether old values wait to be imported, as the person asking may read the pages. */
@@ -169,11 +203,12 @@ async function readChecklist(
   ctx: PluginRouteContext,
   setup: ChecklistSetup
 ): Promise<ChecklistBody> {
-  const [rules, brand, stored, waiting] = await Promise.all([
+  const [rules, brand, stored, waiting, codePages] = await Promise.all([
     setup.readRules(ctx, undefined),
     setup.readBrand(ctx),
     readConnections(ctx),
     setup.readSetupWaiting(ctx),
+    codePagesOf(ctx, setup),
   ]);
   return {
     setupWaiting: waiting,
@@ -185,6 +220,7 @@ async function readChecklist(
       types: setup.types,
       searchConsole: searchConsoleConnected(stored),
       imports: await importsOf(ctx, setup, stored.importedAt),
+      ...(codePages === undefined ? {} : { codePages }),
     }),
   };
 }
