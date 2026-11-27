@@ -111,6 +111,12 @@ vi.mock("@admin/lib/api/protectedApi", () => {
   };
 });
 
+vi.mock("@admin/components/ui", async () => {
+  const actual = await vi.importActual<typeof import("@admin/components/ui")>(
+    "@admin/components/ui"
+  );
+  return { ...actual, toast: { ...actual.toast, error: vi.fn() } };
+});
 vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
 vi.mock("@admin/lib/route-preload", () => ({ preloadRoute: vi.fn() }));
 // A super admin where the builder runs: the person the schema journal was
@@ -119,6 +125,8 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ isSuperAdmin: true, isLoading: false }),
 }));
 
+import { toast } from "@admin/components/ui";
+import { protectedApi } from "@admin/lib/api/protectedApi";
 import { navigateTo } from "@admin/lib/navigation";
 
 import { InboxButton } from "../InboxButton";
@@ -158,10 +166,16 @@ const unreadOnServer = (): number =>
     entry => entry.readAt === null
   ).length;
 
-function wrapper(): (props: { children: ReactNode }) => ReactElement {
+/**
+ * A query client like the admin's, but for retries. `gcTime` is how long an
+ * answer is kept once nothing shows it: none by default, so each test starts
+ * clean; the admin keeps answers for minutes, which a test of what a reopened
+ * Inbox reads must do too.
+ */
+function wrapper(gcTime = 0): (props: { children: ReactNode }) => ReactElement {
   const client = new QueryClient({
     defaultOptions: {
-      queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
+      queries: { retry: false, gcTime, refetchOnWindowFocus: false },
     },
   });
   return ({ children }) => (
@@ -169,8 +183,8 @@ function wrapper(): (props: { children: ReactNode }) => ReactElement {
   );
 }
 
-function renderInbox(): void {
-  render(<InboxButton />, { wrapper: wrapper() });
+function renderInbox(gcTime?: number): void {
+  render(<InboxButton />, { wrapper: wrapper(gcTime) });
 }
 
 /** The button, once the count is in. */
@@ -507,5 +521,80 @@ describe("the Inbox popover", () => {
       expect(screen.queryByRole("tablist", { name: "Inbox" })).toBeNull()
     );
     expect(screen.getByTestId("inbox-button")).toHaveFocus();
+  });
+
+  it("is a dialog named Inbox", async () => {
+    renderInbox();
+    await openInbox();
+    expect(screen.getByRole("dialog", { name: "Inbox" })).toBeInTheDocument();
+  });
+
+  it("opens on Alerts for an alert that arrived since it was last opened", async () => {
+    // The Alerts count is asked for afresh on each opening, so one kept from
+    // the last opening, a moment ago, does not choose the tab.
+    const user = userEvent.setup();
+    fill("for-you", [item("n1", "Assigned")]);
+    renderInbox(Number.POSITIVE_INFINITY);
+    let tabs = await openInbox();
+    expect(within(tabs).getByRole("tab", { selected: true })).toHaveTextContent(
+      "For you"
+    );
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(tabs).not.toBeInTheDocument());
+
+    fill("alerts", [item("a1", "Job failed", { kind: "jobs.failed" })]);
+    tabs = await openInbox();
+    await waitFor(() =>
+      expect(
+        within(tabs).getByRole("tab", { selected: true })
+      ).toHaveTextContent("Alerts")
+    );
+  });
+
+  it("keeps focus on Mark all read once there is nothing left to mark", async () => {
+    const user = userEvent.setup();
+    fill("for-you", [item("n1", "One")]);
+    renderInbox();
+    await openInbox();
+    await screen.findByText("One");
+    const markAll = screen.getByRole("button", { name: "Mark all read" });
+    markAll.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(unreadOnServer()).toBe(0));
+    await waitFor(() =>
+      expect(markAll).toHaveAttribute("aria-disabled", "true")
+    );
+    expect(markAll).toHaveFocus();
+    // Unavailable, it marks nothing more.
+    await user.keyboard("{Enter}");
+    expect(
+      server.asked.filter(request => request === "POST /notices/read")
+    ).toHaveLength(1);
+  });
+
+  it("marks an item read when it is opened in a new browser tab with a middle click", async () => {
+    fill("for-you", [item("n1", "One"), item("n2", "Two")]);
+    renderInbox();
+    await openInbox();
+    const row = await screen.findByRole("link", { name: /Two/ });
+    fireEvent(row, new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+    await waitFor(() => expect(unreadOnServer()).toBe(1));
+    expect(
+      server.items["for-you"].find(entry => entry.id === "n2")?.readAt
+    ).not.toBeNull();
+  });
+
+  it("says so when a mark does not reach the server, and leaves the item as it was", async () => {
+    fill("for-you", [item("n1", "One")]);
+    renderInbox();
+    await openInbox();
+    vi.mocked(protectedApi.post).mockRejectedValueOnce(new Error("offline"));
+    fireEvent.click(await screen.findByRole("link", { name: /One/ }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toast.error).toHaveBeenCalledWith(
+      "Your Inbox could not be updated",
+      expect.objectContaining({ description: expect.any(String) })
+    );
+    expect(unreadOnServer()).toBe(1);
   });
 });

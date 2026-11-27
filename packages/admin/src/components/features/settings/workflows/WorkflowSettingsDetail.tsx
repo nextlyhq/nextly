@@ -267,7 +267,7 @@ export function WorkflowSettingsDetail({
         <Section
           id="workflow-emails"
           title="Notifications"
-          description="The bell always tells the person named. Choose which also send an email."
+          description="The Inbox always tells the person named. Choose which also send an email."
         >
           <WorkflowEmailSection
             settings={settings}

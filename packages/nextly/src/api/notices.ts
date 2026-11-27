@@ -40,12 +40,13 @@ const markIdsBody = z
   .object({ ids: z.array(z.string().min(1)).max(500) })
   .strict();
 
+/** One of the Inbox's tabs, as a query or a body spells it. */
+const tabName = z.enum(NOTICE_TABS);
+
 /** The ids a mark-read names, or every unread notice, in both tabs or one. */
 const markReadBody = z.union([
   markIdsBody,
-  z
-    .object({ all: z.literal(true), tab: z.enum(NOTICE_TABS).optional() })
-    .strict(),
+  z.object({ all: z.literal(true), tab: tabName.optional() }).strict(),
 ]);
 
 function service(): NoticesService {
@@ -67,13 +68,13 @@ function unreadParam(params: URLSearchParams): boolean | undefined {
 function tabParam(params: URLSearchParams): NoticeTab | undefined {
   const value = params.get("tab");
   if (value === null) return undefined;
-  const tab = NOTICE_TABS.find(known => known === value);
-  if (tab === undefined) {
+  const tab = tabName.safeParse(value);
+  if (!tab.success) {
     throw NextlyError.invalidInput({
       message: `\`tab\` must be one of: ${NOTICE_TABS.join(", ")}.`,
     });
   }
-  return tab;
+  return tab.data;
 }
 
 /** A whole number from a query string, or a refusal naming it. */

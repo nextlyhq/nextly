@@ -15,7 +15,7 @@
 import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import { Inbox } from "lucide-react";
 import type { JSX } from "react";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -35,6 +35,7 @@ export function InboxButton({
   align = "end",
 }: InboxButtonProps): JSX.Element {
   const [open, setOpen] = useState(false);
+  const headingId = useId();
   const unread = useUnreadNoticeCount().data ?? 0;
   // What the badge draws, and what the button's name says: a person using
   // speech input says the drawn count to press it, so the name holds it,
@@ -75,8 +76,12 @@ export function InboxButton({
         align={align}
         sideOffset={8}
         className="p-0 w-auto"
+        aria-labelledby={headingId}
       >
-        <InboxPopover onFollowLink={() => setOpen(false)} />
+        <InboxPopover
+          headingId={headingId}
+          onFollowLink={() => setOpen(false)}
+        />
       </PopoverContent>
     </Popover>
   );

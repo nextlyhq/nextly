@@ -16,6 +16,8 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+import { toast } from "@admin/components/ui";
+
 import {
   noticesApi,
   type InboxTab,
@@ -61,7 +63,11 @@ export function useUnreadNoticeCount(): UseQueryResult<number, Error> {
   });
 }
 
-/** One tab's unread count, asked for only while the Inbox is open. */
+/**
+ * One tab's unread count, asked for only while the Inbox is open, and asked
+ * again each time it opens: the tab it opens on is chosen from these counts,
+ * so a count kept from an earlier opening must not choose it.
+ */
 export function useTabUnreadCount(
   tab: InboxTab,
   enabled: boolean
@@ -71,7 +77,15 @@ export function useTabUnreadCount(
     queryFn: () => noticesApi.unreadCount(tab),
     enabled,
     staleTime: 10_000,
+    refetchOnMount: "always",
     retry: 1,
+  });
+}
+
+/** What a mark that did not reach the server says, so it never fails unseen. */
+function markFailed(): void {
+  toast.error("Your Inbox could not be updated", {
+    description: "Nothing was changed. Try again in a moment.",
   });
 }
 
@@ -86,6 +100,7 @@ export function useMarkNoticesRead(): UseMutationResult<
     mutationFn: (body: MarkNoticesRead) => noticesApi.markRead(body),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: [...NOTICES_KEY] }),
+    onError: markFailed,
   });
 }
 
@@ -100,5 +115,6 @@ export function useMarkNoticesUnread(): UseMutationResult<
     mutationFn: (body: { ids: string[] }) => noticesApi.markUnread(body),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: [...NOTICES_KEY] }),
+    onError: markFailed,
   });
 }

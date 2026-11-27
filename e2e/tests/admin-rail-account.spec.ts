@@ -1,7 +1,7 @@
 /**
  * The rail's foot: the reader's Inbox and account menu, at every window height.
  *
- * The rail holds the logo, every section's entry and, at its foot, the bell and
+ * The rail holds the logo, every section's entry and, at its foot, the Inbox and
  * the avatar. On a window too short for all of them the entries scroll and the
  * foot stays in view, so the account menu is never pushed below the window
  * with nothing to scroll.
@@ -23,9 +23,7 @@ test("keeps the account menu in reach on a short window", async ({ page }) => {
   const foot = page.getByTestId("rail-account");
   const avatar = foot.getByRole("button", { name: "User profile menu" });
   await expect(avatar).toBeInViewport({ ratio: 1 });
-  await expect(
-    foot.getByRole("button", { name: /notifications/i })
-  ).toBeInViewport({
+  await expect(foot.getByRole("button", { name: /^Inbox/ })).toBeInViewport({
     ratio: 1,
   });
 

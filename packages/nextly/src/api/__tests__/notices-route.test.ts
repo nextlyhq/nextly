@@ -161,6 +161,14 @@ describe("/api/notices", () => {
     expect(service.count).not.toHaveBeenCalled();
   });
 
+  it("refuses a mark-all-read of one tab that names another person", async () => {
+    const res = await markNoticesRead(
+      post({ all: true, tab: "for-you", userId: "bob" })
+    );
+    expect(res.status).toBe(400);
+    expect(service.markRead).not.toHaveBeenCalled();
+  });
+
   it("refuses a tab on marking read by id, and a tab that does not exist", async () => {
     // A tab says which unread items "all" means; beside ids it means nothing.
     for (const body of [

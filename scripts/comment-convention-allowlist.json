@@ -43,58 +43,6 @@
     "count": 1,
     "digests": ["9fc276c0d3021f58"]
   },
-  "packages/admin/src/components/features/notifications/NotificationBell.tsx": {
-    "count": 1,
-    "digests": ["1156f0555aca5390"]
-  },
-  "packages/admin/src/components/features/notifications/NotificationDropdown.tsx": {
-    "count": 1,
-    "digests": ["fd78f6ffd60069a9"]
-  },
-  "packages/admin/src/components/features/notifications/NotificationRow.tsx": {
-    "count": 1,
-    "digests": ["b1842d77b2e88a12"]
-  },
-  "packages/admin/src/components/features/notifications/__tests__/NotificationBell.test.tsx": {
-    "count": 1,
-    "digests": ["b2ca9803ac6209b7"]
-  },
-  "packages/admin/src/components/features/notifications/__tests__/NotificationDropdown.test.tsx": {
-    "count": 1,
-    "digests": ["75cf4f32ce0734cc"]
-  },
-  "packages/admin/src/components/features/notifications/__tests__/NotificationRow.test.tsx": {
-    "count": 1,
-    "digests": ["f46d06b621150851"]
-  },
-  "packages/admin/src/components/features/notifications/__tests__/formatters.test.ts": {
-    "count": 1,
-    "digests": ["7d410180b33b1f37"]
-  },
-  "packages/admin/src/components/features/notifications/__tests__/relative-time.test.ts": {
-    "count": 1,
-    "digests": ["40e40b48a7a663ce"]
-  },
-  "packages/admin/src/components/features/notifications/__tests__/useUnreadCount.test.ts": {
-    "count": 1,
-    "digests": ["638a9b7e749ee8b2"]
-  },
-  "packages/admin/src/components/features/notifications/formatters.ts": {
-    "count": 1,
-    "digests": ["71a920e3115a6caf"]
-  },
-  "packages/admin/src/components/features/notifications/index.ts": {
-    "count": 1,
-    "digests": ["f20897ddd89574e4"]
-  },
-  "packages/admin/src/components/features/notifications/relative-time.ts": {
-    "count": 1,
-    "digests": ["ea94903affb20e33"]
-  },
-  "packages/admin/src/components/features/notifications/useUnreadCount.ts": {
-    "count": 1,
-    "digests": ["2293271bc6e7025c"]
-  },
   "packages/admin/src/components/features/schema-builder/SchemaChangeDialog.tsx": {
     "count": 2,
     "digests": ["1ad02fe4ea919816", "743c006b5a84b828"]
@@ -115,10 +63,6 @@
     "count": 1,
     "digests": ["845ab2f96f9874fe"]
   },
-  "packages/admin/src/hooks/queries/useJournal.ts": {
-    "count": 1,
-    "digests": ["df5c00e784446f44"]
-  },
   "packages/admin/src/lib/builder/to-manifest-entity.test.ts": {
     "count": 1,
     "digests": ["84404c4f29f8bc78"]
@@ -130,10 +74,6 @@
   "packages/admin/src/lib/builder/ui-schema-mode.ts": {
     "count": 1,
     "digests": ["ef94d21f7c9d8bbb"]
-  },
-  "packages/admin/src/services/journalApi.ts": {
-    "count": 1,
-    "digests": ["2eaefbdc15d3091b"]
   },
   "packages/admin/src/services/schemaApi.ts": {
     "count": 4,

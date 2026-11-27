@@ -63,6 +63,11 @@ export function InboxRow({
             markOpened();
             onFollowLink();
           }}
+          // A middle click opens the item in a new browser tab: it is
+          // opened, so it is read, though this Inbox stays open.
+          onAuxClick={event => {
+            if (event.button === 1) markOpened();
+          }}
         >
           {content}
         </Link>

@@ -39,14 +39,16 @@ const TABS: ReadonlyArray<{ tab: InboxTab; label: string; empty: string }> = [
 
 /**
  * The tab the Inbox opens on: Alerts while it has unread items, For you
- * otherwise; `null` until the Alerts count is in. An Alerts count that could
- * not be read opens For you, which holds the person's own items.
+ * otherwise; `null` until this opening's Alerts count is in, so a count kept
+ * from an earlier opening never decides it. An Alerts count that could not be
+ * read opens For you, which holds the person's own items.
  */
 function openingTab(alerts: {
   isPending: boolean;
+  isFetching: boolean;
   data?: number;
 }): InboxTab | null {
-  if (alerts.isPending) return null;
+  if (alerts.isPending || alerts.isFetching) return null;
   return (alerts.data ?? 0) > 0 ? "alerts" : "for-you";
 }
 
@@ -55,8 +57,11 @@ function isInboxTab(value: string): value is InboxTab {
 }
 
 export function InboxPopover({
+  headingId,
   onFollowLink,
 }: {
+  /** The id of the "Inbox" heading, which names the popover. */
+  headingId: string;
   /** Called as an item's link is followed, so the popover can close. */
   onFollowLink: () => void;
 }): JSX.Element {
@@ -72,15 +77,15 @@ export function InboxPopover({
   if (chosen === null && opening !== null) setChosen(opening);
   const shown = chosen ?? opening;
   const shownUnread = shown === null ? 0 : (counts[shown].data ?? 0);
+  // Unavailable rather than disabled, so a keyboard user who has just marked
+  // everything read keeps focus here instead of losing it to the page.
+  const nothingToMark =
+    shown === null || shownUnread === 0 || markRead.isPending;
 
   return (
-    <section
-      aria-labelledby="inbox-heading"
-      className="flex max-h-[480px] w-96 flex-col"
-      data-testid="inbox-popover"
-    >
+    <div className="flex max-h-[480px] w-96 flex-col">
       <div className="flex items-center justify-between gap-2 px-4 pb-2 pt-3">
-        <h2 id="inbox-heading" className="text-sm font-semibold">
+        <h2 id={headingId} className="text-sm font-semibold">
           Inbox
         </h2>
         <Button
@@ -89,9 +94,12 @@ export function InboxPopover({
           size="sm"
           // "Mark all read" marks the tab shown, every unread item in it,
           // including those not loaded here.
-          disabled={shown === null || shownUnread === 0 || markRead.isPending}
+          aria-disabled={nothingToMark}
+          className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
           onClick={() => {
-            if (shown !== null) markRead.mutate({ all: true, tab: shown });
+            if (!nothingToMark && shown !== null) {
+              markRead.mutate({ all: true, tab: shown });
+            }
           }}
         >
           Mark all read
@@ -138,7 +146,7 @@ export function InboxPopover({
           ))}
         </Root>
       )}
-    </section>
+    </div>
   );
 }
 

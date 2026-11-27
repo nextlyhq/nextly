@@ -584,11 +584,6 @@
         "count": 1
       }
     },
-    "packages/admin/src/components/features/notifications/NotificationRow.tsx": {
-      "complexity_moderate": {
-        "count": 1
-      }
-    },
     "packages/admin/src/components/features/role-management/PermissionMatrixCell.tsx": {
       "complexity_moderate": {
         "count": 1
