@@ -171,6 +171,13 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
                   </>
                 )}
               </DashboardLayout>
+              {/* The command palette, mounted by the admin itself so it opens
+                  in every host app without code of the host's own, and only
+                  for a session the server has confirmed: beside the sign-in
+                  form or the outline drawn while the session is checked, it
+                  would offer screens the visitor may not open, and its reads
+                  would be refused. */}
+              {confirmed && <AdminCommandPalette />}
             </div>
           )}
         </PrivateRoute>
@@ -206,10 +213,6 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
       <Toaster richColors />
       {/* "View all pins", which a pin toast on any screen can open in place. */}
       <AllPinsHost />
-      {/* The command palette, for the signed-in screens: mounted by the admin
-          itself, inside its styling scope, so it opens in place in every host
-          app without code of the host's own. */}
-      {routeType !== "public" && <AdminCommandPalette />}
       {/* Portal root for dialogs, dropdowns, etc. Synchronized with theme class. */}
       <div
         id="nextly-admin-portal-root"

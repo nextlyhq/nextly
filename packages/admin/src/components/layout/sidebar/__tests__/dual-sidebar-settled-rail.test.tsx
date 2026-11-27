@@ -134,6 +134,7 @@ vi.mock("@admin/hooks/queries/useSingles", () => ({
 }));
 
 import { DualSidebar } from "../DualSidebar";
+import { RailColumn } from "../RailColumn";
 import {
   isPaletteOpen,
   setPaletteOpen,
@@ -283,6 +284,29 @@ describe("the entries DualSidebar's rail offers", () => {
     fireEvent.click(search!);
     expect(isPaletteOpen()).toBe(true);
     setPaletteOpen(false);
+  });
+
+  it("keeps Search's place while the rail is an outline, so nothing moves when it settles", () => {
+    // The loading outline passes no Search; the settled rail does. Both hold
+    // the same box under the logo, so the entries below never jump down.
+    const outline = render(
+      <RailColumn settled={false} foot={null}>
+        {null}
+      </RailColumn>
+    );
+    const outlineSlot = document.querySelector("[data-rail-search-slot]");
+    expect(outlineSlot).not.toBeNull();
+    const outlineClass = outlineSlot!.className;
+    expect(outlineClass).toContain("h-11");
+    outline.unmount();
+    render(
+      <RailColumn settled foot={null} search={<button type="button" />}>
+        {null}
+      </RailColumn>
+    );
+    expect(document.querySelector("[data-rail-search-slot]")?.className).toBe(
+      outlineClass
+    );
   });
 
   it("offers Releases in the main menu, beside Media", () => {

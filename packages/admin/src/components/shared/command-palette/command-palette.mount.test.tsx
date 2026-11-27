@@ -39,7 +39,7 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
 }));
 
 import { AdminCommandPalette, CommandPalette } from "./index";
-import { RailSearchButton } from "./PaletteSearchButton";
+import { DrawerSearchButton, RailSearchButton } from "./PaletteSearchButton";
 import { setPaletteOpen } from "./palette-store";
 
 afterEach(() => {
@@ -116,6 +116,19 @@ describe("the admin's own palette", () => {
     expect(dialogs()).toHaveLength(0);
     // The dialog hands focus back after it has gone, on the next task.
     await waitFor(() => expect(document.activeElement).toBe(button));
+  });
+});
+
+describe("the phone drawer's Search row", () => {
+  // Named by the words it shows, so a person using voice control can say
+  // what they see; the shortcut is announced as the shortcut it is.
+  it("is named by its visible text and announces ⌘K as its shortcut", () => {
+    const onPress = vi.fn();
+    render(<DrawerSearchButton onPress={onPress} />);
+    const button = screen.getByRole("button", { name: "Search or jump to…" });
+    expect(button.getAttribute("aria-keyshortcuts")).toBe("Meta+K Control+K");
+    fireEvent.click(button);
+    expect(onPress).toHaveBeenCalledTimes(1);
   });
 });
 

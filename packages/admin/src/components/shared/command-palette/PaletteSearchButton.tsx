@@ -50,7 +50,10 @@ export function DrawerSearchButton({
     <button
       type="button"
       onClick={onPress}
-      aria-label={SEARCH_BUTTON_LABEL}
+      // Named by the words it shows (no aria-label over them), so a person
+      // using voice control can say what they see; the shortcut is announced
+      // as a shortcut, on either platform's modifier.
+      aria-keyshortcuts="Meta+K Control+K"
       className="flex h-11 w-full items-center gap-3 rounded-md border border-border bg-background px-3 text-sm text-muted-foreground hover-unified focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring"
     >
       <Search className="h-4 w-4 shrink-0" aria-hidden="true" />

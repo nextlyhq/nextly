@@ -37,6 +37,9 @@ export function usePaletteResults(): PaletteResults {
     hasPermission,
     canManageSettings: capabilities?.canManageSettings ?? false,
     plugins: branding.plugins,
-    showBuilder: branding.showBuilder ?? true,
+    // The Builders pages open only on the site's explicit yes (the builder
+    // guard's rule): while the answer is in flight or failed, a pick would
+    // land on a page that cannot open.
+    showBuilder: branding.showBuilder === true,
   });
 }

@@ -57,6 +57,11 @@ vi.mock("@admin/lib/navigation/useDocumentAddress", () => ({
     (document: { slug: string }): string =>
       `/admin/singles/${document.slug}`,
 }));
+/** The site's branding answer; `showBuilder` absent while it is unknown. */
+let branding: { showBuilder?: boolean } = { showBuilder: true };
+vi.mock("@admin/context/providers/BrandingProvider", () => ({
+  useBranding: () => branding,
+}));
 const navigateTo = vi.fn();
 vi.mock("@admin/lib/navigation", () => ({
   navigateTo: (path: string) => navigateTo(path),
@@ -103,6 +108,7 @@ const authors: Kind = {
 beforeEach(() => {
   navigateTo.mockClear();
   listedSingles = [{ slug: "homepage", label: "Homepage" }];
+  branding = { showBuilder: true };
 });
 afterEach(() => {
   cleanup();
@@ -202,11 +208,45 @@ describe("the palette for an admin", () => {
   });
 });
 
+describe("the Builders pages in the palette", () => {
+  beforeEach(() => {
+    listed = [posts];
+    offered = [posts];
+    mayCreate = [];
+    granted = new Set(["read-posts"]);
+  });
+
+  const builderRows = () =>
+    rowsUnder("Pages").filter(row => /Field Groups/.test(row));
+
+  it("offers them once the site says the builder is on", () => {
+    branding = { showBuilder: true };
+    openPalette();
+    expect(builderRows()).not.toEqual([]);
+  });
+
+  // The Builders pages open only on the site's explicit yes; while the answer
+  // is in flight or failed, a pick would land on a page that cannot open.
+  it("offers none while the site's answer is unknown, or says the builder is off", () => {
+    branding = {};
+    openPalette();
+    expect(builderRows()).toEqual([]);
+    cleanup();
+    branding = { showBuilder: false };
+    openPalette();
+    expect(builderRows()).toEqual([]);
+  });
+});
+
 describe("the palette for a role that reads three collections", () => {
   beforeEach(() => {
+    // What this reader may read is the Content panel's list, which the
+    // server narrows per reader; the navigation's wider list also holds a
+    // collection the panel leaves out for them. A palette that read the wider
+    // list, rather than the panel's, would offer Payroll.
     listed = [posts, faq, authors];
     listedSingles = [];
-    offered = [posts, faq, authors];
+    offered = [posts, faq, authors, { name: "payroll", label: "Payroll" }];
     mayCreate = [];
     granted = new Set(["read-posts", "read-faq", "read-authors"]);
   });
@@ -214,6 +254,7 @@ describe("the palette for a role that reads three collections", () => {
   it("offers only what they may open", () => {
     openPalette();
     expect(rowsUnder("Collections")).toEqual(["Posts", "FAQ", "Authors"]);
+    expect(document.body.textContent).not.toContain("Payroll");
     expect(rowsUnder("Singles")).toEqual([]);
     const pages = rowsUnder("Pages").join("|");
     expect(pages).toContain("Dashboard");

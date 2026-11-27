@@ -6,8 +6,9 @@
  * window near its top at a phone, a laptop and a desktop width, in light and
  * dark; the rail's Search button and the phone drawer's open the same one;
  * picking a collection, a Single or a Settings page opens it where the menus
- * would; and inside the Page Builder's editor ⌘K is the editor's own while
- * the rail's Search button still opens the admin's.
+ * would; and inside the Page Builder's editor, which takes the whole window,
+ * ⌘K is the editor's own, and back in the admin the rail's Search button
+ * opens the admin's.
  *
  * @module tests/command-palette.spec
  */
@@ -106,10 +107,12 @@ test("on a phone, Search at the top of the menu drawer opens the palette", async
   await menuButton.click();
   const drawer = page.getByRole("dialog", { name: "Navigation Menu" });
   await expect(drawer).toBeVisible();
-  const search = drawer.getByRole("button", { name: "Search (⌘K)" });
+  const search = drawer.getByRole("button", { name: "Search or jump to…" });
   // At the top of the drawer's list: above its first menu entry.
   const searchBox = await search.boundingBox();
-  const firstEntry = await drawer.getByRole("link").nth(1).boundingBox();
+  const firstEntry = await drawer
+    .getByRole("link", { name: "Dashboard", exact: true })
+    .boundingBox();
   expect(searchBox && firstEntry && searchBox.y < firstEntry.y).toBe(true);
   await search.click();
   await expect(drawer).toBeHidden();
@@ -149,7 +152,7 @@ test("picking a collection, a Single or a Settings page opens it where the menus
   await pick("general", /^General/, /\/admin\/settings(\?|$)/);
 });
 
-test("in the Page Builder's editor ⌘K is the editor's, and the rail's Search opens the admin's", async ({
+test("in the Page Builder's editor ⌘K is the editor's, and back in the admin the rail's Search opens the admin's", async ({
   page,
   request,
 }) => {
@@ -162,6 +165,14 @@ test("in the Page Builder's editor ⌘K is the editor's, and the rail's Search o
   await expect(adminPalette(page)).toHaveCount(0);
   await page.keyboard.press("Escape");
 
+  // The editor takes the whole window, the admin's rail with it; its own back
+  // arrow is the way out, and the rail's Search is there again once out.
+  await expect(page.getByRole("button", { name: "Search (⌘K)" })).toHaveCount(
+    0
+  );
+  await page
+    .getByRole("button", { name: "Back to Pages", exact: true })
+    .click();
   await page
     .locator("aside")
     .getByRole("button", { name: "Search (⌘K)" })

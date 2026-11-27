@@ -54,6 +54,7 @@ export function RailColumn({
   /**
    * The Search entry, under the logo and above the entries: kept out of the
    * scrolling list, so it stays in view on a short window as the logo does.
+   * Its place is kept while it is absent (the loading outline).
    */
   search?: ReactNode;
 }): JSX.Element {
@@ -86,7 +87,12 @@ export function RailColumn({
         />
       </Link>
 
-      {search && <div className="mb-4 flex shrink-0 px-3">{search}</div>}
+      {/* Search's box, held whether or not Search is drawn yet: the loading
+          outline passes none, and the entries below must not jump down when
+          the settled rail replaces it. */}
+      <div data-rail-search-slot="" className="mb-4 flex h-11 shrink-0 px-3">
+        {search}
+      </div>
 
       {/* Main Icons */}
       {/* The one part of the rail that gives way on a short window: it
