@@ -39,6 +39,8 @@ import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../context";
 import type { Logger } from "../../utils/logger";
+import { createLogger } from "../../utils/logger";
+import { runDbSync } from "../db-sync";
 import {
   runTrashEmptyCommand,
   runTrashListCommand,
@@ -114,6 +116,16 @@ describeEachDialect("nextly trash list, restore and empty", dialect => {
     _resetEnvCache();
     vi.spyOn(process, "cwd").mockReturnValue(dir);
     loaded.config = config;
+    // The collection's table, as `nextly db:sync` makes it on a development
+    // database, before the application starts on it.
+    await runDbSync(
+      { cwd: dir, autoSync: true } as Parameters<typeof runDbSync>[0],
+      {
+        logger: createLogger({ quiet: true }),
+        options: {},
+        cwd: dir,
+      } as CommandContext
+    );
   }, 120_000);
 
   afterEach(async () => {
