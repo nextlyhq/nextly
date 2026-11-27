@@ -11,7 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import type { ComponentType, JSX } from "react";
 
 import {
   Discord,
@@ -21,6 +21,10 @@ import {
   User as UserIcon,
   LogOut,
 } from "@admin/components/icons";
+import {
+  HELP_LINKS,
+  type HelpLink,
+} from "@admin/components/shared/command-palette/help-links";
 import { ThemeChoice } from "@admin/components/shared/theme-toggle";
 import { ROUTES } from "@admin/constants/routes";
 import {
@@ -63,28 +67,19 @@ interface UserProfileDropdownProps {
   align?: "start" | "center" | "end";
 }
 
-/** The help and community links, each hideable by a plugin. */
-const HELP_LINKS = [
-  {
-    id: "docs",
-    label: "Documentation",
-    href: "https://nextlyhq.com/docs",
-    icon: HelpCircle,
-  },
-  {
-    id: "github",
-    label: "GitHub",
-    href: "https://github.com/nextlyhq/nextly",
-    icon: Github,
-  },
-  {
-    id: "discord",
-    label: "Discord",
-    // The community server's invite, the same link nextlyhq.com carries.
-    href: "https://discord.gg/t2qN6H5tMj",
-    icon: Discord,
-  },
-] as const;
+/**
+ * Each help link's icon, by its id. The links themselves (labels, addresses,
+ * the ids a plugin hides them by) are the admin's one list, which the command
+ * palette reads too.
+ */
+const HELP_LINK_ICONS: Record<
+  HelpLink["id"],
+  ComponentType<{ className?: string; "aria-hidden"?: "true" }>
+> = {
+  docs: HelpCircle,
+  github: Github,
+  discord: Discord,
+};
 
 /**
  * Documentation, GitHub and Discord, as one group, and the items plugins put
@@ -109,18 +104,21 @@ function HelpAndCommunity({
       <DropdownMenuLabel className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
         Help and community
       </DropdownMenuLabel>
-      {links.map(({ id, label, href, icon: Icon }) => (
-        <DropdownMenuItem key={id} asChild className="cursor-pointer text-sm">
-          <a href={href} target="_blank" rel="noopener noreferrer">
-            <Icon className="mr-2 h-4 w-4" aria-hidden="true" />
-            {label}
-            <ExternalLink
-              className="ml-auto h-3.5 w-3.5 text-muted-foreground"
-              aria-hidden="true"
-            />
-          </a>
-        </DropdownMenuItem>
-      ))}
+      {links.map(({ id, label, href }) => {
+        const Icon = HELP_LINK_ICONS[id];
+        return (
+          <DropdownMenuItem key={id} asChild className="cursor-pointer text-sm">
+            <a href={href} target="_blank" rel="noopener noreferrer">
+              <Icon className="mr-2 h-4 w-4" aria-hidden="true" />
+              {label}
+              <ExternalLink
+                className="ml-auto h-3.5 w-3.5 text-muted-foreground"
+                aria-hidden="true"
+              />
+            </a>
+          </DropdownMenuItem>
+        );
+      })}
       <PluginUserMenuItems items={pluginItems} onAction={onPluginAction} />
       <DropdownMenuSeparator className="my-1" />
     </>

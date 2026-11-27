@@ -14,6 +14,7 @@ import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
 import { PrivateRoute } from "../components/guards/PrivateRoute";
 import { PublicRoute } from "../components/guards/PublicRoute";
+import { AdminCommandPalette } from "../components/shared/command-palette";
 import { WaitClockContext } from "../components/shared/loading-frame/delayed-reveal";
 import { ScreenOutlineFor } from "../components/shared/loading-frame/screen-outline-for";
 import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar";
@@ -170,6 +171,13 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
                   </>
                 )}
               </DashboardLayout>
+              {/* The command palette, mounted by the admin itself so it opens
+                  in every host app without code of the host's own, and only
+                  for a session the server has confirmed: beside the sign-in
+                  form or the outline drawn while the session is checked, it
+                  would offer screens the visitor may not open, and its reads
+                  would be refused. */}
+              {confirmed && <AdminCommandPalette />}
             </div>
           )}
         </PrivateRoute>

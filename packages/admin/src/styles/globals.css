@@ -124,6 +124,17 @@
   border-color: var(--nx-input);
 }
 
+/* The command palette on a phone: inset 16px from each window edge. The
+   kit's dialog is full width there with a 16px margin on top of it, which
+   pushed its right edge 16px past the window. Unlayered, so it wins over the
+   kit's width and margin utilities; from 640px up their 512px box stands. */
+@media (width < 40rem) {
+  [data-slot="command-content"] {
+    width: calc(100% - 2rem);
+    margin: 0;
+  }
+}
+
 .nextly-admin {
   background-color: var(--nx-background);
   color: var(--nx-foreground);

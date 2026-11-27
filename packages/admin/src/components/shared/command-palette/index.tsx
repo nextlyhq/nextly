@@ -12,161 +12,147 @@ import {
   ShortcutProvider,
   useShortcuts,
 } from "@nextlyhq/ui";
-import { useCallback, useState, type JSX } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type JSX,
+} from "react";
 
-import { Home, Settings, Shield, Users } from "@admin/components/icons";
 import { ROUTES } from "@admin/constants/routes";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { navigateTo } from "@admin/lib/navigation";
 
-import { ActionCommands } from "./ActionCommands";
+import { openableSettingsHrefs, type PaletteRow } from "./palette-results";
+import {
+  adminPaletteMounted,
+  isPaletteOpen,
+  registerAdminPalette,
+  setPaletteOpen,
+  subscribePalette,
+  takeReturnFocus,
+} from "./palette-store";
+import { usePaletteResults } from "./use-palette-results";
 import { UserSearchResults } from "./UserSearchResults";
 
 /**
- * Command Palette Component
+ * The command palette: ⌘K (Ctrl+K off Apple), or the rail's Search button.
  *
- * A keyboard-driven command palette for quick navigation and actions.
- * Opens with Cmd+K (Mac) or Ctrl+K (Windows/Linux) keyboard shortcut.
- *
- * @example
- * ```tsx
- * // In root layout
- * <CommandPalette />
- * ```
- *
- * @features
- * - Keyboard shortcut: Cmd+K / Ctrl+K
- * - Fuzzy search across navigation commands
- * - Admin SPA router integration for navigation
- * - Dark mode compatible
- * - WCAG 2.2 AA compliant
- *
- * @design-spec
- * - Dialog: 512px (max-w-lg), 12px  border border-border radius
- * - Input: 48px height (h-12)
- * - Items: 36px desktop (h-9), 44px mobile (h-11)
- * - Backdrop: the --nx-overlay scrim with backdrop blur
- * - Animation: 200ms duration
+ * Typing finds collections, Singles, pages (Settings, Builders, Account
+ * settings and the pages plugins add to the menus) and actions ("New <type>",
+ * the help links), each only where the reader may open it, and people by
+ * name. Picking one opens it where the menus would.
  *
  * @accessibility
  * - Full keyboard navigation (Arrow keys, Enter, Escape, Home, End)
- * - Focus trap when dialog is open
- * - ARIA attributes for screen readers
- * - Focus returns to trigger element on close
- * - WCAG 2.2 AA color contrast verified
+ * - Focus trap while open; focus returns to where it was on close
  *
  * @keyboard-shortcuts
- * - Cmd+K / Ctrl+K: Toggle command palette
- * - Escape: Close command palette
- * - Arrow Down: Move to next item
- * - Arrow Up: Move to previous item
- * - Enter: Select highlighted item
- * - Home: Jump to first item
- * - End: Jump to last item
+ * - Cmd+K / Ctrl+K: toggle the palette, unless a workspace that owns the keys
+ *   is open (the Page Builder's editor has its own)
+ * - G then D / U / R / S: go to the dashboard, users, roles, settings
  */
 
-interface NavigationCommand {
-  id: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  href: string;
-  keywords: string[];
-  shortcut?: string;
-}
-
 /**
- * Static navigation commands for quick access to primary routes.
- * Icons from lucide-react, keywords for improved fuzzy search.
- */
-const navigationCommands: NavigationCommand[] = [
-  {
-    id: "nav-dashboard",
-    label: "Dashboard",
-    icon: Home,
-    href: ROUTES.DASHBOARD,
-    keywords: ["home", "overview", "stats", "analytics"],
-    shortcut: "G D", // Gmail-style: Press G then D
-  },
-  {
-    id: "nav-users",
-    label: "Users",
-    icon: Users,
-    href: "/admin/users",
-    keywords: ["people", "accounts", "members", "manage"],
-    shortcut: "G U", // Gmail-style: Press G then U
-  },
-  {
-    id: "nav-roles",
-    label: "Roles & Permissions",
-    icon: Shield,
-    href: "/admin/roles",
-    keywords: ["security", "access", "rbac", "permissions"],
-    shortcut: "G R", // Gmail-style: Press G then R
-  },
-  {
-    id: "nav-settings",
-    label: "Settings",
-    icon: Settings,
-    href: "/admin/settings",
-    keywords: ["config", "preferences", "configuration"],
-    shortcut: "G S", // Gmail-style: Press G then S
-  },
-];
-
-/**
- * The command palette, with the shortcut owner it needs.
+ * The palette a host app mounts itself, exported for embedding.
  *
- * It carries its own provider because it is exported for embedding and is routinely rendered
- * OUTSIDE the admin shell — the playground mounts it as a sibling of the routed children, where no
- * shell provider is an ancestor, and registering a shortcut there would throw. Nesting is free:
- * providers share one manager per target, so inside the shell this reuses the shell's.
+ * The admin now mounts its own (`AdminCommandPalette`, from its root), so a
+ * host that still mounts this one draws nothing while the admin's is there:
+ * one dialog, one answer to ⌘K. Mounted where the admin isn't, it works as it
+ * always did.
+ *
+ * It carries its own shortcut provider because it is routinely rendered
+ * OUTSIDE the admin shell, as a sibling of the routed children, where no shell
+ * provider is an ancestor and registering a shortcut would throw. Nesting is
+ * free: providers share one manager per target.
  */
-export function CommandPalette(): JSX.Element {
+export function CommandPalette(): JSX.Element | null {
+  const adminHasOne = useSyncExternalStore(
+    subscribePalette,
+    adminPaletteMounted,
+    () => false
+  );
+  if (adminHasOne) return null;
   return (
     <ShortcutProvider>
-      <CommandPaletteContent />
+      <PaletteDialog />
     </ShortcutProvider>
   );
 }
 
-function CommandPaletteContent() {
-  const [open, setOpen] = useState(false);
+/**
+ * The admin's own palette, mounted once by its root inside the admin's
+ * styling scope, so its dialog is portalled into the admin's portal root and
+ * placed by the admin's styles in every host.
+ */
+export function AdminCommandPalette(): JSX.Element {
+  useEffect(() => registerAdminPalette(), []);
+  return <PaletteDialog />;
+}
+
+/**
+ * Below every ordinary layer. The manager orders layers by priority before
+ * depth and mount order, so a workspace that binds ⌘K for itself (the Page
+ * Builder's editor) always answers it while it is mounted, however the two
+ * happen to mount; everywhere else this one does. A modal's hold still sits
+ * above it and keeps it shut.
+ */
+const PALETTE_KEY_PRIORITY = -1;
+
+function PaletteDialog(): JSX.Element {
+  const open = useSyncExternalStore(
+    subscribePalette,
+    isPaletteOpen,
+    () => false
+  );
   const [search, setSearch] = useState("");
 
-  /**
-   * Handle command selection
-   * Executes the provided callback (typically navigation) and closes the dialog
-   * Memoized to prevent unnecessary re-renders in keyboard listener
-   */
-  const handleSelect = useCallback((callback: () => void) => {
-    setOpen(false);
-    try {
-      callback();
-    } catch (error) {
-      console.error("Command execution failed:", error);
-      // Re-open the palette on error so user can try again
-      setOpen(true);
-    }
+  const handleOpenChange = useCallback((next: boolean) => {
+    setPaletteOpen(next);
+    // A clean slate on the next open.
+    if (!next) setSearch("");
   }, []);
 
   /**
-   * Keyboard shortcuts, registered with the application's one keydown owner.
-   *
-   * The `g <key>` navigation used to be hand-rolled here, holding the previous key and a
-   * timestamp in the closure and comparing against a one-second window. The manager models a
-   * sequence directly, with the same one-second default, so the state and the comparison go away
-   * — along with the `document` listener that carried them.
+   * Closes the palette, then runs what was picked. Re-opened if it throws,
+   * so the person can try again.
    */
+  const handleSelect = useCallback(
+    (run: () => void) => {
+      handleOpenChange(false);
+      try {
+        run();
+      } catch (error) {
+        console.error("Command execution failed:", error);
+        setPaletteOpen(true);
+      }
+    },
+    [handleOpenChange]
+  );
+
   useShortcuts(
     [
       {
         keys: "mod+k",
         description: "Open the command palette",
-        run: () => setOpen(previous => !previous),
-        // The palette has to be reachable from wherever the user is, including mid-sentence in a
-        // field, which is why this one is exempt from the typing rule and the `g` sequences below
-        // are not.
+        run: () => handleOpenChange(!isPaletteOpen()),
+        // Reachable from wherever the person is, mid-sentence in a field too.
         whenTyping: true,
       },
+    ],
+    { name: "command-palette", priority: PALETTE_KEY_PRIORITY }
+  );
+
+  // The go-to sequences lead only where the palette's own Settings rows
+  // would: a reader who may not open Users, Roles or Settings is not sent to
+  // a refusal by two keystrokes.
+  const { hasPermission } = useCurrentUserPermissions();
+  const mayGoTo = (href: string) =>
+    openableSettingsHrefs(hasPermission).has(href);
+
+  useShortcuts(
+    [
       {
         keys: "g d",
         description: "Go to the dashboard",
@@ -176,36 +162,24 @@ function CommandPaletteContent() {
       {
         keys: "g u",
         description: "Go to users",
-        run: () => handleSelect(() => navigateTo("/admin/users")),
-        when: () => !open,
+        run: () => handleSelect(() => navigateTo(ROUTES.USERS)),
+        when: () => !open && mayGoTo(ROUTES.USERS),
       },
       {
         keys: "g r",
         description: "Go to roles",
-        run: () => handleSelect(() => navigateTo("/admin/roles")),
-        when: () => !open,
+        run: () => handleSelect(() => navigateTo(ROUTES.SECURITY_ROLES)),
+        when: () => !open && mayGoTo(ROUTES.SECURITY_ROLES),
       },
       {
         keys: "g s",
         description: "Go to settings",
-        run: () => handleSelect(() => navigateTo("/admin/settings")),
-        when: () => !open,
+        run: () => handleSelect(() => navigateTo(ROUTES.SETTINGS)),
+        when: () => !open && mayGoTo(ROUTES.SETTINGS),
       },
     ],
-    { name: "command-palette" }
+    { name: "command-palette-go-to" }
   );
-
-  /**
-   * Handle dialog open/close state changes
-   * Resets search state when dialog closes to provide clean slate on next open
-   */
-  const handleOpenChange = useCallback((newOpen: boolean) => {
-    setOpen(newOpen);
-    // Clear search when dialog closes (prevents stale search on re-open)
-    if (!newOpen) {
-      setSearch("");
-    }
-  }, []);
 
   return (
     <CommandDialog
@@ -213,52 +187,136 @@ function CommandPaletteContent() {
       onOpenChange={handleOpenChange}
       // Read after the dialog's name ("Command palette", the kit's default),
       // so a screen reader hears what the palette offers before the field.
-      description="Go to a page, run an action or find a user, and press Enter to choose it."
+      description="Go to a collection, a Single, a page or a person, or run an action, and press Enter to choose it."
+      contentProps={{
+        // Focus goes back to what had it when the palette opened (the
+        // Search button, a field), not to the top of the page.
+        onCloseAutoFocus: event => {
+          const back = takeReturnFocus();
+          if (!back) return;
+          event.preventDefault();
+          back.focus();
+        },
+      }}
     >
       <CommandInput
-        placeholder="Type a command or search..."
+        placeholder="Search or jump to…"
         value={search}
         onValueChange={setSearch}
       />
+      {/* Drawn only while open, so what it reads is fetched only then. */}
+      <PaletteResultsList search={search} onSelect={handleSelect} />
+    </CommandDialog>
+  );
+}
+
+function PaletteResultsList({
+  search,
+  onSelect,
+}: {
+  search: string;
+  onSelect: (run: () => void) => void;
+}): JSX.Element {
+  const results = usePaletteResults();
+  const { hasPermission } = useCurrentUserPermissions();
+  const pick = (row: PaletteRow) =>
+    onSelect(() => {
+      if (row.external) {
+        window.open(row.href, "_blank", "noopener,noreferrer");
+      } else {
+        // Within the admin, through its router, keeping the loaded app state.
+        navigateTo(row.href);
+      }
+    });
+  // Entries found by title get their own heading first, once the admin can
+  // search titles; recently visited items fill the empty box.
+  const groups: { heading: string; rows: PaletteRow[] }[] = [
+    { heading: "Collections", rows: results.collections },
+    { heading: "Singles", rows: results.singles },
+    { heading: "Pages", rows: results.pages },
+    { heading: "Actions", rows: results.actions },
+  ];
+  const drawn = groups.filter(group => group.rows.length > 0);
+  const { lists } = results;
+  return (
+    <>
       <CommandList>
-        <CommandEmpty>No results found.</CommandEmpty>
-
-        {/* Navigation Commands */}
-        <CommandGroup heading="Navigation">
-          {navigationCommands.map(command => {
-            const Icon = command.icon;
-            return (
-              <CommandItem
-                key={command.id}
-                value={command.label}
-                keywords={command.keywords}
-                // Navigation commands move within the admin SPA, so they go
-                // through its router and keep the loaded app state.
-                onSelect={() => handleSelect(() => navigateTo(command.href))}
-              >
-                <Icon className="h-4 w-4" />
-                <span>{command.label}</span>
-                {command.shortcut && (
-                  <CommandShortcut>{command.shortcut}</CommandShortcut>
-                )}
-              </CommandItem>
-            );
-          })}
-        </CommandGroup>
-
-        <CommandSeparator />
-
-        {/* Action Commands */}
-        <ActionCommands onSelect={handleSelect} />
-
-        {/* User Search Results - only show when searching */}
-        {search && (
+        {/* "Nothing matched" only once every collection and Single is in: one
+          still arriving, or on a page that failed, may be the one searched. */}
+        <CommandEmpty>
+          {lists.failed
+            ? "No results among what loaded."
+            : lists.complete
+              ? "No results found."
+              : "Still loading collections and Singles…"}
+        </CommandEmpty>
+        {drawn.map((group, index) => (
+          <PaletteGroup
+            key={group.heading}
+            heading={group.heading}
+            rows={group.rows}
+            separated={index > 0}
+            onPick={pick}
+          />
+        ))}
+        {/* People, by name, for a reader who may list them. */}
+        {search && hasPermission("read-users") && (
           <>
             <CommandSeparator />
-            <UserSearchResults search={search} onSelect={handleSelect} />
+            <UserSearchResults search={search} onSelect={onSelect} />
           </>
         )}
       </CommandList>
-    </CommandDialog>
+      {/* Below the results whatever matched, so what loaded stays in reach. */}
+      {lists.failed && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 border-t border-border px-4 py-2 text-sm text-muted-foreground"
+        >
+          <span>Some collections or Singles could not be loaded.</span>
+          <button
+            type="button"
+            onClick={lists.retry}
+            className="min-h-6 rounded-sm px-2 font-medium text-foreground underline underline-offset-2 hover-unified focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+function PaletteGroup({
+  heading,
+  rows,
+  separated,
+  onPick,
+}: {
+  heading: string;
+  rows: PaletteRow[];
+  separated: boolean;
+  onPick: (row: PaletteRow) => void;
+}): JSX.Element {
+  return (
+    <>
+      {separated && <CommandSeparator />}
+      <CommandGroup heading={heading}>
+        {rows.map(row => (
+          <CommandItem
+            key={row.id}
+            value={row.value}
+            keywords={row.keywords}
+            onSelect={() => onPick(row)}
+          >
+            <span className="truncate">{row.label}</span>
+            {row.hint && <CommandShortcut>{row.hint}</CommandShortcut>}
+            {row.external && (
+              <span className="sr-only">(opens in a new tab)</span>
+            )}
+          </CommandItem>
+        ))}
+      </CommandGroup>
+    </>
   );
 }

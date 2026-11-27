@@ -43,6 +43,7 @@ export function RailColumn({
   settled,
   children,
   foot,
+  search,
 }: {
   /** Whether every answer the rail draws from is in. */
   settled: boolean;
@@ -50,6 +51,12 @@ export function RailColumn({
   children: ReactNode;
   /** The rail's foot: the reader's Inbox and account menu. */
   foot: ReactNode;
+  /**
+   * The Search entry, under the logo and above the entries: kept out of the
+   * scrolling list, so it stays in view on a short window as the logo does.
+   * Its place is kept while it is absent (the loading outline).
+   */
+  search?: ReactNode;
 }): JSX.Element {
   const branding = useBranding();
   return (
@@ -79,6 +86,13 @@ export function RailColumn({
           alt={branding.logoText ?? "Logo"}
         />
       </Link>
+
+      {/* Search's box, held whether or not Search is drawn yet: the loading
+          outline passes none, and the entries below must not jump down when
+          the settled rail replaces it. */}
+      <div data-rail-search-slot="" className="mb-4 flex h-11 shrink-0 px-3">
+        {search}
+      </div>
 
       {/* Main Icons */}
       {/* The one part of the rail that gives way on a short window: it
