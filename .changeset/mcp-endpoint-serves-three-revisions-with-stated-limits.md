@@ -29,6 +29,8 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
+MCP clients older than protocol revision `2025-06-18` stop working: they are offered `2025-11-25` at `initialize`, and any later request without the `MCP-Protocol-Version` header is refused.
+
 The MCP endpoint now serves exactly the protocol revisions `2026-07-28`, `2025-11-25` and `2025-06-18`, each proven with the official MCP client. A 2025 client that offers an older revision (`2025-03-26`, `2024-11-05`) is offered `2025-11-25` instead, as the protocol says, and a request naming a revision the endpoint does not serve is refused with the protocol's error listing the ones it does. The MCP SDK moves to 2.4.0.
 
 Its limits are now stated rather than left to the SDK's defaults: a request body of at most 4 MiB, refused with `413` naming the size, and at most 10,000 array elements and object members in one tool call's arguments, refused naming the number. Discovery and tool-list answers say they are private to the caller and are not to be reused. What an agent can do does not change: the same five tools, with the same names and answers.
