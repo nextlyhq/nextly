@@ -141,6 +141,37 @@
   min-width: 0;
 }
 
+/* The typed box's holder, which hangs its suggestions from it: it takes the
+   box's place in the row, and the box fills it. */
+.nx-colour-suggest {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The colour variables listed under a typed colour box, as wide as the box
+   and never narrower than a name with its swatches. Two classes, to outrank
+   the popover's own width and padding. */
+[data-slot="popover-content"].nx-colour-suggest__list {
+  width: var(--radix-popper-anchor-width, 14rem);
+  min-width: 12rem;
+  padding: 0.25rem;
+}
+
+/* A suggestion: its light and dark swatches, then its name. */
+.nx-colour-suggest__option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.nx-colour-suggest__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* A variable shown as itself: its swatch, its name, and the list's chevron. */
 .nx-style-inspector__colour-pick {
   justify-content: flex-start;
