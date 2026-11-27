@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   formatPlanWarning,
@@ -119,6 +119,28 @@ describe("warnings never stop a run", () => {
       }
     });
   }
+
+  it("leaves the colour off on a terminal when the caller says colour is off (NO_COLOR)", () => {
+    const line = formatPlanWarning(
+      { code: "sqlite-on-vercel", message: "Pick PostgreSQL." },
+      { terminal: true, color: false }
+    );
+    expect(line.includes(ESCAPE)).toBe(false);
+    expect(line).toBe("▲ Pick PostgreSQL.");
+  });
+
+  it("reads nothing from the environment: NO_COLOR alone changes nothing", () => {
+    vi.stubEnv("NO_COLOR", "1");
+    try {
+      const line = formatPlanWarning(
+        { code: "sqlite-on-vercel", message: "Pick PostgreSQL." },
+        { terminal: true }
+      );
+      expect(line.includes(ESCAPE)).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 
   it("labels a warning in plain text where no colour can show it", () => {
     expect(

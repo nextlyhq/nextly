@@ -75,15 +75,18 @@ export function planWarnings(
 /**
  * One warning as one line. A terminal gets it in the warning colour; output
  * that is not a terminal (a pipe, a log, an agent) gets plain text with a
- * "Warning:" label and no escape codes.
+ * "Warning:" label and no escape codes. `color` lets the caller turn the
+ * colour off on a terminal too (picocolors' `isColorSupported` follows
+ * `NO_COLOR`); the plan reads nothing from the environment itself, so the
+ * same warning always formats the same way for the same options.
  *
  * @experimental
  */
 export function formatPlanWarning(
   warning: PlanWarning,
-  { terminal }: { terminal: boolean }
+  { terminal, color = terminal }: { terminal: boolean; color?: boolean }
 ): string {
   if (!terminal) return `Warning: ${warning.message}`;
-  const colors = createColors(true);
+  const colors = createColors(color);
   return colors.yellow(`▲ ${warning.message}`);
 }

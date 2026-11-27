@@ -30,7 +30,7 @@ export function changeAnswer<K extends keyof PlanAnswers>(
   key: K,
   value: PlanAnswers[K]
 ): SetupDraft {
-  if (sameAnswer(draft.answers[key], value)) return draft;
+  if (sameAnswer(key, draft.answers[key], value)) return draft;
   const answers: PlanAnswers = { ...draft.answers, [key]: value };
   for (const dependent of DEPENDENTS[key] ?? []) delete answers[dependent];
   const next: SetupDraft = { ...draft, answers };
@@ -40,10 +40,17 @@ export function changeAnswer<K extends keyof PlanAnswers>(
   return next;
 }
 
-/** Equal values, with lists compared as sets. */
-function sameAnswer(a: unknown, b: unknown): boolean {
-  if (Array.isArray(a) && Array.isArray(b)) {
-    return a.length === b.length && a.every(value => b.includes(value));
+/**
+ * Equal answers. The languages are a list whose order the plan keeps, so a
+ * new order is a change; the other lists are sets, equal when they hold the
+ * same values, however often or in whatever order each was given.
+ */
+function sameAnswer(key: keyof PlanAnswers, a: unknown, b: unknown): boolean {
+  if (!Array.isArray(a) || !Array.isArray(b)) return a === b;
+  if (key === "languages") {
+    return a.length === b.length && a.every((value, i) => value === b[i]);
   }
-  return a === b;
+  const setA = new Set(a);
+  const setB = new Set(b);
+  return setA.size === setB.size && [...setA].every(value => setB.has(value));
 }

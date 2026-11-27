@@ -25,13 +25,17 @@ import {
  * nothing about hosting, data, features or images; the languages only once
  * "More than one language" is ticked; the permission rules only once a
  * coding tool is. An answer that does not apply holds no value in the plan,
- * whatever was given for it. The questions read this to decide what to show.
+ * whatever was given for it. The questions read this to decide what to show,
+ * and `resolvePlan` reads it to decide what the plan holds, so the two can't
+ * disagree. The machine matters for the rules: a coding tool found on it is
+ * ticked before the person answers.
  *
  * @experimental
  */
 export function answerApplies(
   key: keyof PlanAnswers,
-  answers: PlanAnswers
+  answers: PlanAnswers,
+  env: PlanEnvironment
 ): boolean {
   const site = (answers.start ?? defaultStart()) !== "plugin";
   switch (key) {
@@ -46,7 +50,7 @@ export function answerApplies(
         (answers.features ?? defaultFeatures(answers)).includes("languages")
       );
     case "agentRules":
-      return (answers.agents ?? []).length > 0;
+      return (answers.agents ?? env.detectedCodingTools).length > 0;
     default:
       return true;
   }
@@ -113,7 +117,7 @@ export function resolvePlan(
   // The answers every start has, which come last in a plan.
   const tools = {
     agents,
-    ...(answerApplies("agentRules", { agents })
+    ...(answerApplies("agentRules", { agents }, env)
       ? { agentRules: answers.agentRules ?? "yes" }
       : {}),
     packageManager: answers.packageManager ?? env.detectedPackageManager,
@@ -129,7 +133,7 @@ export function resolvePlan(
     answers.features ?? defaultFeatures(answers),
     FEATURES
   );
-  const languages = answerApplies("languages", { start, features })
+  const languages = answerApplies("languages", { start, features }, env)
     ? mainLanguageFirst(answers.languages ?? [])
     : [MAIN_LANGUAGE];
   return {
@@ -176,6 +180,7 @@ function checkAnswers(answers: PlanAnswers): void {
       `git must be true or false, not ${JSON.stringify(answers.git)}.`
     );
   }
+  checkList("languages", answers.languages);
   for (const language of answers.languages ?? []) {
     if (!LANGUAGE_CODE.test(language)) {
       throw new TypeError(
@@ -202,5 +207,15 @@ function checkEach(
   values: readonly unknown[] | undefined,
   list: readonly string[]
 ): void {
+  checkList(key, values);
   for (const value of values ?? []) checkOne(key, value, list);
+}
+
+/** A list answer given as one word would be read a letter at a time. */
+function checkList(key: keyof PlanAnswers, values: unknown): void {
+  if (values !== undefined && !Array.isArray(values)) {
+    throw new TypeError(
+      `${key} must be a list, not ${JSON.stringify(values)}.`
+    );
+  }
 }

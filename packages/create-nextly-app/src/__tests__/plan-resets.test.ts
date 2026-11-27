@@ -125,6 +125,26 @@ describe("an answer given again unchanged", () => {
   });
 });
 
+describe("a list that only looks the same", () => {
+  it("is a change when the languages come in a new order, which the plan keeps", () => {
+    const draft: SetupDraft = {
+      answers: { features: ["languages"], languages: ["en", "fr", "ur"] },
+    };
+    const next = changeAnswer(draft, "languages", ["en", "ur", "fr"]);
+    expect(resolvePlan(next.answers, ENV)).toMatchObject({
+      languages: ["en", "ur", "fr"],
+    });
+  });
+
+  it("is a change from one value given twice to two different ones", () => {
+    const draft: SetupDraft = { answers: { features: ["seo", "seo"] } };
+    const next = changeAnswer(draft, "features", ["seo", "forms"]);
+    expect(resolvePlan(next.answers, ENV)).toMatchObject({
+      features: ["seo", "forms"],
+    });
+  });
+});
+
 describe("an answer nothing depends on", () => {
   it("changes only itself", () => {
     const next = changeAnswer(DRAFT, "images", "uploadthing");

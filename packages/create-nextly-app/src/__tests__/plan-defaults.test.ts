@@ -34,7 +34,7 @@ function pressEnterThroughout(
   const answers: PlanAnswers = { ...given };
   for (const key of PLAN_ANSWER_ORDER) {
     if (answers[key] !== undefined) continue;
-    if (!answerApplies(key, answers)) continue;
+    if (!answerApplies(key, answers, env)) continue;
     const preselected = resolvePlan(answers, env) as Partial<
       Record<keyof PlanAnswers, unknown>
     >;
@@ -79,6 +79,46 @@ describe("the default plan", () => {
       });
     }
   }
+
+  // What each start on each host pre-selects, written out rather than
+  // derived, so a default that reads the wrong answer shows here.
+  const EXPECTED = {
+    website: { features: ["page-builder", "seo", "forms"] },
+    blank: { features: [] },
+  } as const;
+  const BY_HOST = {
+    unsure: { db: "sqlite", images: "local" },
+    vercel: { db: "postgres", images: "vercel-blob" },
+    server: { db: "sqlite", images: "local" },
+  } as const;
+  for (const start of ["website", "blank"] as const) {
+    for (const host of hosts) {
+      it(`pre-selects ${BY_HOST[host].db}, ${BY_HOST[host].images} and the ${start} features for ${start} on ${host}`, () => {
+        expect(resolvePlan({ start, host }, ENV)).toMatchObject({
+          db: BY_HOST[host].db,
+          images: BY_HOST[host].images,
+          features: [...EXPECTED[start].features],
+        });
+      });
+    }
+  }
+
+  it("asks the rules question exactly when the plan holds the rules", () => {
+    for (const detectedCodingTools of [[], ["codex"]] as const) {
+      const env = { ...ENV, detectedCodingTools };
+      for (const answers of [
+        {},
+        { agents: [] },
+        { agents: ["cursor"] },
+      ] as const) {
+        expect(answerApplies("agentRules", answers, env)).toBe(
+          "agentRules" in resolvePlan(answers, env)
+        );
+      }
+    }
+    // A tool found on this computer is ticked before the person answers.
+    expect(answerApplies("agentRules", {}, ENV)).toBe(true);
+  });
 
   it("gives Vercel PostgreSQL and Vercel Blob", () => {
     const plan = resolvePlan({ host: "vercel" }, ENV);
@@ -268,6 +308,11 @@ describe("answers outside the plan's lists", () => {
   it("are refused inside a list too", () => {
     const answers = JSON.parse('{"features":["blog"]}') as PlanAnswers;
     expect(() => resolvePlan(answers, ENV)).toThrow(/features.*"blog"/);
+  });
+
+  it("are refused as a whole when a list is given as a single word", () => {
+    const answers = JSON.parse('{"features":"seo"}') as PlanAnswers;
+    expect(() => resolvePlan(answers, ENV)).toThrow(/features must be a list/);
   });
 
   it("refuse a language that is not a language code", () => {
