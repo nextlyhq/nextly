@@ -46,7 +46,7 @@ const CONTACT_RULE = "Form: Contact us, Notify team";
 
 /**
  * A shop plugin: it owns one template and says what sends it, and its
- * settings send a site template, as a form's notification rule does.
+ * settings send one of your own templates, as a form's notification rule does.
  */
 function shop(references: () => unknown) {
   return definePlugin({
@@ -142,12 +142,12 @@ for (const dialect of getConfiguredTestDialects()) {
         declared: ["A shop order is paid"],
         referenced: [],
       });
-      // A site template a setting sends.
+      // One of your own templates, which a setting sends.
       expect(rows.get("contact-reply")).toEqual({
         declared: [],
         referenced: [CONTACT_RULE],
       });
-      // A site template nothing sends.
+      // One of your own templates, which nothing sends.
       expect(rows.get("unused-note")).toEqual({ declared: [], referenced: [] });
       expect(list.referencesComplete).toBe(true);
     });
