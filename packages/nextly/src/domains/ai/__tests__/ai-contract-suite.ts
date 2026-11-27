@@ -416,6 +416,29 @@ export function describeAIContract(dialect: TestDialect): void {
           expect(heard).toEqual(["succeeded"]);
         });
 
+        it("shows a task unavailable on content the person may read but not edit", async () => {
+          const reader = await personWith(t, "ai-status-reader", [
+            "use-ai",
+            "read-posts",
+          ]);
+          const onPosts = await t.nextly.ai.status({
+            user: { id: reader },
+            target: { collection: "posts" },
+          });
+          expect(onPosts.tasks).toEqual([
+            {
+              owner: "@test/ai",
+              name: "alt-text",
+              role: "vision",
+              available: false,
+              reason: "missing-permission",
+              permission: "update-posts",
+            },
+          ]);
+          const anywhere = await t.nextly.ai.status({ user: { id: reader } });
+          expect(anywhere.tasks[0]?.available).toBe(true);
+        });
+
         it("refuses a Viewer's run, saying they can't use AI", async () => {
           const viewer = await personInRole(
             t,

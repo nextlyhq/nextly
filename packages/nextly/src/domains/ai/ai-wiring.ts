@@ -6,6 +6,7 @@
  * @module domains/ai/ai-wiring
  */
 import {
+  type AuthContext,
   authorizeCaller,
   authorizeCallerForAny,
   isErrorResponse,
@@ -15,7 +16,12 @@ import { NextlyError } from "../../errors/nextly-error";
 import { capabilityProvider } from "../../plugins/capabilities";
 import { buildPluginServicesNamespace } from "../../plugins/services/plugin-services-registry";
 
-import { AI_CAPABILITY, AI_SERVICE, type AIProvider } from "./ai-contract";
+import {
+  AI_CAPABILITY,
+  AI_SERVICE,
+  type AIProvider,
+  type AIRunTarget,
+} from "./ai-contract";
 import { createAIService, type AIService } from "./ai-service";
 import { aiTurnedOff } from "./ai-switch";
 import { recordedAITasks } from "./ai-task-list";
@@ -53,6 +59,20 @@ function startedProvider(): AIProvider | undefined {
   return service;
 }
 
+/** The content routes' decision on one target, for a run or a status. */
+function targetDecision(
+  caller: AuthContext,
+  action: "read" | "update",
+  target: AIRunTarget
+) {
+  return authorizeCaller(
+    caller,
+    action,
+    target.collection,
+    target.id === undefined ? "all" : "one"
+  );
+}
+
 let service: AIService | undefined;
 
 /** Core's AI service, built once per module evaluation over the real process. */
@@ -74,14 +94,13 @@ export function aiService(): AIService {
     // The content routes' own decision, so a caller naming one entry it may
     // not read is answered as if it were missing, exactly as REST answers.
     authorizeTarget: async (caller, action, target) => {
-      const decision = await authorizeCaller(
-        caller,
-        action,
-        target.collection,
-        target.id === undefined ? "all" : "one"
-      );
+      const decision = await targetDecision(caller, action, target);
       if (isErrorResponse(decision)) throw toNextlyAuthError(decision);
     },
+    // The same decision, read as yes or no: a status asks it for every task
+    // and refuses nobody, so nothing is recorded as a refusal.
+    mayTarget: async (caller, action, target) =>
+      !isErrorResponse(await targetDecision(caller, action, target)),
     emit: emitAIUsage,
     now: () => new Date(),
   });

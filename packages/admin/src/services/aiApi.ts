@@ -9,13 +9,27 @@
  *
  * @experimental With the AI contract.
  */
-import type { AIStatus } from "nextly/runtime";
+import type { AIRunTarget, AIStatus } from "nextly/runtime";
 
 import { fetcher } from "../lib/api/fetcher";
 
-/** The AI status, as the server judges it for the signed-in person. */
-function getAIStatus(): Promise<AIStatus> {
-  return fetcher<AIStatus>("/ai/status", {}, true);
+/**
+ * The AI status, as the server judges it for the signed-in person: about one
+ * piece of content where `target` names it, so each task's availability
+ * includes the person's right to read it and to edit it.
+ */
+function getAIStatus(target?: AIRunTarget): Promise<AIStatus> {
+  const query = new URLSearchParams();
+  if (target !== undefined) {
+    query.set("collection", target.collection);
+    if (target.id !== undefined) query.set("id", target.id);
+  }
+  const search = query.toString();
+  return fetcher<AIStatus>(
+    search === "" ? "/ai/status" : `/ai/status?${search}`,
+    {},
+    true
+  );
 }
 
 export const aiApi: { getAIStatus: typeof getAIStatus } = { getAIStatus };

@@ -12,7 +12,7 @@
  */
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
-import type { AIStatus } from "nextly/runtime";
+import type { AIRunTarget, AIStatus } from "nextly/runtime";
 
 import { aiApi } from "@admin/services/aiApi";
 
@@ -21,14 +21,26 @@ const AI_STATUS_STALE_MS = 60_000;
 
 const aiKeys = {
   all: () => ["ai"] as const,
-  status: (): readonly ["ai", "status"] => [...aiKeys.all(), "status"] as const,
+  // One cached status per piece of content asked about, and one for none.
+  status: (target?: AIRunTarget) =>
+    [
+      ...aiKeys.all(),
+      "status",
+      target?.collection ?? null,
+      target?.id ?? null,
+    ] as const,
 };
 
-/** The AI status for the signed-in person. */
-export function useAIStatus(): UseQueryResult<AIStatus, Error> {
+/**
+ * The AI status for the signed-in person, about one piece of content where
+ * `target` names it.
+ */
+export function useAIStatus(
+  target?: AIRunTarget
+): UseQueryResult<AIStatus, Error> {
   return useQuery<AIStatus, Error>({
-    queryKey: aiKeys.status(),
-    queryFn: () => aiApi.getAIStatus(),
+    queryKey: aiKeys.status(target),
+    queryFn: () => aiApi.getAIStatus(target),
     staleTime: AI_STATUS_STALE_MS,
   });
 }

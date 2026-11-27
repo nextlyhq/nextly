@@ -19,6 +19,7 @@
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type {
   AIAgent,
+  AIRunTarget,
   AIStatus,
   AITaskStatus,
   AIUsageListener,
@@ -59,12 +60,22 @@ export interface AICallerArgs {
   agent?: AIAgent | null;
 }
 
+/** @experimental What a status is asked about: who, and optionally which content. */
+export interface AIStatusArgs extends AICallerArgs {
+  target?: AIRunTarget;
+}
+
 /** @experimental `nextly.ai.*`. */
 export interface AINamespace {
-  /** Whether AI is configured, which roles have a model, and what the caller may run. */
-  status(args?: AICallerArgs): Promise<AIStatus>;
+  /**
+   * Whether AI is configured, which roles have a model, and what the caller
+   * may run. With a `target`, each task is judged as its run on that content
+   * would be: the caller must be able to read it, and edit it where the task
+   * writes its result.
+   */
+  status(args?: AIStatusArgs): Promise<AIStatus>;
   /** Every registered task, and whether the caller may run it. */
-  tasks(args?: AICallerArgs): Promise<AITaskStatus[]>;
+  tasks(args?: AIStatusArgs): Promise<AITaskStatus[]>;
   /** Run a task, returning its checked output and what it used. */
   run(args: Omit<AIRunArgs, "agent"> & AICallerArgs): Promise<AIRunOutput>;
   /** Run a task, returning its text as it comes. */
@@ -102,8 +113,11 @@ export function createAINamespace(ctx: NextlyContext): AINamespace {
   }
 
   return {
-    status: async args => aiService().status(callerOf(args)),
-    tasks: async args => (await aiService().status(callerOf(args))).tasks,
+    status: async args =>
+      aiService().status(callerOf(args), { target: args?.target }),
+    tasks: async args =>
+      (await aiService().status(callerOf(args), { target: args?.target }))
+        .tasks,
     run: async args =>
       aiService().run(callerOf(args), {
         task: args.task,

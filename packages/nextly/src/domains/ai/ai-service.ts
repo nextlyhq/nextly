@@ -72,6 +72,15 @@ export interface AIServiceDeps {
     action: "read" | "update",
     target: AIRunTarget
   ): Promise<void>;
+  /**
+   * {@link authorizeTarget}'s answer as yes or no, for the status: the same
+   * decision, asked without answering anybody with a refusal.
+   */
+  mayTarget(
+    caller: AuthContext,
+    action: "read" | "update",
+    target: AIRunTarget
+  ): Promise<boolean>;
   /** Tell the usage listeners about one run. */
   emit(event: AIUsageEvent): Promise<void>;
   now(): Date;
@@ -111,7 +120,15 @@ export interface AIEmbedOutput {
 
 /** What core's AI service offers. */
 export interface AIService {
-  status(caller: AICaller): Promise<AIStatus>;
+  /**
+   * Whether AI is configured and what the caller may do with it. Given a
+   * target, each task's availability also asks what its run would: may the
+   * caller read the target, and edit it where the task writes its result.
+   */
+  status(
+    caller: AICaller,
+    options?: { target?: AIRunTarget }
+  ): Promise<AIStatus>;
   run(caller: AICaller, args: AIRunArgs): Promise<AIRunOutput>;
   stream(caller: AICaller, args: AIRunArgs): Promise<AsyncIterable<string>>;
   embed(caller: AICaller, args: AIEmbedArgs): Promise<AIEmbedOutput>;
@@ -153,6 +170,15 @@ function noModelError(task: AITaskRef): NextlyError {
     publicMessage: `The AI task "${task.owner}/${task.name}" needs a model for the "${task.role}" role, and none is set. Choose one in the AI settings.`,
     logContext: { reason: "ai-no-model-for-role", role: task.role },
   });
+}
+
+/**
+ * What an admission learned besides its answer: whether it failed because
+ * the provider did (its status could not be read), which ends the run as
+ * failed, not refused.
+ */
+interface Admission {
+  providerFailed: boolean;
 }
 
 /** What the provider is handed for one admitted task run. */
@@ -232,6 +258,22 @@ export function createAIService(deps: AIServiceDeps): AIService {
     return answer;
   }
 
+  /**
+   * The roles with a model, as asked during an admission: a provider that
+   * cannot say is the provider failing, so the admission is marked.
+   */
+  async function admittedRoles(
+    provider: AIProvider,
+    admission: Admission
+  ): Promise<Record<AIModelRole, boolean>> {
+    try {
+      return await rolesWithModels(provider);
+    } catch (error) {
+      admission.providerFailed = true;
+      throw error;
+    }
+  }
+
   function findTask(name: AITaskName): AITaskRef {
     const task = deps
       .tasks()
@@ -252,7 +294,8 @@ export function createAIService(deps: AIServiceDeps): AIService {
    */
   async function admitTask(
     caller: AICaller,
-    args: AIRunArgs
+    args: AIRunArgs,
+    admission: Admission
   ): Promise<{ provider: AIProvider; task: AITaskRef }> {
     const provider = requireProvider();
     const task = findTask(args.task);
@@ -264,7 +307,9 @@ export function createAIService(deps: AIServiceDeps): AIService {
         await deps.authorizeTarget(caller, "update", target);
       }
     }
-    if (!(await rolesWithModels(provider))[task.role]) throw noModelError(task);
+    if (!(await admittedRoles(provider, admission))[task.role]) {
+      throw noModelError(task);
+    }
     return { provider, task };
   }
 
@@ -290,23 +335,25 @@ export function createAIService(deps: AIServiceDeps): AIService {
 
   /**
    * Admit the run, then do it, emitting one event when it ends however it
-   * ends: refused when `admit` throws (core's checks said no), failed when
-   * `work` throws (the provider did), succeeded otherwise. The error is
-   * rethrown as it came.
+   * ends: refused when `admit` throws because core's checks said no, failed
+   * when the provider failed (during the admission or in `work`), succeeded
+   * otherwise. The error is rethrown as it came.
    */
   async function withUsageEvent<A, T extends { usage: AIRunUsage }>(
     kind: AIUsageEvent["kind"],
     caller: AICaller,
     task: AITaskName | null,
     agent: AIAgent | null | undefined,
-    admit: () => Promise<A>,
+    admit: (admission: Admission) => Promise<A>,
     work: (admitted: A) => Promise<T>
   ): Promise<T> {
+    const admission: Admission = { providerFailed: false };
     let admitted: A;
     try {
-      admitted = await admit();
+      admitted = await admit(admission);
     } catch (error) {
-      await emitEnd(kind, caller, task, agent, NO_USAGE, "refused");
+      const result = admission.providerFailed ? "failed" : "refused";
+      await emitEnd(kind, caller, task, agent, NO_USAGE, result);
       throw error;
     }
     let outcome: T;
@@ -338,48 +385,69 @@ export function createAIService(deps: AIServiceDeps): AIService {
     stream: AIProviderStream
   ): AsyncIterable<string> {
     const source = stream.text[Symbol.asyncIterator]();
-    let ended = false;
-    const end = async (result: AIRunResult, usage: AIRunUsage) => {
-      ended = true;
-      await emitEnd("stream", caller, args.task, args.agent, usage, result);
+    // Handled from the moment the stream is accepted: a usage that fails
+    // while the text is still being read must not be a rejection nobody
+    // handles, which can stop the process.
+    const usage: Promise<
+      { ok: true; usage: AIRunUsage } | { ok: false; error: unknown }
+    > = stream.usage.then(
+      reported => ({ ok: true as const, usage: reported }),
+      (error: unknown) => ({ ok: false as const, error })
+    );
+    const usageOrNone = usage.then(r => (r.ok ? r.usage : NO_USAGE));
+    // One end, claimed synchronously by whichever read or stop gets there
+    // first; every later one waits for it and emits nothing.
+    let ending: Promise<void> | undefined;
+    const end = (result: AIRunResult, used: () => Promise<AIRunUsage>) => {
+      ending ??= (async () => {
+        await emitEnd(
+          "stream",
+          caller,
+          args.task,
+          args.agent,
+          await used(),
+          result
+        );
+      })();
+      return ending;
     };
     const finished = { done: true as const, value: undefined };
     const iterator: AsyncIterator<string> = {
       async next() {
-        if (ended) return finished;
+        if (ending) {
+          await ending;
+          return finished;
+        }
         let step: IteratorResult<string>;
         try {
           step = await source.next();
         } catch (error) {
-          await end("failed", await usageWithin(stream.usage));
+          await end("failed", () => usageWithin(usageOrNone));
           throw error;
+        }
+        if (ending) {
+          await ending;
+          return finished;
         }
         if (!step.done) return { done: false, value: step.value };
-        let usage: AIRunUsage;
-        try {
-          usage = await stream.usage;
-        } catch (error) {
-          await end("failed", NO_USAGE);
-          throw error;
+        const reported = await usage;
+        if (!reported.ok) {
+          await end("failed", async () => NO_USAGE);
+          throw reported.error;
         }
-        await end("succeeded", usage);
+        await end("succeeded", async () => reported.usage);
         return finished;
       },
       async return() {
-        if (ended) return finished;
-        ended = true;
-        try {
-          await source.return?.();
-        } finally {
-          await emitEnd(
-            "stream",
-            caller,
-            args.task,
-            args.agent,
-            await usageWithin(stream.usage),
-            "cancelled"
-          );
+        if (ending) {
+          await ending;
+          return finished;
         }
+        const stopped = end("cancelled", async () => {
+          await source.return?.();
+          return usageWithin(usageOrNone);
+        });
+        await stopped;
         return finished;
       },
     };
@@ -387,7 +455,7 @@ export function createAIService(deps: AIServiceDeps): AIService {
   }
 
   return {
-    async status(caller) {
+    async status(caller, options = {}) {
       const reason = notConfigured();
       // Not resolved at all while AI is off or absent: resolving runs the
       // provider's factory, and a broken provider must not fail the status.
@@ -401,6 +469,18 @@ export function createAIService(deps: AIServiceDeps): AIService {
         bulk: await holds(caller, "bulk"),
         manage: await holds(caller, "manage"),
       };
+      // What the caller may do to the target, asked once for every task, and
+      // only of a checked caller: trusted code may do anything.
+      const target = options.target;
+      const may =
+        target === undefined || caller === null
+          ? { read: true, update: true }
+          : {
+              read: await deps.mayTarget(caller, "read", target),
+              update: deps.tasks().some(t => t.writesToTarget)
+                ? await deps.mayTarget(caller, "update", target)
+                : true,
+            };
       const tasks = deps.tasks().map((task): AITaskStatus => {
         const base = { owner: task.owner, name: task.name, role: task.role };
         if (reason !== undefined) {
@@ -412,6 +492,19 @@ export function createAIService(deps: AIServiceDeps): AIService {
             available: false,
             reason: "missing-permission",
             permission: AI_PERMISSIONS.use.slug,
+          };
+        }
+        const lacking = !may.read
+          ? "read"
+          : task.writesToTarget && !may.update
+            ? "update"
+            : undefined;
+        if (lacking !== undefined && target !== undefined) {
+          return {
+            ...base,
+            available: false,
+            reason: "missing-permission",
+            permission: `${lacking}-${target.collection}`,
           };
         }
         if (!roles[task.role]) {
@@ -434,16 +527,17 @@ export function createAIService(deps: AIServiceDeps): AIService {
         caller,
         args.task,
         args.agent,
-        () => admitTask(caller, args),
+        admission => admitTask(caller, args, admission),
         ({ provider, task }) =>
           provider.run(providerRequest(caller, args, task))
       );
     },
 
     async stream(caller, args) {
+      const admission: Admission = { providerFailed: false };
       let admitted: { provider: AIProvider; task: AITaskRef };
       try {
-        admitted = await admitTask(caller, args);
+        admitted = await admitTask(caller, args, admission);
       } catch (error) {
         await emitEnd(
           "stream",
@@ -451,7 +545,7 @@ export function createAIService(deps: AIServiceDeps): AIService {
           args.task,
           args.agent,
           NO_USAGE,
-          "refused"
+          admission.providerFailed ? "failed" : "refused"
         );
         throw error;
       }
@@ -480,10 +574,10 @@ export function createAIService(deps: AIServiceDeps): AIService {
         caller,
         null,
         args.agent,
-        async () => {
+        async admission => {
           const provider = requireProvider();
           await requirePermission(caller, "use");
-          if (!(await rolesWithModels(provider)).embedding) {
+          if (!(await admittedRoles(provider, admission)).embedding) {
             throw NextlyError.serviceUnavailable({
               publicMessage:
                 'Embedding text needs a model for the "embedding" role, and none is set. Choose one in the AI settings.',

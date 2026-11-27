@@ -126,6 +126,8 @@ function setup(options: Setup = {}) {
       }
     },
     authorizeTarget,
+    mayTarget: async (_caller, action, target) =>
+      (options.targets ?? []).includes(`${action}-${target.collection}`),
     emit: async event => {
       events.push(event);
     },
@@ -494,6 +496,81 @@ function controlledStream() {
   return { provider, settle, fail, stopped };
 }
 
+describe("a task's availability for one piece of content", () => {
+  it("is judged as its run would be: read the target, and edit it where the result goes", async () => {
+    const { service } = setup({
+      provider: stubProvider(),
+      targets: ["read-posts"],
+    });
+    const status = await service.status(person(), {
+      target: { collection: "posts", id: "p1" },
+    });
+    expect(status.tasks).toEqual([
+      {
+        owner: "@nextlyhq/ai",
+        name: "alt-text",
+        role: "vision",
+        available: false,
+        reason: "missing-permission",
+        permission: "update-posts",
+      },
+      {
+        owner: "plugin-seo",
+        name: "summary",
+        role: "writer",
+        available: true,
+      },
+    ]);
+  });
+
+  it("names the read a caller lacks", async () => {
+    const { service } = setup({ provider: stubProvider(), targets: [] });
+    const status = await service.status(person(), {
+      target: { collection: "posts" },
+    });
+    expect(status.tasks.map(t => t.permission)).toEqual([
+      "read-posts",
+      "read-posts",
+    ]);
+  });
+
+  it("asks nothing of the content when no target is named", async () => {
+    const { service } = setup({ provider: stubProvider(), targets: [] });
+    const status = await service.status(person());
+    expect(status.tasks.every(t => t.available)).toBe(true);
+  });
+});
+
+describe("a provider that fails while a run is admitted", () => {
+  it("records the run as failed, not refused, and passes its error on", async () => {
+    const provider = stubProvider();
+    provider.status.mockImplementation(() => {
+      throw new Error("provider down");
+    });
+    const { service, events } = setup({ provider });
+    await expect(
+      service.run(person(), {
+        task: { owner: "plugin-seo", name: "summary" },
+        input: "x",
+      })
+    ).rejects.toThrow("provider down");
+    await expect(
+      service.stream(person(), {
+        task: { owner: "plugin-seo", name: "summary" },
+        input: "x",
+      })
+    ).rejects.toThrow("provider down");
+    await expect(service.embed(person(), { texts: ["x"] })).rejects.toThrow(
+      "provider down"
+    );
+    expect(events.map(e => [e.kind, e.result])).toEqual([
+      ["run", "failed"],
+      ["stream", "failed"],
+      ["embed", "failed"],
+    ]);
+  });
+});
+
 describe("one usage event per stream, however it ends", () => {
   const summary = {
     task: { owner: "plugin-seo", name: "summary" },
@@ -556,6 +633,54 @@ describe("one usage event per stream, however it ends", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("handles a usage that fails while the text is still being read", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const { provider, fail } = controlledStream();
+      const { service, events } = setup({ provider });
+      const iterator = (await service.stream(person(), summary))[
+        Symbol.asyncIterator
+      ]();
+      await iterator.next();
+      fail(new Error("usage lost"));
+      // Long enough for Node to report a rejection nobody handles.
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(unhandled).not.toHaveBeenCalled();
+      await iterator.next();
+      await expect(iterator.next()).rejects.toThrow("usage lost");
+      expect(events.map(e => e.result)).toEqual(["failed"]);
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("records one event when the last read and a stop race", async () => {
+    const { provider, settle } = controlledStream();
+    const { service, events } = setup({ provider });
+    settle(USAGE);
+    const iterator = (await service.stream(person(), summary))[
+      Symbol.asyncIterator
+    ]();
+    await iterator.next();
+    await iterator.next();
+    await Promise.all([iterator.next(), iterator.return?.()]);
+    expect(events).toHaveLength(1);
+  });
+
+  it("records one event when two reads reach the end together", async () => {
+    const { provider, settle } = controlledStream();
+    const { service, events } = setup({ provider });
+    settle(USAGE);
+    const iterator = (await service.stream(person(), summary))[
+      Symbol.asyncIterator
+    ]();
+    await iterator.next();
+    await iterator.next();
+    await Promise.all([iterator.next(), iterator.next()]);
+    expect(events.map(e => e.result)).toEqual(["succeeded"]);
   });
 
   it("records nothing twice when the reader stops after the end", async () => {
@@ -667,6 +792,7 @@ describe("the usage-event hook", () => {
       tasks: () => [SUMMARY],
       holds: async () => true,
       requirePermission: async () => undefined,
+      mayTarget: async () => true,
       authorizeTarget: async () => undefined,
       emit: emitAIUsage,
       now: () => new Date(),

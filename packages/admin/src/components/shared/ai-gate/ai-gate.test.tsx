@@ -10,10 +10,23 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AIStatus } from "nextly/runtime";
 
-const answer = vi.hoisted(() => ({ status: undefined as unknown }));
+const answer = vi.hoisted(() => ({
+  status: undefined as unknown,
+  // The status for one piece of content, by its collection, where a test
+  // gives one; asked targets are recorded.
+  byTarget: new Map<string, unknown>(),
+  asked: [] as unknown[],
+}));
 
 vi.mock("@admin/services/aiApi", () => ({
-  aiApi: { getAIStatus: async () => answer.status },
+  aiApi: {
+    getAIStatus: async (target?: { collection: string }) => {
+      answer.asked.push(target);
+      return target === undefined
+        ? answer.status
+        : (answer.byTarget.get(target.collection) ?? answer.status);
+    },
+  },
 }));
 
 import { useAIStatus } from "@admin/hooks/queries/useAIStatus";
@@ -57,6 +70,7 @@ function StatusArrived() {
 
 function renderGate(status: AIStatus, gate: ReactNode) {
   answer.status = status;
+  answer.asked.length = 0;
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -157,5 +171,44 @@ describe("the AI gate", () => {
     );
     await screen.findByText("status arrived");
     expect(screen.queryByRole("button", { name: "Run on all" })).toBeNull();
+  });
+
+  it("asks about the content a control acts on, and draws it only where the task is available there", async () => {
+    answer.byTarget.set("posts", {
+      ...CONFIGURED,
+      tasks: [
+        {
+          owner: "@nextlyhq/ai",
+          name: "alt-text",
+          role: "vision",
+          available: false,
+          reason: "missing-permission",
+          permission: "update-posts",
+        },
+      ],
+    });
+    try {
+      renderGate(
+        CONFIGURED,
+        <>
+          <AIGate
+            task={{ owner: "@nextlyhq/ai", name: "alt-text" }}
+            target={{ collection: "posts", id: "p1" }}
+          >
+            <button type="button">On this post</button>
+          </AIGate>
+          <AIGate task={{ owner: "@nextlyhq/ai", name: "alt-text" }}>
+            <button type="button">Anywhere</button>
+          </AIGate>
+        </>
+      );
+      expect(
+        await screen.findByRole("button", { name: "Anywhere" })
+      ).toBeTruthy();
+      expect(answer.asked).toContainEqual({ collection: "posts", id: "p1" });
+      expect(screen.queryByRole("button", { name: "On this post" })).toBeNull();
+    } finally {
+      answer.byTarget.clear();
+    }
   });
 });
