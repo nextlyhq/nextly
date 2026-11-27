@@ -98,7 +98,7 @@ export function effectiveEntryStatus(
 /**
  * Whether the language being edited has no content of its own, read from the
  * same overview {@link effectiveEntryStatus} reads, so the panel's Status
- * sentence and the Languages panel's "not translated" agree. False where the
+ * sentence and the Languages menu's "not started" agree. False where the
  * overview was not read: no claim is made about a language nobody asked about.
  */
 export function editedLanguageUntranslated(

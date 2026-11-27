@@ -852,6 +852,9 @@ export default function EditEntryPage({
           <EntryForm
             shownCopy={shownCopy}
             smartPublish={publishing.smartPublish}
+            onPublishOthers={
+              removedFromCode ? undefined : publishing.publishOthers
+            }
             revealOutline={<EditEntryPageSkeleton />}
             revealWaiting={partsStartup.pending}
             /* A standing fact about the whole document, so a band across the
@@ -859,7 +862,7 @@ export default function EditEntryPage({
              Inside the editor rather than above it: the editor's row pulls up
              over the page's top inset, and a banner placed before it slid
              under the sticky header. It does not touch the per-language
-             staleness markers in the language panel — those answer a different
+             staleness marks in the Languages menu — those answer a different
              question, and a stale translation inside a scheduled release is
              exactly where an editor needs both. */
             documentBanner={

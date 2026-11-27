@@ -55,6 +55,29 @@ export function defaultPartsChoice(args: {
   };
 }
 
+/**
+ * The choice "Publish other languages…" opens with: every language but the one on screen that
+ * holds a saved change. A draft is not chosen, as nothing of it has been put live before; nor are
+ * the shared fields, which are no language's and are asked for by themselves.
+ */
+export function otherLanguagesChoice(args: {
+  languages: readonly string[];
+  /** The language on screen. */
+  onScreen: string | undefined;
+  overview:
+    | Readonly<Record<string, { pendingChange?: boolean } | undefined>>
+    | undefined;
+}): PartsChoice {
+  return {
+    locales: args.languages.filter(
+      language =>
+        language !== args.onScreen &&
+        args.overview?.[language]?.pendingChange === true
+    ),
+    shared: false,
+  };
+}
+
 /** The choice with `locale` chosen or not, kept in the app's order of `languages`. */
 export function withLanguage(
   choice: PartsChoice,

@@ -1,11 +1,7 @@
 /**
  * How far along a set of translations is, as a bar.
  *
- * Two surfaces show one: the language panel counts LANGUAGES against the stored
- * translation map, and translation mode counts FIELDS against the form's live
- * values. Different questions, same drawing — and a second copy of the drawing
- * would drift in height, colour or rounding while both claimed to mean the same
- * thing.
+ * Translation mode shows one, counting FIELDS against the form's live values.
  *
  * `aria-hidden` deliberately: every caller states the same figure in words
  * beside it, and a bar announced as well would say it twice.

@@ -9,7 +9,7 @@
  */
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, waitFor, within } from "@admin/__tests__/utils";
 import type {
@@ -39,7 +39,8 @@ vi.mock("@admin/services/entryApi", async importOriginal => {
     },
   };
 });
-vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
+const can = vi.hoisted(() => ({ publish: true }));
+vi.mock("@admin/hooks/useCan", () => ({ useCan: () => can.publish }));
 // No workflow holds the document.
 vi.mock("@admin/hooks/queries/useReviewState", async importOriginal => ({
   ...(await importOriginal<
@@ -135,6 +136,13 @@ function Page({
         }
       >
         Publish
+      </button>
+      <button
+        type="button"
+        disabled={publishing.publishOthers === undefined}
+        onClick={() => publishing.publishOthers?.()}
+      >
+        Publish others
       </button>
       {publishing.notice}
       {publishing.dialog}
@@ -337,5 +345,54 @@ describe("publishing from an editor's page", () => {
     render(<Page document={post()} translated={false} />);
 
     expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+  });
+});
+
+describe("publishing other languages", () => {
+  afterEach(() => {
+    can.publish = true;
+  });
+
+  it("opens the choice at the other languages that hold changes", async () => {
+    serve(SPANISH_HOLDS);
+    render(
+      <Page
+        document={post({
+          _translations: {
+            en: { status: "published", pendingChange: true },
+            es: { status: "published", pendingChange: true },
+          },
+        })}
+      />
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Publish others" })
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Choose what to publish",
+    });
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Spanish" })
+    ).toBeChecked();
+    expect(
+      within(dialog).getByRole("checkbox", { name: "English" })
+    ).not.toBeChecked();
+  });
+
+  it("is not offered to someone who may not publish, nor without other languages", () => {
+    serve(SPANISH_LIVE);
+    const { rerender } = render(<Page document={post()} translated={false} />);
+    const others = () => screen.getByRole("button", { name: "Publish others" });
+    expect(others()).toBeDisabled();
+
+    // Two languages and the right to publish are what it takes.
+    rerender(<Page document={post()} />);
+    expect(others()).toBeEnabled();
+
+    can.publish = false;
+    rerender(<Page document={post({ title: "Read again" })} />);
+    expect(others()).toBeDisabled();
   });
 });

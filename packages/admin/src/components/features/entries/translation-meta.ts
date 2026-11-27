@@ -3,7 +3,7 @@
  *
  * The backend attaches this map per document when a read asks for
  * `?translation-status=1`. Several surfaces interpret it — the header's
- * language control, the language panel, the list's completeness badge — and
+ * history, the Languages menu, the list's chips — and
  * each needs the same two things: the shape of an entry, and how many
  * languages are translated.
  *
@@ -119,51 +119,6 @@ export const LANGUAGE_STATES = [
 ] as const;
 
 export type LanguageState = (typeof LANGUAGE_STATES)[number];
-
-/**
- * Resolve a locale's state from its translation meta.
- *
- * Lives here rather than beside any one control because four surfaces now read
- * it — the header's language control, the editor's language panel, its menu,
- * and the list's per-language dots — and a second spelling of this rule would
- * let two of them describe the same language differently.
- */
-export function languageState(
-  meta: LocaleTranslationMeta | undefined
-): LanguageState {
-  if (!meta || !meta.translated) return "missing";
-  if (meta.status === "published") return "published";
-  if (meta.status === "draft") return "draft";
-  return "translated";
-}
-
-/**
- * How a language's state reads to a person, including whether work is waiting.
- *
- * The pending change is appended rather than replacing the state: the language
- * IS still published, and saying only "unpublished changes" would suggest
- * nothing of it is live. Both facts matter and they are different facts.
- *
- * One function because four surfaces describe a language — the header control,
- * this panel, its menu, and the list's dots — and a second phrasing would let
- * two of them describe the same language differently.
- */
-export function languageStateLabel(
-  state: LanguageState,
-  qualifiers: { pendingChange?: boolean; stale?: boolean } = {}
-): string {
-  // An OBJECT rather than a second positional flag, now that there are two of these and more are
-  // plausible. Positional booleans read identically at the call site whichever one you meant, so
-  // the second one to arrive is the one that gets passed in the first one's place -- and the
-  // result is a label that is wrong in a way nothing type-checks.
-  //
-  // Appended in a fixed order and never substituted: each qualifier is a separate fact about the
-  // same language, and the state itself remains what the language IS.
-  const parts = [LANGUAGE_STATE_LABEL[state]];
-  if (qualifiers.stale) parts.push("source changed since");
-  if (qualifiers.pendingChange) parts.push("unpublished changes");
-  return parts.join(" · ");
-}
 
 export const LANGUAGE_STATE_LABEL: Record<LanguageState, string> = {
   missing: "not translated",

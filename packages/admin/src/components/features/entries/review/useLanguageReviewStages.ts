@@ -2,7 +2,7 @@
 
 /**
  * Each language's stage in the workflow that holds a document's publishing,
- * by language code, for the Languages panel to say beside each status. Read
+ * by language code, for the Languages menu to say beside each status. Read
  * from the review state every other surface reads, so it costs no request of
  * its own. Undefined where no workflow is attached, or before the document
  * exists.

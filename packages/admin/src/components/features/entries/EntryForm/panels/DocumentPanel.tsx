@@ -7,7 +7,6 @@ import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { containedContributionEvents } from "@admin/components/shared/target-slot/IsolatedContribution";
 import { PlaceContributionFallback } from "@admin/components/shared/target-slot/PlaceContributionFallback";
 import { Skeleton } from "@admin/components/ui";
-import { useLocalization } from "@admin/hooks/useLocalization";
 import type {
   DocumentPanelSectionProps,
   SidebarSectionProps,
@@ -20,10 +19,7 @@ import type {
 import { cn } from "@admin/lib/utils";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 
-import { useEntryLocale } from "../../EntryLocaleContext";
-import { DocumentLanguagePanel, hasLanguages } from "../../LanguagePanel";
 import { ReviewSection } from "../../review/ReviewSection";
-import { useLanguageReviewStages } from "../../review/useLanguageReviewStages";
 import type { EntryDetails } from "../entry-details-read";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
@@ -39,17 +35,17 @@ import {
 import { StatusSection, type PanelDocumentStatus } from "./StatusSection";
 
 // The document panel's sections, in the one order both editors draw them:
-// Status, then Publishing, then Language, then Details, then any a plugin
-// adds for the collection. Each section decides
-// whether it applies and draws nothing where it does not, so a document
-// without a lifecycle or languages reads the sections it has, in that order.
+// Status, then Publishing, then Details, then any a plugin adds for the
+// collection. Each section decides whether it applies and draws nothing where
+// it does not, so a document without a lifecycle reads the sections it has, in
+// that order. A document's languages are the header's Languages menu.
 // A side panel section a plugin declares at an edit page's place is drawn
 // where the server placed it among the built-in four (`panelOrder`, from
 // `placedPanelOrder`), and a built-in it replaces is not drawn.
 //
 // A Single's panel says more about the document, since a Single rarely has
 // a lifecycle or languages to fill it: what this is, first; when it was last
-// changed and by whom, after the lifecycle and language sections and before
+// changed and by whom, after the lifecycle sections and before
 // any plugin's; and Details drawn as "For developers", in Details' own
 // place, so a section anchored to Details stays beside it.
 
@@ -69,7 +65,7 @@ export interface DocumentPanelProps {
   /** Who made and changed the document, where the server says; Details names them. */
   details?: Pick<EntryDetails, "createdBy" | "updatedBy" | "updatedAt">;
   /** Whether the collection has the Draft/Published feature enabled, which
-   *  the Status and Publishing sections and the language panel read. */
+   *  the Status and Publishing sections read. */
   hasStatus: boolean;
   /**
    * The status in the language being edited, as the document bar's pill reads
@@ -81,7 +77,7 @@ export interface DocumentPanelProps {
    * Absent, the section is not drawn.
    */
   releaseDocument?: ReleaseDocumentRef;
-  /** The active editing locale, forwarded to the language panel. */
+  /** The active editing locale, which the Review section's steps are for. */
   locale?: string;
   /**
    * Why the Review section's steps wait at this moment, as the editor holds
@@ -89,12 +85,6 @@ export interface DocumentPanelProps {
    * its way, a past version on screen. Absent, nothing holds them.
    */
   reviewHold?: string | undefined;
-  /** Switch the editor to a language, forwarded to the language panel. */
-  onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
-  /** Withholds the panel's mutating actions (reading a past version). */
-  actionsDisabled?: boolean;
-  /** Withholds opening another language; the same as `actionsDisabled` unless given. */
-  navigationDisabled?: boolean;
   /**
    * Sections plugins add for this collection, drawn after Details under the
    * heading the panel draws for its own sections.
@@ -143,32 +133,14 @@ export function DocumentPanel({
   releaseDocument,
   locale,
   reviewHold,
-  onLocaleChange,
-  actionsDisabled = false,
-  navigationDisabled = actionsDisabled,
   pluginSections = [],
   pluginSectionProps,
   panelOrder = BUILT_IN_ORDER,
   placedSectionProps = pluginSectionProps,
   single,
 }: DocumentPanelProps): React.ReactElement | null {
-  // Each language's workflow stage, read before the panel decides whether it
-  // draws anything, as every hook here must be.
-  const reviewStages = useLanguageReviewStages(
-    mode === "create" ? undefined : releaseDocument
-  );
   // Nothing to say until the document exists.
   if (mode === "create") return null;
-
-  // Per-language translation-status pills. Present only when the entry was
-  // fetched with `?translation-status=1` on a localized collection; inert otherwise.
-  const translations = entry?._translations as
-    | Record<string, { translated: boolean; status?: string }>
-    | undefined;
-
-  // Whether the document's shared fields hold unpublished changes, which the
-  // language section says.
-  const sharedChangesPending = entry?._sharedChangesPending === true;
 
   // Each built-in section by the name the server places it under.
   const builtIn = (name: string): React.ReactNode => {
@@ -184,20 +156,9 @@ export function DocumentPanel({
           <PublishingSection document={releaseDocument} />
         ) : null;
       case "language":
-        return (
-          <LanguageSection>
-            <DocumentLanguagePanel
-              translations={translations}
-              locale={locale}
-              onLocaleChange={onLocaleChange}
-              hasStatus={hasStatus}
-              actionsDisabled={actionsDisabled}
-              navigationDisabled={navigationDisabled}
-              sharedChangesPending={sharedChangesPending}
-              {...(reviewStages === undefined ? {} : { reviewStages })}
-            />
-          </LanguageSection>
-        );
+        // The header's Languages menu says this. The name stays in the order,
+        // so a section placed by it keeps its place.
+        return null;
       case "details":
         return (
           about.developers ?? (
@@ -454,27 +415,5 @@ export function PanelSectionsAboveForm({
         />
       ))}
     </div>
-  );
-}
-
-/**
- * The Language section, where the document has languages to show: the
- * language panel as the editor has always drawn it, one row per language with
- * its state and the actions that make sense of it. The panel's own header
- * names it on screen, so the section's heading is said only to a screen reader.
- */
-function LanguageSection({ children }: { children: React.ReactNode }) {
-  const { enabled, locales } = useLocalization();
-  const { collectionLocalized } = useEntryLocale();
-  // The panel's own rule for when it draws anything, so the section and its
-  // content cannot disagree about an empty section. Without languages the
-  // panel is still mounted, as it always has been, and draws nothing itself.
-  if (!hasLanguages(enabled, collectionLocalized, locales.length)) {
-    return <>{children}</>;
-  }
-  return (
-    <PanelSection title="Language" titleHidden>
-      {children}
-    </PanelSection>
   );
 }

@@ -137,69 +137,51 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("the Single editor's document panel", () => {
-  // The docked rail carries the language panel whenever the panel is docked,
-  // so the Single's pending shared change is said there too, not only in the
-  // inline panel the docked layout hides.
-  it("says in the docked panel while the Single's shared fields hold unpublished changes", () => {
+  it("hands the bar its languages, and draws none beside the fields", () => {
     siteLocales.list = [
       { code: "en", label: "English" },
       { code: "de", label: "German" },
     ];
-    const withShared = (pending: boolean) =>
-      ({
-        id: "s1",
-        title: "Hello",
-        status: "published",
-        _sharedChangesPending: pending,
-        _translations: {
-          en: { translated: true, status: "published" },
-          de: { translated: true, status: "published" },
-        },
-      }) as never;
-    const { unmount } = render(
-      <SingleForm
-        schema={schema}
-        document={withShared(true)}
-        locale="de"
-        onSubmit={vi.fn()}
-      />
-    );
-    expect(
-      within(dockedPanel()!).getByRole("status", {
-        name: "Shared changes pending",
-      })
-    ).toBeInTheDocument();
-    // And the inline panel, kept in the page while the docked layout hides
-    // it, says it too: both read the one answer.
-    expect(
-      screen.getAllByRole("status", {
-        name: "Shared changes pending",
-        hidden: true,
-      })
-    ).toHaveLength(2);
-    unmount();
-
-    // The control: the same docked panel without a pending shared change.
+    const onPublishOthers = vi.fn();
     render(
       <SingleForm
         schema={schema}
-        document={withShared(false)}
+        document={document}
         locale="de"
+        onSubmit={vi.fn()}
+        onPublishOthers={onPublishOthers}
+      />
+    );
+    const control = lastBar().languagesControl as React.ReactElement<
+      Record<string, unknown>
+    >;
+    expect(control.props).toMatchObject({
+      document,
+      hasStatus: true,
+      editorPath: "/admin/singles/landing-page",
+      locale: "de",
+      translating: false,
+      onPublishOthers,
+    });
+    expect(
+      within(dockedPanel()!).queryByRole("region", { name: "Language" })
+    ).toBeNull();
+  });
+
+  it("hands the bar no languages control for a Single that is not translated", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+    render(
+      <SingleForm
+        schema={Object.assign({}, schema, { localized: false }) as never}
+        document={document}
         onSubmit={vi.fn()}
       />
     );
-    expect(dockedPanel()).toBeInTheDocument();
-    expect(
-      within(dockedPanel()!).queryByRole("status", {
-        name: "Shared changes pending",
-      })
-    ).toBeNull();
-    expect(
-      screen.queryAllByRole("status", {
-        name: "Shared changes pending",
-        hidden: true,
-      })
-    ).toHaveLength(0);
+    // Not one that draws nothing: the bar reads that it has one.
+    expect(lastBar().languagesControl).toBeUndefined();
   });
 
   it("reads what it is, Status, Last changed and For developers beside the fields, addressing the Single's releases by its slug", () => {

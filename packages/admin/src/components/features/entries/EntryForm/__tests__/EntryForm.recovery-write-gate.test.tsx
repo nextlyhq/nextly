@@ -13,6 +13,7 @@ import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { cleanup, createTestQueryClient } from "@admin/__tests__/utils";
+import type { LanguagesHold } from "@admin/components/features/languages-menu/document-languages";
 import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 
 const {
@@ -20,16 +21,19 @@ const {
   updateOptions,
   autosaveOffer,
   savedCount,
-  panelHolds,
+  holds,
+  siteLocales,
   update,
   answer,
 } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
   // How many saves the editor last reported, which its preview follows.
   savedCount: { current: 0 },
-  // What each language panel drawn was told to hold, its actions and the move
-  // to another language, in the order they were drawn.
-  panelHolds: { current: [] as { actions: boolean; navigation: boolean }[] },
+  // What the Languages menu drawn was told holds the language on screen, in
+  // the order it was drawn.
+  holds: { current: [] as LanguagesHold[] },
+  // The site's languages; none unless a case configures them.
+  siteLocales: { list: [] as { code: string; label: string }[] },
   // The server's answer on changing the entry in the language on screen.
   answer: { current: "allowed" as "allowed" | "switching" },
   // The entry's update, where a save leaves the editor.
@@ -64,24 +68,12 @@ vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
     };
   },
 }));
-// The language panels, inline and in the rail, as what the editor hands them.
+// The Languages menu, as what the editor hands it.
 vi.mock(
-  "@admin/components/features/entries/LanguagePanel",
-  async importOriginal => ({
-    ...(await importOriginal<
-      typeof import("@admin/components/features/entries/LanguagePanel")
-    >()),
-    DocumentLanguagePanel: ({
-      actionsDisabled,
-      navigationDisabled,
-    }: {
-      actionsDisabled?: boolean;
-      navigationDisabled?: boolean;
-    }) => {
-      panelHolds.current.push({
-        actions: actionsDisabled === true,
-        navigation: navigationDisabled === true,
-      });
+  "@admin/components/features/languages-menu/DocumentLanguagesButton",
+  () => ({
+    DocumentLanguagesButton: ({ hold }: { hold: LanguagesHold }) => {
+      holds.current.push(hold);
       return null;
     },
   })
@@ -95,7 +87,7 @@ vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     enabled: false,
-    locales: [],
+    locales: siteLocales.list,
     defaultLocale: "en",
     fallback: true,
     getLocale: () => undefined,
@@ -128,7 +120,16 @@ const collection = {
     { name: "summary", type: "text", label: "Summary" },
   ],
 } as never;
+/** The same collection, its entries translated. */
+const translated = Object.assign({}, collection, { localized: true }) as never;
 const entry = { id: "e1", title: "Hello", status: "published" } as never;
+
+const NOTHING_HELD: LanguagesHold = {
+  viewingPastVersion: false,
+  recovering: false,
+  changeAwaiting: false,
+  documentHeld: false,
+};
 
 function lockedBy(status: "held-by-me" | "held-by-other") {
   useDocumentLock.mockReturnValue({
@@ -151,7 +152,8 @@ beforeEach(() => {
   updateOptions.current = undefined;
   autosaveOffer.current = null;
   savedCount.current = 0;
-  panelHolds.current = [];
+  holds.current = [];
+  siteLocales.list = [];
 });
 
 afterEach(() => {
@@ -370,16 +372,18 @@ describe("the entry editor's recovery from a refused publish", () => {
     expect(savedCount.current).toBe(2);
   });
 
-  it("holds the language panel's actions and the move to another language while the recovery runs", async () => {
+  it("holds the move to another language while the recovery runs", async () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
     lockedBy("held-by-me");
-    render(<EntryForm collection={collection} entry={entry} mode="edit" />, {
+    render(<EntryForm collection={translated} entry={entry} mode="edit" />, {
       wrapper: Providers,
     });
-    // The author's own entry: both are offered.
-    expect(panelHolds.current.length).toBeGreaterThan(0);
-    expect(
-      panelHolds.current.some(held => held.actions || held.navigation)
-    ).toBe(false);
+    // The author's own entry: nothing holds it.
+    expect(holds.current.length).toBeGreaterThan(0);
+    expect(holds.current.at(-1)).toEqual(NOTHING_HELD);
 
     let finishTake: () => void = () => {};
     const take = vi.fn(
@@ -388,7 +392,7 @@ describe("the entry editor's recovery from a refused publish", () => {
           finishTake = resolve;
         })
     );
-    panelHolds.current = [];
+    holds.current = [];
     let running: Promise<unknown> | undefined;
     act(() => {
       running = updateOptions.current?.refusedForm?.recover(take);
@@ -397,21 +401,51 @@ describe("the entry editor's recovery from a refused publish", () => {
       await vi.waitFor(() => expect(take).toHaveBeenCalled());
     });
 
-    // Every panel drawn from the action on holds both.
-    expect(panelHolds.current.length).toBeGreaterThan(0);
-    expect(
-      panelHolds.current.every(held => held.actions && held.navigation)
-    ).toBe(true);
+    // Every menu drawn from the action on is held.
+    expect(holds.current.length).toBeGreaterThan(0);
+    expect(holds.current.every(hold => hold.recovering)).toBe(true);
 
     await act(async () => {
       finishTake();
       await running;
     });
     // Let go with the rest of the editor.
-    expect(panelHolds.current.at(-1)).toEqual({
-      actions: false,
-      navigation: false,
+    expect(holds.current.at(-1)).toEqual(NOTHING_HELD);
+  });
+
+  it("holds the move to another language while a colleague holds the entry", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+    lockedBy("held-by-other");
+    render(<EntryForm collection={translated} entry={entry} mode="edit" />, {
+      wrapper: Providers,
     });
+    expect(holds.current.at(-1)).toEqual({
+      ...NOTHING_HELD,
+      documentHeld: true,
+    });
+  });
+
+  it("offers no languages for an entry that is not translated", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+    lockedBy("held-by-me");
+    const { unmount } = render(
+      <EntryForm collection={collection} entry={entry} mode="edit" />,
+      { wrapper: Providers }
+    );
+    expect(holds.current).toEqual([]);
+    unmount();
+
+    // The same entry, where its collection is translated.
+    render(<EntryForm collection={translated} entry={entry} mode="edit" />, {
+      wrapper: Providers,
+    });
+    expect(holds.current.length).toBeGreaterThan(0);
   });
 
   it("keeps the entry's claim and its editor through the recovery", async () => {

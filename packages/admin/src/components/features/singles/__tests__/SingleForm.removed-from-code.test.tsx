@@ -1,7 +1,7 @@
 /**
  * The Single editor of a Single removed from code offers no control that would
  * write, for a user holding every permission: no Save or Publish, no
- * Unpublish, no page-contributed action, the panel's actions held, its fields
+ * Unpublish, no page-contributed action, its fields
  * read-only and no claim made on the document. Its history and a
  * preview stay. The notice is the page's document banner; the lock strip adds
  * no reader's sentence of its own.
@@ -17,29 +17,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { cleanup, createTestQueryClient, screen } from "@admin/__tests__/utils";
 
-const { useDocumentLock, sidebarProps } = vi.hoisted(() => ({
+const { useDocumentLock, menuProps, siteLocales, reader } = vi.hoisted(() => ({
+  // Whether the person may change it, and who has it, as a reader is told.
+  reader: {
+    update: "allowed" as "allowed" | "refused",
+    holder: null as unknown,
+  },
   useDocumentLock: vi.fn(),
-  sidebarProps: vi.fn(),
+  menuProps: vi.fn(),
+  // The site's languages; none unless a case configures them.
+  siteLocales: { list: [] as { code: string; label: string }[] },
 }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
-// Drawn as it is, its props recorded: the panel's holds are handed down here.
+vi.mock("@admin/hooks/queries/useDocumentLockHolder", () => ({
+  useDocumentLockHolder: () => reader.holder,
+}));
+// The Languages menu, as what the editor hands it.
 vi.mock(
-  "@admin/components/features/entries/EntryForm/EntryFormSidebar",
-  async importOriginal => {
-    const actual =
-      await importOriginal<
-        typeof import("@admin/components/features/entries/EntryForm/EntryFormSidebar")
-      >();
-    return {
-      EntryFormSidebar: (
-        props: Parameters<typeof actual.EntryFormSidebar>[0]
-      ) => {
-        sidebarProps(props);
-        return actual.EntryFormSidebar(props);
-      },
-    };
-  }
+  "@admin/components/features/languages-menu/DocumentLanguagesButton",
+  () => ({
+    DocumentLanguagesButton: (props: { hold: unknown }) => {
+      menuProps(props);
+      return null;
+    },
+  })
 );
 vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
   useAutosaveRecovery: () => ({
@@ -58,7 +60,7 @@ vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     enabled: false,
-    locales: [],
+    locales: siteLocales.list,
     defaultLocale: "en",
     fallback: true,
     getLocale: () => undefined,
@@ -72,7 +74,7 @@ vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
 }));
 vi.mock("@admin/hooks/useUpdateAnswer", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/hooks/useUpdateAnswer")>()),
-  useUpdateAnswer: () => "allowed",
+  useUpdateAnswer: () => reader.update,
 }));
 
 import {
@@ -89,11 +91,12 @@ function Providers({ children }: { children: ReactNode }): ReactElement {
   );
 }
 
-function banner(removed: boolean): SingleSchema {
+function banner(removed: boolean, localized: boolean): SingleSchema {
   return {
     slug: "banner",
     label: "Banner",
     status: true,
+    localized,
     fields: [
       { type: "text", name: "title", label: "Title" },
       { type: "text", name: "headline", label: "Headline" },
@@ -147,14 +150,19 @@ async function menuItems(): Promise<string[]> {
   return [...buttons, ...items.map(item => item.textContent ?? "")];
 }
 
-function renderEditor(removed: boolean) {
+function renderEditor(
+  removed: boolean,
+  localized = false,
+  onPublishOthers?: () => void
+) {
   render(
     <SingleForm
-      schema={banner(removed)}
+      schema={banner(removed, localized)}
       document={document}
       onSubmit={vi.fn()}
       documentBanner={<p>the page's banner</p>}
       documentActions={[releaseAction]}
+      onPublishOthers={onPublishOthers}
     />,
     { wrapper: Providers }
   );
@@ -162,6 +170,9 @@ function renderEditor(removed: boolean) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  siteLocales.list = [];
+  reader.update = "allowed";
+  reader.holder = null;
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
     takeOver: vi.fn(),
@@ -185,13 +196,21 @@ describe("the Single editor of a Single removed from code", () => {
     expect(items).toContain("History");
   });
 
-  it("holds the panel's actions, and still lets its reader open the other languages", () => {
-    renderEditor(true);
+  it("still lets its reader open the other languages", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+    renderEditor(true, true);
 
-    expect(sidebarProps).toHaveBeenLastCalledWith(
+    expect(menuProps).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        actionsDisabled: true,
-        navigationDisabled: false,
+        hold: {
+          viewingPastVersion: false,
+          recovering: false,
+          changeAwaiting: false,
+          documentHeld: false,
+        },
       })
     );
   });
@@ -219,10 +238,59 @@ describe("the Single editor of a Single removed from code", () => {
     expect(useDocumentLock).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: true })
     );
-    expect(sidebarProps).toHaveBeenLastCalledWith(
+  });
+});
+
+describe("the Languages menu of a Single", () => {
+  const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
+
+  beforeEach(() => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+  });
+
+  it("holds no reader while a colleague has it, and publishes nothing for them", () => {
+    reader.update = "refused";
+    reader.holder = bob;
+    renderEditor(false, true, vi.fn());
+
+    expect(menuProps).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        actionsDisabled: false,
-        navigationDisabled: false,
+        hold: expect.objectContaining({ documentHeld: false }) as unknown,
+        canEdit: false,
+        onPublishOthers: undefined,
+      })
+    );
+  });
+
+  it("holds a person who may change it while a colleague has it", () => {
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-other", holder: bob, requestSent: false },
+      takeOver: vi.fn(),
+      requestAccess: vi.fn(),
+    });
+    renderEditor(false, true, vi.fn());
+
+    expect(menuProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        hold: expect.objectContaining({ documentHeld: true }) as unknown,
+        canEdit: false,
+        onPublishOthers: undefined,
+      })
+    );
+  });
+
+  it("is told of a person editing it, who may publish the others", () => {
+    const onPublishOthers = vi.fn();
+    renderEditor(false, true, onPublishOthers);
+
+    expect(menuProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        hold: expect.objectContaining({ documentHeld: false }) as unknown,
+        canEdit: true,
+        onPublishOthers,
       })
     );
   });

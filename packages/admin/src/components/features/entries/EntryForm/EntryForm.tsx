@@ -44,6 +44,7 @@ import {
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { useEditorRevealHold } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { toast } from "@admin/components/ui";
+import { buildRoute, ROUTES } from "@admin/constants/routes";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
@@ -70,10 +71,10 @@ import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
+import { DocumentLanguagesButton } from "../../languages-menu/DocumentLanguagesButton";
 import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
 import { collectionSourceFetcher } from "../entry-locale-source";
 import { EntryLocaleProvider } from "../EntryLocaleContext";
-import { DocumentLanguagePanel } from "../LanguagePanel";
 import { PreviewPanes } from "../PreviewMode/PreviewPanes";
 import { previewRevisionOf } from "../PreviewMode/previewRevision";
 import { smartPublishHandler } from "../publish-parts/smart-publish-handler";
@@ -307,6 +308,11 @@ export interface EntryFormProps {
    * click, or the choice of what goes live. Absent, Publish is one click.
    */
   smartPublish?: SmartPublish;
+  /**
+   * Opens the choice of which other languages to publish, from the Languages
+   * menu. Absent where there is none or the person may not publish.
+   */
+  onPublishOthers?: (() => void) | undefined;
 }
 
 // ============================================================================
@@ -411,6 +417,7 @@ export function EntryForm({
   documentView,
   shownCopy,
   smartPublish,
+  onPublishOthers,
 }: EntryFormProps): JSX.Element {
   /*
    * Whether the preview pane is open, and when the document last saved.
@@ -530,11 +537,7 @@ export function EntryForm({
   // field can tell whether it is translatable), and whether the active language differs from
   // the app default (per-field affordances only apply while translating a non-default language).
   // All inert for LTR / non-localized editors — the plain path is unchanged.
-  const {
-    getLocale,
-    defaultLocale,
-    enabled: localizationEnabled,
-  } = useLocalization();
+  const { getLocale, defaultLocale } = useLocalization();
   // Where the entry's recovery points are recorded: a write made outside a save
   // waits for one on its way.
   const recordingsOf = documentRecordingKey(
@@ -956,7 +959,7 @@ export function EntryForm({
     ]
   );
   // One answer for every surface offering a write: the header reads the same
-  // through the document-actions model, the rail, the language panel and the
+  // through the document-actions model, the rail, the Languages menu and the
   // submission handlers from here. Derived from the HOST's state, not the
   // context — this body renders ABOVE the provider this component creates, so
   // a context read here would report no version on screen even while one is.
@@ -973,10 +976,8 @@ export function EntryForm({
   // A refused publish's recovery holds them too, until its reloaded entry is
   // on screen.
   const versionWritesHeld = lock.actionsDisabled || updatesHeld || recovering;
-  // And the language panel's copies into the form, as it holds the fields.
+  // And a copy from another language into the form, as it holds the fields.
   const contentHeld = editsHeld || recovering;
-  // And moving to another language, so its Save and take stay on this one.
-  const navigationHeld = writesHeld || recovering;
   // Delete is offered only to a caller who may delete in this collection.
   // The quick-edit and quick-create modals save only with the update or
   // create permission their mode needs: those modals open from a related
@@ -1228,8 +1229,8 @@ export function EntryForm({
   });
   // Nothing to show before the entry exists.
   const panelOnScreen = mode === "edit" && panel.shown;
-  // Where the docked column is on screen, it carries the id and the language
-  // panel, so the field column's own copies of them step aside.
+  // Where the docked column is on screen, it carries the id, so the field
+  // column's own copy of it steps aside.
   const panelDocked = mode === "edit" && panel.docked;
   // The fields a plugin's tab edits are drawn in that tab, not here; every
   // field keeps its value in the form, so Save still stores them.
@@ -1739,6 +1740,51 @@ export function EntryForm({
                                       {...(shareDocument === undefined
                                         ? {}
                                         : { shareDocument })}
+                                      // None for an entry that is not
+                                      // translated: History keeps its word
+                                      // longer where none is handed over.
+                                      languagesControl={
+                                        mode === "edit" &&
+                                        collection.localized === true ? (
+                                          <DocumentLanguagesButton
+                                            document={entry}
+                                            reviewed={{
+                                              scopeKind: "collection",
+                                              scopeSlug: collection.name,
+                                              entryId: savedEntryId,
+                                            }}
+                                            hasStatus={hasStatus}
+                                            editorPath={buildRoute(
+                                              ROUTES.COLLECTION_ENTRY_EDIT,
+                                              {
+                                                slug: collectionSlug,
+                                                id: savedEntryId,
+                                              }
+                                            )}
+                                            locale={locale}
+                                            translating={
+                                              translation?.from !== undefined
+                                            }
+                                            hold={{
+                                              viewingPastVersion:
+                                                viewingVersion !== null,
+                                              recovering,
+                                              changeAwaiting,
+                                              documentHeld:
+                                                lock.actionsDisabled &&
+                                                !readOnlyForReader,
+                                            }}
+                                            canEdit={!lock.readOnly}
+                                            onPublishOthers={
+                                              isSubmitting ||
+                                              lock.actionsDisabled
+                                                ? undefined
+                                                : onPublishOthers
+                                            }
+                                            panelMode={panel.mode}
+                                          />
+                                        ) : undefined
+                                      }
                                       toolbarSlot={versionAwareToolbarSlots(
                                         viewedVersionHost,
                                         // A reader's page holds the slot's writes too.
@@ -1863,46 +1909,6 @@ export function EntryForm({
                                         />
                                       ) : null}
 
-                                      {/* The language panel, inline: the exact
-                        complement of the docked panel, shown wherever that
-                        column is not on screen — create mode, a folded panel,
-                        and every width the panel floats or is a sheet at,
-                        where it opens only when asked for. */}
-                                      {localizationEnabled && (
-                                        <div
-                                          className={cn(
-                                            // In line with the title and the
-                                            // fields, not indented past them.
-                                            "pt-4",
-                                            DOCUMENT_COLUMN_INSET,
-                                            panelDocked && "hidden"
-                                          )}
-                                        >
-                                          <DocumentLanguagePanel
-                                            translations={
-                                              entry?._translations as
-                                                | Record<
-                                                    string,
-                                                    {
-                                                      translated: boolean;
-                                                      status?: string;
-                                                    }
-                                                  >
-                                                | undefined
-                                            }
-                                            locale={locale}
-                                            onLocaleChange={switchLocale}
-                                            sharedChangesPending={
-                                              entry?._sharedChangesPending ===
-                                              true
-                                            }
-                                            actionsDisabled={contentHeld}
-                                            // A reader may still open the other languages.
-                                            navigationDisabled={navigationHeld}
-                                          />
-                                        </div>
-                                      )}
-
                                       {/* Reading a past version replaces the document rather than
                       opening beside it: the question an editor is asking is how
                       this page read then, and that is answered by the page. The
@@ -1996,12 +2002,6 @@ export function EntryForm({
                                         // The Review section's steps wait
                                         // for what holds the header's.
                                         reviewHold={review.stepsHold}
-                                        {...(switchLocale === undefined
-                                          ? {}
-                                          : { onLocaleChange: switchLocale })}
-                                        actionsDisabled={contentHeld}
-                                        // A reader may still open the other languages.
-                                        navigationDisabled={navigationHeld}
                                         pluginSections={pluginSurfaces.sections}
                                         {...(panelOrder === undefined
                                           ? {}

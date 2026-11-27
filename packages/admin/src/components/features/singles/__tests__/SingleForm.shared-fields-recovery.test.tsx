@@ -28,14 +28,15 @@ import {
   screen,
   waitFor,
 } from "@admin/__tests__/utils";
+import type { LanguagesHold } from "@admin/components/features/languages-menu/document-languages";
 import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import {
   clearRegistry,
   registerComponent,
 } from "@admin/lib/plugins/component-registry";
 
-const { useDocumentLock, autosaveOffer, savedCount, panelHolds } = vi.hoisted(
-  () => ({
+const { useDocumentLock, autosaveOffer, savedCount, holds, siteLocales } =
+  vi.hoisted(() => ({
     useDocumentLock: vi.fn(),
     // A recovery point the editor offers back, when a test sets one.
     autosaveOffer: {
@@ -43,35 +44,33 @@ const { useDocumentLock, autosaveOffer, savedCount, panelHolds } = vi.hoisted(
     },
     // How many saves the editor last reported, which its preview follows.
     savedCount: { current: 0 },
-    // What each language panel drawn was told to hold, its actions and the
-    // move to another language, in the order they were drawn.
-    panelHolds: { current: [] as { actions: boolean; navigation: boolean }[] },
-  })
-);
+    // What the Languages menu drawn was told holds the language on screen, in
+    // the order it was drawn.
+    holds: { current: [] as LanguagesHold[] },
+    // The site's languages; none unless a case configures them.
+    siteLocales: { list: [] as { code: string; label: string }[] },
+  }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
-// The language panels, inline and in the rail, as what the Single hands them.
+// The Languages menu, as what the Single hands it.
 vi.mock(
-  "@admin/components/features/entries/LanguagePanel",
-  async importOriginal => ({
-    ...(await importOriginal<
-      typeof import("@admin/components/features/entries/LanguagePanel")
-    >()),
-    DocumentLanguagePanel: ({
-      actionsDisabled,
-      navigationDisabled,
-    }: {
-      actionsDisabled?: boolean;
-      navigationDisabled?: boolean;
-    }) => {
-      panelHolds.current.push({
-        actions: actionsDisabled === true,
-        navigation: navigationDisabled === true,
-      });
+  "@admin/components/features/languages-menu/DocumentLanguagesButton",
+  () => ({
+    DocumentLanguagesButton: ({ hold }: { hold: LanguagesHold }) => {
+      holds.current.push(hold);
       return null;
     },
   })
 );
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({
+    enabled: false,
+    locales: siteLocales.list,
+    defaultLocale: "",
+    fallback: true,
+    getLocale: () => undefined,
+  }),
+}));
 vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
   // As the hook does: an offer is withdrawn once a save lands, which the
   // editor reports through `savedCount` (see the hook's own tests).
@@ -178,6 +177,13 @@ function refusedOnce() {
     .mockResolvedValue(undefined);
 }
 
+const NOTHING_HELD: LanguagesHold = {
+  viewingPastVersion: false,
+  recovering: false,
+  changeAwaiting: false,
+  documentHeld: false,
+};
+
 /** The form the page was handed with the refused save. */
 function refusedFormOf(
   onSubmit: ReturnType<typeof refusedOnce>
@@ -189,7 +195,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   autosaveOffer.current = null;
   savedCount.current = 0;
-  panelHolds.current = [];
+  holds.current = [];
+  siteLocales.list = [];
   heldWork.current = false;
   registerComponent(VIEW, EditorView);
   useDocumentLock.mockReturnValue({
@@ -588,10 +595,18 @@ describe("a Single's form, for a publish refused over shared values", () => {
     expect(savedCount.current).toBe(2);
   });
 
-  it("holds the language panel's actions and the move to another language while the recovery runs", async () => {
+  it("holds the move to another language while the recovery runs", async () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
     const onSubmit = refusedOnce();
     render(
-      <SingleForm schema={schema} document={first} onSubmit={onSubmit} />,
+      <SingleForm
+        schema={{ ...schema, localized: true }}
+        document={first}
+        onSubmit={onSubmit}
+      />,
       { wrapper: Providers }
     );
     // An edit, so the Single has a Save to offer.
@@ -600,11 +615,9 @@ describe("a Single's form, for a publish refused over shared values", () => {
     });
     fireEvent.submit(document.querySelector("form") as HTMLFormElement);
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    // The author's own Single: both are offered.
-    expect(panelHolds.current.length).toBeGreaterThan(0);
-    expect(
-      panelHolds.current.some(held => held.actions || held.navigation)
-    ).toBe(false);
+    // The author's own Single: nothing holds it.
+    expect(holds.current.length).toBeGreaterThan(0);
+    expect(holds.current.at(-1)).toEqual(NOTHING_HELD);
 
     let finishTake: () => void = () => {};
     const take = vi.fn(
@@ -613,7 +626,7 @@ describe("a Single's form, for a publish refused over shared values", () => {
           finishTake = resolve;
         })
     );
-    panelHolds.current = [];
+    holds.current = [];
     let running: Promise<unknown> | undefined;
     act(() => {
       running = refusedFormOf(onSubmit)?.recover(take);
@@ -622,21 +635,16 @@ describe("a Single's form, for a publish refused over shared values", () => {
       await waitFor(() => expect(take).toHaveBeenCalled());
     });
 
-    // Every panel drawn from the action on holds both.
-    expect(panelHolds.current.length).toBeGreaterThan(0);
-    expect(
-      panelHolds.current.every(held => held.actions && held.navigation)
-    ).toBe(true);
+    // Every menu drawn from the action on is held.
+    expect(holds.current.length).toBeGreaterThan(0);
+    expect(holds.current.every(hold => hold.recovering)).toBe(true);
 
     await act(async () => {
       finishTake();
       await running;
     });
     // Let go with the rest of the Single.
-    expect(panelHolds.current.at(-1)).toEqual({
-      actions: false,
-      navigation: false,
-    });
+    expect(holds.current.at(-1)).toEqual(NOTHING_HELD);
   });
 
   it("takes nothing where every Save of the Single would publish it", async () => {

@@ -116,7 +116,6 @@ import {
 } from "@admin/components/features/entries/EntryForm/useVersionConflict";
 import { VersionConflictDialog } from "@admin/components/features/entries/EntryForm/VersionConflictDialog";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
-import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
 import { smartPublishHandler } from "@admin/components/features/entries/publish-parts/smart-publish-handler";
 import type { SmartPublish } from "@admin/components/features/entries/publish-parts/useSmartPublish";
@@ -129,6 +128,7 @@ import { useEditorReview } from "@admin/components/features/entries/review/useEd
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
+import { DocumentLanguagesButton } from "@admin/components/features/languages-menu/DocumentLanguagesButton";
 import {
   autosaveEnabledFor,
   autosaveIntervalFrom,
@@ -153,6 +153,7 @@ import {
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { useEditorRevealHold } from "@admin/components/shared/loading-frame/delayed-reveal";
+import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
@@ -362,6 +363,11 @@ export interface SingleFormProps {
    * click, or the choice of what goes live. Absent, Publish is one click.
    */
   smartPublish?: SmartPublish;
+  /**
+   * Opens the choice of which other languages to publish, from the Languages
+   * menu. Absent where there is none or the person may not publish.
+   */
+  onPublishOthers?: (() => void) | undefined;
 }
 
 // ============================================================================
@@ -453,7 +459,7 @@ function useSingleWriteGate(
 /**
  * The Single's holds with a refused publish's recovery on top: until its
  * reloaded document is on screen it holds the actions and the autosave
- * (`busy`), the language panels' copies into the form and a version's own
+ * (`busy`), the copies from another language into the form and a version's own
  * writes, as the lock holds the fields.
  */
 function recoveryHolds(
@@ -462,85 +468,22 @@ function recoveryHolds(
     writePending: boolean;
     editsHeld: boolean;
     versionWritesHeld: boolean;
-    writesHeld: boolean;
   }
 ): {
   busy: boolean;
   contentHeld: boolean;
   versionWritesHeld: boolean;
-  navigationHeld: boolean;
 } {
   return {
     busy: own.writePending || recovering,
     contentHeld: own.editsHeld || recovering,
     versionWritesHeld: own.versionWritesHeld || recovering,
-    // Moving to another language as well, so the recovery's Save and take
-    // stay on the one they are for.
-    navigationHeld: own.writesHeld || recovering,
   };
 }
 
 /** Which stored version of which document, in which language, is on screen. */
 function singleResetKey(document: SingleDocumentData, locale: unknown): string {
   return `${document.id}:${String(document.updatedAt)}:${String(locale)}`;
-}
-
-/**
- * The inline language panel, shown where the docked panel is not.
- *
- * The exact complement of the docked column that otherwise carries the
- * language workflow: shown once the author folds it, and at every width the
- * panel floats or is a sheet at, where it opens only when asked for. Without
- * it a single loses its language workflow whenever the column is away.
- */
-/**
- * Whether the Single's shared fields hold unpublished changes, as its editor
- * read says (`_sharedChangesPending`).
- */
-function sharedChangesPendingOf(document: unknown): boolean {
-  return (
-    typeof document === "object" &&
-    document !== null &&
-    (document as { _sharedChangesPending?: unknown })._sharedChangesPending ===
-      true
-  );
-}
-
-function SingleFormLanguagePanel({
-  actionsDisabled,
-  navigationDisabled,
-  enabled,
-  locale,
-  onLocaleChange,
-  panelDocked,
-  sharedChangesPending,
-  translations,
-}: {
-  actionsDisabled: boolean;
-  navigationDisabled: boolean;
-  enabled: boolean;
-  locale?: string;
-  onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
-  /** Whether the docked panel, which carries the language panel, is on screen. */
-  panelDocked: boolean;
-  /** The Single's shared fields hold unpublished changes (`_sharedChangesPending`). */
-  sharedChangesPending: boolean;
-  translations?: Record<string, { translated: boolean; status?: string }>;
-}) {
-  if (!enabled) return null;
-  return (
-    // In line with the title and the fields, not indented past them.
-    <div className={cn("pt-4", DOCUMENT_COLUMN_INSET, panelDocked && "hidden")}>
-      <DocumentLanguagePanel
-        translations={translations}
-        locale={locale}
-        onLocaleChange={onLocaleChange}
-        actionsDisabled={actionsDisabled}
-        navigationDisabled={navigationDisabled}
-        sharedChangesPending={sharedChangesPending}
-      />
-    </div>
-  );
 }
 
 /**
@@ -607,22 +550,17 @@ function SingleFormFieldsPanel({
  * same withholding the bar's save affordances observe.
  */
 function SingleFormRail({
-  actionsDisabled,
-  navigationDisabled,
   entry,
   hasStatus,
   documentStatus,
   singleSlug,
   locale,
   reviewHold,
-  onLocaleChange,
   panel,
   panelOrder,
   placedSectionProps,
   about,
 }: {
-  actionsDisabled: boolean;
-  navigationDisabled: boolean;
   entry: React.ComponentProps<typeof EntryFormSidebar>["entry"];
   hasStatus: boolean;
   documentStatus: React.ComponentProps<
@@ -633,7 +571,6 @@ function SingleFormRail({
   locale?: string;
   /** Why the Review section's steps wait, as the header's do (`stepsHold`). */
   reviewHold: string | undefined;
-  onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   panel: Pick<ReturnType<typeof useDocumentPanel>, "mode" | "shown" | "hide">;
   /** The panel's sections in the order the server placed them. */
   panelOrder: PanelOrderEntry[] | undefined;
@@ -666,11 +603,8 @@ function SingleFormRail({
                 entryId: documentId,
               },
             })}
-        actionsDisabled={actionsDisabled}
-        navigationDisabled={navigationDisabled}
         {...(locale === undefined ? {} : { locale })}
         reviewHold={reviewHold}
-        {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
       />
     </DocumentSidePanel>
   );
@@ -741,6 +675,7 @@ export function SingleForm({
   revealWaiting = false,
   shownCopy,
   smartPublish,
+  onPublishOthers,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -1102,7 +1037,7 @@ export function SingleForm({
     historicalValues,
   } = viewedVersionHost;
   // One answer for every surface offering a write — the header reads the same
-  // through the document-actions model, and the rail, the language panel and
+  // through the document-actions model, and the rail, the Languages menu and
   // the submission handlers below take it from here. Derived from the HOST's
   // state, not the context: this body renders ABOVE the provider this
   // component creates, so a context read here would report no version on
@@ -1134,16 +1069,14 @@ export function SingleForm({
   // A save or a discard in flight.
   const writePending = isSubmitting || discardMutation.isPending;
   // Each of the Single's holds, and a refused publish's recovery on top.
-  const { busy, contentHeld, versionWritesHeld, navigationHeld } =
-    recoveryHolds(recovering, {
-      writePending,
-      editsHeld,
-      // A colleague's claim or a reader's page, without the version on
-      // screen: what holds the actions a version's own surfaces offer,
-      // Restore among them.
-      versionWritesHeld: lock.actionsDisabled || updatesHeld,
-      writesHeld,
-    });
+  const { busy, contentHeld, versionWritesHeld } = recoveryHolds(recovering, {
+    writePending,
+    editsHeld,
+    // A colleague's claim or a reader's page, without the version on
+    // screen: what holds the actions a version's own surfaces offer,
+    // Restore among them.
+    versionWritesHeld: lock.actionsDisabled || updatesHeld,
+  });
   // Every switch to another language goes through here, held with the rest,
   // and while a told change waits for an answer about this language's edits.
   const switchLocale = heldLocaleChange(
@@ -1486,11 +1419,7 @@ export function SingleForm({
 
   // i18n: per-locale writing direction (RTL) + the app default locale, for the content-locale
   // context passed to field components and the language pills. Inert for non-localized singles.
-  const {
-    getLocale,
-    defaultLocale,
-    enabled: localizationEnabled,
-  } = useLocalization();
+  const { getLocale, defaultLocale } = useLocalization();
   // The status of the language being edited, read as the entry editor reads
   // it, not the main row's: an untranslated language of a published Single
   // is not published. The status the bar's pill shows and the context
@@ -1515,17 +1444,12 @@ export function SingleForm({
     defaultLocale,
   });
 
-  // The per-locale translation-status map, read once and shared by the header
-  // adapter and the language panel: two reads of the same document key would
-  // agree today and drift the moment one of them learns a new shape.
+  // The per-locale translation-status map, which the header's history reads.
   const singleTranslations = (
     document as {
       _translations?: Record<string, { translated: boolean; status?: string }>;
     }
   )._translations;
-
-  // Read once: the rail's language panel and the inline one say it alike.
-  const sharedChangesPending = sharedChangesPendingOf(document);
 
   // Adapt the SingleDocumentData shape into what the document bar and the
   // rail panels expect (entry.id / entry.status / entry.created_at /
@@ -1547,12 +1471,9 @@ export function SingleForm({
     // the per-language pills (DocumentPanel reads `entry._translations`). Absent for non-localized
     // singles / when translation-status wasn't requested → pills render nothing.
     _translations: singleTranslations,
-    // Forwarded for the rail's language panel, which says while the Single's
-    // shared fields hold unpublished changes, docked as inline.
-    _sharedChangesPending: sharedChangesPending,
   } as unknown as Parameters<typeof DocumentBar>[0]["entry"];
 
-  // i18n: content-locale context for field components + the rail's language panel.
+  // i18n: content-locale context for field components.
   //
   // `collectionSlug`/`entryId` stay absent because a single genuinely has
   // neither. They used to double as the gate for copy-from-language, which made
@@ -2015,6 +1936,47 @@ export function SingleForm({
                                     // credential the server grants only to a
                                     // user who may change the Single.
                                     {...(previewHeld ? {} : previewPane.toggle)}
+                                    // None for a Single that is not
+                                    // translated: History keeps its word
+                                    // longer where none is handed over.
+                                    languagesControl={
+                                      schema.localized === true ? (
+                                        <DocumentLanguagesButton
+                                          document={document}
+                                          reviewed={{
+                                            scopeKind: "single",
+                                            scopeSlug: schema.slug,
+                                            entryId: String(document.id),
+                                          }}
+                                          hasStatus={hasStatus}
+                                          editorPath={buildRoute(
+                                            ROUTES.SINGLE_EDIT,
+                                            { slug: schema.slug }
+                                          )}
+                                          locale={locale}
+                                          translating={
+                                            translation?.from !== undefined
+                                          }
+                                          hold={{
+                                            viewingPastVersion:
+                                              viewingVersion !== null,
+                                            recovering,
+                                            changeAwaiting:
+                                              lock.changeAwaitingAnswer,
+                                            documentHeld:
+                                              lock.actionsDisabled &&
+                                              !readOnlyForReader,
+                                          }}
+                                          canEdit={!lock.readOnly}
+                                          onPublishOthers={
+                                            busy || lock.actionsDisabled
+                                              ? undefined
+                                              : onPublishOthers
+                                          }
+                                          panelMode={panel.mode}
+                                        />
+                                      ) : undefined
+                                    }
                                     toolbarSlot={versionAwareToolbarSlots(
                                       viewedVersionHost,
                                       // A reader's page holds the slot's writes too.
@@ -2129,28 +2091,6 @@ export function SingleForm({
                                         : { placedSectionProps })}
                                     />
 
-                                    {/* The language panel, inline: the exact complement
-                              of the rail, shown where the rail is not. */}
-                                    <SingleFormLanguagePanel
-                                      actionsDisabled={contentHeld}
-                                      // A reader may still open the other languages.
-                                      navigationDisabled={navigationHeld}
-                                      enabled={localizationEnabled}
-                                      panelDocked={panel.docked}
-                                      sharedChangesPending={
-                                        sharedChangesPending
-                                      }
-                                      {...(singleTranslations === undefined
-                                        ? {}
-                                        : { translations: singleTranslations })}
-                                      {...(locale === undefined
-                                        ? {}
-                                        : { locale })}
-                                      {...(switchLocale === undefined
-                                        ? {}
-                                        : { onLocaleChange: switchLocale })}
-                                    />
-
                                     {/* Reading a past version replaces the document rather
                               than opening beside it — see the fields panel. */}
                                     <SingleFormFieldsPanel
@@ -2177,8 +2117,6 @@ export function SingleForm({
                                 {/* The document panel, framed for the editor's
                                 width, as the entry editor's is. */}
                                 <SingleFormRail
-                                  actionsDisabled={contentHeld}
-                                  navigationDisabled={navigationHeld}
                                   entry={entryLike}
                                   hasStatus={hasStatus}
                                   documentStatus={editedStatus}
@@ -2191,9 +2129,6 @@ export function SingleForm({
                                   // The Review section's steps wait for
                                   // what holds the header's.
                                   reviewHold={review.stepsHold}
-                                  {...(switchLocale === undefined
-                                    ? {}
-                                    : { onLocaleChange: switchLocale })}
                                 />
                               </DocumentEditorLayout>
                             </CopyFromLanguageScope>

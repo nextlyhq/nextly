@@ -418,6 +418,9 @@ export default function SingleEditPage({
           <SingleForm
             shownCopy={shownCopy}
             smartPublish={publishing.smartPublish}
+            onPublishOthers={
+              removedFromCode ? undefined : publishing.publishOthers
+            }
             revealOutline={<SingleEditPageSkeleton />}
             revealWaiting={partsStartup.pending}
             /* Under the editor's header, for the reason the entry editor

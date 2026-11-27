@@ -28,7 +28,7 @@ import { DocumentPanel } from "../DocumentPanel";
 const meta = {
   contributions: undefined as AdminContributionsMeta | undefined,
 };
-// Languages on, so all four of the panel's own sections are drawn.
+// Languages on: the panel keeps the `language` place, and draws no section of its own there.
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     enabled: true,
@@ -62,10 +62,6 @@ vi.mock("@admin/hooks/queries/useReleasesContaining", () => ({
   }),
 }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
-vi.mock("../../../LanguagePanel", async importOriginal => ({
-  ...(await importOriginal<typeof import("../../../LanguagePanel")>()),
-  DocumentLanguagePanel: () => <div data-testid="language-panel" />,
-}));
 
 const SIGNED_IN = "11111111-1111-4111-8111-111111111111";
 
@@ -193,12 +189,25 @@ beforeEach(() => {
 });
 
 describe("plugins' sections in the document panel", () => {
-  it("with no contributions the panel draws its own four, in order", () => {
+  it("with no contributions the panel draws its own sections, in order", () => {
     panel();
+    expect(sectionTitles()).toEqual(["Status", "Publishing", "Details"]);
+  });
+
+  it("a section placed after `language` stands where languages were", () => {
+    sections(
+      { builtIn: "status" },
+      { builtIn: "publishing" },
+      { builtIn: "language" },
+      section("acme-a.notes", "Notes", { after: "language" }),
+      { builtIn: "details" }
+    );
+    panel();
+
     expect(sectionTitles()).toEqual([
       "Status",
       "Publishing",
-      "Language",
+      "Notes",
       "Details",
     ]);
   });
@@ -217,7 +226,6 @@ describe("plugins' sections in the document panel", () => {
       "Status",
       "Notes",
       "Publishing",
-      "Language",
       "Details",
     ]);
     // Drawn inside its own section, told the page's ids and its document.
@@ -247,7 +255,6 @@ describe("plugins' sections in the document panel", () => {
       "Translations",
       "Details",
     ]);
-    expect(screen.queryByTestId("language-panel")).toBeNull();
   });
 
   it("a throwing section draws its own fallback, and the rest of the panel stays", () => {
@@ -265,13 +272,11 @@ describe("plugins' sections in the document panel", () => {
       "Status",
       "Broken",
       "Publishing",
-      "Language",
       "Details",
     ]);
     expect(
       screen.getByRole("region", { name: "Broken" })
     ).not.toHaveTextContent("the section failed");
-    expect(screen.getByTestId("language-panel")).toBeInTheDocument();
   });
 
   it("says under a section's heading that its component could not be found", () => {
@@ -342,11 +347,6 @@ describe("plugins' sections in the document panel", () => {
     panel(null);
 
     expect(screen.queryByTestId("notes")).toBeNull();
-    expect(sectionTitles()).toEqual([
-      "Status",
-      "Publishing",
-      "Language",
-      "Details",
-    ]);
+    expect(sectionTitles()).toEqual(["Status", "Publishing", "Details"]);
   });
 });
