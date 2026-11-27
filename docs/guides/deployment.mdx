@@ -51,7 +51,7 @@ A scaffolded Nextly project ships this `build` script in `package.json`:
 ```json
 {
   "scripts": {
-    "build": "nextly migrate && next build"
+    "build": "nextly migrate --mode production && next build"
   }
 }
 ```
@@ -163,7 +163,7 @@ pnpm build
 pnpm start
 ```
 
-The scaffolded `build` script runs `nextly migrate && next build`, and `pnpm start` is `next start`. If you'd rather run migrations as a separate step (recommended for production with zero-downtime deploys), drop `nextly migrate` from `build` and run it via your CI pipeline before promoting the new release.
+The scaffolded `build` script runs `nextly migrate --mode production && next build`, and `pnpm start` is `next start`. `--mode production` makes `nextly migrate` read `.env.production` as `next build` does, even when the host builds with `NODE_ENV` unset. If you'd rather run migrations as a separate step (recommended for production with zero-downtime deploys), drop `nextly migrate --mode production` from `build` and run it via your CI pipeline before promoting the new release.
 
 ### Environment variables
 
@@ -177,7 +177,7 @@ To rate-limit sign-in per client and record real client addresses, let Nextly re
 
 ### Migrations on deploy
 
-For self-hosted deploys, the same forward-only model applies. Run `nextly migrate` against the production database **before** the new app binary takes traffic. A production start does not bring the registry, the permissions, the role grants or the tables up to date itself: until `nextly migrate` runs, a declared field the database lacks answers `ENTITY_NOT_MIGRATED`, and against an empty database the start refuses, naming `nextly migrate`. A changed `dbName` needs a migration of its own (see [A changed `dbName`](/docs/guides/production-migrations#a-changed-dbname)), and a site whose tables its starts made before this release takes a baseline before upgrading (see [Upgrading a site whose starts made its tables](/docs/guides/production-migrations#upgrading-a-site-whose-starts-made-its-tables)).
+For self-hosted deploys, the same forward-only model applies. Run `nextly migrate --mode production` against the production database **before** the new app binary takes traffic. A production start does not bring the registry, the permissions, the role grants or the tables up to date itself: until `nextly migrate` runs, a declared field the database lacks answers `ENTITY_NOT_MIGRATED`, and against an empty database the start refuses, naming `nextly migrate`. A changed `dbName` needs a migration of its own (see [A changed `dbName`](/docs/guides/production-migrations#a-changed-dbname)), and a site whose tables its starts made before this release takes a baseline before upgrading (see [Upgrading a site whose starts made its tables](/docs/guides/production-migrations#upgrading-a-site-whose-starts-made-its-tables)).
 
 Do not move production back to a Nextly release from before the one where starts stopped writing this bookkeeping: such a release seeds the permissions and the preset role grants at every production start, from its own configuration, and nothing turns that off. See [Production migrations](/docs/guides/production-migrations) for GitHub Actions, Railway, Render, Fly.io, and AWS examples.
 
@@ -283,7 +283,7 @@ Before going live, verify:
 - [ ] Storage adapter is configured for non-ephemeral filesystems (no local disk on serverless).
 - [ ] An email provider is configured (Resend, SMTP, or SendLayer) -- without one, password-reset and verification tokens are returned in the API response as a development fallback.
 - [ ] The first administrator exists: created at `/admin/setup` with the setup token, or with `nextly users:create-admin`.
-- [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending and zero unfinished), by a `nextly migrate` that runs before each deploy serves: a production start writes no registry rows, permissions or role grants itself, and creates or changes no table.
+- [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending and zero unfinished), by a `nextly migrate --mode production` that runs before each deploy serves: a production start writes no registry rows, permissions or role grants itself, and creates or changes no table.
 - [ ] The reverse proxy / load balancer terminates TLS and forwards real client headers.
 - [ ] `security.trustProxy` is `true` on Vercel or behind a proxy every request passes through, with `TRUSTED_PROXY_IPS` listing any hops in front of it (see [Client addresses and the auth rate limit](#client-addresses-and-the-auth-rate-limit)).
 - [ ] Database backups are configured (your hosting provider's snapshots, point-in-time recovery, etc.).

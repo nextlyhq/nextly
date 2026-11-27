@@ -5,6 +5,7 @@ import { useCallback, useState, useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Database } from "@admin/components/icons";
+import { RailSearchButton } from "@admin/components/shared/command-palette/PaletteSearchButton";
 import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
 import {
   useBranding,
@@ -558,6 +559,7 @@ export function DualSidebar({
         // The rail's foot: the reader's Inbox and account menu, the same on
         // every page.
         foot={<RailAccount className="mt-4 shrink-0" />}
+        search={<RailSearchButton />}
       >
         {rail.items.map(item => {
           const href = resolveItemHref(item);

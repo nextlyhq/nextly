@@ -186,6 +186,72 @@ describe("where a feed row leads", () => {
   });
 });
 
+describe("who a feed row names", () => {
+  const byAgent = {
+    ...row,
+    collection: "posts",
+    agentName: "Claude Code",
+    door: "command",
+    approvedVia: "phone",
+  };
+
+  it("keeps the person as the actor on an agent's row, and carries who stood behind them", () => {
+    // `user` is read by every consumer of this hook as the person who acted;
+    // an agent's row must not change what it says.
+    const activity = activityFromRow(byAgent);
+    expect(activity?.user).toMatchObject({
+      id: "u1",
+      name: "Ada",
+      email: "ada@example.com",
+      deleted: false,
+    });
+    expect(activity?.attribution).toEqual({
+      agentName: "Claude Code",
+      door: "command",
+      approvedVia: "phone",
+      deploymentHost: null,
+      deploymentCommit: null,
+      actorIsKey: false,
+    });
+  });
+
+  it("carries the same through the activity endpoint", async () => {
+    answer.activities = [byAgent];
+    const { result } = renderHook(() => useRecentActivity(5), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const activity = result.current.data?.activities[0];
+    expect(activity?.user.name).toBe("Ada");
+    expect(activity?.attribution).toMatchObject({
+      agentName: "Claude Code",
+      approvedVia: "phone",
+    });
+  });
+
+  it("says when the actor an agent used is a key", () => {
+    expect(
+      activityFromRow({
+        ...byAgent,
+        actorType: "apiKey",
+        door: "rest-key",
+      })?.attribution
+    ).toMatchObject({ agentName: "Claude Code", actorIsKey: true });
+  });
+
+  it("carries nothing for a row nothing stood behind, or from an older server", () => {
+    expect(activityFromRow({ ...row, collection: "posts" })).not.toHaveProperty(
+      "attribution"
+    );
+    expect(
+      activityFromRow({
+        ...row,
+        collection: "posts",
+        agentName: null,
+        door: null,
+      })
+    ).not.toHaveProperty("attribution");
+  });
+});
+
 describe("a search of the email delivery log", () => {
   const search = {
     ...row,

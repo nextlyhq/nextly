@@ -314,6 +314,7 @@ export async function recordMutationActivity(
   await service.logActivityInTx(db(), {
     actorType: actor.type,
     userId: actor.id,
+    attribution: actor.attribution,
     action: input.action,
     collection: input.collection,
     ...(input.locale === undefined ? {} : { locale: input.locale }),
@@ -422,6 +423,7 @@ export async function recordSingleActivity(
   await service.logActivityInTx(db(), {
     actorType: actor.type,
     userId: actor.id,
+    attribution: actor.attribution,
     action: "update",
     collection: input.slug,
     ...(input.locale === undefined ? {} : { locale: input.locale }),

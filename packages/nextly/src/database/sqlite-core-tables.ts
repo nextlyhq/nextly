@@ -567,6 +567,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "actor_id" TEXT,
       "actor_principal_kind" TEXT,
       "actor_name" TEXT,
+      "actor_agent_name" TEXT,
       "occurred_at" INTEGER NOT NULL,
       "from_state" TEXT,
       "to_state" TEXT,

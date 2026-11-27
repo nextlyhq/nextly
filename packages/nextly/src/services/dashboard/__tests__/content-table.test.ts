@@ -81,6 +81,12 @@ function save(
     countAtLeast: false,
     firstCreatedAt: createdAt,
     identityErasedAt: null,
+    // Nothing stood behind this save: a person in the admin.
+    agentName: null,
+    door: null,
+    approvedVia: null,
+    deploymentHost: null,
+    deploymentCommit: null,
     locale: null,
     ...overrides,
   };

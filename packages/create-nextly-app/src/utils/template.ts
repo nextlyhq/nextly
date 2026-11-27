@@ -1447,9 +1447,17 @@ export async function generatePackageJson(
       // And `|| true` turned a failed index build into a successful one. The
       // search page then ships pointing at an index that was never written,
       // which fails in the browser rather than in CI.
+      //
+      // Every CLI step runs with `--mode production`. A deploy often builds
+      // with NODE_ENV unset, and without a mode the CLI picks its environment
+      // files from NODE_ENV, so it would read `.env.development` and migrate
+      // the development database while the `next build` after it reads
+      // `.env.production`. `nextly plugins add` copies the migrate step's
+      // mode onto each install step it adds.
       build: [
-        "nextly migrate",
-        ...pluginInstalls,
+        ...["nextly migrate", ...pluginInstalls].map(
+          step => `${step} --mode production`
+        ),
         "next build",
         ...(shipsSearchIndex ? ["node scripts/build-search-index.mjs"] : []),
       ].join(" && "),

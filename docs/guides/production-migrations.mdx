@@ -416,13 +416,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Verify migration integrity
-        run: pnpm exec nextly migrate:check
+        run: pnpm exec nextly migrate:check --mode production
 
       - name: Apply pending migrations
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
           NEXTLY_APPLIED_BY: github-actions-${{ github.run_id }}
-        run: pnpm exec nextly migrate
+        run: pnpm exec nextly migrate --mode production
 
       - uses: amondnet/vercel-action@v25
         with:
@@ -454,10 +454,24 @@ The default scaffold ships this `build` script in `package.json`:
 ```json
 {
   "scripts": {
-    "build": "nextly migrate && next build"
+    "build": "nextly migrate --mode production && next build"
   }
 }
 ```
+
+Every `nextly` step in the script carries `--mode production`, so it reads the same environment
+files as the `next build` after it. A project whose config registers plugins also has a
+`nextly plugins install <package> --mode production` step for each before `next build`, or one
+`nextly plugins install --all --mode production` where the config lists a plugin the site wrote itself.
+
+**Upgrading a project made before the flag:** its script reads `nextly migrate && next build`. Where
+the build takes `DATABASE_URL` from a file and runs with `NODE_ENV` unset, that `nextly migrate`
+runs in development mode and reads `.env.development`, so the deploy migrates the development
+database while `next build` reads `.env.production`. Add ` --mode production` to the end of every
+`nextly` step in `build`, as above. A `DATABASE_URL` set in the host's own environment picks the
+same database in either mode, but the mode also sets `NODE_ENV` while the CLI reads your config, so
+a config that branches on it declares its development schema without the flag. Run a `nextly
+migrate` of your own against production with the flag too, as Patterns 1 and 3 do.
 
 Configure `DATABASE_URL` as a Vercel environment variable (available at build time). Every Vercel deploy applies pending migrations before compiling Next.js.
 
@@ -472,7 +486,7 @@ Configure `DATABASE_URL` as a Vercel environment variable (available at build ti
 Run from your laptop:
 
 ```bash
-DATABASE_URL=$PROD_URL pnpm exec nextly migrate
+DATABASE_URL=$PROD_URL pnpm exec nextly migrate --mode production
 vercel --prod
 ```
 
@@ -538,7 +552,7 @@ schema. Three ways to handle it:
 
 Nextly's CLI is platform-agnostic. The pattern is the same on Railway, Render, Fly.io, or AWS:
 
-1. Configure your deploy pipeline to run `nextly migrate` against the production DB.
+1. Configure your deploy pipeline to run `nextly migrate --mode production` against the production DB. The flag makes the CLI read your production environment files and evaluate your config as `next build` does, whatever `NODE_ENV` the step runs with.
 2. Ensure that step runs **before** the new code is promoted.
 3. If the migration fails, the deploy should abort.
 
@@ -548,7 +562,7 @@ Specific examples:
   ```json
   {
     "deploy": {
-      "preDeployCommand": ["nextly migrate"]
+      "preDeployCommand": ["nextly migrate --mode production"]
     }
   }
   ```
@@ -557,9 +571,9 @@ Specific examples:
 - **Fly.io:** Use a `release_command` in `fly.toml`. The `[deploy]` is a TOML section header:
   ```toml
   [deploy]
-  release_command = "nextly migrate"
+  release_command = "nextly migrate --mode production"
   ```
-- **AWS (ECS, etc.):** Add a one-shot task in your pipeline that runs `nextly migrate` before updating the service.
+- **AWS (ECS, etc.):** Add a one-shot task in your pipeline that runs `nextly migrate --mode production` before updating the service.
 
 ---
 
@@ -770,7 +784,7 @@ only through `nextly migrate` (step 8 above, and its registry phase) and a plugi
 uninstall, all under the migrate lock.
 
 So **run `nextly migrate` before serving a new build**. The scaffolded `build` script already runs
-`nextly migrate && next build`. A deployment that relied on its start to bring a new field,
+`nextly migrate --mode production && next build`. A deployment that relied on its start to bring a new field,
 collection or permission into the database must run `nextly migrate` first. Until it does, the
 start keeps serving the registry as it is: a declared field the database has not been migrated
 for is not served, and a read or write that reaches it answers `ENTITY_NOT_MIGRATED` (HTTP 409),
@@ -1895,7 +1909,7 @@ script installs each plugin its config registers. Adding a plugin to an
 existing app? Add its install to your build, after `nextly migrate`:
 
 ```bash
-nextly migrate && nextly plugins install <name> && next build
+nextly migrate --mode production && nextly plugins install <name> --mode production && next build
 ```
 
 A first install, and one after an uninstall, records one row in
