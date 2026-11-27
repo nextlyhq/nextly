@@ -24,6 +24,10 @@ import {
 import { actorForWrite, type RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di/service-access";
 import { NextlyError } from "../../errors";
+import {
+  buildEntryRevalidationIntent,
+  readRevalidateConfig,
+} from "../../revalidation/intent-builders";
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import { TRASH_TABLE } from "../../schemas/trash";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
@@ -37,6 +41,7 @@ import {
   type RestoreEntryResult,
 } from "./restore-entry";
 import {
+  collectionsHoldingItem,
   listTrash,
   readTrashRecord,
   removeFromTrash,
@@ -179,6 +184,7 @@ async function collectionOf(
   return {
     tableName: collectionTableName(record, slug),
     fields: record.fields ?? [],
+    lifecycle: record.status === true,
   };
 }
 
@@ -203,6 +209,30 @@ function refuseNonPlainValues(
       message: "A new value is text, a number, a boolean or null.",
     }));
   if (errors.length > 0) throw NextlyError.validation({ errors });
+}
+
+/**
+ * What a committed restore sets going, as any write does: the cached reads
+ * of the collection and of the entry are invalidated, so a list or a page
+ * that cached the entry's absence shows it again, and the drain is offered
+ * the created event. Neither failure undoes the restore.
+ */
+async function afterRestore(collection: string, id: string): Promise<void> {
+  const record = await getService(
+    "collectionRegistryService"
+  ).getCollectionBySlug(collection);
+  const entries = getService("collectionsHandler").getEntryService();
+  // None where the collection opted out of revalidation.
+  const intent = buildEntryRevalidationIntent(
+    collection,
+    readRevalidateConfig(record ?? {}),
+    { id }
+  );
+  if (intent !== undefined) await entries.flushRevalidationIntents([intent]);
+  await entries.offerPostCommitTxMaintenance({
+    committedWrite: true,
+    recordedEvent: true,
+  });
 }
 
 /** What a restore names: a trash record, or a trashed entry by its id. */
@@ -232,15 +262,13 @@ async function recordFor(
       return record;
     }
   } else {
-    const { items } = await listTrash(
-      adapter(),
-      {
-        itemIds: [ref.itemId],
-        ...(visible === undefined ? {} : { collections: visible }),
-      },
-      { limit: 2, offset: 0 }
-    );
-    const kinds = new Set(items.map(item => item.scopeSlug));
+    const selection = {
+      itemIds: [ref.itemId],
+      ...(visible === undefined ? {} : { collections: visible }),
+    };
+    // Every collection holding a trashed entry of this id, however many
+    // times one of them trashed it: two collections make it ambiguous.
+    const kinds = await collectionsHoldingItem(adapter(), selection);
     if (kinds.size > 1) {
       throw NextlyError.validation({
         errors: [
@@ -253,6 +281,10 @@ async function recordFor(
         logContext: { itemId: ref.itemId },
       });
     }
+    const { items } = await listTrash(adapter(), selection, {
+      limit: 1,
+      offset: 0,
+    });
     if (items[0] !== undefined) return items[0];
   }
   throw NextlyError.notFound({ logContext: { ref } });
@@ -279,7 +311,7 @@ export async function restoreFor(
       },
     });
   }
-  return restoreTrashedEntry(
+  const result = await restoreTrashedEntry(
     { adapter: adapter(), collectionOf },
     {
       trashId: record.id,
@@ -288,6 +320,8 @@ export async function restoreFor(
       actorName: caller.user?.name ?? null,
     }
   );
+  if (result.restored) await afterRestore(result.collection, result.id);
+  return result;
 }
 
 /** What an emptying takes. */

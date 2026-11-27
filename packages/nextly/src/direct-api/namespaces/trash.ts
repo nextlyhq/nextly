@@ -20,10 +20,19 @@ import {
   restoreFor,
   type TrashCaller,
 } from "../../domains/trash/trash-service";
-import type { DirectAPIConfig, ListResult } from "../types/shared";
+import type {
+  DirectAPIConfig,
+  ListResult,
+  MutationResult,
+} from "../types/shared";
 
 import type { NextlyContext } from "./context";
-import { accessOptions, mergeConfig, runAsCaller } from "./helpers";
+import {
+  accessOptions,
+  mergeConfig,
+  runAsCaller,
+  suppliedByCall,
+} from "./helpers";
 
 /** What `trash.list` takes. */
 export type TrashListArgs = DirectAPIConfig & {
@@ -65,11 +74,13 @@ export interface TrashNamespace {
   /**
    * Bring a deleted entry back as it was, as a draft where it had been
    * published. Where a unique value it held is taken, nothing is written and
-   * `{ restored: false, conflicts }` names them: call again with `values`.
+   * the item is `{ restored: false, conflicts }`: call again with `values`.
    */
-  restore(args: TrashRestoreArgs): Promise<RestoreEntryResult>;
-  /** Remove deleted entries for good; answers those removed. */
-  empty(args?: TrashEmptyArgs): Promise<{ removed: TrashListItem[] }>;
+  restore(args: TrashRestoreArgs): Promise<MutationResult<RestoreEntryResult>>;
+  /** Remove deleted entries for good; the item names those removed. */
+  empty(
+    args?: TrashEmptyArgs
+  ): Promise<MutationResult<{ removed: TrashListItem[] }>>;
 }
 
 /** The caller as the trash takes it, from the merged config. */
@@ -91,7 +102,7 @@ export function createTrashNamespace(ctx: NextlyContext): TrashNamespace {
     list: async (args = {}) =>
       runAsCaller(ctx.defaultConfig, args, async callArgs => {
         const page = await listTrashFor(
-          callerOf(mergeConfig(ctx.defaultConfig, callArgs)),
+          callerOf(mergeConfig(ctx.defaultConfig, suppliedByCall(callArgs))),
           {
             ...(callArgs.collection === undefined
               ? {}
@@ -103,9 +114,9 @@ export function createTrashNamespace(ctx: NextlyContext): TrashNamespace {
         return { items: page.items, meta: paginationMetaOf(page) };
       }),
     restore: async args =>
-      runAsCaller(ctx.defaultConfig, args, callArgs =>
-        restoreFor(
-          callerOf(mergeConfig(ctx.defaultConfig, callArgs)),
+      runAsCaller(ctx.defaultConfig, args, async callArgs => {
+        const item = await restoreFor(
+          callerOf(mergeConfig(ctx.defaultConfig, suppliedByCall(callArgs))),
           callArgs.trashId !== undefined
             ? { trashId: callArgs.trashId }
             : {
@@ -115,19 +126,32 @@ export function createTrashNamespace(ctx: NextlyContext): TrashNamespace {
                   : { collection: callArgs.collection }),
               },
           callArgs.values
-        )
-      ),
+        );
+        return {
+          message: item.restored
+            ? "Restored from the trash."
+            : "A value this entry held is taken; give a new one and restore it again.",
+          item,
+        };
+      }),
     empty: async (args = {}) =>
-      runAsCaller(ctx.defaultConfig, args, async callArgs => ({
-        removed: await emptyTrashFor(
-          callerOf(mergeConfig(ctx.defaultConfig, callArgs)),
+      runAsCaller(ctx.defaultConfig, args, async callArgs => {
+        const removed = await emptyTrashFor(
+          callerOf(mergeConfig(ctx.defaultConfig, suppliedByCall(callArgs))),
           {
             ...(callArgs.collection === undefined
               ? {}
               : { collection: callArgs.collection }),
             ...(callArgs.ids === undefined ? {} : { ids: callArgs.ids }),
           }
-        ),
-      })),
+        );
+        return {
+          message:
+            removed.length === 1
+              ? "1 entry removed for good."
+              : `${removed.length} entries removed for good.`,
+          item: { removed },
+        };
+      }),
   };
 }

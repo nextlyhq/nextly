@@ -1,7 +1,8 @@
 /**
  * Who trashed an item, as its record keeps them.
  *
- * A staff user or an API key is kept by its id and the name it had. A person
+ * A staff user is kept by their id and the name they had; an API key by its
+ * id alone. A person
  * a plugin defines is kept by their kind of person alone: their id is
  * erased with them elsewhere, and the trash keeps no copy that erasure would
  * miss. Trusted server work is `system`.
@@ -23,11 +24,18 @@ export function trashActorColumns(
 ): TrashActorColumns {
   switch (actor.type) {
     case "user":
-    case "apiKey":
       return {
-        trashedByKind: actor.type,
+        trashedByKind: "user",
         trashedById: actor.id ?? null,
         trashedByName: name,
+      };
+    case "apiKey":
+      // The name a delete is handed is the key owner's, not the key's: a key
+      // is named by its id alone, never as the person who made it.
+      return {
+        trashedByKind: "apiKey",
+        trashedById: actor.id ?? null,
+        trashedByName: null,
       };
     case "principal":
       return {

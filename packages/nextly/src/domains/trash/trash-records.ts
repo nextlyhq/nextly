@@ -165,6 +165,21 @@ export async function listTrash(
   return { items: rows.map(listItemOf), total };
 }
 
+/** The collections whose trash holds a record `selection` takes. */
+export async function collectionsHoldingItem(
+  db: Pick<DrizzleAdapter, "select">,
+  selection: TrashSelection
+): Promise<Set<string>> {
+  if (selectsNothing(selection)) return new Set();
+  const where = whereOf(selection);
+  // One row per record of one item: a handful, read whole.
+  const rows = await db.select<{ scopeSlug: string }>(TRASH_TABLE, {
+    columns: ["scopeSlug"],
+    ...(where === undefined ? {} : { where }),
+  });
+  return new Set(rows.map(row => String(row.scopeSlug)));
+}
+
 /** Records removed per transaction, so one emptying never holds a long lock. */
 const REMOVE_BATCH = 100;
 

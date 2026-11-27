@@ -181,10 +181,17 @@ function pointsBy(
   input: { collection: string; tableName: string }
 ): "links" | "column" | undefined {
   if (usesJunctionTable(field)) {
-    return optionOf(field, "target") === input.collection &&
-      source.tableName !== input.tableName
-      ? "links"
-      : undefined;
+    if (optionOf(field, "target") !== input.collection) return undefined;
+    // A collection's junction to itself holds the entry on both sides; its
+    // own side is the entry's own record's. Only where the two link columns
+    // are one name (a table named as its slug) is there no other side.
+    const { sourceColumn, targetColumn } = junctionLinkColumnsOf(
+      source.tableName,
+      input.collection
+    );
+    return source.tableName === input.tableName && sourceColumn === targetColumn
+      ? undefined
+      : "links";
   }
   return singleRelationTarget(field) === input.collection
     ? "column"
@@ -193,8 +200,7 @@ function pointsBy(
 
 /**
  * What every other entry holds pointing at `entryId` of `collection`, whose
- * own table is `tableName`. The entry's own links are its own record's, so
- * its own collection's junctions to itself are left to them.
+ * own table is `tableName`.
  */
 export async function captureIncoming(
   tx: TransactionContext,

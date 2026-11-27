@@ -285,7 +285,7 @@ export function accessOptions(config: DirectAPIConfig): AccessOptions {
  * the call by grants that were never the new user's. A call that names
  * `user: undefined` names nobody, and is refused.
  */
-function suppliedByCall(args: DirectAPIConfig): DirectAPIConfig {
+export function suppliedByCall(args: DirectAPIConfig): DirectAPIConfig {
   const supplied: DirectAPIConfig = { ...args };
   if (supplied.overrideAccess === undefined) delete supplied.overrideAccess;
   if ("user" in args && !("actor" in args)) supplied.actor = undefined;

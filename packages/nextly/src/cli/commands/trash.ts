@@ -249,7 +249,7 @@ export async function runTrashRestoreCommand(
   let values = valuesOf(options.set);
   await withNextly(context, async nextly => {
     for (;;) {
-      const result = await nextly.trash.restore({
+      const { item: result } = await nextly.trash.restore({
         overrideAccess: true,
         id,
         ...(options.collection === undefined
@@ -286,7 +286,9 @@ export async function runTrashEmptyCommand(
   const { logger } = context;
   logger.header("Empty the trash");
   await withNextly(context, async nextly => {
-    const { removed } = await nextly.trash.empty({
+    const {
+      item: { removed },
+    } = await nextly.trash.empty({
       overrideAccess: true,
       ...(options.collection === undefined
         ? {}

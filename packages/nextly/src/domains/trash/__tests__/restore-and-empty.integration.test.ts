@@ -41,6 +41,18 @@ import { purgeExpiredTrash } from "../trash-records";
 
 perLanguageStorageSuite();
 
+/** A restore's result, unwrapped from its mutation envelope. */
+const restoreOf = async (
+  t: TestNextly,
+  args: Parameters<TestNextly["nextly"]["trash"]["restore"]>[0]
+) => (await t.nextly.trash.restore(args)).item;
+
+/** An emptying's result, unwrapped from its mutation envelope. */
+const emptyOf = async (
+  t: TestNextly,
+  args?: Parameters<TestNextly["nextly"]["trash"]["empty"]>[0]
+) => (await t.nextly.trash.empty(args)).item;
+
 const POSTS = "trashback_posts";
 const LANGUAGES = { locales: ["en", "de"], defaultLocale: "en" };
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -199,7 +211,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     await t.nextly.delete({ collection: POSTS, id });
     expect(await stored(t, id)).toBeUndefined();
 
-    const result = await t.nextly.trash.restore({ id });
+    const result = await restoreOf(t, { id });
 
     expect(result).toEqual({ restored: true, collection: POSTS, id });
     expect(await stored(t, id)).toMatchObject({
@@ -222,7 +234,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     await t.nextly.delete({ collection: POSTS, id: restored });
     await t.nextly.delete({ collection: POSTS, id: other });
 
-    await t.nextly.trash.restore({ id: restored });
+    await restoreOf(t, { id: restored });
 
     // Every event of the restored entry is in its current life again.
     expect(await endedEvents(t, restored)).toEqual([]);
@@ -239,7 +251,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     expect(await stored(t, id)).toMatchObject({ status: "published" });
     await t.nextly.delete({ collection: POSTS, id });
 
-    await t.nextly.trash.restore({ id });
+    await restoreOf(t, { id });
 
     expect(await stored(t, id)).toMatchObject({ status: "draft" });
   });
@@ -250,7 +262,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     await t.nextly.delete({ collection: POSTS, id: first });
     await post(t, "taken");
 
-    const refused = await t.nextly.trash.restore({ id: first });
+    const refused = await restoreOf(t, { id: first });
 
     expect(refused).toEqual({
       restored: false,
@@ -260,13 +272,18 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     expect(await stored(t, first)).toBeUndefined();
     expect(await trashed(t, first)).toBe(1);
 
-    const again = await t.nextly.trash.restore({
+    const again = await restoreOf(t, {
       id: first,
       values: { slug: "taken-again" },
     });
 
     expect(again).toMatchObject({ restored: true, id: first });
     expect(await stored(t, first)).toMatchObject({ slug: "taken-again" });
+    // The site's created event names the slug the entry holds now.
+    const restored = (await createdEvents(t, first)).find(
+      e => e.restoredFrom === "trash"
+    );
+    expect(restored?.data).toMatchObject({ slug: "taken-again" });
   });
 
   it("records the created event marked as a restore, and a plain create's unmarked", async () => {
@@ -277,15 +294,15 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     expect(plain).not.toHaveProperty("restoredFrom");
     await t.nextly.delete({ collection: POSTS, id });
 
-    await t.nextly.trash.restore({ id });
+    await restoreOf(t, { id });
 
     const events = await createdEvents(t, id);
     expect(events).toHaveLength(2);
     expect(events.filter(e => e.restoredFrom === "trash")).toHaveLength(1);
-    expect(events.find(e => e.restoredFrom === "trash")?.data).toMatchObject({
-      id,
-      title: "Hello",
-    });
+    const restored = events.find(e => e.restoredFrom === "trash");
+    expect(restored?.data).toMatchObject({ id, title: "Hello" });
+    // Every language and the shared fields came back.
+    expect(restored?.shared).toBe(true);
   });
 
   it("emptying removes the entry for good and ends its history", async () => {
@@ -293,11 +310,11 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     const id = await post(t, "gone");
     await t.nextly.delete({ collection: POSTS, id });
 
-    const { removed } = await t.nextly.trash.empty({ collection: POSTS });
+    const { removed } = await emptyOf(t, { collection: POSTS });
 
     expect(removed.map(item => item.itemId)).toEqual([id]);
     expect(await trashed(t, id)).toBe(0);
-    expect(await outcome(() => t.nextly.trash.restore({ id }))).toBe(404);
+    expect(await outcome(() => restoreOf(t, { id }))).toBe(404);
     // Its history ended with its deletion, and nothing re-opened it.
     expect((await historyKinds(t, id)).slice(-1)).toEqual(["deleted"]);
   });
@@ -353,7 +370,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
 
     expect(
       await outcome(() =>
-        t.nextly.trash.restore({
+        restoreOf(t, {
           id,
           user: { id: author },
           overrideAccess: false,
@@ -362,7 +379,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     ).toBe(403);
     expect(
       await outcome(() =>
-        t.nextly.trash.empty({
+        emptyOf(t, {
           collection: POSTS,
           user: { id: author },
           overrideAccess: false,
@@ -372,7 +389,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     expect(await trashed(t, id)).toBe(1);
 
     expect(
-      await t.nextly.trash.restore({
+      await restoreOf(t, {
         id,
         user: { id: editor },
         overrideAccess: false,
@@ -382,7 +399,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     // Deleted again: the Editor empties it, by the permission the presets
     // grant, as `empty-<collection>`.
     await t.nextly.delete({ collection: POSTS, id });
-    const { removed } = await t.nextly.trash.empty({
+    const { removed } = await emptyOf(t, {
       collection: POSTS,
       user: { id: editor },
       overrideAccess: false,

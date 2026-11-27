@@ -19,8 +19,10 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import type { RequestActor } from "../../auth/request-actor";
+import { toDbError } from "../../database/errors";
 import { missingSchemaObject } from "../../database/missing-column";
 import { NextlyError } from "../../errors";
+import { WHOLE_DOCUMENT, withWriteParts } from "../../hooks/hook-language";
 import { DASHBOARD_PINS_TABLE } from "../../schemas/dashboard-pins/table-name";
 import { MEDIA_USAGE_TABLE } from "../../schemas/media-usage/table-name";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
@@ -34,7 +36,10 @@ import { VERSIONS_TABLE } from "../../schemas/versions/types";
 import { reopenEndedLife } from "../content-events/reopen-life";
 import { recordWriteEvent } from "../content-events/write-event";
 import { COMPANION_PARENT_COLUMN } from "../i18n/companion-columns";
-import { fieldProducesColumn } from "../schema/field-rules";
+import {
+  builderColumnIsUnique,
+  fieldProducesColumn,
+} from "../schema/field-rules";
 import { fieldsStoredOnRow } from "../schema/services/field-column-descriptor";
 import { recordMutationEvent } from "../webhooks/record-mutation-event";
 import type { SensitiveFieldSource } from "../webhooks/sensitive-fields";
@@ -67,6 +72,12 @@ export type RestoreField = SensitiveFieldSource & {
 export interface RestoreCollection {
   tableName: string;
   fields: readonly RestoreField[];
+  /**
+   * Whether it has the Draft/Published lifecycle: only then is `status` its
+   * system column, which a restore puts back as a draft. Without it a field
+   * named `status` is the author's own, kept as it was.
+   */
+  lifecycle: boolean;
 }
 
 /** What a restore reads besides the database. */
@@ -150,8 +161,10 @@ function uniqueFieldNames(
 ): string[] {
   const names = new Set<string>(onOwnRow ? [SLUG] : []);
   for (const field of fieldsStoredOnRow(fields)) {
+    // The rule the column's unique constraint is made by: declared unique,
+    // or a one-to-one relation, unique by its kind.
     if (
-      field.unique === true &&
+      builderColumnIsUnique(field) &&
       typeof field.name === "string" &&
       fieldProducesColumn(field)
     ) {
@@ -306,7 +319,7 @@ async function conflictsOf(
 function rowToPutBack(
   table: string,
   kept: KeptRow,
-  collection: RestoreCollection,
+  collection: RestoreCollection & { slug: string },
   asked: {
     conflicts: readonly TrashConflict[];
     values: Readonly<Record<string, unknown>>;
@@ -317,18 +330,25 @@ function rowToPutBack(
   const row = rowGivenBack(kept);
   const companion = `${collection.tableName}${STORAGE_FORMAT.companionSuffix}`;
   if (table === collection.tableName) {
-    if (row.status === PUBLISHED) row.status = DRAFT;
+    if (collection.lifecycle && row.status === PUBLISHED) row.status = DRAFT;
     for (const field of asked.cleared) row[field] = null;
     return withNewValues(row, asked.conflicts, asked.values, undefined);
   }
   if (table === companion) {
-    if (row._status === PUBLISHED) row._status = DRAFT;
+    if (collection.lifecycle && row._status === PUBLISHED) row._status = DRAFT;
     return withNewValues(
       row,
       asked.conflicts,
       asked.values,
       String(row._locale)
     );
+  }
+  // A record kept about the entry names its collection: by the slug it has
+  // now, which a rename since moved the trash record to.
+  if (table.startsWith("nextly_")) {
+    for (const column of ["scopeSlug", "targetSlug", "subjectSlug"]) {
+      if (column in row) row[column] = collection.slug;
+    }
   }
   return row;
 }
@@ -406,6 +426,31 @@ async function rowsOfPeopleStillThere(
 }
 
 /**
+ * Refuses, as a conflict the caller can act on, a row the table no longer
+ * takes as it was stored: a column dropped or renamed since the delete, or a
+ * required one added. The transaction rolls back, so nothing is written and
+ * the entry stays in the trash, whole.
+ */
+function refuseFieldsChangedSince(
+  deps: RestoreDeps,
+  table: string,
+  error: unknown
+): void {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  if (
+    missingSchemaObject(error)?.object === "column" ||
+    toDbError(dialect, error).kind === "not-null-violation"
+  ) {
+    throw NextlyError.conflict({
+      message:
+        "This entry's collection has changed its fields since the entry was deleted, so it cannot be put back as it was stored. It stays in the trash.",
+      logContext: { table, reason: "restore-fields-changed" },
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+}
+
+/**
  * Put one row back. Answers false, writing nothing, for a table no longer in
  * the database, which held a field the collection has since dropped. A table
  * still there but not loaded by this process would lose its rows if skipped,
@@ -421,6 +466,7 @@ async function putBackRow(
     await tx.insert(table, row);
     return true;
   } catch (error) {
+    refuseFieldsChangedSince(deps, table, error);
     if (!isUnregisteredTable(error)) throw error;
     // The refusal comes before any statement, so the transaction is still
     // usable to ask.
@@ -456,11 +502,27 @@ async function putBackTable(
 /** The entry as its created event carries it: as it was, now a draft. */
 function documentAsRestored(
   record: TrashRecord,
-  cleared: readonly string[]
+  restored: {
+    lifecycle: boolean;
+    cleared: readonly string[];
+    taken: readonly TrashConflict[];
+    values: Readonly<Record<string, unknown>>;
+  }
 ): Record<string, unknown> {
   const document = { ...record.stored.document };
-  if (document.status === PUBLISHED) document.status = DRAFT;
-  for (const field of cleared) document[field] = null;
+  if (restored.lifecycle && document.status === PUBLISHED) {
+    document.status = DRAFT;
+  }
+  for (const field of restored.cleared) document[field] = null;
+  // The new values that replaced taken ones, as the rows hold them now.
+  for (const conflict of restored.taken) {
+    if (
+      Object.prototype.hasOwnProperty.call(restored.values, conflict.field) &&
+      conflict.field in document
+    ) {
+      document[conflict.field] = restored.values[conflict.field];
+    }
+  }
   return document;
 }
 
@@ -573,11 +635,16 @@ export async function restoreTrashedEntry(
         deps,
         kept.table,
         kept.rows.map(row =>
-          rowToPutBack(kept.table, row, collection, {
-            conflicts: taken,
-            values,
-            cleared,
-          })
+          rowToPutBack(
+            kept.table,
+            row,
+            { ...collection, slug: record.scopeSlug },
+            {
+              conflicts: taken,
+              values,
+              cleared,
+            }
+          )
         )
       );
     }
@@ -623,19 +690,27 @@ export async function restoreTrashedEntry(
     // The site's created event, marked as a restore, in the same
     // transaction, so it is recorded exactly when the entry is back. The
     // document was kept without its sensitive values.
-    await recordMutationEvent(tx, {
-      type: "entry.created",
-      resource: {
-        kind: "entry",
-        collection: record.scopeSlug,
-        id: record.itemId,
-      },
-      data: documentAsRestored(record, cleared),
-      previous: null,
-      fields: collection.fields,
-      actor: input.actor,
-      restoredFrom: "trash",
-    });
+    // Every language and the shared fields came back, as a create's do.
+    await withWriteParts(WHOLE_DOCUMENT, () =>
+      recordMutationEvent(tx, {
+        type: "entry.created",
+        resource: {
+          kind: "entry",
+          collection: record.scopeSlug,
+          id: record.itemId,
+        },
+        data: documentAsRestored(record, {
+          lifecycle: collection.lifecycle,
+          cleared,
+          taken,
+          values,
+        }),
+        previous: null,
+        fields: collection.fields,
+        actor: input.actor,
+        restoredFrom: "trash",
+      })
+    );
     return {
       restored: true,
       collection: record.scopeSlug,

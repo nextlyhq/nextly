@@ -30,6 +30,18 @@ import { createDynamicHandlers } from "../../../routeHandler";
 
 perLanguageStorageSuite();
 
+/** A restore's result, unwrapped from its mutation envelope. */
+const restoreOf = async (
+  t: TestNextly,
+  args: Parameters<TestNextly["nextly"]["trash"]["restore"]>[0]
+) => (await t.nextly.trash.restore(args)).item;
+
+/** An emptying's result, unwrapped from its mutation envelope. */
+const emptyOf = async (
+  t: TestNextly,
+  args?: Parameters<TestNextly["nextly"]["trash"]["empty"]>[0]
+) => (await t.nextly.trash.empty(args)).item;
+
 const POSTS = "trashrest_posts";
 const NOTES = "trashrest_notes";
 const ADMIN = "trashrest-admin";
@@ -180,7 +192,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     );
     expect(JSON.stringify(whileTrashed ?? null)).not.toContain("Target");
 
-    await t.nextly.trash.restore({ id: postId });
+    await restoreOf(t, { id: postId });
 
     expect(await read()).toEqual(
       expect.objectContaining({ id: postId, title: "Target" })

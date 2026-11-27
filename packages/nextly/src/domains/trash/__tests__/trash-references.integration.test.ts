@@ -42,6 +42,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { getDialectTables } from "../../../database/index";
+import { NextlyError } from "../../../errors/nextly-error";
 import { DASHBOARD_PINS_TABLE } from "../../../schemas/dashboard-pins/table-name";
 import { TRASH_TABLE, type TrashedEntry } from "../../../schemas/trash";
 import { VERSION_VIEWS_TABLE } from "../../../schemas/version-views";
@@ -58,11 +59,26 @@ import type { CollectionEntryService } from "../../../services/collections/colle
 
 perLanguageStorageSuite();
 
+/** A restore's result, unwrapped from its mutation envelope. */
+const restoreOf = async (
+  t: TestNextly,
+  args: Parameters<TestNextly["nextly"]["trash"]["restore"]>[0]
+) => (await t.nextly.trash.restore(args)).item;
+
+/** An emptying's result, unwrapped from its mutation envelope. */
+const emptyOf = async (
+  t: TestNextly,
+  args?: Parameters<TestNextly["nextly"]["trash"]["empty"]>[0]
+) => (await t.nextly.trash.empty(args)).item;
+
 const TAGS = "trashref_tags";
 const PAGES = "trashref_pages";
 const NOTES = "trashref_notes";
 const PRIVATE = "trashref_private";
 const META = "trashref_meta";
+// A collection without the Draft/Published lifecycle, with a field of its own
+// named `status`.
+const PLAIN = "trashref_plain";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -101,6 +117,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [
           text({ name: "title" }),
           relationship({ name: "page", relationTo: PAGES }),
+        ],
+      }),
+      defineCollection({
+        slug: PLAIN,
+        fields: [
+          text({ name: "title" }),
+          text({ name: "status", localized: false }),
         ],
       }),
       defineCollection({
@@ -298,7 +321,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       and: [{ column: "id", op: "=", value: leaves }],
     });
 
-    expect(await t.nextly.trash.restore({ id })).toMatchObject({
+    expect(await restoreOf(t, { id })).toMatchObject({
       restored: true,
     });
     expect(await readersOf(t, id)).toEqual({
@@ -325,7 +348,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       atDelete.filter(e => e.type === "entry.deleted" && e.resource.id === id)
     ).toHaveLength(1);
 
-    await t.nextly.trash.restore({ id });
+    await restoreOf(t, { id });
 
     expect(await read(t, PAGES, id)).toMatchObject({
       meta: expect.objectContaining({ note: "kept" }),
@@ -336,6 +359,54 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     expect(atRestore).toHaveLength(1);
     expect(atRestore[0].restoredFrom).toBe("trash");
     expect(JSON.stringify(atRestore[0])).not.toContain("s3cret-token");
+  });
+
+  it("keeps a field named status as it was, on a collection without the publish lifecycle", async () => {
+    const t = await boot(dialect);
+    const id = await make(t, PLAIN, {
+      title: "Own status",
+      status: "published",
+    });
+    await t.nextly.delete({ collection: PLAIN, id });
+
+    await restoreOf(t, { id });
+
+    expect(await read(t, PLAIN, id)).toMatchObject({ status: "published" });
+  });
+
+  it("refuses, writing nothing, a stored column the table no longer has", async () => {
+    const t = await boot(dialect);
+    const id = await make(t, PAGES, { title: "Drifted", slug: "drifted" });
+    await t.nextly.delete({ collection: PAGES, id });
+    // As a field dropped since the delete leaves it: the kept row names a
+    // column the table does not have.
+    const [row] = await t.adapter.select<{ id: string; stored: unknown }>(
+      TRASH_TABLE,
+      { where: { and: [{ column: "itemId", op: "=", value: id }] } }
+    );
+    const stored = (
+      typeof row.stored === "string" ? JSON.parse(row.stored) : row.stored
+    ) as TrashedEntry;
+    stored.tables[0].rows[0].gone_field = { t: "value", v: "x" };
+    await t.adapter.update(
+      TRASH_TABLE,
+      { stored },
+      { and: [{ column: "id", op: "=", value: row.id }] }
+    );
+
+    const refused = await restoreOf(t, { id }).then(
+      () => "restored",
+      (error: unknown) => (NextlyError.is(error) ? error.statusCode : error)
+    );
+
+    expect(refused).toBe(409);
+    expect((await trashed(t, id)).label).toBe("Drifted");
+    expect(
+      await t.nextly
+        .findByID({ collection: PAGES, id })
+        .then(() => true)
+        .catch(() => false)
+    ).toBe(false);
   });
 
   it("puts back its pending edits and recovery points", async () => {
@@ -376,7 +447,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     await t.nextly.delete({ collection: PAGES, id });
     expect(await kept()).toBe("");
 
-    await t.nextly.trash.restore({ id });
+    await restoreOf(t, { id });
 
     expect(await kept()).toContain("pending edit");
     expect(await kept()).toContain("recovery point");
@@ -388,7 +459,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     await t.nextly.delete({ collection: PAGES, id });
     await make(t, PAGES, { title: "Second", slug: "same" });
 
-    expect(await t.nextly.trash.restore({ id })).toEqual({
+    expect(await restoreOf(t, { id })).toEqual({
       restored: false,
       conflicts: [{ field: "slug", value: "same" }],
     });
@@ -400,9 +471,9 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     const id = await make(t, PAGES, { title: "Tagged", slug: "tagged", tag });
     await t.nextly.delete({ collection: PAGES, id });
     await t.nextly.delete({ collection: TAGS, id: tag });
-    await t.nextly.trash.empty({ collection: TAGS });
+    await emptyOf(t, { collection: TAGS });
 
-    const result = await t.nextly.trash.restore({ id });
+    const result = await restoreOf(t, { id });
 
     expect(result).toMatchObject({
       restored: true,
@@ -432,7 +503,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       data: { page: other, _overwrite: true },
     } as never);
 
-    await t.nextly.trash.restore({ id });
+    await restoreOf(t, { id });
 
     expect((await read(t, NOTES, cleared)).page).toBe(id);
     expect((await read(t, NOTES, edited)).page).toBe(other);
@@ -447,7 +518,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     expect((await trashed(t, id)).label).toBeNull();
     const listed = await t.nextly.trash.list({ collection: PRIVATE });
     expect(JSON.stringify(listed.items)).not.toContain("Secret title");
-    expect(await t.nextly.trash.restore({ id })).toEqual({
+    expect(await restoreOf(t, { id })).toEqual({
       restored: false,
       conflicts: [{ field: "slug" }],
     });
@@ -527,7 +598,7 @@ describe.each(getConfiguredTestDialects())("many-to-many on %s", dialect => {
     await t.nextly.delete({ collection: BTAGS, id: tag });
     expect(await tagsOf(t, post)).toEqual([]);
 
-    await t.nextly.trash.restore({ id: tag });
+    await restoreOf(t, { id: tag });
 
     expect(await tagsOf(t, post)).toEqual([tag]);
   });
@@ -536,7 +607,7 @@ describe.each(getConfiguredTestDialects())("many-to-many on %s", dialect => {
     const { t, tag, post } = await linked();
 
     await t.nextly.delete({ collection: BPOSTS, id: post });
-    await t.nextly.trash.restore({ id: post });
+    await restoreOf(t, { id: post });
 
     expect(await tagsOf(t, post)).toEqual([tag]);
   });
