@@ -815,7 +815,8 @@ describe("what the checker runs with a fork's head checked out", () => {
       return path === change.with.path || path.startsWith(`${change.with.path}/`);
     };
     const inChange = steps.filter(step => underChange(step["working-directory"])).map(step => step.name);
-    expect(inChange).toEqual(["No AI credit", "Run gitleaks on the commits this run adds"]);
+    // The core-library check reads the change's lockfile as text with the root's checker.
+    expect(inChange).toEqual(["No AI credit", "No AI or MCP library in core", "Run gitleaks on the commits this run adds"]);
     // No step reaches into the change any other way: a `cd` into it, or a path under it.
     for (const step of steps) {
       expect(String(step.run ?? ""), step.name).not.toMatch(/\bcd\s+["']?(?:\.\/|\$GITHUB_WORKSPACE\/|\$\{\{\s*github\.workspace\s*\}\}\/)?change\b/);

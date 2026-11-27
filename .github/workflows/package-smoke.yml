@@ -120,6 +120,25 @@ jobs:
           npm install /tmp/tarballs/*.tgz
           npm ls --depth=0
 
+      # A project made without the opt-in packages that may hold AI or MCP
+      # libraries (@nextlyhq/ai, @nextlyhq/mcp, @nextlyhq/plugin-mcp) installs
+      # none of those libraries: nothing else brings one in.
+      - name: No AI or MCP library without the opt-in packages
+        run: |
+          mkdir -p /tmp/without-opt-in
+          cd /tmp/without-opt-in
+          npm init -y > /dev/null
+          shopt -s nullglob
+          tarballs=()
+          for tarball in /tmp/tarballs/*.tgz; do
+            case "$(basename "$tarball")" in
+              nextlyhq-ai-[0-9]*|nextlyhq-mcp-[0-9]*|nextlyhq-plugin-mcp-[0-9]*) continue ;;
+            esac
+            tarballs+=("$tarball")
+          done
+          npm install "${tarballs[@]}"
+          node "$GITHUB_WORKSPACE/scripts/check-core-ai-libraries.mjs" --installed /tmp/without-opt-in/node_modules
+
       - name: Import smoke
         run: |
           cd /tmp/consumer
