@@ -552,7 +552,7 @@ schema. Three ways to handle it:
 
 Nextly's CLI is platform-agnostic. The pattern is the same on Railway, Render, Fly.io, or AWS:
 
-1. Configure your deploy pipeline to run `nextly migrate` against the production DB.
+1. Configure your deploy pipeline to run `nextly migrate --mode production` against the production DB. The flag makes the CLI read your production environment files and evaluate your config as `next build` does, whatever `NODE_ENV` the step runs with.
 2. Ensure that step runs **before** the new code is promoted.
 3. If the migration fails, the deploy should abort.
 
@@ -562,7 +562,7 @@ Specific examples:
   ```json
   {
     "deploy": {
-      "preDeployCommand": ["nextly migrate"]
+      "preDeployCommand": ["nextly migrate --mode production"]
     }
   }
   ```
@@ -571,9 +571,9 @@ Specific examples:
 - **Fly.io:** Use a `release_command` in `fly.toml`. The `[deploy]` is a TOML section header:
   ```toml
   [deploy]
-  release_command = "nextly migrate"
+  release_command = "nextly migrate --mode production"
   ```
-- **AWS (ECS, etc.):** Add a one-shot task in your pipeline that runs `nextly migrate` before updating the service.
+- **AWS (ECS, etc.):** Add a one-shot task in your pipeline that runs `nextly migrate --mode production` before updating the service.
 
 ---
 
