@@ -841,8 +841,10 @@ function frontMatterOf(about: CopyAbout): string {
 /** A page's plain-text copy, as Markdown, ending in a newline. */
 export function plainCopyOf(source: CopySource): string {
   const parts: string[] = [];
-  const title = plainTitle(source.title);
-  if (title !== undefined) parts.push(`# ${escapeText(title)}`);
+  // The title as given, its caller's to read: a page's name is already the
+  // words it shows, which a second reading as markup would cut short.
+  const title = textOf(source.title);
+  if (title !== undefined) parts.push(`# ${escapeText(oneLine(title))}`);
   writtenFor(source.base ?? source.about?.url, () => {
     if (source.fields === undefined) {
       for (const [name, value] of Object.entries(source.document)) {
@@ -878,7 +880,7 @@ export function descriptionCopyOf(
   title: string | undefined,
   description: string | undefined
 ): string {
-  const heading = plainTitle(title);
+  const heading = title === undefined ? undefined : textOf(oneLine(title));
   const words =
     description === undefined ? undefined : textOf(oneLine(description));
   return `${[

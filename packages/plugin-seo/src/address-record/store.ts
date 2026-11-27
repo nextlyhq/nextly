@@ -481,13 +481,15 @@ async function notesOn(
  * Keep `value` under the note `key`: one update where the note is there, an
  * insert where it is not, and the update again where another process made it
  * at the same moment. A caller that has just read the note `absent` starts
- * with the insert.
+ * with the insert. A note made here is of `kind`, `meta` unless given: a
+ * list kept one note an item names its own kind, to be read back by it
+ * ({@link notesOfKind}).
  */
 export async function putNote(
   ctx: PluginContext,
   key: string,
   value: string,
-  { absent = false }: { absent?: boolean } = {}
+  { absent = false, kind = "meta" }: { absent?: boolean; kind?: string } = {}
 ): Promise<void> {
   await recordReady(ctx);
   const byKey = eq(ctx.db.table(addressNotes).noteKey, key);
@@ -495,7 +497,7 @@ export async function putNote(
   if (!absent && (await write()) > 0) return;
   const made = await insertUnlessTaken(ctx, ctx.db, addressNotes, {
     noteKey: key,
-    kind: "meta",
+    kind,
     value,
   });
   if (!made) await write();
@@ -591,6 +593,26 @@ export async function pendingNotes(ctx: PluginContext): Promise<StoredNote[]> {
     );
     if (rows.length < PAGE) return found;
   }
+}
+
+/**
+ * Up to `limit` notes of `kind`, in key order: a list kept one note an item,
+ * so that writers of different items never rewrite one shared note.
+ */
+export async function notesOfKind(
+  ctx: PluginContext,
+  kind: string,
+  limit: number
+): Promise<StoredNote[]> {
+  await recordReady(ctx);
+  const columns = ctx.db.table(addressNotes);
+  const rows = await ctx.db
+    .select(addressNotes)
+    .where(eq(columns.kind, kind))
+    .orderBy(asc(columns.noteKey))
+    .limit(limit)
+    .all();
+  return rows.map(row => noteOf(row as unknown as Record<string, unknown>));
 }
 
 /** Forget the notes `keys`. */

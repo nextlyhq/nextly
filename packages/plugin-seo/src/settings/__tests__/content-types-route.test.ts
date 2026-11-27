@@ -25,6 +25,8 @@ function context(): PluginRouteContext {
   return {
     user: { id: "u1" },
     caller: { can: async () => true },
+    // The app declares no types in code here.
+    config: {},
     services: {
       collections: {
         getCollection: async () => ({
@@ -166,6 +168,8 @@ function siteContext(
   return {
     user: { id: "u1" },
     caller: { can: async () => true },
+    // The app declares no types in code here.
+    config: {},
     services: {
       collections: {
         getCollection: async (slug: string) => {
@@ -305,6 +309,8 @@ describe("the fields a detail may be read from", () => {
     return {
       user: { id: "u1" },
       caller: { can: async () => true },
+      // The app declares no types in code here.
+      config: {},
       services: {
         collections: {
           getCollection: async () => ({

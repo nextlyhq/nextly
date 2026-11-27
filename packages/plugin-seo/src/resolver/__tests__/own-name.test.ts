@@ -112,6 +112,17 @@ describe("a page's own name", () => {
     ).toBe("Things I've Built");
   });
 
+  it("reads markup once: an escaped tag in it stays words", () => {
+    expect(
+      pageNameOf({
+        home: false,
+        document: { title: "<span>Using &lt;Button&gt;</span>" },
+        fields: ["title"],
+        codePage: false,
+      })
+    ).toBe("Using <Button>");
+  });
+
   it("reads a number as a name, as core reads a title field", () => {
     expect(
       pageNameOf({

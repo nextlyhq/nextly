@@ -71,6 +71,7 @@ import {
   descriptionCopyOf,
   pagesOfCopy,
   plainCopyOf,
+  plainTitle,
   relatedDocumentsIn,
   relatedKey,
   withFrontMatter,
@@ -188,6 +189,14 @@ interface HeadNames {
   /** Its type is a Single whose `title` is Nextly's, left out of its copy. */
   labelTitle?: boolean;
 }
+
+/**
+ * What the outputs list a page by: its own name, else its head's title read
+ * once as the words it shows. Read here, once, so no writer reads it as
+ * markup again.
+ */
+const listedName = (head: HeadNames): string | undefined =>
+  head.name ?? plainTitle(head.title);
 
 /** A listed page's head as the public may read it, and its published document. */
 interface ListedHead extends HeadNames {
@@ -309,7 +318,7 @@ export async function llmsTxtOf(
     const head = headOf(at);
     return {
       section: sections.get(page.holder.collection) ?? SINGLES_SECTION,
-      title: head.name ?? head.title ?? page.path,
+      title: listedName(head) ?? page.path,
       url: (head.readable ? linked(at) : undefined) ?? page.loc,
       ...(head.description === undefined
         ? {}
@@ -552,7 +561,7 @@ async function* pagesInOrder(
       body = await documentBodyOf(writing, page, { ...head, document });
     }
     yield {
-      title: head.name ?? head.title ?? page.path,
+      title: listedName(head) ?? page.path,
       url: page.loc,
       ...(head.readable
         ? { body: body ?? descriptionCopyOf(undefined, head.description) }
@@ -938,7 +947,7 @@ async function madeCopy(
 const descriptionCopyFor = (page: ListedPage, head: HeadNames): string =>
   withFrontMatter(
     aboutOf(page, head),
-    descriptionCopyOf(head.name ?? head.title, head.description)
+    descriptionCopyOf(listedName(head), head.description)
   );
 
 /**
@@ -1081,7 +1090,7 @@ async function documentCopyOf(
     titleFields: TitleFields | undefined;
   }
 ): Promise<string> {
-  const title = head.name ?? head.title;
+  const title = listedName(head);
   const related =
     fields === undefined
       ? undefined

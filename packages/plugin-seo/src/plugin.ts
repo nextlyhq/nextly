@@ -1280,7 +1280,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     shareCardRoute(options.baseUrl),
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
-    contentTypesRoute(types),
+    contentTypesRoute(types, titleFields),
     // Which sitemap pages the own robots.txt rules being typed would block.
     ownRulesCheckRoute(options, {
       readRules,

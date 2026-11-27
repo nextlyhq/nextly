@@ -5,16 +5,24 @@
  * llms-full.txt ran out of time before rendering it. AI tools are given the
  * page's description in its place meanwhile.
  *
- * Kept as one note of the address record, the most recent first and no more
- * than {@link MOST_KEPT}, and written only where it changes: a page that
- * renders again is taken off it. A note that cannot be read or written is
+ * Each page is its own note of the address record, of its own kind, keyed by
+ * its address: a failure writes that page's note and a copy made with the
+ * page's words removes it, so two requests finishing at once, about two
+ * pages or one, never rewrite each other's results. The list is read back
+ * by kind, the most recent first. A note that cannot be read or written is
  * logged and never fails the answer it was made for.
  *
  * @module outputs/copy-failures
  */
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
-import { noteKey, putNote, readNotes } from "../address-record/store";
+import {
+  forgetNotes,
+  noteKey,
+  notesOfKind,
+  putNote,
+  readNotes,
+} from "../address-record/store";
 import { isRecord, textOf } from "../plain-values";
 
 /** One page whose copy could not be made. */
@@ -29,54 +37,52 @@ export interface CopyFailure {
   at: string;
 }
 
-/**
- * How many failures are kept: enough to show a pattern, few enough that
- * the note stays well inside a MySQL `TEXT` column.
- */
-const MOST_KEPT = 40;
+/** The kind each page's note is kept under, which the list is read back by. */
+const FAILURE_KIND = "copy-failure";
 
-/**
- * The most the note holds, in bytes: well inside a MySQL `TEXT` column
- * (65,535 bytes). Addresses are kept whole, since a cut one names another
- * page; past this, the oldest failures are let go instead.
- */
-const MOST_NOTE_BYTES = 60_000;
+/** The note of the page at `url`. */
+const failureKey = (url: string): string =>
+  noteKey(`plain-copy-failure:${url}`);
 
-const bytes = (text: string): number => new TextEncoder().encode(text).length;
+/** How many notes one reading of the list takes: far more than it shows. */
+const MOST_READ = 500;
 
-/** The note the failures are kept in. */
-const FAILURES_KEY = noteKey("plain-copy-failures");
+/** How many failures the problem list shows, the most recent. */
+const MOST_SHOWN = 40;
 
-/** The failures a stored note holds, each checked; none from a note that is not one. */
-function failuresIn(value: string | null | undefined): CopyFailure[] {
-  if (value === null || value === undefined) return [];
+/** How many pages one read of their notes asks for. */
+const READ_CHUNK = 100;
+
+/** The failure a stored note holds, checked; none from a note that is not one. */
+function failureIn(value: string | null): CopyFailure | undefined {
+  if (value === null) return undefined;
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
   } catch {
-    return [];
+    return undefined;
   }
-  if (!Array.isArray(parsed)) return [];
-  return parsed.flatMap(entry => {
-    if (!isRecord(entry)) return [];
-    const url = textOf(entry.url);
-    const reason = textOf(entry.reason);
-    const retry = textOf(entry.retry);
-    const at = textOf(entry.at);
-    return url === undefined ||
-      reason === undefined ||
-      retry === undefined ||
-      at === undefined
-      ? []
-      : [{ url, reason, retry, at }];
-  });
+  if (!isRecord(parsed)) return undefined;
+  const url = textOf(parsed.url);
+  const reason = textOf(parsed.reason);
+  const retry = textOf(parsed.retry);
+  const at = textOf(parsed.at);
+  return url === undefined ||
+    reason === undefined ||
+    retry === undefined ||
+    at === undefined
+    ? undefined
+    : { url, reason, retry, at };
 }
 
 /** The pages whose copy could not be made, the most recent first. */
 export async function copyFailures(ctx: PluginContext): Promise<CopyFailure[]> {
   try {
-    const { notes } = await readNotes(ctx, [FAILURES_KEY]);
-    return failuresIn(notes.get(FAILURES_KEY));
+    const notes = await notesOfKind(ctx, FAILURE_KIND, MOST_READ);
+    return notes
+      .flatMap(note => failureIn(note.value) ?? [])
+      .sort((a, b) => b.at.localeCompare(a.at))
+      .slice(0, MOST_SHOWN);
   } catch (error) {
     ctx.logger.warn(
       "The pages whose plain-text copy failed could not be read",
@@ -89,9 +95,10 @@ export async function copyFailures(ctx: PluginContext): Promise<CopyFailure[]> {
 }
 
 /**
- * Keep what making copies found: each of `failed` noted, in place of any
- * earlier note of its page, and each page of `made` taken off. One read of
- * the note, and a write only where it changes.
+ * Keep what making copies found: each page of `failed` noted, in place of
+ * any earlier note of it, and each page of `made` taken off. Each page's
+ * note is written alone, and one read says which of `made` have a note to
+ * take off, so a page with none costs no write.
  */
 export async function noteCopyResults(
   ctx: PluginContext,
@@ -100,28 +107,25 @@ export async function noteCopyResults(
 ): Promise<void> {
   if (failed.length === 0 && made.length === 0) return;
   try {
-    const { notes } = await readNotes(ctx, [FAILURES_KEY]);
-    const stored = notes.get(FAILURES_KEY);
-    const before = failuresIn(stored);
     const at = new Date().toISOString();
-    const fresh = failed.map(failure => ({ ...failure, at }));
-    const settled = new Set([...made, ...fresh.map(failure => failure.url)]);
-    const after = [
-      ...fresh,
-      ...before.filter(failure => !settled.has(failure.url)),
-    ].slice(0, MOST_KEPT);
-    while (after.length > 0 && bytes(JSON.stringify(after)) > MOST_NOTE_BYTES) {
-      after.pop();
-    }
-    // Unchanged but for the times of failures already noted: nothing to write.
-    const same = (list: readonly CopyFailure[]) =>
-      JSON.stringify(
-        list.map(({ url, reason, retry }) => [url, reason, retry])
+    const failedUrls = new Set(failed.map(failure => failure.url));
+    for (const failure of failed) {
+      await putNote(
+        ctx,
+        failureKey(failure.url),
+        JSON.stringify({ ...failure, at }),
+        { kind: FAILURE_KIND }
       );
-    if (same(after) === same(before)) return;
-    await putNote(ctx, FAILURES_KEY, JSON.stringify(after), {
-      absent: !notes.has(FAILURES_KEY),
-    });
+    }
+    const settled = [...new Set(made)].filter(url => !failedUrls.has(url));
+    for (let start = 0; start < settled.length; start += READ_CHUNK) {
+      const keys = settled.slice(start, start + READ_CHUNK).map(failureKey);
+      const { notes } = await readNotes(ctx, keys);
+      await forgetNotes(
+        ctx,
+        keys.filter(key => notes.has(key))
+      );
+    }
   } catch (error) {
     ctx.logger.warn(
       "The pages whose plain-text copy failed could not be kept",

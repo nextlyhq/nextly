@@ -415,7 +415,7 @@ describe("a page's plain-text copy", () => {
 
   it("writes the words markup shows, never the markup", () => {
     const copy = plainCopyOf({
-      title: 'Things I\'ve <span class="text-primary">Built</span>',
+      title: "Things I've Built",
       fields: [
         text({ name: "tagline" }),
         textarea({ name: "intro" }),
@@ -437,11 +437,15 @@ describe("a page's plain-text copy", () => {
       ].join("\n\n") + "\n"
     );
     expect(copy).not.toMatch(/span|strong|script|track/);
+    // A title is read from markup once, by whoever chooses it.
+    expect(
+      plainTitle('Things I\'ve <span class="text-primary">Built</span>')
+    ).toBe("Things I've Built");
   });
 
   it("reads a tag whole, a quoted > in it and all, breaks a line at any <br>, and keeps words beside a drawing", () => {
     const copy = plainCopyOf({
-      title: '<span title="a > b">Hello</span>',
+      title: "Hello",
       fields: [textarea({ name: "intro" }), text({ name: "label" })],
       document: {
         intro: 'One<br class="gap">Two',
@@ -449,15 +453,26 @@ describe("a page's plain-text copy", () => {
       },
     });
     expect(copy).toBe("# Hello\n\nOne\nTwo\n\nDocs\n");
+    expect(plainTitle('<span title="a > b">Hello</span>')).toBe("Hello");
   });
 
   it("reads the characters markup spells by name, as the rendered page does", () => {
     const copy = plainCopyOf({
-      title: "Don&rsquo;t <em>stop</em>",
+      title: "Don’t stop",
       fields: [textarea({ name: "intro" })],
       document: { intro: "<p>Don&rsquo;t &mdash; stop&hellip;</p>" },
     });
     expect(copy).toBe("# Don’t stop\n\nDon’t — stop…\n");
+    expect(plainTitle("Don&rsquo;t <em>stop</em>")).toBe("Don’t stop");
+  });
+
+  it("writes its title as given, never reading a name already read from markup as markup again", () => {
+    const copy = plainCopyOf({
+      title: "Using <Button>",
+      fields: [],
+      document: {},
+    });
+    expect(copy).toBe("# Using \\<Button\\>\n");
   });
 
   it("leaves out a drawing in SVG, as a value or as a picture", () => {

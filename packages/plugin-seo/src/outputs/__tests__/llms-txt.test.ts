@@ -74,19 +74,21 @@ describe("llms.txt", () => {
     );
   });
 
-  it("names each page by the words its title shows, never its markup", async () => {
-    const title = 'Things I\'ve <span class="text-primary">Built</span>';
+  it("writes each page's title as given, never reading it as markup again", async () => {
+    // A name already read from markup: `<Button>` is words here.
+    const title = "Using <Button>";
     const file = llmsTxt({
       name: "Acme",
-      entries: [{ section: "Pages", title, url: "https://acme.example/built" }],
+      entries: [
+        { section: "Pages", title, url: "https://acme.example/button" },
+      ],
     });
-    expect(file).toContain("- [Things I've Built](https://acme.example/built)");
+    expect(file).toContain("- [Using <Button>](https://acme.example/button)");
     const full = await llmsFullTxt({
       name: "Acme",
-      pages: [{ title, url: "https://acme.example/built", body: "Words." }],
+      pages: [{ title, url: "https://acme.example/button", body: "Words." }],
     });
-    expect(full).toContain("# Things I've Built\n\nSource:");
-    expect(full).not.toContain("span");
+    expect(full).toContain("# Using <Button>\n\nSource:");
   });
 
   it("reads its pages one at a time from an async source, as each is built", async () => {

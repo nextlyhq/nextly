@@ -9,7 +9,7 @@
  *
  * @module outputs/llms-txt
  */
-import { linkAddress, plainTitle } from "./plain-copy";
+import { linkAddress } from "./plain-copy";
 
 /** One page, as llms.txt lists it. */
 export interface LlmsEntry {
@@ -85,8 +85,9 @@ export function llmsTxt(file: LlmsFile): string {
   for (const entry of file.entries) {
     const description =
       entry.description === undefined ? "" : oneLine(entry.description);
-    const title = plainTitle(entry.title) ?? entry.url;
-    const link = `- [${linkText(title)}](${linkAddress(entry.url)})`;
+    // The title as given: a page's name is already the words it shows, and
+    // reading it as markup again would take `<Button>` in it for a tag.
+    const link = `- [${linkText(entry.title)}](${linkAddress(entry.url)})`;
     const list = sections.get(entry.section) ?? [];
     list.push(description === "" ? link : `${link}: ${description}`);
     sections.set(entry.section, list);
@@ -136,14 +137,12 @@ const PAGE_BREAK = "\n\n---\n\n";
 const bytes = (text: string): number => new TextEncoder().encode(text).length;
 
 /**
- * One page's part of llms-full.txt: its title as a heading, with no
- * markup, its address, then its copy without the heading the copy begins
- * with.
+ * One page's part of llms-full.txt: its title as a heading, as given, its
+ * address, then its copy without the heading the copy begins with.
  */
 function fullPage(page: LlmsFullPage): string {
   const body = (page.body ?? "").replace(/^# [^\n]*\n+/, "").trim();
-  const title = plainTitle(page.title) ?? page.url;
-  const head = `# ${oneLine(title)}\n\nSource: ${page.url}`;
+  const head = `# ${oneLine(page.title)}\n\nSource: ${page.url}`;
   return body === "" ? head : `${head}\n\n${body}`;
 }
 
