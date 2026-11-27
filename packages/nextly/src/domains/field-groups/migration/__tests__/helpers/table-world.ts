@@ -53,6 +53,12 @@ export interface TableWorldOptions {
    * so the surrounding transaction rolls back.
    */
   onUpdate?: (table: string, id: unknown) => void;
+  /**
+   * The database's clock, which a statement reading the time answers from. Absent, this process's
+   * own; set apart from it, a test tells a step that reads the database's clock from one that
+   * reads its own.
+   */
+  databaseNow?: () => Date;
 }
 
 export interface TableWorld {
@@ -183,10 +189,14 @@ export function createTableWorld(
     }
   }
 
+  const databaseNow = options.databaseNow ?? (() => new Date());
+
   const ctx = {
     select: vi.fn(async (table: string, selectOptions?: SelectOptions) =>
       select(table, selectOptions)
     ),
+    // The one statement a step issues outside the table API is the read of the database's clock.
+    queryStatement: vi.fn(async () => [{ now: databaseNow().getTime() }]),
     update: vi.fn(
       async (
         table: string,

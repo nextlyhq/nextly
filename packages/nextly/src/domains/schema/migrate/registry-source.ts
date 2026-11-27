@@ -16,6 +16,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
+import type { PermissionRecord } from "../migrate-create/declared-permissions";
 import type { EntitySettingsRecord } from "../migrate-create/entity-settings";
 import {
   carriesRegistryMetadata,
@@ -40,6 +41,11 @@ export type RegistrySource =
        * run's configuration).
        */
       chain?: readonly EntitySettingsRecord[];
+      /**
+       * The permissions each of `chain` declares, in its order; undefined for
+       * one written before permissions were recorded.
+       */
+      permissions?: readonly (PermissionRecord | undefined)[];
     }
   | {
       kind: "none";
@@ -95,13 +101,18 @@ export async function readRegistrySource(args: {
   const source = await sourceIn(join(metaDir, newest), newest);
   if (source.kind !== "snapshot") return source;
   // Older applied records, newest first, until one records nothing.
-  const chain = [source.entities];
+  const chain = [source];
   for (const file of older) {
     const earlier = await sourceIn(join(metaDir, file), file);
     if (earlier.kind !== "snapshot") break;
-    chain.push(earlier.entities);
+    chain.push(earlier);
   }
-  return { ...source, chain: chain.reverse() };
+  chain.reverse();
+  return {
+    ...source,
+    chain: chain.map(each => each.entities),
+    permissions: chain.flatMap(each => each.permissions ?? [undefined]),
+  };
 }
 
 /** The source one snapshot file gives: its recorded declarations, or none. */
@@ -123,7 +134,12 @@ async function sourceIn(path: string, file: string): Promise<RegistrySource> {
   // Judged by the one reading of "carries registry metadata", which the
   // first run's record also asks of each migration.
   return carriesRegistryMetadata(parsed)
-    ? { kind: "snapshot", file, entities: parsed.entities }
+    ? {
+        kind: "snapshot",
+        file,
+        entities: parsed.entities,
+        permissions: [parsed.permissions],
+      }
     : { kind: "none", reason: "no-record", file };
 }
 

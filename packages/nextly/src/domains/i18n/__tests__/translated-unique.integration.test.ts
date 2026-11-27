@@ -266,11 +266,11 @@ describeEachDialect("a translated unique field", dialect => {
   async function writeBanner(id: string, locale: string, heading: string) {
     const columns = (names: string[]) => names.map(quoted).join(", ");
     await query(
-      `INSERT INTO ${quoted("comp_banner")} (${columns(["id", "_parent_id", "_parent_table", "_parent_field"])}) ` +
+      `INSERT INTO ${quoted("fg_banner")} (${columns(["id", "_parent_id", "_parent_table", "_parent_field"])}) ` +
         `VALUES ('${id}', 'entry-${id}', 'dc_pages', 'banner')`
     );
     await query(
-      `INSERT INTO ${quoted("comp_banner_locales")} (${columns(["_parent", "_locale", "heading"])}) ` +
+      `INSERT INTO ${quoted("fg_banner_locales")} (${columns(["_parent", "_locale", "heading"])}) ` +
         `VALUES ('${id}', '${locale}', '${heading}')`
     );
   }
@@ -303,7 +303,7 @@ describeEachDialect("a translated unique field", dialect => {
     {
       entity: "a field group",
       change: "adds a shared field",
-      companion: "comp_banner_locales",
+      companion: "fg_banner_locales",
       column: "heading",
       create: () =>
         dispatchComponents(
@@ -332,7 +332,7 @@ describeEachDialect("a translated unique field", dialect => {
             confirmed: true,
             localized: true,
             schemaVersion: await schemaVersionOf(
-              "dynamic_components",
+              "dynamic_field_groups",
               "banner"
             ),
           }
@@ -341,7 +341,7 @@ describeEachDialect("a translated unique field", dialect => {
     {
       entity: "a field group",
       change: "makes a shared field Required",
-      companion: "comp_banner_locales",
+      companion: "fg_banner_locales",
       column: "heading",
       create: () =>
         dispatchComponents(
@@ -369,7 +369,7 @@ describeEachDialect("a translated unique field", dialect => {
             confirmed: true,
             localized: true,
             schemaVersion: await schemaVersionOf(
-              "dynamic_components",
+              "dynamic_field_groups",
               "banner"
             ),
           }
@@ -414,7 +414,7 @@ describeEachDialect("a translated unique field", dialect => {
     {
       entity: "a field group",
       change: "removes a shared field",
-      companion: "comp_banner_locales",
+      companion: "fg_banner_locales",
       column: "heading",
       create: () =>
         dispatchComponents(
@@ -440,7 +440,7 @@ describeEachDialect("a translated unique field", dialect => {
             localized: true,
             resolutions: { note: { action: "confirm_drop" } },
             schemaVersion: await schemaVersionOf(
-              "dynamic_components",
+              "dynamic_field_groups",
               "banner"
             ),
           }
@@ -564,7 +564,7 @@ describeEachDialect("a translated unique field", dialect => {
   const CREATES = [
     {
       entity: "field group",
-      table: "comp_banner",
+      table: "fg_banner",
       create: () =>
         dispatchComponents(
           "createComponent",
@@ -767,7 +767,7 @@ describeEachDialect("a translated unique field", dialect => {
     );
     const columns = (names: string[]) => names.map(quoted).join(", ");
     await query(
-      `INSERT INTO ${quoted("comp_teaser")} (${columns(["id", "_parent_id", "_parent_table", "_parent_field", "heading"])}) ` +
+      `INSERT INTO ${quoted("fg_teaser")} (${columns(["id", "_parent_id", "_parent_table", "_parent_field", "heading"])}) ` +
         `VALUES ('t1', 'entry-t1', 'dc_pages', 'teaser', '${"h".repeat(300)}')`
     );
 
@@ -777,7 +777,7 @@ describeEachDialect("a translated unique field", dialect => {
       {
         fields: [{ name: "heading", type: "text", unique: true }],
         confirmed: true,
-        schemaVersion: await schemaVersionOf("dynamic_components", "teaser"),
+        schemaVersion: await schemaVersionOf("dynamic_field_groups", "teaser"),
       }
     ).then(
       result => ({ refused: false, said: JSON.stringify(result) }),
@@ -796,7 +796,7 @@ describeEachDialect("a translated unique field", dialect => {
       expect(applied.refused, applied.said).toBe(false);
     }
     const lengths = await query<{ n: unknown }>(
-      `SELECT ${dialect === "postgresql" ? "char_length" : "length"}(${quoted("heading")}) AS ${quoted("n")} FROM ${quoted("comp_teaser")}`
+      `SELECT ${dialect === "postgresql" ? "char_length" : "length"}(${quoted("heading")}) AS ${quoted("n")} FROM ${quoted("fg_teaser")}`
     );
     expect(lengths.map(row => Number(row.n))).toEqual([300]);
   });
@@ -837,7 +837,7 @@ describeEachDialect("a translated unique field", dialect => {
     expect(JSON.stringify(refusal?.publicData ?? null)).toMatch(
       /TRANSLATED_UNIQUE_OVER_DUPLICATES/
     );
-    expect(await columnsOf("comp_banner_locales")).not.toContain("subtitle");
+    expect(await columnsOf("fg_banner_locales")).not.toContain("subtitle");
   });
 
   // An index under the per-language index's name proves nothing by its name: one left there that

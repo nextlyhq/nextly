@@ -63,7 +63,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import type { ServiceContainer } from "../../../services";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
@@ -147,8 +147,8 @@ const ENTITY: Record<
   fieldGroup: {
     slug: "promo",
     label: "Field group",
-    registry: STORAGE_FORMAT.registryTable,
-    table: "comp_promo",
+    registry: MIGRATION_TARGET.registryTable,
+    table: "fg_promo",
   },
 };
 

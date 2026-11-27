@@ -13,6 +13,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { getDialectTables } from "../../../../database/index";
 import { createAdapter } from "../../../../database/factory";
 import { SchemaRegistry } from "../../../../database/schema-registry";
+import { getFieldGroupRegistryAliases } from "../../../../domains/field-groups/storage/registry-schemas";
 import type { TestDialect } from "../../../../plugins/test-nextly";
 import type { CommandContext } from "../../../program";
 import type { CLIDatabaseAdapter } from "../../../utils/adapter";
@@ -82,12 +83,16 @@ export async function throwawayDatabase(
 
 export async function openSyncTarget(
   dir: string,
-  dialect: TestDialect
+  dialect: TestDialect,
+  /** A database the test already holds, which it drops itself; a new one where left out. */
+  existing?: string
 ): Promise<SyncTarget> {
   const own =
-    dialect === "sqlite"
-      ? { url: `file:${join(dir, "test.db")}`, drop: async () => {} }
-      : await throwawayDatabase(dialect);
+    existing !== undefined
+      ? { url: existing, drop: async () => {} }
+      : dialect === "sqlite"
+        ? { url: `file:${join(dir, "test.db")}`, drop: async () => {} }
+        : await throwawayDatabase(dialect);
   // The command reads its connection from the environment as well.
   if (dialect !== "sqlite") process.env.DATABASE_URL = own.url;
   // From here a failure still drops the database it was given, since the
@@ -107,7 +112,11 @@ export async function openSyncTarget(
     // Without a resolver the ORM cannot address `dynamic_collections`, so the
     // sync fails before it reaches anything a test is about.
     const registry = new SchemaRegistry(TYPE[dialect]);
-    registry.registerStaticSchemas(getDialectTables(TYPE[dialect]));
+    // Both registry names, as the command registers them: a new site's is the current one.
+    registry.registerStaticSchemas({
+      ...getDialectTables(TYPE[dialect]),
+      ...getFieldGroupRegistryAliases(TYPE[dialect]),
+    });
     (adapter as unknown as DrizzleAdapter).setTableResolver(registry);
     await ensureCoreTables(cli, options, context);
 

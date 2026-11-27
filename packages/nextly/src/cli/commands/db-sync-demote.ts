@@ -31,6 +31,7 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveCollectionTableName } from "../../domains/schema/utils/resolve-table-name";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { DynamicCollectionInsert } from "../../schemas/dynamic-collections/types";
+import type { UpdateCollectionOptions } from "../../services/collections";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import { reportDryRun, type DryRunPlan } from "../dry-run";
 import { CliError, exitWithError } from "../errors";
@@ -181,6 +182,8 @@ type DemotedWrite =
       kind: "update";
       slug: string;
       data: Parameters<CollectionRegistryService["updateCollection"]>[1];
+      /** How the update is written, and asked about (`handOverOf`). */
+      options: UpdateCollectionOptions;
     }
   | { kind: "register"; record: DynamicCollectionInsert };
 
@@ -188,9 +191,21 @@ type DemotedWrite =
  * How a demote updates a record the registry already holds: as the hand-over of the
  * configuration's own collection to the Schema Builder, which the registry takes for a record the
  * code-first sync made and locked, writing its source and lock together. A record that is the
- * Builder's already is updated as any other; a plugin's is refused.
+ * Builder's already is updated as any other. A plugin's is refused, but one of its legacy
+ * `collections` key, which the registry records as the plugin's and a demote may hand over.
  */
-const HAND_OVER = { handOver: "builder" } as const;
+function handOverOf(
+  current: Awaited<ReturnType<CollectionRegistryService["getCollectionBySlug"]>>
+): UpdateCollectionOptions {
+  return {
+    handOver: "builder",
+    // `demotedCollectionIn` refused a collection a plugin contributes, so a plugin's record here is
+    // its legacy `collections` key's.
+    ...(current?.source?.startsWith("plugin:") === true
+      ? { legacyPlugin: true }
+      : {}),
+  };
+}
 
 /** The write a demote of `collection` makes over `current`, the record the registry holds now. */
 function demotedWrite(
@@ -204,8 +219,9 @@ function demotedWrite(
     return {
       kind: "update",
       slug: collection.slug,
+      options: handOverOf(current),
       // Unlocked with it: a record the code-first sync made is locked, and the Schema Builder's
-      // is not (`HAND_OVER`). With the hash the registry compares fields by, so a collection
+      // is not (`handOverOf`). With the hash the registry compares fields by, so a collection
       // whose fields are as they were is not marked as waiting for a schema change, and the path
       // a newly registered demote records.
       data: {
@@ -246,7 +262,7 @@ async function assertDemotedWriteAllowed(
   write: DemotedWrite
 ): Promise<void> {
   if (write.kind === "update") {
-    await registry.assertUpdatable(write.slug, write.data, HAND_OVER);
+    await registry.assertUpdatable(write.slug, write.data, write.options);
     return;
   }
   await registry.assertRegistrable(write.record.slug);
@@ -416,7 +432,7 @@ async function writeDemotedRecord(
 ): Promise<void> {
   const write = demotedWrite(collection, current);
   if (write.kind === "update") {
-    await registry.updateCollection(write.slug, write.data, HAND_OVER);
+    await registry.updateCollection(write.slug, write.data, write.options);
     logger.info(
       current?.source === "ui"
         ? `Updated existing UI record for '${write.slug}'.`

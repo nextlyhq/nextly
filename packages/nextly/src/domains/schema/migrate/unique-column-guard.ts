@@ -36,6 +36,7 @@ import {
 } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { readUniqueColumns } from "../pipeline/live-table-facts";
+import { builtByFor, isCodeOwned } from "../pipeline/registered-collections";
 import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
 import type { RequiredColumnEntity } from "../required-column-refusal";
 import { requiredColumnRegistries } from "../required-column-registries";
@@ -155,8 +156,13 @@ export async function registeredEntities(
         fields: fieldsOf(row.fields),
         // A boolean on PostgreSQL, a number on MySQL and SQLite.
         localized: row.localized === true || Number(row.localized) === 1,
-        // A code-first entity's table is the code-first builder's; any other, the Schema Builder's.
-        builtBy: row.source === "code" ? "codeFirst" : "collection",
+        // A table code or a plugin made is the code-first builder's; any other, the Schema Builder's.
+        builtBy: builtByFor(
+          kind,
+          !isCodeOwned(
+            typeof row.source === "string" ? { source: row.source } : {}
+          )
+        ),
         // Text on every driver; anything else names no source or status.
         source: typeof row.source === "string" ? row.source : "",
         definitionApplied: DEFINITION_APPLIED.has(String(row.migration_status)),

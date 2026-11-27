@@ -99,6 +99,35 @@ describe("toOneParagraph: rich text", () => {
     expect(restricted.value).toEqual(stored);
   });
 
+  it("keeps an address the editor linked as a link, and one the author unlinked as its words", () => {
+    const restricted = toOneParagraph(
+      value([
+        paragraph(
+          {
+            type: "autolink",
+            url: "https://example.com/a",
+            children: [text("example.com/a")],
+          },
+          text(" and "),
+          {
+            type: "autolink",
+            url: "https://example.com/b",
+            isUnlinked: true,
+            children: [text("example.com/b")],
+          }
+        ),
+      ])
+    );
+    // Nothing the author wrote was lost: an unlinked address is only words.
+    expect(restricted.dropped).toBe(false);
+    const [line] = restricted.value.root.children;
+    const links = (line?.children ?? []).filter(node => node.type === "link");
+    expect(links.map(node => node.url)).toEqual(["https://example.com/a"]);
+    expect(richTextToPlainText(restricted.value)).toBe(
+      "example.com/a and example.com/b"
+    );
+  });
+
   it("drops marks other than bold and italic, keeping the words and the kept marks", () => {
     const restricted = toOneParagraph(
       value([

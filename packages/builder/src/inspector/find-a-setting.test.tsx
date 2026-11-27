@@ -170,9 +170,11 @@ describe("Find a setting", () => {
     // The panel stays on Style, and every tab says how many it holds.
     expect(tab("Style").getAttribute("data-state")).toBe("active");
     for (const name of ["Content", "Style", "Advanced"]) {
-      expect(
-        tab(name).querySelector(".nx-inspector__tab-count")
-      ).not.toBeNull();
+      const count = tab(name).querySelector(".nx-inspector__tab-count");
+      expect(count).not.toBeNull();
+      // Placed from the tab's own words, so it sits beside them.
+      expect(count?.parentElement?.className).toBe("nx-inspector__tab-label");
+      expect(count?.parentElement?.textContent).toMatch(new RegExp(`^${name}`));
     }
   });
 

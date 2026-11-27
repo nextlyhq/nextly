@@ -39,7 +39,11 @@ const ALL_RIGHTS = {
   "create-templates": true,
 };
 
-function guard(record: Record<string, unknown> | null = POSTS) {
+function guard(
+  record: Record<string, unknown> | null = POSTS,
+  /** The template addresses the site's code declares, by collection. */
+  declaredAddresses: ReadonlyMap<string, string> = new Map()
+) {
   const readCollection = vi.fn(() => Promise.resolve(record));
   const setup: TemplateGuardSetup = {
     templatesCollection: "templates",
@@ -47,6 +51,9 @@ function guard(record: Record<string, unknown> | null = POSTS) {
     readCollection,
     holderOf: () => Promise.resolve(null),
     entryExists: () => Promise.resolve(true),
+    holdEntry: () => Promise.resolve(true),
+    declaredAddresses,
+    addressHolderOf: () => Promise.resolve(null),
   };
   return { setup, readCollection };
 }
@@ -62,7 +69,9 @@ function reads(
     designs?: Record<string, unknown>[];
   } = {},
   /** The entries the caller may read; every one when absent. */
-  readable?: readonly string[]
+  readable?: readonly string[],
+  /** Where the site declares the entries are shown; nowhere when absent. */
+  site: { readonly address: string | null } | null = null
 ) {
   const templates = vi.fn<EntryDesignsReads["templates"]>(args =>
     Promise.resolve({
@@ -79,6 +88,9 @@ function reads(
         )
       )
   );
+  const siteAddress = vi.fn<EntryDesignsReads["siteAddress"]>(() =>
+    Promise.resolve(site)
+  );
   const injected: EntryDesignsReads = {
     can: (action, slug) =>
       Promise.resolve(rights[`${action}-${slug}`] === true),
@@ -92,8 +104,9 @@ function reads(
       ),
     templates,
     readableEntries,
+    siteAddress,
   };
-  return { injected, templates, readableEntries };
+  return { injected, templates, readableEntries, siteAddress };
 }
 
 const POSTS_ASK: EntryDesignsAsk = { collection: "posts" };
@@ -277,6 +290,63 @@ describe("readEntryDesigns", () => {
     const empty = await readEntryDesigns(POSTS_ASK, setup, none.injected);
     expect(empty.meta.mayCreateTemplate).toBe(true);
     expect(empty.meta.mayGiveDesign).toBe(false);
+  });
+
+  it("says the site's own route shows a collection the page builder has no address for", async () => {
+    const { setup } = guard();
+    const { injected, siteAddress } = reads(ALL_RIGHTS, {}, undefined, {
+      address: "/blog/hello",
+    });
+    const answer = await readEntryDesigns(
+      { collection: "posts", entry: "p1" },
+      setup,
+      injected
+    );
+
+    expect(answer.meta.servedBySite).toEqual({ address: "/blog/hello" });
+    expect(siteAddress).toHaveBeenCalledWith("posts", "p1");
+    // A template is still offered: one with an address would draw them.
+    expect(answer.meta.mayCreateTemplate).toBe(true);
+  });
+
+  it("says nothing of the site's route where a template address serves the entries", async () => {
+    const site = { address: "/blog/hello" };
+    const declared = reads(ALL_RIGHTS, {}, undefined, site);
+    const inCode = await readEntryDesigns(
+      { collection: "posts", entry: "p1" },
+      guard(POSTS, new Map([["posts", "/blog"]])).setup,
+      declared.injected
+    );
+    expect(inCode.meta.servedBySite).toBeNull();
+    expect(declared.siteAddress).not.toHaveBeenCalled();
+
+    const stored = reads(
+      ALL_RIGHTS,
+      {
+        base: [
+          { id: 5, title: "Blog post", status: "draft", address: "/blog" },
+        ],
+      },
+      undefined,
+      site
+    );
+    const onTemplate = await readEntryDesigns(
+      { collection: "posts", entry: "p1" },
+      guard().setup,
+      stored.injected
+    );
+    expect(onTemplate.meta.servedBySite).toBeNull();
+    expect(stored.siteAddress).not.toHaveBeenCalled();
+  });
+
+  it("says nothing of the site's route where the site declares no address", async () => {
+    const { injected } = reads(ALL_RIGHTS);
+    const answer = await readEntryDesigns(
+      { collection: "posts", entry: "p1" },
+      guard().setup,
+      injected
+    );
+    expect(answer.meta.servedBySite).toBeNull();
   });
 
   it("offers no template on a collection that cannot have one", async () => {

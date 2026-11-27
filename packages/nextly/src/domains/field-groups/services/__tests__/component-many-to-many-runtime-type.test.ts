@@ -8,7 +8,7 @@
  * string.
  */
 import { getColumns, type Table } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { FieldConfig } from "../../../../collections/fields/types";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
@@ -20,6 +20,15 @@ import {
   asRowBackedRelationFields,
   shouldTreatAsJson,
 } from "../field-group-utils";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 const LIST_RELATIONS = {
   "a many-to-many": {

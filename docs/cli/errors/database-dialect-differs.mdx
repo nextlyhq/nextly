@@ -1,0 +1,24 @@
+---
+title: DATABASE_DIALECT_DIFFERS
+description: "`DATABASE_URL` names a database of another dialect than the one the migrations are for, so `migrate:create --record-snapshot` would record another database's translation tables."
+---
+
+## Cause
+
+`DATABASE_URL` names a database of another dialect than the one the migrations are for, so `migrate:create --record-snapshot` would record another database's translation tables.
+
+`nextly migrate:create` writes its migration in the dialect the migrations are for: from `--dialect`, the newest migration file's header, or the environment (see [Which database the migrations are for](/docs/guides/production-migrations#which-database-the-migrations-are-for)). `--record-snapshot` also reads a database, the one `DATABASE_URL` names, to record which fields its translation tables hold. When that URL names a database of another dialect, the snapshot would record that database's tables beside a migration written for a different one, so the command refuses before it reads anything.
+
+## Fix
+
+- Point `DATABASE_URL` at the database the migrations run on, one that has applied every migration.
+- If the migrations are meant for the URL's dialect, pass `--dialect` with it.
+
+## Example
+
+```text
+✗ `DATABASE_URL` names a PostgreSQL database, and the migrations are for MySQL.
+  Why:  `--record-snapshot` records the translation tables of the database it reads, in a migration written for the migrations' dialect.
+  Next: Point `DATABASE_URL` at the MySQL database the migrations run on, or pass the `--dialect` they are for.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-dialect-differs  (DATABASE_DIALECT_DIFFERS)
+```

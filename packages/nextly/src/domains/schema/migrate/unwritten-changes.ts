@@ -27,11 +27,8 @@
  *
  * @module domains/schema/migrate/unwritten-changes
  */
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-
 import { CliError } from "../../../cli/errors";
 import {
-  movedColumnNote,
   perLanguageDriftNext,
   perLanguageMoveWhy,
   type PerLanguageMove,
@@ -41,33 +38,29 @@ import {
   type AppMigrationInputsArgs,
 } from "../migrate-create/app-migration-inputs";
 import {
-  appStreamSnapshots,
-  type AppStreamTables,
-} from "../migrate-create/app-stream";
-import {
   declaredPermissionsOf,
-  describePermissionChange,
   permissionChanges,
   type OwnerPermissions,
   type PermissionChange,
   type PermissionRecord,
 } from "../migrate-create/declared-permissions";
 import {
-  describeSettingsChange,
   settingsChangesFor,
   type EntitySettingsChange,
 } from "../migrate-create/entity-settings";
 import {
-  buildDesiredSnapshotFromConfig,
   type MinimalConfigEntity,
+  operationTableName,
 } from "../migrate-create/generate";
-import { perLanguageMovesIn } from "../migrate-create/per-language-moves";
+import type { SnapshotFile } from "../migrate-create/snapshot-io";
 import {
-  EMPTY_SNAPSHOT,
-  type SnapshotFile,
-} from "../migrate-create/snapshot-io";
-import { describeOp } from "../pipeline/diff/describe-operation";
-import { diffSnapshots } from "../pipeline/diff/diff";
+  type BesideFile,
+  madeByMigrate,
+  pendingChangeLines,
+  type PendingChanges,
+  recordsForTheFirstTime,
+} from "../pending/pending-changes";
+import { pendingChanges } from "../pending/plan-pending";
 import type { Operation } from "../pipeline/diff/types";
 
 /** The declared entities, as `migrate:create` generates from them. */
@@ -106,6 +99,8 @@ export interface RecordedInDatabase {
 export interface UnwrittenChanges {
   /** Each table change, in the diff's order. */
   tables: readonly Operation[];
+  /** Each file `migrate:create` would write beside the main migration, a translations one. */
+  beside: readonly BesideFile[];
   settings: readonly EntitySettingsChange[];
   /** Only an app's or a plugin's permissions added or removed. */
   permissions: readonly Extract<PermissionChange, { kind: "owner" }>[];
@@ -116,52 +111,173 @@ export interface UnwrittenChanges {
    * not values removed (`perLanguageMovesIn`). Absent or empty, no drop is such a move.
    */
   perLanguageMoves?: readonly PerLanguageMove[];
+  /**
+   * Whether `migrate:create` would record settings or permissions the newest snapshot predates
+   * recording (`recordsForTheFirstTime`): a notice, never a change.
+   */
+  settingsNotRecorded?: boolean;
+  /**
+   * The files `migrate:create` would write beside the main migration that nothing declared since the
+   * newest snapshot asks for (`besideNotRecorded`): a notice, never a change.
+   */
+  besideNotRecorded?: readonly BesideFile[];
 }
 
 /** Whether `changes` names nothing. */
 export function nothingUnwritten(changes: UnwrittenChanges): boolean {
   return (
     changes.tables.length === 0 &&
+    changes.beside.length === 0 &&
     changes.settings.length === 0 &&
     changes.permissions.length === 0
   );
 }
 
+/** Whether `changes` names settings and nothing else, a refusal of its own. */
+export function settingsAlone(changes: UnwrittenChanges): boolean {
+  return (
+    changes.settings.length > 0 &&
+    changes.tables.length === 0 &&
+    changes.beside.length === 0 &&
+    changes.permissions.length === 0
+  );
+}
+
+/**
+ * Whether `changes` names anything besides its per-language moves: a move is the translations file
+ * of its table, or the drop of a column it moves where no file takes that drop.
+ */
+export function changesBesideMoves(changes: UnwrittenChanges): boolean {
+  const moves = changes.perLanguageMoves ?? [];
+  const tables = new Set(moves.map(move => move.table));
+  const columns = new Set(
+    moves.flatMap(move => move.columns.map(column => `${move.table}.${column}`))
+  );
+  return (
+    changes.settings.length > 0 ||
+    changes.permissions.length > 0 ||
+    changes.beside.some(
+      file => file.kind !== "translations table" || !tables.has(file.table)
+    ) ||
+    changes.tables.some(
+      op =>
+        op.type !== "drop_column" ||
+        !columns.has(`${op.tableName}.${op.columnName}`)
+    )
+  );
+}
+
 /**
  * The declared schema compared with the newest snapshot (`latest`, null where
- * the folder has none). Pure: every input is read by the caller.
+ * the folder has none): the table changes as `migrate:create` plans them
+ * (`pending`, from `pendingChanges`), and the settings and permissions, which
+ * an older snapshot's silence never names. Pure: every input is read by the
+ * caller.
  */
 export function compareWithNewestSnapshot(args: {
+  /** What `migrate:create` would write: the table changes, which drops are moves, permissions. */
+  pending: Pick<
+    PendingChanges,
+    "tables" | "diffed" | "beside" | "perLanguageMoves" | "permissions"
+  >;
   entities: DeclaredEntities;
-  appStream: AppStreamTables;
   permissions: PermissionRecord;
-  latest: { data: SnapshotFile } | null;
-  dialect: SupportedDialect;
+  latest: { data: SnapshotFile; template?: true } | null;
   /** What the database records, read only where the newest snapshot predates a record. */
   recorded?: RecordedInDatabase;
+  /**
+   * Whether the caller reads the database (`nextly migrate`, a production start), whose first run
+   * records the declared permissions itself. Not `migrate:check`, which reads none.
+   */
+  readsDatabase?: boolean;
 }): UnwrittenChanges {
-  const { entities, latest } = args;
-  const existing = latest?.data.snapshot ?? EMPTY_SNAPSHOT;
-  const stream = appStreamSnapshots({
-    previous: existing,
-    previousContributions: latest?.data.contributions ?? {},
-    desired: buildDesiredSnapshotFromConfig(
-      [...entities.collections],
-      [...entities.singles],
-      [...entities.components],
-      args.dialect,
-      existing
-    ),
-    tables: args.appStream,
+  const { entities, latest, pending } = args;
+  const settings = settingsDifferences(entities, latest, args.recorded);
+  const notRecorded = besideNotRecorded({
+    pending,
+    latest,
+    entities,
+    settings,
   });
-  const tables = diffSnapshots(stream.previous, stream.desired);
   return {
-    tables,
-    settings: settingsDifferences(entities, latest, args.recorded),
-    permissions: permissionDifferences(args.permissions, latest, args.recorded),
+    // With no file of the translations tables named, what one does to the main table is named
+    // itself: the snapshot does record that table.
+    tables: recordsTranslationsTables(latest) ? pending.tables : pending.diffed,
+    beside: pending.beside.filter(file => !notRecorded.includes(file)),
+    ...(notRecorded.length === 0 ? {} : { besideNotRecorded: notRecorded }),
+    settings,
+    // With no snapshot at all, a command that reads no database names the permissions the first
+    // migration records, as `migrate:create` writes them; a database's first `nextly migrate`
+    // records the declared ones itself, so for it they are no change.
+    permissions:
+      latest === null && args.readsDatabase !== true
+        ? pending.permissions.filter(
+            (change): change is Extract<PermissionChange, { kind: "owner" }> =>
+              change.kind === "owner"
+          )
+        : permissionDifferences(args.permissions, latest, args.recorded),
     noSnapshot: latest === null,
-    perLanguageMoves: perLanguageMovesIn(tables, entities, args.dialect),
+    perLanguageMoves: pending.perLanguageMoves,
   };
+}
+
+/** The list of `DeclaredEntities` each kind of entity's settings are recorded under. */
+const DECLARED_LIST = {
+  collection: "collections",
+  single: "singles",
+  fieldGroup: "components",
+} as const;
+
+/**
+ * The files beside the main migration that are no change of what the newest snapshot recorded.
+ *
+ * - Over a snapshot that does not say what the translations tables hold: each `nextly migrate` makes
+ *   (`madeByMigrate`).
+ * - Over one that does: only what a repeater's or group's text is kept in, where nothing declared of
+ *   its entity changed, neither a setting nor its main table. A release that keeps such text apart
+ *   asks for it under an unchanged declaration, and `nextly migrate` makes it and records nothing.
+ *   Every other file is a change.
+ */
+function besideNotRecorded(args: {
+  pending: Pick<PendingChanges, "beside" | "diffed">;
+  latest: { data: SnapshotFile; template?: true } | null;
+  entities: DeclaredEntities;
+  settings: readonly EntitySettingsChange[];
+}): BesideFile[] {
+  const { pending, latest, entities } = args;
+  if (latest === null) return [];
+  if (!recordsTranslationsTables(latest)) {
+    return pending.beside.filter(madeByMigrate);
+  }
+  const changed = new Set([
+    ...pending.diffed.map(operationTableName),
+    ...args.settings.flatMap(change =>
+      entities[DECLARED_LIST[change.kind]]
+        .filter(entity => entity.slug === change.slug)
+        .map(entity => entity.tableName)
+    ),
+  ]);
+  return pending.beside.filter(
+    file =>
+      file.overlays === true && madeByMigrate(file) && !changed.has(file.table)
+  );
+}
+
+/**
+ * Whether the newest snapshot is read as saying what the translations tables hold. One that records
+ * the entities' settings is, and so is a template's, read as what its entities were made with; with
+ * no snapshot at all nothing was made. One that records no settings, a baseline or one written before
+ * them, says neither what was declared nor what was made. It is no word on the database: `nextly
+ * migrate` makes a translations table, its columns and its indexes, and records nothing.
+ */
+function recordsTranslationsTables(
+  latest: { data: SnapshotFile; template?: true } | null
+): boolean {
+  return (
+    latest === null ||
+    latest.template === true ||
+    latest.data.entities !== undefined
+  );
 }
 
 /**
@@ -187,7 +303,7 @@ function settingsDifferences(
  * earlier version's snapshot, and the tables a real site declares are named
  * as added in any case.
  */
-export function permissionDifferences(
+function permissionDifferences(
   declared: PermissionRecord,
   latest: { data: SnapshotFile } | null,
   recorded: RecordedInDatabase | undefined
@@ -271,37 +387,9 @@ export function livePermissionsByOwner(
   return { app, plugins };
 }
 
-/**
- * A table change as a line: `+` added, `-` removed, `~` changed. A column drop that is a field
- * moving to its per-language table says where it moves, so it does not read as data loss.
- */
-function tableLine(
-  op: Operation,
-  moves: readonly PerLanguageMove[] = []
-): string {
-  const sign = op.type.startsWith("add_")
-    ? "+"
-    : op.type.startsWith("drop_")
-      ? "-"
-      : "~";
-  const note =
-    op.type === "drop_column"
-      ? movedColumnNote(moves, op.tableName, op.columnName)
-      : "";
-  return `${sign} ${describeOp(op)}${note}`;
-}
-
-/** Every difference as a line, tables first, then settings, then permissions. */
+/** Every difference as a line, in the words every report of them uses (`pendingChangeLines`). */
 export function unwrittenChangeLines(changes: UnwrittenChanges): string[] {
-  return [
-    ...changes.tables.map(op => tableLine(op, changes.perLanguageMoves)),
-    ...changes.settings.map(
-      change => `~ settings ${describeSettingsChange(change)}`
-    ),
-    ...changes.permissions.map(
-      change => `~ permissions ${describePermissionChange(change)}`
-    ),
-  ];
+  return pendingChangeLines(changes);
 }
 
 const CREATE_MIGRATION =
@@ -332,8 +420,6 @@ export function unwrittenChangesError(
     "The database is not reported as up to date while the configuration holds changes no migration records. Nothing was changed.",
     ...lines,
   ].join("\n");
-  const settingsOnly =
-    changes.tables.length === 0 && changes.permissions.length === 0;
   const moves = changes.perLanguageMoves ?? [];
   if (moves.length > 0) {
     return new CliError("SCHEMA_DRIFT", {
@@ -341,11 +427,15 @@ export function unwrittenChangesError(
       why: [why, perLanguageMoveWhy(moves)].join("\n"),
       // The two safe ways forward replace a bare "create a migration", which would read as
       // consent to drop the columns; any other change listed still needs one.
-      next: perLanguageDriftNext(moves, count, CREATE_MIGRATION),
+      next: perLanguageDriftNext(
+        moves,
+        changesBesideMoves(changes),
+        CREATE_MIGRATION
+      ),
       context: { lines },
     });
   }
-  return settingsOnly
+  return settingsAlone(changes)
     ? new CliError("SETTINGS_CHANGE_WITHOUT_MIGRATION", {
         what: `${count} entit${count === 1 ? "y's" : "ies'"} settings changed with no migration.`,
         why,
@@ -369,6 +459,7 @@ export type UnwrittenChangesArgs = Pick<
   | "migrationsDir"
   | "dialect"
   | "logger"
+  | "firstFieldGroupNaming"
 > & {
   /**
    * What the database records, asked only where the newest snapshot predates
@@ -406,6 +497,11 @@ export async function unwrittenChangesOf(
     migrationsDir: args.migrationsDir,
     dialect: args.dialect,
     logger: args.logger,
+    // Where the folder has no migration yet, the names the caller's database is on, as
+    // `migrate:create` writes them; absent (`migrate:check`, which reads no database), the current.
+    ...(args.firstFieldGroupNaming === undefined
+      ? {}
+      : { firstFieldGroupNaming: args.firstFieldGroupNaming }),
   });
   const entities: DeclaredEntities = {
     collections: inputs.collections,
@@ -423,15 +519,26 @@ export async function unwrittenChangesOf(
     (latest.template !== true &&
       (latest.data.entities === undefined ||
         latest.data.permissions === undefined));
-  const changes = compareWithNewestSnapshot({
-    entities,
-    appStream: inputs.appStream,
-    permissions: declaredPermissionsOf(args.config, {
-      collections: inputs.collections,
-      singles: inputs.singles,
-    }),
-    latest,
+  const permissions = declaredPermissionsOf(args.config, {
+    collections: inputs.collections,
+    singles: inputs.singles,
+  });
+  // The table changes as `migrate:create` plans them from these inputs, so this refusal names
+  // what that run would write, and nothing it would not.
+  const pending = await pendingChanges({
+    inputs,
     dialect: args.dialect,
+    migrationsDir: args.migrationsDir,
+    permissions,
+    defaultLocale: args.config.localization?.defaultLocale,
+    languageOrder: args.config.localization?.locales.map(locale => locale.code),
+  });
+  const changes = compareWithNewestSnapshot({
+    pending,
+    entities,
+    permissions,
+    latest,
+    readsDatabase: args.recorded !== undefined,
     ...(predatesRecord && args.recorded !== undefined
       ? {
           recorded: await args.recorded(
@@ -443,7 +550,11 @@ export async function unwrittenChangesOf(
         }
       : {}),
   });
-  return args.comparePermissions === false
-    ? { ...changes, permissions: [] }
+  // Settings the newest snapshot never recorded are a notice of their own, never a change.
+  const noticed = recordsForTheFirstTime(pending)
+    ? { ...changes, settingsNotRecorded: true }
     : changes;
+  return args.comparePermissions === false
+    ? { ...noticed, permissions: [] }
+    : noticed;
 }

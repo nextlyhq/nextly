@@ -48,7 +48,7 @@ import { clearRegistryRowCache } from "../../../dynamic-collections/services/col
 import { companionTableOf } from "../../../i18n/migration/derive-companion-spec";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { applyDesiredSchema } from "../../pipeline/index";
-import { resolveComponentTableName } from "../../utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../../field-groups/services/field-group-storage-names";
 import { ownerRowsToRecord } from "../kept-elements";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
 
@@ -66,7 +66,7 @@ const BUILT_TABLE = `dc_${BUILT}`;
 const KEPT = "plc_kept";
 const KEPT_TABLE = `dc_${KEPT}`;
 const CARDS = "plc_cards";
-const CARDS_TABLE = resolveComponentTableName(CARDS);
+const CARDS_TABLE = fieldGroupTableNameFor("current", CARDS);
 const MARKER = "marker";
 const HOME = "plc_home";
 const HOME_TABLE = `single_${HOME}`;
@@ -324,7 +324,7 @@ describe.each(getConfiguredTestDialects())(
           {
             fields,
             confirmed: true,
-            schemaVersion: await versionOf(t, "dynamic_components", CARDS),
+            schemaVersion: await versionOf(t, "dynamic_field_groups", CARDS),
             ...extra,
           }
         )

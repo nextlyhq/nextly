@@ -19,7 +19,7 @@
 // fallow-ignore-file code-duplication
 import { pgTable, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 
-import { NOTICES_INDEXES, pgIndexes } from "../_internal/core-indexes";
+import { NOTICES_INDEXES, pgIndexes } from "../_internal/core-indexes-postgres";
 import { users } from "../users/postgres";
 
 import { NOTICES_TABLE } from "./table-name";

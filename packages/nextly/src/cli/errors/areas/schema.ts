@@ -340,6 +340,23 @@ export const SCHEMA_CODES = defineCodes({
       },
     ],
   },
+  COLLECTION_BEING_CHANGED: {
+    cause:
+      "A change that deletes values lost its hold of the collection part way, so it stopped before its next statement.",
+    // As `assertSaveHoldKept` (`domains/schema/pipeline/save-hold-check.ts`) refuses a statement:
+    // the connection holding the collection was lost, so the change sends nothing more.
+    from: [
+      {
+        code: "COLLECTION_BEING_CHANGED",
+        reason: "save-hold-lost",
+        describe: () => ({
+          what: "The change stopped before its next statement.",
+          why: "It no longer held its collection, so other writes could go ahead, and what it would delete was counted under a hold that is gone.",
+          next: "Review the change and make it again.",
+        }),
+      },
+    ],
+  },
   SCHEMA_LOCK_UNAVAILABLE: {
     cause:
       "The schema lock's row could not be established, so the command refused to run without it.",

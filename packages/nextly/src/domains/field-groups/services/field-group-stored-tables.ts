@@ -16,6 +16,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import type { ResolvedEntityTable } from "../../i18n/migration/resolve-entity-table";
 import { readIdentifierCaseRules } from "../../schema/utils/read-identifier-case";
 import {
   indexCatalog,
@@ -71,6 +72,12 @@ export interface StoredFieldGroupTables {
    * registry could be read.
    */
   naming: FieldGroupNaming;
+  /**
+   * True where the database has no registry at all, as this one reading found it: what a caller
+   * that names a new site's groups acts on. Asking the catalog again for it can answer otherwise,
+   * when another process creates the registry in between. Absent where a registry was read.
+   */
+  absent?: true;
   /**
    * Why the read failed, when it did.
    *
@@ -135,10 +142,12 @@ export async function readStoredFieldGroupTables(
     // nothing about whether they are looking at a permission problem, a dropped
     // connection, or a malformed row — and this is the failure that defers a
     // whole reload, so it is the one worth diagnosing.
+    const absent = (await registryIsAbsent(adapter)) === true;
     return {
       tables,
-      usable: (await registryIsAbsent(adapter)) === true,
+      usable: absent,
       naming: "legacy",
+      ...(absent ? { absent } : {}),
       reason: error instanceof Error ? error.message : String(error),
     };
   }
@@ -193,7 +202,15 @@ export interface DeclaredFieldGroupStorage {
  */
 export async function declaredFieldGroupStorage(
   adapter: RegistryReadAdapter & CatalogReadAdapter,
-  fieldGroups: readonly unknown[] | undefined
+  fieldGroups: readonly unknown[] | undefined,
+  /**
+   * The names a database with no registry yet starts its field groups on, or how to tell them,
+   * asked only of such a database (`new-database-naming`). Where nothing says, it is read as
+   * legacy, as before.
+   */
+  newDatabaseNaming?:
+    | FieldGroupNaming
+    | (() => Promise<FieldGroupNaming | undefined>)
 ): Promise<DeclaredFieldGroupStorage | undefined> {
   const slugs = (fieldGroups ?? [])
     .map(group => (group as { slug?: unknown }).slug)
@@ -201,8 +218,17 @@ export async function declaredFieldGroupStorage(
   if (slugs.length === 0) return undefined;
   const stored = await readStoredFieldGroupTables(adapter);
   if (!stored.usable) throw fieldGroupRegistryUnreadable(stored.reason);
+  const naming =
+    stored.absent === true
+      ? ((typeof newDatabaseNaming === "function"
+          ? await newDatabaseNaming()
+          : newDatabaseNaming) ?? stored.naming)
+      : stored.naming;
   const tables = new Map(
-    slugs.map(slug => [slug, storedOrNewTableName(stored, slug)])
+    slugs.map(slug => [
+      slug,
+      storedOrNewTableName({ tables: stored.tables, naming }, slug),
+    ])
   );
   const typeColumns = await resolveKnownTypeColumns(adapter, [
     ...tables.values(),
@@ -225,4 +251,25 @@ export function fieldGroupRegistryUnreadable(
       "known. Nothing was changed. Retry once the database answers.",
     logContext: { reason },
   });
+}
+
+/**
+ * `entity` with a field group's tables as the database stores them: the table its registry row
+ * names (`stored`, slug to table), which is `fg_<slug>` once the site's field groups moved to the
+ * current names, and which no configuration rule derives. A collection, a Single, or a field group
+ * the registry does not hold keeps the tables its configuration names.
+ *
+ * Refused for a field group where the registry is there but could not be read: the configuration's
+ * name is the legacy one, and a stale legacy table under it would take the values instead.
+ */
+export function withStoredTable(
+  entity: ResolvedEntityTable,
+  slug: string,
+  stored: Pick<StoredFieldGroupTables, "tables" | "usable" | "reason">
+): ResolvedEntityTable {
+  if (entity.kind !== "fieldGroup") return entity;
+  if (!stored.usable) throw fieldGroupRegistryUnreadable(stored.reason);
+  const tableName = stored.tables.get(slug);
+  if (tableName === undefined) return entity;
+  return { ...entity, tableName, companionTableName: `${tableName}_locales` };
 }

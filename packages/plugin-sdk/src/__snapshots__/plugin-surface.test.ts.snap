@@ -479,6 +479,7 @@ exports[`plugin-sdk public export surface > \`./blocks\` surface is unchanged 1`
   "defineBlock (value)",
   "defineNamedQuery (value)",
   "defineStarterPage (value)",
+  "isFollowedLink (value)",
   "param (value)",
 ]
 `;
@@ -745,6 +746,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "OverridableDocumentAction (type)",
   "PENDING_CHANGE_KEY (value)",
   "PLUGIN_CATEGORIES (value)",
+  "PageArticle (type)",
   "PageImagePreview (type)",
   "PageListItem (type)",
   "PageMetadataAnswer (type)",

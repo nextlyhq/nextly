@@ -410,7 +410,7 @@ describe.each(getConfiguredTestDialects())(
       const card = sealedCard("right");
       const loosened = pageOf([card]);
       await t.adapter.update(
-        "comp_herobox",
+        "fg_herobox",
         {
           content: dialect === "sqlite" ? JSON.stringify(loosened) : loosened,
         },

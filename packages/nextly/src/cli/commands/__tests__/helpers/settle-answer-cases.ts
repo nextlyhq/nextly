@@ -1,0 +1,1342 @@
+/**
+ * The translations-table file a Builder save writes for an answer on a field kept per language
+ * carries the fill's `UPDATE` and `INSERT`, or the delete's statements, after the statements that
+ * change the table itself. `nextly migrate` applies such a file to a database that holds entries of
+ * its own:
+ *
+ * - `migrate:check` passes it, and the check of the translations table before a later file's apply
+ *   does not read it as drift;
+ * - a database of its own, which holds the collection and entries, ends with every entry filled or
+ *   the entries without the value gone, and a second run does nothing;
+ * - the delete needs the data-loss consent on that database: refused without it, by the file and the
+ *   tables it takes rows from and nothing else of the file, with nothing of it changed, and applied
+ *   with it;
+ * - on MySQL, where the file's statements commit one at a time, a run stopped between its ALTER and
+ *   its fill goes on where it stopped.
+ *
+ * The project is built as a person builds it: a site in development, whose Builder saves write the
+ * definition and migrations into one folder. Two copies of that folder, as it stood before the
+ * answered save and after it, are then deployed onto a second database with entries of its own,
+ * written by a site that runs on it. The cases for a layout run in a suite of that layout: the
+ * commands' configuration, mocked there, is the caller's to hold (`loaded`).
+ */
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { defineConfig } from "../../../../config";
+import { createAdapter } from "../../../../database/factory";
+import { clearServices, shutdownServices } from "../../../../di/register";
+import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import { setNonInteractive } from "../../../../domains/schema/migrate/can-prompt";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../../services";
+import { _resetEnvCache } from "../../../../shared/lib/env";
+import type { CommandContext } from "../../../program";
+import type { CLIDatabaseAdapter } from "../../../utils/adapter";
+import { createLogger } from "../../../utils/logger";
+import { findPendingFiles, runMigrate } from "../../migrate";
+import { runMigrateCheck } from "../../migrate-check";
+import { runMigrateResolve } from "../../migrate-resolve";
+
+import { throwawayDatabase } from "./sync-target";
+
+const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
+const DB = {
+  migrationsDir: "./database/history",
+  uiSchemaFile: "./schema/builder.json",
+};
+
+/** The companion table, and so the names the delete answers: `dc_posts_locales`. */
+const MAIN = "dc_posts";
+const COMPANION = "dc_posts_locales";
+
+/** A save's change and answer, its values told apart by case: the answer the dialog sends. */
+type AnsweredSave =
+  | {
+      name: "added";
+      fields: Record<string, unknown>[];
+      answers: Record<string, unknown>;
+      settled: "summary";
+    }
+  | {
+      name: "added beside a container";
+      fields: Record<string, unknown>[];
+      answers: Record<string, unknown>;
+      settled: "summary";
+    }
+  | {
+      name: "renamed";
+      fields: Record<string, unknown>[];
+      answers: Record<string, unknown>;
+      settled: "remark";
+    };
+
+export function settleAnswerCases(args: {
+  layout: "earlier" | "per-language";
+  /** The configuration the commands load, held by the suite file that mocks the loader. */
+  loaded: { config: unknown };
+}): void {
+  const { layout, loaded } = args;
+  // Kept per language on the earlier layout only for a translated collection; on per-language
+  // storage for either.
+  const translations = layout === "earlier" ? [true] : [false, true];
+
+  describe.each(getConfiguredTestDialects())(
+    `an answer carried in a translations-table file (${layout} layout, %s)`,
+    dialect => {
+      let project: string;
+      let closers: Array<() => Promise<void>> = [];
+
+      beforeEach(() => {
+        // Recorded before a scratch database is made, which sets it directly: what
+        // `vi.unstubAllEnvs` puts back after the case is the runner's own address.
+        vi.stubEnv("DATABASE_URL", process.env.DATABASE_URL);
+        project = mkdtempSync(join(tmpdir(), "nextly-settle-answers-"));
+        mkdirSync(join(project, "database"), { recursive: true });
+      });
+
+      afterEach(async () => {
+        await shutdownServices().catch(() => {});
+        clearServices();
+        for (const close of closers.splice(0)) await close();
+        vi.unstubAllEnvs();
+        _resetEnvCache();
+        setNonInteractive(false);
+        rmSync(project, { recursive: true, force: true });
+      });
+
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+      /** A database of this case's own, and the address the commands reach it by. */
+      async function database(): Promise<{
+        url: string;
+        adapter: DrizzleAdapter;
+      }> {
+        let url: string;
+        if (dialect === "sqlite") {
+          url = `file:${join(project, `db-${Math.random().toString(36).slice(2)}.db`)}`;
+        } else {
+          const own = await throwawayDatabase(dialect);
+          url = own.url;
+          closers.push(own.drop);
+        }
+        const adapter = (await createAdapter({
+          type: dialect,
+          url,
+        } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
+        closers.unshift(() => adapter.disconnect().catch(() => {}));
+        return { url, adapter };
+      }
+
+      /** The commands and a site reach `url`'s database from here on. */
+      function reach(url: string): void {
+        vi.stubEnv("DB_DIALECT", dialect);
+        vi.stubEnv("DATABASE_URL", url);
+        _resetEnvCache();
+      }
+
+      /** A site over `adapter`'s database, its files under `folder`. */
+      async function site(
+        adapter: DrizzleAdapter,
+        folder: string,
+        environment: "development" | "production" = "development"
+      ): Promise<TestNextly> {
+        await shutdownServices().catch(() => {});
+        clearServices();
+        vi.stubEnv("NODE_ENV", environment);
+        return createTestNextly({
+          adapter: adapter as never,
+          basePath: folder,
+          collections: [],
+          localization: LOCALIZATION,
+          db: DB,
+        } as Parameters<typeof createTestNextly>[0]);
+      }
+
+      /** A command's output, its error shape on standard error included, and its exit code. */
+      async function ran(
+        fn: () => Promise<void>
+      ): Promise<{ code: number | undefined; said: string }> {
+        const said: string[] = [];
+        const base = createLogger({ quiet: true });
+        const capture = (message: string) => {
+          said.push(message);
+        };
+        Object.assign(base, {
+          info: capture,
+          warn: capture,
+          success: capture,
+          error: capture,
+        });
+        const exit = vi.spyOn(process, "exit").mockImplementation(code => {
+          throw new Error(`exit ${String(code)}`);
+        });
+        const errors = vi
+          .spyOn(console, "error")
+          .mockImplementation((...parts: unknown[]) => {
+            said.push(parts.map(String).join(" "));
+          });
+        const stderr = vi
+          .spyOn(process.stderr, "write")
+          .mockImplementation(chunk => {
+            said.push(String(chunk));
+            return true;
+          });
+        context = {
+          logger: base,
+          options: {},
+          cwd: "",
+        } as unknown as CommandContext;
+        try {
+          await fn();
+          return { code: undefined, said: said.join("\n") };
+        } catch (error) {
+          const match = /^exit (\d+)$/.exec((error as Error).message);
+          if (match) return { code: Number(match[1]), said: said.join("\n") };
+          said.push(String(error));
+          return { code: -1, said: said.join("\n") };
+        } finally {
+          exit.mockRestore();
+          errors.mockRestore();
+          stderr.mockRestore();
+        }
+      }
+      let context: CommandContext;
+
+      /** `nextly migrate` in `folder` on the reached database, with nobody to ask. */
+      const migrate = (
+        folder: string,
+        options: { acceptDataLoss?: true; dryRun?: true } = {},
+        localization: typeof LOCALIZATION | "Settings" = LOCALIZATION
+      ) =>
+        ran(() => {
+          setNonInteractive(true);
+          vi.stubEnv("NODE_ENV", "development");
+          vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", undefined);
+          loaded.config = defineConfig({
+            collections: [],
+            // Without it the languages are the ones Settings holds (`nextly_languages`).
+            ...(localization === "Settings" ? {} : { localization }),
+            db: {
+              migrationsDir: join(folder, "database", "history"),
+              uiSchemaFile: join(folder, "schema", "builder.json"),
+            },
+          } as never);
+          context.cwd = folder;
+          return runMigrate({ cwd: folder, ...options } as never, context);
+        });
+
+      /** `nextly migrate:check` in `folder`. */
+      const check = (folder: string) =>
+        ran(() => {
+          context.cwd = folder;
+          loaded.config = defineConfig({
+            collections: [],
+            localization: LOCALIZATION,
+            db: {
+              migrationsDir: join(folder, "database", "history"),
+              uiSchemaFile: join(folder, "schema", "builder.json"),
+            },
+          } as never);
+          return runMigrateCheck({ cwd: folder } as never, context);
+        });
+
+      /** The project's folder as it stands, copied: the state a deploy takes. */
+      function copied(name: string): string {
+        const folder = mkdtempSync(join(tmpdir(), `nextly-settle-${name}-`));
+        cpSync(project, folder, { recursive: true });
+        closers.push(async () => {
+          rmSync(folder, { recursive: true, force: true });
+        });
+        return folder;
+      }
+
+      /** The project's SQL files so far, by name. */
+      const files = (folder: string) =>
+        readdirSync(join(folder, "database", "history"))
+          .filter(file => file.endsWith(".sql"))
+          .sort();
+
+      /** What file `name` of `folder` runs: its statements, without the ones that undo them. */
+      const runs = (folder: string, name: string) =>
+        readFileSync(join(folder, "database", "history", name), "utf8").split(
+          "-- DOWN"
+        )[0]!;
+
+      /** The deletions a refusal lists, each under the file it is listed for. */
+      function listedDeletions(said: string): Record<string, string[]> {
+        const listed: Record<string, string[]> = {};
+        let file = "";
+        for (const line of said.split("\n")) {
+          const heading = /^\s+(\S+\.sql):$/.exec(line);
+          if (heading) file = heading[1]!;
+          const item = /^\s+- (.+)$/.exec(line);
+          if (item) (listed[file] ??= []).push(item[1]!);
+        }
+        return listed;
+      }
+
+      /** A dialog's apply in development on the running site: it must go through. */
+      async function save(
+        name: string,
+        fields: Record<string, unknown>[],
+        answers: Record<string, unknown>,
+        version: number
+      ): Promise<void> {
+        const applied = (await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: name },
+          { fields, confirmed: true, schemaVersion: version, ...answers }
+        )) as unknown as Response;
+        expect(applied.ok, await applied.clone().text()).toBe(true);
+      }
+
+      /** The registry's version of `posts`, which a save names. */
+      async function versionOf(adapter: DrizzleAdapter): Promise<number> {
+        const rows = await adapter.executeQuery<{ version: unknown }>(
+          `SELECT ${q("schema_version")} AS version FROM ${q("dynamic_collections")} WHERE ${q("slug")} = 'posts'`
+        );
+        return Number(rows[0]?.version ?? 1);
+      }
+
+      /** The translated table a rename reads and writes in: its values are kept per language. */
+      const renameTable = COMPANION;
+
+      const savesFor = (translated: boolean): AnsweredSave[] => [
+        {
+          name: "added",
+          settled: "summary",
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "note", type: "text" },
+            { name: "summary", type: "text", required: true },
+          ],
+          answers: {
+            ...(translated ? { localized: true } : {}),
+            eventResolutions: [
+              {
+                kind: "provide_default",
+                eventId: `add_required_field_no_default:${MAIN}.summary`,
+                value: "summed",
+              },
+            ],
+          },
+        },
+        // The container keeps its text inside, so the save's translations table takes a column for
+        // it too, in a file of its own after the one that adds the text field's.
+        {
+          name: "added beside a container",
+          settled: "summary",
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "note", type: "text" },
+            {
+              name: "slides",
+              type: "repeater",
+              fields: [{ name: "caption", type: "text" }],
+            },
+            { name: "summary", type: "text", required: true },
+          ],
+          answers: {
+            ...(translated ? { localized: true } : {}),
+            eventResolutions: [
+              {
+                kind: "provide_default",
+                eventId: `add_required_field_no_default:${MAIN}.summary`,
+                value: "summed",
+              },
+            ],
+          },
+        },
+        {
+          name: "renamed",
+          settled: "remark",
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "remark", type: "text", required: true },
+          ],
+          answers: {
+            ...(translated ? { localized: true } : {}),
+            renameResolutions: [
+              {
+                tableName: renameTable,
+                fromColumn: "note",
+                toColumn: "remark",
+                choice: "rename",
+              },
+            ],
+            eventResolutions: [
+              {
+                kind: "delete_nonconforming",
+                eventId: `add_not_null_with_nulls:${MAIN}.remark`,
+              },
+            ],
+          },
+        },
+      ];
+
+      /** A save whose answer is decided in the default language, and the file it is written in. */
+      const decidedSaves = (
+        translated: boolean
+      ): {
+        deletes: boolean;
+        file: "the main table's file" | "the translations table's file";
+        save: Pick<AnsweredSave, "name" | "fields" | "answers">;
+      }[] => {
+        const [added, , renamed] = savesFor(translated);
+        // Made required with no column changed: the answer is the main file's.
+        const required = (resolution: Record<string, unknown>) => ({
+          name: "added" as const,
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "note", type: "text", required: true },
+          ],
+          answers: {
+            ...(translated ? { localized: true } : {}),
+            eventResolutions: [
+              {
+                ...resolution,
+                eventId: `add_not_null_with_nulls:${MAIN}.note`,
+              },
+            ],
+          },
+        });
+        return [
+          {
+            deletes: false,
+            file: "the translations table's file",
+            save: added!,
+          },
+          {
+            deletes: true,
+            file: "the translations table's file",
+            save: renamed!,
+          },
+          {
+            deletes: false,
+            file: "the main table's file",
+            save: required({ kind: "provide_default", value: "noted" }),
+          },
+          {
+            deletes: true,
+            file: "the main table's file",
+            save: required({ kind: "delete_nonconforming" }),
+          },
+        ];
+      };
+
+      /** Settings' languages on `adapter`'s database, the first of them its default. */
+      async function settingsLanguages(
+        adapter: DrizzleAdapter,
+        codes: readonly string[]
+      ): Promise<void> {
+        const now = dialect === "sqlite" ? "0" : "CURRENT_TIMESTAMP";
+        const yes = dialect === "postgresql" ? "TRUE" : "1";
+        const no = dialect === "postgresql" ? "FALSE" : "0";
+        await adapter.executeQuery(`DELETE FROM ${q("nextly_languages")}`);
+        for (const [at, code] of codes.entries()) {
+          await adapter.executeQuery(
+            `INSERT INTO ${q("nextly_languages")} (${["code", "label", "fallback", "position", "is_default", "active", "created_at", "updated_at"].map(q).join(", ")}) VALUES ('${code}', '${code}', '[]', ${at}, ${at === 0 ? yes : no}, ${yes}, ${now}, ${now})`
+          );
+        }
+      }
+
+      /**
+       * The project built to an answered save, and its folder as it stood before that save
+       * (`before`) and after it (`after`). `withLater` builds a save after it too.
+       */
+      async function built(
+        translated: boolean,
+        answered: Pick<AnsweredSave, "name" | "fields" | "answers">,
+        withLater = true
+      ): Promise<{ before: string; after: string; later: string | undefined }> {
+        const dev = await database();
+        reach(dev.url);
+        await site(dev.adapter, project);
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: "posts",
+            label: "Posts",
+            localized: translated,
+            fields: [
+              { name: "heading", type: "text" },
+              { name: "note", type: "text" },
+            ],
+          }
+        );
+        const before = copied("before");
+        await save(
+          "posts",
+          answered.fields,
+          answered.answers,
+          await versionOf(dev.adapter)
+        );
+        const after = copied("after");
+        expect(files(after).length).toBeGreaterThan(files(before).length);
+        if (!withLater) return { before, after, later: undefined };
+        // A later save on the same table, which the drift check compares against what the
+        // answered save's file left.
+        await save(
+          "posts",
+          [...answered.fields, { name: "extra", type: "text" }],
+          translated ? { localized: true } : {},
+          await versionOf(dev.adapter)
+        );
+        const later = copied("later");
+        expect(files(later).length).toBeGreaterThan(files(after).length);
+        return { before, after, later };
+      }
+
+      /**
+       * A second database deployed to the state before the answered save, with three entries of
+       * its own: one that has a note in English, one that has none (and, in a translated
+       * collection, a Spanish one), and one with none at all in English.
+       */
+      async function seeded(
+        before: string,
+        translated: boolean
+      ): Promise<{
+        url: string;
+        adapter: DrizzleAdapter;
+        kept: string;
+        empty: string;
+        bare: string;
+      }> {
+        const target = await database();
+        reach(target.url);
+        const first = await migrate(before);
+        expect(first.code, first.said).toBeUndefined();
+        const app = await site(target.adapter, before, "production");
+        const write = async (locale: string, data: Record<string, unknown>) =>
+          String(
+            (
+              await app.nextly.create({
+                collection: "posts" as never,
+                data: data as never,
+                locale,
+              } as never)
+            ).item.id
+          );
+        const kept = await write("en", { heading: "Kept", note: "kept" });
+        const empty = await write("en", { heading: "Empty" });
+        const bare = await write("en", { heading: "Bare" });
+        if (translated) {
+          await app.nextly.update({
+            collection: "posts",
+            id: bare,
+            locale: "es",
+            data: { heading: "Desnuda", note: "nota", _overwrite: true },
+          } as never);
+        }
+        // An entry with no row in English at all, as one written in another language first has.
+        await target.adapter.executeQuery(
+          `DELETE FROM ${q(COMPANION)} WHERE ${q("_parent")} = '${bare}' AND ${q("_locale")} = 'en'`
+        );
+        return { ...target, kept, empty, bare };
+      }
+
+      /** Each entry's English value of `column`, by entry, and which entries there are. */
+      async function englishOf(
+        adapter: DrizzleAdapter,
+        column: string
+      ): Promise<Record<string, unknown>> {
+        const rows = await adapter.executeQuery<{
+          id: unknown;
+          value: unknown;
+        }>(
+          `SELECT ${q("_parent")} AS id, ${q(column)} AS value FROM ${q(COMPANION)} WHERE ${q("_locale")} = 'en'`
+        );
+        return Object.fromEntries(rows.map(row => [String(row.id), row.value]));
+      }
+
+      /** The entries the collection holds. */
+      async function entriesOf(adapter: DrizzleAdapter): Promise<string[]> {
+        const rows = await adapter.executeQuery<{ id: unknown }>(
+          `SELECT ${q("id")} AS id FROM ${q(MAIN)}`
+        );
+        return rows.map(row => String(row.id)).sort();
+      }
+
+      /** Their names (`pendingIn`). */
+      const pendingNames = async (adapter: DrizzleAdapter, folder: string) =>
+        (await pendingIn(adapter, folder)).map(file => file.name);
+
+      /** The files the reached database's ledger does not hold yet. */
+      const pendingIn = (adapter: DrizzleAdapter, folder: string) =>
+        findPendingFiles(
+          adapter as unknown as CLIDatabaseAdapter,
+          adapter.getDrizzle(),
+          dialect,
+          join(folder, "database", "history"),
+          createLogger({ quiet: true })
+        );
+
+      for (const translated of translations) {
+        for (const answered of savesFor(translated)) {
+          const kind = translated ? "a translated" : "an untranslated";
+          const filling = answered.name !== "renamed";
+
+          it(`passes ${kind} collection's file that ${filling ? "fills" : "deletes"} through migrate:check, a second database and a second run (${answered.name})`, async () => {
+            const { before, after, later } = await built(translated, answered);
+            // The check reads the project as a whole: files, snapshots and what they say.
+            const checked = await check(after);
+            expect(checked.code, checked.said).toBeUndefined();
+
+            const target = await seeded(before, translated);
+            const ids = [target.kept, target.empty, target.bare].sort();
+            expect(await entriesOf(target.adapter)).toEqual(ids);
+            // The other language's rows, which a fill of the default one leaves as they were.
+            const spanish = async () =>
+              (await languageRowsOf(target.adapter, "note")).filter(
+                row => row[1] === "es"
+              );
+            const spanishBefore = filling ? await spanish() : [];
+            if (filling) {
+              expect(spanishBefore).toEqual(
+                translated ? [[target.bare, "es", "nota"]] : []
+              );
+            }
+            reach(target.url);
+            const applied = await migrate(
+              after,
+              filling ? {} : { acceptDataLoss: true }
+            );
+            expect(applied.code, applied.said).toBeUndefined();
+            // A file that fills is compared with the table before it applies; a pending rename
+            // leaves its table unjudged, as any pending rename does. Neither is drift.
+            expect(applied.said).not.toMatch(/SCHEMA_DRIFT|drifted/);
+            if (filling) {
+              expect(applied.said).not.toMatch(/without a drift check/);
+            }
+
+            const expected = filling
+              ? {
+                  [target.kept]: "summed",
+                  [target.empty]: "summed",
+                  [target.bare]: "summed",
+                }
+              : { [target.kept]: "kept" };
+            expect(await englishOf(target.adapter, answered.settled)).toEqual(
+              expected
+            );
+            if (!filling) {
+              // The entries without a value are gone, with every language's row of them.
+              expect(await entriesOf(target.adapter)).toEqual([target.kept]);
+              const rows = await target.adapter.executeQuery<{ id: unknown }>(
+                `SELECT ${q("_parent")} AS id FROM ${q(COMPANION)}`
+              );
+              expect(new Set(rows.map(row => String(row.id)))).toEqual(
+                new Set([target.kept])
+              );
+            } else {
+              expect(await entriesOf(target.adapter)).toEqual(ids);
+            }
+
+            if (filling) expect(await spanish()).toEqual(spanishBefore);
+
+            // A second run finds nothing to do, and says so; nothing is pending or run again.
+            expect((await pendingIn(target.adapter, after)).length).toBe(0);
+            const again = await migrate(after);
+            expect(again.code, again.said).toBeUndefined();
+            if (filling) expect(await spanish()).toEqual(spanishBefore);
+            expect(await englishOf(target.adapter, answered.settled)).toEqual(
+              expected
+            );
+
+            // The next save's file applies over the table the settled file left, with no drift.
+            if (later === undefined) return;
+            const next = await migrate(later);
+            expect(next.code, next.said).toBeUndefined();
+            expect(next.said).not.toMatch(/SCHEMA_DRIFT|drifted/);
+            expect((await pendingIn(target.adapter, later)).length).toBe(0);
+            expect(await englishOf(target.adapter, answered.settled)).toEqual(
+              expected
+            );
+          }, 240_000);
+
+          if (answered.name === "added beside a container") {
+            it(`fills ${kind} collection's field in the last translations-table file of a save that adds a container beside it`, async () => {
+              const { before, after } = await built(translated, answered);
+              const written = files(after).filter(
+                name => !files(before).includes(name)
+              );
+              const touching = (text: RegExp) =>
+                written.filter(name => text.test(runs(after, name)));
+              const companion = `${COMPANION}[^;]*`;
+              const summaryAdded = touching(
+                new RegExp(`${companion}ADD (COLUMN )?.summary.`)
+              );
+              const overlayAdded = touching(
+                new RegExp(`${companion}ADD (COLUMN )?.slides.`)
+              );
+              const filled = touching(
+                /UPDATE .dc_posts_locales. SET .summary./
+              );
+
+              // A file each, the container's after the text field's; the fill is in the last of
+              // the translations table's files, where the field's column is there by then.
+              expect(summaryAdded).toHaveLength(1);
+              expect(overlayAdded).toHaveLength(1);
+              expect(written.indexOf(overlayAdded[0]!)).toBeGreaterThan(
+                written.indexOf(summaryAdded[0]!)
+              );
+              const altering = touching(
+                new RegExp(`ALTER TABLE .${COMPANION}.`)
+              );
+              expect(filled).toEqual([altering.at(-1)]);
+              expect(filled).toEqual(overlayAdded);
+            }, 240_000);
+          }
+
+          if (filling) continue;
+
+          it(`refuses ${kind} collection's file that deletes without the data-loss consent, changing nothing (${answered.name})`, async () => {
+            const { before, after } = await built(translated, answered);
+            // The one file of the save that deletes is the translations table's: it renames the
+            // column there, and then deletes from both tables.
+            const deleting = files(after).filter(
+              name =>
+                !files(before).includes(name) &&
+                runs(after, name).includes("DELETE FROM")
+            );
+            expect(deleting).toHaveLength(1);
+            const file = deleting[0]!;
+            const up = runs(after, file);
+            expect(up).toMatch(
+              /dc_posts_locales[^;]*RENAME COLUMN .note. TO .remark./
+            );
+            expect(up.indexOf("DELETE FROM")).toBeGreaterThan(
+              up.indexOf("RENAME COLUMN")
+            );
+            expect(up).toContain(`DELETE FROM ${q(MAIN)} `);
+            expect(up).toContain(`DELETE FROM ${q(COMPANION)} `);
+
+            const target = await seeded(before, translated);
+            const ids = [target.kept, target.empty, target.bare].sort();
+
+            reach(target.url);
+            const rowsBefore = await languageRowsOf(target.adapter, "note");
+            const pending = await pendingIn(target.adapter, after);
+            const refused = await migrate(after);
+
+            // Refused for want of the consent, and for the rows alone: the file's rename is not
+            // among what needs it.
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/DATA_LOSS_CONSENT_REQUIRED/);
+            expect(refused.said).toMatch(/Nothing was changed/);
+            expect(listedDeletions(refused.said)).toEqual({
+              [file]: [
+                `rows of ${MAIN}`,
+                `rows of ${COMPANION}, belonging to ${MAIN}`,
+              ],
+            });
+            // Nothing changed: the entries, every language's row under the column's old name, and
+            // the files still to run.
+            expect(await entriesOf(target.adapter)).toEqual(ids);
+            expect(await languageRowsOf(target.adapter, "note")).toEqual(
+              rowsBefore
+            );
+            expect(await pendingIn(target.adapter, after)).toEqual(pending);
+
+            // With it, the same file applies.
+            const applied = await migrate(after, { acceptDataLoss: true });
+            expect(applied.code, applied.said).toBeUndefined();
+            expect(await entriesOf(target.adapter)).toEqual([target.kept]);
+          }, 240_000);
+        }
+
+        // An answer is decided in the language that was the default when its file was made: a run
+        // whose default is another refuses the file before any statement, a fill's and a delete's
+        // alike, in the main table's file and in the translations table's.
+        for (const decided of decidedSaves(translated)) {
+          const kind = translated ? "a translated" : "an untranslated";
+          const named = `${kind} collection's ${decided.deletes ? "delete" : "fill"} in ${decided.file}`;
+          const consent = decided.deletes
+            ? { acceptDataLoss: true as const }
+            : {};
+
+          /** The save's files on a database of its own, with entries, and the file that answers. */
+          const deployed = async () => {
+            const { before, after } = await built(
+              translated,
+              decided.save,
+              false
+            );
+            const answering = files(after).filter(
+              name =>
+                !files(before).includes(name) &&
+                /^(UPDATE|INSERT INTO|DELETE FROM)\b.*_locales/m.test(
+                  runs(after, name)
+                )
+            );
+            expect(answering).toHaveLength(1);
+            const file = answering[0]!;
+            const localizationFile = readFileSync(
+              join(after, "database", "history", file),
+              "utf8"
+            ).includes("-- Generated: localization");
+            expect(localizationFile).toBe(
+              decided.file === "the translations table's file"
+            );
+            const target = await seeded(before, translated);
+            reach(target.url);
+            const state = async () => ({
+              entries: await entriesOf(target.adapter),
+              notes: await languageRowsOf(target.adapter, "note"),
+              pending: await pendingNames(target.adapter, after),
+            });
+            const left = () => pendingNames(target.adapter, after);
+            return {
+              after,
+              file,
+              target,
+              state,
+              left,
+              untouched: await state(),
+            };
+          };
+          /** What a refusal says: its code, the file, both languages, and that nothing changed. */
+          const refusedIn = (said: string, file: string, runs: string) => {
+            expect(said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            expect(said).toContain(file);
+            expect(said).toMatch(/"en"/);
+            expect(said).toMatch(new RegExp(`"${runs}"`));
+            expect(said).toMatch(/Nothing was changed/);
+            // The ways out: the save made again, or by hand and recorded.
+            expect(said).toMatch(/make the save again/);
+            expect(said).toMatch(/migrate:resolve --applied/);
+            expect(said).not.toMatch(/the default again/);
+          };
+
+          it(`refuses ${named} where the configuration's default is another language`, async () => {
+            const { after, file, state, left, untouched } = await deployed();
+            const spanish = { ...LOCALIZATION, defaultLocale: "es" };
+
+            const refused = await migrate(after, consent, spanish);
+            expect(refused.code, refused.said).not.toBeUndefined();
+            refusedIn(refused.said, file, "es");
+            expect(await state()).toEqual(untouched);
+
+            // The dry run names the same refusal.
+            const previewed = await migrate(
+              after,
+              { ...consent, dryRun: true },
+              spanish
+            );
+            expect(previewed.said).toMatch(/would refuse/);
+            expect(previewed.said).toMatch(/"en"/);
+            expect(previewed.said).toMatch(/"es"/);
+
+            // Under the language it was made in, the same file applies.
+            const applied = await migrate(after, consent);
+            expect(applied.code, applied.said).toBeUndefined();
+            expect(await left()).toEqual([]);
+          }, 240_000);
+
+          it(`refuses ${named} where Settings' default is another language`, async () => {
+            const { after, file, target, state, left, untouched } =
+              await deployed();
+            await settingsLanguages(target.adapter, ["es", "en"]);
+
+            const refused = await migrate(after, consent, "Settings");
+            expect(refused.code, refused.said).not.toBeUndefined();
+            refusedIn(refused.said, file, "es");
+            expect(await state()).toEqual(untouched);
+
+            await settingsLanguages(target.adapter, ["en", "es"]);
+            const applied = await migrate(after, consent, "Settings");
+            expect(applied.code, applied.said).toBeUndefined();
+            expect(await left()).toEqual([]);
+          }, 240_000);
+
+          it(`refuses ${named} where the file records no language`, async () => {
+            const { after, file, state, untouched } = await deployed();
+            const path = join(after, "database", "history", file);
+            const text = readFileSync(path, "utf8");
+            // The line a file with an answer records its language in, taken out.
+            writeFileSync(path, text.replace(/^-- Answers in: .*\n/m, ""));
+
+            const refused = await migrate(after, consent);
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            expect(refused.said).toContain(file);
+            expect(refused.said).toMatch(/records no language/);
+            expect(await state()).toEqual(untouched);
+          }, 240_000);
+        }
+
+        // The translations table may be one the run makes and fills from the entity's, so it is the
+        // entity's own rows that are read.
+        it.runIf(layout === "earlier")(
+          "refuses a delete in a run that turns translation on first, where the entries are not in a translations table yet",
+          async () => {
+            const dev = await database();
+            reach(dev.url);
+            await site(dev.adapter, project);
+            const fields = [
+              { name: "heading", type: "text" },
+              { name: "note", type: "text" },
+            ];
+            await dispatchCollections(
+              {} as ServiceContainer,
+              "createCollection",
+              {},
+              { name: "posts", label: "Posts", localized: false, fields }
+            );
+            const before = copied("untranslated");
+            await save(
+              "posts",
+              fields,
+              { localized: true },
+              await versionOf(dev.adapter)
+            );
+            const renamed = savesFor(true).find(
+              each => each.name === "renamed"
+            )!;
+            await save(
+              "posts",
+              renamed.fields,
+              renamed.answers,
+              await versionOf(dev.adapter)
+            );
+            const after = copied("translated");
+            const added = files(after).filter(
+              name => !files(before).includes(name)
+            );
+            expect(
+              added.some(name =>
+                /INSERT INTO .dc_posts_locales./.test(runs(after, name))
+              )
+            ).toBe(true);
+            expect(
+              added.some(name => runs(after, name).includes("DELETE FROM"))
+            ).toBe(true);
+
+            const target = await database();
+            reach(target.url);
+            const first = await migrate(before);
+            expect(first.code, first.said).toBeUndefined();
+            const app = await site(target.adapter, before, "production");
+            const entry = String(
+              (
+                await app.nextly.create({
+                  collection: "posts" as never,
+                  data: { heading: "Empty" } as never,
+                })
+              ).item.id
+            );
+            expect(await target.adapter.tableExists(COMPANION)).toBe(false);
+            const pending = await pendingNames(target.adapter, after);
+
+            const refused = await migrate(
+              after,
+              { acceptDataLoss: true },
+              { ...LOCALIZATION, defaultLocale: "es" }
+            );
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            expect(await entriesOf(target.adapter)).toEqual([entry]);
+            expect(await target.adapter.tableExists(COMPANION)).toBe(false);
+            expect(await pendingNames(target.adapter, after)).toEqual(pending);
+          },
+          240_000
+        );
+
+        // A run refuses for the entries a file would settle by another language's values: where it
+        // has none to settle, on a database whose table it makes or whose table is empty, the same
+        // file runs. A table the run renames before it answers is read as holding entries, since
+        // what the rename brings is not there yet to be counted.
+        for (const decided of decidedSaves(translated)) {
+          const kind = translated ? "a translated" : "an untranslated";
+          const named = `${kind} collection's ${decided.deletes ? "delete" : "fill"} in ${decided.file}`;
+          const consent = decided.deletes
+            ? { acceptDataLoss: true as const }
+            : {};
+          const spanish = { ...LOCALIZATION, defaultLocale: "es" };
+          /** The save's files, and the one that answers. */
+          const answered = async () => {
+            const { before, after } = await built(
+              translated,
+              decided.save,
+              false
+            );
+            const file = files(after).find(
+              name =>
+                !files(before).includes(name) &&
+                /^(UPDATE|INSERT INTO|DELETE FROM)\b.*_locales/m.test(
+                  runs(after, name)
+                )
+            );
+            expect(file).toBeDefined();
+            return {
+              before,
+              after,
+              path: join(after, "database", "history", file!),
+            };
+          };
+
+          it(`runs ${named} on a new database whose default is another language`, async () => {
+            const { before, after } = await answered();
+            const target = await database();
+            reach(target.url);
+
+            const applied = await migrate(after, consent, spanish);
+            expect(applied.code, applied.said).toBeUndefined();
+            expect(await pendingIn(target.adapter, after)).toEqual([]);
+            expect(await entriesOf(target.adapter)).toEqual([]);
+
+            // The same files on a database holding one entry are refused, with nothing written.
+            const held = await seeded(before, translated);
+            reach(held.url);
+            await held.adapter.executeQuery(
+              `DELETE FROM ${q(MAIN)} WHERE ${q("id")} <> '${held.empty}'`
+            );
+            const pending = await pendingNames(held.adapter, after);
+            const refused = await migrate(after, consent, spanish);
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            expect(await entriesOf(held.adapter)).toEqual([held.empty]);
+            expect(await pendingNames(held.adapter, after)).toEqual(pending);
+          }, 360_000);
+
+          it(`runs ${named} on a new database where the file records no language`, async () => {
+            const { after, path } = await answered();
+            const text = readFileSync(path, "utf8");
+            writeFileSync(path, text.replace(/^-- Answers in: .*\n/m, ""));
+            const target = await database();
+            reach(target.url);
+
+            const applied = await migrate(after, consent);
+            expect(applied.code, applied.said).toBeUndefined();
+            expect(await pendingIn(target.adapter, after)).toEqual([]);
+          }, 240_000);
+
+          // A hand-written file that puts an entry in ahead of the answer, in one run: there is
+          // nothing to settle before the run, and an entry once its first file has applied.
+          const seededInTheRun = async () => {
+            const { before, after, path } = await answered();
+            const target = await database();
+            reach(target.url);
+            const first = await migrate(before);
+            expect(first.code, first.said).toBeUndefined();
+            const app = await site(target.adapter, before, "production");
+            const entry = String(
+              (
+                await app.nextly.create({
+                  collection: "posts" as never,
+                  data: { heading: "Empty" } as never,
+                  locale: "en",
+                } as never)
+              ).item.id
+            );
+            // Its row, kept aside for the file to put back, with no row in any language.
+            await target.adapter.executeQuery(
+              `CREATE TABLE ${q("seed_rows")} AS SELECT * FROM ${q(MAIN)}`
+            );
+            await target.adapter.executeQuery(`DELETE FROM ${q(COMPANION)}`);
+            await target.adapter.executeQuery(`DELETE FROM ${q(MAIN)}`);
+            // After the files before the save, and before the save's own.
+            const seed = `${files(before)
+              .at(-1)!
+              .replace(/\.sql$/, "")}_seed`;
+            writeFileSync(
+              join(after, "database", "history", `${seed}.sql`),
+              `-- UP\nINSERT INTO ${q(MAIN)} SELECT * FROM ${q("seed_rows")};\n\n-- DOWN\nDELETE FROM ${q(MAIN)};\n`
+            );
+            const pending = await pendingNames(target.adapter, after);
+            expect(pending[0]).toBe(seed);
+            const file = basename(path, ".sql");
+            expect(pending).toContain(file);
+            return { after, target, entry, seed, file, pending };
+          };
+          /** What the ledger holds of file \`name\`: the status of each attempt at it. */
+          const ledgerOf = async (adapter: DrizzleAdapter, name: string) =>
+            (
+              await adapter.executeQuery<{ status: unknown }>(
+                `SELECT ${q("status")} AS status FROM ${q("nextly_schema_events")} WHERE ${q("filename")} = '${name}.sql' AND ${q("event_type")} = 'file_apply'`
+              )
+            ).map(row => String(row.status));
+
+          it(`refuses ${named} where an earlier file of the run added an entry, which stays applied`, async () => {
+            const { after, target, entry, seed, file, pending } =
+              await seededInTheRun();
+
+            const refused = await migrate(after, consent, spanish);
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            expect(refused.said).toContain(`${file}.sql`);
+            expect(refused.said).toMatch(/None of its statements ran/);
+            expect(refused.said).not.toMatch(/Nothing was changed/);
+            // The files before it are applied, and nothing of it is.
+            expect(await entriesOf(target.adapter)).toEqual([entry]);
+            expect(await pendingNames(target.adapter, after)).toEqual(
+              pending.slice(pending.indexOf(file))
+            );
+            expect(await ledgerOf(target.adapter, seed)).toEqual(["applied"]);
+            expect(await ledgerOf(target.adapter, file)).toEqual([]);
+          }, 240_000);
+
+          it(`runs ${named} after an earlier file of the run added an entry, in its own language`, async () => {
+            const { after, target } = await seededInTheRun();
+
+            const applied = await migrate(after, consent);
+            expect(applied.code, applied.said).toBeUndefined();
+            expect(await pendingNames(target.adapter, after)).toEqual([]);
+          }, 240_000);
+
+          it(`refuses ${named} where an earlier file of the run changes Settings' default`, async () => {
+            const { before, after, path } = await answered();
+            const target = await seeded(before, translated);
+            reach(target.url);
+            await settingsLanguages(target.adapter, ["en", "es"]);
+            const entries = await entriesOf(target.adapter);
+            const name = `${files(before)
+              .at(-1)!
+              .replace(/\.sql$/, "")}_default`;
+            const isDefault = (code: string, value: boolean) =>
+              `UPDATE ${q("nextly_languages")} SET ${q("is_default")} = ${dialect === "postgresql" ? String(value) : value ? "1" : "0"} WHERE ${q("code")} = '${code}';`;
+            writeFileSync(
+              join(after, "database", "history", `${name}.sql`),
+              `-- UP\n${isDefault("en", false)}\n${isDefault("es", true)}\n\n-- DOWN\n${isDefault("es", false)}\n${isDefault("en", true)}\n`
+            );
+
+            const refused = await migrate(after, consent, "Settings");
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            expect(refused.said).toMatch(/None of its statements ran/);
+            expect(await entriesOf(target.adapter)).toEqual(entries);
+            expect((await pendingNames(target.adapter, after))[0]).toBe(
+              basename(path, ".sql")
+            );
+          }, 240_000);
+
+          // The by-hand way ends in a record of the file. A translations table's file has no
+          // snapshot to compare, so it is recorded only with the comparison left out.
+          if (decided.file === "the translations table's file") {
+            it(`records ${named} settled by hand`, async () => {
+              const { before, after, path } = await answered();
+              const target = await seeded(before, translated);
+              reach(target.url);
+              const file = basename(path);
+              const refused = await migrate(after, consent, spanish);
+              expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+              const resolve = (skipVerify: boolean) =>
+                ran(() => {
+                  context.cwd = after;
+                  return runMigrateResolve(
+                    { cwd: after, applied: file, skipVerify } as never,
+                    context
+                  );
+                });
+
+              const compared = await resolve(false);
+              expect(compared.said).toMatch(/--skip-verify/);
+              const recorded = await resolve(true);
+              expect(recorded.code, recorded.said).toBeUndefined();
+              expect(await pendingNames(target.adapter, after)).not.toContain(
+                basename(path, ".sql")
+              );
+            }, 240_000);
+          }
+
+          it(`refuses ${named} where the run renames the table it settles into place`, async () => {
+            const { before, after, path } = await answered();
+            const target = await seeded(before, translated);
+            reach(target.url);
+            // No row in the translations table, which would tell of the entries by itself.
+            await target.adapter.executeQuery(`DELETE FROM ${q(COMPANION)}`);
+            // The entries are under another name, and the answering file brings them back first.
+            const rename = (from: string, to: string) =>
+              `ALTER TABLE ${q(from)} RENAME TO ${q(to)};`;
+            await target.adapter.executeQuery(rename(MAIN, `${MAIN}_parked`));
+            const text = readFileSync(path, "utf8");
+            const renaming = text.replace(
+              /^-- UP$/m,
+              `-- UP\n${rename(`${MAIN}_parked`, MAIN)}`
+            );
+            expect(renaming).not.toBe(text);
+            writeFileSync(path, renaming);
+
+            const refused = await migrate(after, consent, spanish);
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/MIGRATION_LANGUAGE_DIFFERS/);
+            // Still under the other name, with every entry.
+            const parked = await target.adapter.executeQuery<{ id: unknown }>(
+              `SELECT ${q("id")} AS id FROM ${q(`${MAIN}_parked`)}`
+            );
+            expect(parked.map(row => String(row.id)).sort()).toEqual(
+              [target.kept, target.empty, target.bare].sort()
+            );
+          }, 240_000);
+        }
+
+        // A SQLite file rebuilds a table through a copy renamed into place. The copy is made by the
+        // run, so on a new database there is nothing in it.
+        it.runIf(dialect === "sqlite")(
+          `runs ${translated ? "a translated" : "an untranslated"} collection's delete in a run that rebuilds its table, on a new database whose default is another language`,
+          async () => {
+            const dev = await database();
+            reach(dev.url);
+            await site(dev.adapter, project);
+            const rank = { name: "rank", type: "number" };
+            await dispatchCollections(
+              {} as ServiceContainer,
+              "createCollection",
+              {},
+              {
+                name: "posts",
+                label: "Posts",
+                localized: translated,
+                fields: [
+                  { name: "heading", type: "text" },
+                  { name: "note", type: "text" },
+                  rank,
+                ],
+              }
+            );
+            await save(
+              "posts",
+              [
+                { name: "heading", type: "text" },
+                { name: "note", type: "text" },
+                { ...rank, required: true },
+              ],
+              translated ? { localized: true } : {},
+              await versionOf(dev.adapter)
+            );
+            const answer = decidedSaves(translated).at(-1)!.save;
+            await save(
+              "posts",
+              [...answer.fields, { ...rank, required: true }],
+              answer.answers,
+              await versionOf(dev.adapter)
+            );
+            const after = copied("rebuilt");
+            expect(
+              files(after).filter(name =>
+                runs(after, name).includes(`RENAME TO "${MAIN}"`)
+              ).length
+            ).toBeGreaterThan(0);
+
+            const target = await database();
+            reach(target.url);
+            const applied = await migrate(
+              after,
+              { acceptDataLoss: true },
+              { ...LOCALIZATION, defaultLocale: "es" }
+            );
+            expect(applied.code, applied.said).toBeUndefined();
+            expect(await pendingNames(target.adapter, after)).toEqual([]);
+          },
+          240_000
+        );
+
+        it.runIf(dialect === "mysql")(
+          `leaves ${translated ? "a translated" : "an untranslated"} collection's file whole where a run stopped between its ALTER and its fill, and finishes once that is undone`,
+          async () => {
+            const [answered] = savesFor(translated);
+            const { before, after } = await built(translated, answered!);
+            const target = await seeded(before, translated);
+            reach(target.url);
+            const ids = [target.kept, target.empty, target.bare].sort();
+            const notes = await languageRowsOf(target.adapter, "note");
+
+            // The file's ALTER has committed, and its fill is refused: a run stopped between
+            // them. A table with a trigger asks for the data-loss consent before anything runs.
+            await target.adapter.executeQuery(
+              `CREATE TRIGGER ${q("stop_fill")} BEFORE UPDATE ON ${q(COMPANION)} FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'stopped'`
+            );
+            const stopped = await migrate(after, { acceptDataLoss: true });
+            expect(stopped.code, stopped.said).not.toBeUndefined();
+            expect(stopped.said).toMatch(/stopped/);
+            await target.adapter.executeQuery(`DROP TRIGGER ${q("stop_fill")}`);
+
+            // Nothing is filled and nothing is lost: every entry is there with its notes, and the
+            // new column, which the ALTER left, holds no value.
+            expect(await entriesOf(target.adapter)).toEqual(ids);
+            expect(await languageRowsOf(target.adapter, "note")).toEqual(notes);
+            expect(await languageRowsOf(target.adapter, "summary")).toEqual(
+              notes.map(row => [row[0], row[1], null])
+            );
+
+            // A rerun refuses: it says which statement has run and which it cannot judge, and
+            // what to do about each, and changes nothing.
+            const refused = await migrate(after, { acceptDataLoss: true });
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/NEXTLY_MIGRATION_PARTIALLY_APPLIED/);
+            expect(refused.said).toMatch(
+              /ALTER TABLE [^)]*ADD COLUMN `summary`[^)]*\) is done/
+            );
+            expect(refused.said).toMatch(/UPDATE [^)]*\) is unknown/);
+            expect(await languageRowsOf(target.adapter, "note")).toEqual(notes);
+            expect(await languageRowsOf(target.adapter, "summary")).toEqual(
+              notes.map(row => [row[0], row[1], null])
+            );
+
+            // Undone as the message says, the file runs whole.
+            const file = files(after).find(name =>
+              name.includes("adds_localization")
+            )!;
+            await target.adapter.executeQuery(
+              `ALTER TABLE ${q(COMPANION)} DROP COLUMN ${q("summary")}`
+            );
+            const resolved = await ran(() =>
+              runMigrateResolve(
+                { cwd: after, failedCleanup: file } as never,
+                context
+              )
+            );
+            expect(resolved.code, resolved.said).toBeUndefined();
+            const finished = await migrate(after);
+            expect(finished.code, finished.said).toBeUndefined();
+            expect(await englishOf(target.adapter, "summary")).toEqual({
+              [target.kept]: "summed",
+              [target.empty]: "summed",
+              [target.bare]: "summed",
+            });
+          },
+          240_000
+        );
+      }
+
+      /** Every language's row of the collection, by entry, language and value of `column`. */
+      async function languageRowsOf(
+        adapter: DrizzleAdapter,
+        column: string
+      ): Promise<[string, string, unknown][]> {
+        const rows = await adapter.executeQuery<Record<string, unknown>>(
+          `SELECT ${q("_parent")} AS parent, ${q("_locale")} AS locale, ${q(column)} AS value FROM ${q(COMPANION)}`
+        );
+        return rows
+          .map((row): [string, string, unknown] => [
+            String(row.parent),
+            String(row.locale),
+            row.value ?? null,
+          ])
+          .sort((a, b) => `${a[0]}:${a[1]}`.localeCompare(`${b[0]}:${b[1]}`));
+      }
+    }
+  );
+}

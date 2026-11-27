@@ -1,5 +1,6 @@
 import {
   codeTokenClass,
+  isFollowedLink,
   isRichTextNode,
   isRichTextValue,
   type RichTextNode,
@@ -425,7 +426,12 @@ function LinkView({
   // wrapper the parser was going to take apart anyway — and taking it apart is
   // not a tidy failure: it leaves a second, empty anchor in the middle of the
   // row, which is focusable and announced with no name.
-  if (href === undefined || holdsInteractive(node.children))
+  // An address the author unlinked in the editor is its words alone too.
+  if (
+    href === undefined ||
+    !isFollowedLink(node) ||
+    holdsInteractive(node.children)
+  )
     return <>{children(draw.parts(node).inside, draw)}</>;
 
   // Only `_blank` is honoured. It is the one target the editor writes, and it

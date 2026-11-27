@@ -392,7 +392,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses a field group's group field over the row whose value the new type can't read", async () => {
       const GROUP = "ntc_meta";
-      const COMP = `comp_${GROUP}`;
+      const COMP = `fg_${GROUP}`;
       const t = await createTestNextly({ dialect });
       instance = t;
       vi.stubEnv("NODE_ENV", "development");

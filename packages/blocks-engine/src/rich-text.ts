@@ -50,6 +50,7 @@
  * text, reads no text out of it, and commits an empty string over the passage.
  */
 import { authoredText } from "./authored-text";
+import { isFollowedLink } from "./rich-text-link";
 import { isLinkableUrl } from "./url-policy";
 
 export const RICH_TEXT_PROP_TYPE = "richText";
@@ -602,8 +603,11 @@ function nodePieces(
     return textLeafPieces(node, walk);
   }
   if (node.type === "linebreak") return [{ kind: "break" }];
-  if (node.type === "link" || node.type === "autolink") {
-    return linkOrWords(node, walk, inLink, stack);
+  if (isFollowedLink(node)) return linkOrWords(node, walk, inLink, stack);
+  // An address the author unlinked is its words, with nothing dropped.
+  if (node.type === "autolink") {
+    pushReversed(stack, kidsOf(node));
+    return [];
   }
   walk.dropped = true;
   if (typeof node.text === "string") return textPieces(node.text, 0);

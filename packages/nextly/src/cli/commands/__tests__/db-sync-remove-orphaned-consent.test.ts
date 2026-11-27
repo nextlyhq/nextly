@@ -232,6 +232,7 @@ vi.mock("../../../services/collections/collection-sync-service", () => ({
 
 vi.mock("../../../services/singles/single-registry-service", () => ({
   SingleRegistryService: class {
+    async claimDeclared() {}
     async syncCodeFirstSingles() {
       return emptySync;
     }
@@ -243,6 +244,7 @@ vi.mock("../../../services/singles/single-registry-service", () => ({
 
 vi.mock("../../../services/field-groups/field-group-registry-service", () => ({
   FieldGroupRegistryService: class {
+    async claimDeclared() {}
     async syncCodeFirstComponents() {
       return emptySync;
     }

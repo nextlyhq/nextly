@@ -153,6 +153,7 @@ export {
   type RichTextNode,
   type RichTextValue,
 } from "../rich-text";
+export { isFollowedLink } from "../rich-text-link";
 
 /**
  * Emitting a page's breakpoints for a surface that is not the published page.

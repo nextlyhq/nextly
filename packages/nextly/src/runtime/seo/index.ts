@@ -22,6 +22,7 @@ export {
   PAGE_METADATA_SERVICE,
 } from "./page-metadata-contract";
 export type {
+  PageArticle,
   PageMetadataAnswer,
   PageMetadataImage,
   PageImagePreview,

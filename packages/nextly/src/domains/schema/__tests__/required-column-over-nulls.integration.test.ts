@@ -48,7 +48,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import type { ServiceContainer } from "../../../services";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import { CollectionRegistryService } from "../../collections/services/collection-registry-service";
@@ -133,7 +133,7 @@ async function registryRow(
   slug: string
 ): Promise<Record<string, unknown> | null> {
   const table =
-    registry === "fieldGroups" ? STORAGE_FORMAT.registryTable : registry;
+    registry === "fieldGroups" ? MIGRATION_TARGET.registryTable : registry;
   const rows = await adapter.executeQuery<Record<string, unknown>>(
     `SELECT * FROM ${table} WHERE slug = '${slug}'`
   );
@@ -612,12 +612,12 @@ for (const dialect of getConfiguredTestDialects()) {
         slug: "home",
         data: { promo: { label: "h" }, _overwrite: true },
       });
-      expect(await nullsIn(adapter, "comp_promo", "cta")).toEqual({
+      expect(await nullsIn(adapter, "fg_promo", "cta")).toEqual({
         rows: 4,
         nulls: 3,
       });
       const row = await registryRow(adapter, "fieldGroups", "promo");
-      const columns = await columnsOf(adapter, dialect, "comp_promo");
+      const columns = await columnsOf(adapter, dialect, "fg_promo");
 
       await inDevelopment(async () => {
         expect(
@@ -641,7 +641,7 @@ for (const dialect of getConfiguredTestDialects()) {
             "Field group 'promo': field 'cta' cannot become required while 3 rows hold no value in it: 2 in collection 'posts', 1 in Single 'home'. Give those rows a value first, or keep the field optional.",
         });
       });
-      expect(await columnsOf(adapter, dialect, "comp_promo")).toEqual(columns);
+      expect(await columnsOf(adapter, dialect, "fg_promo")).toEqual(columns);
       expect(await registryRow(adapter, "fieldGroups", "promo")).toEqual(row);
       expect(columns.cta).toBe(true);
     });

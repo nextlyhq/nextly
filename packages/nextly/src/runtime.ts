@@ -86,6 +86,7 @@ export { jsonLdScriptProps, type JsonLdScriptProps } from "./runtime/seo";
 export {
   PAGE_METADATA_CAPABILITY,
   PAGE_METADATA_SERVICE,
+  type PageArticle,
   type PageMetadataAnswer,
   type PageMetadataImage,
   type PageImagePreview,
@@ -132,7 +133,11 @@ export { previewDraftGate } from "./runtime/preview/preview-draft-gate";
 
 // The site's Proxy: the app's `proxy.ts` hands each request to the handlers
 // plugins contribute (`contributes.proxy`).
-export { createNextlyProxy, type NextlyProxyDeps } from "./runtime/proxy";
+export {
+  createNextlyProxy,
+  type NextlyProxyDeps,
+  type NextlyProxyEvent,
+} from "./runtime/proxy";
 
 // The Single counterpart. A sibling rather than a branch: a collection gate
 // returns an entry id so the route can compare it against the row a PATH

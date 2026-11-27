@@ -24,17 +24,12 @@
  */
 
 import { listKindSortable } from "@nextlyhq/blocks-engine";
-import {
-  Button,
-  Label,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@nextlyhq/ui";
+import { Button, Label, Popover, PopoverTrigger } from "@nextlyhq/ui";
 import { ArrowDown, ArrowUp, ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import { ChoiceList, type ListedChoice } from "../../choice-list";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import { propLabel } from "../inspector";
 
 import type {
@@ -226,7 +221,7 @@ export function LoopPicker<C extends ListedChoice>({
         </PopoverTrigger>
         {/* Aligned to the control's right edge, as the font list is: the list
             may be wider than the control, at the window's right edge. */}
-        <PopoverContent
+        <BuilderPopoverContent
           align="end"
           sideOffset={4}
           className="nx-font-pick__popover"
@@ -249,7 +244,7 @@ export function LoopPicker<C extends ListedChoice>({
             />
             {around?.below}
           </div>
-        </PopoverContent>
+        </BuilderPopoverContent>
       </Popover>
     </div>
   );

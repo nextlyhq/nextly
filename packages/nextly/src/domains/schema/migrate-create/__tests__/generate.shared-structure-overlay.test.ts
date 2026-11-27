@@ -236,7 +236,7 @@ describe("generateMigration: overlay columns of containers keeping one structure
   // nullable, and only a later run makes it NOT NULL as declared. Added NOT NULL to a table with
   // rows, the migration is refused before the data step can run.
   it.each(["sqlite", "postgresql", "mysql"] as const)(
-    "adds a required container's structure column nullable, the run it stops being translated whole (%s)",
+    "keeps a required container's structure column nullable, from the run it stops being translated whole (%s)",
     async dialect => {
       const required = { ...SLIDES, required: true };
       const before: MinimalConfigEntity = {
@@ -273,14 +273,15 @@ describe("generateMigration: overlay columns of containers keeping one structure
         nullable: true,
       });
 
-      // The next run finds it there and no longer translated whole: required as declared.
+      // The next run does not make it required: a container keeping one structure has its main
+      // column nullable, `required` judged on save, so no file waits on the data step's fill.
       await run(
         "settled",
         { ...before, fields: [{ name: "title", type: "text" }, required] },
         new Date("2026-11-20T14:00:00.000Z")
       );
       expect(await snapshotColumn("dc_pages", "slides")).toMatchObject({
-        nullable: false,
+        nullable: true,
       });
     }
   );

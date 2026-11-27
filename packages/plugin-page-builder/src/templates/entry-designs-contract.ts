@@ -101,6 +101,16 @@ export interface EntryDesignsMeta extends PaginationMeta {
    * template is published, to be copied, and the caller may create templates.
    */
   readonly mayGiveDesign: boolean;
+  /**
+   * Where the site's own code shows the collection's entries rather than the
+   * page builder: the collection declares a public address (`publicAddress`)
+   * and the page builder has no template address for it, in code or stored
+   * on its template. `address` is the asked entry's path there, or null for
+   * the collection's list or an entry with no value yet to fill it. Null
+   * where the page builder would serve the entries, or nothing declares
+   * where they are shown.
+   */
+  readonly servedBySite: { readonly address: string | null } | null;
   /** The one entry the read was asked about, or null for the collection's list. */
   readonly entry: string | null;
   /** The templates collection's slug as the site resolved it. */

@@ -23,6 +23,12 @@ vi.mock("../../../domains/field-groups/migration/run", () => ({
   runFieldGroupMigration,
 }));
 
+// Judged from the database's ledger, which this file has none of.
+const refuseRollback = vi.hoisted(() => vi.fn());
+vi.mock("../../../domains/schema/migrate/field-group-rollback", () => ({
+  refuseRollbackUnderCurrentHistory: refuseRollback,
+}));
+
 const setTableResolver = vi.fn();
 
 // The site's config, as the loader reads it: only its evaluation is stood in for, so the
@@ -97,6 +103,7 @@ const DRY_RUN_OUTCOME = {
 beforeEach(() => {
   printed.length = 0;
   runFieldGroupMigration.mockReset();
+  refuseRollback.mockReset();
   setTableResolver.mockReset();
   runFieldGroupMigration.mockResolvedValue(DRY_RUN_OUTCOME);
   // A fresh process: nothing has chosen the storage layout yet.
@@ -115,6 +122,21 @@ describe("migrate:field-groups — what it asks the engine for", () => {
       dryRun: true,
       direction: "up",
       backupConfirmed: false,
+    });
+  });
+
+  it("asks whether the storage may move back before the engine runs, and only for a move back", async () => {
+    await runMigrateFieldGroups({}, context);
+    expect(refuseRollback).not.toHaveBeenCalled();
+
+    refuseRollback.mockRejectedValueOnce(new Error("refused"));
+    runFieldGroupMigration.mockClear();
+    await expect(
+      runMigrateFieldGroups({ down: true, cwd: "/project" }, context)
+    ).rejects.toThrow("refused");
+    expect(runFieldGroupMigration).not.toHaveBeenCalled();
+    expect(refuseRollback.mock.calls[0]![0]).toMatchObject({
+      migrationsDir: resolve("/project", "src/db/migrations"),
     });
   });
 
@@ -267,6 +289,80 @@ describe("migrate:field-groups — what it tells the operator", () => {
     expect(printed.join("\n")).toContain(
       "nextly migrate:field-groups --apply --backup-confirmed"
     );
+  });
+
+  it("warns, before it applies, that content saves may be refused while it runs", async () => {
+    // Printed before the engine starts, so an operator reads it before any statement runs: a
+    // warning printed with the result would come after the saves it warns of were refused.
+    runFieldGroupMigration.mockImplementation(async () => {
+      printed.push("ENGINE STARTED");
+      return { ran: true, direction: "up", steps: 9, restartNeeded: false };
+    });
+
+    await runMigrateFieldGroups(
+      { apply: true, backupConfirmed: true },
+      context
+    );
+
+    const warning = printed.findIndex(line =>
+      /saves .*may be refused/i.test(line)
+    );
+    expect(warning, printed.join("\n")).toBeGreaterThanOrEqual(0);
+    expect(warning).toBeLessThan(printed.indexOf("ENGINE STARTED"));
+  });
+
+  it("warns before a rollback as before a run up, and of no other failure", async () => {
+    runFieldGroupMigration.mockImplementation(async () => {
+      printed.push("ENGINE STARTED");
+      return { ran: true, direction: "down", steps: 9, restartNeeded: false };
+    });
+
+    await runMigrateFieldGroups(
+      { apply: true, backupConfirmed: true, down: true },
+      context
+    );
+    const warning = printed.findIndex(line =>
+      /saves .*may be refused/i.test(line)
+    );
+    expect(warning, printed.join("\n")).toBeGreaterThanOrEqual(0);
+    expect(warning).toBeLessThan(printed.indexOf("ENGINE STARTED"));
+    expect(printed.join("\n")).not.toMatch(/internal error/i);
+  });
+
+  it("says when it ends that no running server needs a restart, when none does", async () => {
+    runFieldGroupMigration.mockResolvedValue({
+      ran: true,
+      direction: "up",
+      steps: 9,
+      restartNeeded: false,
+    });
+
+    await runMigrateFieldGroups(
+      { apply: true, backupConfirmed: true },
+      context
+    );
+
+    expect(printed.join("\n")).toMatch(/no running server needs a restart/i);
+  });
+
+  it("says when it ends that running servers must restart, when the run says so", async () => {
+    // The line follows the run's own answer, not a fixed sentence: the same report for both
+    // answers would tell an operator nothing.
+    runFieldGroupMigration.mockResolvedValue({
+      ran: true,
+      direction: "up",
+      steps: 9,
+      restartNeeded: true,
+    });
+
+    await runMigrateFieldGroups(
+      { apply: true, backupConfirmed: true },
+      context
+    );
+
+    const report = printed.join("\n");
+    expect(report).toMatch(/restart every running server/i);
+    expect(report).not.toMatch(/no running server needs a restart/i);
   });
 
   it("names the ROLLBACK command when previewing a rollback", async () => {

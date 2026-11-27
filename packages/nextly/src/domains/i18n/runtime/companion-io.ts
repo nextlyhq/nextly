@@ -977,13 +977,20 @@ export async function survivingCompanionRefusal(
 export async function refuseCompanionColumnsThatCannotHold(
   adapter: CompanionIntrospectAdapter,
   config: Parameters<typeof localizableConfigEntities>[0],
-  recordedBefore: RecordedEntities | undefined
+  recordedBefore: RecordedEntities | undefined,
+  /**
+   * The table each field group is stored in, by slug: on a site whose storage moved to the
+   * current names, a group's translations table is `fg_<slug>_locales`, which no slug alone says.
+   * Absent, the legacy derivation.
+   */
+  fieldGroupTable?: (slug: string) => string
 ): Promise<void> {
   if (recordedBefore === undefined) return;
   const reasons: string[] = [];
   const errors: { path: string; code: string; message: string }[] = [];
   for (const [kind, group, resolveTableName] of localizableConfigEntities(
-    config
+    config,
+    fieldGroupTable
   )) {
     for (const entity of group) {
       // Every entity kept per language: a translated one, or any under
@@ -1324,7 +1331,9 @@ export async function reconcileCompanionColumns(
     // (one an earlier release kept shared, now keeping its text apart): the default language's
     // overlay is seeded from it, as `migrate:create` and the Builder seed it. Left empty, a first
     // save in another language writes the structure without that text, and the default
-    // language's text is gone. Run once: the column is present on every later run.
+    // language's text is gone. Run once: the column is present on every later run, so a seed
+    // that fails takes its columns back out (`withdrawUnseededOverlays`) and fails the run, and
+    // the next run finds them missing, adds them again and seeds them.
     if (args.defaultLocale !== undefined) {
       const added = desired
         .filter(f => keepsTranslationsInside(f, true))
@@ -1338,17 +1347,32 @@ export async function reconcileCompanionColumns(
         const { buildOverlaySeedStatements } = await import(
           "../migration/generate-up"
         );
-        for (const stmt of buildOverlaySeedStatements(
-          {
-            dialect: args.dialect,
-            mainTable: args.tableName,
-            companionTable: companionTableName,
-            defaultLocale: args.defaultLocale,
-          },
-          seeded,
-          { status: hasStatus && onMain.has("status") }
-        )) {
-          await adapter.executeQuery(stmt);
+        try {
+          for (const stmt of buildOverlaySeedStatements(
+            {
+              dialect: args.dialect,
+              mainTable: args.tableName,
+              companionTable: companionTableName,
+              defaultLocale: args.defaultLocale,
+            },
+            seeded,
+            { status: hasStatus && onMain.has("status") }
+          )) {
+            await adapter.executeQuery(stmt);
+          }
+        } catch (error) {
+          // Not left to the catch below, which takes the columns' presence as success: here the
+          // columns are present and the seed they were added for is not done.
+          fail(
+            await withdrawUnseededOverlays(
+              adapter,
+              companionTableName,
+              seeded,
+              args.dialect,
+              error
+            )
+          );
+          return !failed;
         }
       }
     }
@@ -1366,6 +1390,41 @@ export async function reconcileCompanionColumns(
     fail(error);
   }
   return !failed;
+}
+
+/**
+ * Takes out the overlay columns a failed seed was owed, so the next reconcile finds them missing,
+ * adds them and seeds them again: with the columns left in place, every later run would read the
+ * companion as in step and never seed them. Each was added by this run and holds only what the
+ * failed seed may have copied in, which the next run copies again. Returns the error to report:
+ * the seed's, or, when a column cannot be taken out, one naming the columns left unseeded, since
+ * the next run will not seed those by itself.
+ */
+async function withdrawUnseededOverlays(
+  adapter: CompanionReconcileAdapter,
+  companionTableName: string,
+  columns: readonly string[],
+  dialect: SupportedDialect,
+  seedError: unknown
+): Promise<unknown> {
+  const left: string[] = [];
+  for (const column of columns) {
+    try {
+      await adapter.executeQuery(
+        `ALTER TABLE ${quoteIdent(companionTableName, dialect)} DROP COLUMN ${quoteIdent(column, dialect)}`
+      );
+    } catch {
+      left.push(column);
+    }
+  }
+  if (left.length === 0) return seedError;
+  const reason =
+    seedError instanceof Error ? seedError.message : String(seedError);
+  return new Error(
+    `The default language's text was not copied into ${companionTableName} (${left.join(", ")}): ` +
+      `${reason}. The columns could not be taken out again, so a later run will not copy it: ` +
+      `drop them and run again.`
+  );
 }
 
 /**

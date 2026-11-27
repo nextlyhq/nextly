@@ -13,6 +13,7 @@ import { FRAMEWORK_CRAWL_EXCLUSIONS } from "@nextlyhq/plugin-sdk";
 
 import type { AiCrawlerChoice } from "../settings/contract";
 import { readOwnRules } from "../settings/robots-rules";
+import { SHARE_CARD_PREFIX } from "../social/share-card";
 
 import { AI_SEARCH_CRAWLERS, AI_TRAINING_CRAWLERS } from "./ai-crawlers";
 
@@ -68,6 +69,10 @@ export function robotsTxt(options: {
       "User-agent: *",
       "Allow: /",
       ...FRAMEWORK_CRAWL_EXCLUSIONS.map(path => `Disallow: ${path}`),
+      // The share cards the plugin serves under the admin's API, which
+      // networks fetch as crawlers do: the longer rule wins over the
+      // admin's, so nothing else under it is opened.
+      `Allow: ${SHARE_CARD_PREFIX}`,
     ],
     // A group of its own for each crawler: a crawler that finds its own name
     // reads that group alone, and some read a group naming several poorly.

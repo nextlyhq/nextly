@@ -78,6 +78,32 @@ describe("contentFacts", () => {
     ]);
   });
 
+  it("reads no link from an address the author unlinked, only its words", () => {
+    const facts = contentFacts({
+      id: "7",
+      body: {
+        root: {
+          type: "root",
+          children: [
+            {
+              type: "paragraph",
+              children: [
+                {
+                  type: "autolink",
+                  url: "/blog/kept-as-words",
+                  isUnlinked: true,
+                  children: [{ type: "text", text: "/blog/kept-as-words" }],
+                },
+                { type: "autolink", url: "/blog/linked" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    expect(facts.links).toEqual([{ field: "body", url: "/blog/linked" }]);
+  });
+
   it("reads Page Builder's image and button blocks, and its decorative mark", () => {
     const facts = contentFacts({
       id: "7",
@@ -124,6 +150,55 @@ describe("contentFacts", () => {
       { field: "layout", name: "map.png", media: false, alt: "Map" },
     ]);
     expect(facts.links).toEqual([{ field: "layout", url: "/blog/gone" }]);
+  });
+
+  it("finds the links in a page's own address fields, not only in its rich text", () => {
+    const facts = contentFacts({
+      id: "7",
+      // A repeater's rows and a group, where the address is a plain text
+      // field rather than a rich text link: how a card or a button is
+      // modelled without rich text.
+      cards: [
+        { title: "Brand voice", href: "/features/brand-voice" },
+        { title: "Pricing", linkTitle: "See pricing", linkUrl: "/pricing" },
+      ],
+      cta: { label: "Book a demo", buttonLink: "https://example.com/demo" },
+      hero: {
+        // Named like an address, but it holds words.
+        url: "Read more",
+        // The page's own heading, not a link to another page.
+        ctaHref: "#demo",
+        // A picture: the images check reads it, and it is no page link.
+        imageUrl: "/uploads/hero.png",
+        // An address under a field that does not name one.
+        note: "/not-a-link",
+      },
+    });
+    expect(facts.links).toEqual([
+      { field: "cards", url: "/features/brand-voice" },
+      { field: "cards", url: "/pricing" },
+      { field: "cta", url: "https://example.com/demo" },
+    ]);
+  });
+
+  it("finds an address field at the document's root, not only inside a group", () => {
+    // A collection can hold its address in a field of its own, beside the
+    // title, rather than in a group or a repeater's row.
+    const facts = contentFacts({
+      id: "7",
+      title: "Harbour",
+      buttonLink: "/blog/gone",
+    });
+    expect(facts.links).toEqual([{ field: "buttonLink", url: "/blog/gone" }]);
+  });
+
+  it("counts a link once however its address is spaced", () => {
+    // The node reader keeps the address as it is stored, and the address
+    // field reads it trimmed: one link, not two.
+    const facts = contentFacts({
+      cta: { type: "link", url: " /pricing ", href: "/pricing" },
+    });
+    expect(facts.links.map(link => link.url.trim())).toEqual(["/pricing"]);
   });
 
   it("finds nothing in a page with no images or links", () => {

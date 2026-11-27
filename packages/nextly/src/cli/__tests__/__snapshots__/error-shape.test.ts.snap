@@ -545,6 +545,13 @@ exports[`each code, as a command ends with it > BUILD_STRICT_WARNINGS 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/build-strict-warnings  (BUILD_STRICT_WARNINGS)"
 `;
 
+exports[`each code, as a command ends with it > BUILDER_DEFINITION_IGNORED 1`] = `
+"✗ The Schema Builder's definition file, \`ui-schema.json\`, is ignored by git.
+  Why:  \`migrate:check\` compares what the project commits with its migrations, and an ignored file is not committed, so the check would pass on one machine and fail on another.
+  Next: Commit \`ui-schema.json\`: remove the line in \`.gitignore\` that ignores it, then \`git add\` it.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-definition-ignored  (BUILDER_DEFINITION_IGNORED)"
+`;
+
 exports[`each code, as a command ends with it > BUILDER_DEFINITION_MISSING 1`] = `
 "✗ The newest migration snapshot records a Builder collection 'articles' that neither \`nextly.config.ts\` nor \`./ui-schema.json\` declares.
   Why:  \`./ui-schema.json\` is part of the code: \`migrate:create\` reads the Builder's entities from it. Without them, a migration written now would drop each one's table and its content.
@@ -600,6 +607,13 @@ exports[`each code, as a command ends with it > CHECKSUM_MISMATCH 1`] = `
         Actual SHA-256:   3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d
   Next: Either revert the edit, or delete this file and re-generate via \`nextly migrate:create --name="<migration-name>"\`.
   Docs: https://nextlyhq.com/docs/cli/errors/checksum-mismatch  (CHECKSUM_MISMATCH)"
+`;
+
+exports[`each code, as a command ends with it > COLLECTION_BEING_CHANGED 1`] = `
+"✗ The change stopped before its next statement.
+  Why:  It no longer held its collection, so other writes could go ahead, and what it would delete was counted under a hold that is gone.
+  Next: Review the change and make it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/collection-being-changed  (COLLECTION_BEING_CHANGED)"
 `;
 
 exports[`each code, as a command ends with it > COMPONENT_MAP_OUT_OF_DATE 1`] = `
@@ -778,6 +792,13 @@ exports[`each code, as a command ends with it > DATABASE_CATALOG_UNREADABLE 1`] 
   Docs: https://nextlyhq.com/docs/cli/errors/database-catalog-unreadable  (DATABASE_CATALOG_UNREADABLE)"
 `;
 
+exports[`each code, as a command ends with it > DATABASE_DIALECT_DIFFERS 1`] = `
+"✗ \`DATABASE_URL\` names a PostgreSQL database, and the migrations are for MySQL.
+  Why:  \`--record-snapshot\` records the translation tables of the database it reads, in a migration written for the migrations' dialect.
+  Next: Point \`DATABASE_URL\` at the MySQL database the migrations run on, or pass the \`--dialect\` they are for.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-dialect-differs  (DATABASE_DIALECT_DIFFERS)"
+`;
+
 exports[`each code, as a command ends with it > DATABASE_DIALECT_INVALID 1`] = `
 "✗ \`DB_DIALECT\` is \`mssql\`, which is not a database Nextly supports.
   Why:  Nextly runs on PostgreSQL, MySQL and SQLite.
@@ -854,11 +875,25 @@ exports[`each code, as a command ends with it > DEMOTE_PLUGIN_COLLECTION 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/demote-plugin-collection  (DEMOTE_PLUGIN_COLLECTION)"
 `;
 
+exports[`each code, as a command ends with it > DIALECT_NOT_STATED 1`] = `
+"✗ The command could not tell which database the migrations are for.
+  Why:  It reads no database, no migration file names its dialect yet, and neither \`DB_DIALECT\` nor \`DATABASE_URL\` is set.
+  Next: Pass \`--dialect\` with \`postgresql\`, \`mysql\` or \`sqlite\`, or set \`DB_DIALECT\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/dialect-not-stated  (DIALECT_NOT_STATED)"
+`;
+
 exports[`each code, as a command ends with it > DROP_OF_FOREIGN_TABLE 1`] = `
 "✗ A migration would drop a table that belongs to a different owner.
   Why:  In \`@acme/seo/20261020_120000_add_redirects\`, on \`dc_posts\`, which \`app\` holds. It has been refused, and nothing was applied.
   Next: Change only what this migration's owner holds: a change to another owner's table belongs in that owner's migrations.
   Docs: https://nextlyhq.com/docs/cli/errors/drop-of-foreign-table  (DROP_OF_FOREIGN_TABLE)"
+`;
+
+exports[`each code, as a command ends with it > ENTITIES_NOT_SYNCED 1`] = `
+"✗ \`db:sync\` could not add a column or create a table, so these entities are recorded failed: \`seo\` (priority: Duplicate column name 'priority').
+  Why:  The database refused the statement. Everything else was synced, and the steps over data an earlier release stored wait for a run that syncs every entity.
+  Next: Fix the cause, then run \`nextly db:sync\` again; it retries them.
+  Docs: https://nextlyhq.com/docs/cli/errors/entities-not-synced  (ENTITIES_NOT_SYNCED)"
 `;
 
 exports[`each code, as a command ends with it > FIELD_GROUP_BACKUP_NOT_CONFIRMED 1`] = `
@@ -868,6 +903,20 @@ exports[`each code, as a command ends with it > FIELD_GROUP_BACKUP_NOT_CONFIRMED
   Docs: https://nextlyhq.com/docs/cli/errors/field-group-backup-not-confirmed  (FIELD_GROUP_BACKUP_NOT_CONFIRMED)"
 `;
 
+exports[`each code, as a command ends with it > FIELD_GROUP_HISTORY_BEHIND_STORAGE 1`] = `
+"✗ This database's field groups were moved to the current names (dynamic_field_groups, fg_<slug>), and the project's migration history is still on the legacy ones (dynamic_components, comp_<slug>).
+  Why:  Every file after this point would be planned against tables the database no longer has.
+  Next: No file was applied. Run \`nextly migrate:create --field-group-names=current\`, then \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-history-behind-storage  (FIELD_GROUP_HISTORY_BEHIND_STORAGE)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_HISTORY_NAMES_UNRECORDED 1`] = `
+"✗ The snapshot of migration 20261101_120000_000_add_banner holds field groups under both the current names (fg_banner with _field_group_type) and the legacy ones (comp_card with _component_type), and does not record which names the history is on.
+  Why:  An earlier release wrote it after this site's field groups moved, and no reading of it plans against the tables the database holds.
+  Next: Nothing was written or applied. Re-baseline the history with \`nextly migrate:baseline\`: it lists how to clear the existing migrations, then records the tables as the database holds them.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-history-names-unrecorded  (FIELD_GROUP_HISTORY_NAMES_UNRECORDED)"
+`;
+
 exports[`each code, as a command ends with it > FIELD_GROUP_MIGRATION_IN_FLIGHT 1`] = `
 "✗ The command did not run: a field-group storage migration is in flight on this database.
   Why:  Mid-run, some field-group tables carry their old names and some their new ones (it is at step 3), a shape neither the old configuration nor the new one describes.
@@ -875,11 +924,60 @@ exports[`each code, as a command ends with it > FIELD_GROUP_MIGRATION_IN_FLIGHT 
   Docs: https://nextlyhq.com/docs/cli/errors/field-group-migration-in-flight  (FIELD_GROUP_MIGRATION_IN_FLIGHT)"
 `;
 
+exports[`each code, as a command ends with it > FIELD_GROUP_NAMES_DIFFER_FROM_HISTORY 1`] = `
+"✗ This database's field groups are on the current names (dynamic_field_groups, fg_<slug>), and the project's migration history is still on the legacy ones (dynamic_components, comp_<slug>).
+  Why:  Planned across the two, every field-group table would be dropped and created again, and its rows lost.
+  Next: Nothing was written. Run \`nextly migrate:create --field-group-names=current\` to move the history to the current names first.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-names-differ-from-history  (FIELD_GROUP_NAMES_DIFFER_FROM_HISTORY)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_NAMES_OPTION_INVALID 1`] = `
+"✗ \`--field-group-names\` takes \`current\`, and was given \`fg\`.
+  Why:  It writes the one migration that moves the app's history to the current field-group names (dynamic_field_groups, fg_<slug>), and there is no other naming to move it to.
+  Next: Run \`nextly migrate:create --field-group-names=current\` on its own.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-names-option-invalid  (FIELD_GROUP_NAMES_OPTION_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_ROLLBACK_HISTORY_UNREADABLE 1`] = `
+"✗ Whether this database's field groups can be moved back could not be told: 20261119_120000_000_field_group_current_names is recorded applied, and its snapshot cannot be read.
+  Why:  A history on the current field-group names cannot be moved back, and only the project's migrations say which names it is on.
+  Next: Nothing was changed. Run the command from the project that holds its migrations.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-rollback-history-unreadable  (FIELD_GROUP_ROLLBACK_HISTORY_UNREADABLE)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_ROLLBACK_REFUSED 1`] = `
+"✗ This database's field groups cannot be moved back to the legacy names: its applied migration history is on the current ones (dynamic_field_groups, fg_<slug>), as 20261119_120000_000_field_group_current_names records.
+  Why:  Every migration after it is planned against those names, and no command moves a history back.
+  Next: Nothing was changed. The field-group storage stays on the current names while this history is applied.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-rollback-refused  (FIELD_GROUP_ROLLBACK_REFUSED)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_STORAGE_NOT_MIGRATED 1`] = `
+"✗ 20261119_120000_000_field_group_current_names.sql moves the migration history to the current field-group names (dynamic_field_groups, fg_<slug>), and this database's field groups are still on the legacy ones (dynamic_components, comp_<slug>).
+  Why:  Applying it would record a move the database has not made.
+  Next: It was not applied. Move the field groups with \`nextly migrate:field-groups --apply --backup-confirmed\`, then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-storage-not-migrated  (FIELD_GROUP_STORAGE_NOT_MIGRATED)"
+`;
+
 exports[`each code, as a command ends with it > FIELD_GROUP_STORAGE_REFUSED 1`] = `
 "✗ The field-group storage migration refused to proceed.
   Why:  Registry rows name storage that does not exist.
   Next: Run the command again with \`--verbose\` to see the tables and rows involved, and check them before running anything that changes the schema.
   Docs: https://nextlyhq.com/docs/cli/errors/field-group-storage-refused  (FIELD_GROUP_STORAGE_REFUSED)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_TRANSITION_REFUSED 1`] = `
+"✗ \`--field-group-names=current\` moves the history to the current field-group names, and the config has changes to "dc_posts" to migrate.
+  Why:  The move changes nothing else, so a change written into its snapshot would be missing from every database that applies it.
+  Next: Nothing was written. Write those first with \`nextly migrate:create --name <name>\`, then run it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-transition-refused  (FIELD_GROUP_TRANSITION_REFUSED)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED 1`] = `
+"✗ This database's field-group table fg_banner still holds the legacy type column _component_type, and the project's migration history records _field_group_type there.
+  Why:  An earlier release created it after the field groups moved to the current names, so the storage migration never renamed the column, and every file planned from the history would address a column the database does not have.
+  Next: No file was applied. Re-baseline the history with \`nextly migrate:baseline\`: it lists how to clear the existing migrations, then records each table with the columns it holds.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-type-column-not-recorded  (FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED)"
 `;
 
 exports[`each code, as a command ends with it > FIELDS_LEAVING_TRANSLATION_NOT_MOVED 1`] = `
@@ -1099,6 +1197,14 @@ exports[`each code, as a command ends with it > MIGRATION_IRREVERSIBLE 1`] = `
   Why:  \`nextly migrate:down\` runs a migration's \`-- DOWN\` section, and this file's is empty.
   Next: Hand-write a -- DOWN section or use 'nextly migrate:fresh'.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-irreversible  (MIGRATION_IRREVERSIBLE)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_LANGUAGE_DIFFERS 1`] = `
+"✗ A migration's answers are not recorded as decided in this project's default language, "es".
+  Why:  20261021_090000_require_body.sql: its answers are decided in "en", and this project's default language is "es".
+        Run here, its statements would settle other entries than the ones answered for. Nothing was changed.
+  Next: Where no environment has applied it, delete it and make the save again with "es" as the default language. Where one has, do its other statements by hand, settle the entries in "es" by hand, and record it with \`nextly migrate:resolve --applied 20261021_090000_require_body.sql\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-language-differs  (MIGRATION_LANGUAGE_DIFFERS)"
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_MISSING 1`] = `
@@ -2074,6 +2180,13 @@ exports[`each code, as a command ends with it > SETUP_TOKEN_SET_BY_ENV 1`] = `
   Why:  A token set by NEXTLY_SETUP_TOKEN is read from the environment, not stored in the install's database.
   Next: Change the variable where it is set.
   Docs: https://nextlyhq.com/docs/cli/errors/setup-token-set-by-env  (SETUP_TOKEN_SET_BY_ENV)"
+`;
+
+exports[`each code, as a command ends with it > SNAPSHOT_WITHOUT_ENTITIES 1`] = `
+"✗ The applied migration \`20261024_120000_make_author_required\` has a snapshot that records no entities, and the older \`20261020_120000_add_posts\` has one that does.
+  Why:  An earlier release's \`migrate:create\` wrote it. Its migration changed the tables after \`20261020_120000_add_posts\`, so judging the columns by \`20261020_120000_add_posts\` would convert them back.
+  Next: Run \`nextly migrate:create --name="<migration-name>"\`, then \`nextly migrate\`: the migration it writes records the entities as they are. Then run \`nextly repair-columns\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/snapshot-without-entities  (SNAPSHOT_WITHOUT_ENTITIES)"
 `;
 
 exports[`each code, as a command ends with it > SYNC_CONFIRMATION_REQUIRED 1`] = `

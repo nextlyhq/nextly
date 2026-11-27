@@ -242,11 +242,11 @@ for (const dialect of getConfiguredTestDialects()) {
       );
 
     it("replaces an empty leftover field-group table with the requested columns", async () => {
-      await leftoverFieldGroupTable("comp_lfempty");
+      await leftoverFieldGroupTable("fg_lfempty");
 
       await createFieldGroup("lfempty");
 
-      const columns = await liveColumns("comp_lfempty");
+      const columns = await liveColumns("fg_lfempty");
       expect(columns).toEqual(expect.arrayContaining(["title", "score"]));
       expect(columns).not.toContain("stale");
       const stored = await app()
@@ -256,17 +256,17 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     it("refuses a field-group create over a leftover holding rows, naming it and its row count", async () => {
-      await leftoverFieldGroupTable("comp_lfheld");
-      await holdRows("comp_lfheld", 2);
+      await leftoverFieldGroupTable("fg_lfheld");
+      await holdRows("fg_lfheld", 2);
 
       const refused = await refusalOf(createFieldGroup("lfheld"));
 
       expect(refused).toMatchObject({
         code: "CONFLICT",
-        publicMessage: expect.stringContaining('"comp_lfheld" (2 rows)'),
+        publicMessage: expect.stringContaining('"fg_lfheld" (2 rows)'),
       });
-      expect(await rowCount("comp_lfheld")).toBe(2);
-      expect(await liveColumns("comp_lfheld")).toContain("stale");
+      expect(await rowCount("fg_lfheld")).toBe(2);
+      expect(await liveColumns("fg_lfheld")).toContain("stale");
       expect(
         await app()
           .getService("fieldGroupRegistryService")
@@ -304,15 +304,15 @@ for (const dialect of getConfiguredTestDialects()) {
     it("refuses a Single create over an empty leftover whose field-group rows name it, deleting nothing", async () => {
       await leftoverSingleTable("single_lsfg");
       await createFieldGroup("lsfgchip");
-      await holdRows("comp_lsfgchip", 1, { _parent_table: "single_lsfg" });
+      await holdRows("fg_lsfgchip", 1, { _parent_table: "single_lsfg" });
 
       const refused = await refusalOf(createSingle("lsfg"));
 
       expect(refused).toMatchObject({
         code: "CONFLICT",
-        publicMessage: expect.stringContaining('"comp_lsfgchip" (1 row)'),
+        publicMessage: expect.stringContaining('"fg_lsfgchip" (1 row)'),
       });
-      expect(await rowCount("comp_lsfgchip")).toBe(1);
+      expect(await rowCount("fg_lsfgchip")).toBe(1);
       expect(await liveColumns("single_lsfg")).toContain("stale");
     });
 
@@ -454,15 +454,15 @@ for (const dialect of getConfiguredTestDialects()) {
     it("refuses a collection create over an empty leftover whose field-group rows name it, deleting nothing", async () => {
       await leftoverCollectionTables("dc_lcfg");
       await createFieldGroup("lcfgchip");
-      await holdRows("comp_lcfgchip", 1, { _parent_table: "dc_lcfg" });
+      await holdRows("fg_lcfgchip", 1, { _parent_table: "dc_lcfg" });
 
       const refused = await refusalOf(createCollection("lcfg"));
 
       expect(refused).toMatchObject({
         code: "CONFLICT",
-        publicMessage: expect.stringContaining('"comp_lcfgchip" (1 row)'),
+        publicMessage: expect.stringContaining('"fg_lcfgchip" (1 row)'),
       });
-      expect(await rowCount("comp_lcfgchip")).toBe(1);
+      expect(await rowCount("fg_lcfgchip")).toBe(1);
       expect(await liveColumns("dc_lcfg")).toContain("stale");
     });
 
@@ -515,10 +515,10 @@ for (const dialect of getConfiguredTestDialects()) {
       await createFieldGroup("lcfgsame");
       const q = dialect === "mysql" ? "`" : '"';
       await app().adapter.executeQuery(
-        `ALTER TABLE ${q}comp_lcfgsame${q} RENAME TO ${q}dc_lcfgsame${q}`
+        `ALTER TABLE ${q}fg_lcfgsame${q} RENAME TO ${q}dc_lcfgsame${q}`
       );
       await app().adapter.executeQuery(
-        `UPDATE dynamic_components SET table_name = 'dc_lcfgsame' WHERE slug = 'lcfgsame'`
+        `UPDATE dynamic_field_groups SET table_name = 'dc_lcfgsame' WHERE slug = 'lcfgsame'`
       );
 
       const refused = await refusalOf(createCollection("lcfgsame"));
@@ -585,7 +585,7 @@ for (const dialect of getConfiguredTestDialects()) {
 
       expect(outcomes.filter(o => o.status === "fulfilled")).toHaveLength(1);
       expect(outcomes.filter(o => o.status === "rejected")).toHaveLength(1);
-      const columns = await liveColumns("comp_lftwice");
+      const columns = await liveColumns("fg_lftwice");
       expect(columns).toEqual(expect.arrayContaining(["title", "score"]));
     });
 

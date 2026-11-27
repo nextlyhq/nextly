@@ -43,7 +43,11 @@ import {
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PAGES_SLUG } from "./collections/pages";
-import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
+import {
+  declaredByConfig,
+  declaredSingleSlugs,
+  isOrphanedSingle,
+} from "./declared-singles";
 import {
   SITE_STYLE_ROUTE_PATH,
   type StoredSiteStyle,
@@ -155,9 +159,7 @@ function isLiveSingle(
   row: unknown,
   declared: ReadonlySet<string> | undefined
 ): boolean {
-  if (declared === undefined) {
-    return (row as { source?: unknown } | null)?.source !== "code";
-  }
+  if (declared === undefined) return !declaredByConfig(row);
   return !isOrphanedSingle(row, declared);
 }
 

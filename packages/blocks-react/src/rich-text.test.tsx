@@ -93,6 +93,31 @@ describe("RichText", () => {
     expect(container.textContent).toContain("nowhere");
   });
 
+  it("renders an address the editor linked as a link, and one the author unlinked as its words", () => {
+    const { container } = render(
+      <RichText
+        value={doc([
+          {
+            type: "autolink",
+            url: "https://example.com/a",
+            children: [{ type: "text", text: "example.com/a" }],
+          },
+          {
+            type: "autolink",
+            url: "https://example.com/b",
+            isUnlinked: true,
+            children: [{ type: "text", text: "example.com/b" }],
+          },
+        ])}
+      />
+    );
+    expect(
+      container.querySelector('a[href="https://example.com/a"]')?.textContent
+    ).toBe("example.com/a");
+    expect(container.querySelectorAll("a")).toHaveLength(1);
+    expect(container.textContent).toContain("example.com/b");
+  });
+
   it("falls back to h2 for a heading whose tag is not one", () => {
     const { container } = render(
       <RichText

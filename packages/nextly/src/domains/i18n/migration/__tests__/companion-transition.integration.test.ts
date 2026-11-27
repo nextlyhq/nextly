@@ -12,6 +12,7 @@ import { NextlyError } from "../../../../errors";
 import { getI18nArchiveDdl } from "../../../../schemas/nextly-i18n-archive/ddl";
 import { ddlType } from "../ddl-types";
 import { fieldToLocalizedColumnSpec } from "../field-to-column-spec";
+import { buildOverlaySeedStatements } from "../generate-up";
 import {
   type CompanionTransitionArgs,
   buildCompanionTransitionStatements,
@@ -146,6 +147,68 @@ describe("buildCompanionTransitionStatements — enable, a container's text on m
       expect(mainColumns()).toContain("slides");
     }
   );
+
+  // The seed runs again where a column it adds already stands: an upgraded site whose newest
+  // snapshot records no overlay columns has its seed planned once more by the next
+  // `migrate:create`, after editors have saved. By then main holds the structure alone, without
+  // the text, so a seed copying it over a row's overlay replaces that language's text with the
+  // bare structure, and every text in it reads as none. It fills only an overlay not yet written.
+  it("leaves an overlay already written alone when it runs again, filling only one not yet written", () => {
+    const plan = buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
+      slug: "hero",
+      kind: "collection" as const,
+      tableName: "single_hero",
+      dialect: "sqlite",
+      defaultLocale: "en",
+      ...NO_STATUS_HISTORY,
+      wasLocalized: false,
+      isLocalized: true,
+      oldFields: [...FIELDS, SLIDES],
+      newFields: [...FIELDS, SLIDES],
+      companionExists: false,
+    });
+    run(plan.statements);
+    // Saved since: main holds the structure alone, English its own text by row.
+    const written = JSON.stringify({ r1: { caption: "Hello again" } });
+    sqlite
+      .prepare(`UPDATE "single_hero" SET "slides" = ? WHERE "id" = ?`)
+      .run(JSON.stringify([{ id: "r1", rank: 1 }]), "h1");
+    sqlite
+      .prepare(
+        `UPDATE "single_hero_locales" SET "slides" = ? WHERE "_parent" = ? AND "_locale" = ?`
+      )
+      .run(written, "h1", "en");
+    // A second entry whose English overlay was never written.
+    const bare = JSON.stringify([{ id: "r2", caption: "Second", rank: 2 }]);
+    sqlite
+      .prepare(`INSERT INTO "single_hero" ("id","slides") VALUES (?,?)`)
+      .run("h2", bare);
+
+    run(
+      buildOverlaySeedStatements(
+        {
+          dialect: "sqlite",
+          mainTable: "single_hero",
+          companionTable: "single_hero_locales",
+          defaultLocale: "en",
+        },
+        ["slides"]
+      )
+    );
+
+    const overlays = Object.fromEntries(
+      (
+        sqlite
+          .prepare(
+            `SELECT "_parent", "slides" FROM "single_hero_locales" WHERE "_locale" = 'en'`
+          )
+          .all() as { _parent: string; slides: string }[]
+      ).map(row => [row._parent, row.slides])
+    );
+    expect(overlays.h1).toBe(written);
+    expect(overlays.h2).toBe(bare);
+  });
 });
 
 describe("buildCompanionTransitionStatements — a container left keeping no text", () => {

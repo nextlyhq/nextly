@@ -169,25 +169,48 @@ export interface Walk {
   problems: string[];
 }
 
-/** What `entry` loads. With `lazy`, an `import()` is followed too. */
-export function loads(entry: string, lazy = false): Walk {
-  const from = new Map<string, string | null>([[entry, null]]);
-  const problems: string[] = [];
+/**
+ * What `entry` loads. With `lazy`, an `import()` is followed too. A module in `stopAt` is reached
+ * but not walked past: what it loads is left out, as for a registry whose entries load only when
+ * one is chosen.
+ */
+export function loads(
+  entry: string,
+  lazy = false,
+  stopAt: ReadonlySet<string> = new Set()
+): Walk {
+  const walk: Walk = { from: new Map([[entry, null]]), problems: [] };
   const queue = [entry];
   while (queue.length > 0) {
     const file = queue.shift() as string;
     for (const edge of edgesOf(file)) {
-      if (edge.dynamic && !lazy) continue;
-      if (edge.kind !== "module") {
-        problems.push(`${edge.kind}: ${edge.detail}`);
-        continue;
-      }
-      if (from.has(edge.target)) continue;
-      from.set(edge.target, file);
-      queue.push(edge.target);
+      const next = followEdge(walk, file, edge, lazy);
+      // Reached either way; walked past only when it is not a registry the caller stops at.
+      if (next !== undefined && !stopAt.has(next)) queue.push(next);
     }
   }
-  return { from, problems: [...new Set(problems)] };
+  return { from: walk.from, problems: [...new Set(walk.problems)] };
+}
+
+/**
+ * One edge of `file`, recorded in `walk`: the module it newly reaches, or undefined for an edge the
+ * walk does not follow (an `import()` when not `lazy`, a module already reached) or cannot (a
+ * problem, kept in `walk.problems`).
+ */
+function followEdge(
+  walk: Walk,
+  file: string,
+  edge: Edge,
+  lazy: boolean
+): string | undefined {
+  if (edge.dynamic && !lazy) return undefined;
+  if (edge.kind !== "module") {
+    walk.problems.push(`${edge.kind}: ${edge.detail}`);
+    return undefined;
+  }
+  if (walk.from.has(edge.target)) return undefined;
+  walk.from.set(edge.target, file);
+  return edge.target;
 }
 
 /** The import chain from the walk's entry to `module`. */

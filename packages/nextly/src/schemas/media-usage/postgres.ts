@@ -17,7 +17,10 @@
 // fallow-ignore-file code-duplication
 import { pgTable, text } from "drizzle-orm/pg-core";
 
-import { MEDIA_USAGE_INDEXES, pgIndexes } from "../_internal/core-indexes";
+import {
+  MEDIA_USAGE_INDEXES,
+  pgIndexes,
+} from "../_internal/core-indexes-postgres";
 import { media } from "../media/postgres";
 
 import { MEDIA_USAGE_TABLE } from "./table-name";

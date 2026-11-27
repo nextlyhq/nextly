@@ -275,7 +275,9 @@ The tab shows, in order:
   from, such as "Empty uses the Posts pattern: `{Title} | {Site name}`" or "Empty uses the
   post's excerpt": the content type's pattern, one of the page's own fields, or the site's
   defaults. Typing marks it **Typed for this page**, with one action, **Go back to
-  automatic**, that empties it again.
+  automatic**, that empties it again. While a field is automatic it is empty, so its text
+  can't be selected or edited in place: **Edit the automatic text**, under it, puts that
+  text in the field with the cursor at its end, to change from there.
 - **Advanced**, closed until opened: hiding the page from search, its official address
   (the canonical), a different title and description when shared, the share image, the
   [structured data type](#structured-data), with what the type still lacks, and
@@ -845,6 +847,14 @@ default, for one) would otherwise serve Markdown at the page's address. It is ne
 noindex there, so a cache's mistake can never mark the page. A browser never asks for
 Markdown, so it is always served the page.
 
+A copy asked for at its `.md` address on a server that has only just started is still
+answered: the Proxy waits for Nextly's start, and the copy for the address record to catch
+up, each for a few seconds at most. Past that wait, it answers `503` with
+`cache-control: no-store` and a `Retry-After` header, as the sitemap does, rather than the
+not-found page a reader might keep, unless a page of the site is at that address, which is
+then served. Asked for at the page's own address, it is never held: the page is served until
+the copy can be.
+
 No reader is told apart by who it is: neither output looks at the user agent, and every
 reader asking the same way gets the same answer. llms.txt is its own file. A copy is
 answered by the site's [Proxy](/docs/plugins/proxy), so the site needs its `proxy.ts`, as
@@ -1251,7 +1261,59 @@ seoPlugin({
 
 The image's alt text is the media item's own, so give share images alt text in the media library.
 
+Where a route's own metadata states a picture that is one of the page's own pictures (its cover or
+featured image, the same address, or its path at the site's production address), the card states the
+size the media library stores for it, never the size the route wrote. A route that writes every
+picture as `1200 × 630` would otherwise have the head claim a share card's size for a picture of
+another shape, and the check below would never say it is cropped. The route's own alt text for it
+stays, and the media item's fills in where the route gives none.
+
+### Article details on the card
+
+A page described as an article of any kind (Article, Blog post or Technical article, see
+[Structured data](#structured-data)) also gets the article details Open Graph reads, with
+`og:type` `article`:
+
+- `article:published_time`, its date published;
+- `article:modified_time`, the date its content last changed;
+- `article:author`, each author's own page where they have one, else their name;
+- `article:tag`, one per tag.
+
+They come from the same details its structured data states, so the two never give the page
+different dates, authors or tags, and they are stated only where its structured data is, with every
+detail its type needs. A value the route's own `openGraph` sets (`type`, `publishedTime`,
+`modifiedTime`, `authors` or `tags`) is kept as the route set it, and the plugin's is not added
+beside it, so no tag is served twice.
+
 ### Share images of the right size
+
+A page's automatic share image, its own picture (a cover or featured image), is served at the right
+size by itself. Where networks would not show the picture in full (the wrong shape, narrower than
+1200 pixels, or an SVG, AVIF or WebP file), the head names a 1200 × 630 JPEG cut from it around its
+focal point, with the picture's alt text, at the plugin's
+`/admin/api/plugins/@nextlyhq/plugin-seo/share-card/<media id>/<version>.jpg`. The version is taken
+from the picture's stored file and focal point, so a new picture, a replaced file or a moved focal
+point is a new address and a new card, and a card is never served from an earlier picture. A new alt
+text needs no new card: the alt is read from the picture with the page's head.
+
+The card is cut when its address is first fetched, from the picture as the site serves it (on
+`baseUrl` where set), and answered with a year's cache, so the browser and any CDN in front of the
+site keep it. Nothing is stored, and naming the card reads nothing the head does not read already,
+so it costs a page's head nothing. An address naming an earlier version is sent on to the current
+card. The route is public, since networks fetch cards with no session, and holds one client to 60
+cuts a minute. It needs `sharp`, as making a share image does; without it, the picture is served as
+it is and the SEO tab says what keeps it from showing. The address assumes the Nextly handler is
+mounted at `/admin/api`, as a scaffolded project mounts it.
+
+Networks fetch a card as crawlers do, and robots.txt keeps crawlers out of `/admin/`, so the
+plugin's robots.txt allows the cards' path,
+`Allow: /admin/api/plugins/@nextlyhq/plugin-seo/share-card/`; the longer rule wins, so nothing else
+under the admin is opened. A site that serves its own robots.txt, such as with core's
+`nextlyRobots`, adds the same path to its `allow` list.
+
+A share image chosen for the page, or one made with **Make a share image**, is the page's own and is
+never replaced: it is served as it is, and the tab says if networks would crop it. The sitemap lists
+the page's picture itself, not the card.
 
 Networks show a share image in full at 1200 × 630. A picture narrower than 1200 pixels, or whose
 width is not between 1.8 and 2.0 times its height, is cropped or shrunk. `shareImageProblems(ctx,
@@ -1280,11 +1342,18 @@ is set. A picture that storage will not serve to an anonymous reader is refused,
 could load it either. It needs the `sharp` image library, which the media library uses to read image sizes:
 install it with `npm install sharp`.
 
+Under **Advanced**, a card cut from the page's picture is shown as the share image, with what it
+was cut from and that it follows that picture.
+
 In the SEO tab, the **When shared** preview says how the share image fits the card: the size every
 network shows in full, or where a picture of another shape is cut, with a dashed line where the card
-cuts a taller one. Under **Advanced**, a share image of the wrong size offers **Make a share image**.
-Once made, the copy is the page's share image, the row says **Made for this page** and what it was
-made from, and **Go back to automatic** returns to the page's own picture.
+cuts a taller one. Under **Advanced**, a share image of the wrong size offers **Make a share image**, as the
+notice above the fields does. While the copy is being made, both buttons say **Making…** and
+wait, so a second click makes no second copy. Once made, the copy is the page's share image, the
+row says **Made for this page** and what it was made from, and **Go back to automatic** returns to
+the page's own picture. Made from the notice, a note in its place says so, shows the copy, and
+**Show it under Advanced** opens Advanced at its row. A copy that can't be made is said where it
+was asked for, with the route's reason, such as a picture the site does not serve publicly.
 
 ## Structured data
 
@@ -1378,6 +1447,11 @@ holds a date. Where it is empty, as a correction date is on a page never correct
 page's [`<lastmod>`](#the-sitemap-and-robotstxt) date, when its content last changed, rather than
 the row's own `updatedAt`, which every save moves, an SEO-only one included. Map `dateModified`
 (or `datePublished`) to read another field.
+
+A date field that keeps a day alone, as `date()` does by default (`pickerAppearance: "dayOnly"`,
+or `"monthOnly"`), stores the day as midnight in UTC, a time nobody chose. Its value is stated as
+the date alone, `2026-11-26`, which schema.org and Open Graph both read as a date, rather than
+`2026-11-26T00:00:00.000Z`. A field that holds a time of day (`"dayAndTime"`) keeps it.
 
 A detail can also be read from one of the dates every entry holds by itself: `createdAt`, and
 `firstPublishedAt` on a type with drafts and publishing. A type with no publish date of its own can
@@ -1628,7 +1702,7 @@ What the plugin adds to each request is kept off the database:
 - **The staging guard reads only the environment** when `NEXTLY_PRODUCTION_ADDRESSES` is set, which is the setting to use on a production site. Without it, the SEO settings' addresses are read by a server's first request and kept, read again in the background every 30 seconds.
 - **Each server notes once an hour that its Proxy runs**, in the background, which is how the admin knows redirects are served.
 
-Nextly starts on a server's first request through the Proxy and lets requests through as the page alone until it has, so a cold server never waits; redirects apply from the first request after the start. A redirect that must hold from a server's very first request, or a site that needs only a few fixed redirects and a staging `noindex`, is better served by `redirects()` and `headers()` in `next.config`, which run with no function call.
+Nextly starts on a server's first request through the Proxy and lets requests through as the page alone until it has, so a cold server never waits; redirects apply from the first request after the start. The one exception is a page's [plain-text copy](#llmstxt-and-plain-text-copies) at its `.md` address, which no page of the site serves: that request waits for the start. A redirect that must hold from a server's very first request, or a site that needs only a few fixed redirects and a staging `noindex`, is better served by `redirects()` and `headers()` in `next.config`, which run with no function call.
 
 #### A site that already has `middleware.ts`
 
@@ -1800,7 +1874,9 @@ it is published in and at its address there, as its head would be served, for:
   [How wide a title or description is](#how-wide-a-title-or-description-is));
 - a canonical typed for the page that names another address, unless the page is marked as having
   first appeared on another site, which makes that address the one meant;
-- a link in its content to an address of a content type that no page holds;
+- a link in its content (rich text, a Page Builder button block, or a field holding an
+  address, such as `href`, `linkUrl` or `buttonLink`) to an address of a content type that no
+  page holds;
 - a listed page no other page links to (**Page no other page links to**, a notice): search engines
   and visitors find pages by following links, so it is found only through the sitemap. Its home page
   and a page kept out of search are never named. Only the links in pages' content are read, the

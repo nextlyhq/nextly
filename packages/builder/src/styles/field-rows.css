@@ -453,3 +453,32 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 .nx-style-inspector [data-slot="accordion-content"][data-state="open"] {
   overflow: visible;
 }
+
+/*
+ * A row's actions, the "Connect to a field" button on a setting and the ⋯
+ * on a sort key, shown while the row is pointed at or anything in it has
+ * focus (a tap focuses it), and while the button's own popup or menu is
+ * open; a connected setting draws its chip in the button's place, always.
+ * At rest they are faded, never hidden, as the value dot above is: each
+ * keeps its place, so nothing in the row moves when it appears, and keeps
+ * its place in the keyboard order and its spoken name. The row at rest is
+ * named in the selector, so this outweighs a button's own disabled fade,
+ * which applies again once the row is pointed at.
+ */
+:is(.nx-binding-row, .nx-list-sort):not(:hover, :focus-within)
+  :is(.nx-binding-row__bind, .nx-list-sort__more):not(
+    [data-open],
+    [data-state="open"]
+  ) {
+  opacity: 0;
+}
+
+:is(.nx-binding-row__bind, .nx-list-sort__more) {
+  transition: opacity 120ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.nx-binding-row__bind, .nx-list-sort__more) {
+    transition: none;
+  }
+}

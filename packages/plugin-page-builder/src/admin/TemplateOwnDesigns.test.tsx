@@ -75,6 +75,7 @@ function answer(
       templateAllowed: true,
       mayCreateTemplate: false,
       mayGiveDesign: templateStatus === "published",
+      servedBySite: null,
       entry: null,
       templatesCollection: "templates",
       names: { singular: "Post", plural: "Posts" },

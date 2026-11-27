@@ -161,24 +161,32 @@ describeEachDialect("registry rows read inside a transaction", dialect => {
     // The update looks its collections up inside the transaction, so at least
     // one read reaches the database: none would mean the count proves nothing.
     expect(reads.length).toBeGreaterThan(0);
-    // On MySQL an entry write also holds its collection against a Builder save
-    // deleting values (`holdEntityForWrite`): one locking read of the row
-    // `FOR SHARE`, after which the transaction forgets the rows it read, since
-    // one read before the hold may predate a commit the hold waited for. So
-    // there the row is read once before the hold and once after it, and
-    // nowhere else; elsewhere no hold is taken and it is read once.
+    // An entry write also holds its collection against a Builder save deleting
+    // values (`holdEntityForWrite`), and reads the row's id and version under
+    // that hold. On PostgreSQL and SQLite that is one short read of its own,
+    // and the definition is still read once. On MySQL it is a locking read
+    // (`FOR SHARE`), after which the transaction forgets the rows it read,
+    // since one read before the hold may predate a commit the hold waited for:
+    // there the definition is read once before the hold and once after it.
+    const mysql = dialect === "mysql";
     const locking = reads.filter(read => /\bfor share\b/i.test(read.text));
     const plain = reads.filter(read => !locking.includes(read));
-    const held = dialect === "mysql";
+    const definitions = plain.filter(read => /\bfields\b/i.test(read.text));
+    const versions = plain.filter(read => !definitions.includes(read));
     expect(readsPerSlug(locking, ["posts", "authors"])).toEqual({
-      posts: held ? 1 : 0,
+      posts: mysql ? 1 : 0,
       authors: 0,
     });
-    expect(readsPerSlug(plain, ["posts", "authors"])).toEqual({
-      posts: held ? 2 : 1,
+    expect(readsPerSlug(versions, ["posts", "authors"])).toEqual({
+      posts: mysql ? 0 : 1,
+      authors: 0,
+    });
+    expect(readsPerSlug(definitions, ["posts", "authors"])).toEqual({
+      posts: mysql ? 2 : 1,
       authors: expect.any(Number),
     });
-    expect(plain.length).toBeLessThanOrEqual(held ? 3 : 2);
+    expect(definitions.length).toBeLessThanOrEqual(mysql ? 3 : 2);
+    expect(versions.length).toBe(mysql ? 0 : 1);
   });
 
   it("sees a registry write made earlier in the same transaction", async () => {

@@ -20,7 +20,7 @@ import {
   ACTIVITY_LOG_INDEXES,
   AUDIT_LOG_INDEXES,
   sqliteIndexes,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-sqlite";
 import { sqliteTimestamp } from "../_internal/sqlite-timestamp";
 
 // Append-only by application convention. SQLite has no GRANT, so the posture is

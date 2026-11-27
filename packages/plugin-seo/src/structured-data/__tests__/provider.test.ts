@@ -107,6 +107,22 @@ describe("withStructuredData", () => {
     expect(resolver.tags?.(input)).toEqual(["media"]);
   });
 
+  it("gives an article's card its dates and author, from the same details", async () => {
+    const resolver = withStructuredData(
+      ctx,
+      head,
+      rulesFromOptions("https://example.com", {})
+    );
+
+    const answer = await resolver.resolve(input);
+
+    expect(answer.social).toMatchObject({
+      image: { url: "/media/hello.png" },
+      type: "article",
+      article: { publishedTime: "2026-11-01", authors: ["Sara"] },
+    });
+  });
+
   it("answers a page with no structured data without any", async () => {
     const resolver = withStructuredData(
       ctx,

@@ -227,18 +227,17 @@ for (const dialect of getConfiguredTestDialects()) {
       const drift = await migrate();
       expect(drift.exit, drift.text).toBe(1);
       expect(drift.text).toContain("SCHEMA_DRIFT");
-      // Each drop reads as the move it is.
-      expect(drift.text).toContain(
-        "- drop_column dc_posts.headline (moves to dc_posts_locales)"
-      );
+      // The moves are the translations file's, which `migrate:create` writes beside the main one:
+      // named as that file, never as the main table's columns dropped.
+      expect(drift.text).toContain("~ translations table dc_posts");
+      expect(drift.text).not.toContain("drop_column dc_posts.headline");
       expectMoveExplained(drift.text);
 
       const checked = await check();
       expect(checked.exit, checked.text).toBe(1);
       expect(checked.text).toContain("SCHEMA_DRIFT");
-      expect(checked.text).toContain(
-        "drop_column dc_posts.headline (moves to dc_posts_locales)"
-      );
+      expect(checked.text).toContain("~ translations table dc_posts");
+      expect(checked.text).not.toContain("drop_column dc_posts.headline");
       expectMoveExplained(checked.text);
 
       const refused = await create("upgrade");

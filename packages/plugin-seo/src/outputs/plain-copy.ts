@@ -21,6 +21,8 @@
  *
  * @module outputs/plain-copy
  */
+import { isFollowedLink } from "@nextlyhq/plugin-sdk/blocks";
+
 import { isRecord, textOf } from "../plain-values";
 
 /** A field as the type declares it, as far as a copy needs it. */
@@ -136,7 +138,8 @@ function inline(nodes: readonly Node[]): string {
   return nodes
     .map(node => {
       if (node.type === "linebreak") return "\n";
-      if (node.type === "link" || node.type === "autolink") {
+      // An address the author unlinked is read below as its words.
+      if (isFollowedLink(node)) {
         const words = inline(childrenOf(node));
         const url = textOf(node.url);
         return url === undefined

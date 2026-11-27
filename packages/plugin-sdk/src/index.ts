@@ -43,9 +43,12 @@ export { definePlugin } from "nextly";
  * and intended to become stable with it. `PageRobots` (with
  * `PageImagePreview`) is the answer's `robots`: whether the page is listed,
  * and Google's controls over how it is shown; experimental with the
+ * contract too. `PageArticle` is the answer's `social.article`: an
+ * article's dates, authors and tags for its card; experimental with the
  * contract too. Type-only, so importing it pulls no runtime into the plugin.
  */
 export type {
+  PageArticle,
   PageMetadataAnswer,
   PageMetadataImage,
   PageImagePreview,

@@ -44,6 +44,8 @@ describe("robots.txt for each AI crawler choice", () => {
         "Disallow: /api/",
         "Disallow: /api$",
         "Disallow: /api?",
+        // Share cards, under the admin's API, are fetched by networks.
+        "Allow: /admin/api/plugins/@nextlyhq/plugin-seo/share-card/",
         "",
         `Sitemap: ${SITEMAP}`,
         "",
