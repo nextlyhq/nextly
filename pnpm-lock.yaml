@@ -1174,6 +1174,12 @@ importers:
       fs-extra:
         specifier: ^11.3.0
         version: 11.3.2
+      mysql2:
+        specifier: ^3.23.1
+        version: 3.23.1(@types/node@22.20.5)
+      pg:
+        specifier: ^8.16.3
+        version: 8.16.3
       picocolors:
         specifier: ^1.1.1
         version: 1.1.1
@@ -1211,6 +1217,9 @@ importers:
       '@types/node':
         specifier: ^22.20.5
         version: 22.20.5
+      '@types/pg':
+        specifier: ^8.15.5
+        version: 8.15.5
       '@types/picomatch':
         specifier: ^4.0.3
         version: 4.0.3
