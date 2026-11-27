@@ -51,13 +51,26 @@ export interface OperationListSources {
   }[];
 }
 
+/** Whether `value` carries a Standard Schema's marker with its validate function. */
+function isSchema(value: object): boolean {
+  if (!("~standard" in value)) return false;
+  const standard: unknown = value["~standard"];
+  return (
+    typeof standard === "object" &&
+    standard !== null &&
+    "validate" in standard &&
+    typeof standard.validate === "function"
+  );
+}
+
 /** Whether `value` is an array or an object literal, the data a declaration holds. */
 function isPlainData(value: unknown): value is object {
   if (Array.isArray(value)) return true;
   if (typeof value !== "object" || value === null) return false;
   // A schema is kept as given, whatever it is made of: its marker may not be
-  // a property a copy would carry over.
-  if ("~standard" in value) return false;
+  // a property a copy would carry over. Only a real one, with a validate
+  // function under its marker, is spared; other data is copied.
+  if (isSchema(value)) return false;
   const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
@@ -77,10 +90,26 @@ function frozenCopy<T>(value: T, copies = new Map<object, object>()): T {
     ? []
     : Object.create(Object.getPrototypeOf(value) as object | null);
   copies.set(value, copy);
-  for (const [key, entry] of Object.entries(value)) {
-    (copy as Record<string, unknown>)[key] = frozenCopy(entry, copies);
+  if (Array.isArray(value) && Array.isArray(copy)) {
+    // Every index, holes included: a hole becomes `undefined`, which the
+    // checks then refuse like any other missing entry.
+    for (let index = 0; index < value.length; index++) {
+      copy.push(frozenCopy<unknown>(value[index], copies));
+    }
+  } else {
+    for (const [key, entry] of Object.entries(value)) {
+      (copy as Record<string, unknown>)[key] = frozenCopy(entry, copies);
+    }
   }
   return Object.freeze(copy) as T;
+}
+
+/**
+ * The key a run of command words is found by. Each word stays a word, so
+ * `["posts list"]` is not `["posts", "list"]`.
+ */
+function wordsKey(words: readonly string[]): string {
+  return JSON.stringify(words);
 }
 
 function listed(op: OperationDefinition): ListedOperation {
@@ -130,12 +159,12 @@ export async function assembleOperationList(
   // has one operation.
   const byWords = new Map<string, ListedOperation>();
   for (const op of operations) {
-    byWords.set(op.command.join(" "), op);
-    for (const alias of op.aliases) byWords.set(alias.command.join(" "), op);
+    byWords.set(wordsKey(op.command), op);
+    for (const alias of op.aliases) byWords.set(wordsKey(alias.command), op);
   }
   return Object.freeze({
     operations,
     byId: (id: string) => byId.get(id),
-    byCommand: (words: readonly string[]) => byWords.get(words.join(" ")),
+    byCommand: (words: readonly string[]) => byWords.get(wordsKey(words)),
   });
 }

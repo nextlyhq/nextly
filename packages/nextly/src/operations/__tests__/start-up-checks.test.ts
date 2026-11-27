@@ -564,3 +564,101 @@ describe("the list's view of an operation", () => {
     expect(list.byId("posts.list")?.doors).toEqual(["local", "site"]);
   });
 });
+
+describe("plain JavaScript that a check could stumble on", () => {
+  it("refuses a hole in a list of raise rules", async () => {
+    const rule = {
+      when: "always",
+      level: "critical" as const,
+      applies: () => true,
+    };
+    // A hand-written array literal such as `[, rule]` leaves this hole.
+    const sparse: unknown[] = [];
+    sparse[1] = rule;
+    const problems = await refusal({
+      core: [writeOperation({ raise: sparse as OperationDefinition["raise"] })],
+    });
+    expect(problems).toEqual([
+      'Operation "posts.publish" from core: a raise rule is not an object',
+    ]);
+  });
+
+  it.each([
+    [1n, "1n"],
+    [
+      (() => {
+        const loop: Record<string, unknown> = {};
+        loop.self = loop;
+        return loop;
+      })(),
+      "[object Object]",
+    ],
+  ])(
+    "quotes a mark JSON can't write (%s) instead of failing",
+    async (mark, shown) => {
+      const problems = await refusal({
+        core: [
+          {
+            ...writeOperation({ level: "critical" }),
+            alwaysAllow: mark as unknown as false,
+          },
+        ],
+      });
+      expect(problems).toEqual([
+        `Operation "posts.publish" from core: its "Always allow" mark is ${shown}; it may only be false, or left out`,
+      ]);
+    }
+  );
+
+  it.each([
+    [{}, "{}"],
+    [null, "null"],
+  ])(
+    "refuses a schema that answers an example with %j",
+    async (answer, shown) => {
+      const odd = {
+        "~standard": {
+          version: 1 as const,
+          vendor: "handmade",
+          validate: () => answer,
+        },
+      };
+      const problems = await refusal({
+        core: [
+          readOperation({
+            input: odd as unknown as OperationDefinition["input"],
+          }),
+        ],
+      });
+      expect(problems).toEqual([
+        `Operation "posts.list" from core: its input schema answered example "The first ten posts" with ${shown}, which is neither a parsed value nor a list of issues`,
+      ]);
+    }
+  );
+});
+
+describe("data shaped like a schema marker", () => {
+  it("is copied like any other data, not kept as given", async () => {
+    const example = {
+      summary: "Marker-shaped",
+      input: { "~standard": "value" },
+    };
+    const declared = readOperation({
+      input: z.object({ "~standard": z.string() }),
+      examples: [example],
+    });
+    const list = await assembleOperationList({ core: [declared] });
+    example.input["~standard"] = "changed";
+    expect(list.byId("posts.list")?.examples[0].input).toEqual({
+      "~standard": "value",
+    });
+  });
+});
+
+describe("finding an operation by its command words", () => {
+  it("keeps each word a word", async () => {
+    const list = await assembleOperationList({ core: [readOperation()] });
+    expect(list.byCommand(["posts", "list"])?.id).toBe("posts.list");
+    expect(list.byCommand(["posts list"])).toBeUndefined();
+  });
+});

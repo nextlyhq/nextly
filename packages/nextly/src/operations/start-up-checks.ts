@@ -81,8 +81,17 @@ function isNonEmptyText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/**
+ * `value` as a refusal quotes it. Never throws: a value JSON can't write (a
+ * bigint, a circular object) is described instead.
+ */
 function quoted(value: unknown): string {
-  return JSON.stringify(value) ?? String(value);
+  if (typeof value === "bigint") return `${value}n`;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
 }
 
 /**
@@ -493,13 +502,36 @@ async function examplesProblems(op: OperationDefinition): Promise<string[]> {
       );
       continue;
     }
-    if (!result.issues) continue;
-    const issues = result.issues.map(issue => issue.message).join("; ");
-    problems.push(
-      `its example "${example.summary}" does not parse against its input schema: ${issues}`
-    );
+    const problem = exampleResultProblem(example.summary, result);
+    if (problem) problems.push(problem);
   }
   return problems;
+}
+
+/**
+ * Why a schema's answer for one example refuses it: the issues it found, or
+ * an answer that is neither a parsed value nor a list of issues, which a
+ * hand-made schema might give and which proves nothing about the example.
+ */
+function exampleResultProblem(
+  summary: string,
+  result: unknown
+): string | undefined {
+  if (isObject(result) && "issues" in result && result.issues !== undefined) {
+    if (!Array.isArray(result.issues)) {
+      return `its input schema answered example "${summary}" with issues that are not a list`;
+    }
+    const issues = result.issues
+      .map((issue: unknown) =>
+        isObject(issue) && "message" in issue
+          ? String(issue.message)
+          : quoted(issue)
+      )
+      .join("; ");
+    return `its example "${summary}" does not parse against its input schema: ${issues}`;
+  }
+  if (isObject(result) && "value" in result) return undefined;
+  return `its input schema answered example "${summary}" with ${quoted(result)}, which is neither a parsed value nor a list of issues`;
 }
 
 /** Who first claimed an ID or a set of command words. */
