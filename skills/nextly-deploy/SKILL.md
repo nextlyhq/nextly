@@ -76,7 +76,7 @@ In `package.json`:
 ```json
 {
   "scripts": {
-    "build": "nextly migrate && next build"
+    "build": "nextly migrate --mode production && next build"
   }
 }
 ```
