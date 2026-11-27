@@ -62,6 +62,11 @@ describe("an address the site hands the command line", () => {
       // Quotes and shell metacharacters, refused before anything opens.
       'https://site.example/" & calc',
       "https://site.example/;rm -rf ~",
+      // The same with no whitespace, so only the character check refuses.
+      'https://site.example/";calc',
+      "https://site.example/$(id)",
+      "https://site.example/`id`",
+      "https://site.example/a|b",
       "",
       "not an address",
     ]) {
