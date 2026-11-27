@@ -5,7 +5,7 @@
  * reach: whether the sidebar DRAWS by that rule. A sidebar that computed the settled entries and
  * went on drawing every entry it shows while loading would leave every rule test green.
  */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -134,6 +134,10 @@ vi.mock("@admin/hooks/queries/useSingles", () => ({
 }));
 
 import { DualSidebar } from "../DualSidebar";
+import {
+  isPaletteOpen,
+  setPaletteOpen,
+} from "@admin/components/shared/command-palette/palette-store";
 
 const railLabels = () =>
   Array.from(
@@ -257,6 +261,29 @@ describe("the entries DualSidebar's rail offers", () => {
     permissionsLoading: false,
     contentLoading: false,
   };
+
+  it("puts Search under the logo, above the entries, and it opens the palette", () => {
+    answers = ALL_IN;
+    render(<DualSidebar />);
+    const rail = document.querySelector("aside");
+    const logo = rail?.querySelector(":scope > a");
+    const search = rail?.querySelector('button[aria-label="Search (⌘K)"]');
+    const nav = rail?.querySelector("nav");
+    expect(logo && search && nav).toBeTruthy();
+    // Logo, then Search, then the entries, in reading and Tab order.
+    expect(
+      logo!.compareDocumentPosition(search!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      search!.compareDocumentPosition(nav!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    // Not one of the entries: it opens the palette and selects nothing.
+    expect(nav!.contains(search!)).toBe(false);
+    expect(isPaletteOpen()).toBe(false);
+    fireEvent.click(search!);
+    expect(isPaletteOpen()).toBe(true);
+    setPaletteOpen(false);
+  });
 
   it("offers Releases in the main menu, beside Media", () => {
     answers = ALL_IN;

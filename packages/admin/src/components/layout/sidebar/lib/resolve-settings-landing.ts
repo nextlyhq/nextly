@@ -35,9 +35,14 @@ import {
  *
  * Any-of over a list and a plain check over a single slug, which is what
  * `PermissionGuard` does with `requiredPermission`. A destination declaring
- * nothing extra is governed by its visibility gate alone.
+ * nothing extra is governed by its visibility gate alone. Exported so every
+ * place that offers a Settings destination (the landing here, the command
+ * palette) asks the one rule.
  */
-function mayOpen(item: SettingsNavItem, access: SettingsNavAccess): boolean {
+export function mayOpen(
+  item: SettingsNavItem,
+  access: SettingsNavAccess
+): boolean {
   const required = item.routePermission;
   if (required === undefined) return true;
   return Array.isArray(required)

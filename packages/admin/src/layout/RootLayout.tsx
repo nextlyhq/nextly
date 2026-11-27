@@ -14,6 +14,7 @@ import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
 import { PrivateRoute } from "../components/guards/PrivateRoute";
 import { PublicRoute } from "../components/guards/PublicRoute";
+import { AdminCommandPalette } from "../components/shared/command-palette";
 import { WaitClockContext } from "../components/shared/loading-frame/delayed-reveal";
 import { ScreenOutlineFor } from "../components/shared/loading-frame/screen-outline-for";
 import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar";
@@ -205,6 +206,10 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
       <Toaster richColors />
       {/* "View all pins", which a pin toast on any screen can open in place. */}
       <AllPinsHost />
+      {/* The command palette, for the signed-in screens: mounted by the admin
+          itself, inside its styling scope, so it opens in place in every host
+          app without code of the host's own. */}
+      {routeType !== "public" && <AdminCommandPalette />}
       {/* Portal root for dialogs, dropdowns, etc. Synchronized with theme class. */}
       <div
         id="nextly-admin-portal-root"

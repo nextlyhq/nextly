@@ -7,10 +7,12 @@ import {
   SheetClose,
   SheetTitle,
 } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import { useRef, type JSX } from "react";
 
 import { Laptop, X } from "@admin/components/icons";
 import { SidebarContent, SidebarGroup } from "@admin/components/layout/sidebar";
+import { openCommandPalette } from "@admin/components/shared/command-palette/palette-store";
+import { DrawerSearchButton } from "@admin/components/shared/command-palette/PaletteSearchButton";
 import { Link } from "@admin/components/ui/link";
 import type { NavigationItem } from "@admin/constants/navigation";
 import { MOBILE_DRAWER_WIDTH } from "@admin/constants/sidebar";
@@ -109,9 +111,19 @@ export function MobileSidebarDrawer({
   isActive,
 }: MobileSidebarDrawerProps): JSX.Element {
   const branding = useBranding();
+  // Set by the Search row: the drawer closes first and opens the palette once
+  // it has, so its focus return to the menu button can't take focus from the
+  // palette's field, and the palette hands focus back to that button.
+  const searchOnClose = useRef(false);
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
+        onCloseAutoFocus={() => {
+          if (!searchOnClose.current) return;
+          searchOnClose.current = false;
+          // After the drawer has put focus back on its menu button.
+          queueMicrotask(openCommandPalette);
+        }}
         side="left"
         className="p-0 bg-sidebar-background text-sidebar-foreground border-sidebar-border flex flex-col h-full"
         style={{ width: `${MOBILE_DRAWER_WIDTH}px` }}
@@ -155,6 +167,15 @@ export function MobileSidebarDrawer({
             [&::-webkit-scrollbar-thumb]:bg-primary/5
             hover:[&::-webkit-scrollbar-thumb]:bg-accent"
         >
+          {/* Search first, as the rail draws it under the logo. */}
+          <div className="mb-3">
+            <DrawerSearchButton
+              onPress={() => {
+                searchOnClose.current = true;
+                onOpenChange(false);
+              }}
+            />
+          </div>
           <SidebarGroup>
             <SidebarNavigation
               items={navigationItems}
