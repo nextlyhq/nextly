@@ -540,7 +540,8 @@ export class MySqlAdapter extends DrizzleAdapter {
       // busy past the same bound a new connection gets to open.
       boundPoolWait(
         pool.pool as unknown as QueueingPool,
-        poolConfig.connectTimeout ?? 0
+        poolConfig.connectTimeout ?? 0,
+        this.config.logger
       );
       // Cast to our Pool interface - mysql2's mixin types don't resolve properly
       this.pool = pool as unknown as Pool;
@@ -1195,7 +1196,12 @@ export class MySqlAdapter extends DrizzleAdapter {
    * a suspended instance keeps whatever it holds open; each setting the
    * config gives still wins on its own.
    */
-  private poolDefaults(): { min: number; max: number; idleTimeoutMs: number } {
+  private poolDefaults(): {
+    min: number;
+    max: number;
+    idleTimeoutMs: number;
+    connectionTimeoutMs: number;
+  } {
     return isVercelFunction() ? SERVERLESS_POOL_DEFAULTS : DEFAULT_POOL_CONFIG;
   }
 
@@ -1218,9 +1224,11 @@ export class MySqlAdapter extends DrizzleAdapter {
   private buildConnectionConfig(): ConnectionOptions {
     const config: ConnectionOptions = this.buildAddressConfig();
 
+    // Inside Vercel functions the serverless wait (`poolDefaults`), which the
+    // queue's bound (`boundPoolWait`) is set from too.
     config.connectTimeout =
       this.config.pool?.connectionTimeoutMs ??
-      DEFAULT_POOL_CONFIG.connectionTimeoutMs;
+      this.poolDefaults().connectionTimeoutMs;
 
     // SSL configuration
     if (this.config.ssl) {

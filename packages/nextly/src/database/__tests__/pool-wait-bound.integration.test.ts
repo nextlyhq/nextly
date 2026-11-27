@@ -14,6 +14,9 @@
  * - the failure reaches a caller as DATABASE_BUSY, with a retry hint, and
  *   leaves REST as 503 with a Retry-After header;
  * - nothing the waiting request meant to write was written;
+ * - the wait was logged once as a warning naming the bound, so a pool whose
+ *   connections are all held shows in the log even where the caller answers
+ *   the failure without passing it on;
  * - no session was left inside a transaction, and the pool serves the next
  *   request once the holder is done.
  *
@@ -28,7 +31,16 @@ import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { withErrorHandler } from "../../api/with-error-handler";
 import { NextlyError } from "../../errors";
@@ -130,6 +142,10 @@ for (const dialect of DIALECTS) {
         await adapter.executeQuery(`DELETE FROM ${table}`);
       });
 
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
       /**
        * A transaction holding the pool's one connection until `release` is
        * called, having written row 1. `done` settles once it has committed.
@@ -186,6 +202,7 @@ for (const dialect of DIALECTS) {
       }
 
       it("a transaction that waits past the bound fails as database busy, writes nothing, and leaves no transaction open", async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
         const holder = await holdTheConnection();
         const outcome = await failure(() =>
           adapter.transaction(ctx =>
@@ -198,6 +215,14 @@ for (const dialect of DIALECTS) {
         await holder.done;
 
         await expectBusy(dialect, outcome, BOUND_MS);
+        // Logged once, where the adapter raised it, naming the bound.
+        expect(
+          warn.mock.calls.filter(([line]) =>
+            String(line).includes(
+              `waited ${BOUND_MS} ms for a database connection and none was free`
+            )
+          )
+        ).toHaveLength(1);
         expect(await ids()).toEqual([1]);
         expect(await sessionsIdleInTransaction()).toBe(0);
         // The pool serves the next request: a connection that arrived for

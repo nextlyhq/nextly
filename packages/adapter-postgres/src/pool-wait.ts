@@ -14,7 +14,10 @@
  * due to connection timeout"), a database that cannot be reached rather than
  * one that is busy, and stays as it was.
  */
-import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
+import {
+  type AdapterLogger,
+  poolWaitTimedOut,
+} from "@nextlyhq/adapter-drizzle/types";
 import type { Pool, PoolClient } from "pg";
 
 /**
@@ -30,18 +33,26 @@ type ConnectCallback = (
   done: (release?: unknown) => void
 ) => void;
 
-/** The error a caller should see for one pg-pool raised. */
-function translated(error: Error, boundMs: number): Error {
+/**
+ * The error a caller should see for one pg-pool raised: the queue wait
+ * timeout is logged (`poolWaitTimedOut`) and given the adapters' own code.
+ */
+function translated(
+  error: Error,
+  boundMs: number,
+  logger: AdapterLogger | undefined
+): Error {
   if (error.message === QUEUE_WAIT_TIMEOUT_MESSAGE) {
-    return poolWaitTimeoutError(boundMs, error);
+    return poolWaitTimedOut(boundMs, { dialect: "PostgreSQL", logger }, error);
   }
   return error;
 }
 
 /**
  * Makes `pool` report a request that waited past `boundMs` for a connection
- * with the pool-wait timeout error, and returns it. `boundMs` is the pool's
- * own `connectionTimeoutMillis`, unset when the pool has none.
+ * with the pool-wait timeout error, logged as a warning on `logger` (the
+ * console when there is none), and returns it. `boundMs` is the pool's own
+ * `connectionTimeoutMillis`, unset when the pool has none.
  *
  * Replaces the pool's own `connect`, which its `query` also goes through, so
  * every path to a connection reports the same way: the adapter's statements,
@@ -49,7 +60,8 @@ function translated(error: Error, boundMs: number): Error {
  */
 export function reportPoolWaitTimeout(
   pool: Pool,
-  boundMs: number | undefined
+  boundMs: number | undefined,
+  logger?: AdapterLogger
 ): Pool {
   const bound = boundMs ?? 0;
   const connect = pool.connect.bind(pool) as (
@@ -58,11 +70,11 @@ export function reportPoolWaitTimeout(
   const bounded = (callback?: ConnectCallback) => {
     if (callback) {
       return connect((err, client, done) =>
-        callback(err && translated(err, bound), client, done)
+        callback(err && translated(err, bound, logger), client, done)
       );
     }
     return (connect() as Promise<PoolClient>).catch((error: Error) => {
-      throw translated(error, bound);
+      throw translated(error, bound, logger);
     });
   };
   pool.connect = bounded as Pool["connect"];

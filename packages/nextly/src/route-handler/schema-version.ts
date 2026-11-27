@@ -30,6 +30,16 @@
  *   start loaded the definitions at, so a change made between that load and
  *   this copy's first read would otherwise never be seen. The first read of a
  *   process (or of a new database connection) therefore reloads once.
+ * - **A request waits for the routine read only so long.** The read is one
+ *   row, but it needs a pooled connection, and where every connection is held
+ *   (a small serverless pool, the start's own work) it waits the pool's whole
+ *   acquire bound, and every request waits with it, for a check whose failure
+ *   already serves what this copy has. So a request waits at most
+ *   {@link SCHEMA_VERSION_WAIT_MS} for a routine read, then is served with the
+ *   version it served before while the read finishes for later requests, and
+ *   the wait is logged once. A read a change marked here asked for, and a
+ *   reload a read found it needs, are still waited for in full: those are the
+ *   reads whose answer the request is about.
  *
  * The admin reads the same value from the `X-Nextly-Schema-Version` header and
  * refetches its schema when it increases; it is one number for every copy, so
@@ -53,11 +63,22 @@ import {
 } from "../domains/schema/stored-schema-seq";
 import type { CollectionsHandler } from "../services/collections-handler";
 import { isWithinLifetime, monotonicNow } from "../shared/lib/lifetime";
+import { consoleLogger } from "../shared/types";
 
 // The interval the stored version is read at, kept beside the read itself
 // (`stored-schema-seq`) and named here, where the served version's callers
 // have always found it.
 export { SCHEMA_VERSION_READ_INTERVAL_MS };
+
+/**
+ * The longest a request waits for a routine read of the stored version before
+ * it is served with the version this copy served before. The same as the read
+ * interval: a change another copy made already goes unseen here for up to that
+ * long, so waiting longer for the read buys no freshness the interval does not
+ * already give up, while a read that waits for a pooled connection would hold
+ * every request for the pool's whole acquire bound.
+ */
+export const SCHEMA_VERSION_WAIT_MS = SCHEMA_VERSION_READ_INTERVAL_MS;
 
 /** What this process knows of the schema version. */
 interface ServedSchema {
@@ -86,6 +107,13 @@ interface ServedSchema {
   inSync: boolean;
   /** The read (and any reload after it) every concurrent request waits on. */
   inFlight: Promise<void> | null;
+  /**
+   * Whether a request joining `inFlight` may stop waiting for it after
+   * {@link SCHEMA_VERSION_WAIT_MS}: true while a routine read (one no change
+   * marked here asked for) has not answered yet, false once it has and any
+   * reload it found needed runs.
+   */
+  waitBounded: boolean;
 }
 
 // On `globalThis`: a Next.js server holds several copies of a package's
@@ -103,11 +131,13 @@ function served(): ServedSchema {
     marks: 0,
     inSync: true,
     inFlight: null,
+    waitBounded: false,
   };
   const state = globalForSchema.__nextly_servedSchema;
   // A dev server keeps this state across a module reload, and a build from
-  // before `marks` left none.
+  // before `marks` or `waitBounded` left none.
   (state as Partial<ServedSchema>).marks ??= 0;
+  (state as Partial<ServedSchema>).waitBounded ??= false;
   return state;
 }
 
@@ -128,6 +158,12 @@ function registeredAdapter(): DrizzleAdapter | undefined {
  * it moved. Undefined while the services are not started, or where the
  * version could never be read. Never throws: a read that fails keeps what
  * this copy has, and is tried again after the interval.
+ *
+ * A routine read that has not answered within {@link SCHEMA_VERSION_WAIT_MS}
+ * is not waited for: the request is answered with the version this copy
+ * served before, as a failed read would answer it, and the read goes on for
+ * the requests after it. A read a change marked here asked for, and a reload
+ * of the definitions, are waited for in full.
  */
 export async function servedSchemaVersion(): Promise<number | undefined> {
   const adapter = registeredAdapter();
@@ -135,13 +171,8 @@ export async function servedSchemaVersion(): Promise<number | undefined> {
   const state = served();
   for (;;) {
     if (state.inFlight !== null) {
-      // Joined rather than repeated. A request arriving while a read runs
-      // waits for it, never for the version before it: that read may be the
-      // one a change marked here asked for.
-      await state.inFlight;
-      // What it settled answers this request, however long it took, unless a
-      // change was marked while it ran, which asks for a read of its own.
-      if (state.database === adapter && !state.stale) return state.seq;
+      const joined = await joinRead(state, adapter, state.inFlight);
+      if (joined.answered) return joined.seq;
       continue;
     }
     if (
@@ -156,6 +187,49 @@ export async function servedSchemaVersion(): Promise<number | undefined> {
     });
     state.inFlight = reading;
   }
+}
+
+/** What a request that joined the read under way is answered with, or to look again. */
+type Joined = { answered: true; seq: number | undefined } | { answered: false };
+
+/** Whether the read under way is a routine one still reading, with no change marked since. */
+function isRoutineRead(state: ServedSchema): boolean {
+  return state.waitBounded && !state.stale;
+}
+
+/**
+ * Join `following`, the read under way, rather than repeating it. A request
+ * arriving while a read runs waits for it, never for the version before it:
+ * that read may be the one a change marked here asked for. What it settled
+ * answers the request, however long it took, unless a change was marked
+ * while it ran, which asks for a read of its own.
+ *
+ * A routine read is waited for only {@link SCHEMA_VERSION_WAIT_MS}, since its
+ * failure would serve this copy's definitions as they are anyway: past that,
+ * the request is answered with what this copy serves. Where the read moved on
+ * to a reload meanwhile, or a change was marked here, the request looks again
+ * and waits for that in full.
+ */
+async function joinRead(
+  state: ServedSchema,
+  adapter: DrizzleAdapter,
+  following: Promise<void>
+): Promise<Joined> {
+  if (
+    isRoutineRead(state) &&
+    !(await settlesWithin(following, SCHEMA_VERSION_WAIT_MS))
+  ) {
+    if (state.inFlight !== following || !isRoutineRead(state)) {
+      return { answered: false };
+    }
+    const seq = state.database === adapter ? state.seq : undefined;
+    noteSlowRead(following, seq);
+    return { answered: true, seq };
+  }
+  await following;
+  return state.database === adapter && !state.stale
+    ? { answered: true, seq: state.seq }
+    : { answered: false };
 }
 
 /**
@@ -278,13 +352,24 @@ async function followStoredVersion(
   state: ServedSchema,
   adapter: DrizzleAdapter
 ): Promise<void> {
+  // A routine read unless a change marked here asked for it: only a routine
+  // read's wait is bounded (`servedSchemaVersion`). Read before `stale` is
+  // cleared, which is what says a mark asked.
+  state.waitBounded = !state.stale;
   // Cleared as the read begins: a change marked while it runs marks it again.
   state.stale = false;
   const known = state.database === adapter ? state.seq : undefined;
   // Read now, through the one read the process shares (`stored-schema-seq`),
   // so the registry row cache files what it reads under the count this read
   // found rather than reading it again. It never throws.
-  const seq = await storedSchemaSeq(adapter, { fresh: true });
+  let seq: number | undefined;
+  try {
+    seq = await storedSchemaSeq(adapter, { fresh: true });
+  } finally {
+    // Answered: a reload from here on is the change the request is about,
+    // and is waited for in full.
+    state.waitBounded = false;
+  }
   if (seq === undefined) {
     // The version could not be read (a database `nextly migrate` has not
     // prepared, a dropped connection): this copy keeps serving what it has.
@@ -305,6 +390,44 @@ async function followStoredVersion(
   }
   state.database = adapter;
   state.readAt = monotonicNow();
+}
+
+/**
+ * Whether `work` settles within `ms`: true once it has, false where the time
+ * ran out first. A rejection of `work` is passed on. The timer never keeps a
+ * process alive on its own.
+ */
+async function settlesWithin(
+  work: Promise<void>,
+  ms: number
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<false>(resolve => {
+    timer = setTimeout(() => resolve(false), ms);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([work.then(() => true as const), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The reads whose slow answer has been logged, so each is logged once. */
+const slowReadsNoted = new WeakSet<Promise<void>>();
+
+/**
+ * Log, once per read, that a routine read of the stored version is taking
+ * longer than {@link SCHEMA_VERSION_WAIT_MS} and requests are being served
+ * without it. Such a read is nearly always waiting for a pooled database
+ * connection, and without this line the only sign would be slow responses.
+ */
+function noteSlowRead(read: Promise<void>, seq: number | undefined): void {
+  if (slowReadsNoted.has(read)) return;
+  slowReadsNoted.add(read);
+  consoleLogger.warn(
+    `[Nextly] The stored schema version has not answered in ${SCHEMA_VERSION_WAIT_MS} ms, so requests are served with the schema version this process has (${seq ?? "none read yet"}) until it does. A read this slow is usually waiting for a free database connection.`
+  );
 }
 
 /**

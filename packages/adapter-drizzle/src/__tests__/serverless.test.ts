@@ -27,11 +27,12 @@ describe("isVercelFunction", () => {
 });
 
 describe("SERVERLESS_POOL_DEFAULTS", () => {
-  it("is a small pool that keeps no connection open and closes idle ones after 5 s", () => {
+  it("is a small pool that keeps no connection open, closes idle ones after 5 s, and waits 5 s for one", () => {
     expect(SERVERLESS_POOL_DEFAULTS).toEqual({
       max: 3,
       min: 0,
       idleTimeoutMs: 5000,
+      connectionTimeoutMs: 5000,
     });
   });
 });

@@ -108,6 +108,7 @@ describe("PostgreSQL pool outside Vercel", () => {
       max: 10,
       min: 0,
       idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 15000,
     });
     expect(attachDatabasePool).not.toHaveBeenCalled();
   });
@@ -118,13 +119,14 @@ describe("PostgreSQL pool on Vercel", () => {
     vi.stubEnv("VERCEL", "1");
   });
 
-  it("defaults to three connections, none kept open, idle ones closed after 5 s", async () => {
+  it("defaults to three connections, none kept open, idle ones closed after 5 s, a 5 s wait for one", async () => {
     await connected({ url: standardUrl });
 
     expect(lastPoolConfig()).toMatchObject({
       max: 3,
       min: 0,
       idleTimeoutMillis: 5000,
+      connectionTimeoutMillis: 5000,
     });
   });
 
@@ -148,6 +150,13 @@ describe("PostgreSQL pool on Vercel", () => {
       max: 3,
       min: 1,
       idleTimeoutMillis: 5000,
+    });
+
+    await connected({ url: standardUrl, pool: { connectionTimeoutMs: 12000 } });
+    expect(lastPoolConfig()).toMatchObject({
+      max: 3,
+      idleTimeoutMillis: 5000,
+      connectionTimeoutMillis: 12000,
     });
   });
 
@@ -175,7 +184,7 @@ describe("PostgreSQL pool on Vercel", () => {
       max: 3,
       min: 0,
       idleTimeoutMillis: 5000,
-      connectionTimeoutMillis: 15000,
+      connectionTimeoutMillis: 5000,
       statement_timeout: 15000,
       ssl: { rejectUnauthorized: true },
     });
