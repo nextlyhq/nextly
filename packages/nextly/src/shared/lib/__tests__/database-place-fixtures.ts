@@ -154,8 +154,9 @@ export const DATABASE_PLACE_FIXTURES: readonly DatabasePlaceFixture[] = [
     place: "live",
   },
   {
+    // Local by its host, but a site reading DB_DIALECT first opens SQLite.
     name: "DB_DIALECT naming another dialect than the URL",
-    url: "postgresql://app:pw@db.prod.neon.tech:5432/shop",
+    url: "postgresql://app:pw@localhost:5432/shop",
     dialect: "sqlite",
     place: "live",
   },
