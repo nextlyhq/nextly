@@ -25,6 +25,11 @@ import { z } from "zod";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import {
+  isAttributionId,
+  storedId,
+  storedName,
+} from "../domains/audit/attribution";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
@@ -152,12 +157,68 @@ function askedLimit(req: Request): { limit?: number } {
 }
 
 /**
+ * The agent filters a request asked for: `?agent=` (an agent's name, as the
+ * activity rows store it) and `?session=` (one agent session's id). Checked by
+ * the rules the rows were stored under, so a value no row could hold is
+ * refused rather than answered with nothing, or with everything.
+ */
+const AGENT_FILTER_QUERY = z.object({
+  agent: z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined) return undefined;
+      const name = storedName(value);
+      if (name === undefined) {
+        ctx.addIssue({ code: "custom", message: "Not an agent's name." });
+        return z.NEVER;
+      }
+      return name;
+    }),
+  session: z
+    .string()
+    .optional()
+    .refine(value => value === undefined || isAttributionId(value), {
+      message: "Not an agent session's id.",
+    }),
+});
+
+function askedAgentFilters(req: Request): {
+  agentName?: string;
+  agentSessionId?: string;
+} {
+  const params = new URL(req.url).searchParams;
+  const parsed = AGENT_FILTER_QUERY.safeParse({
+    agent: params.get("agent") ?? undefined,
+    session: params.get("session") ?? undefined,
+  });
+  if (!parsed.success) {
+    throw NextlyError.validation({
+      errors: parsed.error.issues.map(issue => ({
+        path: String(issue.path[0] ?? ""),
+        code: "INVALID",
+        message: issue.message,
+      })),
+    });
+  }
+  const { agent, session } = parsed.data;
+  return {
+    ...(agent === undefined ? {} : { agentName: agent }),
+    // In the one spelling the rows store it in, so every database answers
+    // the same rows.
+    ...(session === undefined ? {} : { agentSessionId: storedId(session) }),
+  };
+}
+
+/**
  * GET /api/dashboard/activity?limit=5
  *
  * Returns recent activity log entries (create/update/delete actions).
  *
  * Query params:
  *   - limit: number (default: 5, max: 50)
+ *   - agent: an agent's name, to show only what that agent did
+ *   - session: an agent session's id, to show only that session's work
  *
  * Body shape: `{ activities, hasMore }`. The activity feed is cursor-style
  * (`hasMore` flag, no page/limit/totalPages metadata surfaced to clients), so
@@ -171,6 +232,8 @@ function askedLimit(req: Request): { limit?: number } {
 export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+  // Read before any work, so a malformed filter costs nothing.
+  const agentFilters = askedAgentFilters(req);
 
   const service = await getActivityLogService();
   // The caller WHOLE, and resolved ONCE. Both consumers read it: the scope
@@ -184,6 +247,7 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   // source hands them: the two doors leave out the same rows.
   const result = await service.getRecentActivity({
     ...askedLimit(req),
+    ...agentFilters,
     scope,
     caller,
     ...(await readActivitySubjects()),

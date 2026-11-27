@@ -47,6 +47,7 @@ import type { RowLockServer } from "../../shared/lib/row-lock";
 import { isValidUUID } from "../auth/services/role/utils";
 import { pluginSettingsSecrets } from "../plugins/settings-service";
 
+import { storedAttribution, type ActorAttribution } from "./attribution";
 import { isAuditReason } from "./audit-reasons";
 import { CORE_DOTTED_AUDIT_KINDS } from "./core-dotted-kinds";
 import {
@@ -407,6 +408,12 @@ export interface AuditEvent {
   userAgent?: string | null;
   /** JSON-serialisable details. Goes into the dialect's JSON column. */
   metadata?: Record<string, unknown>;
+  /**
+   * Who stands behind the actor: an agent acting for them, the door, the
+   * credential by id, an approval, a grant, an undo or a deployment. Stored
+   * in the row's attribution columns; the actor stays the person.
+   */
+  attribution?: ActorAttribution;
 }
 
 export interface AuditLogWriter {
@@ -600,6 +607,12 @@ function auditRowInput(
       targetPrincipalId: targetPrincipal.id,
       ...(pluginRow ? {} : { metadata }),
       createdAt: new Date(),
+      // Never erased: the person an agent acted for is the actor above, so
+      // their erasure runs through the actor's columns, and what remains
+      // here names software, doors and ids.
+      ...storedAttribution(event.attribution, "audit", {
+        actorIsPerson: actorUserId !== null || event.actorPrincipal != null,
+      }),
     },
     identity: {
       ipAddress: event.ipAddress ?? null,

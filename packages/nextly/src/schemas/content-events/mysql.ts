@@ -18,6 +18,8 @@ import {
   varchar,
 } from "drizzle-orm/mysql-core";
 
+import { ATTRIBUTION_NAME_LENGTH } from "../audit/widths";
+
 import type { ContentEventActorKind, ContentEventSubjectKind } from "./types";
 import { CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH } from "./widths";
 
@@ -47,6 +49,13 @@ export const nextlyContentEventsMysql = mysqlTable(
       length: CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH,
     }),
     actorName: varchar("actor_name", { length: 255 }),
+    // The agent that acted for this actor ("Claude Code"), beside the person
+    // it acted for, who stays the actor above: erasing that person blanks
+    // their name and keeps this one, which names software, not a person.
+    // NULL when no agent acted, and on every event before it existed.
+    actorAgentName: varchar("actor_agent_name", {
+      length: ATTRIBUTION_NAME_LENGTH,
+    }),
 
     occurredAt: datetime("occurred_at", { fsp: 3 }).notNull(),
 

@@ -13,6 +13,9 @@
  * @module schemas/audit/postgres
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
+// Each dialect declares the same columns with its own builders, so the
+// declarations repeat by design.
+// fallow-ignore-file code-duplication
 
 import { pgTable, text, timestamp, jsonb, varchar } from "drizzle-orm/pg-core";
 import type { PgBuildExtraConfigColumns } from "drizzle-orm/pg-core";
@@ -24,6 +27,10 @@ import {
 } from "../_internal/core-indexes-postgres";
 
 import {
+  ATTRIBUTION_COMMIT_LENGTH,
+  ATTRIBUTION_ID_LENGTH,
+  ATTRIBUTION_NAME_LENGTH,
+  ATTRIBUTION_WORD_LENGTH,
   AUDIT_ACTOR_KIND_LENGTH,
   AUDIT_ACTOR_PRINCIPAL_KIND_LENGTH,
   AUDIT_KIND_LENGTH,
@@ -52,6 +59,43 @@ import {
 //
 // The append-only posture and these two duties only look contradictory while
 // the grant is all-or-nothing.
+/**
+ * Who stands behind the row's actor: the agent that acted for them, the door,
+ * the credential, the agent session, an approval, a standing grant, an undo,
+ * or a deployment. The same columns on both trails, written from one mapping
+ * (`domains/audit/attribution`). Every one is nullable, and NULL on a row
+ * nothing stood behind, which is every row written before they existed. The
+ * person an agent acted for is the row's own actor, so erasing that person
+ * erases them here as it does from their own rows, and the agent's name stays.
+ */
+function attributionColumnSet() {
+  return {
+    agentName: varchar("agent_name", { length: ATTRIBUTION_NAME_LENGTH }),
+    agentSessionId: varchar("agent_session_id", {
+      length: ATTRIBUTION_ID_LENGTH,
+    }),
+    door: varchar("door", { length: ATTRIBUTION_WORD_LENGTH }),
+    credentialId: varchar("credential_id", { length: ATTRIBUTION_ID_LENGTH }),
+    approvalRequestId: varchar("approval_request_id", {
+      length: ATTRIBUTION_ID_LENGTH,
+    }),
+    approvedByUserId: varchar("approved_by_user_id", {
+      length: ATTRIBUTION_ID_LENGTH,
+    }),
+    approvedVia: varchar("approved_via", { length: ATTRIBUTION_WORD_LENGTH }),
+    grantId: varchar("grant_id", { length: ATTRIBUTION_ID_LENGTH }),
+    undoesSessionId: varchar("undoes_session_id", {
+      length: ATTRIBUTION_ID_LENGTH,
+    }),
+    deploymentHost: varchar("deployment_host", {
+      length: ATTRIBUTION_NAME_LENGTH,
+    }),
+    deploymentCommit: varchar("deployment_commit", {
+      length: ATTRIBUTION_COMMIT_LENGTH,
+    }),
+  };
+}
+
 /** `audit_log` columns, a fresh builder record per call (see `core-table-contributions`). */
 export function auditLogColumns() {
   return {
@@ -90,6 +134,7 @@ export function auditLogColumns() {
       length: AUDIT_TARGET_PRINCIPAL_KIND_LENGTH,
     }),
     targetPrincipalId: varchar("target_principal_id", { length: 191 }),
+    ...attributionColumnSet(),
   };
 }
 
@@ -150,6 +195,7 @@ export function activityLogColumns() {
       .defaultNow()
       .notNull(),
     identityErasedAt: timestamp("identity_erased_at", { withTimezone: false }),
+    ...attributionColumnSet(),
   };
 }
 
