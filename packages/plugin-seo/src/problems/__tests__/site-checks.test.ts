@@ -210,7 +210,25 @@ describe("proxyProblems", () => {
     expect(problem?.what).toBe(
       "3 redirects are saved but not served: proxy.ts is not wired, so no request has reached the site's Proxy."
     );
-    expect(PROXY_WIRING_NOTE).toContain("createNextlyProxy");
+    expect(PROXY_WIRING_NOTE).toContain("composeProxy");
+    expect(PROXY_WIRING_NOTE).toContain("nextlyProxyMatcher");
+  });
+
+  it("lists plain-text copies switched on with no Proxy, with or without redirects", () => {
+    const notWired = { state: "not-wired" as const, lastSeen: null };
+    expect(proxyProblems(notWired, 0, true)[0]?.what).toBe(
+      "Plain-text copies are switched on but not served: proxy.ts is not wired, so no request has reached the site's Proxy."
+    );
+    expect(proxyProblems(notWired, 2, true)[0]?.what).toBe(
+      "2 redirects are saved and plain-text copies switched on, but neither is served: proxy.ts is not wired, so no request has reached the site's Proxy."
+    );
+    expect(
+      proxyProblems(
+        { state: "running", lastSeen: "2026-11-12T08:00:00.000Z" },
+        0,
+        true
+      )
+    ).toEqual([]);
   });
 
   it("names the day a Proxy that stopped running last ran", () => {

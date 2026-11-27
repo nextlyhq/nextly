@@ -23,11 +23,13 @@ import { z } from "nextly/zod";
 import type {
   ConnectionAttempt,
   ConnectionResult,
+  IndexNowKeyCheck,
   SearchConsoleReportBody,
 } from "./contract";
 
 const RESULTS = [
   "sent",
+  "accepted",
   "refused-key",
   "rate-limited",
   "no-address",
@@ -77,6 +79,20 @@ const schema = z.object({
   indexNowKey: z.string().optional(),
   /** How IndexNow's last notice went. */
   indexNowLast: attempt.optional(),
+  /** What the last check of the key file found. */
+  indexNowKeyCheck: z
+    .object({
+      at: z.string(),
+      result: z.enum(["answering", "not-answering", "no-address"]),
+      origin: z.string().optional(),
+    })
+    .optional(),
+  /**
+   * Until when, as an ISO time followed by the opening check's name, the key
+   * file is served while IndexNow is off: a check under way reads it before
+   * the switch is turned on.
+   */
+  indexNowKeyCheckUntil: z.string().optional(),
   /** Search Console, once connected. */
   searchConsole: z
     .object({
@@ -112,6 +128,8 @@ const schema = z.object({
 export interface ConnectionSettings {
   indexNowKey?: string;
   indexNowLast?: ConnectionAttempt;
+  indexNowKeyCheck?: IndexNowKeyCheck;
+  indexNowKeyCheckUntil?: string;
   searchConsole?: { refreshToken: string; email?: string; property?: string };
   searchConsolePending?: {
     state: string;

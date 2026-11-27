@@ -17,6 +17,9 @@
  *   maps to, or where an import has been applied; done once one has;
  * - `searchConsole`: Search Console is connected to the site's property,
  *   with no failure since;
+ * - `proxy`: the site's Proxy has handled a request within the week, as its
+ *   own note says: redirects, plain-text copies and the staging guard are
+ *   answered from it;
  * - `codePages`: listed only where the build has routes with a variable
  *   part, whose addresses only the build names; done where the running
  *   site can list them: the build being served recorded its pages, or its
@@ -49,6 +52,7 @@ import {
   type ImportSetup,
 } from "../import/plan";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
+import { readProxyStatus } from "../redirects/proxy-seen";
 import type { SiteRules } from "../resolver/page-levels";
 import type { BrandFacts } from "../settings/rules";
 
@@ -68,6 +72,8 @@ export interface ChecklistFacts {
   types: readonly string[];
   /** Whether Search Console is connected. */
   searchConsole: boolean;
+  /** Whether the site's Proxy runs, as its last note says. */
+  proxy: boolean;
   /**
    * Old SEO values to bring in: `none` where the site holds none, `waiting`
    * where it does and nothing has been imported, `imported` once an import
@@ -109,6 +115,7 @@ export function checklistItems(facts: ChecklistFacts): ChecklistItemState[] {
     items.push({ id: "import", done: facts.imports === "imported" });
   }
   items.push({ id: "searchConsole", done: facts.searchConsole });
+  items.push({ id: "proxy", done: facts.proxy });
   if (facts.codePages !== undefined) {
     items.push({
       id: "codePages",
@@ -203,12 +210,13 @@ async function readChecklist(
   ctx: PluginRouteContext,
   setup: ChecklistSetup
 ): Promise<ChecklistBody> {
-  const [rules, brand, stored, waiting, codePages] = await Promise.all([
+  const [rules, brand, stored, waiting, codePages, proxy] = await Promise.all([
     setup.readRules(ctx, undefined),
     setup.readBrand(ctx),
     readConnections(ctx),
     setup.readSetupWaiting(ctx),
     codePagesOf(ctx, setup),
+    readProxyStatus(ctx),
   ]);
   return {
     setupWaiting: waiting,
@@ -219,6 +227,7 @@ async function readChecklist(
       brand,
       types: setup.types,
       searchConsole: searchConsoleConnected(stored),
+      proxy: proxy.state === "running",
       imports: await importsOf(ctx, setup, stored.importedAt),
       ...(codePages === undefined ? {} : { codePages }),
     }),

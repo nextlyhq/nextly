@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { holdNextStatement } from "../../__tests__/count-statements";
 import { seoContext } from "../../address-record/__tests__/record-tables";
-import { lastCatchUp } from "../../address-record/catch-up";
+import { lastStartWork } from "../../start-work";
 import {
   noteKey,
   putNotesTogether,
@@ -48,7 +48,8 @@ async function boot(dialect: TestDialect): Promise<void> {
       }),
     ],
   });
-  await lastCatchUp();
+  // The start's own background work, its commits among them, done first.
+  await lastStartWork();
 }
 
 const XML = "application/xml; charset=utf-8";

@@ -28,7 +28,8 @@ import { readProxyStatus } from "../../redirects/proxy-seen";
 import { seoPlugin } from "../../plugin";
 import { addressNotes } from "../../schema/tables";
 import { readStanding } from "../../staging/guard";
-import { catchUp, lastCatchUp } from "../catch-up";
+import { lastStartWork } from "../../start-work";
+import { catchUp } from "../catch-up";
 import { ADDRESS_RECORD_SLUG } from "../collection";
 import { addressHolders } from "../participant";
 import { pendingMoves } from "../pending-moves";
@@ -92,7 +93,7 @@ async function boot(dialect: TestDialect, renamed?: string) {
   });
   const ctx = seen.ctx;
   if (!ctx) throw new Error("the helper plugin never started");
-  await lastCatchUp();
+  await lastStartWork();
   return { t: current, ctx, record: renamed ?? ADDRESS_RECORD_SLUG };
 }
 

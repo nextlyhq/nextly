@@ -20,6 +20,7 @@ const BARE: ChecklistFacts = {
   brand: {},
   types: ["posts", "pages"],
   searchConsole: false,
+  proxy: false,
   imports: "none",
 };
 
@@ -38,6 +39,7 @@ const DONE: ChecklistFacts = {
   brand: { name: "Acme", logo: { url: "https://acme.example/logo.png" } },
   types: ["posts", "pages"],
   searchConsole: true,
+  proxy: true,
   imports: "imported",
 };
 
@@ -53,6 +55,7 @@ describe("checklistItems", () => {
       { id: "shareImage", done: false },
       { id: "brand", done: false },
       { id: "searchConsole", done: false },
+      { id: "proxy", done: false },
     ]);
   });
 
@@ -64,6 +67,7 @@ describe("checklistItems", () => {
       brand: true,
       import: true,
       searchConsole: true,
+      proxy: true,
     });
   });
 
@@ -117,11 +121,16 @@ describe("checklistItems", () => {
       "brand",
       "import",
       "searchConsole",
+      "proxy",
     ]);
   });
 
   it("needs Search Console connected", () => {
     expect(doneOf({ ...DONE, searchConsole: false }).searchConsole).toBe(false);
+  });
+
+  it("needs the site's Proxy running", () => {
+    expect(doneOf({ ...DONE, proxy: false }).proxy).toBe(false);
   });
 
   it("lists the pages built in code only where the build has routes with a variable part, with their count", () => {

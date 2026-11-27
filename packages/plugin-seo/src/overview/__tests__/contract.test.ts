@@ -38,6 +38,7 @@ describe("checklistItemText", () => {
       brand: `${SECTION}/settings?tab=brand`,
       import: `${SECTION}/pages/import`,
       searchConsole: `${SECTION}/settings?tab=connections`,
+      proxy: `${SECTION}/redirects`,
       codePages: `${SECTION}/pages`,
     });
   });

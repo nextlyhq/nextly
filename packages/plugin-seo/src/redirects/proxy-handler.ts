@@ -28,7 +28,7 @@ import { redirectsSlug } from "./collection";
 import { heldRedirectKeys, type HeldRedirectKeys } from "./held-keys";
 import { redirectHits, type RedirectHits } from "./hits";
 import { redirectMeeting } from "./meeting";
-import { proxySeenNotes } from "./proxy-seen";
+import { proxySeenNotes, type ProxySeenNotes } from "./proxy-seen";
 import { askedAddress } from "./served";
 import { redirectOf, type StoredRedirect } from "./store";
 
@@ -198,14 +198,15 @@ async function goneResponse(
  * The handler the plugin contributes to the site's Proxy, answering from
  * `keys`: the plugin forgets them when a redirect saved here commits. Each
  * request a redirect answers is counted on it by `hits`, in the background.
- * An address made Gone is answered as `gone` says.
+ * An address made Gone is answered as `gone` says. `seen` notes that the
+ * Proxy runs, shared with the plugin's other handlers.
  */
 export function redirectsProxyHandler(
   keys: HeldRedirectKeys = heldRedirectKeys(),
   hits: RedirectHits = redirectHits(),
-  gone: GoneAnswerOptions = {}
+  gone: GoneAnswerOptions = {},
+  seen: ProxySeenNotes = proxySeenNotes()
 ): PluginProxyHandler {
-  const seen = proxySeenNotes();
   return {
     name: "redirects",
     async handle(request, ctx) {

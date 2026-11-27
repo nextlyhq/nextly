@@ -15,11 +15,13 @@ import {
   SegmentedChoice,
   SettingsRowGroup,
   Switch,
+  usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Info, X } from "lucide-react";
-import { useId, type JSX, type ReactNode } from "react";
+import { useId, useState, type JSX, type ReactNode } from "react";
 
-import type { SeoContentType } from "../settings/contract";
+import { REDIRECT_ROUTES, type ProxyStatus } from "../redirects/contract";
+import { SEO_PLUGIN_NAME, type SeoContentType } from "../settings/contract";
 import {
   defaultTitlePattern,
   fillPattern,
@@ -531,6 +533,55 @@ function SwitchRow({
   );
 }
 
+/**
+ * What the Plain-text copies row says while the site's Proxy has never run:
+ * the copies are answered there, so switched on they would not be served.
+ */
+const COPIES_NEED_PROXY =
+  "Plain-text copies are answered by the site's Proxy, which hasn't handled a request yet. A developer adds src/proxy.ts with composeProxy from nextly/runtime (see the SEO guide, \"Running redirects\"); then switch this on.";
+
+/**
+ * Plain-text copies' switch, which turns on only once the site's Proxy has
+ * handled a request: until then it stays off and says why. Where whether
+ * the Proxy runs can't be read, the switch is not held back.
+ */
+function PlainCopiesRow({ draft, change }: TabProps): JSX.Element {
+  const proxy = usePluginRoute<ProxyStatus>({
+    plugin: SEO_PLUGIN_NAME,
+    path: REDIRECT_ROUTES.proxy,
+    staleTime: 0,
+  });
+  const neverRan = proxy.error === null && proxy.data?.state === "not-wired";
+  const [refused, setRefused] = useState(false);
+  return (
+    <SettingsRowGroup
+      label="Plain-text copies"
+      description="Adds a text version of each page, the same words people see, for AI tools. Off by default."
+    >
+      <Switch
+        aria-label="Plain-text copies"
+        checked={draft.plainTextCopies}
+        onCheckedChange={plainTextCopies => {
+          if (plainTextCopies && neverRan) {
+            setRefused(true);
+            return;
+          }
+          setRefused(false);
+          change(current => ({ ...current, plainTextCopies }));
+        }}
+      />
+      {refused || (draft.plainTextCopies && neverRan) ? (
+        <p
+          className="mt-1.5 text-xs font-medium text-warning-text"
+          role="status"
+        >
+          {COPIES_NEED_PROXY}
+        </p>
+      ) : null}
+    </SettingsRowGroup>
+  );
+}
+
 /** The host the site is served from, for the sentences that name it. */
 export function siteHostOf(
   draft: SettingsDraft,
@@ -658,14 +709,7 @@ export function CrawlersTab({
         on={draft.llmsFullTxt}
         set={llmsFullTxt => change(current => ({ ...current, llmsFullTxt }))}
       />
-      <SwitchRow
-        label="Plain-text copies"
-        description="Adds a text version of each page, the same words people see, for AI tools. Off by default."
-        on={draft.plainTextCopies}
-        set={plainTextCopies =>
-          change(current => ({ ...current, plainTextCopies }))
-        }
-      />
+      <PlainCopiesRow draft={draft} change={change} />
     </SettingsCard>
   );
 }

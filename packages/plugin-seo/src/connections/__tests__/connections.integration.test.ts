@@ -45,10 +45,12 @@ import { readSeoRules } from "../../settings/rules";
 import { structuredDataFromSettings } from "../../settings/structured-data-rules";
 import { noSocialCardRules } from "../../social/card";
 import { rulesFromOptions } from "../../structured-data/rules";
-import type {
-  ConnectionsBody,
-  SearchConsoleConnectBody,
-  SearchConsoleReportBody,
+import {
+  INDEXNOW_KEY_CHECK_PATH,
+  type ConnectionsBody,
+  type IndexNowKeyCheck,
+  type SearchConsoleConnectBody,
+  type SearchConsoleReportBody,
 } from "../contract";
 import { flushIndexNow } from "../indexnow";
 import type { IndexNowNotice } from "../indexnow-send";
@@ -93,6 +95,50 @@ vi.mock("../indexnow-send", async importOriginal => {
   };
 });
 
+/**
+ * The live site as the key check reads it: a site wrapped in `withNextly`,
+ * whose rewrite sends `/<key>.txt` to the API handler's key route, with no
+ * Proxy; or, with `servesKeyFile` off, a site that answers its own page.
+ */
+const site = vi.hoisted(() => ({
+  servesKeyFile: true,
+  reads: 0,
+  /** Runs while a read is under way, as another check might. */
+  duringRead: undefined as (() => Promise<void>) | undefined,
+}));
+
+vi.mock("../../received/fetch", async importOriginal => {
+  const real = await importOriginal<typeof import("../../received/fetch")>();
+  return {
+    ...real,
+    fetchAs: async (url: URL) => {
+      site.reads += 1;
+      const during = site.duringRead;
+      site.duringRead = undefined;
+      await during?.();
+      const key = /^\/([0-9a-f]{32})\.txt$/.exec(url.pathname)?.[1];
+      const answer = (status: number, html: string) => ({
+        kind: "received" as const,
+        status,
+        url: url.href,
+        redirects: [],
+        headers: {},
+        html,
+        ms: 1,
+      });
+      if (!site.servesKeyFile || key === undefined) {
+        return answer(404, "the page");
+      }
+      const { createDynamicHandlers } = await import("nextly/runtime");
+      const response = await createDynamicHandlers().GET(
+        new Request(`${url.origin}/admin/api/indexnow-key/${key}`),
+        { params: Promise.resolve({ params: ["indexnow-key", key] }) }
+      );
+      return answer(response.status, await response.text());
+    },
+  };
+});
+
 const SITE = "https://acme.example";
 const CLIENT = { clientId: "acme-client.apps", clientSecret: "client-shh" };
 
@@ -106,6 +152,9 @@ afterEach(async () => {
   current = undefined;
   indexNow.notices.length = 0;
   indexNow.answer = 200;
+  site.servesKeyFile = true;
+  site.reads = 0;
+  site.duringRead = undefined;
 });
 
 let plugin: PluginDefinition;
@@ -510,6 +559,109 @@ describe.each(getConfiguredTestDialects())(
   "optional connections (%s)",
   dialect => {
     describe("IndexNow", () => {
+      /** The key file through the API handler, as withNextly's rewrite reaches it. */
+      async function keyFile(key: string) {
+        const response = await createDynamicHandlers().GET(
+          new Request(`${SITE}/admin/api/indexnow-key/${key}`),
+          { params: Promise.resolve({ params: ["indexnow-key", key] }) }
+        );
+        return { status: response.status, body: await response.text() };
+      }
+
+      /** The Connections tab's key check, as Sara runs it. */
+      async function checkKey(seo: PluginContext): Promise<IndexNowKeyCheck> {
+        const answer = await call(
+          seo,
+          { asked: [], failing: {} },
+          "POST",
+          INDEXNOW_KEY_CHECK_PATH
+        );
+        expect(answer.status).toBe(200);
+        return answer.json as IndexNowKeyCheck;
+      }
+
+      it("serves the key file at the site's root with no Proxy, only while IndexNow is on", async () => {
+        const { t, seo } = await boot(dialect);
+        await settings(t, { indexNow: true });
+        await publish(t, "pricing");
+        await t.events.settle();
+        await flushIndexNow();
+        const key = (await readConnections(seo)).indexNowKey ?? "";
+        expect(key).toMatch(/^[0-9a-f]{32}$/);
+
+        expect(await keyFile(key)).toEqual({ status: 200, body: key });
+        // Another key's file, or the key spelled otherwise, is not found.
+        expect((await keyFile("0".repeat(32))).status).toBe(404);
+        expect((await keyFile(key.toUpperCase())).status).toBe(404);
+
+        await settings(t, { indexNow: false });
+        expect((await keyFile(key)).status).toBe(404);
+      });
+
+      it("checks the key file before IndexNow is switched on, serving it only for the check", async () => {
+        const { t, seo } = await boot(dialect);
+        await settings(t, {});
+
+        // The key is made by the check, and read at the production address.
+        expect(await checkKey(seo)).toMatchObject({
+          result: "answering",
+          origin: SITE,
+        });
+        expect(site.reads).toBe(1);
+        const key = (await readConnections(seo)).indexNowKey ?? "";
+        expect(key).toMatch(/^[0-9a-f]{32}$/);
+        // Off, and no check under way: not served.
+        expect((await keyFile(key)).status).toBe(404);
+        // The tab shows what the check found, never the key.
+        const shown = await tab(seo);
+        expect(shown.body.indexNow.keyCheck?.result).toBe("answering");
+        expect(shown.text).not.toContain(key);
+
+        // A site that answers its own page there instead.
+        site.servesKeyFile = false;
+        expect((await checkKey(seo)).result).toBe("not-answering");
+        expect((await tab(seo)).body.indexNow.keyCheck?.result).toBe(
+          "not-answering"
+        );
+      });
+
+      it("leaves the key file served for a check another opened while its own read ran", async () => {
+        const { t, seo } = await boot(dialect);
+        await settings(t, {});
+        // Another check, on another server, opens its own window meanwhile.
+        site.duringRead = async () => {
+          await writeConnections(seo, {
+            indexNowKeyCheckUntil: `${new Date(Date.now() + 60_000).toISOString()} other`,
+          });
+        };
+
+        expect((await checkKey(seo)).result).toBe("answering");
+
+        // That check's read still finds the file.
+        const key = (await readConnections(seo)).indexNowKey ?? "";
+        expect(await keyFile(key)).toEqual({ status: 200, body: key });
+      });
+
+      it("counts a 202 as accepted only where the key file answers, and as a refused key where it does not", async () => {
+        const { t, seo } = await boot(dialect);
+        await settings(t, { indexNow: true });
+        indexNow.answer = 202;
+
+        await publish(t, "pricing");
+        await t.events.settle();
+        await flushIndexNow();
+        expect((await tab(seo)).body.indexNow.last?.result).toBe("accepted");
+
+        site.servesKeyFile = false;
+        await publish(t, "about");
+        await t.events.settle();
+        await flushIndexNow();
+        expect((await tab(seo)).body.indexNow.last?.result).toBe("refused-key");
+        expect(await connectionProblems(seo)).toEqual([
+          expect.stringContaining("refused the site's IndexNow key"),
+        ]);
+      });
+
       it("is off by default: a published page tells no one, and no key is made", async () => {
         const { t } = await boot(dialect);
         await settings(t, {});

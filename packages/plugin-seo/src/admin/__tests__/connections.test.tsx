@@ -37,9 +37,11 @@ import {
   writePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 
-import type {
-  ConnectionsBody,
-  SearchConsoleReportBody,
+import {
+  INDEXNOW_KEY_CHECK_PATH,
+  type ConnectionsBody,
+  type IndexNowKeyCheck,
+  type SearchConsoleReportBody,
 } from "../../connections/contract";
 
 import { SeoSettingsPage } from "../SeoSettingsPage";
@@ -129,6 +131,40 @@ const openTab = (name: string) =>
   fireEvent.click(screen.getByRole("link", { name }));
 
 describe("the outputs for AI tools", () => {
+  it("keeps plain-text copies off while the site's Proxy has never run, and says why", async () => {
+    serving({ _rev: "1", productionAddresses: ["https://rext.ai"] });
+    const answered = vi.mocked(usePluginRoute).getMockImplementation();
+    vi.mocked(usePluginRoute).mockImplementation(request =>
+      request.path === "/proxy-status"
+        ? ({
+            data: { state: "not-wired", lastSeen: null },
+            pending: false,
+            error: null,
+            refetch: () => undefined,
+            fetching: false,
+          } as ReturnType<typeof usePluginRoute>)
+        : (answered?.(request) as ReturnType<typeof usePluginRoute>)
+    );
+    window.history.replaceState(
+      null,
+      "",
+      "/admin/plugins/nextlyhq-plugin-seo/settings?tab=crawlers"
+    );
+    render(<SeoSettingsPage />);
+
+    fireEvent.click(switchNamed("Plain-text copies"));
+    await settle();
+
+    expect(switchNamed("Plain-text copies").getAttribute("aria-checked")).toBe(
+      "false"
+    );
+    expect(
+      screen.getByText(
+        /answered by the site's Proxy, which hasn't handled a request yet/
+      )
+    ).toBeTruthy();
+  });
+
   it("shows llms.txt and plain-text copies off by default, at the site's own address", () => {
     serving({ _rev: "1", productionAddresses: ["https://rext.ai"] });
     // A link can land on the tab.
@@ -336,13 +372,34 @@ describe("Search Console on the Connections tab", () => {
   });
 });
 
+/** The key check's answers, in order, as the stand-in server gives them. */
+function keyChecks(...results: IndexNowKeyCheck["result"][]): string[] {
+  const asked: string[] = [];
+  vi.mocked(writePluginRoute).mockImplementation(async request => {
+    // The tab's other checks (the verification codes) answer nothing here.
+    if (request.path !== INDEXNOW_KEY_CHECK_PATH) return undefined;
+    asked.push(request.path);
+    const result = results.shift() ?? "answering";
+    return {
+      at: new Date().toISOString(),
+      result,
+      origin: "https://acme.example",
+    } as never;
+  });
+  return asked;
+}
+
 describe("IndexNow on the Connections tab", () => {
   it("is off by default, saves switched on, and says when search engines refused its key", async () => {
     serving({ _rev: "2" });
+    const asked = keyChecks("answering");
     const { unmount } = render(<SeoSettingsPage />);
     openTab("Connections");
     expect(switchNamed("IndexNow").getAttribute("aria-checked")).toBe("false");
     fireEvent.click(switchNamed("IndexNow"));
+    await settle();
+    expect(asked).toEqual([INDEXNOW_KEY_CHECK_PATH]);
+    expect(screen.getByText("Key file: answering ✓")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await settle();
     expect(sent).toEqual([{ indexNow: true, _rev: "2" }]);
@@ -369,5 +426,73 @@ describe("IndexNow on the Connections tab", () => {
     expect(
       within(row).getByText(/Search engines refused the site's IndexNow key/)
     ).toBeTruthy();
+  });
+
+  it("refuses to switch on while the key file doesn't answer, and switches on once a check again finds it", async () => {
+    serving({ _rev: "2", productionAddresses: ["https://acme.example"] });
+    const asked = keyChecks("not-answering", "answering");
+    render(<SeoSettingsPage />);
+    openTab("Connections");
+
+    fireEvent.click(switchNamed("IndexNow"));
+    await settle();
+    expect(switchNamed("IndexNow").getAttribute("aria-checked")).toBe("false");
+    expect(
+      screen.getByText(
+        "Bing can't read your key at https://acme.example/[key].txt, so it would refuse every notice. Add withNextly() to next.config, then check again."
+      )
+    ).toBeTruthy();
+    // Nothing to save: the switch stayed off.
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Save changes",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await settle();
+    expect(asked).toHaveLength(2);
+    expect(switchNamed("IndexNow").getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText("Key file: answering ✓")).toBeTruthy();
+  });
+
+  it("checks the key file again once a day while IndexNow is on", async () => {
+    const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    serving(
+      { _rev: "3", indexNow: true },
+      {
+        searchConsole: { configured: true },
+        indexNow: { keyCheck: { at: dayAgo, result: "answering" } },
+      }
+    );
+    const asked = keyChecks("not-answering");
+    render(<SeoSettingsPage />);
+    openTab("Connections");
+    await settle();
+
+    expect(asked).toEqual([INDEXNOW_KEY_CHECK_PATH]);
+    expect(screen.getByText(/Bing can't read your key/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+  });
+
+  it("asks nothing while the last check is under a day old", async () => {
+    serving(
+      { _rev: "3", indexNow: true },
+      {
+        searchConsole: { configured: true },
+        indexNow: {
+          keyCheck: { at: new Date().toISOString(), result: "answering" },
+        },
+      }
+    );
+    const asked = keyChecks();
+    render(<SeoSettingsPage />);
+    openTab("Connections");
+    await settle();
+
+    expect(asked).toEqual([]);
+    expect(screen.getByText("Key file: answering ✓")).toBeTruthy();
   });
 });
