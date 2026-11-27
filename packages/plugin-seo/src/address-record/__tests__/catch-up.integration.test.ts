@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { statementsOf, writesAmong } from "../../__tests__/count-statements";
 import { seoPlugin } from "../../plugin";
+import { lastStartWork } from "../../start-work";
 import { catchUp, lastCatchUp } from "../catch-up";
 import { noteKey, putNote } from "../store";
 
@@ -73,7 +74,7 @@ async function boot(dialect: TestDialect) {
   const ctx = seen.ctx;
   if (!ctx) throw new Error("the helper plugin never started");
   // The start-up catch-up of an empty site, finished before the test acts.
-  await lastCatchUp();
+  await lastStartWork();
   return { t: current, ctx };
 }
 

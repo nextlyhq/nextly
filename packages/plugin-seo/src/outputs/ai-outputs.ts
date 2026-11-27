@@ -37,6 +37,7 @@ import type { StatedMarkdown } from "../code-pages/stated";
 import { onceEach, resolveIn, servedAt } from "../languages/versions";
 import { originOf } from "../origin";
 import { isRecord, textOf } from "../plain-values";
+import { proxySeenNotes, type ProxySeenNotes } from "../redirects/proxy-seen";
 import type { SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import { TITLE_FIELDS } from "../settings/patterns";
@@ -1131,7 +1132,8 @@ async function waitForRecord(
  * names its page as canonical, so search engines keep the page.
  */
 export function plainCopyProxyHandler(
-  config: AiOutputsConfig
+  config: AiOutputsConfig,
+  seen: ProxySeenNotes = proxySeenNotes()
 ): PluginProxyHandler {
   return {
     name: "plain-text-copies",
@@ -1145,6 +1147,8 @@ export function plainCopyProxyHandler(
       return asked?.atPage === false && !builtAt(config, asked.url);
     },
     async handle(request, ctx) {
+      // Noted in the background, so the admin can tell the Proxy runs.
+      void seen.note(ctx);
       const asked = copyAskedFor(request);
       if (asked === undefined) return;
       const { url, atPage } = asked;

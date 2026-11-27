@@ -25,9 +25,20 @@ export const SEARCH_CONSOLE_DISCONNECT_PATH =
 /** Where the Connections tab reads what Search Console says about the site. */
 export const SEARCH_CONSOLE_REPORT_PATH = "/connections/search-console/report";
 
-/** How the last attempt to reach an optional service went. */
+/**
+ * Where the Connections tab checks that the site serves its IndexNow key at
+ * its root, making the key first where there is none yet.
+ */
+export const INDEXNOW_KEY_CHECK_PATH = "/connections/indexnow/key-check";
+
+/**
+ * How the last attempt to reach an optional service went. `accepted` is
+ * IndexNow's 202: the notice was received, and the search engines will
+ * check the site's key before they act on it.
+ */
 export type ConnectionResult =
   | "sent"
+  | "accepted"
   | "refused-key"
   | "rate-limited"
   | "no-address"
@@ -43,6 +54,22 @@ export interface ConnectionAttempt {
   urls?: number;
 }
 
+/**
+ * What the last check of the IndexNow key file found, read at the site's
+ * production address: the file answers with the key, it does not, or the
+ * site has no address to read it at. Never the key itself.
+ */
+export interface IndexNowKeyCheck {
+  /** When, as an ISO 8601 time. */
+  at: string;
+  result: "answering" | "not-answering" | "no-address";
+  /** The origin the file was read at, where there was one. */
+  origin?: string;
+}
+
+/** How long a key check stands before the Connections tab checks again. */
+export const KEY_CHECK_STANDS_MS: number = 24 * 60 * 60 * 1000;
+
 /** Search Console, as the Connections tab shows it. Never a credential. */
 export interface SearchConsoleState {
   /** Whether the site's configuration names a Google sign-in to connect with. */
@@ -57,10 +84,15 @@ export interface SearchConsoleState {
 export interface ConnectionsBody {
   searchConsole: SearchConsoleState;
   /**
-   * IndexNow: whether the settings switch it on, and its last attempt to
-   * tell search engines, where it made one.
+   * IndexNow: whether the settings switch it on, its last attempt to tell
+   * search engines, and the last check of its key file, where there were
+   * any.
    */
-  indexNow: { switchedOn?: boolean; last?: ConnectionAttempt };
+  indexNow: {
+    switchedOn?: boolean;
+    last?: ConnectionAttempt;
+    keyCheck?: IndexNowKeyCheck;
+  };
 }
 
 /** What the connect route answers: where to send the person to sign in. */
@@ -126,6 +158,16 @@ export function indexNowLine(
           : `, about ${last.urls} ${last.urls === 1 ? "page" : "pages"}`;
       return { ok: true, text: `Last told search engines${at}${pages}.` };
     }
+    case "accepted": {
+      const pages =
+        last.urls === undefined
+          ? ""
+          : `, about ${last.urls} ${last.urls === 1 ? "page" : "pages"}`;
+      return {
+        ok: true,
+        text: `Search engines received the last notice${at}${pages}. They read the site's key before acting on it.`,
+      };
+    }
     case "refused-key":
       return {
         ok: false,
@@ -145,6 +187,31 @@ export function indexNowLine(
       return {
         ok: false,
         text: `IndexNow could not be reached${at}. Pages are not affected; later changes are sent again.`,
+      };
+  }
+}
+
+/**
+ * What the last key check says, in plain words, for the IndexNow row: `ok`
+ * where the key file answers. Names the file's address with `[key]` for the
+ * key, which the admin is never told.
+ */
+export function keyCheckLine(check: IndexNowKeyCheck): {
+  ok: boolean;
+  text: string;
+} {
+  switch (check.result) {
+    case "answering":
+      return { ok: true, text: "Key file: answering ✓" };
+    case "no-address":
+      return {
+        ok: false,
+        text: "No production address is saved, so the key file can't be checked. Save it on General, then check again.",
+      };
+    default:
+      return {
+        ok: false,
+        text: `Bing can't read your key at ${check.origin ?? "the site"}/[key].txt, so it would refuse every notice. Add withNextly() to next.config, then check again.`,
       };
   }
 }

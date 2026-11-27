@@ -22,6 +22,7 @@ import type { PluginContext, PluginProxyHandler } from "@nextlyhq/plugin-sdk";
 import { addNoteOnce, noteKey, readNotes } from "../address-record/store";
 import { productionAddressesOf } from "../canonical";
 import { keptValue } from "../kept-value";
+import { proxySeenNotes, type ProxySeenNotes } from "../redirects/proxy-seen";
 import type { ReadRules } from "../resolver/provider";
 
 /**
@@ -138,7 +139,10 @@ async function fromDatabase(
  * and kept: read again in the background every half minute, so no later
  * request waits on the database.
  */
-export function stagingGuard(readRules: ReadRules): PluginProxyHandler {
+export function stagingGuard(
+  readRules: ReadRules,
+  seen: ProxySeenNotes = proxySeenNotes()
+): PluginProxyHandler {
   let latest: PluginContext | undefined;
   const judged = keptValue(
     () =>
@@ -150,6 +154,8 @@ export function stagingGuard(readRules: ReadRules): PluginProxyHandler {
   return {
     name: "staging-guard",
     async handle(request, ctx) {
+      // Noted in the background, so the admin can tell the Proxy runs.
+      void seen.note(ctx);
       const origin = new URL(request.url).origin;
       const fromEnvironment = productionAddressesOf(undefined);
       if (fromEnvironment.length > 0) {

@@ -171,6 +171,24 @@ const ROOT_FILES = [
   "/llms-full.txt",
 ] as const;
 
+/**
+ * The IndexNow key file: a key of 32 lower-case hex characters, served at the
+ * site's root, where the protocol requires it to prove the whole host. Like
+ * the files above, the site's own (a `public/` file, a route, a rewrite of
+ * its own) comes first, and a plugin route mounted at
+ * {@link KEY_FILE_ROUTE_PREFIX} answers it otherwise, with no Proxy needed.
+ */
+const KEY_FILE_SOURCE = "/:key([0-9a-f]{32}).txt";
+
+/**
+ * Where the key file is answered behind the API handler: `<prefix>/<key>`. A
+ * plugin's root route at `/indexnow-key/:key` answers it.
+ */
+export const KEY_FILE_ROUTE_PREFIX = "/indexnow-key";
+
+/** A key file's address, to ask whether the site rewrites such addresses itself. */
+const KEY_FILE_SAMPLE = `/${"0".repeat(32)}.txt`;
+
 /** Options for {@link withNextly}. */
 export interface WithNextlyOptions {
   /**
@@ -274,9 +292,26 @@ function withRootFileRewrites(
           )
       )
       .map(file => ({ source: file, destination: `${apiRoute}${file}` }));
+    // The key file, on the same terms: left to a site that rewrites such an
+    // address itself.
+    const keyFileRewrites = all.some(
+      rule =>
+        typeof rule.source === "string" && matches(rule.source, KEY_FILE_SAMPLE)
+    )
+      ? []
+      : [
+          {
+            source: KEY_FILE_SOURCE,
+            destination: `${apiRoute}${KEY_FILE_ROUTE_PREFIX}/:key`,
+          },
+        ];
     return {
       beforeFiles: phases.beforeFiles ?? [],
-      afterFiles: [...(phases.afterFiles ?? []), ...rootRewrites],
+      afterFiles: [
+        ...(phases.afterFiles ?? []),
+        ...rootRewrites,
+        ...keyFileRewrites,
+      ],
       fallback: phases.fallback ?? [],
     };
   };

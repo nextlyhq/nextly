@@ -126,23 +126,30 @@ export function productionAddressProblems(
 
 /** What a developer adds so the site's Proxy hands requests to Nextly. */
 export const PROXY_WIRING_NOTE =
-  'Redirects are saved but not served: proxy.ts is not wired. Add src/proxy.ts with `export const proxy = createNextlyProxy(nextlyConfig)` (from "nextly/runtime") and a matcher that leaves out _next/static and _next/image, or call it from the proxy.ts the site has. See the SEO plugin guide, "Running redirects".';
+  'Redirects and plain-text copies are saved but not served: proxy.ts is not wired. Add src/proxy.ts with `export const proxy = composeProxy(createNextlyProxy(nextlyConfig), siteProxy)` (both from "nextly/runtime"; leave out siteProxy where the site has no Proxy of its own) and `export const config = { matcher: [...] }` with the pattern `nextlyProxyMatcher` holds, written out. See the SEO plugin guide, "Running redirects".';
 
 /**
- * The site's redirects going unserved, where `redirects` are saved and the
- * Proxy never ran or has been quiet for a week. A site with no redirect
- * saved has nothing unserved yet, so nothing is listed.
+ * What goes unserved while the Proxy never ran or has been quiet for a week:
+ * the `redirects` saved, and the plain-text copies where `copies` are on. A
+ * site with neither has nothing unserved yet, so nothing is listed.
  */
 export function proxyProblems(
   status: ProxyStatus,
-  redirects: number
+  redirects: number,
+  copies = false
 ): Problem[] {
-  if (status.state === "running" || redirects === 0) return [];
+  if (status.state === "running" || (redirects === 0 && !copies)) return [];
   const count = `${redirects} ${redirects === 1 ? "redirect is" : "redirects are"}`;
+  const unserved =
+    redirects === 0
+      ? "Plain-text copies are switched on but not served"
+      : copies
+        ? `${count} saved and plain-text copies switched on, but neither is served`
+        : `${count} saved but not served`;
   const what =
     status.state === "not-wired"
-      ? `${count} saved but not served: proxy.ts is not wired, so no request has reached the site's Proxy.`
-      : `${count} saved but not served: no request has reached the site's Proxy since ${status.lastSeen?.slice(0, 10) ?? "it last ran"}.`;
+      ? `${unserved}: proxy.ts is not wired, so no request has reached the site's Proxy.`
+      : `${unserved}: no request has reached the site's Proxy since ${status.lastSeen?.slice(0, 10) ?? "it last ran"}.`;
   return [
     {
       kind: "proxyNotWired",

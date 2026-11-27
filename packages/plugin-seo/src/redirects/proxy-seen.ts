@@ -61,15 +61,20 @@ export async function recordProxySeen(
   await putNote(ctx, SEEN_KEY, at.toISOString());
 }
 
+/** What notes that the Proxy runs, shared by every handler of one server. */
+export interface ProxySeenNotes {
+  note(ctx: PluginContext): Promise<void>;
+}
+
 /**
  * A note-taker for one server: `note` records the Proxy as seen the first
- * time and then at most every {@link PROXY_NOTE_EVERY_MS}. The Proxy does not
+ * time and then at most every {@link PROXY_NOTE_EVERY_MS}. One is shared by
+ * every handler the plugin gives the Proxy, so a Proxy running any of them
+ * is seen, and a server notes once an hour however many run. The Proxy does not
  * wait for it; the promise it answers settles once the note is made or
  * failed, and never rejects. `now` is the clock, replaced by tests.
  */
-export function proxySeenNotes(now: () => number = Date.now): {
-  note(ctx: PluginContext): Promise<void>;
-} {
+export function proxySeenNotes(now: () => number = Date.now): ProxySeenNotes {
   let notedAt: number | undefined;
   return {
     note(ctx) {

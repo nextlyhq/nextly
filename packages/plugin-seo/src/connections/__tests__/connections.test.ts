@@ -3,25 +3,67 @@
  * the one request a notice is, the property that is the site, and the state
  * the Connections tab is told, which never carries a credential.
  */
+import { withNextly } from "nextly/next";
 import { describe, expect, it } from "vitest";
 
-import { resultOfStatus } from "../indexnow";
+import { indexNowLine, keyCheckLine } from "../contract";
+import { INDEXNOW_KEY_ROUTE_PATH, resultOfStatus } from "../indexnow";
 import { INDEXNOW_ENDPOINT, sendIndexNow } from "../indexnow-send";
 import { propertyFor, searchConsoleState } from "../search-console";
 
 describe("what IndexNow's answer means", () => {
-  it("takes 200 and 202 as sent, 403 and 422 as a refused key, 429 as a rate limit", () => {
+  it("takes 200 as sent, 202 as accepted with the key not checked yet, 403 and 422 as a refused key, 429 as a rate limit", () => {
     expect(
       [200, 202, 400, 403, 422, 429, 500].map(status => resultOfStatus(status))
     ).toEqual([
       "sent",
-      "sent",
+      "accepted",
       "failed",
       "refused-key",
       "refused-key",
       "rate-limited",
       "failed",
     ]);
+  });
+});
+
+describe("what the IndexNow row says", () => {
+  it("says an accepted notice waits on the key, never that it was told", () => {
+    const line = indexNowLine({
+      at: "2026-01-01T00:00:00.000Z",
+      result: "accepted",
+      urls: 1,
+    });
+    expect(line?.ok).toBe(true);
+    expect(line?.text).toContain("read the site's key");
+  });
+
+  it("names the key file's address without the key", () => {
+    expect(
+      keyCheckLine({
+        at: "2026-01-01T00:00:00.000Z",
+        result: "not-answering",
+        origin: "https://acme.example",
+      }).text
+    ).toBe(
+      "Bing can't read your key at https://acme.example/[key].txt, so it would refuse every notice. Add withNextly() to next.config, then check again."
+    );
+    expect(
+      keyCheckLine({ at: "2026-01-01T00:00:00.000Z", result: "answering" })
+    ).toEqual({ ok: true, text: "Key file: answering ✓" });
+  });
+});
+
+describe("the IndexNow key file's route", () => {
+  it("is where withNextly's rewrite sends a key file, behind the API handler", async () => {
+    const config = withNextly({}) as { rewrites: () => Promise<unknown> };
+    const { afterFiles } = (await config.rewrites()) as {
+      afterFiles: { source: string; destination: string }[];
+    };
+    const rule = afterFiles.find(
+      each => each.source.endsWith(".txt") && each.source.includes(":key")
+    );
+    expect(rule?.destination).toBe(`/admin/api${INDEXNOW_KEY_ROUTE_PATH}`);
   });
 });
 

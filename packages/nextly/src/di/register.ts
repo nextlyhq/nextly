@@ -28,7 +28,10 @@ import { join, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  PoolConfig,
+  SupportedDialect,
+} from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 import type { AnyRelations } from "drizzle-orm";
 
@@ -461,6 +464,15 @@ export interface NextlyServiceConfig {
    * If not provided, created automatically from environment variables.
    */
   adapter?: DrizzleAdapter;
+
+  /**
+   * The pool the adapter created from the environment takes, each setting
+   * given here winning over the `DB_POOL_*` variables. For a start whose
+   * process serves one narrow purpose, as the site's Proxy does in a
+   * serverless function of its own, so it holds fewer connections than the
+   * app's functions do. Ignored where `adapter` is given.
+   */
+  databasePool?: PoolConfig;
 
   /** Storage plugins for cloud storage providers (S3, Vercel Blob, etc.). */
   storagePlugins?: StoragePlugin[];
@@ -1026,6 +1038,7 @@ async function registerServicesOnce(
 
   const {
     adapter: providedAdapter,
+    databasePool,
     storagePlugins,
     imageProcessor,
     logger,
@@ -1106,7 +1119,10 @@ async function registerServicesOnce(
     providedAdapter,
     resolvedLogger,
     transformedConfig.db?.postgres?.schema,
-    { createsSchema: structure.mayDefine }
+    {
+      createsSchema: structure.mayDefine,
+      ...(databasePool === undefined ? {} : { pool: databasePool }),
+    }
   );
 
   // ----------------------------------------
@@ -3854,6 +3870,8 @@ async function resolveAdapter(
      * one is a database `nextly migrate` has not set up, and is refused so.
      */
     createsSchema: boolean;
+    /** The pool settings the start asks for, over the environment's. */
+    pool?: PoolConfig;
   }
 ): Promise<DrizzleAdapter> {
   if (providedAdapter) {
@@ -3882,14 +3900,15 @@ async function resolveAdapter(
     env.DB_DIALECT === "postgresql";
   let adapter: DrizzleAdapter;
   try {
-    adapter = await createAdapterFromEnv(
-      postgresSchema !== undefined
+    adapter = await createAdapterFromEnv({
+      ...(postgresSchema !== undefined
         ? {
             schema: postgresSchema,
             ...(schemaReadOnly ? { readOnly: true } : {}),
           }
-        : undefined
-    );
+        : {}),
+      ...(options.pool === undefined ? {} : { pool: options.pool }),
+    });
   } catch (error) {
     if (schemaReadOnly && carriesSqlState(error, INVALID_SCHEMA_NAME)) {
       const { databaseNotSetUp } = await import("../init/first-run");

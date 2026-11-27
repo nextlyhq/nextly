@@ -23,7 +23,7 @@ import {
   holdNextStatement,
   statementsOf,
 } from "../../__tests__/count-statements";
-import { lastCatchUp } from "../../address-record/catch-up";
+import { lastStartWork } from "../../start-work";
 import { seoPlugin } from "../../plugin";
 import { putRedirect } from "../../redirects/store";
 import { NOT_FOUND_SLUG } from "../collection";
@@ -57,6 +57,9 @@ async function boot(dialect: TestDialect, languages = false) {
   });
   const seo = keptSeoContext();
   if (!seo) throw new Error("the SEO plugin never started");
+  // The start's own background work, which moves the log, done first: a
+  // test that counts the log's statements counts its own alone.
+  await lastStartWork();
   return { t: current, seo };
 }
 
@@ -182,8 +185,6 @@ describe.each(getConfiguredTestDialects())(
 
     it("counts a request for an address already logged in one statement, and a first in at most three", async () => {
       const { t, seo } = await boot(dialect);
-      // The start's own background work finished first, outside the count.
-      await lastCatchUp();
       await moveLoggedRows(seo);
 
       const first = await statementsOf(dialect, () =>
