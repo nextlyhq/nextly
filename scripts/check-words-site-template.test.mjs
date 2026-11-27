@@ -34,6 +34,7 @@ describe("the words 'site template'", () => {
         "packages/create-nextly-app/src",
         "packages/nextly/src",
         "packages/plugin-form-builder/src",
+        "templates",
       ])
     );
   });
@@ -43,13 +44,28 @@ describe("the words 'site template'", () => {
     // folder: a clean result from the real one says nothing on its own.
     const root = mkdtempSync(join(tmpdir(), "site-template-words-"));
     try {
+      // The shipped kinds of file the real tree holds, each with the words.
+      const shipped = [
+        "AGENTS.md.template",
+        "globals.css",
+        "page.md",
+        "seed.sql",
+      ];
       for (const folder of SCANNED) {
         mkdirSync(join(root, folder), { recursive: true });
-        writeFileSync(join(root, folder, "page.md"), "Pick a site template.\n");
-        writeFileSync(join(root, folder, "clean.ts"), 'const slug = "site-templates";\n');
+        for (const name of shipped) {
+          writeFileSync(join(root, folder, name), "Pick a site template.\n");
+        }
+        writeFileSync(
+          join(root, folder, "clean.ts"),
+          'const slug = "site-templates";\n'
+        );
       }
-      expect(siteTemplateWordsInRepository(root)).toEqual(
-        SCANNED.map(folder => `${folder}/page.md:1: Pick a site template.`)
+      // Sorted, since the order a folder lists its files in is the platform's.
+      expect([...siteTemplateWordsInRepository(root)].sort()).toEqual(
+        SCANNED.flatMap(folder =>
+          shipped.map(name => `${folder}/${name}:1: Pick a site template.`)
+        ).sort()
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -63,6 +79,11 @@ describe("the words 'site template'", () => {
       ' * known: may be sent from code". A site template with neither reads "Not sent',
       '  it("says a site template with no senders is not sent by anything yet", () => {',
       "<p>Site Templates</p>",
+      // One word linked or styled renders the same words.
+      "Choose a site [template](/docs/templates) to start from.",
+      "Choose a site <em>template</em> to start from.",
+      "Choose a [site](/docs/sites) template to start from.",
+      "Choose a `site` template to start from.",
     ];
     for (const text of cases) {
       expect(siteTemplateWordsIn("fixture.ts", text)).toHaveLength(1);

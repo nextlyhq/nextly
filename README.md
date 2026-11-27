@@ -38,7 +38,7 @@
 
 Nextly is an open-source content platform for Next.js.
 
-Developers define the content model in TypeScript, or build it in the admin with the Visual Schema Builder; either way it is the same data model. Your team then composes pages in the Visual Page Builder, translates them, keeps a version history, and schedules what goes live. MIT licensed, self-hosted: it runs inside your own Next.js app, on your own PostgreSQL or MySQL database, or SQLite for local work.
+Developers define the content model in TypeScript, or build it in the admin with the Visual Schema Builder; either way it is the same data model. Your team then composes pages in the Visual Page Builder, translates them, keeps a version history, and schedules what goes live. MIT licensed, self-hosted: it runs inside your own Next.js app, on your own PostgreSQL or MySQL database, or on SQLite, which is great on your own machine and on a single server; on Vercel, choose PostgreSQL.
 
 ## Why Nextly?
 
@@ -124,11 +124,11 @@ Set `DATABASE_URL` (and `DB_DIALECT`) in your `.env`; Nextly picks the dialect a
 
 ### Database adapters
 
-| Package                        | Description                                     |
-| ------------------------------ | ----------------------------------------------- |
-| **@nextlyhq/adapter-postgres** | PostgreSQL adapter (recommended for production) |
-| **@nextlyhq/adapter-mysql**    | MySQL adapter                                   |
-| **@nextlyhq/adapter-sqlite**   | SQLite adapter (local demos only)               |
+| Package                        | Description                                                                                     |
+| ------------------------------ | ----------------------------------------------------------------------------------------------- |
+| **@nextlyhq/adapter-postgres** | PostgreSQL adapter (recommended for production)                                                 |
+| **@nextlyhq/adapter-mysql**    | MySQL adapter                                                                                   |
+| **@nextlyhq/adapter-sqlite**   | SQLite adapter (great on your own machine and on a single server; on Vercel, choose PostgreSQL) |
 
 ### Storage adapters
 
@@ -173,11 +173,11 @@ Nextly has a plugin SDK, in alpha: pin exact versions. The Visual Page Builder i
 
 ### Database support
 
-| Database                                                  | Minimum | Notes                                                                                                    |
-| --------------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------- |
-| [PostgreSQL](https://nextlyhq.com/docs/database/postgres) | 15.0+   | Standard PG, Neon (also reachable via Vercel Marketplace), Supabase, RDS, Aurora PG, Railway, Cloud SQL. |
-| [MySQL](https://nextlyhq.com/docs/database/mysql)         | 8.0+    | MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess on best-effort.                                         |
-| [SQLite](https://nextlyhq.com/docs/database/sqlite)       | 3.38+   | Bundled with `better-sqlite3`. Local demos only.                                                         |
+| Database                                                  | Minimum | Notes                                                                                                          |
+| --------------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| [PostgreSQL](https://nextlyhq.com/docs/database/postgres) | 15.0+   | Standard PG, Neon (also reachable via Vercel Marketplace), Supabase, RDS, Aurora PG, Railway, Cloud SQL.       |
+| [MySQL](https://nextlyhq.com/docs/database/mysql)         | 8.0+    | MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess on best-effort.                                               |
+| [SQLite](https://nextlyhq.com/docs/database/sqlite)       | 3.38+   | Bundled with `better-sqlite3`. Great on your own machine and on a single server; on Vercel, choose PostgreSQL. |
 
 See the [database support docs](https://nextlyhq.com/docs/database/support) for the full version policy and cloud-provider notes.
 
@@ -216,15 +216,15 @@ Nextly draws inspiration from each of these projects. The table compares Nextly 
 
 Checked on 2026-10-16 against each project's own documentation, linked below.
 
-| Dimension                      | Nextly                                  | Payload                   | Strapi v5                                       | Sanity                                                  |
-| ------------------------------ | --------------------------------------- | ------------------------- | ----------------------------------------------- | ------------------------------------------------------- |
-| License                        | MIT                                     | MIT                       | MIT (+ EE)                                      | MIT (Studio); proprietary SaaS (Content Lake)           |
-| Self-hostable                  | yes                                     | yes                       | yes                                             | no (the Studio can be; the Content Lake is hosted SaaS) |
-| Hosted in your Next.js app     | yes                                     | yes                       | no (separate Node server)                       | no (Studio mounts in your app; data is hosted SaaS)     |
-| Code-first schema              | yes                                     | yes                       | partial (`strapi generate` writes JSON schemas) | yes                                                     |
-| Visual schema builder          | yes                                     | no                        | yes (in development only)                       | no                                                      |
-| Both code-first **and** visual | yes                                     | no                        | partial                                         | no                                                      |
-| Database / storage             | Postgres, MySQL (SQLite for local work) | Postgres, MongoDB, SQLite | Postgres, MySQL/MariaDB, SQLite                 | Sanity Content Lake (managed)                           |
+| Dimension                      | Nextly                  | Payload                   | Strapi v5                                       | Sanity                                                  |
+| ------------------------------ | ----------------------- | ------------------------- | ----------------------------------------------- | ------------------------------------------------------- |
+| License                        | MIT                     | MIT                       | MIT (+ EE)                                      | MIT (Studio); proprietary SaaS (Content Lake)           |
+| Self-hostable                  | yes                     | yes                       | yes                                             | no (the Studio can be; the Content Lake is hosted SaaS) |
+| Hosted in your Next.js app     | yes                     | yes                       | no (separate Node server)                       | no (Studio mounts in your app; data is hosted SaaS)     |
+| Code-first schema              | yes                     | yes                       | partial (`strapi generate` writes JSON schemas) | yes                                                     |
+| Visual schema builder          | yes                     | no                        | yes (in development only)                       | no                                                      |
+| Both code-first **and** visual | yes                     | no                        | partial                                         | no                                                      |
+| Database / storage             | Postgres, MySQL, SQLite | Postgres, MongoDB, SQLite | Postgres, MySQL/MariaDB, SQLite                 | Sanity Content Lake (managed)                           |
 
 "Partial" for Strapi: a content type is a JSON schema file, written by `strapi generate` or by the admin's Content-type Builder, and the builder works in development only.
 
