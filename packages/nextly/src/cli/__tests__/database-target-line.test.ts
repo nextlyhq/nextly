@@ -21,7 +21,21 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { detectIsCi } from "@nextlyhq/telemetry/ci";
+
 import { NEXTLY_RUN_TIMEOUT, runNextly } from "./helpers/run-nextly";
+
+/**
+ * Every variable of this process the CI and host detector reads as a
+ * pipeline (GitHub Actions sets `GITHUB_ACTIONS` beside `CI`), cleared, so a
+ * run outside a pipeline is one wherever the test runs. Read from the
+ * detector itself, so a marker it learns is cleared too.
+ */
+const OUTSIDE_A_PIPELINE = Object.fromEntries(
+  Object.keys(process.env)
+    .filter(name => detectIsCi({ [name]: process.env[name] }))
+    .map(name => [name, undefined])
+);
 
 const SECRETS = ["appuser", "s3cr3t-pass", "hunter2-query", "sslmode"];
 const POSTGRES =
@@ -59,6 +73,7 @@ async function run(
     DB_DIALECT: undefined,
     NODE_ENV: undefined,
     CI: undefined,
+    ...OUTSIDE_A_PIPELINE,
     ...env,
   });
   const lines = result.stderr.split("\n").filter(line => line.trim() !== "");

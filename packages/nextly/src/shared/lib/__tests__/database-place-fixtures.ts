@@ -165,5 +165,16 @@ export const DATABASE_PLACE_FIXTURES: readonly DatabasePlaceFixture[] = [
     url: "file:./app.db?mode=ro",
     place: "live",
   },
+  {
+    // node-postgres keeps the last value and mysql2 the first.
+    name: "a host parameter given twice, differently",
+    url: "postgresql://app:pw@localhost/shop?host=localhost&host=db.prod.neon.tech",
+    place: "live",
+  },
+  {
+    name: "a host parameter given twice, the same",
+    url: "postgresql://app:pw@db.prod.neon.tech/shop?host=localhost&host=localhost",
+    place: "local",
+  },
   { name: "no URL", url: undefined, place: "live" },
 ];

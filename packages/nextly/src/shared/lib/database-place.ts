@@ -204,6 +204,23 @@ function partsReadable(parts: ServerParts, socket: string | null): boolean {
   );
 }
 
+/** A parameter's value given twice or more, differently: no one reading of it. */
+const AMBIGUOUS = Symbol("ambiguous");
+
+/**
+ * The value the URL gives parameter `name`: null where it gives none, and
+ * `AMBIGUOUS` where it gives several that differ, which drivers read
+ * differently (node-postgres keeps the last, mysql2 the first).
+ */
+function oneParameter(
+  parsed: URL,
+  name: string
+): string | null | typeof AMBIGUOUS {
+  const values = parsed.searchParams.getAll(name);
+  if (values.length === 0) return null;
+  return values.every(value => value === values[0]) ? values[0] : AMBIGUOUS;
+}
+
 /**
  * The host, port and database the driver connects with: the URL's own, a
  * PostgreSQL `host` or `port` parameter over them, MySQL's `socketPath`
@@ -221,18 +238,17 @@ function serverParts(
   const database = decoded(parsed.pathname.replace(/^\//, ""));
   if (named === undefined || database === undefined) return undefined;
   if (credentialsMisread(parsed)) return undefined;
+  const pg = dialect === "postgresql";
+  const host = pg ? oneParameter(parsed, "host") : null;
+  const port = pg ? oneParameter(parsed, "port") : null;
+  const socket = pg ? null : oneParameter(parsed, "socketPath");
+  if (host === AMBIGUOUS || port === AMBIGUOUS || socket === AMBIGUOUS) {
+    return undefined;
+  }
   const defaults = driverDefaults(dialect, env);
-  const parameter = (name: string) =>
-    dialect === "postgresql" ? parsed.searchParams.get(name) : null;
-  const socket =
-    dialect === "mysql" ? parsed.searchParams.get("socketPath") : null;
   const parts = {
-    host:
-      socket ||
-      parameter("host") ||
-      (named === NO_HOST ? "" : named) ||
-      defaults.host,
-    port: parameter("port") || parsed.port || defaults.port,
+    host: socket || host || (named === NO_HOST ? "" : named) || defaults.host,
+    port: port || parsed.port || defaults.port,
     database: database || defaults.database,
   };
   return partsReadable(parts, socket) ? parts : undefined;
