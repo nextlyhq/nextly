@@ -47,17 +47,17 @@ export const SCANNED = [
 
 /** Files a person or an agent reads: source, tests and docs. */
 const READ_FILE = /\.(?:[cm]?[jt]sx?|mdx?|json)$/;
-const SKIPPED_DIR = new Set(["node_modules", "dist", ".turbo"]);
+const SKIPPED_DIR = new Set(["node_modules", "dist", ".turbo", ".next"]);
 
 /**
  * "site" and "template(s)" as a reader sees them: with spaces, a comment's
  * `*` or `//`, an HTML tag (`site <em>template</em>`), a link's bracket
- * (`site [template](…)`) or the end of a link (`[site](…) template`) between
- * them. So a comment wrapped between the two, or one word linked or styled,
- * is still read.
+ * (`site [template](…)`), the end of a link (`[site](…) template`) or a code
+ * span's backtick between them. So a comment wrapped between the two, or one
+ * word linked, styled or set as code, is still read.
  */
 const SITE_TEMPLATE =
-  /\bsite(?:\s|\*|\/\/|<[^>\n]*>|\[|\]\([^)\n]*\))+templates?\b/gi;
+  /\bsite(?:\s|\*|`|\/\/|<[^>\n]*>|\[|\]\([^)\n]*\))+templates?\b/gi;
 
 /** Every read file beneath `at`, or `at` itself when it is a file. */
 function readFiles(at) {

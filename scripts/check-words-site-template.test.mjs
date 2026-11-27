@@ -71,6 +71,7 @@ describe("the words 'site template'", () => {
       "Choose a site [template](/docs/templates) to start from.",
       "Choose a site <em>template</em> to start from.",
       "Choose a [site](/docs/sites) template to start from.",
+      "Choose a `site` template to start from.",
     ];
     for (const text of cases) {
       expect(siteTemplateWordsIn("fixture.ts", text)).toHaveLength(1);

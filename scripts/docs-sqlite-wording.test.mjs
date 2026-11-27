@@ -35,18 +35,25 @@ const PAGES = [
 const OLD_WORDINGS = [
   /\bdemos? only\b/i,
   /\blocal demos?\b/i,
+  /\bquick (?:demos?|experiments?)\b/i,
   /not recommended for serious/i,
   /one-off (?:local )?demos?\b/i,
   /\bfor local work\b/i,
+  /\blocal only\b/i,
+  /\bnot for production\b/i,
   /\bnot localhost\b.*\bsqlite\b/i,
 ];
 
 /**
- * Words that pass a verdict on what SQLite is fit for. A sentence naming
- * SQLite with one of these is a description of it.
+ * Words that pass a verdict on what a database is fit for. Plain
+ * "production" is not one: "In production, SQLite runs migrations in one
+ * transaction" states a fact; "not for production" judges.
  */
 const VERDICT =
-  /\b(?:demos?|local (?:work|development|only)|serious|recommended|not suitable|single server|vercel|production)\b/i;
+  /\b(?:demos?|local (?:work|development|only)|serious|recommended|not suitable|single server|vercel|(?:not|never) (?:for|in) production|prototyp\w*|experiments?)\b/gi;
+
+/** A database's name, as pages spell it in prose, code and addresses. */
+const DATABASE = /(?<![a-z])(sqlite|postgres(?:ql)?|mysql|mariadb)(?![a-z])/gi;
 
 /** A repository-relative path, with forward slashes whatever the platform spells. */
 const repoPath = abs => relative(repoRoot, abs).split("\\").join("/");
@@ -66,7 +73,13 @@ function readerPages() {
     }
   };
   walk(resolve(repoRoot, "docs"));
-  out.push("README.md");
+  out.push("README.md", "templates/README.md");
+  // The agent guides every new project is given.
+  for (const guide of ["AGENTS.md.template", "CLAUDE.md.template"]) {
+    if (existsSync(resolve(repoRoot, "templates/base", guide))) {
+      out.push(`templates/base/${guide}`);
+    }
+  }
   for (const base of ["packages", "templates"]) {
     for (const entry of readdirSync(resolve(repoRoot, base), {
       withFileTypes: true,
@@ -106,29 +119,50 @@ export function oldWordingsIn(file, text) {
     );
 }
 
-/** Whether a piece of text names SQLite with a verdict. */
-const judgesSqlite = text => /\bsqlite\b/i.test(text) && VERDICT.test(text);
+/**
+ * Whether a piece of text passes a verdict on SQLite: some verdict in it sits
+ * nearest to SQLite among the databases it names. "PostgreSQL (recommended
+ * for production), MySQL, or SQLite" passes its verdict to PostgreSQL;
+ * "SQLite adapter (not for production)" passes it to SQLite.
+ */
+function judgesSqlite(text) {
+  const names = [...text.matchAll(DATABASE)];
+  if (!names.some(name => name[1].toLowerCase() === "sqlite")) return false;
+  return [...text.matchAll(VERDICT)].some(verdict => {
+    const nearest = names.reduce((best, name) =>
+      Math.abs(name.index - verdict.index) <
+      Math.abs(best.index - verdict.index)
+        ? name
+        : best
+    );
+    return nearest[1].toLowerCase() === "sqlite";
+  });
+}
 
 /**
- * The sentences of a page that describe SQLite in other words. Each sentence
- * is read with the agreed wording taken out, one clause at a time, and counts
- * when a clause names SQLite with a verdict. So a verdict added beside the
- * agreed wording ("…choose PostgreSQL, and SQLite is recommended for
- * production") counts, while a verdict about something else in the same
- * sentence does not: a parenthesis ("PostgreSQL (recommended for
- * production), MySQL, or SQLite"), another table cell, or the clause after a
- * semicolon or a dash. A sentence ends at a full stop, a question or
- * exclamation mark, or a line break; commas do not end a clause, so "Pick
- * SQLite only locally, never in production" is read whole.
+ * What a sentence says about SQLite, judged in the parts it is made of. A
+ * table row whose first cell names SQLite is about SQLite as a whole, so a
+ * verdict in any later cell counts; any other row is read cell by cell, so
+ * a "recommended" column beside "One of `postgresql`, `mysql`, `sqlite`" is
+ * not a verdict on SQLite.
+ */
+function partsOf(sentence) {
+  if (!sentence.trimStart().startsWith("|")) return [sentence];
+  const cells = sentence.split("|").filter(cell => cell.trim() !== "");
+  return /sqlite/i.test(cells[0] ?? "") ? [sentence] : cells;
+}
+
+/**
+ * The sentences of a page that describe SQLite in other words: read with the
+ * agreed wording taken out, they still pass a verdict on SQLite. So a verdict
+ * added beside the agreed wording ("…choose PostgreSQL, and SQLite is
+ * recommended for production") counts. A sentence ends at a full stop, a
+ * question or exclamation mark, or a line break.
  */
 export function otherDescriptionsIn(text) {
   return text
     .split(/(?<=[.!?])\s+|\n/)
-    .filter(sentence =>
-      withoutSentence(sentence)
-        .split(/[;()|]|--|—/)
-        .some(judgesSqlite)
-    )
+    .filter(sentence => partsOf(withoutSentence(sentence)).some(judgesSqlite))
     .map(sentence => sentence.trim());
 }
 
@@ -171,6 +205,10 @@ describe("docs: how SQLite is described", () => {
       "on your own PostgreSQL or MySQL database, or SQLite for local work.",
       "points to a production database (not localhost / SQLite).",
       "pnpm add @nextlyhq/adapter-sqlite better-sqlite3     # SQLite (local demos)",
+      "Use SQLite for quick experiments.",
+      "SQLite works for a quick demo.",
+      "| SQLite | Local only |",
+      "SQLite adapter (not for production)",
     ]) {
       expect(oldWordingsIn("page.mdx", line)).toHaveLength(1);
     }
@@ -214,5 +252,28 @@ describe("docs: how SQLite is described", () => {
         `PostgreSQL (recommended for production), MySQL, or SQLite (${SENTENCE})`
       )
     ).toEqual([]);
+  });
+
+  it.each([
+    "SQLite adapter (not for production)",
+    "| [SQLite](x) | 3.38+ | Not recommended for production. |",
+    "| SQLite | Local only |",
+    `SQLite is ${SENTENCE} (but not in production).`,
+    "Pick SQLite only when you are prototyping.",
+  ])("would catch the verdict in %s", line => {
+    expect(otherDescriptionsIn(line)).toHaveLength(1);
+  });
+
+  it.each([
+    // A plugin's own track record, beside SQLite named as a test harness.
+    "exercised it in production** (against a real database, not just the SQLite test harness).",
+    // A table row about a setting, whose "recommended" column is the setting's.
+    "| `DB_DIALECT`   | recommended | (auto-detected from URL) | One of `postgresql`, `mysql`, `sqlite`.",
+    // A list whose "(recommended)" belongs to the PostgreSQL adapter before it.
+    "- [`@nextlyhq/adapter-postgres`](https://github.com/x/adapter-postgres) (recommended), [`@nextlyhq/adapter-mysql`](https://github.com/x/adapter-mysql), [`@nextlyhq/adapter-sqlite`](https://github.com/x/adapter-sqlite): database adapters",
+    // A fact about SQLite in production, which passes no verdict.
+    "In production, SQLite runs migrations in one transaction.",
+  ])("would leave %s alone", line => {
+    expect(otherDescriptionsIn(line)).toEqual([]);
   });
 });
