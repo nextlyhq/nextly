@@ -1376,3 +1376,342 @@ describe("the space a container puts between its children", () => {
     expect(labels(container)).toEqual(["18"]);
   });
 });
+
+describe("small blocks keep their own label and color under the bands", () => {
+  /*
+   * jsdom lays nothing out, so the bands and their chips are given the boxes a
+   * browser would: a band where its own inline size says, a chip 24 x 16 px.
+   * Everything else keeps jsdom's answer.
+   */
+  const REAL_RECT = Element.prototype.getBoundingClientRect;
+  /** `painted` moves every box on screen, as a zoom or a scroll does. */
+  function stubOverlayBoxes(painted: { y: number } = { y: 0 }) {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        if (this instanceof HTMLElement) {
+          if (this.classList.contains("nx-spacing-overlay__value")) {
+            const band = this.parentElement;
+            const left = parseFloat(band?.style.left ?? "0") || 0;
+            const top = parseFloat(band?.style.top ?? "0") || 0;
+            return new DOMRect(left, top + painted.y, 24, 16);
+          }
+          if (this.classList.contains("nx-spacing-overlay__band")) {
+            return new DOMRect(
+              parseFloat(this.style.left) || 0,
+              (parseFloat(this.style.top) || 0) + painted.y,
+              parseFloat(this.style.width) || 0,
+              parseFloat(this.style.height) || 0
+            );
+          }
+        }
+        return REAL_RECT.call(this);
+      }
+    );
+  }
+  function band(
+    container: HTMLElement,
+    box: string,
+    side: string
+  ): HTMLElement {
+    const found = container.querySelector<HTMLElement>(
+      `.nx-spacing-overlay__band[data-box="${box}"][data-side="${side}"]`
+    );
+    if (found === null) throw new Error(`no ${box} band on the ${side}`);
+    return found;
+  }
+  function pointAt(x: number, y: number): void {
+    act(() => {
+      document.dispatchEvent(
+        new MouseEvent("pointermove", { clientX: x, clientY: y, bubbles: true })
+      );
+    });
+  }
+
+  it("hides a number thinner than its band until the pointer is over that band", () => {
+    stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
+    stubOverlayBoxes();
+    const { container } = mount(editorOf("a"));
+    const thin = band(container, "margin", "top");
+    const wide = band(container, "margin", "bottom");
+    // A 16 px number on a 12 px band hides; on a 64 px band it shows.
+    expect(thin.hasAttribute("data-tight")).toBe(true);
+    expect(wide.hasAttribute("data-tight")).toBe(false);
+    expect(thin.hasAttribute("data-pointed")).toBe(false);
+
+    const box = thin.getBoundingClientRect();
+    pointAt(box.x + box.width / 2, box.y + box.height / 2);
+    expect(thin.hasAttribute("data-pointed")).toBe(true);
+    expect(wide.hasAttribute("data-pointed")).toBe(false);
+
+    pointAt(box.x + box.width / 2, box.y + box.height + 200);
+    expect(thin.hasAttribute("data-pointed")).toBe(false);
+  });
+
+  it("shows a hidden number on a tap, which sends no move", () => {
+    stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
+    stubOverlayBoxes();
+    const { container } = mount(editorOf("a"));
+    const thin = band(container, "margin", "top");
+    const box = thin.getBoundingClientRect();
+    act(() => {
+      document.dispatchEvent(
+        new MouseEvent("pointerdown", {
+          clientX: box.x + box.width / 2,
+          clientY: box.y + box.height / 2,
+          bubbles: true,
+        })
+      );
+    });
+    expect(thin.hasAttribute("data-pointed")).toBe(true);
+  });
+
+  it("lets go of a band that moved out from under a still pointer", () => {
+    withFakeResizeObserver();
+    stubComputedStyle({ a: { marginTop: "40px", marginBottom: "64px" } });
+    stubOverlayBoxes();
+    const { container } = mount(editorOf("a"));
+    const before = band(container, "margin", "top").getBoundingClientRect();
+    // Near the top of a 40 px band, where a 12 px band no longer reaches.
+    pointAt(before.x + before.width / 2, before.y + 5);
+    expect(band(container, "margin", "top").hasAttribute("data-pointed")).toBe(
+      true
+    );
+
+    // The block's margin shrinks with no pointer move, as an edit or a reflow
+    // does: the band is still drawn, but no longer under the pointer.
+    stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
+    remeasure();
+    const after = band(container, "margin", "top");
+    expect(after.hasAttribute("data-tight")).toBe(true);
+    expect(after.hasAttribute("data-pointed")).toBe(false);
+  });
+
+  it("lets go of a band painted away from a still pointer, as a zoom does", () => {
+    // The band's own place in the layer is unchanged; only where it is
+    // painted moves, so nothing the overlay measures changes with it.
+    stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
+    const painted = { y: 0 };
+    stubOverlayBoxes(painted);
+    const editor = editorOf("a");
+    const view = mount(editor);
+    const box = band(view.container, "margin", "top").getBoundingClientRect();
+    pointAt(box.x + box.width / 2, box.y + box.height / 2);
+    expect(
+      band(view.container, "margin", "top").hasAttribute("data-pointed")
+    ).toBe(true);
+
+    painted.y = 300;
+    view.rerender(
+      <Canvas
+        document={editor.document}
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId={editor.selectedId}
+        selectedIds={editor.selection.ids}
+        overlay={<SpacingOverlay editor={editor} />}
+      />
+    );
+    expect(
+      band(view.container, "margin", "top").hasAttribute("data-pointed")
+    ).toBe(false);
+  });
+
+  /** A press of the given pointer kind, at a point of the editor. */
+  function press(x: number, y: number, pointerType: string): void {
+    act(() => {
+      const event = new MouseEvent("pointerdown", {
+        clientX: x,
+        clientY: y,
+        bubbles: true,
+      });
+      Object.defineProperty(event, "pointerType", { value: pointerType });
+      document.dispatchEvent(event);
+    });
+  }
+
+  it("shows every number after a touch, which cannot point at a band", () => {
+    // A tap goes through the overlay to whatever is beneath, and may select
+    // something else, so a number must not wait for a band to be pointed.
+    stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
+    stubOverlayBoxes();
+    const { container } = mount(editorOf("a"));
+    expect(band(container, "margin", "top").hasAttribute("data-tight")).toBe(
+      true
+    );
+    press(900, 900, "touch");
+    expect(band(container, "margin", "top").hasAttribute("data-tight")).toBe(
+      false
+    );
+    // The control: a mouse again, and the thin number hides until pointed.
+    press(900, 900, "mouse");
+    expect(band(container, "margin", "top").hasAttribute("data-tight")).toBe(
+      true
+    );
+  });
+
+  it("lets go of a band a scroll carried away, with no drawing after it", () => {
+    stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
+    const painted = { y: 0 };
+    stubOverlayBoxes(painted);
+    const { container } = mount(editorOf("a"));
+    const box = band(container, "margin", "top").getBoundingClientRect();
+    pointAt(box.x + box.width / 2, box.y + box.height / 2);
+    expect(band(container, "margin", "top").hasAttribute("data-pointed")).toBe(
+      true
+    );
+    painted.y = 300;
+    act(() => {
+      document.dispatchEvent(new Event("scroll"));
+    });
+    expect(band(container, "margin", "top").hasAttribute("data-pointed")).toBe(
+      false
+    );
+  });
+
+  it("points at the band drawn on top where a negative margin and padding overlap", () => {
+    // The pulled-in margin is drawn first and the padding over it, so the
+    // padding is what the pointer is on where the two share pixels.
+    stubComputedStyle({ a: { marginTop: "-30px", paddingTop: "10px" } });
+    stubOverlayBoxes();
+    const { container } = mount(editorOf("a"));
+    const padding = band(container, "padding", "top");
+    const margin = band(container, "margin", "top");
+    const box = padding.getBoundingClientRect();
+    const under = margin.getBoundingClientRect();
+    // The control: the two do share the pointed pixel.
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    expect(x >= under.x && x <= under.x + under.width).toBe(true);
+    expect(y >= under.y && y <= under.y + under.height).toBe(true);
+    pointAt(x, y);
+    expect(padding.hasAttribute("data-pointed")).toBe(true);
+    expect(margin.hasAttribute("data-pointed")).toBe(false);
+  });
+
+  it("hides that number again when the pointer leaves the editor from over its band", () => {
+    stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
+    stubOverlayBoxes();
+    const { container } = mount(editorOf("a"));
+    const thin = band(container, "margin", "top");
+    const box = thin.getBoundingClientRect();
+    pointAt(box.x + box.width / 2, box.y + box.height / 2);
+    expect(thin.hasAttribute("data-pointed")).toBe(true);
+
+    // Out of the window with no move in between: no later move clears it.
+    act(() => {
+      document.documentElement.dispatchEvent(
+        new MouseEvent("pointerleave", { bubbles: false })
+      );
+    });
+    expect(thin.hasAttribute("data-pointed")).toBe(false);
+  });
+
+  it("draws the bands of a block that holds no blocks as outlines", () => {
+    stubComputedStyle({ a: { paddingTop: "12px" } });
+    const { container } = mount(editorOf("a"));
+    const layer = container.querySelector(".nx-spacing-overlay");
+    expect(layer?.hasAttribute("data-outlines")).toBe(true);
+  });
+
+  it("keeps filled bands on a block that holds blocks", () => {
+    if (!hasBlock("acme/box")) {
+      registerBlocks(
+        [
+          {
+            name: "acme/box",
+            version: 1,
+            description: "A box holding blocks.",
+            example: { props: {} },
+            supports: { spacing: { margin: true, padding: true } },
+            slots: { children: {} },
+            render: () => React.createElement("div", null, "box"),
+          },
+        ] as never,
+        { source: "spacing-overlay-test" }
+      );
+    }
+    const withBox = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "x",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: { children: [] },
+        },
+      ],
+    } as unknown as BlockDocument;
+    stubComputedStyle({ x: { paddingTop: "64px" } });
+    const { container } = mount({
+      ...editorOf("x"),
+      document: withBox,
+    } as EditorState);
+    const layer = container.querySelector(".nx-spacing-overlay");
+    expect(container.querySelector(".nx-spacing-overlay__band")).not.toBeNull();
+    expect(layer?.hasAttribute("data-outlines")).toBe(false);
+  });
+
+  it("keeps filled bands on a container only the canvas's own resolver knows", () => {
+    // Stored before its slot holds anything, so the node names no slot: only
+    // the definition says it holds blocks, and only this resolver has it.
+    const resolver = createBlockResolver([
+      {
+        name: "acme/private-box",
+        version: 1,
+        description: "A box only this canvas knows.",
+        example: { props: {} },
+        supports: { spacing: { margin: true, padding: true } },
+        slots: { children: {} },
+        render: ({ className }: { className: string }) =>
+          React.createElement("div", { className }, "box"),
+      },
+    ] as never);
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "p", type: "acme/private-box", version: 1, props: {} }],
+    } as unknown as BlockDocument;
+    stubComputedStyle({ p: { paddingTop: "64px" } });
+    stubLayoutBoxes(true);
+    const editor = { ...editorOf("p"), document } as EditorState;
+    const { container } = render(
+      <Canvas
+        document={document}
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="p"
+        selectedIds={["p"]}
+        render={{ blocks: resolver }}
+        overlay={<SpacingOverlay editor={editor} blocks={resolver} />}
+      />
+    );
+    expect(container.querySelector(".nx-spacing-overlay__band")).not.toBeNull();
+    const layer = container.querySelector(".nx-spacing-overlay");
+    expect(layer?.hasAttribute("data-outlines")).toBe(false);
+  });
+
+  it("keeps filled bands on a component copy, which draws a whole set of blocks", () => {
+    // Stored with no slots of its own: its blocks live in the component, so a
+    // reading of the copy alone would take it for a single small block.
+    const withCopy = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "c",
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "card" },
+        },
+      ],
+    } as unknown as BlockDocument;
+    stubComputedStyle({ c: { paddingTop: "64px" } });
+    const { container } = mount({
+      ...editorOf("c"),
+      document: withCopy,
+    } as EditorState);
+    const layer = container.querySelector(".nx-spacing-overlay");
+    expect(layer).not.toBeNull();
+    expect(layer?.hasAttribute("data-outlines")).toBe(false);
+  });
+});
