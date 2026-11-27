@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { NextlyError } from "../../errors/nextly-error";
-import type { OperationDefinition } from "../definition";
+import type { Door, OperationDefinition } from "../definition";
 import { assembleOperationList, type OperationListSources } from "../list";
 
 import { readOperation, settingsSetLike, writeOperation } from "./fixtures";
@@ -387,5 +387,113 @@ describe("other rules of a declaration", () => {
         /^Operation "posts\.list" from core: its example "The first ten posts" does not parse/
       ),
     ]);
+  });
+});
+
+describe("the deploy door", () => {
+  const maintenance = {
+    kind: "maintenance",
+    reason: "Brings the schema up to the code.",
+  } as const;
+
+  it("is refused to a core operation outside its fixed set, naming it", async () => {
+    const problems = await refusal({
+      core: [
+        readOperation({
+          id: "content.list",
+          command: ["content", "list"],
+          doors: ["local", "deploy", "site"],
+        }),
+      ],
+    });
+    expect(problems).toEqual([
+      'Operation "content.list" from core: it runs on the deploy door, which only migrate, migrations.status, migrations.check, doctor may',
+    ]);
+  });
+
+  it("is open to an operation in the set (control)", async () => {
+    const list = await assembleOperationList({
+      core: [
+        writeOperation({
+          id: "migrate",
+          command: ["migrate"],
+          doors: ["local", "deploy"],
+          permission: maintenance,
+        }),
+        readOperation({
+          id: "migrations.status",
+          command: ["migrations", "status"],
+          doors: ["local", "deploy"],
+        }),
+      ],
+    });
+    expect(list.operations.map(op => op.id)).toEqual([
+      "migrate",
+      "migrations.status",
+    ]);
+  });
+});
+
+describe("who registered an operation", () => {
+  it("must be core or a plugin with a name", async () => {
+    const problems = await refusal({
+      core: [],
+      plugins: [
+        {
+          name: "",
+          operations: [
+            readOperation({ id: "seo.audit", command: ["seo", "audit"] }),
+          ],
+        },
+      ],
+    });
+    expect(problems).toEqual([
+      'Operations were registered by a plugin with no name: {"kind":"plugin","name":""}',
+    ]);
+  });
+});
+
+describe("a schema that throws instead of answering", () => {
+  it("is refused with the operation named", async () => {
+    const throwing = {
+      "~standard": {
+        version: 1 as const,
+        vendor: "handmade",
+        validate: () => {
+          throw new Error("this schema cannot read numbers");
+        },
+      },
+    };
+    const problems = await refusal({
+      core: [readOperation({ input: throwing })],
+    });
+    expect(problems).toEqual([
+      'Operation "posts.list" from core: its example "The first ten posts" could not be checked: this schema cannot read numbers',
+    ]);
+  });
+});
+
+describe("the list's view of an operation", () => {
+  it("does not change when the declarer changes its own object afterwards", async () => {
+    const declared = readOperation();
+    const list = await assembleOperationList({ core: [declared] });
+
+    (declared.doors as Door[]).push("deploy");
+    (declared.effects as { destroys: boolean }).destroys = true;
+    (declared.examples[0] as { summary: string }).summary = "changed";
+
+    const listedOp = list.byId("posts.list");
+    expect(listedOp?.doors).toEqual(["local", "site"]);
+    expect(listedOp?.effects.destroys).toBe(false);
+    expect(listedOp?.examples[0].summary).toBe("The first ten posts");
+    // The schemas are the declarer's own: the list calls them, never edits.
+    expect(listedOp?.input).toBe(declared.input);
+  });
+
+  it("cannot be changed through the list either", async () => {
+    const list = await assembleOperationList({ core: [readOperation()] });
+    const doors = list.byId("posts.list")?.doors as Door[];
+    expect(() => doors.push("deploy")).toThrow(TypeError);
+    expect(list.byId("posts.list")?.doors).toEqual(["local", "site"]);
   });
 });

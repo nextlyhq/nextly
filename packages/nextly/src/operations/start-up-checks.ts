@@ -46,6 +46,18 @@ const DOORS_WITHOUT_PERMISSION: Readonly<
   maintenance: ["local", "deploy"],
 };
 
+/**
+ * The only operations that may run on the deploy door, where the CLI acts as
+ * the deployment against a live database: those that bring its schema up to
+ * the code, or check that it is. A deploy pipeline may run nothing else.
+ */
+export const DEPLOY_DOOR_OPERATIONS: ReadonlySet<string> = new Set([
+  "migrate",
+  "migrations.status",
+  "migrations.check",
+  "doctor",
+]);
+
 /** The effects every declaration states, each a yes or a no. */
 const EFFECTS = ["destroys", "idempotent", "outside", "spendsAi"] as const;
 
@@ -77,8 +89,13 @@ function raises(op: OperationDefinition): boolean {
   return Array.isArray(op.raise) && op.raise.some(isObject);
 }
 
+/** Core, or a plugin with a name: nothing else may register an operation. */
 function isSource(value: unknown): value is OperationSource {
-  return typeof value === "object" && value !== null && "kind" in value;
+  if (!isObject(value) || !("kind" in value)) return false;
+  if (value.kind === "core") return true;
+  return (
+    value.kind === "plugin" && "name" in value && isNonEmptyText(value.name)
+  );
 }
 
 function sameSource(a: OperationSource, b: OperationSource): boolean {
@@ -215,6 +232,13 @@ const doorsProblems: DefinitionCheck = op => {
   }
   if (op.doors.includes("deploy") && op.source?.kind !== "core") {
     problems.push("a plugin's operation may not run on the deploy door");
+  } else if (
+    op.doors.includes("deploy") &&
+    !DEPLOY_DOOR_OPERATIONS.has(op.id)
+  ) {
+    problems.push(
+      `it runs on the deploy door, which only ${[...DEPLOY_DOOR_OPERATIONS].join(", ")} may`
+    );
   }
   if (op.chatExposed === true && !op.doors.includes("chat")) {
     problems.push(
@@ -396,7 +420,18 @@ const DEFINITION_CHECKS: readonly DefinitionCheck[] = [
 async function examplesProblems(op: OperationDefinition): Promise<string[]> {
   const problems: string[] = [];
   for (const example of op.examples) {
-    const result = await op.input["~standard"].validate(example.input);
+    let result: Awaited<ReturnType<(typeof op.input)["~standard"]["validate"]>>;
+    try {
+      result = await op.input["~standard"].validate(example.input);
+    } catch (error) {
+      // A hand-made schema may throw rather than answer; the refusal still
+      // names the operation it belongs to.
+      const reason = error instanceof Error ? error.message : String(error);
+      problems.push(
+        `its example "${example.summary}" could not be checked: ${reason}`
+      );
+      continue;
+    }
     if (!result.issues) continue;
     const issues = result.issues.map(issue => issue.message).join("; ");
     problems.push(
@@ -525,6 +560,12 @@ export async function operationListProblems(
   const byWords = new Map<string, Claim>();
 
   for (const { source, operations } of contributions) {
+    if (!isSource(source)) {
+      problems.push(
+        `Operations were registered by a plugin with no name: ${quoted(source)}`
+      );
+      continue;
+    }
     const from = describeSource(source);
     for (const op of operations as readonly unknown[]) {
       if (!isObject(op)) {

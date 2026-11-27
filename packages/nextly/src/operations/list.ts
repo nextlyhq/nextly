@@ -51,6 +51,35 @@ export interface OperationListSources {
   }[];
 }
 
+/** Whether `value` is an array or an object literal, the data a declaration holds. */
+function isPlainData(value: unknown): value is object {
+  if (Array.isArray(value)) return true;
+  if (typeof value !== "object" || value === null) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * A frozen deep copy of a declaration's plain data: its arrays and object
+ * literals, at every depth. Schemas (class instances) and functions are kept
+ * as they are, since the list calls them rather than reading them. The list
+ * checks and serves this copy, so a declarer that keeps its own object and
+ * changes it later (pushing a door, say) changes nothing the checks passed.
+ */
+function frozenCopy<T>(value: T, copies = new Map<object, object>()): T {
+  if (!isPlainData(value)) return value;
+  const done = copies.get(value);
+  if (done) return done as T;
+  const copy: Record<string, unknown> | unknown[] = Array.isArray(value)
+    ? []
+    : Object.create(Object.getPrototypeOf(value) as object | null);
+  copies.set(value, copy);
+  for (const [key, entry] of Object.entries(value)) {
+    (copy as Record<string, unknown>)[key] = frozenCopy(entry, copies);
+  }
+  return Object.freeze(copy) as T;
+}
+
 function listed(op: OperationDefinition): ListedOperation {
   return Object.freeze({
     ...op,
@@ -69,10 +98,13 @@ export async function assembleOperationList(
   sources: OperationListSources
 ): Promise<OperationList> {
   const contributions: OperationContribution[] = [
-    { source: { kind: "core" }, operations: sources.core },
+    {
+      source: { kind: "core" },
+      operations: sources.core.map(op => frozenCopy(op)),
+    },
     ...(sources.plugins ?? []).map(plugin => ({
       source: { kind: "plugin" as const, name: plugin.name },
-      operations: plugin.operations,
+      operations: plugin.operations.map(op => frozenCopy(op)),
     })),
   ];
   const problems = await operationListProblems(contributions);

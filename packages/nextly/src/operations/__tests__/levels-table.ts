@@ -34,26 +34,16 @@ export interface LevelsRow {
 export const CORE_LEVELS_TABLE: Readonly<Record<string, LevelsRow>> = {};
 
 /**
- * The only core operations that may run in a deploy pipeline: those that bring
- * the database's schema up to the code, or check that it is.
+ * The operations that may run in a deploy pipeline, stated a second time and
+ * independently of the list's own set, which the list enforces: a change that
+ * widens one without the other fails the table test.
  */
-export const DEPLOY_DOOR_OPERATIONS: ReadonlySet<string> = new Set([
-  "migrate",
-  "migrations.status",
-  "migrations.check",
+export const DEPLOY_DOOR_ROWS: readonly string[] = [
   "doctor",
-]);
-
-/** The operations on the deploy door that are not in the fixed set. */
-export function outsideDeploySet(
-  operations: readonly ListedOperation[]
-): string[] {
-  return operations
-    .filter(
-      op => op.doors.includes("deploy") && !DEPLOY_DOOR_OPERATIONS.has(op.id)
-    )
-    .map(op => op.id);
-}
+  "migrate",
+  "migrations.check",
+  "migrations.status",
+];
 
 /** Each way `operations` differs from `table`, as a sentence. */
 export function levelsTableProblems(

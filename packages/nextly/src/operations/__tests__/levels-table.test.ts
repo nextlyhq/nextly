@@ -1,12 +1,13 @@
 /**
  * Core's operations against the levels table: each one's level, "Always
- * allow" mark, effects, doors and chat mark, and the door rules the table
- * states for the whole list.
+ * allow" mark, raise rules, effects, doors and chat mark, and the operations
+ * the deploy door is open to.
  */
 import { describe, expect, it } from "vitest";
 
 import { CORE_OPERATIONS } from "../core";
 import { assembleOperationList } from "../list";
+import { DEPLOY_DOOR_OPERATIONS } from "../start-up-checks";
 
 import {
   activityDeleteLike,
@@ -16,8 +17,8 @@ import {
 } from "./fixtures";
 import {
   CORE_LEVELS_TABLE,
+  DEPLOY_DOOR_ROWS,
   levelsTableProblems,
-  outsideDeploySet,
   type LevelsRow,
 } from "./levels-table";
 
@@ -85,45 +86,12 @@ describe("the levels table", () => {
   );
 });
 
-describe("the doors core's operations declare", () => {
-  it("puts no core operation outside the fixed set on the deploy door", async () => {
-    const list = await assembleOperationList({ core: CORE_OPERATIONS });
-    expect(outsideDeploySet(list.operations)).toEqual([]);
-  });
-
-  it("names an operation on the deploy door that is not in the fixed set (control)", async () => {
-    const maintenance = {
-      kind: "maintenance",
-      reason: "Brings the schema up to the code.",
-    } as const;
-    const list = await assembleOperationList({
-      core: [
-        writeOperation({
-          id: "migrate",
-          command: ["migrate"],
-          doors: ["local", "deploy"],
-          permission: maintenance,
-        }),
-        writeOperation({
-          id: "cache.purge",
-          command: ["cache", "purge"],
-          doors: ["local", "deploy"],
-          permission: maintenance,
-        }),
-      ],
-    });
-    expect(outsideDeploySet(list.operations)).toEqual(["cache.purge"]);
-  });
-
-  // The list refuses such a declaration outright; start-up-checks.test.ts
-  // shows that refusal on a fixture.
-  it("keeps every operation that changes project files off the site and chat doors", async () => {
-    const list = await assembleOperationList({ core: CORE_OPERATIONS });
-    const projectOnline = list.operations
-      .filter(op => op.permission.kind === "project")
-      .filter(op => op.doors.some(door => door === "site" || door === "chat"))
-      .map(op => op.id);
-    expect(projectOnline).toEqual([]);
+// Which operations may run on the deploy door, and that a project-file
+// operation stays off the site and chat doors, are refused at assembly
+// (start-up-checks.test.ts). Here the deploy door's set is stated again.
+describe("the deploy door", () => {
+  it("is open to the same operations the table states", () => {
+    expect([...DEPLOY_DOOR_OPERATIONS].sort()).toEqual(DEPLOY_DOOR_ROWS);
   });
 });
 
