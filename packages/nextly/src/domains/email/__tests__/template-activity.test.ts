@@ -137,7 +137,7 @@ describe("email template activity", () => {
   });
 
   it("names cc, bcc and the description when they change, and carries none of their values", async () => {
-    // A site template: core's `password-reset` carries a secret and takes no
+    // One of your own templates: core's `password-reset` carries a secret and takes no
     // copies at all.
     const created = await service.createTemplate(
       { ...INPUT, slug: "order-shipped", cc: ["kept@shop.example"] },
