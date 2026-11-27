@@ -10,12 +10,9 @@
  * with — *what needs me, anywhere, in my language?* — so finding the work meant
  * opening every document in turn.
  *
- * This is only the way IN. Choosing a row hands off to the editor that already
- * exists, in translation mode, with the source language already chosen. It
- * deliberately does not become a second editor: that would duplicate the form,
- * the unsaved-changes guard, autosave and the save intent, and it would make
- * this the fifth surface answering one question — which is the failure the
- * whole multilingual pass exists to undo.
+ * This is only the way IN. Choosing a row hands off to the document's
+ * translation page, with the source language already chosen, rather than
+ * becoming a second place to write in.
  *
  * @module components/features/translations/TranslationWorklist
  */
@@ -31,12 +28,11 @@ import {
   Button,
   Skeleton,
 } from "@admin/components/ui";
-import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { LOCALE_PARAM, TRANSLATE_PARAM } from "@admin/constants/search-params";
 import { useBrandingStatus } from "@admin/context/providers/BrandingProvider";
 import { useTranslationWorklist } from "@admin/hooks/queries/useTranslationWorklist";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { navigateTo } from "@admin/lib/navigation";
+import { translationAddress } from "@admin/lib/navigation/translation-address";
 import {
   WORKLIST_STATES,
   resolveActiveTarget,
@@ -45,29 +41,19 @@ import {
   type WorklistState,
 } from "@admin/types/translations/worklist";
 
-/** Where a row goes: the document, in the target language, translating from the source. */
+/** Where a row goes: the document's translation page, from the source shown. */
 function rowHref(
   row: TranslationWorkRow,
   target: string,
   source: string
 ): string {
   // A Single is one document, opened at its own route; an entry at its collection's.
-  const path =
+  return translationAddress(
     row.kind === "single"
-      ? buildRoute(ROUTES.SINGLE_EDIT, { slug: row.collection })
-      : buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-          slug: row.collection,
-          id: row.id,
-        });
-  // BOTH params, because the destination needs both facts: which language is
-  // being edited, and which one is on display beside it. Sending only the
-  // locale opens the ordinary editor in that language with no source — which
-  // is not the screen this row promised.
-  const params = new URLSearchParams({
-    [LOCALE_PARAM]: target,
-    [TRANSLATE_PARAM]: source,
-  });
-  return `${path}?${params.toString()}`;
+      ? { kind: "single", slug: row.collection }
+      : { kind: "collection", slug: row.collection, id: row.id },
+    { target, source }
+  );
 }
 
 function WorklistRow({

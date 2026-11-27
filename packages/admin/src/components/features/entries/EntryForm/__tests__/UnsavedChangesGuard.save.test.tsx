@@ -245,6 +245,30 @@ describe("the prompt with a Save choice", () => {
   });
 });
 
+describe("the prompt of a form that writes one language", () => {
+  it.each([
+    ["with a Save choice", () => Promise.resolve(true)],
+    ["without one", undefined],
+  ])("names the language, %s", async (_choices, onSave) => {
+    const user = userEvent.setup();
+    render(
+      <UnsavedChangesGuard
+        isDirty
+        language="Spanish"
+        {...(onSave === undefined ? {} : { onSave })}
+      >
+        <GoTo path={ELSEWHERE} label="go" />
+      </UnsavedChangesGuard>
+    );
+    await user.click(screen.getByRole("button", { name: "go" }));
+    expect(
+      await screen.findByText(
+        /^You have unsaved changes in Spanish that will be lost if you leave this page\./
+      )
+    ).toBeInTheDocument();
+  });
+});
+
 describe("the prompt without a Save choice", () => {
   it("is the editors' prompt, word for word, with their two choices", async () => {
     const user = userEvent.setup();

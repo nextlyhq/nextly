@@ -9,7 +9,11 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
+import {
+  grantTo,
+  superAdminUser,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineSingle, text } from "../../../config";
 import { container } from "../../../di/container";
 import {
@@ -507,6 +511,47 @@ describe.each(getConfiguredTestDialects())(
         expect(await stored()).toEqual({
           main: "published",
           languages: { en: "published", es: "published" },
+        });
+      });
+
+      it("refuses to take one language offline for a caller without the right to unpublish", async () => {
+        await boot(dialect);
+        await bothLive();
+        // Both may read and change it; only one may unpublish it.
+        const may = await userWhoMay(app(), "notice-may", "unpublish", [
+          NOTICE,
+        ]);
+        const mayNot = await userWhoMay(app(), "notice-may-not", "publish", [
+          NOTICE,
+        ]);
+        for (const user of [may, mayNot]) {
+          await grantTo(app(), user, "update", [NOTICE]);
+          await grantTo(app(), user, "read", [NOTICE]);
+        }
+        const takeDown = (id: string) =>
+          singles().publishParts(
+            {
+              slug: NOTICE,
+              overrideAccess: false,
+              user: { id, email: `${id}@example.test`, roles: [] },
+              data: { _overwrite: true },
+            },
+            { direction: "unpublish", locales: ["es"] }
+          );
+
+        const refused = await takeDown(mayNot);
+        expect(refused.success).toBe(false);
+        expect(refused.statusCode).toBe(403);
+        expect(await stored()).toEqual({
+          main: "published",
+          languages: { en: "published", es: "published" },
+        });
+
+        const taken = await takeDown(may);
+        expect(taken.success, JSON.stringify(taken)).toBe(true);
+        expect(await stored()).toEqual({
+          main: "published",
+          languages: { en: "published", es: "draft" },
         });
       });
 

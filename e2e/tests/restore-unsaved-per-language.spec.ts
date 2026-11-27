@@ -1,12 +1,19 @@
 /**
- * "Restore unsaved changes" offers only what was typed in the language being
- * edited.
+ * "Restore unsaved changes" belongs to the language the work was typed in.
  *
- * An author types in Spanish and leaves before saving, so the editor records
- * their unsaved Spanish work. Opened in English, the editor offers nothing to
- * restore; opened in Spanish again, it offers the Spanish work. The plausible
- * broken implementation offers the author's one recovery point wherever the
- * editor stands, so one click puts Spanish text in the English fields.
+ * The editor records unsaved work in the default language, the one it edits,
+ * and offers it there. An author types in English and leaves before saving:
+ * the Spanish translation page shows the published English and the stored
+ * Spanish, and offers nothing to restore; the English editor offers the work.
+ * And what was typed on the Spanish page and left unsaved is not offered by
+ * the English editor. The plausible broken implementation offers the author's
+ * one recovery point wherever the document is open, so one click puts one
+ * language's text in another's fields.
+ *
+ * Not covered, because the behaviour was removed: Spanish work recorded as it
+ * was typed, and offered when the editor was opened in Spanish again. Spanish
+ * was then written in the editor. It is now written on its translation page,
+ * which keeps no recovery point, so there is none of its own to offer.
  *
  * @module tests/restore-unsaved-per-language
  */
@@ -38,36 +45,54 @@ async function liveAuthor(page: Page): Promise<string> {
   return id;
 }
 
+/** The field both the editor and the translation page write. */
+const role = (page: Page) =>
+  page
+    .locator("main")
+    .getByRole("textbox", { name: "Role / Title", exact: true });
+
 test.describe("restoring unsaved changes", () => {
-  test("offers only the work typed in the language being edited", async ({
+  test("offers English work in the English editor, and on no other language's page", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     const id = await liveAuthor(page);
+    const editor = `/collections/authors/${id}`;
+    const spanish = `/translations/collections/authors/${id}?locale=es`;
 
-    // Typed in Spanish and recorded as unsaved work, never saved.
-    await gotoAdmin(page, `/collections/authors/${id}?locale=es`);
+    // Typed on the Spanish page and left: the English editor offers nothing.
+    await gotoAdmin(page, spanish);
+    await expect(role(page)).toHaveValue("Matemática");
+    await role(page).fill("Matemática y escritora");
+    await gotoAdmin(page, editor);
+    await expect(role(page)).toHaveValue("Mathematician");
+    await expect(includingHidden(page).getByText(OFFER)).toHaveCount(0);
+
+    // Typed in English and recorded as unsaved work, never saved.
     const recorded = page.waitForResponse(
       response =>
         response.request().method() === "PUT" &&
         response.url().includes(`/entries/${id}/versions/autosave`) &&
         response.ok()
     );
-    const role = page.getByLabel("Role / Title");
-    await role.fill("Matemática y escritora");
+    await role(page).fill("Mathematician and writer");
     await recorded;
 
-    // English: nothing of the Spanish work is offered.
-    await gotoAdmin(page, `/collections/authors/${id}`);
-    await expect(page.getByLabel("Role / Title")).toHaveValue("Mathematician");
+    // Spanish: nothing of the English work is offered, and it is not the text
+    // shown to translate from.
+    await gotoAdmin(page, spanish);
+    await expect(role(page)).toHaveValue("Matemática");
+    await expect(
+      page
+        .getByRole("group", { name: "Role / Title", exact: true })
+        .locator('[data-slot="translation-source"] [lang="en"]')
+    ).toHaveText("Mathematician");
     await expect(includingHidden(page).getByText(OFFER)).toHaveCount(0);
 
-    // Spanish again: its own unsaved work is offered, and restores there.
-    await gotoAdmin(page, `/collections/authors/${id}?locale=es`);
+    // English again: its own unsaved work is offered, and restores there.
+    await gotoAdmin(page, editor);
     await expect(page.getByText(OFFER)).toBeVisible();
     await page.getByRole("button", { name: "Restore", exact: true }).click();
-    await expect(page.getByLabel("Role / Title")).toHaveValue(
-      "Matemática y escritora"
-    );
+    await expect(role(page)).toHaveValue("Mathematician and writer");
   });
 });

@@ -20,6 +20,7 @@ import { useEffect, useCallback, useState, useRef } from "react";
 
 import { DOCUMENT_TAB_PARAM } from "@admin/components/features/entries/EntryForm/document-tab-address";
 import { HISTORY_ADDRESS_PARAMS } from "@admin/components/features/versions/history-address";
+import { SOURCE_PARAM } from "@admin/constants/search-params";
 import {
   DOCUMENT_VIEW_ADDRESS_PARAMS,
   drawnDocumentView,
@@ -166,38 +167,50 @@ const EDITOR_ADDRESS =
   /^\/admin\/(?:collections\/[^/]+\/[^/]+|singles\/[^/]+)$/;
 
 /**
- * Whether a move only opens another tab of the editor on screen: the same
- * editor address but for the open tab. That keeps the same form mounted on
- * every editor, a new entry's among them, which has no document to stay on
- * yet.
+ * A document's translation page, whose `?source=` names the language beside
+ * the one being written and nothing that is written.
  */
-function opensAnotherTab(
+const TRANSLATION_ADDRESS =
+  /^\/admin\/translations\/(?:collections\/[^/]+\/[^/]+|singles\/[^/]+)$/;
+
+/**
+ * Whether a move changes nothing but what the form's page shows beside it: the
+ * same address but for an editor's open tab, or for a translation page's
+ * source. That keeps the same form mounted on every editor, a new entry's
+ * among them, which has no document to stay on yet.
+ */
+function showsAnotherPart(
   from: { pathname: string; search: string },
   to: { pathname: string; search: string }
 ): boolean {
-  if (from.pathname !== to.pathname || !EDITOR_ADDRESS.test(from.pathname)) {
-    return false;
-  }
+  if (from.pathname !== to.pathname) return false;
+  const part = EDITOR_ADDRESS.test(from.pathname)
+    ? DOCUMENT_TAB_PARAM
+    : TRANSLATION_ADDRESS.test(from.pathname)
+      ? SOURCE_PARAM
+      : undefined;
+  if (part === undefined) return false;
   const was = new URLSearchParams(from.search);
   const next = new URLSearchParams(to.search);
-  was.delete(DOCUMENT_TAB_PARAM);
-  next.delete(DOCUMENT_TAB_PARAM);
+  was.delete(part);
+  next.delete(part);
   return was.toString() === next.toString();
 }
 
 /**
  * Whether a move is between one document's edit address and its own views,
- * opens or moves through its history beside it, or opens another of its
- * editor's tabs. The same page answers all of them and keeps the same form
- * mounted, so nothing unsaved is left behind. Any other query change — a
- * language among them — still counts, and so does another document's view.
+ * opens or moves through its history beside it, opens another of its editor's
+ * tabs, or shows another source beside its translation. The same page answers
+ * all of them and keeps the same form mounted, so nothing unsaved is left
+ * behind. Any other query change — a language among them — still counts, and
+ * so does another document's view.
  */
 function staysOnDocument(
   from: { pathname: string; search: string },
   to: { pathname: string; search: string },
   fields: readonly object[] | undefined
 ): boolean {
-  if (opensAnotherTab(from, to)) return true;
+  if (showsAnotherPart(from, to)) return true;
   // The guard's fields are the current document's, which is the one the
   // move would have to stay on.
   const here = documentOf(from.pathname, fields);

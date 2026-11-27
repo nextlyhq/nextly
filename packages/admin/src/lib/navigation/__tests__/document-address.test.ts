@@ -2,8 +2,9 @@
  * The one address every "open this document" link uses: a list row, a
  * dashboard card's row. A collection opens its entries where it says
  * (`admin.opensIn`); else in a view asking to open first for its main field;
- * else in the form. A reader who may not update the entry, and an entry asked
- * for in a language other than the default, get the form.
+ * else in the form. A reader who may not update the entry gets the form; an
+ * entry asked for in a language other than the default gets its translation
+ * page, or the form where it keeps no text per language that is known.
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -207,10 +208,41 @@ describe("the two ways back to the form", () => {
     );
   });
 
-  it("opens the form in a language other than the default", () => {
+  it("opens the form in a language other than the default, where it may keep one text", () => {
     expect(open(page, { ...editor, locale: "ar" })).toBe(
       "/admin/collections/pages/42?locale=ar"
     );
+  });
+
+  it("opens the translation page of a document known to keep text per language", () => {
+    expect(
+      open({ ...page, localized: true }, { ...editor, locale: "ar" })
+    ).toBe("/admin/translations/collections/pages/42?locale=ar");
+    // Reading it is enough: the page shows a reader its text, read-only.
+    expect(
+      open(
+        { ...page, localized: true },
+        { canUpdate: false, defaultLocale: "en", locale: "ar" }
+      )
+    ).toBe("/admin/translations/collections/pages/42?locale=ar");
+  });
+
+  it("opens the form, in no language, for the default one asked for by name", () => {
+    expect(
+      open(
+        { ...page, localized: true },
+        { canUpdate: false, defaultLocale: "en", locale: "en" }
+      )
+    ).toBe("/admin/collections/pages/42");
+  });
+
+  it("leaves the form to decide where the site's default is not known", () => {
+    expect(
+      open(
+        { fields: [title, excerpt], localized: true },
+        { canUpdate: true, locale: "fr" }
+      )
+    ).toBe("/admin/collections/pages/42?locale=fr");
   });
 
   it("opens where the rule says for the default language", () => {
@@ -264,10 +296,16 @@ describe("a Single, by the same rule", () => {
     );
   });
 
-  it("opens the form in a language other than the default", () => {
+  it("opens the form in a language other than the default, where it may keep one text", () => {
     expect(single(homepage, { ...editor, locale: "ar" })).toBe(
       "/admin/singles/homepage?locale=ar"
     );
+  });
+
+  it("opens the translation page of one that keeps text per language", () => {
+    expect(
+      single({ ...homepage, localized: true }, { ...editor, locale: "ar" })
+    ).toBe("/admin/translations/singles/homepage?locale=ar");
   });
 
   it("opens the form when it says so, whatever its main field", () => {

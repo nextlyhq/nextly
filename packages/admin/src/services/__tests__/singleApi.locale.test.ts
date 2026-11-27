@@ -36,6 +36,13 @@ describe("singleApi.getDocument — locale params", () => {
     expect(url).toContain("translation-status=1");
   });
 
+  it("asks for every language's values only when told to", async () => {
+    await singleApi.getDocument("site-settings", { everyLanguage: true });
+    expect(get.mock.calls[0][0] as string).toContain("translations=all");
+    await singleApi.getDocument("site-settings", { locale: "ar" });
+    expect(get.mock.calls[1][0] as string).not.toContain("translations=");
+  });
+
   it("omits locale params when none are given (non-localized path unchanged)", async () => {
     await singleApi.getDocument("site-settings");
     const url = get.mock.calls[0][0] as string;
