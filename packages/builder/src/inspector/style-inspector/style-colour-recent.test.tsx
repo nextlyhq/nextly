@@ -305,14 +305,17 @@ describe("a block's colour picker", () => {
         },
       ],
     });
+    // By its label: while the variables it names are suggested under it,
+    // the box is a combobox rather than a plain text box.
+    const box = () => screen.getByLabelText("Colour", { selector: "input" });
     let typed = "";
     for (const character of "color.brand.dark") {
       typed += character;
-      const field = screen.getByRole("textbox", { name: "Colour" });
+      const field = box();
       field.focus();
       fireEvent.change(field, { target: { value: typed } });
     }
-    const field = screen.getByRole("textbox", { name: "Colour" });
+    const field = box();
     expect((field as HTMLInputElement).value).toBe("color.brand.dark");
     fireEvent.blur(field);
     const color = (
