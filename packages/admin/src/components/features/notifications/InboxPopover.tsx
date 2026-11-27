@@ -189,15 +189,14 @@ function InboxTabBody({
   onFollowLink: () => void;
 }): JSX.Element {
   const list = useNoticeList(tab, true);
-  if (list.isError) {
-    return (
+  // Only with no rows to show: when a later refresh fails, the rows already
+  // shown stay, and the next refresh brings them up to date.
+  if (list.data === undefined) {
+    return list.isError ? (
       <p role="alert" className="px-4 py-3 text-sm text-destructive">
         Your Inbox could not be loaded.
       </p>
-    );
-  }
-  if (list.isPending) {
-    return (
+    ) : (
       <p role="status" className="px-4 py-3 text-sm text-muted-foreground">
         Loading…
       </p>

@@ -679,6 +679,63 @@ describe("the Inbox popover", () => {
     expect(String(options?.description)).not.toMatch(/nothing was changed/i);
   });
 
+  it("says the Inbox could not be loaded when its first read of the rows fails", async () => {
+    fill("for-you", [item("n1", "One")]);
+    const get = vi.mocked(protectedApi.get);
+    const real = get.getMockImplementation()!;
+    get.mockImplementation(async (path: string) => {
+      if (path.startsWith("/notices?")) throw new Error("offline");
+      return real(path);
+    });
+    try {
+      renderInbox();
+      await openInbox();
+      expect(
+        await screen.findByText("Your Inbox could not be loaded.", undefined, {
+          timeout: 4_000,
+        })
+      ).toBeInTheDocument();
+    } finally {
+      get.mockImplementation(real);
+    }
+  });
+
+  it("keeps the rows it has when a later refresh of them fails", async () => {
+    fill("for-you", [item("n1", "One"), item("n2", "Two")]);
+    renderInbox();
+    await openInbox();
+    await screen.findByRole("link", { name: /One/ });
+
+    // The next reads of the list fail, as a dropped connection would.
+    const get = vi.mocked(protectedApi.get);
+    const real = get.getMockImplementation()!;
+    try {
+      get.mockImplementation(async (path: string) => {
+        if (path.startsWith("/notices?")) throw new Error("offline");
+        return real(path);
+      });
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+      await waitFor(() =>
+        expect(
+          get.mock.calls.filter(([path]) =>
+            String(path).startsWith("/notices?")
+          ).length
+        ).toBeGreaterThan(1)
+      );
+      // Retried once by the hook, then settled as failed.
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 1_500));
+      });
+      expect(screen.getByRole("link", { name: /One/ })).toBeInTheDocument();
+      expect(screen.queryByText("Your Inbox could not be loaded.")).toBeNull();
+    } finally {
+      get.mockImplementation(real);
+    }
+  });
+
   it("brings an open Inbox's rows up to date with its counts when the admin regains focus", async () => {
     fill("for-you", [item("n1", "One"), item("n2", "Two")]);
     renderInbox();
