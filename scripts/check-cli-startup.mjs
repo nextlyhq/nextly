@@ -20,8 +20,8 @@
  * table fails the check, so a new command cannot ship untimed. Each run is
  * stopped at its first line that is not blank, so what the command would go
  * on to do never happens, and each that takes `--dry-run` is run with it. The
- * line must be the one the command declared (the `Database: …` line or its
- * start line), so a stray warning or Commander's refusal of the arguments
+ * line must be the one the command declared (the database line, `● local · …`,
+ * or its start line), so a stray warning or Commander's refusal of the arguments
  * does not pass as a fast answer.
  *
  * Then every command that runs an action is timed until its own code has
@@ -634,7 +634,7 @@ function connectOutcome(run, probe) {
   const failed = unfinished(run);
   if (failed) return { failure: failed };
   const connected = wroteLine(run, probe, "connected");
-  if (connected && !/^Database: SQLite /m.test(run.stderr)) {
+  if (connected && !/^● local · .* · SQLite \(/m.test(run.stderr)) {
     return { failure: "connected to a database it did not name as SQLite" };
   }
   if (connected && run.status === probe.exit) return { kind: "connected" };

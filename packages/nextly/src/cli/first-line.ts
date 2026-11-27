@@ -7,9 +7,10 @@
  * starts with, and the program prints it as the run begins, once the
  * environment files are read and before any of the command's code is
  * imported:
- * - a command that uses a database names it, with the run's mode and where
- *   its URL came from (`Database: …`), the line it would otherwise print only
- *   once connected;
+ * - a command that uses a database names it, whether it is on this machine,
+ *   the run's mode and where its URL came from (`● local · …` or
+ *   `● LIVE database …`), the line it would otherwise print only once
+ *   connected;
  * - a command that does not prints a short line saying what it is starting;
  * - a command that answers at once (its own code is light) prints its own
  *   first line, and declares so.
@@ -36,7 +37,7 @@ export type StartLineDatabase =
 
 /** The line a command starts with. */
 export type FirstLine =
-  /** The `Database: …` line naming the database the run uses. */
+  /** The line naming the database the run uses and where it is (`● local · …`, `● LIVE database …`). */
   | { kind: "database" }
   /** A short line saying what the command is starting, and whether it may connect after it. */
   | { kind: "start"; line: string; database: StartLineDatabase }

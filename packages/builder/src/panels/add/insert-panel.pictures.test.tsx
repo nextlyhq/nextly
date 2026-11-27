@@ -14,7 +14,7 @@
  *   opening up for sections nobody looked at.
  * - A picture on an open tab draws nothing until its tile is on screen, so
  *   the tab opens at once and a long list draws only what is scrolled to.
- * - The tiles sit two to a row while they carry pictures, and three without.
+ * - The tiles sit two to a row, with pictures or without.
  *
  * @module insert-panel.pictures.test
  */
@@ -221,7 +221,7 @@ describe("the Saved sections tab's pictures", () => {
     expect(tile("Text")).toBeTruthy();
     expect(document.querySelector(".nx-picture")).toBeNull();
     expect(renderPicture).not.toHaveBeenCalled();
-    expect(columns()).toBe("3");
+    expect(columns()).toBe("2");
   });
 
   it("draws nothing in a picture until its tile is on screen", () => {
@@ -245,14 +245,14 @@ describe("the Saved sections tab's pictures", () => {
     expect(screen.queryAllByTestId("drawn")).toHaveLength(2);
   });
 
-  it("keeps the mark, three to a row, for a host with no pictures", () => {
+  it("keeps the mark, two to a row as every tile is, for a host with no pictures", () => {
     registerBlocks([TEXT], { source: "acme" });
     render(<InsertPanel editor={editor()} patterns={SECTIONS} />);
 
     openTab("Saved sections");
     expect(tile("Hero").querySelector(".nx-picture")).toBeNull();
     expect(tile("Hero").querySelector(".nx-block-icon")).not.toBeNull();
-    expect(columns()).toBe("3");
+    expect(columns()).toBe("2");
   });
 
   it("keeps the mark for a section the host draws no picture for, whatever it returns", () => {
