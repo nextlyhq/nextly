@@ -32,20 +32,20 @@ export interface DocumentStanding {
 }
 
 /**
- * A mark of each part of a description, opaque: equal in two descriptions where nothing of that
- * part was saved between them. A part is covered by what moves with it alone, so a change to a
- * component or to a live shared field, which moves the document's own counter and no more, is in
- * the version and in no mark.
+ * A mark of each part of a description its caller can be shown, opaque: equal in two descriptions
+ * where nothing of that part was saved between them. A part is covered by what moves with it
+ * alone, so a change to a component or to a live shared field, which moves the document's own
+ * counter and no more, is in the version and in no mark. A language the description does not
+ * describe is in no mark: its caller may not be allowed to read it, and a mark of it would tell
+ * them when it was saved.
  *
  * @experimental
  */
 export interface PartMarks {
   /** The languages described. */
   languages: Readonly<Record<string, string>>;
-  /** The shared part, where it is described. */
-  shared?: string;
-  /** Everything of the document that is not described. */
-  rest: string;
+  /** The shared part's held change, which every language shows, described or not. */
+  shared: string;
 }
 
 /**
@@ -103,10 +103,9 @@ export function describedFrom(
   // A document with no languages of its own is one part, whichever language a draft of it was
   // saved in.
   const whole = Object.keys(standing.languages).length === 0;
-  // The described part a draft belongs to, or undefined for one of the rest.
+  // The marked part a draft belongs to, or undefined for a language not described.
   const partOfSlot = (slot: string | null): string | null | undefined => {
-    if (whole) return parts.shared ? SHARED_DRAFT_SLOT : undefined;
-    if (slot === SHARED_DRAFT_SLOT) return parts.shared ? slot : undefined;
+    if (whole || slot === SHARED_DRAFT_SLOT) return SHARED_DRAFT_SLOT;
     return described.has(slot) ? slot : undefined;
   };
   const marked = (
@@ -128,13 +127,7 @@ export function describedFrom(
           marked([counter], slot => partOfSlot(slot) === counter[0]),
         ])
       ),
-      ...(parts.shared
-        ? { shared: marked([], slot => partOfSlot(slot) === SHARED_DRAFT_SLOT) }
-        : {}),
-      rest: marked(
-        counters.filter(([locale]) => !described.has(locale)),
-        slot => partOfSlot(slot) === undefined
-      ),
+      shared: marked([], slot => partOfSlot(slot) === SHARED_DRAFT_SLOT),
     },
   };
 }

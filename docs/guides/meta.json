@@ -1,6 +1,7 @@
 {
   "title": "Guides",
   "pages": [
+    "build-your-front-end-in-code",
     "deployment",
     "production-migrations",
     "upgrading",

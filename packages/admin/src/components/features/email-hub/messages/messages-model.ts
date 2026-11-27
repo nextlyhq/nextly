@@ -183,7 +183,7 @@ export interface SendersDisplay {
  * What sends an email, formatted for the "Sent when" column and phone cards.
  *
  * An owned template with no declared senders and no references reads "Not
- * known: may be sent from code". A site template with neither reads "Not sent
+ * known: may be sent from code". One of your own templates with neither reads "Not sent
  * by anything yet". When references could not all be checked, that is said
  * instead or beside the known senders.
  */

@@ -1368,6 +1368,15 @@ describe("where overlays inside the shell portal to", () => {
     }
   });
 
+  it("draws what it hosts on the editor's own surface and colors", () => {
+    // Portalled out of the chrome, an overlay is outside every scope that
+    // defines the editor's tokens, so `var(--nx-builder-panel)` resolves to
+    // nothing and the Add picker is see-through over the page beneath it.
+    // The host is that scope, so every overlay it holds reads the tokens.
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+    expect(overlayHost().closest(".nx-builder-tokens")).not.toBeNull();
+  });
+
   it("keeps the host out of any ancestor that would trap fixed positioning", () => {
     // A guard rather than a comment, because the invariant is fragile by
     // construction and its violation is silent.

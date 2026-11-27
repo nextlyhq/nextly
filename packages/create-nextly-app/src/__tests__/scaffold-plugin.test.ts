@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import {
   mkdir,
@@ -7,6 +7,7 @@ import {
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -536,6 +537,137 @@ describe("a plugin scaffold runs as created", () => {
 
   // The playground's start-up hook, which creates the auto-login user, is run
   // rather than read in plugin-playground-seed.test.ts.
+
+  /*
+   * The declaration in the new package's package.json, and the test that
+   * keeps it in step with the plugin's code, run as the author runs them:
+   * vitest in the project, importing the SDK and `nextly` the project would
+   * install, linked from this checkout's built packages. Each edit an author
+   * might make to one side alone fails that test, naming what to change.
+   */
+  describe("the plugin's declaration", () => {
+    const linked = [
+      ["nextly", path.resolve(templatesRoot, "../packages/nextly")],
+      [
+        "@nextlyhq/plugin-sdk",
+        path.resolve(templatesRoot, "../packages/plugin-sdk"),
+      ],
+      ["vitest", path.dirname(requireFromHere.resolve("vitest/package.json"))],
+    ] as const;
+    let manifest = "";
+
+    beforeAll(async () => {
+      for (const [name, source] of linked) {
+        const at = path.join(project, "node_modules", name);
+        await mkdir(path.dirname(at), { recursive: true });
+        await symlink(source, at, "junction");
+      }
+      manifest = await read("package.json");
+    });
+    afterEach(async () => {
+      await writeFile(path.join(project, "package.json"), manifest);
+    });
+    // The links point into this checkout. Each is removed on its own, as a
+    // link, before the scaffold's folder is deleted, so that deletion never
+    // walks through one into the packages it points at.
+    afterAll(async () => {
+      for (const [name] of linked) {
+        await rm(path.join(project, "node_modules", name), { force: true });
+      }
+    });
+
+    /** The project's declaration test, run by vitest in the project: its status and output. */
+    function runDeclarationTest(): { status: number | null; output: string } {
+      const run = spawnSync(
+        process.execPath,
+        [
+          path.join(project, "node_modules/vitest/vitest.mjs"),
+          "run",
+          "src/declaration.test.ts",
+        ],
+        {
+          cwd: project,
+          encoding: "utf8",
+          env: { ...process.env, CI: "1", NO_COLOR: "1", FORCE_COLOR: "0" },
+        }
+      );
+      return { status: run.status, output: `${run.stdout}${run.stderr}` };
+    }
+
+    /** Rewrites the project's declaration through `edit`. */
+    async function editDeclaration(
+      edit: (declared: Record<string, unknown>) => void
+    ): Promise<void> {
+      const pkg = JSON.parse(manifest) as { nextly: Record<string, unknown> };
+      edit(pkg.nextly);
+      await writeFile(path.join(project, "package.json"), JSON.stringify(pkg));
+    }
+
+    it("says what the plugin needs, in the format and range its code uses", async () => {
+      const pkg = JSON.parse(manifest) as {
+        peerDependencies: Record<string, string>;
+        nextly: Record<string, unknown>;
+      };
+      const plugin = parseFile("src/plugin.ts", await read("src/plugin.ts"));
+      // The range `definePlugin` was rendered with, read from the call.
+      const range = /nextly: "([^"]+)"/.exec(plugin.text)?.[1];
+      expect(pkg.nextly).toEqual({
+        format: 1,
+        core: range,
+        databases: ["postgresql", "mysql", "sqlite"],
+        plugin: { export: "myPlugin", call: true },
+        collections: ["examples"],
+      });
+      expect(pkg.nextly.core).toBe(pkg.peerDependencies.nextly);
+    });
+
+    it("passes its own declaration test as created", () => {
+      const run = runDeclarationTest();
+      expect(run.status, run.output).toBe(0);
+      expect(run.output).toMatch(/1 passed/);
+    }, 120_000);
+
+    it.each<[string, (declared: Record<string, unknown>) => void, RegExp]>([
+      [
+        "a table the plugin does not define",
+        declared => {
+          declared.tables = ["examples_log"];
+        },
+        // vitest prints the sentence quoted, escaping its own quotes.
+        /table \\?"examples_log\\?", which the plugin's definition does not have/,
+      ],
+      [
+        "SQLite left out of the databases its suite runs on",
+        declared => {
+          declared.databases = ["postgresql", "mysql"];
+        },
+        /runs the plugin on sqlite, and the declaration's databases do not list it/,
+      ],
+      [
+        "a format newer than this Nextly reads",
+        declared => {
+          declared.format = 99;
+        },
+        /format 99.*this format needs a newer Nextly/,
+      ],
+      [
+        "an export the entry does not have",
+        declared => {
+          declared.plugin = { export: "myPlugn", call: true };
+        },
+        /It names the export myPlugn, which its entry does not have/,
+      ],
+    ])(
+      "fails its declaration test with %s, naming it",
+      async (_, edit, named) => {
+        await editDeclaration(edit);
+        const run = runDeclarationTest();
+        expect(run.status, run.output).not.toBe(0);
+        expect(run.output).toMatch(named);
+      },
+      120_000
+    );
+  });
 });
 
 /*

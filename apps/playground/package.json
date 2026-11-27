@@ -32,6 +32,7 @@
     "@nextlyhq/blocks-react": "workspace:^",
     "@nextlyhq/builder": "workspace:*",
     "@nextlyhq/plugin-form-builder": "workspace:^",
+    "@nextlyhq/plugin-mcp": "workspace:^",
     "@nextlyhq/plugin-page-builder": "workspace:^",
     "@nextlyhq/plugin-sdk": "workspace:^",
     "@nextlyhq/plugin-seo": "workspace:^",
