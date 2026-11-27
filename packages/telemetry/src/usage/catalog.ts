@@ -581,14 +581,7 @@ type ValueOf<P> = P extends {
  * What a caller passes for an event: its required properties, and any of its
  * optional ones. The base properties are the session's to add.
  */
-export type UsageEventProperties<E extends UsageEventName> = [
-  keyof Catalog[E]["required"] | keyof Catalog[E]["optional"],
-] extends [never]
-  ? // An event with no properties of its own takes an empty object only.
-    Record<string, never>
-  : OwnProperties<E>;
-
-type OwnProperties<E extends UsageEventName> = {
+export type UsageEventProperties<E extends UsageEventName> = {
   -readonly [K in keyof Catalog[E]["required"]]: ValueOf<
     Catalog[E]["required"][K]
   >;
