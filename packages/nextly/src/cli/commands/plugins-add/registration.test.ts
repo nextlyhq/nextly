@@ -171,16 +171,27 @@ describe("a package's nextly.plugin declaration", () => {
     });
   });
 
-  it("is invalid when a full declaration does not parse, naming the field", () => {
-    expect(
+  it("refuses a full declaration that does not parse under its own code, naming the field", () => {
+    // Not PLUGIN_DECLARATION_INVALID, whose cause is the registration block:
+    // here the block may be fine or absent, and another field is not.
+    let refused: unknown;
+    try {
       readDeclaration({
         name: PKG,
-        nextly: { format: 1, core: "^1.0.0", databases: [] },
-      })
-    ).toEqual({
-      kind: "invalid",
-      problem: expect.stringContaining("nextly.databases:"),
-    });
+        nextly: {
+          format: 1,
+          core: "^1.0.0",
+          databases: [],
+          plugin: { export: "seoPlugin" },
+        },
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(CliError);
+    const error = refused as CliError;
+    expect(error.code).toBe("PLUGIN_DECLARATION_MALFORMED");
+    expect(error.why).toContain("nextly.databases:");
   });
 
   it("refuses a declaration in a newer format, naming the format and the Nextly it works with", async () => {

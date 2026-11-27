@@ -96,7 +96,7 @@ import { checkPluginPackageDeclaration } from "@nextlyhq/plugin-sdk";
 import { getConfiguredTestDialects } from "@nextlyhq/plugin-sdk/testing";
 import { expect, it } from "vitest";
 
-import { redirectsPlugin } from "./index";
+import * as entry from "./index";
 
 const manifest: unknown = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8")
@@ -104,8 +104,9 @@ const manifest: unknown = JSON.parse(
 
 it("declares in package.json what the plugin does", () => {
   expect(
-    checkPluginPackageDeclaration(manifest, redirectsPlugin(), {
+    checkPluginPackageDeclaration(manifest, entry.redirectsPlugin(), {
       databases: getConfiguredTestDialects(),
+      exports: entry,
     })
   ).toEqual([]);
 });
@@ -113,8 +114,10 @@ it("declares in package.json what the plugin does", () => {
 
 `checkPluginPackageDeclaration` returns each problem as a sentence that names what to change, such
 as `The declaration lists the table "redirects_log", which the plugin's definition does not have.`
-With `databases`, each database the suite runs on must be among the declared ones. A plugin made
-with `create-nextly-app`'s Plugin start comes with this test and a declaration that passes it.
+With `databases`, each database the suite boots the plugin on (pass the list its other tests run
+on, as the Plugin start does) must be among the declared ones. With `exports`, the registration is
+checked against the entry: the export is there, a function when it is called, and otherwise the
+plugin itself. A plugin made with `create-nextly-app`'s Plugin start comes with this test and a declaration that passes it.
 
 `readPluginPackageDeclaration` reads a package.json's `nextly` key, and
 `pluginPackageDeclarationJsonSchema()` returns its JSON Schema for editors and other tools. Both

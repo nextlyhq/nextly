@@ -50,6 +50,9 @@ expectTypeOf<PluginDatabaseKind>().toEqualTypeOf<
 expectTypeOf(PLUGIN_DATABASE_KINDS).toEqualTypeOf<
   readonly ["postgresql", "mysql", "sqlite"]
 >();
+expectTypeOf<CheckPluginPackageDeclarationOptions["exports"]>().toEqualTypeOf<
+  Readonly<Record<string, unknown>> | undefined
+>();
 expectTypeOf<CheckPluginPackageDeclarationOptions["databases"]>().toEqualTypeOf<
   readonly PluginDatabaseKind[] | undefined
 >();

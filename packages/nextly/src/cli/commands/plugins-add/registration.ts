@@ -32,9 +32,11 @@
  */
 import type { PluginPackageInstallOption } from "../../../plugins/declaration/format";
 import { readPluginPackageDeclaration } from "../../../plugins/declaration/read";
+import { registrationTargetProblem } from "../../../plugins/declaration/registration-target";
 import {
   pluginDeclarationFormatNewer,
   pluginDeclarationInvalid,
+  pluginDeclarationMalformed,
   pluginOptionInvalid,
   pluginOptionMissing,
   pluginRegistrationUnknown,
@@ -108,17 +110,17 @@ export function readDeclaration(manifest: {
     case "newer-format":
       throw pluginDeclarationFormatNewer(name, reading.format, reading.core);
     case "invalid":
-      // Today's block alone is refused in the words it always was, each
-      // problem named within the block; a declaration with a format names
-      // each problem from its `nextly` key.
+      // A declaration with a format that does not hold to it has a refusal
+      // of its own; today's block alone is refused in the words, and under
+      // the code, it always was, each problem named within the block.
+      if (reading.of === "declaration") {
+        throw pluginDeclarationMalformed(name, reading.problems);
+      }
       return {
         kind: "invalid",
-        problem:
-          reading.of === "registration"
-            ? `Its \`nextly.plugin\` does not parse: ${reading.problems
-                .map(problem => problem.replace(/^nextly\.plugin(?:\.|: )/, ""))
-                .join("; ")}`
-            : `Its \`nextly\` declaration does not parse: ${reading.problems.join("; ")}`,
+        problem: `Its \`nextly.plugin\` does not parse: ${reading.problems
+          .map(problem => problem.replace(/^nextly\.plugin(?:\.|: )/, ""))
+          .join("; ")}`,
       };
     case "registration":
     case "declared": {
@@ -333,21 +335,16 @@ export async function pluginFrom(
   registration: Registration,
   values: Record<string, string>
 ): Promise<PluginShape> {
+  // The same question a plugin's own suite asks of its entry, in the same
+  // words: whether the export is there, and a function when it is called.
+  const problem = registrationTargetProblem(
+    { export: registration.exportName, call: registration.call },
+    exports
+  );
+  if (problem !== undefined) throw pluginDeclarationInvalid(pkg, problem);
   const exported = exports[registration.exportName];
-  if (exported === undefined) {
-    throw pluginDeclarationInvalid(
-      pkg,
-      `It names the export ${registration.exportName}, which its entry does not have`
-    );
-  }
   let made: unknown = exported;
   if (registration.call) {
-    if (typeof exported !== "function") {
-      throw pluginDeclarationInvalid(
-        pkg,
-        `It says ${registration.exportName} is called, and it is not a function`
-      );
-    }
     const options = Object.keys(registration.options).length > 0;
     try {
       made = await (exported as (options?: unknown) => unknown)(

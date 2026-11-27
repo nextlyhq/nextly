@@ -650,6 +650,13 @@ describe("a plugin scaffold runs as created", () => {
         },
         /format 99.*this format needs a newer Nextly/,
       ],
+      [
+        "an export the entry does not have",
+        declared => {
+          declared.plugin = { export: "myPlugn", call: true };
+        },
+        /It names the export myPlugn, which its entry does not have/,
+      ],
     ])(
       "fails its declaration test with %s, naming it",
       async (_, edit, named) => {

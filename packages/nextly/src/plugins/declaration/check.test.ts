@@ -97,3 +97,51 @@ describe("a plugin's suite checking its declaration", () => {
     ]);
   });
 });
+
+describe("a plugin's suite checking its registration against its entry", () => {
+  it("passes when the entry exports the factory the registration calls", () => {
+    expect(
+      checkPluginPackageDeclaration(manifest(), fixturePlugin(), {
+        exports: { notesPlugin: fixturePlugin },
+      })
+    ).toEqual([]);
+  });
+
+  it("names an export the entry does not have", () => {
+    expect(
+      checkPluginPackageDeclaration(manifest(), fixturePlugin(), {
+        exports: { notesPlgin: fixturePlugin },
+      })
+    ).toEqual([
+      "The declaration's registration does not fit the package's entry. It names the export notesPlugin, which its entry does not have.",
+    ]);
+  });
+
+  it("names a called export that is not a function", () => {
+    expect(
+      checkPluginPackageDeclaration(manifest(), fixturePlugin(), {
+        exports: { notesPlugin: fixturePlugin() },
+      })
+    ).toEqual([
+      "The declaration's registration does not fit the package's entry. It says notesPlugin is called, and it is not a function.",
+    ]);
+  });
+
+  it("names an export placed as it is that is not the plugin checked", () => {
+    const plugin = fixturePlugin();
+    const placed = manifest({ plugin: { export: "notesPlugin" } });
+    // The control: the plugin itself, exported as it is, fits.
+    expect(
+      checkPluginPackageDeclaration(placed, plugin, {
+        exports: { notesPlugin: plugin },
+      })
+    ).toEqual([]);
+    expect(
+      checkPluginPackageDeclaration(placed, plugin, {
+        exports: { notesPlugin: fixturePlugin },
+      })
+    ).toEqual([
+      "The declaration's registration places notesPlugin as it is, and the entry's notesPlugin is not the plugin this check was given: declare \"call\": true if it is a function that makes the plugin.",
+    ]);
+  });
+});

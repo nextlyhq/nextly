@@ -1563,6 +1563,13 @@ exports[`each code, as a command ends with it > PLUGIN_DECLARATION_INVALID 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-declaration-invalid  (PLUGIN_DECLARATION_INVALID)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_DECLARATION_MALFORMED 1`] = `
+"✗ The \`nextly\` declaration of "@acme/seo" cannot be read.
+  Why:  nextly.databases: must name at least one database. The package's package.json says what the plugin needs, and that is the plugin's to fix. The package may already be installed; your configuration was not changed.
+  Next: Tell the plugin's author, or add a version of the plugin whose declaration reads.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-declaration-malformed  (PLUGIN_DECLARATION_MALFORMED)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_DEPENDENCY_NOT_INSTALLED 1`] = `
 "✗ "@acme/sitemap" cannot be installed until its dependency is installed.
   Why:  Install them in this order:

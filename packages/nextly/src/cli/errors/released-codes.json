@@ -153,6 +153,7 @@
   "PLUGIN_CONFIG_NOT_EDITABLE": "`nextly plugins add` cannot place a plugin in the configuration file safely, so it left the file as it was.",
   "PLUGIN_DECLARATION_FORMAT_NEWER": "A package declares itself in the `nextly` key of its package.json in a format newer than this Nextly reads.",
   "PLUGIN_DECLARATION_INVALID": "The `nextly.plugin` declaration in a package's package.json cannot be read, or names an export that makes no plugin.",
+  "PLUGIN_DECLARATION_MALFORMED": "A package's declaration in the `nextly` key of its package.json names its format, and a field in it is missing or malformed.",
   "PLUGIN_DEPENDENCY_NOT_INSTALLED": "A plugin to install depends on a plugin that is not installed on this database.",
   "PLUGIN_DISABLED": "The plugin to install or uninstall is disabled in the configuration, so its hooks would not run.",
   "PLUGIN_DOCUMENT_SURFACE_COLLISION": "Two plugins override the same document action on one collection.",

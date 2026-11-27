@@ -28,6 +28,7 @@ import {
   pluginConfigNotEditable,
   pluginDeclarationFormatNewer,
   pluginDeclarationInvalid,
+  pluginDeclarationMalformed,
   pluginNotFound,
   pluginOptionInvalid,
   pluginOptionMissing,
@@ -148,6 +149,10 @@ export const PLUGIN_CASES = {
   PLUGIN_INSTALL_TARGET_UNCLEAR: () => installTargetUnclear(undefined),
   // As `nextly plugins add` raises each, with the values it passes.
   PLUGIN_PACKAGE_NOT_INSTALLED: () => pluginPackageNotInstalled(PLUGIN),
+  PLUGIN_DECLARATION_MALFORMED: () =>
+    pluginDeclarationMalformed(PLUGIN, [
+      "nextly.databases: must name at least one database",
+    ]),
   PLUGIN_DECLARATION_FORMAT_NEWER: () =>
     pluginDeclarationFormatNewer(PLUGIN, 2, "^1.0.0"),
   PLUGIN_DECLARATION_INVALID: () =>
