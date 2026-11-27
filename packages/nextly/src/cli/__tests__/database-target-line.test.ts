@@ -8,6 +8,12 @@
  * a port nothing listens on: the command says its line and then fails to
  * connect, and nothing it printed on either stream may hold any of the
  * three.
+ *
+ * The line says whether the database is on this machine (`● local · …`) or
+ * not (`● LIVE database …`), by where it is and never by the mode: a remote
+ * URL run with `NODE_ENV=development` is still live, and gets the hint that
+ * says how to mark a development copy. The remote host is a `.invalid`
+ * name, which no resolver answers, so the run fails at once after its line.
  */
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,13 +21,34 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { detectIsCi } from "@nextlyhq/telemetry/ci";
+
 import { NEXTLY_RUN_TIMEOUT, runNextly } from "./helpers/run-nextly";
+
+/**
+ * Every variable of this process the CI and host detector reads as a
+ * pipeline (GitHub Actions sets `GITHUB_ACTIONS` beside `CI`), cleared, so a
+ * run outside a pipeline is one wherever the test runs. Read from the
+ * detector itself, so a marker it learns is cleared too.
+ */
+const OUTSIDE_A_PIPELINE = Object.fromEntries(
+  Object.keys(process.env)
+    // Asked one variable at a time; `NODE_ENV` is no marker, and is required
+    // by the environment's type.
+    .filter(name => detectIsCi({ NODE_ENV: "test", [name]: process.env[name] }))
+    .map(name => [name, undefined])
+);
 
 const SECRETS = ["appuser", "s3cr3t-pass", "hunter2-query", "sslmode"];
 const POSTGRES =
   "postgresql://appuser:s3cr3t-pass@127.0.0.1:1/shop?sslmode=disable&password=hunter2-query";
 const MYSQL =
   "mysql://appuser:s3cr3t-pass@127.0.0.1:1/shop?password=hunter2-query";
+/** A live database's URL with every kind of credential, on a host nobody answers for. */
+const REMOTE =
+  "postgresql://appuser:s3cr3t-pass@db.prod.invalid:5432/app?sslmode=require&password=hunter2-query";
+const LIVE_HINT =
+  "This database isn't on this machine. If it's a development copy: nextly db mark-dev";
 
 const folders: string[] = [];
 afterEach(() => {
@@ -31,7 +58,12 @@ afterEach(() => {
 });
 
 /** Runs `command` in a new project, the URL in `.env.local` or in the process environment alone. */
-async function run(command: string, url: string, from: "file" | "process") {
+async function run(
+  command: string,
+  url: string,
+  from: "file" | "process",
+  env: Record<string, string | undefined> = {}
+) {
   const project = realpathSync(mkdtempSync(join(tmpdir(), "nextly-line-")));
   folders.push(project);
   if (from === "file") {
@@ -43,9 +75,16 @@ async function run(command: string, url: string, from: "file" | "process") {
     DB_DIALECT: undefined,
     NODE_ENV: undefined,
     CI: undefined,
+    ...OUTSIDE_A_PIPELINE,
+    ...env,
   });
-  const first = result.stderr.split("\n").find(line => line.trim() !== "");
-  return { project, first, all: `${result.stdout}\n${result.stderr}` };
+  const lines = result.stderr.split("\n").filter(line => line.trim() !== "");
+  return {
+    project,
+    first: lines[0],
+    second: lines[1],
+    all: `${result.stdout}\n${result.stderr}`,
+  };
 }
 
 const SOURCES = {
@@ -65,7 +104,7 @@ describe.each(["migrate:status", "migrate"])("nextly %s", command => {
       const { first, all } = await run(command, url, from);
 
       expect(first, all).toBe(
-        `Database: ${name} 127.0.0.1:1/shop (development; DATABASE_URL ${SOURCES[from]})`
+        `● local · 127.0.0.1:1/shop · ${name} (development; DATABASE_URL ${SOURCES[from]})`
       );
       // Nowhere in what it printed, the connection failure included.
       for (const secret of SECRETS) expect(all).not.toContain(secret);
@@ -82,7 +121,7 @@ describe.each(["migrate:status", "migrate"])("nextly %s", command => {
         "file"
       );
       expect(first, all).toBe(
-        `Database: SQLite ${join(project, "data", "app.db")} (development; DATABASE_URL from .env.local)`
+        `● local · ${join(project, "data", "app.db")} · SQLite (development; DATABASE_URL from .env.local)`
       );
     },
     NEXTLY_RUN_TIMEOUT
@@ -93,8 +132,58 @@ describe.each(["migrate:status", "migrate"])("nextly %s", command => {
     async () => {
       const { first, all } = await run(command, "file::memory:", "process");
       expect(first, all).toBe(
-        "Database: SQLite :memory: (development; DATABASE_URL from the process environment)"
+        "● local · :memory: · SQLite (development; DATABASE_URL from the process environment)"
       );
+    },
+    NEXTLY_RUN_TIMEOUT
+  );
+
+  it.each([["development"], ["production"], [undefined]] as const)(
+    "names a remote PostgreSQL database LIVE, with the hint and no credential, under NODE_ENV=%s",
+    async nodeEnv => {
+      const { first, second, all } = await run(command, REMOTE, "file", {
+        NODE_ENV: nodeEnv,
+      });
+      const mode = nodeEnv ?? "development";
+      expect(first, all).toBe(
+        `● LIVE database db.prod.invalid:5432/app · PostgreSQL (${mode}; DATABASE_URL from .env.local)`
+      );
+      expect(second, all).toBe(`  ${LIVE_HINT}`);
+      for (const secret of SECRETS) expect(all).not.toContain(secret);
+    },
+    NEXTLY_RUN_TIMEOUT
+  );
+
+  it(
+    "names a Docker service name and a private address LIVE: neither is this machine",
+    async () => {
+      for (const host of ["db", "10.0.0.5"]) {
+        const { first, all } = await run(
+          command,
+          `postgresql://appuser:s3cr3t-pass@${host}:1/shop`,
+          "process"
+        );
+        expect(first, all).toMatch(
+          new RegExp(
+            `^● LIVE database ${host.replace(/\./g, "\\.")}:1/shop · PostgreSQL `
+          )
+        );
+      }
+    },
+    NEXTLY_RUN_TIMEOUT
+  );
+
+  it(
+    "gives a deploy pipeline's live database its line and no hint",
+    async () => {
+      const { first, second, all } = await run(command, REMOTE, "file", {
+        CI: "true",
+      });
+      expect(first, all).toMatch(
+        /^● LIVE database db\.prod\.invalid:5432\/app /
+      );
+      expect(all).not.toContain(LIVE_HINT);
+      expect(second ?? "", all).not.toMatch(/mark-dev/);
     },
     NEXTLY_RUN_TIMEOUT
   );
