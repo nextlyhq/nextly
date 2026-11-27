@@ -18,7 +18,7 @@
  */
 import { NextlyError } from "nextly/errors";
 
-import type { AgentOperation } from "./operation";
+import type { AgentOperation, ToolNameAlias } from "./operation";
 
 /** The longest name a tool may have. */
 export const MAX_TOOL_NAME_LENGTH = 64;
@@ -32,7 +32,7 @@ const NAME_SHAPE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
  * `describe`, `upload`, `submit`, `validate`). A word outside this list in
  * first place is taken to be a noun, which breaks the verb-first rule.
  */
-export const TOOL_VERBS: ReadonlySet<string> = new Set([
+const TOOL_VERBS: ReadonlySet<string> = new Set([
   "abandon",
   "add",
   "audit",
@@ -187,27 +187,85 @@ function aMinorLater(earlier: string, later: string): boolean | undefined {
 }
 
 /**
- * Builds the door's two-way name map and checks it against the table, or
- * throws (`INVALID_INPUT`) with every problem found, each naming the tool or
- * operation.
+ * The refusal that stops a door starting, listing every problem. Refused the
+ * way core refuses an operation list with a problem, so a door never starts
+ * serving a tool nobody reviewed.
+ */
+export function startUpRefusal(problems: readonly string[]): NextlyError {
+  const count =
+    problems.length === 1 ? "one problem" : `${problems.length} problems`;
+  const listed = problems.map(problem => `- ${problem}`).join("\n");
+  return NextlyError.invalidInput({
+    message: `The MCP tool list can't be built (${count}):\n${listed}`,
+    logContext: { problems: [...problems] },
+  });
+}
+
+/** The table's rows by name, with a problem for each name given twice. */
+function rowsByName(
+  table: readonly ToolTableRow[],
+  problems: string[]
+): ReadonlyMap<string, ToolTableRow> {
+  const rows = new Map<string, ToolTableRow>();
+  for (const row of table) {
+    if (rows.has(row.name))
+      problems.push(`The tool table has two rows for "${row.name}"`);
+    rows.set(row.name, row);
+  }
+  return rows;
+}
+
+/** What is wrong with a served tool's row in the table, if anything. */
+function rowProblem(
+  name: string,
+  operation: AgentOperation,
+  row: ToolTableRow | undefined
+): string | undefined {
+  if (!row) {
+    return `The tool "${name}" (operation "${operation.id}") has no row in the adapter's tool table; add one naming its operation`;
+  }
+  if (row.operation === null) {
+    return `The tool "${name}" is served by operation "${operation.id}", but its row in the adapter's tool table names no operation yet; set it to "${operation.id}"`;
+  }
+  if (row.operation !== operation.id) {
+    return `The tool "${name}" is served by operation "${operation.id}", but its row in the adapter's tool table names "${row.operation}"`;
+  }
+  return undefined;
+}
+
+/** What is wrong with an old name of the tool `name`, if anything. */
+function aliasProblems(name: string, alias: ToolNameAlias): string[] {
+  const problems: string[] = [];
+  const shape = toolNameProblem(alias.name);
+  if (shape)
+    problems.push(`The old tool name "${alias.name}" of "${name}" ${shape}`);
+  const later = aMinorLater(alias.addedIn, alias.removableFrom);
+  if (later === undefined) {
+    problems.push(
+      `The old tool name "${alias.name}" of "${name}" gives releases that are not x.y.z ("${alias.addedIn}", "${alias.removableFrom}")`
+    );
+  } else if (!later) {
+    problems.push(
+      `The old tool name "${alias.name}" of "${name}" may be removed in ${alias.removableFrom}, less than one minor release after ${alias.addedIn}`
+    );
+  }
+  return problems;
+}
+
+/**
+ * The door's two-way name map, checked against the table, with every problem
+ * found, each naming the tool or operation.
  *
  * Checked: each name's shape; a row for each served tool naming that tool's
  * operation; one operation per name, current or old; and each old name kept
  * for at least one minor release.
  */
-export function buildNameMap(
+export function nameMapOf(
   served: readonly NamedOperation[],
   table: readonly ToolTableRow[]
-): NameMap {
+): { readonly map: NameMap; readonly problems: readonly string[] } {
   const problems: string[] = [];
-  const rows = new Map<string, ToolTableRow>();
-  for (const row of table) {
-    if (rows.has(row.name)) {
-      problems.push(`The tool table has two rows for "${row.name}"`);
-    }
-    rows.set(row.name, row);
-  }
-
+  const rows = rowsByName(table, problems);
   const byName = new Map<string, ResolvedName>();
   const nameById = new Map<string, string>();
   const claim = (name: string, resolved: ResolvedName): void => {
@@ -216,54 +274,25 @@ export function buildNameMap(
       problems.push(
         `The tool name "${name}" is claimed by both "${held.operation.id}" and "${resolved.operation.id}"`
       );
-      return;
+    } else {
+      byName.set(name, resolved);
     }
-    byName.set(name, resolved);
   };
 
   for (const { name, operation } of served) {
-    const problem = toolNameProblem(name);
-    if (problem) {
+    const shape = toolNameProblem(name);
+    if (shape)
       problems.push(
-        `The tool "${name}" (operation "${operation.id}") ${problem}`
+        `The tool "${name}" (operation "${operation.id}") ${shape}`
       );
-    }
-    const row = rows.get(name);
-    if (!row) {
-      problems.push(
-        `The tool "${name}" (operation "${operation.id}") has no row in the adapter's tool table; add one naming its operation`
-      );
-    } else if (row.operation === null) {
-      problems.push(
-        `The tool "${name}" is served by operation "${operation.id}", but its row in the adapter's tool table names no operation yet; set it to "${operation.id}"`
-      );
-    } else if (row.operation !== operation.id) {
-      problems.push(
-        `The tool "${name}" is served by operation "${operation.id}", but its row in the adapter's tool table names "${row.operation}"`
-      );
-    }
+    const row = rowProblem(name, operation, rows.get(name));
+    if (row) problems.push(row);
     claim(name, { operation, name });
     nameById.set(operation.id, name);
   }
-
   for (const { name, operation } of served) {
     for (const alias of operation.toolNameAliases ?? []) {
-      const problem = toolNameProblem(alias.name);
-      if (problem) {
-        problems.push(
-          `The old tool name "${alias.name}" of "${name}" ${problem}`
-        );
-      }
-      const later = aMinorLater(alias.addedIn, alias.removableFrom);
-      if (later === undefined) {
-        problems.push(
-          `The old tool name "${alias.name}" of "${name}" gives releases that are not x.y.z ("${alias.addedIn}", "${alias.removableFrom}")`
-        );
-      } else if (!later) {
-        problems.push(
-          `The old tool name "${alias.name}" of "${name}" may be removed in ${alias.removableFrom}, less than one minor release after ${alias.addedIn}`
-        );
-      }
+      problems.push(...aliasProblems(name, alias));
       claim(alias.name, {
         operation,
         name,
@@ -273,21 +302,23 @@ export function buildNameMap(
     }
   }
 
-  if (problems.length > 0) {
-    // Refused at start-up the way core refuses an operation list with a
-    // problem, so a door never starts serving a tool nobody reviewed.
-    throw NextlyError.invalidInput({
-      message: [
-        `The MCP tool list can't be built: ${problems.length === 1 ? "a problem" : `${problems.length} problems`}.`,
-        ...problems.map(problem => `- ${problem}`),
-      ].join("\n"),
-      logContext: { problems },
-    });
-  }
-
-  return Object.freeze({
+  const map: NameMap = Object.freeze({
     served: Object.freeze([...served]),
     resolve: (name: string) => byName.get(name),
     nameOf: (operationId: string) => nameById.get(operationId),
   });
+  return { map, problems };
+}
+
+/**
+ * The door's two-way name map, or throws (`INVALID_INPUT`) with every problem
+ * {@link nameMapOf} finds.
+ */
+export function buildNameMap(
+  served: readonly NamedOperation[],
+  table: readonly ToolTableRow[]
+): NameMap {
+  const { map, problems } = nameMapOf(served, table);
+  if (problems.length > 0) throw startUpRefusal(problems);
+  return map;
 }

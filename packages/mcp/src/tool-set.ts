@@ -41,15 +41,16 @@ import {
 } from "./errors";
 import { hintsFor, type ToolHints } from "./hints";
 import {
-  buildNameMap,
+  nameMapOf,
+  startUpRefusal,
   TOOL_TABLE,
-  type NameMap,
   type ResolvedName,
   type ToolTableRow,
 } from "./names";
 import type {
   AgentOperation,
   Door,
+  OperationOutcome,
   OperationSource,
   SchemaResult,
 } from "./operation";
@@ -133,6 +134,39 @@ function titleOf(operation: AgentOperation): string {
   return operation.summary.replace(/\.\s*$/, "");
 }
 
+/** One tool's definition, built once, or the problems that stop it being served. */
+function servedTool(
+  name: string,
+  operation: AgentOperation
+): ServedTool | { readonly problems: readonly string[] } {
+  const schemas = toolSchemas(name, operation);
+  if ("problems" in schemas) return schemas;
+  const title = titleOf(operation);
+  const annotations = Object.freeze(hintsFor(operation));
+  const definition: Tool = Object.freeze({
+    name,
+    title,
+    description: operation.description,
+    inputSchema: schemas.input as Tool["inputSchema"],
+    outputSchema: schemas.output,
+    annotations,
+  });
+  return Object.freeze({
+    name,
+    title,
+    description: operation.description,
+    inputSchema: schemas.input,
+    outputSchema: schemas.output,
+    annotations,
+    paged: schemas.paged,
+    oldNames: Object.freeze(
+      (operation.toolNameAliases ?? []).map(alias => alias.name)
+    ),
+    operation,
+    definition,
+  });
+}
+
 /** How many elements `value` holds, counting past `max` no further. */
 function elementCount(value: unknown, max: number): number {
   let count = 0;
@@ -200,6 +234,239 @@ interface RefusedCall {
   readonly suggestions?: readonly string[];
 }
 
+function isRefused(value: object): value is RefusedCall {
+  return "refused" in value;
+}
+
+/** The refusal for arguments that are too large or not an object, if they are. */
+function shapeRefusal(
+  args: unknown,
+  maxElements: number
+): RefusedCall | undefined {
+  if (elementCount(args, maxElements) > maxElements) {
+    return {
+      refused: new NextlyError({
+        code: "PAYLOAD_TOO_LARGE",
+        publicMessage: `The arguments hold more than ${maxElements} elements, the most one call may send.`,
+      }),
+    };
+  }
+  if (args !== undefined && !isRecord(args)) {
+    return { refused: inputRefusal("", "The arguments must be an object.") };
+  }
+  return undefined;
+}
+
+/** The refusal for an input the tool doesn't take, with the close names it does. */
+function unknownKeyRefusal(
+  tool: ServedTool,
+  raw: Readonly<Record<string, unknown>>
+): RefusedCall | undefined {
+  if (tool.inputSchema.additionalProperties !== false) return undefined;
+  const known = Object.keys(propertiesOf(tool.inputSchema) ?? {});
+  const unknownKey = Object.keys(raw).find(key => !known.includes(key));
+  if (unknownKey === undefined) return undefined;
+  return {
+    refused: NextlyError.validation({
+      errors: [
+        {
+          path: unknownKey,
+          code: "UNKNOWN_KEY",
+          message: "This tool takes no input by this name.",
+        },
+      ],
+    }),
+    suggestions: nearestNames(unknownKey, known),
+  };
+}
+
+/** The answer format the call asks for, the default when it names none. */
+function formatOf(
+  raw: Readonly<Record<string, unknown>>
+): AnswerFormat | RefusedCall {
+  const format = raw[FORMAT_KEY] ?? FORMATS[0];
+  return format === "concise" || format === "detailed"
+    ? format
+    : { refused: inputRefusal(FORMAT_KEY, 'Must be "concise" or "detailed".') };
+}
+
+/** The page size the call asks for, the default when it names none. */
+function limitOf(
+  input: Readonly<Record<string, unknown>>
+): number | RefusedCall {
+  const asked = input[LIMIT_KEY] ?? DEFAULT_PAGE_SIZE;
+  const valid =
+    typeof asked === "number" &&
+    Number.isInteger(asked) &&
+    asked >= 1 &&
+    asked <= MAX_PAGE_SIZE;
+  return valid
+    ? asked
+    : {
+        refused: inputRefusal(
+          LIMIT_KEY,
+          `Must be a whole number from 1 to ${MAX_PAGE_SIZE}.`
+        ),
+      };
+}
+
+/**
+ * The operation's own cursor inside the call's `after`, or `undefined` when
+ * the call sent none.
+ */
+function cursorOf(
+  tool: ServedTool,
+  input: Readonly<Record<string, unknown>>
+): { readonly next: string } | RefusedCall | undefined {
+  const after = input[AFTER_KEY];
+  if (after === undefined) return undefined;
+  if (typeof after !== "string") {
+    return {
+      refused: inputRefusal(
+        AFTER_KEY,
+        "Must be the `page.next` cursor from an earlier answer."
+      ),
+    };
+  }
+  const decoded = decodeCursor(after, tool.name, input);
+  if (!("problem" in decoded)) return decoded;
+  return {
+    refused: inputRefusal(
+      AFTER_KEY,
+      `The cursor ${decoded.problem}; send \`page.next\` from the previous answer of this tool, with the same other inputs.`
+    ),
+  };
+}
+
+/** For a list tool, the call's page size set and its cursor unwrapped, or the refusal. */
+function paging(
+  tool: ServedTool,
+  input: Record<string, unknown>
+): { readonly limit?: number } | RefusedCall {
+  if (!tool.paged) return {};
+  const limit = limitOf(input);
+  if (typeof limit !== "number") return limit;
+  input[LIMIT_KEY] = limit;
+  const cursor = cursorOf(tool, input);
+  if (cursor && isRefused(cursor)) return cursor;
+  if (cursor) input[AFTER_KEY] = cursor.next;
+  return { limit };
+}
+
+/** The call's arguments checked and split, or why they were refused. */
+async function prepareCall(
+  tool: ServedTool,
+  args: unknown,
+  maxElements: number
+): Promise<PreparedCall | RefusedCall> {
+  const shape = shapeRefusal(args, maxElements);
+  if (shape) return shape;
+  const raw: Readonly<Record<string, unknown>> = isRecord(args) ? args : {};
+  const unknownKey = unknownKeyRefusal(tool, raw);
+  if (unknownKey) return unknownKey;
+  const format = formatOf(raw);
+  if (typeof format !== "string") return format;
+  const input: Record<string, unknown> = { ...raw };
+  delete input[FORMAT_KEY];
+  const page = paging(tool, input);
+  if (isRefused(page)) return page;
+  const checked = await tool.operation.input["~standard"].validate(input);
+  if (checked.issues) return { refused: issuesRefusal(checked.issues) };
+  return {
+    input: isRecord(checked.value) ? checked.value : input,
+    query: input,
+    format,
+    ...page,
+  };
+}
+
+/**
+ * Whether `result` meets the operation's own output schema. One that doesn't
+ * is a defect: logged by where it failed, never by its values, and answered
+ * as an internal error rather than sent on.
+ */
+async function resultIsValid(
+  tool: ServedTool,
+  result: unknown,
+  logger: ToolLogger,
+  requestId: string
+): Promise<boolean> {
+  const checked = await tool.operation.output["~standard"].validate(result);
+  if (!checked.issues) return true;
+  logger.error(
+    "@nextlyhq/mcp: an operation's result failed its output schema",
+    {
+      requestId,
+      tool: tool.name,
+      operation: tool.operation.id,
+      paths: checked.issues.map(issue =>
+        (issue.path ?? []).map(String).join(".")
+      ),
+    }
+  );
+  return false;
+}
+
+/**
+ * The data an answer carries: the concise cut when that format was asked for
+ * (the full result whenever the cut would not pass the operation's schema),
+ * with a list tool's page beside it.
+ */
+async function answerData(
+  tool: ServedTool,
+  outcome: OperationOutcome,
+  prepared: PreparedCall
+): Promise<unknown> {
+  let data: unknown = outcome.result;
+  if (prepared.format === "concise") {
+    const cut = conciseCut(outcome.result, tool.outputSchema);
+    const checked = await tool.operation.output["~standard"].validate(cut);
+    if (!checked.issues) data = cut;
+  }
+  if (!tool.paged || !isRecord(data)) return data;
+  const page = outcome.page;
+  const next = page?.next ?? null;
+  return {
+    ...data,
+    [PAGE_KEY]: {
+      next:
+        next === null ? null : encodeCursor(tool.name, prepared.query, next),
+      limit: page?.limit ?? prepared.limit ?? DEFAULT_PAGE_SIZE,
+      ...(page?.total === undefined ? {} : { total: page.total }),
+      ...(page?.truncated === undefined ? {} : { truncated: page.truncated }),
+    },
+  };
+}
+
+/** What the Markdown answer needs besides the data. */
+function answerContext(
+  tool: ServedTool,
+  format: AnswerFormat,
+  adminOrigin: string | undefined,
+  resolved: ResolvedName
+): AnswerContext {
+  const renamed =
+    resolved.renamedFrom === undefined
+      ? undefined
+      : {
+          from: resolved.renamedFrom,
+          to: resolved.name,
+          removableFrom: resolved.removableFrom ?? "",
+        };
+  return {
+    title: tool.title,
+    format,
+    ...(adminOrigin === undefined ? {} : { adminOrigin }),
+    ...(renamed ? { renamed } : {}),
+  };
+}
+
+/** The refusal for an answer over the cap, which says how to ask for less. */
+const ANSWER_TOO_LARGE = {
+  publicMessage: `The answer would be longer than ${MAX_ANSWER_CHARACTERS} characters, so none of it was sent.`,
+  next: `Ask for less: name fewer fields with \`fields\`, set a smaller \`${LIMIT_KEY}\`, add a filter, or use \`format: "concise"\`, then call again.`,
+};
+
 /**
  * Builds a door's tools from `source`, once. Throws (`INVALID_INPUT`) with
  * every problem found when any tool can't be served: no row in the table, a
@@ -211,163 +478,21 @@ export function buildToolSet<Caller>(
 ): ToolSet<Caller> {
   const maxInputElements =
     options.maxInputElements ?? DEFAULT_MAX_INPUT_ELEMENTS;
-  const problems: string[] = [];
   const named = source.operations
     .filter(operation => servedOn(operation, options.door))
     .map(operation => ({ name: source.toolNameOf(operation), operation }));
 
-  let names: NameMap | undefined;
-  try {
-    names = buildNameMap(named, options.table ?? TOOL_TABLE);
-  } catch (error) {
-    if (!NextlyError.is(error)) throw error;
-    const listed = error.logContext?.problems;
-    problems.push(
-      ...(Array.isArray(listed) ? listed.map(String) : [error.publicMessage])
-    );
-  }
-
+  const names = nameMapOf(named, options.table ?? TOOL_TABLE);
+  const problems = [...names.problems];
   const tools: ServedTool[] = [];
   for (const { name, operation } of named) {
-    const schemas = toolSchemas(name, operation);
-    if ("problems" in schemas) {
-      problems.push(...schemas.problems);
-      continue;
-    }
-    const title = titleOf(operation);
-    const annotations = Object.freeze(hintsFor(operation));
-    const definition: Tool = Object.freeze({
-      name,
-      title,
-      description: operation.description,
-      inputSchema: schemas.input as Tool["inputSchema"],
-      outputSchema: schemas.output,
-      annotations,
-    });
-    tools.push(
-      Object.freeze({
-        name,
-        title,
-        description: operation.description,
-        inputSchema: schemas.input,
-        outputSchema: schemas.output,
-        annotations,
-        paged: schemas.paged,
-        oldNames: Object.freeze(
-          (operation.toolNameAliases ?? []).map(alias => alias.name)
-        ),
-        operation,
-        definition,
-      })
-    );
+    const tool = servedTool(name, operation);
+    if ("problems" in tool) problems.push(...tool.problems);
+    else tools.push(tool);
   }
-
-  if (problems.length > 0 || !names) {
-    // Refused at start-up the way core refuses an operation list with a
-    // problem, so a door never starts serving a tool nobody reviewed.
-    throw NextlyError.invalidInput({
-      message: [
-        `The MCP tool list can't be built: ${problems.length === 1 ? "a problem" : `${problems.length} problems`}.`,
-        ...problems.map(problem => `- ${problem}`),
-      ].join("\n"),
-      logContext: { problems },
-    });
-  }
-  const nameMap = names;
+  if (problems.length > 0) throw startUpRefusal(problems);
+  const nameMap = names.map;
   const byName = new Map(tools.map(tool => [tool.name, tool]));
-
-  /** The call's arguments checked and split, or why they were refused. */
-  async function prepare(
-    tool: ServedTool,
-    args: unknown
-  ): Promise<PreparedCall | RefusedCall> {
-    if (elementCount(args, maxInputElements) > maxInputElements) {
-      return {
-        refused: new NextlyError({
-          code: "PAYLOAD_TOO_LARGE",
-          publicMessage: `The arguments hold more than ${maxInputElements} elements, the most one call may send.`,
-        }),
-      };
-    }
-    if (args !== undefined && !isRecord(args)) {
-      return { refused: inputRefusal("", "The arguments must be an object.") };
-    }
-    const raw: Readonly<Record<string, unknown>> = args ?? {};
-    const properties = propertiesOf(tool.inputSchema) ?? {};
-    if (tool.inputSchema.additionalProperties === false) {
-      const unknownKey = Object.keys(raw).find(key => !(key in properties));
-      if (unknownKey !== undefined) {
-        return {
-          refused: NextlyError.validation({
-            errors: [
-              {
-                path: unknownKey,
-                code: "UNKNOWN_KEY",
-                message: "This tool takes no input by this name.",
-              },
-            ],
-          }),
-          suggestions: nearestNames(unknownKey, Object.keys(properties)),
-        };
-      }
-    }
-    const format = raw[FORMAT_KEY] ?? FORMATS[0];
-    if (format !== "concise" && format !== "detailed") {
-      return {
-        refused: inputRefusal(FORMAT_KEY, 'Must be "concise" or "detailed".'),
-      };
-    }
-    const input: Record<string, unknown> = { ...raw };
-    delete input[FORMAT_KEY];
-    let limit: number | undefined;
-    if (tool.paged) {
-      const asked = input[LIMIT_KEY] ?? DEFAULT_PAGE_SIZE;
-      if (
-        typeof asked !== "number" ||
-        !Number.isInteger(asked) ||
-        asked < 1 ||
-        asked > MAX_PAGE_SIZE
-      ) {
-        return {
-          refused: inputRefusal(
-            LIMIT_KEY,
-            `Must be a whole number from 1 to ${MAX_PAGE_SIZE}.`
-          ),
-        };
-      }
-      limit = asked;
-      input[LIMIT_KEY] = asked;
-      const after = input[AFTER_KEY];
-      if (after !== undefined) {
-        if (typeof after !== "string") {
-          return {
-            refused: inputRefusal(
-              AFTER_KEY,
-              "Must be the `page.next` cursor from an earlier answer."
-            ),
-          };
-        }
-        const decoded = decodeCursor(after, tool.name, input);
-        if ("problem" in decoded) {
-          return {
-            refused: inputRefusal(
-              AFTER_KEY,
-              `The cursor ${decoded.problem}; send \`page.next\` from the previous answer of this tool, with the same other inputs.`
-            ),
-          };
-        }
-        input[AFTER_KEY] = decoded.next;
-      }
-    }
-    const checked = await tool.operation.input["~standard"].validate(input);
-    if (checked.issues) return { refused: issuesRefusal(checked.issues) };
-    return {
-      input: isRecord(checked.value) ? checked.value : input,
-      query: input,
-      format,
-      ...(limit === undefined ? {} : { limit }),
-    };
-  }
 
   /** Runs `tool` for `binding`'s caller and answers, or answers the refusal. */
   async function call(
@@ -391,103 +516,46 @@ export function buildToolSet<Caller>(
         tool: tool.name,
         ...extra,
       });
-    let prepared: PreparedCall | RefusedCall;
     try {
-      prepared = await prepare(tool, args);
-    } catch (error) {
-      // A schema library that throws instead of answering with issues.
-      return refuse(error);
-    }
-    if ("refused" in prepared) {
-      return refuse(prepared.refused, {
-        ...(prepared.suggestions ? { suggestions: prepared.suggestions } : {}),
-      });
-    }
-
-    try {
+      const prepared = await prepareCall(tool, args, maxInputElements);
+      if (isRefused(prepared)) {
+        return refuse(prepared.refused, {
+          ...(prepared.suggestions
+            ? { suggestions: prepared.suggestions }
+            : {}),
+        });
+      }
       const outcome = await source.run(
         tool.operation,
         prepared.input,
         binding.caller
       );
-      const checked = await tool.operation.output["~standard"].validate(
-        outcome.result
-      );
-      if (checked.issues) {
-        // The operation answered outside its own schema: a defect, logged
-        // and answered as an internal error, never sent on.
-        binding.logger.error(
-          "@nextlyhq/mcp: an operation's result failed its output schema",
-          {
-            requestId,
-            tool: tool.name,
-            operation: tool.operation.id,
-            paths: checked.issues.map(issue =>
-              (issue.path ?? []).map(String).join(".")
-            ),
-          }
-        );
+      if (
+        !(await resultIsValid(tool, outcome.result, binding.logger, requestId))
+      ) {
         return refuse(NextlyError.internal());
       }
-      let data: unknown = outcome.result;
-      if (prepared.format === "concise") {
-        const cut = conciseCut(outcome.result, tool.outputSchema);
-        const cutChecked =
-          await tool.operation.output["~standard"].validate(cut);
-        // The cut keeps every required field, so it passes; if an unusual
-        // schema still refuses it, the full result is answered instead.
-        if (!cutChecked.issues) data = cut;
-      }
-      if (tool.paged && isRecord(data)) {
-        const page = outcome.page;
-        data = {
-          ...data,
-          [PAGE_KEY]: {
-            next:
-              page && page.next !== null
-                ? encodeCursor(tool.name, prepared.query, page.next)
-                : null,
-            limit: page?.limit ?? prepared.limit ?? DEFAULT_PAGE_SIZE,
-            ...(page?.total === undefined ? {} : { total: page.total }),
-            ...(page?.truncated === undefined
-              ? {}
-              : { truncated: page.truncated }),
-          },
-        };
-      }
-      const context: AnswerContext = {
-        title: tool.title,
-        format: prepared.format,
-        ...(binding.adminOrigin === undefined
-          ? {}
-          : { adminOrigin: binding.adminOrigin }),
-        ...(resolved.renamedFrom === undefined
-          ? {}
-          : {
-              renamed: {
-                from: resolved.renamedFrom,
-                to: resolved.name,
-                removableFrom: resolved.removableFrom ?? "",
-              },
-            }),
-      };
-      const text = answerText(data, context);
+      const data = await answerData(tool, outcome, prepared);
+      const text = answerText(
+        data,
+        answerContext(tool, prepared.format, binding.adminOrigin, resolved)
+      );
       if (text.length > MAX_ANSWER_CHARACTERS) {
         return refuse(
           new NextlyError({
             code: "PAYLOAD_TOO_LARGE",
-            publicMessage: `The answer would be longer than ${MAX_ANSWER_CHARACTERS} characters, so none of it was sent.`,
+            publicMessage: ANSWER_TOO_LARGE.publicMessage,
           }),
-          {
-            next: `Ask for less: name fewer fields with \`fields\`, set a smaller \`${LIMIT_KEY}\`, add a filter, or use \`format: "concise"\`, then call again.`,
-          }
+          { next: ANSWER_TOO_LARGE.next }
         );
       }
-      const result: CallToolResult = {
-        content: [{ type: "text", text }],
-        ...(isRecord(data) ? { structuredContent: { ...data } } : {}),
-      };
-      return server.projectCallToolResult(result, tool.outputSchema);
+      return server.projectCallToolResult(
+        {
+          content: [{ type: "text", text }],
+          ...(isRecord(data) ? { structuredContent: { ...data } } : {}),
+        },
+        tool.outputSchema
+      );
     } catch (error) {
       return refuse(error);
     }

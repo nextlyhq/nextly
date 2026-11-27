@@ -291,6 +291,66 @@ export interface FixtureRunOptions {
   readonly fail?: unknown;
 }
 
+/** Refuses a collection the fixture site doesn't have. */
+function checkCollection(collection: string): void {
+  if (!(COLLECTIONS as readonly string[]).includes(collection)) {
+    throw unknownCollection(collection);
+  }
+}
+
+/** Refuses the first chosen field an entry doesn't have. */
+function checkFields(fields: readonly string[] | undefined): void {
+  const unknown = (fields ?? []).find(
+    field => !(ENTRY_FIELDS as readonly string[]).includes(field)
+  );
+  if (unknown !== undefined) {
+    throw unknownNameError("VALIDATION_ERROR", {
+      kind: "field",
+      name: unknown,
+      choices: [...ENTRY_FIELDS],
+    });
+  }
+}
+
+/** `entries.find`: a page of entries, its cursor the offset of the next one. */
+function findEntries(
+  input: unknown,
+  entries: readonly StoredEntry[]
+): OperationOutcome {
+  const query = FIND_INPUT.parse(input);
+  checkCollection(query.collection);
+  checkFields(query.fields);
+  const offset = query.after === undefined ? 0 : Number(query.after);
+  const limit = query.limit ?? 20;
+  const page = entries.slice(offset, offset + limit);
+  const nextOffset = offset + page.length;
+  return {
+    result: {
+      collection: query.collection,
+      items: page.map(entry => shown(entry, query.fields)),
+    },
+    page: {
+      next: nextOffset < entries.length ? String(nextOffset) : null,
+      limit,
+      total: entries.length,
+    },
+  };
+}
+
+/** `entries.get`: one entry with every field. */
+function getEntry(
+  input: unknown,
+  entries: readonly StoredEntry[]
+): OperationOutcome {
+  const query = z
+    .object({ collection: z.string(), id: z.string() })
+    .parse(input);
+  checkCollection(query.collection);
+  const entry = entries.find(candidate => candidate.id === query.id);
+  if (!entry) throw NextlyError.notFound();
+  return { result: shown(entry, undefined) };
+}
+
 /** Runs a fixture operation the way the operation engine would hand it to the adapter. */
 export async function runFixture(
   operation: AgentOperation,
@@ -299,47 +359,8 @@ export async function runFixture(
 ): Promise<OperationOutcome> {
   if (options.fail !== undefined) throw options.fail;
   const entries = options.entries ?? fixtureEntries(3);
-  if (operation.id === "entries.find") {
-    const query = FIND_INPUT.parse(input);
-    if (!(COLLECTIONS as readonly string[]).includes(query.collection)) {
-      throw unknownCollection(query.collection);
-    }
-    for (const field of query.fields ?? []) {
-      if (!(ENTRY_FIELDS as readonly string[]).includes(field)) {
-        throw unknownNameError("VALIDATION_ERROR", {
-          kind: "field",
-          name: field,
-          choices: [...ENTRY_FIELDS],
-        });
-      }
-    }
-    const offset = query.after === undefined ? 0 : Number(query.after);
-    const limit = query.limit ?? 20;
-    const page = entries.slice(offset, offset + limit);
-    const nextOffset = offset + page.length;
-    return {
-      result: {
-        collection: query.collection,
-        items: page.map(entry => shown(entry, query.fields)),
-      },
-      page: {
-        next: nextOffset < entries.length ? String(nextOffset) : null,
-        limit,
-        total: entries.length,
-      },
-    };
-  }
-  if (operation.id === "entries.get") {
-    const query = z
-      .object({ collection: z.string(), id: z.string() })
-      .parse(input);
-    if (!(COLLECTIONS as readonly string[]).includes(query.collection)) {
-      throw unknownCollection(query.collection);
-    }
-    const entry = entries.find(candidate => candidate.id === query.id);
-    if (!entry) throw NextlyError.notFound();
-    return { result: shown(entry, undefined) };
-  }
+  if (operation.id === "entries.find") return findEntries(input, entries);
+  if (operation.id === "entries.get") return getEntry(input, entries);
   const { id } = z.object({ id: z.string() }).parse(input);
   return { result: { id, done: true } };
 }

@@ -27,16 +27,19 @@ const PAGE_FREE_KEYS: ReadonlySet<string> = new Set([
   "fields",
 ]);
 
-/** `value` as JSON with every object's keys in order, so equal inputs hash equally. */
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (typeof value === "object" && value !== null) {
-    const entries = Object.entries(value)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
+/**
+ * `value` as JSON text with each object's keys sorted and unset ones left out,
+ * so two equal inputs always give the same text.
+ */
+function sortedJson(value: unknown): string {
+  return JSON.stringify(value, (_key, entry: unknown) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+      return entry;
+    const keys = Object.keys(entry).sort();
+    return Object.fromEntries(
+      keys.map(key => [key, (entry as Record<string, unknown>)[key]])
+    );
+  });
 }
 
 /** A short fingerprint of the inputs that must stay the same across pages. */
@@ -46,7 +49,7 @@ function queryFingerprint(input: Readonly<Record<string, unknown>>): string {
     if (!PAGE_FREE_KEYS.has(key)) query[key] = entry;
   }
   return createHash("sha256")
-    .update(canonical(query))
+    .update(sortedJson(query))
     .digest("base64url")
     .slice(0, 22);
 }

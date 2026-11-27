@@ -11,14 +11,7 @@
  */
 
 /** How much harm a run can do, lowest first: core's four risk levels. */
-export const RISK_LEVELS: readonly ["read", "draft", "change", "critical"] = [
-  "read",
-  "draft",
-  "change",
-  "critical",
-] as const;
-
-export type RiskLevel = (typeof RISK_LEVELS)[number];
+export type RiskLevel = "read" | "draft" | "change" | "critical";
 
 /** Where an operation may run: core's four doors. */
 export type Door = "local" | "deploy" | "site" | "chat";

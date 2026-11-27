@@ -16,7 +16,7 @@
 import type { AgentOperation } from "./operation";
 
 /** The JSON Schema dialect tools are described in, the protocol's default. */
-export const JSON_SCHEMA_TARGET = "draft-2020-12";
+const JSON_SCHEMA_TARGET = "draft-2020-12";
 
 /** The input property that picks how much an answer carries. */
 export const FORMAT_KEY = "format";
@@ -122,6 +122,63 @@ function describesObject(schema: JsonSchema): boolean {
   return schema.type === undefined || schema.type === "object";
 }
 
+/** One side of an operation's schema as JSON Schema, or the problem converting it. */
+function describedSide(
+  operation: AgentOperation,
+  side: "input" | "output",
+  label: string
+): JsonSchema | string {
+  const converter = operation[side]["~standard"].jsonSchema;
+  if (!converter) {
+    return `${label}: its ${side} schema can't describe itself as JSON Schema; declare it with a library that implements ~standard.jsonSchema (Zod 4.2 or later)`;
+  }
+  try {
+    return converter[side]({ target: JSON_SCHEMA_TARGET });
+  } catch {
+    return `${label}: its ${side} schema failed to convert to JSON Schema`;
+  }
+}
+
+/** What stops a list tool's output carrying `page`, if anything. */
+function pageProblem(output: JsonSchema, label: string): string | undefined {
+  const properties = propertiesOf(output);
+  if (!describesObject(output) || !properties) {
+    return `${label}: it pages, so its output must be an object with properties to carry "${PAGE_KEY}"`;
+  }
+  return PAGE_KEY in properties
+    ? `${label}: its output already has a "${PAGE_KEY}" property, which the adapter adds to every list`
+    : undefined;
+}
+
+/** The tool's input schema: the operation's, with paging stated and `format` added. */
+function toolInputSchema(
+  input: JsonSchema,
+  properties: Readonly<Record<string, JsonSchema>>,
+  paged: boolean
+): JsonSchema {
+  const paging = paged
+    ? {
+        [LIMIT_KEY]: { ...properties[LIMIT_KEY], ...LIMIT_PROPERTY },
+        [AFTER_KEY]: { ...properties[AFTER_KEY], ...AFTER_PROPERTY },
+      }
+    : {};
+  return frozen({
+    ...input,
+    type: "object",
+    properties: { ...properties, ...paging, [FORMAT_KEY]: FORMAT_PROPERTY },
+  });
+}
+
+/** The tool's output schema: the operation's, with `page` added for a list. */
+function toolOutputSchema(output: JsonSchema, paged: boolean): JsonSchema {
+  if (!paged) return frozen({ ...output });
+  return frozen({
+    ...output,
+    type: "object",
+    properties: { ...propertiesOf(output), [PAGE_KEY]: PAGE_PROPERTY },
+  });
+}
+
 /**
  * The tool's schemas for `operation`, or the problems that stop it being
  * served. `name` only labels the problems.
@@ -131,74 +188,32 @@ export function toolSchemas(
   operation: AgentOperation
 ): ToolSchemas | { readonly problems: readonly string[] } {
   const label = `The tool "${name}" (operation "${operation.id}")`;
-  const describe = (side: "input" | "output"): JsonSchema | string => {
-    const converter = operation[side]["~standard"].jsonSchema;
-    if (!converter) {
-      return `${label}: its ${side} schema can't describe itself as JSON Schema; declare it with a library that implements ~standard.jsonSchema (Zod 4.2 or later)`;
-    }
-    try {
-      return converter[side]({ target: JSON_SCHEMA_TARGET });
-    } catch {
-      return `${label}: its ${side} schema failed to convert to JSON Schema`;
-    }
-  };
-  const input = describe("input");
-  const output = describe("output");
-  const problems: string[] = [];
-  if (typeof input === "string") problems.push(input);
-  if (typeof output === "string") problems.push(output);
+  const input = describedSide(operation, "input", label);
+  const output = describedSide(operation, "output", label);
   if (typeof input === "string" || typeof output === "string") {
-    return { problems };
+    return {
+      problems: [input, output].filter(
+        (side): side is string => typeof side === "string"
+      ),
+    };
   }
-
-  const inputProperties = propertiesOf(input);
-  if (!describesObject(input) || !inputProperties) {
-    problems.push(
-      `${label}: its input schema is not an object with properties`
-    );
-    return { problems };
+  const properties = propertiesOf(input);
+  if (!describesObject(input) || !properties) {
+    return {
+      problems: [`${label}: its input schema is not an object with properties`],
+    };
   }
-  if (FORMAT_KEY in inputProperties) {
-    problems.push(
-      `${label}: its input already has a "${FORMAT_KEY}" property, which the adapter adds to every tool`
-    );
-  }
-  const paged = LIMIT_KEY in inputProperties && AFTER_KEY in inputProperties;
-  const outputProperties = propertiesOf(output);
-  if (paged) {
-    if (!describesObject(output) || !outputProperties) {
-      problems.push(
-        `${label}: it pages, so its output must be an object with properties to carry "${PAGE_KEY}"`
-      );
-    } else if (PAGE_KEY in outputProperties) {
-      problems.push(
-        `${label}: its output already has a "${PAGE_KEY}" property, which the adapter adds to every list`
-      );
-    }
-  }
+  const paged = LIMIT_KEY in properties && AFTER_KEY in properties;
+  const problems = [
+    FORMAT_KEY in properties
+      ? `${label}: its input already has a "${FORMAT_KEY}" property, which the adapter adds to every tool`
+      : undefined,
+    paged ? pageProblem(output, label) : undefined,
+  ].filter((problem): problem is string => problem !== undefined);
   if (problems.length > 0) return { problems };
-
-  const toolInput: Record<string, unknown> = {
-    ...input,
-    type: "object",
-    properties: {
-      ...inputProperties,
-      ...(paged
-        ? {
-            [LIMIT_KEY]: { ...inputProperties[LIMIT_KEY], ...LIMIT_PROPERTY },
-            [AFTER_KEY]: { ...inputProperties[AFTER_KEY], ...AFTER_PROPERTY },
-          }
-        : {}),
-      [FORMAT_KEY]: FORMAT_PROPERTY,
-    },
+  return {
+    input: toolInputSchema(input, properties, paged),
+    output: toolOutputSchema(output, paged),
+    paged,
   };
-  const toolOutput: Record<string, unknown> =
-    paged && outputProperties
-      ? {
-          ...output,
-          type: "object",
-          properties: { ...outputProperties, [PAGE_KEY]: PAGE_PROPERTY },
-        }
-      : { ...output };
-  return { input: frozen(toolInput), output: frozen(toolOutput), paged };
 }

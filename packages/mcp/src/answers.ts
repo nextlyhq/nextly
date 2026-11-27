@@ -32,7 +32,7 @@ import { propertiesOf, type AnswerFormat } from "./schemas";
 export const MAX_ANSWER_CHARACTERS = 50_000;
 
 /** The fields the concise answer always keeps, beside the required ones. */
-export const IDENTIFYING_KEYS: ReadonlySet<string> = new Set([
+const IDENTIFYING_KEYS: ReadonlySet<string> = new Set([
   "id",
   "title",
   "name",
@@ -253,6 +253,18 @@ function itemLines(
     : [`${indent}-`, ...quoted(String(item), `${indent}  `)];
 }
 
+/** A list's count line, then one entry per item. */
+function listLines(
+  items: readonly unknown[],
+  origin: string | undefined
+): string[] {
+  const count =
+    items.length === 0
+      ? "No items."
+      : `${items.length} item${items.length === 1 ? "" : "s"}:`;
+  return [count, ...items.flatMap(item => itemLines(item, origin, ""))];
+}
+
 /** The Markdown body for `data`, without the heading or the data block. */
 function bodyLines(data: unknown, origin: string | undefined): string[] {
   if (!isRecord(data)) {
@@ -261,23 +273,20 @@ function bodyLines(data: unknown, origin: string | undefined): string[] {
       ? [`Result: ${inline}`]
       : ["Result:", ...quoted(String(data), "")];
   }
-  const lines: string[] = [];
-  if (isThing(data)) lines.push(thingLine(data, origin), "");
-  const items = data.items;
-  const skip = new Set<string>(isThing(data) ? SHOWN_IN_HEADING : []);
-  skip.add("page");
-  if (Array.isArray(items)) skip.add("items");
-  lines.push(...fieldLines(data, origin, "", skip));
-  if (Array.isArray(items)) {
-    if (lines.length > 0) lines.push("");
-    lines.push(
-      items.length === 0
-        ? "No items."
-        : `${items.length} item${items.length === 1 ? "" : "s"}:`
-    );
-    for (const item of items) lines.push(...itemLines(item, origin, ""));
-  }
-  return lines;
+  const thing = isThing(data);
+  const items = Array.isArray(data.items) ? data.items : undefined;
+  const skip = new Set<string>([...(thing ? SHOWN_IN_HEADING : []), "page"]);
+  if (items) skip.add("items");
+  const lines = [
+    ...(thing ? [thingLine(data, origin), ""] : []),
+    ...fieldLines(data, origin, "", skip),
+  ];
+  if (!items) return lines;
+  return [
+    ...lines,
+    ...(lines.length > 0 ? [""] : []),
+    ...listLines(items, origin),
+  ];
 }
 
 /** The page line of a list's answer. */
@@ -303,7 +312,7 @@ function fenceFor(text: string): string {
 }
 
 /** The label line before the data block, which a client can find it by. */
-export const DATA_LABEL = "Data (the same as the structured content, as JSON):";
+const DATA_LABEL = "Data (the same as the structured content, as JSON):";
 
 /**
  * The answer's text for `data`: the Markdown answer, then the data as JSON in

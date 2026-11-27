@@ -50,73 +50,56 @@ const NEXT_BY_CODE: Readonly<Partial<Record<NextlyErrorCode, string>>> = {
     "The sign-in this connection uses has expired. Ask the person to connect this app again, then call again.",
 };
 
-/** What to do next for a status, when the code has no advice of its own. */
-function nextForStatus(status: number): string {
-  if (status === 400) {
-    return "Check the input against the tool's input schema, fix what `error.data` names, and call again.";
-  }
-  if (status === 401) {
-    return "This connection is not signed in. Ask the person to connect this app again, then call again.";
-  }
-  if (status === 403) {
-    return "The person this connection acts for may not do this. Do something the connection allows, or ask a site owner for the access.";
-  }
-  if (status === 404) return NEXT_BY_CODE.NOT_FOUND ?? "";
-  if (status === 405)
-    return "This action isn't available on this item. Use a tool meant for it.";
-  if (status === 409) {
-    return "The item changed, is busy, or clashes with another. Read it again, then retry with what you read.";
-  }
-  if (status === 410) {
-    return "That has expired or was already used. Call the tool that issued it again to get a new one.";
-  }
-  if (status === 413) return NEXT_BY_CODE.PAYLOAD_TOO_LARGE ?? "";
-  if (status === 415) {
-    return "That kind of file or content isn't accepted here. Send one the tool's description allows.";
-  }
-  if (status === 416)
-    return "The range asked for is outside the item. Ask for a range inside it.";
-  if (status === 422) {
-    return "The call breaks one of the site's rules. Change the input so it meets the rule `error.data` names, then call again.";
-  }
-  if (status === 428) return NEXT_BY_CODE.VERSION_REQUIRED ?? "";
-  if (status === 429) return NEXT_BY_CODE.RATE_LIMITED ?? "";
-  if (status >= 500) {
-    return "The site couldn't finish this. Try again in a moment; if it keeps failing, give the site owner the request ID.";
-  }
-  return "The call was refused. Read `error.code` and `error.data`, change the call, and try again.";
-}
+/** What to do next for each status, when the code has no advice of its own. */
+const NEXT_BY_STATUS: Readonly<Record<number, string>> = {
+  400: "Check the input against the tool's input schema, fix what `error.data` names, and call again.",
+  401: "This connection is not signed in. Ask the person to connect this app again, then call again.",
+  403: "The person this connection acts for may not do this. Do something the connection allows, or ask a site owner for the access.",
+  404: NEXT_BY_CODE.NOT_FOUND ?? "",
+  405: "This action isn't available on this item. Use a tool meant for it.",
+  409: "The item changed, is busy, or clashes with another. Read it again, then retry with what you read.",
+  410: "That has expired or was already used. Call the tool that issued it again to get a new one.",
+  413: NEXT_BY_CODE.PAYLOAD_TOO_LARGE ?? "",
+  415: "That kind of file or content isn't accepted here. Send one the tool's description allows.",
+  416: "The range asked for is outside the item. Ask for a range inside it.",
+  422: "The call breaks one of the site's rules. Change the input so it meets the rule `error.data` names, then call again.",
+  428: NEXT_BY_CODE.VERSION_REQUIRED ?? "",
+  429: NEXT_BY_CODE.RATE_LIMITED ?? "",
+};
+
+/** What to do next when the site failed, whatever its status. */
+const NEXT_ON_FAILURE =
+  "The site couldn't finish this. Try again in a moment; if it keeps failing, give the site owner the request ID.";
+
+/** What to do next for a status nothing more exact covers. */
+const NEXT_OTHERWISE =
+  "The call was refused. Read `error.code` and `error.data`, change the call, and try again.";
 
 /** What to do next after an error with `code` and HTTP `status`. */
 export function nextStepFor(code: string, status: number): string {
-  return code in NEXT_BY_CODE
-    ? (NEXT_BY_CODE[code as NextlyErrorCode] ?? nextForStatus(status))
-    : nextForStatus(status);
+  const byCode = (NEXT_BY_CODE as Readonly<Record<string, string | undefined>>)[
+    code
+  ];
+  if (byCode !== undefined) return byCode;
+  return (
+    NEXT_BY_STATUS[status] ?? (status >= 500 ? NEXT_ON_FAILURE : NEXT_OTHERWISE)
+  );
 }
 
-/** The edit distance between `a` and `b`, counting a swap of two neighbours as one edit. */
+/** The number of single-letter insertions, deletions and changes that turn `a` into `b`. */
 function editDistance(a: string, b: string): number {
-  const rows = a.length + 1;
-  const cols = b.length + 1;
-  const d: number[][] = Array.from({ length: rows }, (_, i) =>
-    Array.from({ length: cols }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
-  );
-  for (let i = 1; i < rows; i++) {
-    for (let j = 1; j < cols; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      let best = Math.min(
-        (d[i - 1]?.[j] ?? 0) + 1,
-        (d[i]?.[j - 1] ?? 0) + 1,
-        (d[i - 1]?.[j - 1] ?? 0) + cost
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++) {
+      const change = (previous[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1);
+      current.push(
+        Math.min((previous[j] ?? 0) + 1, (current[j - 1] ?? 0) + 1, change)
       );
-      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
-        best = Math.min(best, (d[i - 2]?.[j - 2] ?? 0) + 1);
-      }
-      const row = d[i];
-      if (row) row[j] = best;
     }
+    previous = current;
   }
-  return d[a.length]?.[b.length] ?? 0;
+  return previous[b.length] ?? 0;
 }
 
 /** The most suggestions one refusal names. */
@@ -147,12 +130,8 @@ export function nearestNames(
 }
 
 /** The kinds of thing an unknown-name refusal may name, each worded in the answer. */
-export const UNKNOWN_NAME_KINDS: readonly [
-  "field",
-  "collection",
-  "single",
-  "block",
-] = ["field", "collection", "single", "block"] as const;
+const UNKNOWN_NAME_KINDS: readonly ["field", "collection", "single", "block"] =
+  ["field", "collection", "single", "block"] as const;
 
 export type UnknownNameKind = (typeof UNKNOWN_NAME_KINDS)[number];
 
@@ -175,14 +154,18 @@ function isUnknownNameKind(value: unknown): value is UnknownNameKind {
   return (UNKNOWN_NAME_KINDS as readonly unknown[]).includes(value);
 }
 
+/** The `key` field of `value` when it is an object, else `undefined`. */
+function fieldOf(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null
+    ? (value as Readonly<Record<string, unknown>>)[key]
+    : undefined;
+}
+
 function unknownNameOf(data: unknown): UnknownNameData["unknown"] | undefined {
-  if (typeof data !== "object" || data === null || !("unknown" in data))
-    return undefined;
-  const unknown: unknown = data.unknown;
-  if (typeof unknown !== "object" || unknown === null) return undefined;
-  const kind = "kind" in unknown ? unknown.kind : undefined;
-  const name = "name" in unknown ? unknown.name : undefined;
-  const choices = "choices" in unknown ? unknown.choices : undefined;
+  const unknown = fieldOf(data, "unknown");
+  const kind = fieldOf(unknown, "kind");
+  const name = fieldOf(unknown, "name");
+  const choices = fieldOf(unknown, "choices");
   // A kind the answer has no words for is read as no unknown name at all.
   if (
     !isUnknownNameKind(kind) ||
@@ -191,13 +174,10 @@ function unknownNameOf(data: unknown): UnknownNameData["unknown"] | undefined {
   ) {
     return undefined;
   }
-  return {
-    kind,
-    name,
-    choices: choices.filter(
-      (choice): choice is string => typeof choice === "string"
-    ),
-  };
+  const names = choices.filter(
+    (choice): choice is string => typeof choice === "string"
+  );
+  return { kind, name, choices: names };
 }
 
 /** A name as inline code, with backticks it holds made harmless. */
@@ -225,12 +205,52 @@ export interface ErrorAnswerOptions {
   readonly suggestions?: readonly string[];
 }
 
-/** The call frames of `error`'s stack, without the message line V8 puts first. */
-function callFramesOf(error: Error): string[] {
-  return (error.stack ?? "")
-    .split("\n")
-    .filter(line => /^\s+at\s/.test(line))
-    .map(line => line.trim());
+/** A line of a stack that names a call frame (`    at …`). */
+const FRAME_LINE = /^\s+at\s/;
+
+/**
+ * Where `error` was thrown: its stack's call frames, without the message line
+ * V8 puts first, which can quote a secret.
+ */
+function framesOf(error: Error): string[] {
+  const frames: string[] = [];
+  for (const line of (error.stack ?? "").split("\n")) {
+    if (FRAME_LINE.test(line)) frames.push(line.trim());
+  }
+  return frames;
+}
+
+/**
+ * `error` as a `NextlyError`: itself, or core's internal error for anything
+ * else, which is logged by its kind and call frames, never its message.
+ */
+function refusalFor(error: unknown, options: ErrorAnswerOptions): NextlyError {
+  if (NextlyError.is(error)) return error;
+  options.logger.error("@nextlyhq/mcp: a tool failed", {
+    requestId: options.requestId,
+    tool: options.tool,
+    error:
+      error instanceof Error
+        ? { name: error.name, frames: framesOf(error) }
+        : { type: typeof error },
+  });
+  return NextlyError.internal();
+}
+
+/** The answer's line about close names, or none when it has none to name. */
+function suggestionLine(
+  unknown: UnknownNameData["unknown"] | undefined,
+  suggestions: readonly string[]
+): string | undefined {
+  const close = suggestions.map(code).join(", ");
+  if (!unknown)
+    return suggestions.length > 0
+      ? `Close names you may use: ${close}.`
+      : undefined;
+  const missing = `No ${unknown.kind} is called ${code(unknown.name)}`;
+  return suggestions.length > 0
+    ? `${missing}. Close names you may use: ${close}.`
+    : `${missing}, and none you may use is close to it.`;
 }
 
 /** The tool error answering `error`. */
@@ -239,45 +259,22 @@ export function errorAnswer(
   options: ErrorAnswerOptions
 ): CallToolResult {
   const { requestId } = options;
-  let refusal: NextlyError;
-  if (NextlyError.is(error)) {
-    refusal = error;
-  } else {
-    options.logger.error("@nextlyhq/mcp: a tool failed", {
-      requestId,
-      tool: options.tool,
-      error:
-        error instanceof Error
-          ? { name: error.name, frames: callFramesOf(error) }
-          : { type: typeof error },
-    });
-    refusal = NextlyError.internal();
-  }
+  const refusal = refusalFor(error, options);
   const json = refusal.toResponseJSON(requestId);
   const next = options.next ?? nextStepFor(json.code, refusal.statusCode);
   const unknown = unknownNameOf(json.data);
   const suggestions = unknown
     ? nearestNames(unknown.name, unknown.choices)
     : [...(options.suggestions ?? [])];
-
-  const lines = [`**Refused: ${code(json.code)}**`, "", next];
-  if (unknown) {
-    lines.push(
-      "",
-      suggestions.length > 0
-        ? `No ${unknown.kind} is called ${code(unknown.name)}. Close names you may use: ${suggestions.map(code).join(", ")}.`
-        : `No ${unknown.kind} is called ${code(unknown.name)}, and none you may use is close to it.`
-    );
-  } else if (suggestions.length > 0) {
-    lines.push(
-      "",
-      `Close names you may use: ${suggestions.map(code).join(", ")}.`
-    );
-  }
-  lines.push(
+  const close = suggestionLine(unknown, suggestions);
+  const lines = [
+    `**Refused: ${code(json.code)}**`,
     "",
-    `Request ID: ${code(requestId)}. \`structuredContent.error\` has the same, with the details as data.`
-  );
+    next,
+    ...(close === undefined ? [] : ["", close]),
+    "",
+    `Request ID: ${code(requestId)}. \`structuredContent.error\` has the same, with the details as data.`,
+  ];
   const data: ErrorAnswerData = {
     error: {
       ...json,
