@@ -13,6 +13,11 @@
  * configuration that branches on `NODE_ENV` declares, under `nextly migrate
  * --mode production`, the same schema `next build` evaluates it with.
  *
+ * The mode chooses files and nothing else. Whether the database is on this
+ * machine is decided by where it is (`shared/lib/database-place`), once a
+ * run, so a laptop in development mode whose `.env` holds a remote URL
+ * prints that it is about to use a live database.
+ *
  * Nothing here imports an application module: the program runs this before a
  * command's work is loaded, because that code may read `process.env` as it
  * loads.
@@ -24,9 +29,13 @@ import { createRequire } from "node:module";
 import { relative, resolve } from "node:path";
 
 import type * as NextEnv from "@next/env";
+import { detectIsCi } from "@nextlyhq/telemetry/ci";
 import type { Command } from "commander";
+import pc from "picocolors";
 
-import { databaseTarget } from "./database-target";
+import type { DatabasePlace } from "../shared/lib/database-place";
+
+import { databaseTarget, type DatabaseTarget } from "./database-target";
 
 /** The modes a run can be in, as Next.js names them. */
 export const CLI_MODES = ["development", "production", "test"] as const;
@@ -48,6 +57,8 @@ interface CliEnvironment {
 let current: CliEnvironment | undefined;
 let writeModeLine: ((line: string) => void) | undefined;
 let modeLinePrinted = false;
+/** The database this run uses and where it is, decided once a run (`runDatabase`). */
+let decided: DatabaseTarget | undefined;
 
 function isMode(value: string | undefined): value is CliMode {
   return (CLI_MODES as readonly string[]).includes(value ?? "");
@@ -102,8 +113,9 @@ export function loadCliEnvironment(
     info: () => {},
     error: (...args: unknown[]) => console.error(...args),
   });
-  // A run starts here, and its line is printed once a run.
+  // A run starts here: its line is printed, and its database judged, once a run.
   modeLinePrinted = false;
+  decided = undefined;
   current = {
     mode,
     folder,
@@ -207,16 +219,16 @@ export function environmentFolder(): string | undefined {
 }
 
 /**
- * The line naming the database a run is about to use, its mode and where its
- * URL came from, as `Database: PostgreSQL db.internal:5432/shop (production;
- * DATABASE_URL from .env.production)`; `undefined` when no environment was
- * loaded, as in a test that calls a command directly. Of the URL it says the
- * target alone (`databaseTarget`): never a user name, a password or a query
- * parameter.
+ * The database this run uses, and whether it is on this machine, decided
+ * once a run: at the first ask, which is the line a command prints before
+ * its first connection, so before anything is read or changed. Every rule
+ * that depends on where the database is reads this one answer
+ * (`runDatabasePlace`), never a second reading. `undefined` when no
+ * environment was loaded, as in a test that calls a command directly.
  */
-export function modeLine(): string | undefined {
+function runDatabase(): DatabaseTarget | undefined {
   if (!current) return undefined;
-  const target = databaseTarget({
+  decided ??= databaseTarget({
     url: process.env.DATABASE_URL,
     dialect: process.env.DB_DIALECT,
     env: process.env,
@@ -224,7 +236,73 @@ export function modeLine(): string | undefined {
     // process is in now, which a command told to work elsewhere has entered.
     folder: process.cwd(),
   });
-  return `Database: ${target} (${current.mode}; DATABASE_URL ${sourceOf(current, "DATABASE_URL")})`;
+  return decided;
+}
+
+/**
+ * Whether this run's database is on this machine (`local`) or anywhere else
+ * (`live`), by where it is and never by the mode: `--mode` and `NODE_ENV`
+ * only choose the environment files. The run's one answer; `undefined` when
+ * no environment was loaded.
+ */
+export function runDatabasePlace(): DatabasePlace | undefined {
+  return runDatabase()?.place;
+}
+
+/**
+ * The line naming the database a run is about to use, where it is, the
+ * run's mode and where its URL came from:
+ * `● local · /srv/app/data/nextly.db · SQLite (development; DATABASE_URL from .env)`
+ * or `● LIVE database db.internal:5432/shop · PostgreSQL (production;
+ * DATABASE_URL from .env.production)`; `undefined` when no environment was
+ * loaded, as in a test that calls a command directly. Of the URL it says the
+ * target alone (`databaseTarget`): never a user name, a password or a query
+ * parameter.
+ */
+export function modeLine(): string | undefined {
+  const database = runDatabase();
+  if (!current || !database) return undefined;
+  const facts = `(${current.mode}; DATABASE_URL ${sourceOf(current, "DATABASE_URL")})`;
+  if (database.kind === "none") return `● no database ${facts}`;
+  const where = database.dialect
+    ? `${database.target} · ${database.dialect}`
+    : database.target;
+  return database.place === "local"
+    ? `● local · ${where} ${facts}`
+    : `● LIVE database ${where} ${facts}`;
+}
+
+/** What a live database's line adds, outside a deploy pipeline. */
+const LIVE_HINT =
+  "This database isn't on this machine. If it's a development copy: nextly db mark-dev";
+
+/**
+ * Whether this run is a CI or hosting build's, where a live database is the
+ * one it means to reach, so the line needs no hint. The one list of CI and
+ * host markers, telemetry's, read through its light entry so the first line
+ * loads nothing more.
+ */
+function inDeployPipeline(): boolean {
+  return detectIsCi(process.env);
+}
+
+/** Whether the run's line goes to a terminal that takes color. */
+function inColor(): boolean {
+  return pc.isColorSupported && process.stderr.isTTY === true;
+}
+
+/**
+ * The run's line in color when standard error is a terminal that takes
+ * color: the local dot in the success color, a live database's whole line
+ * in the danger color, the hint dimmed. Plain text otherwise, so a pipe, a
+ * log and a test read the words alone.
+ */
+function colored(line: string, place: DatabasePlace | undefined): string {
+  if (!inColor()) return line;
+  if (place === "local") return line.replace(/^●/, pc.green("●"));
+  return place === "live" && line.startsWith("● LIVE")
+    ? pc.red(pc.bold(line))
+    : line;
 }
 
 /**
@@ -250,13 +328,20 @@ export function announceStart(line: string): void {
 /**
  * Prints the run's line once a run, through the writer the program set. Called
  * where a command first validates its database settings, so every command
- * that reaches a database names the database, the mode it runs in and where its URL
- * came from, and a command that does not stays as quiet as it was.
+ * that reaches a database names the database, whether it is on this machine,
+ * the mode it runs in and where its URL came from, and a command that does
+ * not stays as quiet as it was. A live database outside a deploy pipeline
+ * gets a second line saying how to mark a development copy.
  */
 export function announceMode(): void {
   if (modeLinePrinted || !writeModeLine) return;
   const line = modeLine();
   if (line === undefined) return;
   modeLinePrinted = true;
-  writeModeLine(line);
+  const place = decided?.kind === "none" ? undefined : decided?.place;
+  writeModeLine(colored(line, place));
+  if (place === "live" && !inDeployPipeline()) {
+    const hint = `  ${LIVE_HINT}`;
+    writeModeLine(inColor() ? pc.dim(hint) : hint);
+  }
 }

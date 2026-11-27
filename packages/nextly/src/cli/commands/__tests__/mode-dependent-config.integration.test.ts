@@ -150,11 +150,11 @@ describe.each(getConfiguredTestDialects())(
         ]);
         expect(run.status, run.stderr).toBe(0);
         expect(() => JSON.parse(run.stdout)).not.toThrow();
-        expect(run.stdout).not.toContain("Database:");
-        // The database, then the mode and where its URL came from; the
-        // target itself is each dialect's, asserted in its own suite.
+        expect(run.stdout).not.toContain("●");
+        // The database and where it is, then the mode and where its URL came
+        // from; the target itself is each dialect's, asserted in its own suite.
         expect(run.stderr).toMatch(
-          /^Database: \S.* \(production; DATABASE_URL from the process environment\)$/m
+          /^● (local · |LIVE database )\S.* \(production; DATABASE_URL from the process environment\)$/m
         );
       },
       NEXTLY_RUN_TIMEOUT

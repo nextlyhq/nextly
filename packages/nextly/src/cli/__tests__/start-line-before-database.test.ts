@@ -11,10 +11,10 @@
  * runner cannot load a `nextly.config.ts` the way the CLI does.
  *
  * What would separate a correct program from a broken one:
- * - a run that reaches no database printing `Database: …` all the same (the
+ * - a run that reaches no database printing the database line (`● local · …`) all the same (the
  *   line the program prints first for a command declared to use one);
  * - a start line missing, or another line first;
- * - the `Database: …` line lost from a run that does reach its database,
+ * - the database line lost from a run that does reach its database,
  *   which the dry runs here are the control for;
  * - consent to delete asked before the run says which database it deletes from.
  *
@@ -76,7 +76,7 @@ const KEPT = [
   "XDG_CONFIG_HOME",
 ] as const;
 
-const DATABASE_LINE = /^Database: SQLite .*start-line\.db \(/;
+const DATABASE_LINE = /^● local · .*start-line\.db · SQLite \(/;
 
 let folder: string;
 let kept: Partial<Record<(typeof KEPT)[number], string>>;
