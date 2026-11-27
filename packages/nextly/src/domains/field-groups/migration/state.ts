@@ -108,8 +108,8 @@ export const MIN_READABLE_MANIFEST_VERSION = 2;
  * claims is therefore weaker than what this build means by settled, which is the
  * one thing this constant exists to say.
  *
- * Refusing costs nothing an operator can feel: the migration has no caller, so
- * no database holds a marker of any version, and the refusal names the remedy.
+ * Refusing costs nothing an operator can feel: no release wrote a marker below
+ * this version, so no database holds one, and the refusal names the remedy.
  * A repair path for a state that cannot exist would be dead code carrying a
  * maintenance cost for the life of the project.
  */

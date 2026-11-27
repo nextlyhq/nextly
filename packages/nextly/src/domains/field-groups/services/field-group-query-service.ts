@@ -50,6 +50,12 @@ import {
 import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
 import { directFieldGroupFields } from "../field-group-write-access";
+import {
+  followMovedFieldGroupTable,
+  isMovedStorageError,
+  isOnTransaction,
+  raiseIfMoved,
+} from "../migration/moved-storage";
 import { passwordReachOf } from "../password-reach";
 import {
   isFieldGroupFieldType,
@@ -473,6 +479,7 @@ export class FieldGroupQueryService extends BaseService {
     private readonly instanceTables?: InstanceTables
   ) {
     super(adapter, logger);
+    // Its lookups follow a registry the storage migration moved under this process.
     this.registryService = registryService;
     this.relationshipService = relationshipService;
   }
@@ -1380,6 +1387,42 @@ export class FieldGroupQueryService extends BaseService {
   }
 
   /**
+   * One field's stored instances, read with their translations where they have any in one language,
+   * and the registry row their translations are then overlaid from (`metaAfterRead`).
+   */
+  private async instancesOf(
+    componentSlug: string,
+    at: {
+      parentId: string;
+      parentTable: string;
+      fieldName: string;
+      languages: readonly ComponentReadLanguage[];
+      executor: unknown;
+      strict: boolean;
+    }
+  ) {
+    const meta = await this.registryService.getComponent(
+      componentSlug,
+      at.executor
+    );
+    const { rows, joined } = await this.getExistingInstances(
+      meta.tableName,
+      at.parentId,
+      at.parentTable,
+      at.fieldName,
+      at.executor,
+      at.strict,
+      await this.oneLanguagePlan(meta, at.languages, at.executor)
+    );
+    return {
+      componentFields: meta.fields,
+      rows,
+      joined,
+      current: await this.metaAfterRead(componentSlug, at.executor),
+    };
+  }
+
+  /**
    * A single component field's instance, in each language asked: the row is
    * read once and deserialized for each language, so no language's overlay
    * reaches another's copy.
@@ -1396,20 +1439,16 @@ export class FieldGroupQueryService extends BaseService {
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<(Record<string, unknown> | null)[]> {
-    const meta = await this.registryService.getComponent(
+    const { componentFields, rows, joined, current } = await this.instancesOf(
       componentSlug,
-      executor
-    );
-    const componentFields = meta.fields;
-    // Read with its translations when it has any in one language.
-    const { rows, joined } = await this.getExistingInstances(
-      meta.tableName,
-      parentId,
-      parentTable,
-      fieldName,
-      executor,
-      strict,
-      await this.oneLanguagePlan(meta, languages, executor)
+      {
+        parentId,
+        parentTable,
+        fieldName,
+        languages,
+        executor,
+        strict,
+      }
     );
 
     if (rows.length === 0) return languages.map(() => null);
@@ -1428,7 +1467,7 @@ export class FieldGroupQueryService extends BaseService {
     }));
     // i18n: overlay translatable fields from the companion for each requested locale.
     await this.overlayLocalizedComponentByLanguage(
-      meta,
+      current,
       byLanguage,
       executor,
       strict,
@@ -1466,20 +1505,16 @@ export class FieldGroupQueryService extends BaseService {
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Record<string, unknown>[][]> {
-    const meta = await this.registryService.getComponent(
+    const { componentFields, rows, joined, current } = await this.instancesOf(
       componentSlug,
-      executor
-    );
-    const componentFields = meta.fields;
-    // Read with their translations when they have any in one language.
-    const { rows, joined } = await this.getExistingInstances(
-      meta.tableName,
-      parentId,
-      parentTable,
-      fieldName,
-      executor,
-      strict,
-      await this.oneLanguagePlan(meta, languages, executor)
+      {
+        parentId,
+        parentTable,
+        fieldName,
+        languages,
+        executor,
+        strict,
+      }
     );
 
     const reach = await this.passwordReach(componentFields, executor);
@@ -1497,7 +1532,7 @@ export class FieldGroupQueryService extends BaseService {
 
     // i18n: overlay translatable fields per instance from the companion.
     await this.overlayLocalizedComponentByLanguage(
-      meta,
+      current,
       byLanguage,
       executor,
       strict,
@@ -1643,7 +1678,7 @@ export class FieldGroupQueryService extends BaseService {
       read
     );
     return {
-      meta,
+      meta: await this.metaAfterRead(componentSlug, read.executor),
       componentFields,
       rows,
       reach: await this.passwordReach(componentFields, read.executor),
@@ -1996,7 +2031,9 @@ export class FieldGroupQueryService extends BaseService {
     parentTable: string,
     fieldName: string,
     executor: unknown,
-    strict: boolean
+    strict: boolean,
+    // Set on the read that follows a move: it reads under the name it was given, once.
+    followed = false
   ): Promise<ComponentRow[]> {
     try {
       const rows = await this.adapter.select<ComponentRow>(
@@ -2009,6 +2046,20 @@ export class FieldGroupQueryService extends BaseService {
       );
       return this.withoutServerOnlyColumns(rows, tableName);
     } catch (error) {
+      // The storage migration may have moved the table since this process resolved its name: read
+      // it again under the name it holds now, rather than reading the group as empty.
+      const moved = await this.movedTable(tableName, error, executor, followed);
+      if (moved !== undefined) {
+        return this.instancesAlone(
+          moved,
+          parentId,
+          parentTable,
+          fieldName,
+          executor,
+          strict,
+          true
+        );
+      }
       // The comp_* table may not exist yet (a component before its migration
       // runs) — tolerate that and read as empty. In strict mode a real failure
       // (transient/permission/schema) instead propagates.
@@ -2023,8 +2074,49 @@ export class FieldGroupQueryService extends BaseService {
     }
   }
 
+  /**
+   * A field group's registry row as it stands after its instances were read, for what is read
+   * next from where the row says: its translations. A read that followed a move
+   * (`movedTable`) cleared the registry's cache, so this is the row the migration rewrote, naming
+   * the companion table under its current name; with no move, the cache answers it unread. The
+   * row taken before the read would send the translations to the companion's old name, and a
+   * read that tolerates a failed overlay would return the shared values alone.
+   */
+  private async metaAfterRead(
+    componentSlug: string,
+    executor: unknown
+  ): Promise<DynamicFieldGroupRecord> {
+    return this.registryService.getComponent(componentSlug, executor);
+  }
+
   // Results are ordered by `(_parent_id ASC, _order ASC)` so grouped
   // results maintain correct array ordering.
+  /**
+   * The name `tableName` has now, when a read of it failed because the storage migration moved it
+   * (`followMovedFieldGroupTable`), registered in this process; `undefined` otherwise.
+   *
+   * A read on a write's transaction is not retried: the write that owns it is refused instead
+   * (`refusingMovedStorage`), and the table followed once the transaction has ended.
+   */
+  private async movedTable(
+    tableName: string,
+    error: unknown,
+    executor: unknown,
+    // Set on the read that already followed a move once: it is not followed again.
+    followed: boolean
+  ): Promise<string | undefined> {
+    if (followed || !isMovedStorageError(error)) return undefined;
+    if (isOnTransaction(this.adapter, executor)) {
+      await raiseIfMoved({ adapter: this.adapter, error, executor });
+      return undefined;
+    }
+    return followMovedFieldGroupTable({
+      adapter: this.adapter,
+      rows: this.registryService,
+      tableName,
+    });
+  }
+
   private async batchGetInstances(
     tableName: string,
     parentIds: string[],
@@ -2032,7 +2124,9 @@ export class FieldGroupQueryService extends BaseService {
     fieldName: string,
     // As `getExistingInstances` takes them: only a missing table is read as
     // empty under `strict`, and `executor` reads on a write's transaction.
-    read: Pick<BatchPopulateRead, "strict" | "executor">
+    read: Pick<BatchPopulateRead, "strict" | "executor">,
+    // Set on the read that follows a move: it reads under the name it was given, once.
+    followed = false
   ): Promise<ComponentRow[]> {
     if (parentIds.length === 0) return [];
 
@@ -2068,6 +2162,23 @@ export class FieldGroupQueryService extends BaseService {
       );
       return this.withoutServerOnlyColumns(rows, tableName);
     } catch (error) {
+      // As `instancesAlone`: a table the storage migration moved is read under its name now.
+      const moved = await this.movedTable(
+        tableName,
+        error,
+        read.executor,
+        followed
+      );
+      if (moved !== undefined) {
+        return this.batchGetInstances(
+          moved,
+          parentIds,
+          parentTable,
+          fieldName,
+          read,
+          true
+        );
+      }
       // On a transaction a failed statement has aborted it on PostgreSQL, so
       // reading on as though the table were empty is possible on the other
       // dialects only: every dialect refuses alike instead.

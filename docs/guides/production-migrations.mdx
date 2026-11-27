@@ -1132,6 +1132,8 @@ Everything above describes how **columns** reach production. Entities created in
 label, description and admin display settings. A database that has run
 `nextly migrate:field-groups --apply --backup-confirmed` holds the Field Group registry as
 `dynamic_field_groups` instead, and the runtime reads whichever of the two the database has.
+Undoing that move with `nextly migrate:field-groups --down --apply --backup-confirmed` keeps the
+site up the same way: a save that meets it is refused with a message to retry.
 Collections and Singles additionally carry the Versions, Revalidate and Webhooks switches; Field
 Groups have none of those, and the Field Group registry has no columns for them under either name.
 The runtime reads its Drizzle table from that row, so the row matters as much as the columns do.

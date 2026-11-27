@@ -22,6 +22,7 @@ import {
   defineCollection,
   defineConfig,
   defineFieldGroup,
+  defineSingle,
 } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import {
@@ -58,6 +59,7 @@ export interface LoadedConfig {
 export interface Declared {
   collections: ReturnType<typeof defineCollection>[];
   fieldGroups: ReturnType<typeof defineFieldGroup>[];
+  singles?: ReturnType<typeof defineSingle>[];
 }
 
 export interface SiteOptions {
@@ -72,6 +74,13 @@ export interface SiteOptions {
   legacy?: boolean;
   /** Plugins every start boots, as the app config lists them. */
   plugins?: PluginDefinition[];
+  /**
+   * Keep a SQLite site in a file rather than in memory, so a second process can open the same
+   * database (`StorageGenerationSite.url`). Server dialects are always reachable that way.
+   */
+  sqliteFile?: boolean;
+  /** Connections the site's own pool holds; a server dialect's default, unless given. */
+  poolMax?: number;
 }
 
 /**
@@ -127,6 +136,11 @@ export function recordingLogger(): {
 
 export interface StorageGenerationSite {
   adapter: DrizzleAdapter;
+  /**
+   * What another process connects to this database with: the server URL of its own database, or
+   * the SQLite file's `file:` URL. Undefined for a SQLite site kept in memory.
+   */
+  readonly url: string | undefined;
   /** The instance the last start made. */
   readonly current: TestNextly | undefined;
   /** A development start: the boot, then its schema apply, as `next dev` runs them. */
@@ -138,9 +152,12 @@ export interface StorageGenerationSite {
   ): Promise<TestNextly>;
   /** A configuration reload of `declared`, as a saved edit triggers it. */
   configurationReload(declared: Declared): Promise<void>;
-  /** `migrate:field-groups --apply --backup-confirmed`, or its preview. */
+  /** `migrate:field-groups --apply --backup-confirmed`, or its preview, or with `--down` its rollback. */
   migrateStorage(options?: {
     dryRun?: boolean;
+    direction?: "up" | "down";
+    /** The run's lease on the schema lock, in seconds; the production one, unless given. */
+    leaseSeconds?: number;
   }): Promise<{ reason?: string; ran: boolean }>;
   /** The storage migration's marker, as the migration reads it. */
   marker(): Promise<Awaited<ReturnType<typeof readMigrationState>>>;
@@ -148,17 +165,38 @@ export interface StorageGenerationSite {
 }
 
 export async function openDatabase(
-  dialect: TestDialect
-): Promise<{ adapter: DrizzleAdapter; close(): Promise<void> }> {
+  dialect: TestDialect,
+  sqliteFile = false,
+  poolMax?: number
+): Promise<{
+  adapter: DrizzleAdapter;
+  url: string | undefined;
+  close(): Promise<void>;
+}> {
   if (dialect === "sqlite") {
     vi.stubEnv("DB_DIALECT", "sqlite");
     _resetEnvCache();
-    const adapter = (await createAdapter({
-      type: "sqlite",
-      memory: true,
-    } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
-    // Disconnected once by the instance's own teardown already, where one ran.
-    return { adapter, close: () => adapter.disconnect().catch(() => {}) };
+    const folder = sqliteFile
+      ? await mkdtemp(join(tmpdir(), "nextly-fgsn-db-"))
+      : undefined;
+    const url =
+      folder === undefined ? undefined : `file:${join(folder, "site.db")}`;
+    const adapter = (await createAdapter(
+      (url === undefined
+        ? { type: "sqlite", memory: true }
+        : { type: "sqlite", url }) as Parameters<typeof createAdapter>[0]
+    )) as unknown as DrizzleAdapter;
+    return {
+      adapter,
+      url,
+      // Disconnected once by the instance's own teardown already, where one ran.
+      async close() {
+        await adapter.disconnect().catch(() => {});
+        if (folder !== undefined) {
+          await rm(folder, { recursive: true, force: true });
+        }
+      },
+    };
   }
   const serverUrl = process.env[SERVER_URL_ENV[dialect]];
   if (!serverUrl) throw new Error(`${SERVER_URL_ENV[dialect]} is not set`);
@@ -176,9 +214,14 @@ export async function openDatabase(
   const adapter = (await createAdapter({
     type: dialect,
     url: url.toString(),
-  })) as unknown as DrizzleAdapter;
+    // Bounded, so a read that waits for the connection its own transaction holds fails its case.
+    ...(poolMax === undefined
+      ? {}
+      : { pool: { max: poolMax, connectionTimeoutMs: 5000 } }),
+  } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
   return {
     adapter,
+    url: url.toString(),
     async close() {
       await adapter.disconnect().catch(() => {});
       await server.executeQuery(dropDatabaseStatement(dialect, name));
@@ -191,7 +234,11 @@ export async function openStorageGenerationSite(
   options: SiteOptions
 ): Promise<StorageGenerationSite> {
   const { dialect, loaded, localization, plugins } = options;
-  const database = await openDatabase(dialect);
+  const database = await openDatabase(
+    dialect,
+    options.sqliteFile === true,
+    options.poolMax
+  );
   if (options.legacy === true) {
     await seedLegacyCoreTables(database.adapter, dialect);
   }
@@ -204,12 +251,14 @@ export async function openStorageGenerationSite(
     defineConfig({
       collections: declared.collections,
       fieldGroups: declared.fieldGroups,
+      ...(declared.singles ? { singles: declared.singles } : {}),
       ...(localization ? { localization } : {}),
       ...(plugins ? { plugins } : {}),
     });
 
   return {
     adapter: database.adapter,
+    url: database.url,
     get current() {
       return current;
     },
@@ -226,6 +275,7 @@ export async function openStorageGenerationSite(
         adapter: database.adapter as never,
         collections: declared.collections,
         fieldGroups: declared.fieldGroups,
+        ...(declared.singles ? { singles: declared.singles } : {}),
         ...(localization ? { localization } : {}),
         ...(bootPlugins ? { plugins: bootPlugins } : {}),
         ...(logger ? { logger: logger as never } : {}),
@@ -239,14 +289,19 @@ export async function openStorageGenerationSite(
       loaded.config = configOf(declared);
       await reloadNextlyConfig();
     },
-    async migrateStorage({ dryRun = false } = {}) {
+    async migrateStorage({
+      dryRun = false,
+      direction = "up",
+      leaseSeconds,
+    } = {}) {
       const outcome = await runFieldGroupMigration({
         adapter: database.adapter,
         logger: SILENT as never,
-        direction: "up",
+        direction,
         dryRun,
         // The suite creates and drops this database itself.
         backupConfirmed: true,
+        ...(leaseSeconds === undefined ? {} : { leaseSeconds }),
       });
       // The process that migrated drops what it resolved before storage moved.
       forgetFieldGroupStorageNames();
