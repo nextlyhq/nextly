@@ -15,13 +15,15 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs"
-    }
+    },
+    "./setup-plan.schema.json": "./src/plan/setup-plan.schema.json"
   },
   "files": [
     "dist",
     "bin",
     "skills",
-    "templates"
+    "templates",
+    "src/plan/setup-plan.schema.json"
   ],
   "scripts": {
     "build": "tsdown --config-loader tsx",
