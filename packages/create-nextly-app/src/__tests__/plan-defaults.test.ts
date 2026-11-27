@@ -60,6 +60,12 @@ describe("the default plan", () => {
     } satisfies SetupPlan);
   });
 
+  it("for a run given nothing equals pressing Enter at every question", () => {
+    expect(resolvePlan({}, ENV)).toEqual(
+      resolvePlan(pressEnterThroughout({}, ENV), ENV)
+    );
+  });
+
   const starts = ["website", "blank", "plugin"] as const;
   const hosts = ["unsure", "vercel", "server"] as const;
 
