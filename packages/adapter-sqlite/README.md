@@ -16,7 +16,7 @@ SQLite database adapter for Nextly. Built on `better-sqlite3` for synchronous fi
 
 ## What it is
 
-The SQLite adapter for Nextly. The database is one file beside your app, so it needs no server: it suits your own machine and a site on a single server.
+The SQLite adapter for Nextly. The database is one file beside your app, so it needs no server and starts with the project.
 
 For Vercel, for several servers sharing one database, or for the full feature set, use [`@nextlyhq/adapter-postgres`](../adapter-postgres). PostgreSQL has the full feature set Nextly is designed around; SQLite emulates a subset.
 

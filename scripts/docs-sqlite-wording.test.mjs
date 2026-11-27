@@ -29,6 +29,11 @@ const PAGES = [
   "docs/getting-started/installation.mdx",
   "docs/getting-started/quick-start.mdx",
   "docs/guides/deployment.mdx",
+  // The npm and GitHub pages people choose an adapter from.
+  "README.md",
+  "packages/nextly/README.md",
+  "packages/adapter-sqlite/README.md",
+  "packages/adapter-drizzle/README.md",
 ];
 
 /** Wordings that describe SQLite as unfit for real sites, in each spelling seen. */
@@ -159,10 +164,32 @@ function judgesSqlite(text) {
  * question or exclamation mark, or a line break.
  */
 export function otherDescriptionsIn(text) {
-  return text
-    .split(/(?<=[.!?])\s+|\n/)
-    .filter(sentence => judgesSqlite(withoutSentence(sentence)))
-    .map(sentence => sentence.trim());
+  const found = [];
+  // The database the previous sentence or line ended on, for a verdict that
+  // follows it without naming one: "SQLite. It is not for production." and a
+  // list item under "- SQLite" are about SQLite.
+  let carried = null;
+  for (const sentence of text.split(/(?<=[.!?])\s+|\n/)) {
+    const rest = withoutSentence(sentence);
+    const names = [...rest.matchAll(DATABASE)];
+    const verdicts = [...rest.matchAll(VERDICT)];
+    // A place a fragment names ("Vercel Blob", "a single server") is too weak
+    // to inherit a subject; a judging word ("not for production", "demo") is
+    // not.
+    const judging = verdicts.some(
+      verdict => !/^(?:vercel|single server)$/i.test(verdict[0])
+    );
+    if (
+      judgesSqlite(rest) ||
+      (names.length === 0 && judging && carried === "sqlite")
+    ) {
+      found.push(sentence.trim());
+    }
+    // Only the next fragment inherits, and only when it is not blank.
+    if (names.length > 0) carried = names[names.length - 1][1].toLowerCase();
+    else if (sentence.trim() !== "") carried = null;
+  }
+  return found;
 }
 
 describe("docs: how SQLite is described", () => {
@@ -270,6 +297,9 @@ describe("docs: how SQLite is described", () => {
     "| @foo | SQLite | Not for production |",
     "SQLite is production-ready.",
     "SQLite is suitable for production.",
+    // A verdict in the next sentence or list line, without naming SQLite.
+    "SQLite. It is not for production.",
+    "- SQLite\n  - Not for production",
   ])("would catch the verdict in %s", line => {
     expect(otherDescriptionsIn(line)).toHaveLength(1);
   });
@@ -283,6 +313,8 @@ describe("docs: how SQLite is described", () => {
     "- [`@nextlyhq/adapter-postgres`](https://github.com/x/adapter-postgres) (recommended), [`@nextlyhq/adapter-mysql`](https://github.com/x/adapter-mysql), [`@nextlyhq/adapter-sqlite`](https://github.com/x/adapter-sqlite): database adapters",
     // A fact about SQLite in production, which passes no verdict.
     "In production, SQLite runs migrations in one transaction.",
+    // A place named after SQLite is not a verdict carried over to it.
+    "PostgreSQL, MySQL, or SQLite. Local disk by default; S3, Vercel Blob, or UploadThing for storage.",
   ])("would leave %s alone", line => {
     expect(otherDescriptionsIn(line)).toEqual([]);
   });
