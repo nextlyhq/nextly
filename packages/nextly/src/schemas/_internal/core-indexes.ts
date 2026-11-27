@@ -227,3 +227,13 @@ export const NEXTLY_RELEASES_INDEXES = [
   { name: "nextly_releases_scheduled_idx", columns: ["scheduledAt"] },
   { name: "nextly_releases_published_idx", columns: ["publishedAt"] },
 ] as const satisfies readonly CoreIndex<string>[];
+
+export const TRASH_INDEXES = [
+  // A trashed item found by its collection and its own id, as a restore by
+  // id and a list of one collection's trash read it.
+  { name: "nextly_trash_item_idx", columns: ["scopeSlug", "itemId"] },
+  // The items past their purge date, which the daily clean-up removes.
+  { name: "nextly_trash_purge_idx", columns: ["purgeAt"] },
+  // The list, newest first.
+  { name: "nextly_trash_trashed_at_idx", columns: ["trashedAt"] },
+] as const satisfies readonly CoreIndex<string>[];

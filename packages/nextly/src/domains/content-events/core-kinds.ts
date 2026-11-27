@@ -81,6 +81,14 @@ export const CORE_CONTENT_EVENT_KINDS = {
       .strict(),
   },
   deleted: { name: "deleted", label: "Deleted by {actor}", endsSubject: true },
+  // Moved to the trash: the document is gone from every read, and its
+  // history stays whole, since a restore brings it back. It ends only when
+  // the document leaves the trash for good, recorded then as `deleted`.
+  trashed: { name: "trashed", label: "Moved to the trash by {actor}" },
+  restoredFromTrash: {
+    name: "restored-from-trash",
+    label: "Restored from the trash by {actor}",
+  },
   versionsRemoved: {
     name: "versions-removed",
     label: "{count} older versions removed",

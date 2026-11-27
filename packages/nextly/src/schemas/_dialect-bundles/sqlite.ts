@@ -151,3 +151,5 @@ export {
 // a fresh database, for the reason the release tables above give.
 export { nextlyPreviewLinksSqlite as nextlyPreviewLinks } from "../preview-links/sqlite";
 export { nextlyLanguagesSqlite as nextlyLanguages } from "../languages/sqlite";
+// Deleted items, kept until restored or removed for good.
+export { nextlyTrashSqlite as nextlyTrash } from "../trash/sqlite";

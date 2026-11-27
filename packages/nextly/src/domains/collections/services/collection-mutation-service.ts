@@ -539,6 +539,7 @@ import {
   closeReviewOnDiscard,
   removeDeletedDocumentReviewStates,
 } from "../../workflows/review-state-cleanup";
+import { moveEntryToTrash } from "../../trash/move-to-trash";
 import {
   localizedFilterContext,
   type FilterConditionSources,
@@ -2614,6 +2615,42 @@ export class CollectionMutationService extends BaseService {
       // per-item failure.
       throw markWriteIntegrityFailure(err);
     }
+  }
+
+  /**
+   * Move an entry being deleted to the trash, on the delete's transaction and
+   * before anything of it is removed: every row it stores is copied into one
+   * trash record (`moveEntryToTrash`), and the delete then removes them as it
+   * always has. Answers whether it went to the trash: false on a database the
+   * trash table has not reached yet, where the delete stays permanent.
+   */
+  private async moveDeletedEntryToTrash(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      tableName: string;
+      entryId: string;
+      fields: readonly FieldConfig[];
+      document: Record<string, unknown>;
+      actor: RequestActor;
+      actorName: string | null;
+    }
+  ): Promise<boolean> {
+    const moved = await moveEntryToTrash(
+      tx,
+      this.adapter,
+      {
+        collection: args.collectionName,
+        tableName: args.tableName,
+        entryId: args.entryId,
+        fields: args.fields,
+        document: args.document,
+        actor: args.actor,
+        actorName: args.actorName,
+      },
+      this.logger
+    );
+    return moved.trashed;
   }
 
   /**
@@ -22792,6 +22829,18 @@ export class CollectionMutationService extends BaseService {
           // main row) still busts the correct tag.
           deletedSlugForRevalidation = readStringField(deletedDocument, "slug");
 
+          // Every row the entry stores is copied to the trash before the
+          // removal below, which then goes on as before.
+          const trashed = await this.moveDeletedEntryToTrash(tx, {
+            collectionName: params.collectionName,
+            tableName,
+            entryId: params.entryId,
+            fields: collectionFields,
+            document: deletedDocument,
+            actor: actorForWrite(params.actor, params.user),
+            actorName: params.user?.name ?? null,
+          });
+
           if (this.fieldGroupDataService) {
             await this.fieldGroupDataService.deleteComponentDataInTransaction(
               tx,
@@ -22860,15 +22909,16 @@ export class CollectionMutationService extends BaseService {
             params.entryId
           );
 
-          // The document's last history event: the whole document, every
-          // language, is gone. Its history is kept for the activity log's window
-          // from here.
+          // The document's history event: moved to the trash, its history
+          // kept whole until it leaves the trash for good; or, on a database
+          // without the trash, deleted, its history kept for the activity log's
+          // window from here.
           await this.recordHistoryEvent(
             tx,
             params.collectionName,
             params.entryId,
             {
-              kind: "deleted",
+              kind: trashed ? "trashed" : "deleted",
               actor: actorForWrite(params.actor, params.user),
               personName: params.user?.name ?? null,
             }
@@ -26197,6 +26247,18 @@ export class CollectionMutationService extends BaseService {
       // locale's page (reads are id-tagged), so localized slug tags are omitted
       // on this path; the pool-owned deleteEntry path collects them pre-tx.
 
+      // Every row the entry stores is copied to the trash before the removal
+      // below, which then goes on as before.
+      const trashed = await this.moveDeletedEntryToTrash(tx, {
+        collectionName: params.collectionName,
+        tableName,
+        entryId,
+        fields: collectionFields,
+        document: deletedDocument,
+        actor: actorForWrite(params.actor, params.user),
+        actorName: params.user?.name ?? null,
+      });
+
       // Cascade delete component data before deleting the main entry
       if (this.fieldGroupDataService) {
         await this.fieldGroupDataService.deleteComponentDataInTransaction(tx, {
@@ -26269,9 +26331,9 @@ export class CollectionMutationService extends BaseService {
       // Where its translated values came from; see the single-delete path.
       await this.forgetTranslationRecords(tx, params.collectionName, entryId);
 
-      // The document's last history event; see the single-delete path.
+      // The document's history event; see the single-delete path.
       await this.recordHistoryEvent(tx, params.collectionName, entryId, {
-        kind: "deleted",
+        kind: trashed ? "trashed" : "deleted",
         actor: actorForWrite(params.actor, params.user),
         personName: params.user?.name ?? null,
       });

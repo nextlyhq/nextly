@@ -530,6 +530,29 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_translation_sources_uidx"
       ON "nextly_translation_sources" ("scope_kind", "scope_slug", "entry_id", "source_locale", "field_path", "fingerprint")`,
+    // Deleted items, kept until restored or removed for good. Columns match
+    // schemas/trash/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_trash" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "item_id" TEXT NOT NULL,
+      "label" TEXT,
+      "stored" TEXT NOT NULL,
+      "storage_key" TEXT,
+      "made_private" INTEGER NOT NULL DEFAULT 0,
+      "trashed_by_kind" TEXT,
+      "trashed_by_id" TEXT,
+      "trashed_by_name" TEXT,
+      "trashed_at" INTEGER NOT NULL,
+      "purge_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_trash_item_idx"
+      ON "nextly_trash" ("scope_slug", "item_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_trash_purge_idx"
+      ON "nextly_trash" ("purge_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_trash_trashed_at_idx"
+      ON "nextly_trash" ("trashed_at")`,
     // What admins change for each workflow. Columns match schemas/workflow-settings/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_workflow_settings" (
       "id" TEXT PRIMARY KEY NOT NULL,

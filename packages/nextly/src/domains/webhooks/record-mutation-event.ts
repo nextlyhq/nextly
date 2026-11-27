@@ -105,6 +105,11 @@ export interface RecordMutationEventArgs {
    * its own; the envelope keeps `statusChange`, which receivers already read.
    */
   publication?: PublicationFacts;
+  /**
+   * Where a created entry came back from, for a restore alone: copied onto
+   * the envelope, which carries it on no other event.
+   */
+  restoredFrom?: "trash";
 }
 
 /**
@@ -179,6 +184,10 @@ function prepareMutationEnvelope(args: RecordMutationEventArgs): {
       : {}),
     ...languagesOf(args.resource),
   });
+  // Set by a restore alone, so every other envelope keeps its shape.
+  if (args.restoredFrom !== undefined) {
+    envelope.restoredFrom = args.restoredFrom;
+  }
   return {
     envelope,
     retentionClass: resolveEventRetentionClass({ auditEnabled, hasEndpoints }),

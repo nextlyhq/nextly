@@ -177,3 +177,5 @@ export {
 // a fresh database, for the reason the release tables above give.
 export { nextlyPreviewLinksPg as nextlyPreviewLinks } from "../preview-links/postgres";
 export { nextlyLanguagesPg as nextlyLanguages } from "../languages/postgres";
+// Deleted items, kept until restored or removed for good.
+export { nextlyTrashPg as nextlyTrash } from "../trash/postgres";
