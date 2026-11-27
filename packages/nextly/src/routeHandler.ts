@@ -49,6 +49,11 @@ import {
 import { readAccessCaller, readCaller } from "./api/authenticated-read";
 import { handleContentEventsRequest } from "./api/content-events";
 import {
+  emptyTrashRoute,
+  listTrashRoute,
+  restoreFromTrashRoute,
+} from "./api/trash/trash-routes";
+import {
   getDashboardStats,
   getDashboardContent,
   getDashboardRecentEntries,
@@ -451,6 +456,8 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "schema",
   "contentEvents",
   "rolesScreen",
+  // Deleted entries; its handler authenticates, the service decides access.
+  "trash",
   // The Email hub's Activity reads (`/api/email-deliveries`).
   "email",
 ]);
@@ -1733,6 +1740,19 @@ async function serveServiceRequest(
   // document's). The handler owns its authorization.
   if (service === "contentEvents") {
     return handleContentEventsRequest(req);
+  }
+
+  // ==================== TRASH ====================
+  // Deleted entries. Matched by method name both ways, so a name the parser
+  // gets wrong fails rather than falling into the removal.
+  if (service === "trash") {
+    if (method === "listTrash") return listTrashRoute(req);
+    if (method === "restoreFromTrash") return restoreFromTrashRoute(req);
+    if (method === "emptyTrash") return emptyTrashRoute(req);
+    throw NextlyError.notFound({
+      message: `Unknown trash operation: ${method}`,
+      logContext: { service: "trash", method },
+    });
   }
 
   // ==================== JOBS DIRECT DISPATCH ====================

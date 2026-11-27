@@ -219,7 +219,13 @@ async function recordFor(
     const kinds = new Set(items.map(item => item.scopeSlug));
     if (kinds.size > 1) {
       throw NextlyError.validation({
-        message: `More than one collection has a trashed entry "${ref.itemId}"; name the collection.`,
+        errors: [
+          {
+            path: "collection",
+            code: "ambiguous",
+            message: `More than one collection has a trashed entry "${ref.itemId}"; name the collection.`,
+          },
+        ],
         logContext: { itemId: ref.itemId },
       });
     }

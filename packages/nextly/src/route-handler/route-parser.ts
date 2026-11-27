@@ -3787,6 +3787,20 @@ export function parseRestRoute(
     };
   }
 
+  // Deleted entries (`/trash`, `/trash/restore`, `/trash/empty`). Its handler
+  // authenticates; the trash service decides access.
+  if (resource === "trash" && !subresource) {
+    if (!id && httpMethod === "GET") {
+      return { service: "trash", operation: "list", method: "listTrash", routeParams };
+    }
+    if (id === "restore" && httpMethod === "POST") {
+      return { service: "trash", operation: "update", method: "restoreFromTrash", routeParams };
+    }
+    if (id === "empty" && httpMethod === "POST") {
+      return { service: "trash", operation: "delete", method: "emptyTrash", routeParams };
+    }
+  }
+
   // Handle Collections endpoints
   if (resource === "collections") {
     // Nested version history is matched first: it sits deeper than the entry
