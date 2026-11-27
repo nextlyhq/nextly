@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { AI_PERMISSIONS } from "../../domains/ai/ai-contract";
+
 export const IdSchema = z.string().min(1, "ID is required");
 
 /**
@@ -322,6 +324,22 @@ export const PermissionActionSchema = z.enum(
   }
 );
 
+/**
+ * @experimental The actions a STORED permission row may carry: every action
+ * a permission may be created with, plus the two verbs only the AI
+ * permissions use (`use-ai`, `run-bulk-ai-jobs`), read from the AI contract
+ * so the seeding and this list spell them alike.
+ *
+ * For reading what a site holds, never for creating: the create and update
+ * routes keep {@link PermissionActionSchema}, and so does the list of
+ * actions a workflow step finds already seeded.
+ */
+export const StoredPermissionActionSchema = z.enum([
+  ...PermissionActionSchema.options,
+  AI_PERMISSIONS.use.action,
+  AI_PERMISSIONS.bulk.action,
+]);
+
 // Resources: any valid kebab-case slug (system resources + dynamic collection slugs).
 // Actual validation against existing collections happens in the service layer,
 // not in the Zod schema, since collections are dynamic.
@@ -349,7 +367,8 @@ export const PermissionSchema = z.object({
       "Slug must be lowercase alphanumeric with hyphens"
     )
     .toLowerCase(),
-  action: PermissionActionSchema,
+  // As stored, so a row seeded with an AI verb reads like any other.
+  action: StoredPermissionActionSchema,
   resource: PermissionResourceSchema,
   description: z
     .string()
@@ -482,7 +501,8 @@ export const GetUserPermissionsSchema = z.object({
 
 export const CheckUserPermissionSchema = z.object({
   userId: IdSchema,
-  action: PermissionActionSchema,
+  // Any action a stored permission may carry, the AI ones included.
+  action: StoredPermissionActionSchema,
   resource: PermissionResourceSchema,
 });
 

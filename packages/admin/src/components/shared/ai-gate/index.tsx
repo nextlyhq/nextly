@@ -22,9 +22,8 @@
  *
  * @experimental With the AI contract.
  */
-import type { ReactNode } from "react";
-
 import type { AIRunTarget } from "nextly/runtime";
+import type { ReactNode } from "react";
 
 import { useAIStatus } from "@admin/hooks/queries/useAIStatus";
 

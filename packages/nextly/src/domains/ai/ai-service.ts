@@ -12,6 +12,8 @@
  *
  * @module domains/ai/ai-service
  */
+import { z } from "zod";
+
 import type { AuthContext } from "../../auth/middleware";
 import { NextlyError } from "../../errors/nextly-error";
 
@@ -159,7 +161,7 @@ function notConfiguredError(reason: AINotConfiguredReason): NextlyError {
     publicMessage:
       reason === "turned-off"
         ? `AI is turned off on this site by ${AI_OFF_SWITCH}. Unset it to turn AI back on; its settings are kept.`
-        : "AI isn't set up on this site. Add @nextlyhq/ai to the plugins in your Nextly config, or run `nextly ai setup`.",
+        : "AI isn't set up on this site. Add @nextlyhq/ai to the plugins in your Nextly config.",
     logContext: { reason: `ai-${reason}` },
   });
 }
@@ -170,6 +172,43 @@ function noModelError(task: AITaskRef): NextlyError {
     publicMessage: `The AI task "${task.owner}/${task.name}" needs a model for the "${task.role}" role, and none is set. Choose one in the AI settings.`,
     logContext: { reason: "ai-no-model-for-role", role: task.role },
   });
+}
+
+/**
+ * What a provider reports it used, read at the boundary: counts are whole
+ * and never negative, and the cost is whole millionths of a dollar, so one
+ * faulty answer cannot corrupt what listeners sum.
+ */
+const usageSchema = z.object({
+  model: z.string().max(200).nullable(),
+  tokensIn: z.number().int().nonnegative(),
+  tokensOut: z.number().int().nonnegative(),
+  estimatedCostMicroUsd: z.number().int().nonnegative().nullable(),
+});
+
+/** A finished run's answer: the output, checked by the task's own shape later, and its usage. */
+const runOutcomeSchema = z.object({ output: z.unknown(), usage: usageSchema });
+
+/** An embedding's answer: one vector of numbers per text, and its usage. */
+const embedOutcomeSchema = z.object({
+  vectors: z.array(z.array(z.number())),
+  usage: usageSchema,
+});
+
+/** The refusal for a provider answer that does not have the contract's shape. */
+function unreadableAnswer(issues: unknown): NextlyError {
+  return NextlyError.externalService({
+    publicMessage:
+      "The AI provider's answer could not be read, so the run was stopped.",
+    logContext: { reason: "ai-provider-answer-unreadable", issues },
+  });
+}
+
+/** A provider's answer, parsed with `schema`, or the refusal for it. */
+function readAnswer<T>(schema: z.ZodType<T>, answer: unknown): T {
+  const parsed = schema.safeParse(answer);
+  if (!parsed.success) throw unreadableAnswer(parsed.error.issues);
+  return parsed.data;
 }
 
 /**
@@ -259,6 +298,25 @@ export function createAIService(deps: AIServiceDeps): AIService {
   }
 
   /**
+   * The started provider, as reached for during an admission: AI off or no
+   * provider is core's refusal; a provider that cannot even be reached (its
+   * factory throws, or its service has the wrong shape) is the provider
+   * failing, so the admission is marked.
+   */
+  function admittedProvider(admission: Admission): AIProvider {
+    if (deps.turnedOff()) throw notConfiguredError("turned-off");
+    let provider: AIProvider | undefined;
+    try {
+      provider = deps.provider();
+    } catch (error) {
+      admission.providerFailed = true;
+      throw error;
+    }
+    if (provider === undefined) throw notConfiguredError("no-ai-package");
+    return provider;
+  }
+
+  /**
    * The roles with a model, as asked during an admission: a provider that
    * cannot say is the provider failing, so the admission is marked.
    */
@@ -297,7 +355,7 @@ export function createAIService(deps: AIServiceDeps): AIService {
     args: AIRunArgs,
     admission: Admission
   ): Promise<{ provider: AIProvider; task: AITaskRef }> {
-    const provider = requireProvider();
+    const provider = admittedProvider(admission);
     const task = findTask(args.task);
     await requirePermission(caller, "use");
     const target = args.target ?? null;
@@ -391,7 +449,15 @@ export function createAIService(deps: AIServiceDeps): AIService {
     const usage: Promise<
       { ok: true; usage: AIRunUsage } | { ok: false; error: unknown }
     > = stream.usage.then(
-      reported => ({ ok: true as const, usage: reported }),
+      (reported: unknown) => {
+        const parsed = usageSchema.safeParse(reported);
+        return parsed.success
+          ? { ok: true as const, usage: parsed.data }
+          : {
+              ok: false as const,
+              error: unreadableAnswer(parsed.error.issues),
+            };
+      },
       (error: unknown) => ({ ok: false as const, error })
     );
     const usageOrNone = usage.then(r => (r.ok ? r.usage : NO_USAGE));
@@ -452,8 +518,13 @@ export function createAIService(deps: AIServiceDeps): AIService {
           await before;
           return finished;
         }
-        const stopped = end("cancelled", async () => {
-          await source.return?.();
+        const stopped = end("cancelled", () => {
+          // The provider is told to stop, but not waited on: a stop queued
+          // behind a read still pending, or one that fails, must neither hold
+          // the reader nor lose the event. Its usage is waited for, bounded.
+          void Promise.resolve()
+            .then(() => source.return?.())
+            .catch(() => undefined);
           return usageWithin(usageOrNone);
         });
         await stopped;
@@ -537,8 +608,11 @@ export function createAIService(deps: AIServiceDeps): AIService {
         args.task,
         args.agent,
         admission => admitTask(caller, args, admission),
-        ({ provider, task }) =>
-          provider.run(providerRequest(caller, args, task))
+        async ({ provider, task }) =>
+          readAnswer(
+            runOutcomeSchema,
+            await provider.run(providerRequest(caller, args, task))
+          )
       );
     },
 
@@ -584,7 +658,7 @@ export function createAIService(deps: AIServiceDeps): AIService {
         null,
         args.agent,
         async admission => {
-          const provider = requireProvider();
+          const provider = admittedProvider(admission);
           await requirePermission(caller, "use");
           if (!(await admittedRoles(provider, admission)).embedding) {
             throw NextlyError.serviceUnavailable({
@@ -595,12 +669,15 @@ export function createAIService(deps: AIServiceDeps): AIService {
           }
           return provider;
         },
-        provider =>
-          provider.embed({
-            texts: args.texts,
-            personId: caller?.userId ?? null,
-            agent: args.agent ?? null,
-          })
+        async provider =>
+          readAnswer(
+            embedOutcomeSchema,
+            await provider.embed({
+              texts: args.texts,
+              personId: caller?.userId ?? null,
+              agent: args.agent ?? null,
+            })
+          )
       );
     },
 

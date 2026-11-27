@@ -7,7 +7,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { PermissionActionSchema } from "../../../schemas/_zod/rbac";
+import {
+  CheckUserPermissionSchema,
+  PermissionActionSchema,
+  PermissionListResponseSchema,
+  PermissionSchema,
+} from "../../../schemas/_zod/rbac";
 import { AI_PERMISSIONS } from "../../ai/ai-contract";
 import { defineWorkflow } from "../../workflows/define-workflow";
 import {
@@ -77,4 +82,30 @@ describe("the AI permissions' verbs", () => {
       ]);
     }
   );
+
+  it("are read by the published permission schemas, as the rows a site stores", () => {
+    const rows = Object.values(AI_PERMISSIONS).map(p => ({
+      id: `id-${p.slug}`,
+      name: p.slug,
+      slug: p.slug,
+      action: p.action,
+      resource: p.resource,
+    }));
+    for (const row of rows) {
+      expect(PermissionSchema.safeParse(row).success).toBe(true);
+      expect(
+        CheckUserPermissionSchema.safeParse({
+          userId: "u1",
+          action: row.action,
+          resource: row.resource,
+        }).success
+      ).toBe(true);
+    }
+    expect(PermissionListResponseSchema.safeParse(rows).success).toBe(true);
+  });
+
+  it("are still refused where a permission is created", () => {
+    expect(PermissionActionSchema.safeParse("use").success).toBe(false);
+    expect(PermissionActionSchema.safeParse("run").success).toBe(false);
+  });
 });

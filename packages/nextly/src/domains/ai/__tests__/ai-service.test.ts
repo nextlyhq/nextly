@@ -263,7 +263,8 @@ describe("with no AI package", () => {
       const error = await refusal(attempt);
       expect(error.code).toBe("SERVICE_UNAVAILABLE");
       expect(error.publicMessage).toContain("@nextlyhq/ai");
-      expect(error.publicMessage).toContain("nextly ai setup");
+      // No command is named that the CLI does not have.
+      expect(error.publicMessage).not.toContain("nextly ai");
     }
   });
 });
@@ -466,7 +467,9 @@ describe("while switched off", () => {
 });
 
 /** A provider whose stream is driven by the test. */
-function controlledStream() {
+function controlledStream(
+  cleanup: () => Promise<unknown> = async () => undefined
+) {
   const provider = stubProvider();
   let settle!: (usage: typeof USAGE) => void;
   let fail!: (error: Error) => void;
@@ -486,6 +489,7 @@ function controlledStream() {
               : { done: true as const, value: undefined },
           return: async () => {
             stopped();
+            await cleanup();
             return { done: true as const, value: undefined };
           },
         };
@@ -538,6 +542,95 @@ describe("a task's availability for one piece of content", () => {
     const { service } = setup({ provider: stubProvider(), targets: [] });
     const status = await service.status(person());
     expect(status.tasks.every(t => t.available)).toBe(true);
+  });
+});
+
+describe("a provider that cannot be reached for", () => {
+  it("records the run as failed, not refused", async () => {
+    const { service, events, resolveProvider } = setup({
+      provider: stubProvider(),
+    });
+    resolveProvider.mockImplementation(() => {
+      throw new Error("factory broke");
+    });
+    await expect(
+      service.run(person(), {
+        task: { owner: "plugin-seo", name: "summary" },
+        input: "x",
+      })
+    ).rejects.toThrow("factory broke");
+    await expect(
+      service.stream(person(), {
+        task: { owner: "plugin-seo", name: "summary" },
+        input: "x",
+      })
+    ).rejects.toThrow("factory broke");
+    await expect(service.embed(person(), { texts: ["x"] })).rejects.toThrow(
+      "factory broke"
+    );
+    expect(events.map(e => e.result)).toEqual(["failed", "failed", "failed"]);
+  });
+});
+
+describe("a provider that answers with something unreadable", () => {
+  const summary = {
+    task: { owner: "plugin-seo", name: "summary" },
+    input: "x",
+  };
+
+  it.each([
+    ["negative tokens", { ...USAGE, tokensIn: -1 }],
+    ["fractional tokens", { ...USAGE, tokensOut: 1.5 }],
+    [
+      "a cost that is not a whole number",
+      { ...USAGE, estimatedCostMicroUsd: 0.5 },
+    ],
+    [
+      "a cost that is not a number",
+      { ...USAGE, estimatedCostMicroUsd: Number.NaN },
+    ],
+  ])(
+    "refuses a run whose usage has %s, and records it failed with none",
+    async (_what, usage) => {
+      const provider = stubProvider();
+      provider.run.mockResolvedValueOnce({ output: { alt: "x" }, usage });
+      const { service, events } = setup({ provider });
+      const error = await refusal(service.run(person(), summary));
+      expect(error.code).toBe("EXTERNAL_SERVICE_ERROR");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        result: "failed",
+        tokensIn: 0,
+        estimatedCostMicroUsd: null,
+      });
+    }
+  );
+
+  it("refuses a stream whose usage is unreadable, once its text is read", async () => {
+    const { provider, settle } = controlledStream();
+    const { service, events } = setup({ provider });
+    settle({ ...USAGE, tokensIn: -5 });
+    const read = async () => {
+      for await (const _chunk of await service.stream(person(), summary)) {
+        // read to the end
+      }
+    };
+    await expect(read()).rejects.toMatchObject({
+      code: "EXTERNAL_SERVICE_ERROR",
+    });
+    expect(events.map(e => [e.result, e.tokensIn])).toEqual([["failed", 0]]);
+  });
+
+  it("refuses an embedding whose vectors are not numbers", async () => {
+    const provider = stubProvider();
+    provider.embed.mockResolvedValueOnce({
+      vectors: [["a"]] as unknown as number[][],
+      usage: USAGE,
+    });
+    const { service, events } = setup({ provider });
+    const error = await refusal(service.embed(person(), { texts: ["x"] }));
+    expect(error.code).toBe("EXTERNAL_SERVICE_ERROR");
+    expect(events.map(e => e.result)).toEqual(["failed"]);
   });
 });
 
@@ -681,6 +774,43 @@ describe("one usage event per stream, however it ends", () => {
     await iterator.next();
     await Promise.all([iterator.next(), iterator.next()]);
     expect(events.map(e => e.result)).toEqual(["succeeded"]);
+  });
+
+  it("records a stop whose provider never finishes stopping, after the bounded wait", async () => {
+    vi.useFakeTimers();
+    try {
+      const { provider, settle } = controlledStream(
+        () => new Promise(() => undefined)
+      );
+      const { service, events } = setup({ provider });
+      settle(USAGE);
+      const iterator = (await service.stream(person(), summary))[
+        Symbol.asyncIterator
+      ]();
+      await iterator.next();
+      const stopping = iterator.return?.();
+      await vi.advanceTimersByTimeAsync(STREAM_USAGE_WAIT_MS);
+      await stopping;
+      expect(events.map(e => [e.result, e.tokensIn])).toEqual([
+        ["cancelled", USAGE.tokensIn],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records a stop whose provider fails to stop", async () => {
+    const { provider, settle } = controlledStream(async () => {
+      throw new Error("cleanup broke");
+    });
+    const { service, events } = setup({ provider });
+    settle(USAGE);
+    const iterator = (await service.stream(person(), summary))[
+      Symbol.asyncIterator
+    ]();
+    await iterator.next();
+    await iterator.return?.();
+    expect(events.map(e => e.result)).toEqual(["cancelled"]);
   });
 
   it("records nothing twice when the reader stops after the end", async () => {
