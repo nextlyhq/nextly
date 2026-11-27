@@ -53,11 +53,14 @@ describe("the Add panel's tiles", () => {
     expect(mark).toMatch(/background:\s*color-mix\([^;]*var\(--nx-primary\)/);
   });
 
-  it("break a name only between its words", () => {
+  it("break a name only between its words, unless one word alone is wider than the tile", () => {
     const label = rule(".nx-insert-panel__label");
+    // `break-word` breaks a word only when it cannot fit on a line of its
+    // own, so a plugin's "CollectionLoop" stays inside its tile while every
+    // name that fits keeps its words whole; `break-all` breaks every word.
     expect(label).not.toMatch(/overflow-wrap:\s*anywhere/);
     expect(label).not.toMatch(/word-break:\s*break-all/);
-    expect(label).toMatch(/overflow-wrap:\s*normal/);
+    expect(label).toMatch(/overflow-wrap:\s*break-word/);
   });
 
   it("keep a refused tile's name at text contrast, greying its mark and border", () => {

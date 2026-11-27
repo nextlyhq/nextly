@@ -295,11 +295,13 @@
   text-align: inherit;
   color: inherit;
   /*
-   * Broken between words only: "Table of" over "contents", never "Table of
+   * Broken between words: "Table of" over "contents", never "Table of
    * conten" over "ts". Two to a row leaves each name room for its longest
-   * word at the panel's narrowest width.
+   * word at the panel's narrowest width. A word too long for a line of its
+   * own (a plugin's "CollectionLoop") is the one broken, so it never runs
+   * out of its tile over the next.
    */
-  overflow-wrap: normal;
+  overflow-wrap: break-word;
   word-break: normal;
   hyphens: manual;
 }
