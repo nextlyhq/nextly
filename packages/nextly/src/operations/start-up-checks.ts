@@ -11,6 +11,8 @@
  * @module operations/start-up-checks
  * @experimental
  */
+import { SLUG_PATTERN } from "../shared/slug-pattern";
+
 import {
   DOORS,
   RISK_LEVELS,
@@ -21,8 +23,6 @@ import {
   type OperationRaise,
   type OperationSource,
 } from "./definition";
-import { SLUG_PATTERN } from "../shared/slug-pattern";
-
 import { levelRank } from "./levels";
 
 /** One contributor's operations: core's, or one plugin's. */
@@ -330,18 +330,21 @@ function unpermittedDoorProblems(
   ];
 }
 
+/** A permission name, spelled as stored. */
+function permissionNameProblems(name: unknown): string[] {
+  if (!isNonEmptyText(name)) return ["its permission has no name"];
+  if (isStoredPermission(name)) return [];
+  return [
+    `its permission ${quoted(name)} is not spelled as permissions are stored (<action>-<slug>, as read-posts)`,
+  ];
+}
+
 /** The permission it needs, or why it needs none and where that is safe. */
 const permissionProblems: DefinitionCheck = op => {
   const permission: Partial<{ kind: unknown; name: unknown; reason: unknown }> =
     op.permission ?? {};
-  if (permission.kind === "permission") {
-    if (!isNonEmptyText(permission.name)) return ["its permission has no name"];
-    return isStoredPermission(permission.name)
-      ? []
-      : [
-          `its permission ${quoted(permission.name)} is not spelled as permissions are stored (<action>-<slug>, as read-posts)`,
-        ];
-  }
+  if (permission.kind === "permission")
+    return permissionNameProblems(permission.name);
   if (
     permission.kind !== "project" &&
     permission.kind !== "maintenance" &&
