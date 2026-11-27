@@ -177,44 +177,57 @@ async function urlsByHost(
 }
 
 /**
+ * Send `notice`, and once more with the key the site now serves where it was
+ * refused because another instance's key replaced this one before the
+ * search engines read it: what came of it, and the key used last.
+ */
+async function sendNotice(
+  ctx: PluginContext,
+  fetch: OutboundFetch,
+  notice: IndexNowNotice
+): Promise<{ result: ConnectionResult; key: string }> {
+  const result = await sendOne(fetch, notice);
+  const stored =
+    result === "refused-key" ? await replacedKey(ctx, notice.key) : undefined;
+  if (stored === undefined) return { result, key: notice.key };
+  return {
+    result: await sendOne(fetch, { ...notice, key: stored }),
+    key: stored,
+  };
+}
+
+/**
  * One notice for each host's addresses, at most `MOST_URLS` at a time, sent
- * with `key`: how the last went. A notice refused because another
- * instance's key replaced this one before the search engines checked it is
- * sent once more with the key the site now serves.
+ * with `key`: how the last went, and the hosts whose notice was accepted
+ * with the key not yet read.
  */
 async function tellHosts(
   ctx: PluginContext,
   fetch: OutboundFetch,
   byHost: ReadonlyMap<string, readonly string[]>,
   key: string
-): Promise<ConnectionAttempt> {
+): Promise<{ last: ConnectionAttempt; accepted: Set<string> }> {
   let using = key;
   let last = attemptNow("sent", 0);
+  // The hosts a notice of which was accepted, its key not yet read.
+  const accepted = new Set<string>();
   for (const [host, urls] of byHost) {
     for (let at = 0; at < urls.length; at += MOST_URLS) {
-      const notice: IndexNowNotice = {
-        host,
-        key: using,
-        urlList: urls.slice(at, at + MOST_URLS),
-      };
-      let result = await sendOne(fetch, notice);
-      const stored =
-        result === "refused-key" ? await replacedKey(ctx, using) : undefined;
-      if (stored !== undefined) {
-        using = stored;
-        result = await sendOne(fetch, { ...notice, key: using });
-      }
-      last = attemptNow(result, notice.urlList.length);
+      const urlList = urls.slice(at, at + MOST_URLS);
+      const sent = await sendNotice(ctx, fetch, { host, key: using, urlList });
+      using = sent.key;
+      last = attemptNow(sent.result, urlList.length);
+      if (sent.result === "accepted") accepted.add(host);
       // The key and the addresses stay out of the log.
-      if (result !== "sent") {
+      if (sent.result !== "sent") {
         ctx.logger.warn("IndexNow did not take the site's notice", {
-          result,
+          result: sent.result,
           host,
         });
       }
     }
   }
-  return last;
+  return { last, accepted };
 }
 
 /** The notes taken since the last notice, and when the next one goes. */
@@ -323,14 +336,18 @@ function indexNowQueue(
       )
     );
     const byHost = await urlsByHost(noted, origin, hosts);
-    let last = await tellHosts(ctx, fetch, byHost, await keyOf(ctx));
+    const told = await tellHosts(ctx, fetch, byHost, await keyOf(ctx));
+    let last = told.last;
     // A 202 says only that the notice was received: the search engines read
-    // the key later, and refuse every notice where they cannot. So the key
-    // file is read now, as they will read it.
-    if (last.result === "accepted") {
-      const check = await checkIndexNowKey(ctx, setup);
+    // the key later, on the host the notice named, and refuse every notice
+    // where they cannot. So the key file is read now on each such host, as
+    // they will read it; one that doesn't answer refuses the key.
+    const protocol = new URL(origin).protocol;
+    for (const host of told.accepted) {
+      const check = await checkIndexNowKey(ctx, setup, `${protocol}//${host}`);
       if (check.result !== "answering") {
         last = { ...last, result: "refused-key" };
+        break;
       }
     }
     await writeConnections(ctx, { indexNowLast: last });
@@ -439,7 +456,10 @@ async function keyFileServed(
   until: string | undefined
 ): Promise<boolean> {
   if ((await setup.readRules(ctx, undefined)).indexNow === true) return true;
-  const time = until === undefined ? Number.NaN : Date.parse(until);
+  // The time is the window's first word; the rest names the check that
+  // opened it.
+  const time =
+    until === undefined ? Number.NaN : Date.parse(until.split(" ")[0] ?? "");
   return !Number.isNaN(time) && Date.now() < time;
 }
 
@@ -470,60 +490,100 @@ async function keyFileAnswer(
   });
 }
 
+/** Whether `key`'s file answers at `origin`, as IndexNow reads it. */
+async function keyAnswersAt(
+  ctx: PluginContext,
+  setup: IndexNowSetup,
+  origin: string,
+  key: string
+): Promise<boolean> {
+  const fetched = await fetchAs(
+    new URL(`/${key}.txt`, origin),
+    KEY_CHECK_AGENT,
+    {
+      ...setup.fetch,
+      origins: await originsOf(ctx, {
+        readRules: setup.readRules,
+        baseUrl: setup.origin,
+      }),
+    }
+  );
+  // The file must answer the key itself, as IndexNow reads it: a page the
+  // site serves at that address instead is not the key.
+  return (
+    fetched.kind === "received" &&
+    fetched.status === 200 &&
+    fetched.redirects.length === 0 &&
+    fetched.html.trim() === key
+  );
+}
+
 /**
- * Read the key file at the site's production address as the search engines
- * will, the key made first where there is none, and keep what was found.
- * While the read runs the file is served even with IndexNow off, so the
- * check can come before the switch. The read is held to the site's own
- * addresses (`fetchAs`), so it reaches nothing else.
+ * Read the key file while it is served for the check: the window is opened
+ * for this read, and closed after it only where no later check has opened
+ * its own since, so a check never closes the window another still reads in.
+ */
+async function readInWindow(
+  ctx: PluginContext,
+  setup: IndexNowSetup,
+  origin: string,
+  key: string
+): Promise<boolean> {
+  // Named for this check, so two checks opening a window in the same
+  // millisecond still tell their windows apart.
+  const until = `${new Date(Date.now() + KEY_CHECK_WINDOW_MS).toISOString()} ${randomBytes(6).toString("hex")}`;
+  await writeConnections(ctx, { indexNowKeyCheckUntil: until });
+  try {
+    return await keyAnswersAt(ctx, setup, origin, key);
+  } finally {
+    const { indexNowKeyCheckUntil } = await readConnections(ctx);
+    if (indexNowKeyCheckUntil === until) {
+      await writeConnections(ctx, { indexNowKeyCheckUntil: null });
+    }
+  }
+}
+
+/** The key checks under way in this process, by origin, which a second one joins. */
+const checksUnderWay = new Map<string, Promise<IndexNowKeyCheck>>();
+
+/**
+ * Read the key file at `origin`, the site's production address where none
+ * is named, as the search engines will, the key made first where there is
+ * none, and keep what was found. While the read runs the file is served even
+ * with IndexNow off, so the check can come before the switch. The read is
+ * held to the site's own addresses (`fetchAs`), so it reaches nothing else.
+ * A check asked for while one for the same origin runs in this process
+ * answers what that one finds.
  */
 async function checkIndexNowKey(
   ctx: PluginContext,
-  setup: IndexNowSetup
+  setup: IndexNowSetup,
+  at?: string
 ): Promise<IndexNowKeyCheck> {
-  const at = new Date().toISOString();
-  const origin = await siteOriginFor(undefined, ctx, setup);
+  const origin = at ?? (await siteOriginFor(undefined, ctx, setup));
   if (origin === undefined) {
-    const check: IndexNowKeyCheck = { at, result: "no-address" };
+    const check: IndexNowKeyCheck = {
+      at: new Date().toISOString(),
+      result: "no-address",
+    };
     await writeConnections(ctx, { indexNowKeyCheck: check });
     return check;
   }
-  const key = await keyOf(ctx);
-  await writeConnections(ctx, {
-    indexNowKeyCheckUntil: new Date(
-      Date.now() + KEY_CHECK_WINDOW_MS
-    ).toISOString(),
-  });
-  let answering = false;
-  try {
-    const fetched = await fetchAs(
-      new URL(`/${key}.txt`, origin),
-      KEY_CHECK_AGENT,
-      {
-        ...setup.fetch,
-        origins: await originsOf(ctx, {
-          readRules: setup.readRules,
-          baseUrl: setup.origin,
-        }),
-      }
-    );
-    // The file must answer the key itself, as IndexNow reads it: a page the
-    // site serves at that address instead is not the key.
-    answering =
-      fetched.kind === "received" &&
-      fetched.status === 200 &&
-      fetched.redirects.length === 0 &&
-      fetched.html.trim() === key;
-  } finally {
-    await writeConnections(ctx, { indexNowKeyCheckUntil: null });
-  }
-  const check: IndexNowKeyCheck = {
-    at,
-    result: answering ? "answering" : "not-answering",
-    origin,
-  };
-  await writeConnections(ctx, { indexNowKeyCheck: check });
-  return check;
+  const running = checksUnderWay.get(origin);
+  if (running !== undefined) return running;
+  const checking = (async (): Promise<IndexNowKeyCheck> => {
+    const checkedAt = new Date().toISOString();
+    const answering = await readInWindow(ctx, setup, origin, await keyOf(ctx));
+    const check: IndexNowKeyCheck = {
+      at: checkedAt,
+      result: answering ? "answering" : "not-answering",
+      origin,
+    };
+    await writeConnections(ctx, { indexNowKeyCheck: check });
+    return check;
+  })().finally(() => checksUnderWay.delete(origin));
+  checksUnderWay.set(origin, checking);
+  return checking;
 }
 
 /** Key checks running in this process; a screen a person opens needs few. */

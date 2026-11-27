@@ -165,6 +165,34 @@ describe("composeProxy", () => {
     );
   });
 
+  it("gives the page Nextly's value for its own request header over one the visitor sent", async () => {
+    answering({ requestHeaders: { "x-asked-for": "/blog/hello" } });
+    const spoofed = () =>
+      new Request("https://example.com/blog/hello", {
+        headers: { cookie: "a=1", "x-asked-for": "/somewhere-else" },
+      });
+    // A site Proxy passing the request on as it came, both ways it can.
+    const plain = () => NextResponse.next();
+    const carried = (request: Request) =>
+      NextResponse.next({ request: { headers: new Headers(request.headers) } });
+
+    for (const site of [plain, carried]) {
+      const response = await composeProxy(
+        createNextlyProxy(config, deps),
+        site
+      )(spoofed(), {});
+      expect(response?.headers.get("x-middleware-request-x-asked-for")).toBe(
+        "/blog/hello"
+      );
+      expect(
+        response?.headers
+          .get("x-middleware-override-headers")
+          ?.split(",")
+          .filter(name => name === "x-asked-for")
+      ).toEqual(["x-asked-for"]);
+    }
+  });
+
   it("answers with Nextly's own answer where the site's Proxy answers nothing", async () => {
     answering({ headers: { "x-robots-tag": "noindex" } });
 

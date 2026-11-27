@@ -36,7 +36,9 @@ vi.mock("../content-dates/upgrade", async importOriginal => {
     await importOriginal<typeof import("../content-dates/upgrade")>();
   return {
     ...real,
-    // The real waiting for `after`, with the pass itself stood in for.
+    // The waiting for `after`, with the pass itself stood in for: the plugin
+    // hands it the catch-up here, and `upgrade-after.test.ts` holds the real
+    // function to reading nothing until that settles.
     startFingerprintUpgrade: (_ctx: unknown, after?: Promise<unknown>) =>
       (after ?? Promise.resolve())
         .catch(() => undefined)

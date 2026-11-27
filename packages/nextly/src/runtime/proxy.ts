@@ -526,9 +526,11 @@ const REQUEST_HEADER_PREFIX = "x-middleware-request-";
 /**
  * `answered` with Nextly's `decision` added: each response header Nextly sets
  * that the site's answer does not, and, where the answer goes on to a page
- * (`NextResponse.next` or `rewrite`), each request header Nextly adds that
- * the site's does not. The site's own headers, its cookies among them, are
- * kept as the site set them.
+ * (`NextResponse.next` or `rewrite`), each request header Nextly adds, with
+ * Nextly's value. Those are Nextly's own headers, which a visitor may send
+ * too and the site's Proxy pass on as it got them, so Nextly's value always
+ * replaces theirs, as Nextly's Proxy alone replaces it. The site's own
+ * headers, its cookies among them, are kept as the site set them.
  *
  * Request headers are written as `NextResponse.next({ request })` writes
  * them: the page's request takes exactly the headers the override list
@@ -559,7 +561,8 @@ function withNextlyDecision(
 /**
  * The response headers that hand the page `asked` beside what `answered`
  * already hands it, as `NextResponse.next({ request })` encodes them: none
- * where Nextly asks for none.
+ * where Nextly asks for none. A header `asked` names is given Nextly's value
+ * whatever the request or the site's answer carried for it.
  */
 function requestHeadersAdded(
   answered: Response,
@@ -582,8 +585,7 @@ function requestHeadersAdded(
     }
   }
   for (const [name, value] of entries) {
-    if (names.includes(name)) continue;
-    names.push(name);
+    if (!names.includes(name)) names.push(name);
     added[REQUEST_HEADER_PREFIX + name] = value;
   }
   added[OVERRIDE_HEADERS] = names.join(",");

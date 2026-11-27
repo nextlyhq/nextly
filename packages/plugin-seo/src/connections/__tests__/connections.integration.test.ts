@@ -100,7 +100,12 @@ vi.mock("../indexnow-send", async importOriginal => {
  * whose rewrite sends `/<key>.txt` to the API handler's key route, with no
  * Proxy; or, with `servesKeyFile` off, a site that answers its own page.
  */
-const site = vi.hoisted(() => ({ servesKeyFile: true, reads: 0 }));
+const site = vi.hoisted(() => ({
+  servesKeyFile: true,
+  reads: 0,
+  /** Runs while a read is under way, as another check might. */
+  duringRead: undefined as (() => Promise<void>) | undefined,
+}));
 
 vi.mock("../../received/fetch", async importOriginal => {
   const real = await importOriginal<typeof import("../../received/fetch")>();
@@ -108,6 +113,9 @@ vi.mock("../../received/fetch", async importOriginal => {
     ...real,
     fetchAs: async (url: URL) => {
       site.reads += 1;
+      const during = site.duringRead;
+      site.duringRead = undefined;
+      await during?.();
       const key = /^\/([0-9a-f]{32})\.txt$/.exec(url.pathname)?.[1];
       const answer = (status: number, html: string) => ({
         kind: "received" as const,
@@ -146,6 +154,7 @@ afterEach(async () => {
   indexNow.answer = 200;
   site.servesKeyFile = true;
   site.reads = 0;
+  site.duringRead = undefined;
 });
 
 let plugin: PluginDefinition;
@@ -614,6 +623,23 @@ describe.each(getConfiguredTestDialects())(
         expect((await tab(seo)).body.indexNow.keyCheck?.result).toBe(
           "not-answering"
         );
+      });
+
+      it("leaves the key file served for a check another opened while its own read ran", async () => {
+        const { t, seo } = await boot(dialect);
+        await settings(t, {});
+        // Another check, on another server, opens its own window meanwhile.
+        site.duringRead = async () => {
+          await writeConnections(seo, {
+            indexNowKeyCheckUntil: `${new Date(Date.now() + 60_000).toISOString()} other`,
+          });
+        };
+
+        expect((await checkKey(seo)).result).toBe("answering");
+
+        // That check's read still finds the file.
+        const key = (await readConnections(seo)).indexNowKey ?? "";
+        expect(await keyFile(key)).toEqual({ status: 200, body: key });
       });
 
       it("counts a 202 as accepted only where the key file answers, and as a refused key where it does not", async () => {

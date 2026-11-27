@@ -88,8 +88,9 @@ const schema = z.object({
     })
     .optional(),
   /**
-   * Until when, as an ISO time, the key file is served while IndexNow is
-   * off: a check under way reads it before the switch is turned on.
+   * Until when, as an ISO time followed by the opening check's name, the key
+   * file is served while IndexNow is off: a check under way reads it before
+   * the switch is turned on.
    */
   indexNowKeyCheckUntil: z.string().optional(),
   /** Search Console, once connected. */
