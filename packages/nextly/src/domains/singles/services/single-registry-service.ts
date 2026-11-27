@@ -28,6 +28,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { ownIdentityFieldNames } from "../../../collections/config/declared-config";
 import { toDbError } from "../../../database/errors";
 // PR 4 migration: ServiceError throws replaced with NextlyError per spec
 // §13.8 — public messages stay generic ("Resource already exists.", etc.)
@@ -482,6 +483,16 @@ export class SingleRegistryService extends BaseRegistryService<
    */
   getCodeFirstFields(slug: string): SingleConfig["fields"] | undefined {
     return this.codeFirstSingles?.find(single => single.slug === slug)?.fields;
+  }
+
+  /**
+   * Which of `title` and `slug` the Single's author declared as fields of their own
+   * (`ownIdentityFieldNames`), from its live code-first definition. None for a Schema Builder
+   * Single, whose identity is always Nextly's. The schema reads hand it to the admin, which pins
+   * only the others to the Single's label and slug.
+   */
+  getOwnIdentityFields(slug: string): Array<"title" | "slug"> {
+    return ownIdentityFieldNames(this.getCodeFirstFields(slug));
   }
 
   protected getSearchColumns(): string[] {

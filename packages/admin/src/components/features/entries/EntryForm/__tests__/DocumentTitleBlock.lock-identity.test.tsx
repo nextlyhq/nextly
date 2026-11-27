@@ -1,3 +1,4 @@
+import type { FieldConfig } from "nextly/config";
 import { useForm, FormProvider } from "react-hook-form";
 import { describe, it, expect } from "vitest";
 
@@ -14,10 +15,12 @@ function Harness({
   lockIdentity,
   documentLocked,
   mode = "edit",
+  titleField,
 }: {
   lockIdentity?: boolean;
   documentLocked?: boolean;
   mode?: "create" | "edit";
+  titleField?: FieldConfig;
 }) {
   const methods = useForm({ defaultValues: { title: "Homepage" } });
   return (
@@ -26,6 +29,7 @@ function Harness({
         mode={mode}
         lockIdentity={lockIdentity}
         documentLocked={documentLocked}
+        titleField={titleField}
       />
     </FormProvider>
   );
@@ -47,6 +51,27 @@ describe("DocumentTitleBlock — lockIdentity", () => {
 
   it("renders the title read-only under a colleague's claim", () => {
     render(<Harness documentLocked />);
+    expect((screen.getByLabelText("Title") as HTMLInputElement).readOnly).toBe(
+      true
+    );
+  });
+
+  it("renders the title read-only where its field is declared read-only", () => {
+    // The title is drawn here rather than by FieldRenderer, so it reads the
+    // field's own gates itself: an author's own title declared read-only stays
+    // read-only, as it would anywhere else in the form.
+    render(
+      <Harness
+        titleField={
+          {
+            type: "text",
+            name: "title",
+            label: "Title",
+            admin: { readOnly: true },
+          } as unknown as FieldConfig
+        }
+      />
+    );
     expect((screen.getByLabelText("Title") as HTMLInputElement).readOnly).toBe(
       true
     );

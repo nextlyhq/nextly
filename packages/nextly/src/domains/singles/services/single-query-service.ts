@@ -39,6 +39,7 @@ import {
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { SYSTEM_ACTOR } from "../../../auth/request-actor";
+import { ownIdentityFieldNames } from "../../../collections/config/declared-config";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import {
@@ -262,6 +263,23 @@ import {
  * the system column or receives a wrong-typed default.
  */
 const SINGLE_IDENTITY_FIELDS = new Set(["title", "slug"]);
+
+/**
+ * The `title`/`slug` a Single's author declared as fields of their own (`ownIdentityFieldNames`),
+ * with their label/slug seed removed from `defaults`. Such a field is content, not Nextly's
+ * identity: no system field stands in its place, so the seed is not its value. Removed before any
+ * default is resolved, so a function default reading the document built so far never sees the
+ * label as the author's value; the field then takes its own default like any other, and an
+ * optional one starts empty.
+ */
+function withoutOwnIdentitySeeds(
+  defaults: Record<string, unknown>,
+  codeFirstFields: readonly unknown[] | undefined
+): ReadonlySet<string> {
+  const own = new Set<string>(ownIdentityFieldNames(codeFirstFields));
+  for (const name of own) delete defaults[name];
+  return own;
+}
 
 /**
  * A Single's default document, built but not yet written. The read path judges
@@ -2614,6 +2632,9 @@ export class SingleQueryService extends BaseService {
     const codeFirstFields = this.singleRegistryService.getCodeFirstFields(
       singleMeta.slug
     );
+    // The author's own `title`/`slug`, whose label/slug seed is dropped before any default is
+    // resolved (`withoutOwnIdentitySeeds`).
+    const ownIdentity = withoutOwnIdentitySeeds(defaults, codeFirstFields);
     // Both lists are read at the row's level (`fieldsStoredOnRow`): a field inside a group with no
     // name is a column of this row, with a default like one beside the group, and a required one
     // is NOT NULL, so leaving it out of this insert failed the first read.
@@ -2711,8 +2732,13 @@ export class SingleQueryService extends BaseService {
       // which still needs the label). When a Single redefines `title`/`slug` as a
       // NON-text column, the string seed is invalid regardless of whether the
       // field is required: use its type default when required, otherwise drop the
-      // seed so it is never inserted/seeded into (e.g.) a numeric column.
-      if (SINGLE_IDENTITY_FIELDS.has(field.name)) {
+      // seed so it is never inserted/seeded into (e.g.) a numeric column. An
+      // author's own `title`/`slug` had its seed dropped above, and takes the
+      // last branch like any other field.
+      if (
+        SINGLE_IDENTITY_FIELDS.has(field.name) &&
+        !ownIdentity.has(field.name)
+      ) {
         // A Single's table is built by the same service that builds collections. The question
         // asked here — does this kind store text — is answered the same way whatever built the
         // table, so the builtBy cannot change the outcome; it is stated rather than defaulted so

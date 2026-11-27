@@ -116,6 +116,7 @@ import {
 } from "@admin/components/features/entries/EntryForm/useVersionConflict";
 import { VersionConflictDialog } from "@admin/components/features/entries/EntryForm/VersionConflictDialog";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
+import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
 import { smartPublishHandler } from "@admin/components/features/entries/publish-parts/smart-publish-handler";
@@ -185,7 +186,11 @@ import { singleApi } from "@admin/services/singleApi";
 import type { SingleAdminOptions } from "@admin/types/entities";
 import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
-import { relaxIdentityRequired } from "./identity-fields";
+import {
+  fixedIdentityNames,
+  ownTitleInHeading,
+  relaxIdentityRequired,
+} from "./identity-fields";
 import { useSinglePanel, type SinglePanelProps } from "./useSinglePanel";
 import { useSinglePreviewLink } from "./useSinglePreviewLink";
 import { useSinglePreviewPane } from "./useSinglePreviewPane";
@@ -234,6 +239,13 @@ export interface SingleSchema extends RemovedFromCodeMark {
    * `null` (or absent from an older server) where none is attached.
    */
   workflow?: { slug: string; label: string } | null;
+  /**
+   * Which of `title` and `slug` the Single's author declared as fields of
+   * their own, from the schema read. Those are content: drawn editable and
+   * saved as stored or typed. The others are Nextly's, fixed by the Single's
+   * config (`fixedIdentityNames`). Absent (an older server) fixes both.
+   */
+  ownIdentityFields?: readonly string[];
 }
 
 /**
@@ -377,19 +389,84 @@ export interface SingleFormProps {
 // ============================================================================
 
 /**
- * The form's values for a stored document: its fields, with the Single's
- * identity (title and slug) pinned to its config, so the read-only display and
- * the submitted payload always reflect the definition rather than any stale
- * stored value. One derivation for the first render and for every save after.
+ * The form's values for a stored document: its fields, with the identity its
+ * config fixes (`fixedIdentityNames`) pinned to the Single's label and slug, so
+ * the read-only display and the submitted payload always reflect the
+ * definition rather than any stale stored value. A `title` or `slug` the
+ * author declared as their own field keeps its stored value: pinning it would
+ * replace their content with the label on every save. One derivation for the
+ * first render and for every save after.
  */
 function singleFormDefaults(
   schema: SingleSchema,
   document: SingleDocumentData
 ): Record<string, unknown> {
   const values = getDefaultValues(schema.fields, document);
-  values.title = schema.label;
-  values.slug = schema.slug;
+  const fixed = fixedIdentityNames(schema);
+  if (fixed.has("title")) values.title = schema.label;
+  if (fixed.has("slug")) values.slug = schema.slug;
   return values;
+}
+
+/**
+ * The Single's title and slug, at the head of its document.
+ *
+ * Nextly's own (`fixed`, from `fixedIdentityNames`) are the Single's config:
+ * the title is drawn read-only in the heading and the slug is not drawn, as it
+ * is not part of the Single's address on most sites. An author's own field of
+ * either name is content. A plain text title the author declared is drawn
+ * editable in the heading (`ownTitleInHeading`); any other, and an own slug,
+ * is drawn through the field's own control, since the body never draws a field
+ * named title or slug, so its type, its `admin` gates (hidden, a condition,
+ * read-only, disabled) and its validation are the field renderer's, as for any
+ * other field. Both are held with the document: by a colleague's claim or a
+ * reader's access, and while a past version is on screen, where an edit would
+ * reach the live form.
+ */
+function SingleIdentityFields({
+  titleField,
+  slugField,
+  fixed,
+  documentLocked,
+  viewingPastVersion,
+  isSubmitting,
+}: {
+  titleField: FieldConfig | undefined;
+  slugField: FieldConfig | undefined;
+  fixed: ReadonlySet<string>;
+  documentLocked: boolean;
+  viewingPastVersion: boolean;
+  isSubmitting: boolean;
+}): React.JSX.Element {
+  const ownFieldControl = (field: FieldConfig) => (
+    <div className={cn("pt-4", DOCUMENT_COLUMN_INSET)}>
+      <FieldRenderer
+        field={field}
+        readOnly={documentLocked || viewingPastVersion}
+        disabled={isSubmitting}
+      />
+    </div>
+  );
+  return (
+    <>
+      {titleField === undefined ||
+      fixed.has("title") ||
+      ownTitleInHeading(titleField) ? (
+        <DocumentTitleBlock
+          mode="edit"
+          titleField={titleField}
+          lockIdentity={fixed.has("title")}
+          documentLocked={documentLocked}
+          // A save or a discard alone: the title's own `disabled` follows it,
+          // and a recovery holds the title read-only through the lock instead.
+          isSubmitting={isSubmitting}
+        />
+      ) : (
+        ownFieldControl(titleField)
+      )}
+      {slugField && !fixed.has("slug") ? ownFieldControl(slugField) : null}
+    </>
+  );
 }
 
 /**
@@ -742,21 +819,24 @@ export function SingleForm({
   shownCopy,
   smartPublish,
 }: SingleFormProps): React.JSX.Element {
-  // Generate Zod schema from field configurations. Singles render title/slug
-  // read-only from config, so relax their required rule — submitting must not
-  // error when they aren't user-entered.
+  // Generate Zod schema from field configurations. Singles render the
+  // title/slug their config fixes read-only, so relax those fields' required
+  // rule — submitting must not error when they aren't user-entered. An
+  // author's own title or slug keeps its rule, as any of their fields does.
+  const fixedIdentity = useMemo(() => fixedIdentityNames(schema), [schema]);
   const zodSchema = useMemo(() => {
     try {
       // Singles are always an update of the one existing document, so the
       // schema runs in edit mode (blank password = keep current).
-      return generateClientSchema(relaxIdentityRequired(schema.fields), {
-        mode: "edit",
-      });
+      return generateClientSchema(
+        relaxIdentityRequired(schema.fields, fixedIdentity),
+        { mode: "edit" }
+      );
     } catch (error) {
       console.error("Failed to generate schema:", error);
       return z.record(z.string(), z.unknown());
     }
-  }, [schema.fields]);
+  }, [schema.fields, fixedIdentity]);
 
   // Password fields submit "" to mean "keep the stored hash", so they are
   // exempt from the blank-to-null normalization applied on submit.
@@ -1475,8 +1555,9 @@ export function SingleForm({
   const slugFieldName =
     slugField && "name" in slugField ? (slugField.name as string) : "slug";
   // Singles never auto-generate the slug — it's fixed by the single's config
-  // and rendered read-only. Keep the hook mounted (stable hook order) but
-  // disabled so it never writes to the slug field.
+  // and rendered read-only, and an author's own slug is edited by hand under
+  // the title. Keep the hook mounted (stable hook order) but disabled so it
+  // never writes to the slug field.
   useAutoSlug({
     form,
     titleFieldName,
@@ -2074,19 +2155,14 @@ export function SingleForm({
                                     fieldNames={fieldNames}
                                     viewingPastVersion={viewingVersion !== null}
                                   >
-                                    {/* The title, fixed by the Single's config and
-                                  so read-only. No slug line: a Single's slug
-                                  is fixed by its config too, and is not part
-                                  of its address on most sites. */}
-                                    <DocumentTitleBlock
-                                      mode="edit"
+                                    <SingleIdentityFields
                                       titleField={titleField}
-                                      lockIdentity
+                                      slugField={slugField}
+                                      fixed={fixedIdentity}
                                       documentLocked={lock.readOnly}
-                                      // A save or a discard alone: the title's own
-                                      // `disabled` follows it, and a recovery
-                                      // holds the title read-only through the lock
-                                      // instead.
+                                      viewingPastVersion={
+                                        viewingVersion !== null
+                                      }
                                       isSubmitting={writePending}
                                     />
                                     <ReviewStatusLine

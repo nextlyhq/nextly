@@ -1321,6 +1321,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             enrichedData as unknown as SingleWithFields
           ),
           ...draftSplitResponseFields(draftSplit),
+          // Which of `title` and `slug` are the author's own fields, so the
+          // editor saves them as stored or typed; the others it pins to the
+          // Single's label and slug.
+          ownIdentityFields: svc.registry.getOwnIdentityFields(slug),
           // The workflow that holds this Single's publishing, so the editor
           // knows whether a review state is coming before it reads one: one
           // with none publishes without waiting. `null` where none is

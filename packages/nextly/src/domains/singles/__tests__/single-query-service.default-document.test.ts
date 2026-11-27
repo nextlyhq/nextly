@@ -282,6 +282,51 @@ describe("SingleQueryService.buildDefaultDocument", () => {
     });
   });
 
+  it("leaves an author's own title to its own default, which never sees the label as its value", async () => {
+    const registry = createMockSingleRegistry();
+    const service = new SingleQueryService(
+      createMockAdapter() as unknown as Ctor[0],
+      createSilentLogger() as unknown as Ctor[1],
+      registry as unknown as Ctor[2],
+      createMockHookRegistry() as unknown as Ctor[3]
+    );
+    const meta = siteSettingsMeta({
+      fields: [
+        { name: "title", type: "text" },
+        { name: "intro", type: "text" },
+      ],
+    });
+    // The author's own title (no system field was added in its place), whose
+    // default reads the document built so far; `intro`'s reads the title.
+    const seen: unknown[] = [];
+    registry.getCodeFirstFields.mockReturnValue([
+      {
+        name: "title",
+        type: "text",
+        defaultValue: (data: Record<string, unknown>) => {
+          seen.push(data.title);
+          return data.title ?? "Heading";
+        },
+      },
+      {
+        name: "intro",
+        type: "text",
+        defaultValue: (data: Record<string, unknown>) =>
+          `Under ${String(data.title)}`,
+      },
+    ]);
+
+    const { insertValues } = await service.buildDefaultDocument(
+      meta as unknown as SingleMeta
+    );
+
+    expect(seen).toEqual([undefined]);
+    expect(insertValues).toMatchObject({
+      title: "Heading",
+      intro: "Under Heading",
+    });
+  });
+
   it("passes logical (not JSON-stringified) prior values to a dependent default function", async () => {
     const registry = createMockSingleRegistry();
     const service = new SingleQueryService(
