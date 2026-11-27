@@ -342,7 +342,7 @@ describe("what a colour box says, and where it leaves focus", () => {
     fireEvent.blur(box);
     expect(screen.getByRole("alert").textContent).toContain("yellow 50");
     // Picked from the swatch's own list, not typed.
-    fireEvent.click(screen.getByRole("button", { name: /^Colour for Colour/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Colour for Color/ }));
     fireEvent.click(
       within(
         screen.getByRole("listbox", { name: "Colour variables" })
@@ -378,7 +378,7 @@ describe("what a colour box says, and where it leaves focus", () => {
     fireEvent.keyDown(box, { key: "Enter" });
     await frame();
     expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: /^Colour for Colour: Yellow 500/ })
+      screen.getByRole("button", { name: /^Colour for Color: Yellow 500/ })
     );
   });
 
