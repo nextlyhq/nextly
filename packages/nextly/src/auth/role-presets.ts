@@ -156,7 +156,16 @@ export const ROLE_PRESETS: RolePreset[] = [
     grants: ({ action, resource }, { isSystem, isPlugin, isWorkflow }) => {
       if (isPlugin || isWorkflow) return false;
       if (isSystem && resource !== "media") return false;
-      return !["delete", "publish", "unpublish", "manage"].includes(action);
+      // The trash's two actions go with `delete`: an author neither brings a
+      // deleted entry back nor removes one for good.
+      return ![
+        "delete",
+        "publish",
+        "unpublish",
+        "manage",
+        "restore",
+        "empty-trash",
+      ].includes(action);
     },
   },
   {

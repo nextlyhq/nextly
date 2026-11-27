@@ -102,6 +102,7 @@ import {
   createApiKeysNamespace,
   createFilesNamespace,
   createContentEventsNamespace,
+  createTrashNamespace,
   createJobsNamespace,
   createNoticesNamespace,
   createTranslationsNamespace,
@@ -123,6 +124,7 @@ import {
   type ApiKeysNamespace,
   type FilesNamespace,
   type ContentEventsNamespace,
+  type TrashNamespace,
   type JobsNamespace,
   type NoticesNamespace,
   type TranslationsNamespace,
@@ -330,6 +332,8 @@ export class Nextly implements NextlyContext {
   public readonly versions: VersionsNamespace;
   /** A subject's content events: a document's or a release's. */
   public readonly contentEvents: ContentEventsNamespace;
+  /** @experimental Deleted entries: list, restore, empty. */
+  public readonly trash: TrashNamespace;
   /** @experimental Review state under a workflow: read it, take steps, assign, what waits. */
   public readonly workflows: WorkflowsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
@@ -380,6 +384,7 @@ export class Nextly implements NextlyContext {
     this.contentEvents = withLanguagesPinned(
       createContentEventsNamespace(this)
     );
+    this.trash = withLanguagesPinned(createTrashNamespace(this));
     this.workflows = withLanguagesPinned(createWorkflowsNamespace(this));
     this.principals = createNextlyPrincipals();
     this.files = withLanguagesPinned(createFilesNamespace());
@@ -1217,6 +1222,13 @@ export const nextly = {
     list: async args =>
       (await requireNextlyOnceStarted()).contentEvents.list(args),
   } satisfies ContentEventsNamespace,
+
+  trash: {
+    list: async args => (await requireNextlyOnceStarted()).trash.list(args),
+    restore: async args =>
+      (await requireNextlyOnceStarted()).trash.restore(args),
+    empty: async args => (await requireNextlyOnceStarted()).trash.empty(args),
+  } satisfies TrashNamespace,
 
   // Checked against the namespace's own type, so a method added there and
   // not delegated here is a compile error rather than a gap a caller finds.

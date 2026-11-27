@@ -782,7 +782,8 @@ export class PermissionSeedService extends BaseService {
   /**
    * Seed CRUD permissions for a single collection.
    *
-   * Creates 6 permissions: create, read, update, delete, publish, unpublish.
+   * Creates 8 permissions: create, read, update, delete, publish, unpublish,
+   * and the trash's restore and empty-trash.
    *
    * Publishing is seeded for every collection, not only those with the
    * draft/published lifecycle enabled. A collection can gain `status: true`

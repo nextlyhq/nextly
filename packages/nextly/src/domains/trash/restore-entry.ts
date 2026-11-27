@@ -164,8 +164,11 @@ async function conflictsOf(
   for (const field of uniqueFields(collection.fields)) {
     const name = String(field.name);
     const asked = Object.prototype.hasOwnProperty.call(values, name);
+    // Asked only of the rows that hold the column: a translated field lives
+    // in the language rows, not the entry's own.
+    const ownHolds = own !== undefined && name in own;
     const ownValue = asked ? values[name] : own && keptColumn(own, name);
-    if (ownValue !== undefined && ownValue !== null && own !== undefined) {
+    if (ownHolds && ownValue !== undefined && ownValue !== null) {
       const taken = await valueTaken(tx, collection.tableName, [
         { column: name, op: "=", value: ownValue },
         { column: "id", op: "!=", value: record.itemId },
@@ -173,6 +176,7 @@ async function conflictsOf(
       if (taken) conflicts.push({ field: name, value: ownValue });
     }
     for (const row of keptRowsOf(record.stored, companion)) {
+      if (!(name in row)) continue;
       const locale = String(keptColumn(row, "_locale"));
       const value = asked ? values[name] : keptColumn(row, name);
       if (value === undefined || value === null) continue;

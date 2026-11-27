@@ -39,6 +39,11 @@ export const COLLECTION_SEEDED_ACTIONS = [
   "delete",
   "publish",
   "unpublish",
+  // The trash's own two: bringing a deleted entry back, and removing deleted
+  // entries for good. Apart from `delete`, so a role may restore without
+  // emptying, and granted by the presets as `delete` is.
+  "restore",
+  "empty-trash",
 ] as const;
 
 export const SINGLE_SEEDED_ACTIONS = [
