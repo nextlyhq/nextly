@@ -230,22 +230,24 @@ const doorsProblems: DefinitionCheck = op => {
   if (new Set(op.doors).size !== op.doors.length) {
     problems.push("it names a door twice");
   }
-  if (op.doors.includes("deploy") && op.source?.kind !== "core") {
-    problems.push("a plugin's operation may not run on the deploy door");
-  } else if (
-    op.doors.includes("deploy") &&
-    !DEPLOY_DOOR_OPERATIONS.has(op.id)
-  ) {
-    problems.push(
-      `it runs on the deploy door, which only ${[...DEPLOY_DOOR_OPERATIONS].join(", ")} may`
-    );
-  }
   if (op.chatExposed === true && !op.doors.includes("chat")) {
     problems.push(
       "it is marked as seen by chat apps but does not run on the chat door"
     );
   }
   return problems;
+};
+
+/** Only core's fixed set of schema operations runs on the deploy door. */
+const deployDoorProblems: DefinitionCheck = op => {
+  if (!Array.isArray(op.doors) || !op.doors.includes("deploy")) return [];
+  if (op.source?.kind !== "core") {
+    return ["a plugin's operation may not run on the deploy door"];
+  }
+  if (DEPLOY_DOOR_OPERATIONS.has(op.id)) return [];
+  return [
+    `it runs on the deploy door, which only ${[...DEPLOY_DOOR_OPERATIONS].join(", ")} may`,
+  ];
 };
 
 /** An operation that reads only its plugin's own data, unchecked. */
@@ -407,6 +409,7 @@ const DEFINITION_CHECKS: readonly DefinitionCheck[] = [
   raiseProblems,
   effectsProblems,
   doorsProblems,
+  deployDoorProblems,
   permissionProblems,
   dryRunProblems,
   longProblems,
