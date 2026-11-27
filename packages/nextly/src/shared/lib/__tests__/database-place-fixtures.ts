@@ -65,6 +65,11 @@ export const DATABASE_PLACE_FIXTURES: readonly DatabasePlaceFixture[] = [
   },
   { name: "::1", url: "postgresql://app:pw@[::1]:5432/shop", place: "local" },
   {
+    name: "::1 written out in full",
+    url: "postgresql://app:pw@[0:0:0:0:0:0:0:1]:5432/shop",
+    place: "local",
+  },
+  {
     name: "an IPv4 loopback written as IPv6",
     url: "postgresql://app:pw@[::ffff:127.0.0.1]:5432/shop",
     place: "local",
@@ -125,6 +130,38 @@ export const DATABASE_PLACE_FIXTURES: readonly DatabasePlaceFixture[] = [
   {
     name: "a URL no dialect reads",
     url: "mongodb://localhost/shop",
+    place: "live",
+  },
+  {
+    name: "a remote host, whatever PGHOST says",
+    url: "postgresql://app:pw@db.prod.neon.tech:5432/shop",
+    env: { PGHOST: "/var/run/postgresql" },
+    place: "live",
+  },
+  {
+    name: "a MySQL host parameter, which MySQL's driver ignores",
+    url: "mysql://app:pw@db.prod.example.com:3306/shop?host=localhost",
+    place: "live",
+  },
+  {
+    name: "a name that only starts like a loopback address",
+    url: "postgresql://app:pw@127.0.0.1.example.com:5432/shop",
+    place: "live",
+  },
+  {
+    name: "a password holding #, which would read the user name as the host",
+    url: "postgresql://localhost:2024#x@db.prod.neon.tech/shop",
+    place: "live",
+  },
+  {
+    name: "DB_DIALECT naming another dialect than the URL",
+    url: "postgresql://app:pw@db.prod.neon.tech:5432/shop",
+    dialect: "sqlite",
+    place: "live",
+  },
+  {
+    name: "a SQLite URL that is not a file's path",
+    url: "file:./app.db?mode=ro",
     place: "live",
   },
   { name: "no URL", url: undefined, place: "live" },

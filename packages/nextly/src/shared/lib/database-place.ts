@@ -49,18 +49,23 @@ export interface ServerParts {
  * - `unrecognised`: a URL that names no dialect this package supports;
  * - `sqlite`: the file's path resolved against the folder, `:memory:`, or
  *   `undefined` where the URL holds something that is not the file's own
- *   path (the adapter still opens a file on this machine);
+ *   path;
  * - `server`: the host (or socket), port and database, or `undefined`
  *   where any part is not what it should be.
+ *
+ * `disagrees` is set where `DB_DIALECT` names a dialect other than the one
+ * the URL's scheme names. The CLI connects with the scheme's and a site
+ * reads `DB_DIALECT` first, so such settings may reach either database.
  */
 export type DatabaseAddress =
   | { kind: "none" }
   | { kind: "unrecognised" }
-  | { kind: "sqlite"; file: string | undefined }
+  | { kind: "sqlite"; file: string | undefined; disagrees: boolean }
   | {
       kind: "server";
       dialect: Exclude<Dialect, "sqlite">;
       parts: ServerParts | undefined;
+      disagrees: boolean;
     };
 
 /** What a database's address is read from. */
@@ -78,16 +83,23 @@ export interface DatabaseAddressInput {
 const DEFAULT_PORTS = { postgresql: "5432", mysql: "3306" } as const;
 
 /**
- * The dialect a command connects with, as its settings check decides it: the
- * one stated (`DB_DIALECT`) when it names one, else the one the URL implies.
+ * The dialect a CLI command connects with: the one the URL's scheme implies,
+ * else the one stated (`DB_DIALECT`); and whether the two name different
+ * dialects.
  */
 function dialectOf(
   url: string,
   stated: string | undefined
-): Dialect | undefined {
-  return (DIALECTS as readonly string[]).includes(stated ?? "")
+): { dialect: Dialect | undefined; disagrees: boolean } {
+  const named = (DIALECTS as readonly string[]).includes(stated ?? "")
     ? (stated as Dialect)
-    : dialectFromUrl(url);
+    : undefined;
+  const implied = dialectFromUrl(url);
+  return {
+    dialect: implied ?? named,
+    disagrees:
+      implied !== undefined && named !== undefined && implied !== named,
+  };
 }
 
 /**
@@ -188,7 +200,17 @@ function serverParts(
     port: parameter("port") || parsed.port || defaults.port,
     database: database || defaults.database,
   };
+  // Credentials the parser did not read as credentials: a `#` or `?` in a
+  // password ends the address early, and the user name is read as the host
+  // (`postgres://admin:2024#x@db/shop` is host `admin`, port `2024`).
+  const misread =
+    parsed.hash !== "" ||
+    (parsed.href.includes("@") &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      !/^[a-z]+:\/\/[^/?#]*@/i.test(parsed.href));
   const readable =
+    !misread &&
     named !== undefined &&
     database !== undefined &&
     (HOST.test(parts.host) || SOCKET.test(parts.host)) &&
@@ -210,12 +232,13 @@ export function readDatabaseAddress(
 ): DatabaseAddress {
   const { url } = input;
   if (url === undefined || url === "") return { kind: "none" };
-  const dialect = dialectOf(url, input.dialect);
+  const { dialect, disagrees } = dialectOf(url, input.dialect);
   if (dialect === undefined) return { kind: "unrecognised" };
   if (dialect === "sqlite") {
     return {
       kind: "sqlite",
       file: sqliteFile(url, input.folder ?? process.cwd()),
+      disagrees,
     };
   }
   const parsed = parseServerUrl(url);
@@ -223,6 +246,7 @@ export function readDatabaseAddress(
     kind: "server",
     dialect,
     parts: parsed && serverParts(parsed, dialect, input.env ?? {}),
+    disagrees,
   };
 }
 
@@ -255,17 +279,22 @@ function hostIsThisMachine(host: string): boolean {
 }
 
 /**
- * Whether the database at `address` is on this machine. A SQLite database
- * always is: the adapter opens only a file, or memory. A server is local
- * only by its socket or its host; one whose address cannot be read is live,
- * as is no database at all, so nothing is ever local without a reason.
+ * Whether the database at `address` is on this machine. A SQLite file or
+ * memory is: the adapter opens nothing else. A server is local only by its
+ * socket or its host. Nothing is ever local without a reason, so these are
+ * live: an address that cannot be read, settings whose `DB_DIALECT` and URL
+ * name different dialects, and no database at all.
  */
 export function placeOf(address: DatabaseAddress): DatabasePlace {
   switch (address.kind) {
     case "sqlite":
-      return "local";
+      return address.file !== undefined && !address.disagrees
+        ? "local"
+        : "live";
     case "server":
-      return address.parts && hostIsThisMachine(address.parts.host)
+      return address.parts &&
+        !address.disagrees &&
+        hostIsThisMachine(address.parts.host)
         ? "local"
         : "live";
     default:

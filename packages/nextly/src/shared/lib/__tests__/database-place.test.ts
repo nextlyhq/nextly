@@ -65,6 +65,7 @@ describe("where a database is", () => {
       kind: "server",
       dialect: "postgresql",
       parts: { host: "db.example.com", port: "5432", database: "shop" },
+      disagrees: false,
     });
     expect(placeOf(address)).toBe("live");
   });

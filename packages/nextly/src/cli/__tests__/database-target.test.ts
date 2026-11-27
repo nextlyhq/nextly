@@ -70,23 +70,39 @@ describe("the database a command names", () => {
     expect(target(":memory:", "sqlite")).toBe("SQLite :memory:");
   });
 
-  it("names the dialect the command connects with: the one stated, else the one the URL implies", () => {
+  it("names the dialect the command connects with: the one the URL implies, else the one stated", () => {
     expect(target("./app.data", "sqlite")).toBe(
       `SQLite ${resolve(FOLDER, "app.data")}`
     );
-    // Stated beside another dialect's URL, the stated one is what connects.
+    // The CLI's connection reads the URL's scheme before DB_DIALECT.
     expect(target("postgres://appuser:s3cr3t@db.internal/shop", "mysql")).toBe(
-      "MySQL db.internal:3306/shop"
+      "PostgreSQL db.internal:5432/shop"
     );
   });
 
-  it("never prints a server's URL as a SQLite path", () => {
-    const line = target(
-      "postgres://appuser:s3cr3t@db.internal:5432/shop?password=hunter2",
-      "sqlite"
-    );
-    expect(line).toBe("SQLite (address not readable)");
-    for (const secret of SECRETS) expect(line).not.toContain(secret);
+  it("never prints a server's URL as a SQLite path, and calls such settings live", () => {
+    const read = databaseTarget({
+      url: "postgres://appuser:s3cr3t@localhost:5432/shop?password=hunter2",
+      dialect: "sqlite",
+      folder: FOLDER,
+    });
+    expect(phrase(read)).toBe("PostgreSQL localhost:5432/shop");
+    // DB_DIALECT and the URL disagree: a site reads one, the CLI the other.
+    expect(read.place).toBe("live");
+    for (const secret of SECRETS) expect(phrase(read)).not.toContain(secret);
+  });
+
+  it("never reads a user name as the host when a password holds # or ?", () => {
+    for (const url of [
+      "postgres://admin:2024#Summer@db.internal/shop",
+      "postgres://admin:2024?Summer@db.internal/shop",
+      "mysql://admin:2024#Summer@db.internal/shop",
+    ]) {
+      const read = databaseTarget({ url, folder: FOLDER });
+      expect(read.target).toBe("(address not readable)");
+      expect(read.place).toBe("live");
+      expect(phrase(read)).not.toContain("admin");
+    }
   });
 
   it("does not name a SQLite file the adapter would not open: a URL with a query part is unreadable", () => {
