@@ -224,6 +224,19 @@ function oneParameter(
 }
 
 /**
+ * MySQL's `socketPath` parameter, as its driver opens it: a relative path
+ * from the folder it runs in, as the adapter opens a relative SQLite file.
+ */
+function mysqlSocket(
+  parsed: URL,
+  folder: string
+): string | null | typeof AMBIGUOUS {
+  const named = oneParameter(parsed, "socketPath");
+  if (typeof named !== "string" || named.startsWith("/")) return named;
+  return RELATIVE_SOCKET.test(named) ? resolve(folder, named) : named;
+}
+
+/**
  * The host, port and database the driver connects with: the URL's own, a
  * PostgreSQL `host` or `port` parameter over them, MySQL's `socketPath`
  * over the host, and the driver's defaults for what is left out. Undefined
@@ -244,18 +257,10 @@ function serverParts(
   const pg = dialect === "postgresql";
   const host = pg ? oneParameter(parsed, "host") : null;
   const port = pg ? oneParameter(parsed, "port") : null;
-  const namedSocket = pg ? null : oneParameter(parsed, "socketPath");
-  if (host === AMBIGUOUS || port === AMBIGUOUS || namedSocket === AMBIGUOUS) {
+  const socket = pg ? null : mysqlSocket(parsed, folder);
+  if (host === AMBIGUOUS || port === AMBIGUOUS || socket === AMBIGUOUS) {
     return undefined;
   }
-  // MySQL's driver opens a relative socket path from the folder it runs in,
-  // as the adapter opens a relative SQLite file: resolved the same way.
-  const socket =
-    namedSocket &&
-    !namedSocket.startsWith("/") &&
-    RELATIVE_SOCKET.test(namedSocket)
-      ? resolve(folder, namedSocket)
-      : namedSocket;
   const defaults = driverDefaults(dialect, env);
   const parts = {
     host: socket || host || (named === NO_HOST ? "" : named) || defaults.host,
