@@ -31,7 +31,7 @@
 
 The command palette is now part of the admin. It opens with ⌘K (Ctrl+K on Windows and Linux) in every app that serves the admin, with no code of the app's own, and it opens on screen, near the top of the window, at every width.
 
-A new Search button under the logo at the top of the rail opens it too, and on a phone the Search row at the top of the menu drawer does. When the palette closes, focus goes back to where it was.
+A new Search button under the logo at the top of the rail opens it too; on a phone it sits at the top of the menu drawer, which draws the rail. When the palette closes, focus goes back to where it was.
 
 Typing finds collections, Singles, pages and actions, each under its own heading and only where the person may open it:
 
