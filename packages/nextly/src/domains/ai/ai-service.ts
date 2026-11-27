@@ -170,6 +170,26 @@ function providerRequest(
   };
 }
 
+/**
+ * How long a stopped or broken stream's usage is waited for. The provider
+ * settles it once its text has ended or been stopped; one that never does
+ * must not hold the reader that stopped it.
+ */
+export const STREAM_USAGE_WAIT_MS = 5_000;
+
+/** What a stream reported it used, or none if it fails or takes too long. */
+async function usageWithin(usage: Promise<AIRunUsage>): Promise<AIRunUsage> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<AIRunUsage>(resolve => {
+    timer = setTimeout(() => resolve(NO_USAGE), STREAM_USAGE_WAIT_MS);
+  });
+  try {
+    return await Promise.race([usage.catch(() => NO_USAGE), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function createAIService(deps: AIServiceDeps): AIService {
   /** Why AI is not configured, or undefined when it is. */
   function notConfigured(): AINotConfiguredReason | undefined {
@@ -302,35 +322,76 @@ export function createAIService(deps: AIServiceDeps): AIService {
 
   /**
    * The provider's text, passed through as it comes, with the run's one
-   * event emitted when the text ends: succeeded once it has all been read,
-   * failed when it breaks, cancelled when the reader stops early.
+   * event emitted when the reading ends, however it ends: succeeded once the
+   * text has all been read and its usage reported; failed when the text or
+   * its usage breaks; cancelled when the reader stops, before or during the
+   * reading, after the provider has been told to stop and has said what it
+   * used (waited for at most {@link STREAM_USAGE_WAIT_MS}). Written by hand
+   * rather than as a generator, because a generator stopped before its first
+   * read never runs its cleanup, and its event would be lost.
+   *
+   * A stream nobody reads or stops never ends, so it emits nothing.
    */
-  async function* streamed(
+  function streamed(
     caller: AICaller,
     args: AIRunArgs,
     stream: AIProviderStream
-  ): AsyncGenerator<string> {
-    let result: AIRunResult = "cancelled";
-    try {
-      for await (const chunk of stream.text) yield chunk;
-      result = "succeeded";
-    } catch (error) {
-      result = "failed";
-      throw error;
-    } finally {
-      // Only a stream read to its end reports usage worth keeping; one that
-      // broke or was left early is recorded with none, and its usage
-      // promise is not waited for, since a broken stream may never settle it.
-      if (result !== "succeeded") stream.usage.catch(() => undefined);
-      const usage = result === "succeeded" ? await stream.usage : NO_USAGE;
+  ): AsyncIterable<string> {
+    const source = stream.text[Symbol.asyncIterator]();
+    let ended = false;
+    const end = async (result: AIRunResult, usage: AIRunUsage) => {
+      ended = true;
       await emitEnd("stream", caller, args.task, args.agent, usage, result);
-    }
+    };
+    const finished = { done: true as const, value: undefined };
+    const iterator: AsyncIterator<string> = {
+      async next() {
+        if (ended) return finished;
+        let step: IteratorResult<string>;
+        try {
+          step = await source.next();
+        } catch (error) {
+          await end("failed", await usageWithin(stream.usage));
+          throw error;
+        }
+        if (!step.done) return { done: false, value: step.value };
+        let usage: AIRunUsage;
+        try {
+          usage = await stream.usage;
+        } catch (error) {
+          await end("failed", NO_USAGE);
+          throw error;
+        }
+        await end("succeeded", usage);
+        return finished;
+      },
+      async return() {
+        if (ended) return finished;
+        ended = true;
+        try {
+          await source.return?.();
+        } finally {
+          await emitEnd(
+            "stream",
+            caller,
+            args.task,
+            args.agent,
+            await usageWithin(stream.usage),
+            "cancelled"
+          );
+        }
+        return finished;
+      },
+    };
+    return { [Symbol.asyncIterator]: () => iterator };
   }
 
   return {
     async status(caller) {
       const reason = notConfigured();
-      const provider = deps.provider();
+      // Not resolved at all while AI is off or absent: resolving runs the
+      // provider's factory, and a broken provider must not fail the status.
+      const provider = reason === undefined ? deps.provider() : undefined;
       const roles =
         reason === undefined && provider !== undefined
           ? await rolesWithModels(provider)

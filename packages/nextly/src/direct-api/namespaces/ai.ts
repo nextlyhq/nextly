@@ -32,7 +32,7 @@ import type {
 } from "../../domains/ai/ai-service";
 import { onAIUsage } from "../../domains/ai/ai-usage-events";
 import { aiService } from "../../domains/ai/ai-wiring";
-import type { UserContext } from "../types/shared";
+import type { DirectAPIConfig, UserContext } from "../types/shared";
 
 import type { NextlyContext } from "./context";
 import { checkedCaller } from "./helpers";
@@ -46,8 +46,12 @@ export interface AICallerArgs {
    * Defaults to `false` here, whatever the instance's default.
    */
   overrideAccess?: boolean;
-  /** The API key's own grants, when the transport authenticated one. */
-  authenticatedScope?: AuthenticatedScope;
+  /**
+   * The API key's own scope, when the transport authenticated one: the call
+   * is then judged on the key's grants, never its owner's. The same field,
+   * and the same meaning, as everywhere else in the Direct API.
+   */
+  actor?: AuthenticatedScope;
   /**
    * The agent acting for the person, recorded with the run. The checks are
    * the person's, never more.
@@ -86,13 +90,15 @@ export interface AINamespace {
 export function createAINamespace(ctx: NextlyContext): AINamespace {
   /** The checked caller, or null for a call that asked to be trusted. */
   function callerOf(args: AICallerArgs = {}): AICaller {
-    return checkedCaller(ctx.defaultConfig, {
-      ...(args.user === undefined ? {} : { user: args.user }),
-      ...(args.authenticatedScope === undefined
-        ? {}
-        : { authenticatedScope: args.authenticatedScope }),
+    // `user` and `actor` passed on only when the call names them, so the
+    // seam reads them as every namespace's are: a call naming a user and no
+    // key is that person, and one naming neither keeps the instance's.
+    const access: DirectAPIConfig = {
       overrideAccess: args.overrideAccess === true,
-    });
+    };
+    if ("user" in args) access.user = args.user;
+    if ("actor" in args) access.actor = args.actor;
+    return checkedCaller(ctx.defaultConfig, access);
   }
 
   return {

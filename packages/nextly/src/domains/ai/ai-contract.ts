@@ -149,7 +149,11 @@ export interface AIProviderRunOutcome {
 /** @experimental A streamed run: its text as it comes, then its usage. */
 export interface AIProviderStream {
   text: AsyncIterable<string>;
-  /** Settles once the text has ended. */
+  /**
+   * Settles once the text has ended, or once core has stopped it because
+   * the reader stopped early, with what was used up to then. Core waits a
+   * few seconds for it after a stop, then records the run with no usage.
+   */
   usage: Promise<AIRunUsage>;
 }
 

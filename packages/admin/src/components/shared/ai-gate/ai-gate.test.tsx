@@ -133,4 +133,29 @@ describe("the AI gate", () => {
     await screen.findByText("status arrived");
     expect(screen.queryByRole("button", { name: "Run on all" })).toBeNull();
   });
+
+  it("draws a bulk control for a person who may use AI and run bulk jobs", async () => {
+    renderGate(
+      { ...CONFIGURED, permissions: { use: true, bulk: true, manage: false } },
+      <AIGate permission="bulk">
+        <button type="button">Run on all</button>
+      </AIGate>
+    );
+    expect(
+      await screen.findByRole("button", { name: "Run on all" })
+    ).toBeTruthy();
+  });
+
+  it("draws no bulk control for a person who may run bulk jobs but not use AI", async () => {
+    // The server refuses such a person's bulk job ("You can't use AI."), so
+    // offering the button would only lead to that refusal.
+    renderGate(
+      { ...CONFIGURED, permissions: { use: false, bulk: true, manage: false } },
+      <AIGate permission="bulk">
+        <button type="button">Run on all</button>
+      </AIGate>
+    );
+    await screen.findByText("status arrived");
+    expect(screen.queryByRole("button", { name: "Run on all" })).toBeNull();
+  });
 });

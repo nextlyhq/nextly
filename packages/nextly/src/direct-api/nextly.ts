@@ -380,7 +380,10 @@ export class Nextly implements NextlyContext {
     this.jobs = withLanguagesPinned(createJobsNamespace());
     this.releases = withLanguagesPinned(createReleasesNamespace(this));
     this.notices = withLanguagesPinned(createNoticesNamespace());
-    this.ai = withLanguagesPinned(createAINamespace(this));
+    // `onUsage` kept as it is: the pinning wraps a method's answer in a
+    // promise, and this one answers with the function that stops listening.
+    const ai = createAINamespace(this);
+    this.ai = { ...withLanguagesPinned(ai), onUsage: ai.onUsage };
     this.translations = withLanguagesPinned(createTranslationsNamespace(this));
     this.versions = withLanguagesPinned(createVersionsNamespace(this));
     this.contentEvents = withLanguagesPinned(

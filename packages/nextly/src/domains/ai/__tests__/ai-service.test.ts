@@ -11,11 +11,16 @@ import {
   AI_PERMISSIONS,
   type AIProvider,
   type AIProviderRunRequest,
+  type AIProviderStream,
   type AIRunTarget,
   type AITaskRef,
   type AIUsageEvent,
 } from "../ai-contract";
-import { createAIService, type AIServiceDeps } from "../ai-service";
+import {
+  createAIService,
+  STREAM_USAGE_WAIT_MS,
+  type AIServiceDeps,
+} from "../ai-service";
 import { aiTurnedOff } from "../ai-switch";
 import { emitAIUsage, onAIUsage } from "../ai-usage-events";
 
@@ -53,16 +58,18 @@ function stubProvider(roles: Partial<Record<string, boolean>> = {}) {
       asked.push(request);
       return { output: { alt: "A red bicycle" }, usage: USAGE };
     }),
-    stream: vi.fn(async (request: AIProviderRunRequest) => {
-      asked.push(request);
-      return {
-        text: (async function* () {
-          yield "A red ";
-          yield "bicycle";
-        })(),
-        usage: Promise.resolve(USAGE),
-      };
-    }),
+    stream: vi.fn(
+      async (request: AIProviderRunRequest): Promise<AIProviderStream> => {
+        asked.push(request);
+        return {
+          text: (async function* () {
+            yield "A red ";
+            yield "bicycle";
+          })(),
+          usage: Promise.resolve(USAGE),
+        };
+      }
+    ),
     embed: vi.fn(async () => ({ vectors: [[0.1, 0.2]], usage: USAGE })),
   } satisfies AIProvider & Record<string, unknown>;
   return provider;
@@ -101,8 +108,11 @@ function setup(options: Setup = {}) {
     (options.held ?? ALL_AI).includes(
       `${permission.action}-${permission.resource}`
     );
+  // Resolving the provider runs its plugin's factory; counted so a test can
+  // say it was never reached for.
+  const resolveProvider = vi.fn(() => options.provider);
   const deps: AIServiceDeps = {
-    provider: () => options.provider,
+    provider: resolveProvider,
     turnedOff: () => env.off,
     tasks: () => options.tasks ?? [ALT_TEXT, SUMMARY],
     holds: async (_caller, permission) => held(permission),
@@ -121,7 +131,13 @@ function setup(options: Setup = {}) {
     },
     now: () => new Date("2026-11-27T10:00:00Z"),
   };
-  return { service: createAIService(deps), events, env, authorizeTarget };
+  return {
+    service: createAIService(deps),
+    events,
+    env,
+    authorizeTarget,
+    resolveProvider,
+  };
 }
 
 async function refusal(promise: Promise<unknown>): Promise<NextlyError> {
@@ -427,6 +443,133 @@ describe("bulk jobs", () => {
   it("lets a caller holding both through", async () => {
     const { service } = setup({ provider: stubProvider() });
     await expect(service.checkBulkJob(person())).resolves.toBeUndefined();
+  });
+});
+
+describe("while switched off", () => {
+  it("never resolves the provider, so a broken one cannot fail the status", async () => {
+    const { service, env, resolveProvider } = setup({
+      provider: stubProvider(),
+    });
+    env.off = true;
+    await service.status(person());
+    await refusal(
+      service.run(person(), {
+        task: { owner: "plugin-seo", name: "summary" },
+        input: "x",
+      })
+    );
+    expect(resolveProvider).not.toHaveBeenCalled();
+  });
+});
+
+/** A provider whose stream is driven by the test. */
+function controlledStream() {
+  const provider = stubProvider();
+  let settle!: (usage: typeof USAGE) => void;
+  let fail!: (error: Error) => void;
+  const usage = new Promise<typeof USAGE>((resolve, reject) => {
+    settle = resolve;
+    fail = reject;
+  });
+  const stopped = vi.fn();
+  provider.stream.mockImplementation(async () => ({
+    text: {
+      [Symbol.asyncIterator]: () => {
+        let sent = 0;
+        return {
+          next: async () =>
+            sent < 2
+              ? { done: false as const, value: `chunk ${++sent}` }
+              : { done: true as const, value: undefined },
+          return: async () => {
+            stopped();
+            return { done: true as const, value: undefined };
+          },
+        };
+      },
+    },
+    usage,
+  }));
+  return { provider, settle, fail, stopped };
+}
+
+describe("one usage event per stream, however it ends", () => {
+  const summary = {
+    task: { owner: "plugin-seo", name: "summary" },
+    input: "x",
+  };
+
+  it("records a stream stopped before it is read as cancelled, and stops the provider", async () => {
+    const { provider, settle, stopped } = controlledStream();
+    const { service, events } = setup({ provider });
+    const iterator = (await service.stream(person(), summary))[
+      Symbol.asyncIterator
+    ]();
+    settle(USAGE);
+    await iterator.return?.();
+    expect(stopped).toHaveBeenCalledTimes(1);
+    expect(events.map(e => e.result)).toEqual(["cancelled"]);
+  });
+
+  it("records what a stream stopped early used, once the provider says", async () => {
+    const { provider, settle } = controlledStream();
+    const { service, events } = setup({ provider });
+    const iterator = (await service.stream(person(), summary))[
+      Symbol.asyncIterator
+    ]();
+    await iterator.next();
+    const stopping = iterator.return?.();
+    settle(USAGE);
+    await stopping;
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ result: "cancelled", ...USAGE });
+  });
+
+  it("records a stream whose usage fails after its text as failed, and tells the reader", async () => {
+    const { provider, fail } = controlledStream();
+    const { service, events } = setup({ provider });
+    fail(new Error("usage unavailable"));
+    const read = async () => {
+      for await (const _chunk of await service.stream(person(), summary)) {
+        // read to the end
+      }
+    };
+    await expect(read()).rejects.toThrow("usage unavailable");
+    expect(events.map(e => e.result)).toEqual(["failed"]);
+  });
+
+  it("records a stop with no usage when the provider never says, after a bounded wait", async () => {
+    vi.useFakeTimers();
+    try {
+      const { provider } = controlledStream();
+      const { service, events } = setup({ provider });
+      const iterator = (await service.stream(person(), summary))[
+        Symbol.asyncIterator
+      ]();
+      await iterator.next();
+      const stopping = iterator.return?.();
+      await vi.advanceTimersByTimeAsync(STREAM_USAGE_WAIT_MS);
+      await stopping;
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ result: "cancelled", tokensIn: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records nothing twice when the reader stops after the end", async () => {
+    const { provider, settle } = controlledStream();
+    const { service, events } = setup({ provider });
+    settle(USAGE);
+    const iterator = (await service.stream(person(), summary))[
+      Symbol.asyncIterator
+    ]();
+    while (!(await iterator.next()).done) {
+      // read to the end
+    }
+    await iterator.return?.();
+    expect(events.map(e => e.result)).toEqual(["succeeded"]);
   });
 });
 

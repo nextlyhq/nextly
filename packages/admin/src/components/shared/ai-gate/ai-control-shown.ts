@@ -27,7 +27,11 @@ export function aiControlShown(
   needs: AIControlNeeds = {}
 ): boolean {
   if (status === undefined || !status.configured) return false;
-  if (!status.permissions[needs.permission ?? "use"]) return false;
+  const permission = needs.permission ?? "use";
+  if (!status.permissions[permission]) return false;
+  // A bulk job runs AI, so the server asks for "Use AI" as well; a control
+  // it would refuse is not drawn.
+  if (permission === "bulk" && !status.permissions.use) return false;
   const { task } = needs;
   if (task === undefined) return true;
   return status.tasks.some(

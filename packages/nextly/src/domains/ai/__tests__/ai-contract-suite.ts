@@ -12,6 +12,7 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
+import type { CollectionConfig } from "../../../collections/config/define-collection";
 import { NextlyError } from "../../../errors/nextly-error";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
@@ -32,10 +33,12 @@ import {
 } from "../ai-contract";
 import { recordAITasks } from "../ai-task-list";
 
-const AI_SLUGS = Object.values(AI_PERMISSIONS)
+const AI_SLUGS: string[] = Object.values(AI_PERMISSIONS)
   .map(p => p.slug)
   .sort();
-const AI_RESOURCES = Object.values(AI_PERMISSIONS).map(p => p.resource);
+const AI_RESOURCES: string[] = Object.values(AI_PERMISSIONS).map(
+  p => p.resource
+);
 
 /** Writes its result onto the target, so running it needs `update` there. */
 const ALT_TEXT: AITaskRef = {
@@ -45,9 +48,9 @@ const ALT_TEXT: AITaskRef = {
   writesToTarget: true,
 };
 
-const POSTS = {
+const POSTS: CollectionConfig = {
   slug: "posts",
-  fields: [{ name: "title", type: "text" as const }],
+  fields: [{ name: "title", type: "text" }],
   grants: { presets: ["admin", "editor", "author", "viewer"] },
 };
 
@@ -370,6 +373,47 @@ export function describeAIContract(dialect: TestDialect): void {
             }
           );
           expect(ai.asked.map(r => r.personId)).toEqual([writer]);
+        });
+
+        it("judges a call made through an API key on the key's own grants, not its owner's", async () => {
+          // The owner is the site's super admin; the key may only read posts.
+          const keyScope = {
+            actorType: "apiKey" as const,
+            permissions: ["read-posts"],
+            roles: [],
+          };
+          const error = await refusal(
+            t.nextly.ai.run({ ...altText(ownerOf(t)), actor: keyScope })
+          );
+          expect(error.code).toBe("FORBIDDEN");
+          expect(error.publicMessage).toBe("You can't use AI.");
+          const status = await t.nextly.ai.status({
+            user: { id: ownerOf(t) },
+            actor: keyScope,
+          });
+          expect(status.permissions).toEqual({
+            use: false,
+            bulk: false,
+            manage: false,
+          });
+          expect(ai.asked).toEqual([]);
+        });
+
+        it("hands back the stop function for a usage listener, and tells it about each run", async () => {
+          const heard: string[] = [];
+          const stop = t.nextly.ai.onUsage(event => {
+            heard.push(event.result);
+          });
+          expect(typeof stop).toBe("function");
+          const writer = await personWith(t, "ai-listened", [
+            "use-ai",
+            "read-posts",
+            "update-posts",
+          ]);
+          await t.nextly.ai.run(altText(writer));
+          stop();
+          await t.nextly.ai.run(altText(writer));
+          expect(heard).toEqual(["succeeded"]);
         });
 
         it("refuses a Viewer's run, saying they can't use AI", async () => {
