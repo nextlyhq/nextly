@@ -449,11 +449,12 @@ async function headerWithImage(
   expect(header, "the site default has a header").toBeDefined();
   const starter = await request.get(`${COMPONENTS}/${header}`);
   expect(starter.ok(), `the starter header: ${starter.status()}`).toBe(true);
+  // A single entry is answered as the entry itself.
   const content = (
     (await starter.json()) as {
-      item: { content: { nodes: TreeNode[] } & Record<string, unknown> };
+      content: { nodes: TreeNode[] } & Record<string, unknown>;
     }
-  ).item.content;
+  ).content;
   // The row the site's name sits in, as the starter lays it out.
   const row = nodeIn(content.nodes, "starter-header-start");
   const children = row?.slots?.children;
