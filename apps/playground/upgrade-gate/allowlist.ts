@@ -65,6 +65,19 @@ export const UPGRADE_CONSENT: readonly string[] = [
 const TRANSLATION_SOURCES_KEPT =
   "The source text each translation is made from is kept from the first translation saved after the upgrade. The table is new, so nothing an installation held lives in it.";
 
+/**
+ * Why the attribution columns are added: on the activity and audit logs, the
+ * agent that acted for the actor, the door, the credential, the agent session,
+ * an approval, a grant, an undo and a deployment; on content events, the
+ * agent's name beside the person.
+ */
+const ATTRIBUTION_COLUMN_ADDED =
+  "The activity log, the audit log and content events gain nullable columns saying which agent acted for the actor, through which door, and who approved. Each is new and NULL on every row an installation already holds, so nothing it held changes.";
+
+/** Why the activity log's two agent indexes are created. */
+const ATTRIBUTION_INDEX_ADDED =
+  "Two indexes on the activity log back reading one agent's or one agent session's rows, newest first. Building an index changes no row.";
+
 export const ALLOWED_OPERATIONS: readonly AllowedOperation[] = [
   {
     operation: "create table nextly_translation_sources",
@@ -323,5 +336,425 @@ export const ALLOWED_OPERATIONS: readonly AllowedOperation[] = [
       "change column dc_form_submissions.form: varchar(36) not null collate utf8mb4_0900_ai_ci -> varchar(36) null collate utf8mb4_0900_ai_ci",
     dialects: ["mysql"],
     reason: FORM_ID_NULLABLE,
+  },
+  {
+    operation: "add column activity_log.agent_name: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column activity_log.agent_session_id: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column activity_log.approval_request_id: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column activity_log.approved_by_user_id: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column activity_log.approved_via: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column activity_log.credential_id: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column activity_log.deployment_commit: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column activity_log.deployment_host: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column activity_log.door: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column activity_log.grant_id: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column activity_log.undoes_session_id: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.agent_name: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.agent_session_id: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.approval_request_id: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.approved_by_user_id: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.approved_via: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.credential_id: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.deployment_commit: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.deployment_host: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.door: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.grant_id: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.undoes_session_id: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column nextly_content_events.actor_agent_name: text null",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "create index activity_log.idx_activity_log_agent_name: (agent_name, created_at)",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_INDEX_ADDED,
+  },
+  {
+    operation:
+      "create index activity_log.idx_activity_log_agent_session: (agent_session_id, created_at)",
+    dialects: ["sqlite"],
+    reason: ATTRIBUTION_INDEX_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.agent_name: character varying(191) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.agent_session_id: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.approval_request_id: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.approved_by_user_id: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.approved_via: character varying(16) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.credential_id: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.deployment_commit: character varying(40) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.deployment_host: character varying(191) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column activity_log.door: character varying(16) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column activity_log.grant_id: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.undoes_session_id: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.agent_name: character varying(191) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.agent_session_id: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.approval_request_id: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.approved_by_user_id: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.approved_via: character varying(16) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.credential_id: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.deployment_commit: character varying(40) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.deployment_host: character varying(191) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.door: character varying(16) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation: "add column audit_log.grant_id: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.undoes_session_id: character varying(64) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column nextly_content_events.actor_agent_name: character varying(191) null",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "create index activity_log.idx_activity_log_agent_name: USING btree (agent_name, created_at)",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_INDEX_ADDED,
+  },
+  {
+    operation:
+      "create index activity_log.idx_activity_log_agent_session: USING btree (agent_session_id, created_at)",
+    dialects: ["postgresql"],
+    reason: ATTRIBUTION_INDEX_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.agent_name: varchar(191) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.agent_session_id: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.approval_request_id: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.approved_by_user_id: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.approved_via: varchar(16) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.credential_id: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.deployment_commit: varchar(40) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.deployment_host: varchar(191) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.door: varchar(16) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.grant_id: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column activity_log.undoes_session_id: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.agent_name: varchar(191) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.agent_session_id: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.approval_request_id: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.approved_by_user_id: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.approved_via: varchar(16) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.credential_id: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.deployment_commit: varchar(40) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.deployment_host: varchar(191) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.door: varchar(16) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.grant_id: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column audit_log.undoes_session_id: varchar(64) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "add column nextly_content_events.actor_agent_name: varchar(191) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_COLUMN_ADDED,
+  },
+  {
+    operation:
+      "create index activity_log.idx_activity_log_agent_name: btree (agent_name, created_at)",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_INDEX_ADDED,
+  },
+  {
+    operation:
+      "create index activity_log.idx_activity_log_agent_session: btree (agent_session_id, created_at)",
+    dialects: ["mysql"],
+    reason: ATTRIBUTION_INDEX_ADDED,
   },
 ];
