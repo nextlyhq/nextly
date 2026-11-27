@@ -87,7 +87,10 @@ export function InboxRow({
               <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
+          {/* Above the Inbox popover it opens from: a menu sits at z-50 and a
+              popover at z-[100], so without this it would open underneath
+              the rows it belongs to and could not be clicked. */}
+          <DropdownMenuContent align="end" className="z-[110]">
             <DropdownMenuItem
               onSelect={() => markUnread.mutate({ ids: [notice.id] })}
             >

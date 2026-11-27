@@ -127,7 +127,9 @@ test("an item is read when it is opened, not when it is shown, in every browser 
   page,
   browser,
 }) => {
-  test.setTimeout(150_000);
+  // Seeding three releases and a pass of the runner, then up to a minute for
+  // the second browser's count, on a server that compiles routes as asked.
+  test.setTimeout(300_000);
   const stamp = Date.now().toString(36);
   const seeded: Array<{ id: string; title: string }> = [];
   // The same person in a second browser: the session's cookies, nothing else.
