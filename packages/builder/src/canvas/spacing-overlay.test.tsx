@@ -1515,6 +1515,58 @@ describe("small blocks keep their own label and color under the bands", () => {
     ).toBe(false);
   });
 
+  /** A press of the given pointer kind, at a point of the editor. */
+  function press(x: number, y: number, pointerType: string): void {
+    act(() => {
+      const event = new MouseEvent("pointerdown", {
+        clientX: x,
+        clientY: y,
+        bubbles: true,
+      });
+      Object.defineProperty(event, "pointerType", { value: pointerType });
+      document.dispatchEvent(event);
+    });
+  }
+
+  it("shows every number after a touch, which cannot point at a band", () => {
+    // A tap goes through the overlay to whatever is beneath, and may select
+    // something else, so a number must not wait for a band to be pointed.
+    stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
+    stubOverlayBoxes();
+    const { container } = mount(editorOf("a"));
+    expect(band(container, "margin", "top").hasAttribute("data-tight")).toBe(
+      true
+    );
+    press(900, 900, "touch");
+    expect(band(container, "margin", "top").hasAttribute("data-tight")).toBe(
+      false
+    );
+    // The control: a mouse again, and the thin number hides until pointed.
+    press(900, 900, "mouse");
+    expect(band(container, "margin", "top").hasAttribute("data-tight")).toBe(
+      true
+    );
+  });
+
+  it("lets go of a band a scroll carried away, with no drawing after it", () => {
+    stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
+    const painted = { y: 0 };
+    stubOverlayBoxes(painted);
+    const { container } = mount(editorOf("a"));
+    const box = band(container, "margin", "top").getBoundingClientRect();
+    pointAt(box.x + box.width / 2, box.y + box.height / 2);
+    expect(band(container, "margin", "top").hasAttribute("data-pointed")).toBe(
+      true
+    );
+    painted.y = 300;
+    act(() => {
+      document.dispatchEvent(new Event("scroll"));
+    });
+    expect(band(container, "margin", "top").hasAttribute("data-pointed")).toBe(
+      false
+    );
+  });
+
   it("hides that number again when the pointer leaves the editor from over its band", () => {
     stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
     stubOverlayBoxes();

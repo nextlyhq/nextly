@@ -73,6 +73,9 @@ export function useLookBeneath(
   }, [hovered]);
   return React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
+      // A finger lands on what it means to press: a tap on the bar is aimed
+      // at the button it lands on, never at a block beneath it.
+      if (event.pointerType === "touch") return;
       const from = last.current;
       if (from !== null && withinSelection(document, from, selectedIds)) {
         return;

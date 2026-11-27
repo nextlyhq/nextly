@@ -82,6 +82,7 @@ import { watchCanvasFor } from "./canvas-geometry-watch";
 import {
   canvasContentRect,
   canvasPaintedScale,
+  boxInFrameViewport,
   clippedByAncestor,
   framePointInHost,
   hasScrollbarGutter,
@@ -619,8 +620,8 @@ function tightBandsIn(layer: HTMLElement): ReadonlySet<string> {
   )) {
     const chip = band.querySelector(".nx-spacing-overlay__value");
     if (chip === null) continue;
-    const box = band.getBoundingClientRect();
-    const label = chip.getBoundingClientRect();
+    const box = boxInFrameViewport(band);
+    const label = boxInFrameViewport(chip);
     const across =
       band.dataset.side === "top" || band.dataset.side === "bottom";
     if (across ? label.height > box.height : label.width > box.width) {
@@ -631,7 +632,8 @@ function tightBandsIn(layer: HTMLElement): ReadonlySet<string> {
 }
 
 /**
- * Which band the pointer is over, by its key, or `null`.
+ * Which band the pointer is over, by its key, or `null`, and whether the
+ * last pointer to press or move was a touch.
  *
  * The overlay takes no pointer, so a press goes through to the block under
  * it; which band is pointed at is read from the pointer's moves instead. In
@@ -647,8 +649,9 @@ function usePointedBand(
   layer: React.RefObject<HTMLDivElement | null>,
   active: boolean,
   frameKey: unknown
-): string | null {
+): { readonly pointed: string | null; readonly touch: boolean } {
   const [pointed, setPointed] = React.useState<string | null>(null);
+  const [touch, setTouch] = React.useState(false);
   const last = React.useRef<{ x: number; y: number } | null>(null);
   const hitTest = React.useCallback(() => {
     const element = layer.current;
@@ -658,12 +661,12 @@ function usePointedBand(
       for (const band of element.querySelectorAll<HTMLElement>(
         ".nx-spacing-overlay__band"
       )) {
-        const box = band.getBoundingClientRect();
+        const box = boxInFrameViewport(band);
         if (
-          point.x >= box.left &&
-          point.x <= box.right &&
-          point.y >= box.top &&
-          point.y <= box.bottom
+          point.x >= box.x &&
+          point.x <= box.x + box.width &&
+          point.y >= box.y &&
+          point.y <= box.y + box.height
         ) {
           found = bandKeyOf(band);
           break;
@@ -685,11 +688,18 @@ function usePointedBand(
       last.current = { x, y };
       hitTest();
     };
-    const onChrome = (event: PointerEvent): void =>
+    // A touch cannot hover, so after one every number is shown (below); a
+    // mouse or a pen moving again hides the thin ones until pointed.
+    const kind = (event: PointerEvent): void =>
+      setTouch(event.pointerType === "touch");
+    const onChrome = (event: PointerEvent): void => {
+      kind(event);
       at(event.clientX, event.clientY);
+    };
     // Carried out of the frame by the one mapping every frame point takes:
     // its border, its padding and its painted scale.
     const onFrame = (event: PointerEvent): void => {
+      kind(event);
       if (frame === null) return;
       const host = framePointInHost(frame, {
         x: event.clientX,
@@ -707,8 +717,21 @@ function usePointedBand(
       last.current = null;
       setPointed(null);
     };
+    // A scroll moves the bands without a drawing to follow it when nothing
+    // the overlay measures changes, so it is a reason to test again too.
+    const onScroll = (): void => hitTest();
     const inner = frame?.contentDocument ?? null;
     const both = inner !== null && inner !== chrome;
+    chrome.addEventListener("scroll", onScroll, {
+      capture: true,
+      passive: true,
+    });
+    if (both) {
+      inner.addEventListener("scroll", onScroll, {
+        capture: true,
+        passive: true,
+      });
+    }
     for (const type of ["pointermove", "pointerdown"] as const) {
       chrome.addEventListener(type, onChrome, { passive: true });
       if (both) inner.addEventListener(type, onFrame, { passive: true });
@@ -716,6 +739,9 @@ function usePointedBand(
     chrome.documentElement.addEventListener("pointerleave", onLeave);
     if (both) inner.documentElement.addEventListener("pointerleave", onLeave);
     return () => {
+      chrome.removeEventListener("scroll", onScroll, { capture: true });
+      if (both)
+        inner.removeEventListener("scroll", onScroll, { capture: true });
       for (const type of ["pointermove", "pointerdown"] as const) {
         chrome.removeEventListener(type, onChrome);
         if (both) inner.removeEventListener(type, onFrame);
@@ -733,7 +759,7 @@ function usePointedBand(
   React.useLayoutEffect(() => {
     if (active) hitTest();
   });
-  return pointed;
+  return { pointed, touch };
 }
 
 export function SpacingOverlay({
@@ -1113,7 +1139,7 @@ export function SpacingOverlay({
     const next = element === null ? NO_KEYS : tightBandsIn(element);
     setTight(current => (sameKeys(current, next) ? current : next));
   }, [bands, framed]);
-  const pointed = usePointedBand(
+  const { pointed, touch } = usePointedBand(
     layer,
     !hidden && bands.length > 0,
     canvasFrame
@@ -1154,7 +1180,10 @@ export function SpacingOverlay({
           data-side={band.side}
           data-negative={band.negative ? "" : undefined}
           data-gap={band.gapFrom === undefined ? undefined : ""}
-          data-tight={tight.has(`${band.box}-${band.side}`) ? "" : undefined}
+          // After a touch every number shows: a tap cannot point at a band.
+          data-tight={
+            !touch && tight.has(`${band.box}-${band.side}`) ? "" : undefined
+          }
           data-pointed={pointed === `${band.box}-${band.side}` ? "" : undefined}
           // See the layer above: the report is hidden, the control is not.
           aria-hidden="true"

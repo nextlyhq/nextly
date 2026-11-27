@@ -1587,6 +1587,18 @@ describe("BlockToolbar", () => {
       expect(bar.hasAttribute("data-lets-through")).toBe(true);
     });
 
+    it("stays for a tap, which is aimed at the button it lands on", () => {
+      // A finger lands without a move before it, so nothing says where it
+      // came from; what it lands on is what it means to press.
+      const bar = barOverB(null);
+      fireEvent.pointerEnter(bar, {
+        clientX: 10,
+        clientY: 10,
+        pointerType: "touch",
+      });
+      expect(bar.hasAttribute("data-lets-through")).toBe(false);
+    });
+
     it("stays for a pointer coming up from the selection, which is heading for a button", () => {
       const bar = barOverB("a");
       fireEvent.pointerEnter(bar, { clientX: 10, clientY: 10 });
