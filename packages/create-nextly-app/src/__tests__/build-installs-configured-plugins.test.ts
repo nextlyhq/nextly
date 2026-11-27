@@ -120,16 +120,16 @@ describe("a scaffold's build installs the plugins its config registers", () => {
 
       if (registersOwnPlugin(text)) {
         expect(installs, relative(file)).toEqual([
-          "nextly plugins install --all",
+          "nextly plugins install --all --mode production",
         ]);
       } else {
         expect(installs, relative(file)).toEqual(
-          wanted.map(pkg => `nextly plugins install ${pkg}`)
+          wanted.map(pkg => `nextly plugins install ${pkg} --mode production`)
         );
       }
       for (const install of installs) {
         expect(steps.indexOf(install)).toBeGreaterThan(
-          steps.indexOf("nextly migrate")
+          steps.indexOf("nextly migrate --mode production")
         );
         expect(steps.indexOf(install)).toBeLessThan(
           steps.indexOf("next build")
@@ -152,13 +152,12 @@ describe("a scaffold's build installs the plugins its config registers", () => {
       "utf8"
     );
     const steps = (await buildScript("blog", text)).split(" && ");
-    expect(steps).toContain("nextly plugins install --all");
-    expect(steps.indexOf("nextly plugins install --all")).toBeGreaterThan(
-      steps.indexOf("nextly migrate")
+    const install = "nextly plugins install --all --mode production";
+    expect(steps).toContain(install);
+    expect(steps.indexOf(install)).toBeGreaterThan(
+      steps.indexOf("nextly migrate --mode production")
     );
-    expect(steps.indexOf("nextly plugins install --all")).toBeLessThan(
-      steps.indexOf("next build")
-    );
+    expect(steps.indexOf(install)).toBeLessThan(steps.indexOf("next build"));
   });
 
   it("installs nothing for a config with no plugins", async () => {
