@@ -16,7 +16,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di/service-access";
 import { TRASH_TABLE } from "../../schemas/trash";
-import { fieldsStoredOnRow } from "../schema/services/field-column-descriptor";
 import { sanitizedChange } from "../webhooks/envelope";
 import {
   sensitiveFieldPaths,
@@ -85,13 +84,8 @@ function trashLabelOf(
   document: Record<string, unknown>,
   fields: readonly CapturedField[]
 ): string | null {
-  const byName = new Map(
-    fieldsStoredOnRow(fields)
-      .filter(field => typeof field.name === "string")
-      .map(field => [String(field.name), field] as const)
-  );
   for (const key of ["title", "name", "slug"]) {
-    if (fieldHasReadRule(collection, key, byName.get(key))) continue;
+    if (fieldHasReadRule(collection, key, fields)) continue;
     const value = document[key];
     if (typeof value === "string" && value.trim() !== "") {
       return value.length > MAX_LABEL ? value.slice(0, MAX_LABEL) : value;

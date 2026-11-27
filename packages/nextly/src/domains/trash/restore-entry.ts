@@ -451,17 +451,8 @@ function conflictsAnswered(
   conflicts: readonly TrashConflict[],
   fields: readonly RestoreField[]
 ): TrashConflict[] {
-  const byName = new Map(
-    fieldsStoredOnRow(fields)
-      .filter(field => typeof field.name === "string")
-      .map(field => [String(field.name), field] as const)
-  );
   return conflicts.map(conflict => {
-    if (
-      !fieldHasReadRule(collection, conflict.field, byName.get(conflict.field))
-    ) {
-      return conflict;
-    }
+    if (!fieldHasReadRule(collection, conflict.field, fields)) return conflict;
     const { value: _hidden, ...rest } = conflict;
     return rest;
   });

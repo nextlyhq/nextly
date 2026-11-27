@@ -11,6 +11,7 @@
  * @module domains/trash/field-read-rule
  */
 import { getFieldFunctions } from "../../shared/lib/field-level-registry";
+import { fieldsStoredOnRow } from "../schema/services/field-column-descriptor";
 
 /** A stored field, as far as its own access is concerned. */
 interface StoredField {
@@ -28,11 +29,18 @@ function storedReadRule(field: StoredField | undefined): boolean {
   );
 }
 
+/**
+ * Whether the field `name` of `collection`, stored on the entry's row among
+ * `fields`, has a read rule of its own.
+ */
 export function fieldHasReadRule(
   collection: string,
   name: string,
-  stored?: StoredField
+  fields: readonly StoredField[]
 ): boolean {
   const declared = getFieldFunctions("collection", collection)?.[name];
-  return declared?.access?.read !== undefined || storedReadRule(stored);
+  if (declared?.access?.read !== undefined) return true;
+  return storedReadRule(
+    fieldsStoredOnRow(fields).find(field => field.name === name)
+  );
 }
