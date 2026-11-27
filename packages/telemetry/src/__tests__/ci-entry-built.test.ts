@@ -64,6 +64,12 @@ afterAll(() => {
   if (scratch) rmSync(scratch, { recursive: true, force: true });
 });
 
+/**
+ * A relative import in every form a build can write: `... from "./x"`, a
+ * side-effect `import "./x"`, and a dynamic `import("./x")`.
+ */
+const RELATIVE_IMPORT = /\b(?:from|import)\s*\(?\s*["'](\.[^"']+)["']/g;
+
 /** Every file a built module imports, followed through relative imports. */
 function importGraph(entry: string): string[] {
   const seen = new Set<string>();
@@ -71,7 +77,7 @@ function importGraph(entry: string): string[] {
     if (seen.has(file)) return;
     seen.add(file);
     const text = readFileSync(file, "utf8");
-    for (const match of text.matchAll(/\bfrom\s*["'](\.[^"']+)["']/g)) {
+    for (const match of text.matchAll(RELATIVE_IMPORT)) {
       const specifier = match[1];
       if (specifier) visit(resolve(dirname(file), specifier));
     }
@@ -79,6 +85,32 @@ function importGraph(entry: string): string[] {
   visit(entry);
   return [...seen];
 }
+
+describe("the import walker", () => {
+  it("follows every form of relative import a build can write", () => {
+    const dir = join(scratch, "walker");
+    mkdirSync(dir, { recursive: true });
+    const files: Record<string, string> = {
+      "entry.mjs": [
+        'import "./side-effect.mjs";',
+        'export { a } from "./re-export.mjs";',
+        'const later = () => import("./dynamic.mjs");',
+      ].join("\n"),
+      "side-effect.mjs": "",
+      "re-export.mjs": 'import { b } from "./nested.mjs";\nexport const a = b;',
+      "nested.mjs": "export const b = 1;",
+      "dynamic.mjs": "",
+    };
+    for (const [name, text] of Object.entries(files)) {
+      writeFileSync(join(dir, name), text);
+    }
+    expect(
+      importGraph(join(dir, "entry.mjs"))
+        .map(file => file.slice(dir.length + 1))
+        .sort()
+    ).toEqual(Object.keys(files).sort());
+  });
+});
 
 describe("the built ci entry", () => {
   it("imports by name through the exports map and answers", () => {
