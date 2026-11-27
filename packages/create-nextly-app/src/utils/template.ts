@@ -1640,6 +1640,19 @@ async function generatePluginPackageJson(
     },
     peerDependencies,
     devDependencies,
+    // What the plugin needs, read by `nextly plugins add` before any of its
+    // code runs. It says what `src/plugin.ts` does: the same Nextly range
+    // (the `nextly` peer, which `{{nextlyRange}}` is resolved to as well),
+    // its `myPlugin()` factory and its one collection. The template's
+    // `declaration.test.ts` checks the two agree, so an author who changes
+    // one and not the other sees the suite fail.
+    nextly: {
+      format: 1,
+      core: peerDependencies.nextly,
+      databases: ["postgresql", "mysql", "sqlite"],
+      plugin: { export: "myPlugin", call: true },
+      collections: ["examples"],
+    },
     // Native build-script allowlist is NOT emitted here: pnpm 11 ignores the
     // package.json `pnpm` field. It lives in pnpm-workspace.yaml instead (written
     // by copyPluginTemplate via generatePnpmWorkspaceYaml).

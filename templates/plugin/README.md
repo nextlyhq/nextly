@@ -23,6 +23,14 @@ under `next dev`; production builds ignore the auto-login setting.
 pnpm test     # boots a real Nextly on in-memory SQLite via createTestNextly
 ```
 
+`package.json` says what the plugin needs under its `nextly` key: the Nextly
+versions and databases it works with, how it is placed in a site's config, and
+the collection it adds. Nextly reads it as data, without running the plugin's
+code. `src/declaration.test.ts` checks it against `src/plugin.ts`, so when
+you add a collection, a table, a capability or a dependency to the plugin,
+declare it too, or the test fails and names what to add. Every field is in
+[The plugin declaration](https://nextlyhq.com/docs/plugins/declaration).
+
 ## Build & publish
 
 ```bash

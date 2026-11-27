@@ -1,0 +1,24 @@
+---
+title: PLUGIN_DECLARATION_MALFORMED
+description: "A package's declaration in the `nextly` key of its package.json names its format, and a field in it is missing or malformed."
+---
+
+## Cause
+
+A package's declaration in the `nextly` key of its package.json names its format, and a field in it is missing or malformed.
+
+A plugin says what it needs in its package.json, under `nextly`, and a declaration that names its `format` is held to that format: `core` and `databases` are required, and every field has a shape. The message names each field that does not hold to it. A package whose `nextly` key has no `format` and only a `plugin` block is read as before, and a problem there is [PLUGIN_DECLARATION_INVALID](/docs/cli/errors/plugin-declaration-invalid). The package itself may already be installed; your configuration was not changed.
+
+## Fix
+
+- Tell the plugin's author which fields the message names: [The plugin declaration](/docs/plugins/declaration) describes each one.
+- Or install a version of the plugin whose declaration reads, with your package manager, then run `nextly plugins add <package> --skip-install`.
+
+## Example
+
+```text
+✗ The `nextly` declaration of "@acme/seo" cannot be read.
+  Why:  nextly.databases: must name at least one database. The package's package.json says what the plugin needs, and that is the plugin's to fix. The package may already be installed; your configuration was not changed.
+  Next: Tell the plugin's author, or add a version of the plugin whose declaration reads.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-declaration-malformed  (PLUGIN_DECLARATION_MALFORMED)
+```

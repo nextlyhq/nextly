@@ -152,6 +152,7 @@ import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services
 import {
   keepDeniedAtStoredOnUpdate,
   keepDeniedFieldGroupsInDraft,
+  unreadBy,
   withStoredFieldGroups,
 } from "../../field-groups/field-group-write-access";
 import { passwordReachOf } from "../../field-groups/password-reach";
@@ -218,7 +219,10 @@ import {
   resolveCompanionReadiness,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
-import { withComponentShapes } from "../../i18n/runtime/component-shapes";
+import {
+  withComponentShapes,
+  withComponentShapesOf,
+} from "../../i18n/runtime/component-shapes";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import {
   assembleStoredValue,
@@ -287,6 +291,7 @@ import {
   SHARED_DRAFT_SLOT,
   sharedFieldsJudged,
   storePartDrafts,
+  withPendingChange,
 } from "../../versions/part-drafts";
 import {
   languagesTold,
@@ -785,18 +790,20 @@ export class SingleMutationService extends BaseService {
    * (`assignRepeaterRowIds`). `stored` is the document as stored, hashes
    * included; a translated container's stored value is the write language's
    * row of the translations table. `undefined` where the fields hold neither
-   * a password nor a repeater, so such an update reads nothing more.
+   * a password nor a repeater, so such an update reads nothing more; read
+   * whatever they hold where no `reach` is given.
    */
   private async storedContainersForWrite(args: {
     stored: Record<string, unknown>;
     fields: Parameters<typeof carryStoredPasswords>[2];
-    reach: FieldGroupReach;
+    reach?: FieldGroupReach;
     companion: CompanionSchema | null;
     writeLocale: string | undefined;
     documentId: string;
     mainTableName: string;
   }): Promise<Record<string, unknown> | undefined> {
     if (
+      args.reach !== undefined &&
       !reachesPasswordField(args.fields, args.reach) &&
       !reachesRepeaterField(args.fields, args.reach)
     ) {
@@ -858,6 +865,67 @@ export class SingleMutationService extends BaseService {
       if (value !== undefined) translated[field.name] = value;
     }
     return { ...args.stored, ...translated };
+  }
+
+  /**
+   * The Single in the language a save of it writes, its containers' text with
+   * their structure, as its editors are shown it: with the change it holds in
+   * that language, where it keeps one, and none of its password hashes.
+   */
+  private async asItsEditorsSeeIt(args: {
+    slug: string;
+    singleMeta: DynamicSingleRecord;
+    stored: Record<string, unknown>;
+    companion: CompanionSchema | null;
+    writeLocale: string | undefined;
+    locale: string | undefined;
+  }): Promise<Record<string, unknown>> {
+    const { singleMeta, stored } = args;
+    const documentId = String(stored.id);
+    const inLanguage =
+      (await this.storedContainersForWrite({
+        stored,
+        fields: singleMeta.fields,
+        // The text a component held inside a container keeps per language, too.
+        companion: await withComponentShapesOf(args.companion),
+        writeLocale: args.writeLocale,
+        documentId,
+        mainTableName: singleMeta.tableName,
+      })) ?? stored;
+    const fields = singleMeta.fields ?? [];
+    // By the rule every read of "the draft" uses, so a pending change no read
+    // shows (one held before the Single could no longer hold it) lends the
+    // save nothing its writer was not shown.
+    const overlay =
+      singleMeta.versions?.drafts?.enabled === true
+        ? resolveDraftOverlay({
+            ...draftDocumentFacts(singleMeta),
+            entityKind: "single",
+            fields,
+            componentSchemas: await resolveComponentSchemas(fields),
+            includeWorkingDraft: true,
+            // A writer who may update the Single may edit it.
+            callerMayEdit: true,
+            requestLocale: args.locale ?? null,
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          })
+        : undefined;
+    const seen = overlay?.overlay
+      ? await withPendingChange(
+          new VersionsRepository(this.adapter),
+          { scopeKind: "single", scopeSlug: args.slug, entryId: documentId },
+          overlay.draftLocale,
+          inLanguage,
+          singleMeta.fields
+        )
+      : inLanguage;
+    const shown = detachData(seen);
+    stripPasswordFieldValues(
+      shown,
+      singleMeta.fields,
+      await passwordReachOf(singleMeta.fields, this.fieldGroupDataService)
+    );
+    return shown;
   }
 
   /**
@@ -3230,6 +3298,22 @@ export class SingleMutationService extends BaseService {
         });
       const storedLocales = this.localization?.locales.map(l => l.code) ?? [];
       const storedForAccess = await storedFieldGroupsIn(options.locale);
+      const unread = await unreadBy({
+        entity: { kind: "single", slug },
+        id: documentId,
+        stored: () =>
+          this.asItsEditorsSeeIt({
+            slug,
+            singleMeta,
+            stored: existingDeserialized,
+            companion,
+            writeLocale,
+            locale: options.locale,
+          }),
+        fields: fieldConfigs,
+        source: this.fieldGroupDataService,
+        access: singleWriteAccess,
+      });
       // For a conditional write made whole, what this pass takes out or keeps
       // is recorded, and refuses it once every hook has run.
       const { storedPaths, storedValues } =
@@ -3248,6 +3332,7 @@ export class SingleMutationService extends BaseService {
               fields: fieldConfigs,
               source: this.fieldGroupDataService,
               access: singleWriteAccess,
+              unread,
               ownRules: document =>
                 applyFieldWriteAccess({
                   kind: "single",
