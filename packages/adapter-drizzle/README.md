@@ -26,7 +26,7 @@ pnpm add @nextlyhq/adapter-postgres pg
 
 - [`@nextlyhq/adapter-postgres`](../adapter-postgres) — recommended for production
 - [`@nextlyhq/adapter-mysql`](../adapter-mysql)
-- [`@nextlyhq/adapter-sqlite`](../adapter-sqlite) — local demos
+- [`@nextlyhq/adapter-sqlite`](../adapter-sqlite) — your own machine or a single server
 
 ## License
 

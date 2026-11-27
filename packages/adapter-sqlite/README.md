@@ -11,14 +11,14 @@ SQLite database adapter for Nextly. Built on `better-sqlite3` for synchronous fi
 > [!IMPORTANT]
 > Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
 
-> [!WARNING]
-> **SQLite is for local demos and quick experiments only.** It is single-writer, file-based, has no SSL, and emulates several features (see [Dialect notes](#dialect-notes) below). The adapter exists so you can try Nextly without provisioning a database server. For any real project, even local development, use [`@nextlyhq/adapter-postgres`](../adapter-postgres). The fastest way to run Postgres locally is `docker compose up -d postgres`.
+> [!NOTE]
+> **SQLite is great on your own machine and on a single server; on Vercel, choose PostgreSQL.** It is single-writer, file-based, has no SSL, and emulates several features (see [Dialect notes](#dialect-notes) below). On Vercel and other serverless hosts a function's disk does not last, so use [`@nextlyhq/adapter-postgres`](../adapter-postgres) there, and wherever several servers share one database.
 
 ## What it is
 
-The SQLite adapter for Nextly. Use this for one-off local demos or quick experiments where setting up a database server would be friction.
+The SQLite adapter for Nextly. The database is one file beside your app, so it needs no server: it suits your own machine and a site on a single server.
 
-For any project beyond a quick demo, use [`@nextlyhq/adapter-postgres`](../adapter-postgres). PostgreSQL has the full feature set Nextly is designed around; SQLite emulates a subset.
+For Vercel, for several servers sharing one database, or for the full feature set, use [`@nextlyhq/adapter-postgres`](../adapter-postgres). PostgreSQL has the full feature set Nextly is designed around; SQLite emulates a subset.
 
 ## Installation
 
@@ -66,7 +66,7 @@ Most users do not need this.
 
 ## Dialect notes
 
-- **Single writer.** SQLite serializes writes; concurrent transactions queue. Fine for one user, painful for production traffic.
+- **Single writer.** SQLite serializes writes; concurrent transactions queue. It suits one app on one server; many writers at once wait their turn.
 - **No SSL or TLS.** Not applicable to a local file.
 - **Limited types.** No native arrays, no JSONB; JSON is stored as TEXT. ILIKE and case-insensitive `contains` fold both sides with `nextly_fold_case()`, a Unicode case fold the adapter registers on every connection it opens (SQLite's own `LOWER()` folds ASCII letters only), then compare with `LIKE`.
 - **Savepoints.** Supported.

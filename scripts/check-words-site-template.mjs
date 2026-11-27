@@ -40,6 +40,9 @@ export const SCANNED = [
   // builder, whose notifications send a site's own email templates.
   "packages/nextly/src",
   "packages/plugin-form-builder/src",
+  // The starts the installer copies into new projects, README and comments
+  // included.
+  "templates",
 ];
 
 /** Files a person or an agent reads: source, tests and docs. */
@@ -47,10 +50,14 @@ const READ_FILE = /\.(?:[cm]?[jt]sx?|mdx?|json)$/;
 const SKIPPED_DIR = new Set(["node_modules", "dist", ".turbo"]);
 
 /**
- * "site" and "template(s)" as words, with only spaces, a comment's `*` or `//`
- * between them, so a comment wrapped between the two is still read.
+ * "site" and "template(s)" as a reader sees them: with spaces, a comment's
+ * `*` or `//`, an HTML tag (`site <em>template</em>`), a link's bracket
+ * (`site [template](…)`) or the end of a link (`[site](…) template`) between
+ * them. So a comment wrapped between the two, or one word linked or styled,
+ * is still read.
  */
-const SITE_TEMPLATE = /\bsite(?:\s|\*|\/\/)+templates?\b/gi;
+const SITE_TEMPLATE =
+  /\bsite(?:\s|\*|\/\/|<[^>\n]*>|\[|\]\([^)\n]*\))+templates?\b/gi;
 
 /** Every read file beneath `at`, or `at` itself when it is a file. */
 function readFiles(at) {

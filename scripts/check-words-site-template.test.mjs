@@ -34,6 +34,7 @@ describe("the words 'site template'", () => {
         "packages/create-nextly-app/src",
         "packages/nextly/src",
         "packages/plugin-form-builder/src",
+        "templates",
       ])
     );
   });
@@ -63,6 +64,10 @@ describe("the words 'site template'", () => {
       ' * known: may be sent from code". A site template with neither reads "Not sent',
       '  it("says a site template with no senders is not sent by anything yet", () => {',
       "<p>Site Templates</p>",
+      // One word linked or styled renders the same words.
+      "Choose a site [template](/docs/templates) to start from.",
+      "Choose a site <em>template</em> to start from.",
+      "Choose a [site](/docs/sites) template to start from.",
     ];
     for (const text of cases) {
       expect(siteTemplateWordsIn("fixture.ts", text)).toHaveLength(1);

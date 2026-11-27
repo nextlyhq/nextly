@@ -41,7 +41,7 @@ pnpm add @nextlyhq/adapter-postgres pg               # PostgreSQL
 # or
 pnpm add @nextlyhq/adapter-mysql mysql2              # MySQL
 # or
-pnpm add @nextlyhq/adapter-sqlite better-sqlite3     # SQLite (local demos)
+pnpm add @nextlyhq/adapter-sqlite better-sqlite3     # SQLite
 ```
 
 See the [installation guide](https://nextlyhq.com/docs/getting-started/installation) for the full setup: admin routes, environment variables, and the first-run migration.
