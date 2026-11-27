@@ -38,7 +38,9 @@ export type StandardSchemaResult<Output> =
   | {
       readonly issues: ReadonlyArray<{
         readonly message: string;
-        readonly path?: ReadonlyArray<PropertyKey | { readonly key: PropertyKey }>;
+        readonly path?: ReadonlyArray<
+          PropertyKey | { readonly key: PropertyKey }
+        >;
       }>;
     };
 

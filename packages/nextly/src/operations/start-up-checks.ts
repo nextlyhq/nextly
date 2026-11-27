@@ -27,7 +27,8 @@ export interface OperationContribution {
 }
 
 /** `<noun>.<verb>`, or one word for a top-level verb; lower case, hyphens inside a word. */
-const ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)*$/;
+const ID_PATTERN =
+  /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)*$/;
 
 /** One command word: lower case, hyphens inside a word. */
 const WORD_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
@@ -83,8 +84,10 @@ function definitionProblems(
   }
   problems.push(...commandProblems(op.command, "command"));
   if (!isNonEmptyText(op.summary)) problems.push("it has no summary");
-  else if (/[\r\n]/.test(op.summary)) problems.push("its summary is more than one line");
-  if (!isNonEmptyText(op.description)) problems.push("it has no description for agents");
+  else if (/[\r\n]/.test(op.summary))
+    problems.push("its summary is more than one line");
+  if (!isNonEmptyText(op.description))
+    problems.push("it has no description for agents");
   for (const [name, schema] of [
     ["input", op.input],
     ["output", op.output],
@@ -95,28 +98,45 @@ function definitionProblems(
   }
 
   const levelKnown = RISK_LEVELS.includes(op.level);
-  if (!levelKnown) problems.push(`its level ${JSON.stringify(op.level)} is not one of ${RISK_LEVELS.join(", ")}`);
+  if (!levelKnown)
+    problems.push(
+      `its level ${JSON.stringify(op.level)} is not one of ${RISK_LEVELS.join(", ")}`
+    );
   if (op.alwaysAllow === false && op.level !== "critical") {
-    problems.push(`it refuses "Always allow" but its level is ${op.level}, not critical`);
+    problems.push(
+      `it refuses "Always allow" but its level is ${op.level}, not critical`
+    );
   }
   for (const rule of op.raise ?? []) {
-    if (!isNonEmptyText(rule.when)) problems.push("a raise rule does not say when it applies");
+    if (!isNonEmptyText(rule.when))
+      problems.push("a raise rule does not say when it applies");
     if (!RISK_LEVELS.includes(rule.level)) {
-      problems.push(`a raise rule's level ${JSON.stringify(rule.level)} is not one of ${RISK_LEVELS.join(", ")}`);
+      problems.push(
+        `a raise rule's level ${JSON.stringify(rule.level)} is not one of ${RISK_LEVELS.join(", ")}`
+      );
     } else if (levelKnown && levelRank(rule.level) < levelRank(op.level)) {
       problems.push(
         `its raise rule "${rule.when}" would lower the level from ${op.level} to ${rule.level}; an input may only raise it`
       );
     }
     if (rule.alwaysAllow === false && rule.level !== "critical") {
-      problems.push(`its raise rule "${rule.when}" refuses "Always allow" at ${rule.level}, not critical`);
+      problems.push(
+        `its raise rule "${rule.when}" refuses "Always allow" at ${rule.level}, not critical`
+      );
     }
-    if (typeof rule.applies !== "function") problems.push(`its raise rule "${rule.when}" has no applies()`);
+    if (typeof rule.applies !== "function")
+      problems.push(`its raise rule "${rule.when}" has no applies()`);
   }
 
   const effects = op.effects;
-  for (const key of ["destroys", "idempotent", "outside", "spendsAi"] as const) {
-    if (typeof effects?.[key] !== "boolean") problems.push(`its effects do not say whether it ${key}`);
+  for (const key of [
+    "destroys",
+    "idempotent",
+    "outside",
+    "spendsAi",
+  ] as const) {
+    if (typeof effects?.[key] !== "boolean")
+      problems.push(`its effects do not say whether it ${key}`);
   }
   if (op.level === "read" && effects?.destroys === true) {
     problems.push("its level is read but it destroys data");
@@ -126,32 +146,46 @@ function definitionProblems(
     problems.push("it names no doors");
   } else {
     for (const door of op.doors) {
-      if (!DOORS.includes(door)) problems.push(`its door ${JSON.stringify(door)} is not one of ${DOORS.join(", ")}`);
+      if (!DOORS.includes(door))
+        problems.push(
+          `its door ${JSON.stringify(door)} is not one of ${DOORS.join(", ")}`
+        );
     }
-    if (new Set(op.doors).size !== op.doors.length) problems.push("it names a door twice");
+    if (new Set(op.doors).size !== op.doors.length)
+      problems.push("it names a door twice");
     if (op.doors.includes("deploy") && op.source?.kind !== "core") {
       problems.push("a plugin's operation may not run on the deploy door");
     }
   }
   if (op.chatExposed === true && !op.doors?.includes("chat")) {
-    problems.push("it is marked as seen by chat apps but does not run on the chat door");
+    problems.push(
+      "it is marked as seen by chat apps but does not run on the chat door"
+    );
   }
 
   const permission = op.permission;
   if (permission?.kind === "permission") {
-    if (!isNonEmptyText(permission.name)) problems.push("its permission has no name");
+    if (!isNonEmptyText(permission.name))
+      problems.push("its permission has no name");
   } else if (
     permission?.kind === "project" ||
     permission?.kind === "maintenance" ||
     permission?.kind === "own-data"
   ) {
     if (!isNonEmptyText(permission.reason)) {
-      problems.push(`it needs no permission (${permission.kind}) but gives no reason`);
+      problems.push(
+        `it needs no permission (${permission.kind}) but gives no reason`
+      );
     }
     if (permission.kind === "own-data") {
-      if (op.source?.kind !== "plugin") problems.push("only a plugin's operation may read its own data without a permission");
+      if (op.source?.kind !== "plugin")
+        problems.push(
+          "only a plugin's operation may read its own data without a permission"
+        );
       if (op.level !== "read" || (op.raise ?? []).length > 0) {
-        problems.push("an operation without a permission for its own data may only read");
+        problems.push(
+          "an operation without a permission for its own data may only read"
+        );
       }
     } else {
       const allowed = DOORS_WITHOUT_PERMISSION[permission.kind];
@@ -163,21 +197,26 @@ function definitionProblems(
       }
     }
   } else {
-    problems.push("it does not say which permission it needs, or why it needs none");
+    problems.push(
+      "it does not say which permission it needs, or why it needs none"
+    );
   }
 
-  if (typeof op.dryRun !== "boolean") problems.push("it does not say whether it supports a dry run");
+  if (typeof op.dryRun !== "boolean")
+    problems.push("it does not say whether it supports a dry run");
   const writes = op.level !== "read" || (op.raise ?? []).length > 0;
   if (writes && permission?.kind !== "project" && op.dryRun !== true) {
     problems.push("it writes but offers no dry run");
   }
-  if (typeof op.long !== "boolean") problems.push("it does not say whether it is long-running");
+  if (typeof op.long !== "boolean")
+    problems.push("it does not say whether it is long-running");
 
   if (!Array.isArray(op.examples) || op.examples.length === 0) {
     problems.push("it has no example");
   } else {
     for (const example of op.examples) {
-      if (!isNonEmptyText(example?.summary)) problems.push("an example has no summary");
+      if (!isNonEmptyText(example?.summary))
+        problems.push("an example has no summary");
     }
   }
 
@@ -187,13 +226,18 @@ function definitionProblems(
     const seen = new Set<number>();
     for (const { code, meaning } of op.exitCodes) {
       if (!Number.isInteger(code) || code < 0 || code > 255) {
-        problems.push(`its exit code ${JSON.stringify(code)} is not a whole number from 0 to 255`);
+        problems.push(
+          `its exit code ${JSON.stringify(code)} is not a whole number from 0 to 255`
+        );
       } else if (code !== 2 && code in SHARED_EXIT_CODES) {
-        problems.push(`it gives exit code ${code} a meaning of its own; ${code} always means "${SHARED_EXIT_CODES[code]}"`);
+        problems.push(
+          `it gives exit code ${code} a meaning of its own; ${code} always means "${SHARED_EXIT_CODES[code]}"`
+        );
       }
       if (seen.has(code)) problems.push(`it lists exit code ${code} twice`);
       seen.add(code);
-      if (!isNonEmptyText(meaning)) problems.push(`its exit code ${code} has no meaning`);
+      if (!isNonEmptyText(meaning))
+        problems.push(`its exit code ${code} has no meaning`);
     }
   }
 
@@ -202,14 +246,21 @@ function definitionProblems(
   } else {
     for (const alias of op.aliases) {
       problems.push(...commandProblems(alias?.command, "old name"));
-      if (!isNonEmptyText(alias?.addedIn) || !isNonEmptyText(alias?.removableFrom)) {
-        problems.push("an old name does not say the release that added it and the earliest that may remove it");
+      if (
+        !isNonEmptyText(alias?.addedIn) ||
+        !isNonEmptyText(alias?.removableFrom)
+      ) {
+        problems.push(
+          "an old name does not say the release that added it and the earliest that may remove it"
+        );
       }
     }
   }
 
   if (op.stability !== "experimental" && op.stability !== "stable") {
-    problems.push(`its stability ${JSON.stringify(op.stability)} is neither experimental nor stable`);
+    problems.push(
+      `its stability ${JSON.stringify(op.stability)} is neither experimental nor stable`
+    );
   }
   return problems;
 }
@@ -242,7 +293,9 @@ export async function operationListProblems(
       const id = isNonEmptyText(op.id) ? op.id : "(no ID)";
       const name = `Operation "${id}" from ${from}`;
       if (!ID_PATTERN.test(id)) {
-        problems.push(`${name}: its ID is not dotted lower-case words (noun.verb)`);
+        problems.push(
+          `${name}: its ID is not dotted lower-case words (noun.verb)`
+        );
       }
       const own = definitionProblems(op, source);
       problems.push(...own.map(problem => `${name}: ${problem}`));
@@ -258,14 +311,18 @@ export async function operationListProblems(
 
       const earlier = byId.get(id);
       if (earlier) {
-        problems.push(`Two operations claim the ID "${id}": one from ${earlier.from} and one from ${from}`);
+        problems.push(
+          `Two operations claim the ID "${id}": one from ${earlier.from} and one from ${from}`
+        );
       } else {
         byId.set(id, { id, from });
       }
 
       const claims = [
         op.command,
-        ...(Array.isArray(op.aliases) ? op.aliases.map(alias => alias?.command) : []),
+        ...(Array.isArray(op.aliases)
+          ? op.aliases.map(alias => alias?.command)
+          : []),
       ];
       const claimedHere = new Set<string>();
       for (const words of claims) {
@@ -277,7 +334,9 @@ export async function operationListProblems(
             `Two operations claim the command words "nextly ${key}": "${holder.id}" from ${holder.from} and "${id}" from ${from}`
           );
         } else if (claimedHere.has(key)) {
-          problems.push(`${name}: it claims the command words "nextly ${key}" twice`);
+          problems.push(
+            `${name}: it claims the command words "nextly ${key}" twice`
+          );
         }
         claimedHere.add(key);
       }

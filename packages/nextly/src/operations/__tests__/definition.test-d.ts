@@ -65,8 +65,19 @@ const update = defineOperation({
   input: z.object({ ids: z.array(z.string()), limit: z.number().default(20) }),
   output: z.object({ updated: z.number() }),
   level: "draft",
-  raise: [{ when: "more than 25", level: "change", applies: ({ input }) => input.ids.length > 25 }],
-  effects: { destroys: true, idempotent: true, outside: false, spendsAi: false },
+  raise: [
+    {
+      when: "more than 25",
+      level: "change",
+      applies: ({ input }) => input.ids.length > 25,
+    },
+  ],
+  effects: {
+    destroys: true,
+    idempotent: true,
+    outside: false,
+    spendsAi: false,
+  },
   doors: ["local"],
   permission: { kind: "permission", name: "update-posts" },
   dryRun: true,
@@ -76,10 +87,13 @@ const update = defineOperation({
   source: { kind: "core" },
   stability: "experimental",
 });
-expectTypeOf(update.examples[0].input).toEqualTypeOf<{ ids: string[]; limit?: number | undefined }>();
-expectTypeOf<Parameters<NonNullable<typeof update.raise>[number]["applies"]>[0]>().toEqualTypeOf<
-  OperationRun<{ ids: string[]; limit: number }>
->();
+expectTypeOf(update.examples[0].input).toEqualTypeOf<{
+  ids: string[];
+  limit?: number | undefined;
+}>();
+expectTypeOf<
+  Parameters<NonNullable<typeof update.raise>[number]["applies"]>[0]
+>().toEqualTypeOf<OperationRun<{ ids: string[]; limit: number }>>();
 
 // A typed declaration fits in the list's untyped one.
 expectTypeOf(update).toExtend<OperationDefinition>();

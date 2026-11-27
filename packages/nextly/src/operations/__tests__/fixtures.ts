@@ -18,11 +18,17 @@ export function readOperation(
       command: ["posts", "list"],
       aliases: [],
       summary: "List posts",
-      description: "Lists posts the person may read, newest first. Changes nothing.",
+      description:
+        "Lists posts the person may read, newest first. Changes nothing.",
       input: z.object({ limit: z.number().int().min(1).max(100).optional() }),
       output: z.object({ items: z.array(z.object({ id: z.string() })) }),
       level: "read",
-      effects: { destroys: false, idempotent: true, outside: false, spendsAi: false },
+      effects: {
+        destroys: false,
+        idempotent: true,
+        outside: false,
+        spendsAi: false,
+      },
       doors: ["local", "site"],
       permission: { kind: "permission", name: "read-posts" },
       dryRun: false,
@@ -44,12 +50,18 @@ export function writeOperation(
     id: "posts.publish",
     command: ["posts", "publish"],
     summary: "Publish a post",
-    description: "Publishes one post so visitors see it. Unpublish puts it back.",
+    description:
+      "Publishes one post so visitors see it. Unpublish puts it back.",
     input: z.object({ id: z.string() }),
     output: z.object({ id: z.string() }),
     examples: [{ summary: "Publish post 128", input: { id: "128" } }],
     level: "change",
-    effects: { destroys: false, idempotent: true, outside: false, spendsAi: false },
+    effects: {
+      destroys: false,
+      idempotent: true,
+      outside: false,
+      spendsAi: false,
+    },
     permission: { kind: "permission", name: "publish-posts" },
     dryRun: true,
     ...overrides,
@@ -65,8 +77,12 @@ export const contentUpdateLike = defineOperation({
   command: ["content", "update"],
   aliases: [],
   summary: "Update entries",
-  description: "Saves changes to entries as drafts. Publishing is its own step.",
-  input: z.object({ ids: z.array(z.string()).min(1), data: z.record(z.string(), z.unknown()) }),
+  description:
+    "Saves changes to entries as drafts. Publishing is its own step.",
+  input: z.object({
+    ids: z.array(z.string()).min(1),
+    data: z.record(z.string(), z.unknown()),
+  }),
   output: z.object({ updated: z.number() }),
   level: "draft",
   raise: [
@@ -76,20 +92,33 @@ export const contentUpdateLike = defineOperation({
       applies: ({ input }) => input.ids.length > BULK_THRESHOLD,
     },
   ],
-  effects: { destroys: true, idempotent: true, outside: false, spendsAi: false },
+  effects: {
+    destroys: true,
+    idempotent: true,
+    outside: false,
+    spendsAi: false,
+  },
   doors: ["local", "site", "chat"],
   chatExposed: true,
   permission: { kind: "permission", name: "update-posts" },
   dryRun: true,
   long: false,
-  examples: [{ summary: "Retitle one entry", input: { ids: ["128"], data: { title: "Spring" } } }],
+  examples: [
+    {
+      summary: "Retitle one entry",
+      input: { ids: ["128"], data: { title: "Spring" } },
+    },
+  ],
   exitCodes: [],
   source: { kind: "core" },
   stability: "experimental",
 });
 
 /** The settings that guard sign-in and security. */
-const SECURITY_KEYS: ReadonlySet<string> = new Set(["auth.passwordMinLength", "auth.allowRegistration"]);
+const SECURITY_KEYS: ReadonlySet<string> = new Set([
+  "auth.passwordMinLength",
+  "auth.allowRegistration",
+]);
 
 /**
  * Shaped like the settings change: a `change`, raised to a `critical` that
@@ -100,7 +129,8 @@ export const settingsSetLike = defineOperation({
   command: ["settings", "set"],
   aliases: [],
   summary: "Change a setting",
-  description: "Changes one site setting. Security and sign-in settings need approval.",
+  description:
+    "Changes one site setting. Security and sign-in settings need approval.",
   input: z.object({ key: z.string(), value: z.unknown() }),
   output: z.object({ key: z.string() }),
   level: "change",
@@ -112,12 +142,22 @@ export const settingsSetLike = defineOperation({
       applies: ({ input }) => SECURITY_KEYS.has(input.key),
     },
   ],
-  effects: { destroys: true, idempotent: true, outside: false, spendsAi: false },
+  effects: {
+    destroys: true,
+    idempotent: true,
+    outside: false,
+    spendsAi: false,
+  },
   doors: ["local", "site"],
   permission: { kind: "permission", name: "update-settings" },
   dryRun: true,
   long: false,
-  examples: [{ summary: "Rename the site", input: { key: "site.title", value: "Corner Bakery" } }],
+  examples: [
+    {
+      summary: "Rename the site",
+      input: { key: "site.title", value: "Corner Bakery" },
+    },
+  ],
   exitCodes: [],
   source: { kind: "core" },
   stability: "experimental",

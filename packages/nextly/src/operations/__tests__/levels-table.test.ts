@@ -19,7 +19,12 @@ import {
 const READ_ROW: LevelsRow = {
   level: "read",
   alwaysAllow: true,
-  effects: { destroys: false, idempotent: true, outside: false, spendsAi: false },
+  effects: {
+    destroys: false,
+    idempotent: true,
+    outside: false,
+    spendsAi: false,
+  },
   doors: ["local", "site"],
   chatExposed: false,
 };
@@ -41,7 +46,9 @@ describe("the levels table", () => {
 
   it("reports a row whose operation is gone", async () => {
     const list = await assembleOperationList({ core: [] });
-    expect(levelsTableProblems(list.operations, { "posts.list": READ_ROW })).toEqual([
+    expect(
+      levelsTableProblems(list.operations, { "posts.list": READ_ROW })
+    ).toEqual([
       'the levels table has a row for "posts.list", which is not in the list',
     ]);
   });
@@ -59,7 +66,9 @@ describe("the levels table", () => {
     "reports a declaration whose %s differs from its row",
     async (_fact, change) => {
       const list = await assembleOperationList({ core: [readOperation()] });
-      expect(levelsTableProblems(list.operations, { "posts.list": READ_ROW })).toEqual([]);
+      expect(
+        levelsTableProblems(list.operations, { "posts.list": READ_ROW })
+      ).toEqual([]);
       const [problem, ...rest] = levelsTableProblems(list.operations, {
         "posts.list": { ...READ_ROW, ...change },
       });
@@ -76,11 +85,24 @@ describe("the doors core's operations declare", () => {
   });
 
   it("names an operation on the deploy door that is not in the fixed set (control)", async () => {
-    const maintenance = { kind: "maintenance", reason: "Brings the schema up to the code." } as const;
+    const maintenance = {
+      kind: "maintenance",
+      reason: "Brings the schema up to the code.",
+    } as const;
     const list = await assembleOperationList({
       core: [
-        writeOperation({ id: "migrate", command: ["migrate"], doors: ["local", "deploy"], permission: maintenance }),
-        writeOperation({ id: "cache.purge", command: ["cache", "purge"], doors: ["local", "deploy"], permission: maintenance }),
+        writeOperation({
+          id: "migrate",
+          command: ["migrate"],
+          doors: ["local", "deploy"],
+          permission: maintenance,
+        }),
+        writeOperation({
+          id: "cache.purge",
+          command: ["cache", "purge"],
+          doors: ["local", "deploy"],
+          permission: maintenance,
+        }),
       ],
     });
     expect(outsideDeploySet(list.operations)).toEqual(["cache.purge"]);

@@ -51,31 +51,61 @@ describe("every core operation", () => {
 describe("the completeness check", () => {
   it("passes a complete read and a complete write (control)", async () => {
     expect(
-      await operationListProblems([{ source: { kind: "core" }, operations: [readOperation(), writeOperation()] }])
+      await operationListProblems([
+        {
+          source: { kind: "core" },
+          operations: [readOperation(), writeOperation()],
+        },
+      ])
     ).toEqual([]);
   });
 
-  it.each(REQUIRED_FACTS)("refuses a declaration without its %s", async fact => {
-    const problems = await operationListProblems([
-      { source: { kind: "core" }, operations: [without(readOperation(), fact)] },
-    ]);
-    expect(problems.length).toBeGreaterThan(0);
-    expect(problems.every(problem => problem.startsWith("Operation "))).toBe(true);
-  });
+  it.each(REQUIRED_FACTS)(
+    "refuses a declaration without its %s",
+    async fact => {
+      const problems = await operationListProblems([
+        {
+          source: { kind: "core" },
+          operations: [without(readOperation(), fact)],
+        },
+      ]);
+      expect(problems.length).toBeGreaterThan(0);
+      expect(problems.every(problem => problem.startsWith("Operation "))).toBe(
+        true
+      );
+    }
+  );
 
   it.each([
     ["an empty summary", { summary: " " }],
     ["an empty description", { description: "" }],
     ["no command words", { command: [] }],
     ["no doors", { doors: [] }],
-    ["no examples", { examples: [] as unknown as OperationDefinition["examples"] }],
-    ["a permission with no name", { permission: { kind: "permission", name: "" } }],
-    ["no reason for needing no permission", { doors: ["local"], permission: { kind: "project", reason: "" } }],
-    ["an old name without its releases", { aliases: [{ command: ["posts", "ls"], addedIn: "", removableFrom: "" }] }],
-  ] satisfies [string, Partial<OperationDefinition>][])("refuses %s", async (_case, change) => {
-    const problems = await operationListProblems([
-      { source: { kind: "core" }, operations: [readOperation(change)] },
-    ]);
-    expect(problems).toHaveLength(1);
-  });
+    [
+      "no examples",
+      { examples: [] as unknown as OperationDefinition["examples"] },
+    ],
+    [
+      "a permission with no name",
+      { permission: { kind: "permission", name: "" } },
+    ],
+    [
+      "no reason for needing no permission",
+      { doors: ["local"], permission: { kind: "project", reason: "" } },
+    ],
+    [
+      "an old name without its releases",
+      {
+        aliases: [{ command: ["posts", "ls"], addedIn: "", removableFrom: "" }],
+      },
+    ],
+  ] satisfies [string, Partial<OperationDefinition>][])(
+    "refuses %s",
+    async (_case, change) => {
+      const problems = await operationListProblems([
+        { source: { kind: "core" }, operations: [readOperation(change)] },
+      ]);
+      expect(problems).toHaveLength(1);
+    }
+  );
 });

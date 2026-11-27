@@ -12,7 +12,11 @@
  * @module operations/definition
  * @experimental
  */
-import type { SchemaInput, SchemaOutput, StandardSchema } from "./standard-schema";
+import type {
+  SchemaInput,
+  SchemaOutput,
+  StandardSchema,
+} from "./standard-schema";
 
 /**
  * How much harm a run can do, lowest first. The approval rules turn a level

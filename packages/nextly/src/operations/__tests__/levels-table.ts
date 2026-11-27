@@ -34,9 +34,13 @@ export const DEPLOY_DOOR_OPERATIONS: ReadonlySet<string> = new Set([
 ]);
 
 /** The operations on the deploy door that are not in the fixed set. */
-export function outsideDeploySet(operations: readonly ListedOperation[]): string[] {
+export function outsideDeploySet(
+  operations: readonly ListedOperation[]
+): string[] {
   return operations
-    .filter(op => op.doors.includes("deploy") && !DEPLOY_DOOR_OPERATIONS.has(op.id))
+    .filter(
+      op => op.doors.includes("deploy") && !DEPLOY_DOOR_OPERATIONS.has(op.id)
+    )
     .map(op => op.id);
 }
 
@@ -60,7 +64,11 @@ export function levelsTableProblems(
       doors: [...op.doors].sort(),
       chatExposed: op.chatExposed,
     };
-    const expected: LevelsRow = { ...row, effects: { ...row.effects }, doors: [...row.doors].sort() };
+    const expected: LevelsRow = {
+      ...row,
+      effects: { ...row.effects },
+      doors: [...row.doors].sort(),
+    };
     if (JSON.stringify(actual) !== JSON.stringify(expected)) {
       problems.push(
         `"${op.id}" differs from its row: declared ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`
@@ -68,7 +76,10 @@ export function levelsTableProblems(
     }
   }
   for (const id of Object.keys(table)) {
-    if (!ids.has(id)) problems.push(`the levels table has a row for "${id}", which is not in the list`);
+    if (!ids.has(id))
+      problems.push(
+        `the levels table has a row for "${id}", which is not in the list`
+      );
   }
   return problems;
 }

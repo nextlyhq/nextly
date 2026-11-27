@@ -14,14 +14,22 @@ function ids(count: number): string[] {
 
 describe("the level of a content update", () => {
   it("stays draft at the bulk threshold", () => {
-    expect(levelForRun(contentUpdateLike, { input: { ids: ids(BULK_THRESHOLD), data: {} } })).toEqual({
+    expect(
+      levelForRun(contentUpdateLike, {
+        input: { ids: ids(BULK_THRESHOLD), data: {} },
+      })
+    ).toEqual({
       level: "draft",
       alwaysAllow: true,
     });
   });
 
   it("is a change above the bulk threshold", () => {
-    expect(levelForRun(contentUpdateLike, { input: { ids: ids(BULK_THRESHOLD + 1), data: {} } })).toEqual({
+    expect(
+      levelForRun(contentUpdateLike, {
+        input: { ids: ids(BULK_THRESHOLD + 1), data: {} },
+      })
+    ).toEqual({
       level: "change",
       alwaysAllow: true,
     });
@@ -30,14 +38,22 @@ describe("the level of a content update", () => {
 
 describe("the level of a settings change", () => {
   it("stays a change for the site's title", () => {
-    expect(levelForRun(settingsSetLike, { input: { key: "site.title", value: "Corner Bakery" } })).toEqual({
+    expect(
+      levelForRun(settingsSetLike, {
+        input: { key: "site.title", value: "Corner Bakery" },
+      })
+    ).toEqual({
       level: "change",
       alwaysAllow: true,
     });
   });
 
   it('is critical, never covered by "Always allow", for a sign-in setting', () => {
-    expect(levelForRun(settingsSetLike, { input: { key: "auth.allowRegistration", value: true } })).toEqual({
+    expect(
+      levelForRun(settingsSetLike, {
+        input: { key: "auth.allowRegistration", value: true },
+      })
+    ).toEqual({
       level: "critical",
       alwaysAllow: false,
     });
@@ -52,7 +68,10 @@ describe("a rule that names a lower level", () => {
       level: "critical" as const,
       raise: [{ when: "always", level: "read" as const, applies: () => true }],
     };
-    expect(levelForRun(lowering, { input: {} })).toEqual({ level: "critical", alwaysAllow: true });
+    expect(levelForRun(lowering, { input: {} })).toEqual({
+      level: "critical",
+      alwaysAllow: true,
+    });
   });
 });
 
@@ -64,11 +83,23 @@ describe("the target the plan found", () => {
         {
           when: "the entry is published",
           level: "change" as const,
-          applies: ({ target }: { target?: Readonly<Record<string, unknown>> }) => target?.status === "published",
+          applies: ({
+            target,
+          }: {
+            target?: Readonly<Record<string, unknown>>;
+          }) => target?.status === "published",
         },
       ],
     };
-    expect(levelForRun(publishedRaises, { input: {}, target: { status: "draft" } }).level).toBe("draft");
-    expect(levelForRun(publishedRaises, { input: {}, target: { status: "published" } }).level).toBe("change");
+    expect(
+      levelForRun(publishedRaises, { input: {}, target: { status: "draft" } })
+        .level
+    ).toBe("draft");
+    expect(
+      levelForRun(publishedRaises, {
+        input: {},
+        target: { status: "published" },
+      }).level
+    ).toBe("change");
   });
 });
