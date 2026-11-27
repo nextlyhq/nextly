@@ -29,6 +29,7 @@ import { createRequire } from "node:module";
 import { relative, resolve } from "node:path";
 
 import type * as NextEnv from "@next/env";
+import { detectIsCi } from "@nextlyhq/telemetry/ci";
 import type { Command } from "commander";
 import pc from "picocolors";
 
@@ -276,12 +277,13 @@ const LIVE_HINT =
   "This database isn't on this machine. If it's a development copy: nextly db mark-dev";
 
 /**
- * Whether this run is a deploy pipeline's, where a live database is the one
- * it means to reach, so the line needs no hint.
+ * Whether this run is a CI or hosting build's, where a live database is the
+ * one it means to reach, so the line needs no hint. The one list of CI and
+ * host markers, telemetry's, read through its light entry so the first line
+ * loads nothing more.
  */
 function inDeployPipeline(): boolean {
-  // WIP-PLACEHOLDER: replaced by telemetry's CI detection before any push.
-  return false;
+  return detectIsCi(process.env);
 }
 
 /** Whether the run's line goes to a terminal that takes color. */
