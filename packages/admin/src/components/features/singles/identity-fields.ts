@@ -1,5 +1,7 @@
 import type { FieldConfig } from "nextly/config";
 
+import { fieldAdminGates } from "../entries/fields/field-admin-gates";
+
 /**
  * A Single's "identity" fields. Nextly gives every Single a `title` and a
  * `slug` (`defineSingle` adds them, and the system schema does for a visual
@@ -56,4 +58,18 @@ export function relaxIdentityRequired(
       ...(validation ? { validation: { ...validation, required: false } } : {}),
     } as FieldConfig;
   });
+}
+
+/**
+ * Whether an author's own `title` is drawn in the document's heading, the
+ * single-line text input at its head: a plain text field that is always shown.
+ * Any other (a number, a field hidden or shown by a condition) is drawn
+ * through its own field control instead, which knows its type and its gates;
+ * the heading would send a number as a string and show a hidden value.
+ */
+export function ownTitleInHeading(field: FieldConfig): boolean {
+  const gates = fieldAdminGates(field);
+  return (
+    field.type === "text" && !gates.hidden && gates.condition === undefined
+  );
 }

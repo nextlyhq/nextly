@@ -202,6 +202,64 @@ describe("SingleForm, a Single with its own title and slug", () => {
   });
 });
 
+describe("SingleForm, a Single whose own title the heading can't draw", () => {
+  it("draws a number title through its own control, and saves a number", async () => {
+    // The heading is a text input; a number sent through it is a string the
+    // field's own rule refuses on every save.
+    const numberTitle = {
+      ...ownSchema,
+      ownIdentityFields: ["title"],
+      fields: [
+        { type: "number", name: "title", label: "Issue", required: true },
+        { type: "text", name: "intro", label: "Intro" },
+      ],
+    } as unknown as SingleSchema;
+    const onSubmit = vi.fn(() => Promise.resolve());
+    const user = userEvent.setup();
+    render(
+      <SingleForm
+        schema={numberTitle}
+        document={{ ...stored, title: 7 } as unknown as SingleDocumentData}
+        onSubmit={onSubmit}
+      />
+    );
+
+    const issue = screen.getByRole("spinbutton", { name: /issue/i });
+    await user.clear(issue);
+    await user.type(issue, "8");
+    const sent = await save(onSubmit);
+
+    expect(sent).toMatchObject({ title: 8 });
+  });
+
+  it("draws no title where the author's own one is hidden, and saves it as stored", async () => {
+    const hiddenTitle = {
+      ...ownSchema,
+      ownIdentityFields: ["title"],
+      fields: [
+        {
+          type: "text",
+          name: "title",
+          label: "Heading",
+          admin: { hidden: true },
+        },
+        { type: "text", name: "intro", label: "Intro" },
+      ],
+    } as unknown as SingleSchema;
+    const onSubmit = vi.fn(() => Promise.resolve());
+    const user = userEvent.setup();
+    render(
+      <SingleForm schema={hiddenTitle} document={stored} onSubmit={onSubmit} />
+    );
+
+    expect(screen.queryByDisplayValue(HEADING)).toBeNull();
+    await user.type(screen.getByLabelText("Intro"), "Notes");
+    const sent = await save(onSubmit);
+
+    expect(sent).toMatchObject({ title: HEADING, intro: "Notes" });
+  });
+});
+
 describe("SingleForm, a Single with Nextly's own title and slug", () => {
   it("shows the label read-only and saves the label and slug, whatever is stored", async () => {
     const onSubmit = vi.fn(() => Promise.resolve());
