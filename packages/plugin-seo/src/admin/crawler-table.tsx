@@ -12,6 +12,7 @@ import { useId, useState, type JSX } from "react";
 import {
   AI_CRAWLERS,
   AI_CRAWLERS_CHECKED,
+  askedAway,
   type AiCrawlerUse,
 } from "../outputs/ai-crawlers";
 import type { AiCrawlerChoice } from "../settings/contract";
@@ -22,8 +23,13 @@ const USES: readonly { use: AiCrawlerUse; title: string; detail?: string }[] = [
   {
     use: "answers",
     title: "Read pages to answer questions and cite them",
+    detail: "For an AI search index, or because a person asked about the page.",
+  },
+  {
+    use: "user-triggered",
+    title: "User-triggered: robots.txt may not apply",
     detail:
-      "For an AI search index, or because a person asked about the page. OpenAI says ChatGPT-User may not follow robots.txt, because a person asked for the page.",
+      "They fetch a page because a person asked for it, and each company says they may not follow robots.txt. Block all AI tools still asks them to stay away.",
   },
   {
     use: "own-request",
@@ -40,8 +46,8 @@ function askedOf(
 ): { text: string; away: boolean } {
   if (use === "own-request")
     return { text: "Never asked to stay away", away: false };
-  const away =
-    choice === "block" || (choice === "search" && use === "training");
+  // The same judgement robots.txt is written from.
+  const away = askedAway(use, choice);
   return { text: away ? "Asked to stay away" : "Allowed", away };
 }
 

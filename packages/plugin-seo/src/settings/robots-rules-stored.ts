@@ -1,7 +1,9 @@
 /**
  * A site's own robots.txt lines as the SEO settings store them: the box's
- * text, and the person's confirmation that its rules may block pages the
- * sitemap lists, tied to the exact text and the exact pages it confirmed.
+ * text, the person's confirmation that its rules may block pages the
+ * sitemap lists, tied to the exact text and the exact pages it confirmed,
+ * and whether robots.txt adds a Content-Signal line stating the AI tools
+ * choice.
  *
  * Parsed with zod where the value is written (the Single's validation) and
  * again where it is read (robots.txt and the problem list), so a value edited
@@ -25,6 +27,11 @@ export interface StoredRobotsRules {
    * stood when the person confirmed blocking those pages.
    */
   confirmed?: { text: string; pages: string };
+  /**
+   * Whether the group for every crawler carries a Content-Signal line
+   * stating the AI tools choice: only once ticked, as `true`.
+   */
+  contentSignal?: boolean;
 }
 
 const storedRobotsRules: z.ZodType<StoredRobotsRules> = z
@@ -34,6 +41,7 @@ const storedRobotsRules: z.ZodType<StoredRobotsRules> = z
       .object({ text: z.string().max(MAX_TEXT), pages: z.string().max(64) })
       .strict()
       .optional(),
+    contentSignal: z.boolean().optional(),
   })
   .strict()
   .superRefine((value, context) => {

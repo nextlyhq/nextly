@@ -163,8 +163,8 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 | `nosnippet`          | checkbox | No text under the page's link in any Google result                                                                                                                       |
 | `noimageindex`       | checkbox | Asks Google not to index the pictures on the page                                                                                                                        |
 | `unavailableAfter`   | date     | When the page leaves search. After it, the page is served `noindex` and leaves the sitemap and `llms.txt`                                                                |
-| `noarchive`          | checkbox | Asks search engines not to keep a stored copy. Google doesn't use it                                                                                                     |
-| `nocache`            | checkbox | The same request, as some search engines spell it. Google doesn't use it                                                                                                 |
+| `noarchive`          | checkbox | Asks search engines not to keep a stored copy. Google doesn't use it; Bing also keeps the page out of Copilot's answers and AI training                                  |
+| `nocache`            | checkbox | The same request, as some search engines spell it. Google doesn't use it; with it, Bing's Copilot uses only the page's address, title and snippet                        |
 
 <Callout type="warn">
 **Ticking `noindex` does not on its own keep a page out of search results.** The plugin
@@ -548,11 +548,46 @@ These are requests. Well-behaved tools follow them; some ignore them. Asking Goo
 use your pages for AI training (`Google-Extended`) also limits what Gemini can use from
 them. Google Search and Bing are not affected by any choice.
 
+`"search"` and `"block"` also write the shared AI-training opt-out, a group of its own that
+names a policy token rather than a crawler:
+
+```txt
+User-agent: __usage_ai-training
+Disallow: /
+```
+
+AI companies that read it don't train on the pages it disallows; `Disallow: /` covers every
+page, the admin and your own rules' paths included. A `User-agent: *` group never applies to
+the token, so it is always named. Anthropic honours it now, and Google and Microsoft plan to in
+2027; it is an individual IETF draft (`draft-kelley-aipref-training-preference-signal`), not yet
+a standard. `"all"` writes nothing for it.
+
 The crawler names come from each provider's own page (OpenAI, Anthropic, Google, Apple, Common
-Crawl, Meta, Amazon, Perplexity, DuckDuckGo and Mistral), last checked on 13 November 2026. Two crawlers are never asked to stay away, because they visit only what the site itself
+Crawl, Meta, Amazon, Perplexity, DuckDuckGo and Mistral), last checked on 27 November 2026. Two crawlers are never asked to stay away, because they visit only what the site itself
 asked for: OpenAI's ads checker `OAI-AdsBot`, which visits only pages submitted as ads in
 ChatGPT, and `Google-CloudVertexBot`, which crawls only for a Vertex AI agent the site's owner
 set up.
+
+Six fetch a page because a person asked for it, and their providers say robots.txt may not
+apply to them: `ChatGPT-User`, `Perplexity-User`, `meta-externalfetcher`, `Amzn-User`,
+`Google-Agent` and `Google-GeminiNotebook`. `"block"` still asks them to stay away; the
+settings screen lists them apart, as "User-triggered: robots.txt may not apply".
+
+#### A Content-Signal line
+
+**Add a Content-Signal line**, a tick under the AI tools choice, off by default, states the
+choice in the group for every crawler:
+
+```txt
+User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
+Allow: /
+```
+
+`"all"` writes `ai-train=yes`, `"search"` `ai-train=no`, and `"block"` `ai-input=no` and
+`ai-train=no`; `search=yes` always. Content-Signal is Cloudflare's proposal, not a standard:
+some scanners and Cloudflare read it, and crawlers that don't know it skip it, so no rule of
+the file changes with it. The tick is saved with your own rules, so it needs no migration.
 
 ### Your own rules
 
@@ -576,12 +611,14 @@ Each line is read as you type, the way crawlers read robots.txt:
   **Block these pages anyway**. The confirmation is kept with the rules' text and the pages it
   named, so it is asked again when either changes. Each such page stays an error on the
   problem list while the rule stands.
-- A misspelt rule (`Dissalow`) is warned about. A line that is not a standard rule, such as
-  `Content-Signal`, is kept with a note that crawlers may ignore it.
+- A misspelt rule (`Dissalow`) is warned about. A line that is not a standard rule is kept with
+  a note that crawlers may ignore it; a `Content-Signal` line's note also points to the tick
+  above, so the site doesn't state its preference twice.
 - A group naming a crawler is followed by that crawler instead of the rules for every crawler,
   Nextly's own included. For an AI crawler, such as `User-agent: GPTBot`, it is joined with the
   group the AI tools choice writes for it, so a page the choice keeps it from opens only with an
-  `Allow` line; the screen says so.
+  `Allow` line; the screen says so. A group naming `__usage_ai-training` joins the opt-out
+  group the choice writes in the same way.
 - A rule needs a `User-agent` line above it, and a line holding a control character is
   refused, so nothing in the box can start a group of its own you did not write.
 
@@ -593,9 +630,15 @@ plugin's rules are not the ones crawlers read; the plugin reads the site's robot
 production address for that header, at most every ten minutes. The rules are a new field of the settings Single: a site that applies its schema with
 migrations runs `nextly migrate:create` and then `nextly migrate` after upgrading.
 
+### Outside robots.txt
+
 robots.txt can't take a site out of Google's AI Overviews or AI Mode without taking it out of
-Google Search: they read pages with Google Search's own crawler. A page's snippet controls
-keep its text out of them.
+Google Search: they read pages with Google Search's own crawler. Search Console's
+**Settings > Search generative AI** setting leaves a site out of AI Overviews, AI Mode and
+Discover's AI features, and Google says it isn't a ranking signal; a page's snippet controls
+keep one page's text out of them. Bing Webmaster Tools sets whether Bing may use your pages
+for AI training and for grounding Copilot's answers, from 15 December 2026. The settings
+screen's **Outside robots.txt** row links to both.
 
 ### The site's address, and why it affects caching
 
@@ -1225,6 +1268,8 @@ them in each listed page's `robots` tag; a page hidden from search is served non
     problem list names it until the date is removed.
   - **Controls for other search engines**: `noarchive` and `nocache`, closed away, each its
     own switch and off by default. Google uses neither, and no other setting turns either on.
+    Bing reads both for Copilot: `noarchive` keeps the page out of Copilot's answers and AI
+    training, and `nocache` limits Copilot to the page's address, title and snippet.
 
 A route that sets its own limits in `robots` keeps them where they are stricter: the smaller
 image preview and snippet, and the earlier date, are served.

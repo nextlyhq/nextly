@@ -884,6 +884,41 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("writes the shared AI-training opt-out for search but not training, and the ticked Content-Signal line", async () => {
+      const { t } = await boot(dialect, { aiCrawlers: "search" });
+      const before = await rootFile("robots.txt");
+      expect(before.body).toContain(
+        "\n\nUser-agent: __usage_ai-training\nDisallow: /\n"
+      );
+      expect(before.body).not.toContain("Content-Signal");
+      // Ticked with the own rules' box empty: saved through the Single's
+      // own check, and served under the group for every crawler.
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          robotsRules: { text: "", contentSignal: true },
+        },
+      });
+      const after = await rootFile("robots.txt");
+      expect(
+        after.body.startsWith(
+          "User-agent: *\nContent-Signal: search=yes, ai-input=yes, ai-train=no\nAllow: /\n"
+        )
+      ).toBe(true);
+      expect(after.body).not.toContain("Your own rules");
+      // Anything but a boolean is refused, so no line is added unticked.
+      await expect(
+        t.nextly.updateSingle({
+          slug: SEO_SETTINGS_SLUG,
+          data: {
+            _overwrite: true,
+            robotsRules: { text: "", contentSignal: "yes" },
+          },
+        })
+      ).rejects.toThrow();
+    });
+
     it("refuses to save an own rule that keeps every crawler from the whole site", async () => {
       const { t } = await boot(dialect);
       await expect(

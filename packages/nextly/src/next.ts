@@ -96,6 +96,13 @@ const NEXTLY_ADDED_HTML_LIMITED_BOTS = [
   "Amazonbot",
   "Bytespider",
   "meta-externalagent",
+  // Meta's and Amazon's AI search crawlers and the fetchers each sends for a
+  // person's request: they read the HTML they are sent, and none is known
+  // to run a page's script.
+  "meta-webindexer",
+  "meta-externalfetcher",
+  "Amzn-SearchBot",
+  "Amzn-User",
   "DuckAssistBot",
   "MistralAI-User",
   "cohere-ai",

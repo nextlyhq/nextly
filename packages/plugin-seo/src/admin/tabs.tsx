@@ -8,8 +8,6 @@
  * @module admin/tabs
  */
 import {
-  Alert,
-  AlertDescription,
   Button,
   Input,
   SegmentedChoice,
@@ -17,7 +15,7 @@ import {
   Switch,
   usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
-import { Info, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useId, useState, type JSX, type ReactNode } from "react";
 
 import { REDIRECT_ROUTES, type ProxyStatus } from "../redirects/contract";
@@ -32,6 +30,7 @@ import { profileAddressProblem } from "../settings/stored-values";
 import type { StructuredDataBrand } from "../structured-data/rules";
 import { fitSummary, textFit } from "../tab/problems";
 
+import { ContentSignalTick, OutsideRobotsRow } from "./ai-controls";
 import { BrandDetailRows, CODE_LIST_NOTE, CODE_NOTE } from "./brand-details";
 import { brandDetailsDraftProblem } from "./brand-draft";
 import {
@@ -597,31 +596,6 @@ export function siteHostOf(
   return typeof window === "undefined" ? "your-site" : window.location.host;
 }
 
-/**
- * What robots.txt can't do for Google's AI answers, beside the choices that
- * might suggest it can: they read pages with Google Search's own crawler,
- * so only a page's snippet controls keep its text out of them.
- */
-function AiOverviewsRow(): JSX.Element {
-  return (
-    <SettingsRowGroup
-      label="Google's AI Overviews and AI Mode"
-      description="Answers Google shows above its results."
-    >
-      <Alert variant="info" role="note">
-        <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-        <AlertDescription>
-          robots.txt can&apos;t take your site out of them. They read pages with
-          Google Search&apos;s own crawler, so blocking it would take you out of
-          Google Search too. To keep a page&apos;s text out, set its{" "}
-          <b className="font-semibold">Text under the link</b> to None on that
-          page; that also removes the text from normal results.
-        </AlertDescription>
-      </Alert>
-    </SettingsRowGroup>
-  );
-}
-
 /** Which automated readers may use the site's pages, and what they are given. */
 export function CrawlersTab({
   draft,
@@ -682,8 +656,9 @@ export function CrawlersTab({
         />
         <ControlNote>{AI_CHOICES_NOTE}</ControlNote>
         <CrawlerTable choice={draft.aiCrawlers} />
+        <ContentSignalTick draft={draft} change={change} />
       </SettingsRowGroup>
-      <AiOverviewsRow />
+      <OutsideRobotsRow />
       <OwnRulesRow
         draft={draft}
         change={change}

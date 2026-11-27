@@ -460,7 +460,9 @@ function otherEnginesSummary(noarchive: boolean, nocache: boolean): string {
 
 /**
  * `noarchive` and `nocache`, closed away and off by default, each its own
- * switch. Google uses neither; what they do elsewhere is not described here.
+ * switch. Google uses neither; Bing reads both for Copilot, which each
+ * switch's help says, since that costs a page its place in Copilot's
+ * answers.
  */
 function OtherEnginesRows({
   values,
@@ -504,7 +506,7 @@ function OtherEnginesRows({
           <Row
             error={errors.noarchive}
             label="noarchive"
-            help="Asks search engines not to keep a stored copy of this page. Google doesn't use it."
+            help="Asks search engines not to keep a stored copy of this page. Google doesn't use it, but Bing also keeps the page out of Copilot's answers and AI training."
             control={
               <Switch
                 aria-label="noarchive"
@@ -519,7 +521,7 @@ function OtherEnginesRows({
           <Row
             error={errors.nocache}
             label="nocache"
-            help="A similar request some search engines read. Google doesn't use it."
+            help="A similar request some search engines read. Google doesn't use it; with it, Bing's Copilot uses only the page's address, title and snippet."
             control={
               <Switch
                 aria-label="nocache"
