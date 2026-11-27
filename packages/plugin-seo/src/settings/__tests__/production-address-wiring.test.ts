@@ -42,6 +42,10 @@ afterEach(() => {
 /** A context whose site has saved its settings and decided it is listed. */
 const ctx = {
   self: { singles: {}, collections: {} },
+  // The plugin's background work (the address record move, the Proxy note)
+  // reports its failures through the logger, as every real context has one;
+  // without it those reports throw as unhandled rejections.
+  logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
   user: null,
   services: {
     ownCollections: {
