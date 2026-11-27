@@ -2,12 +2,14 @@
  * `/api/notices` — the signed-in person's own notices.
  *
  *   GET  /api/notices?tab=&unread=&page=&limit=   a page, newest first
- *   GET  /api/notices/count?tab=&unread=           how many, or how many unread
+ *   GET  /api/notices/count?unread=   `{ total, alerts }`: how many, or how
+ *                                     many unread, in all and in Alerts
  *   POST /api/notices/read      mark `{ ids }` or `{ all: true, tab? }` read
  *   POST /api/notices/unread    mark `{ ids }` unread again
  *
  * `tab` is `for-you` or `alerts`, the Inbox's two tabs; absent means both.
- * It, and `/unread`, are experimental until the Inbox is complete.
+ * It, the count's `alerts` and `/unread` are experimental until the Inbox is
+ * complete.
  *
  * The person is ALWAYS the signed-in user, never a parameter, so nobody can
  * read or mark another person's notices however the request is written. An API
@@ -28,7 +30,7 @@ import { NextlyError } from "../errors/nextly-error";
 
 import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
 import { readBoundedJsonBody } from "./read-json-body";
-import { respondAction, respondCount, respondList } from "./response-shapes";
+import { respondAction, respondData, respondList } from "./response-shapes";
 import { signedInPerson } from "./signed-in-person";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -115,15 +117,20 @@ export const getNotices = withErrorHandler(async (req: Request) => {
   );
 });
 
+/**
+ * The Inbox's counts in one answer: `total` across both tabs, and `alerts`,
+ * the part of it in Alerts. The Inbox button and both tab counts read this one
+ * response, so they cannot disagree; "For you" is `total - alerts`.
+ */
 export const getNoticeCount = withErrorHandler(async (req: Request) => {
   const auth = await signedInPerson(req, "have notices");
   const params = new URL(req.url).searchParams;
-  const total = await service().count({
-    userId: auth.userId,
-    unread: unreadParam(params),
-    tab: tabParam(params),
-  });
-  return respondCount(total, { headers: PRIVATE_NO_STORE_HEADERS });
+  const query = { userId: auth.userId, unread: unreadParam(params) };
+  const [total, alerts] = await Promise.all([
+    service().count(query),
+    service().count({ ...query, tab: "alerts" }),
+  ]);
+  return respondData({ total, alerts }, { headers: PRIVATE_NO_STORE_HEADERS });
 });
 
 export const markNoticesRead = withErrorHandler(async (req: Request) => {
@@ -138,9 +145,10 @@ export const markNoticesRead = withErrorHandler(async (req: Request) => {
         `${NOTICE_TABS.join(", ")}.`,
     });
   }
+  // The signed-in person last, so no body field could ever name another.
   const marked = await service().markRead({
-    userId: auth.userId,
     ...parsed.data,
+    userId: auth.userId,
   });
   return respondAction("Notices marked read.", { marked });
 });

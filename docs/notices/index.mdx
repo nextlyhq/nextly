@@ -51,12 +51,13 @@ someone else. API keys are refused, since a notice belongs to a person's own inb
 | Request                                                                                                   | Answer                                                              |
 | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `GET /api/notices?tab=for-you&unread=true&page=1&limit=20`                                                | The standard list envelope, newest first. `limit` is at most 100    |
-| `GET /api/notices/count?tab=for-you&unread=true`                                                          | `{ "total": 3 }`                                                    |
+| `GET /api/notices/count?unread=true`                                                                      | `{ "total": 3, "alerts": 1 }`: in all, and in Alerts                |
 | `POST /api/notices/read` with `{ "ids": ["…"] }`, `{ "all": true }` or `{ "all": true, "tab": "alerts" }` | How many were marked. Ids that are not yours are ignored            |
 | `POST /api/notices/unread` with `{ "ids": ["…"] }`                                                        | How many were made unread again. Ids that are not yours are ignored |
 
-`tab` is `for-you` or `alerts`; leave it out for both. `tab` and `/api/notices/unread` are
-experimental: they may change until the Inbox is complete.
+`tab` is `for-you` or `alerts`; leave it out for both. For you's count is `total - alerts`. `tab`,
+the count's `alerts` and `/api/notices/unread` are experimental: they may change until the Inbox is
+complete.
 
 Each notice has its `title` and optional `body`, its `kind`, and its `subject`: its `type`, `id`,
 a `link` into the admin, and `gone: true` once the subject no longer exists.

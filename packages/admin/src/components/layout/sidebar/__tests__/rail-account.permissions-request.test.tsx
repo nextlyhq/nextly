@@ -52,7 +52,7 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
       if (route === "/me/capabilities") return EVERYTHING;
       // The Inbox counts the reader's own unread notices, and asks for
       // nothing else until it is opened.
-      if (route === "/notices/count") return { total: 0 };
+      if (route === "/notices/count") return { total: 0, alerts: 0 };
       throw new Error(`unexpected request ${path}`);
     },
   },

@@ -14,7 +14,11 @@ const { requireAuthentication, service } = vi.hoisted(() => ({
   requireAuthentication: vi.fn(),
   service: {
     find: vi.fn(async () => ({ rows: [], total: 0, page: 1, limit: 20 })),
-    count: vi.fn(async () => 3),
+    // Three unread in all, one of them in Alerts: distinct numbers, so a
+    // count answering one tab's number for the other is caught.
+    count: vi.fn(async (query: { tab?: string }) =>
+      query.tab === "alerts" ? 1 : 3
+    ),
     markRead: vi.fn(async () => 2),
     markUnread: vi.fn(async () => 1),
   },
@@ -62,13 +66,14 @@ describe("/api/notices", () => {
     expect(res.headers.get("Cache-Control")).toBe("private, no-store");
   });
 
-  it("counts the signed-in person's unread notices", async () => {
-    const res = await getNoticeCount(get("/count?unread=true"));
-    expect(await res.json()).toEqual({ total: 3 });
-    expect(service.count).toHaveBeenCalledWith({
-      userId: "alice",
-      unread: true,
-    });
+  it("counts the signed-in person's unread notices, in all and in Alerts, in one answer", async () => {
+    const res = await getNoticeCount(get("/count?unread=true&userId=bob"));
+    expect(await res.json()).toEqual({ total: 3, alerts: 1 });
+    expect(service.count.mock.calls).toEqual([
+      [{ userId: "alice", unread: true }],
+      [{ userId: "alice", unread: true, tab: "alerts" }],
+    ]);
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
   });
 
   it("marks read only for the signed-in person", async () => {
@@ -104,7 +109,7 @@ describe("/api/notices", () => {
     expect(service.find).not.toHaveBeenCalled();
   });
 
-  it("reads and counts one tab of the signed-in person's Inbox", async () => {
+  it("reads one tab of the signed-in person's Inbox", async () => {
     await getNotices(get("?tab=alerts&userId=bob"));
     expect(service.find).toHaveBeenCalledWith({
       userId: "alice",
@@ -112,12 +117,6 @@ describe("/api/notices", () => {
       unread: undefined,
       page: undefined,
       limit: undefined,
-    });
-    await getNoticeCount(get("/count?unread=true&tab=for-you"));
-    expect(service.count).toHaveBeenCalledWith({
-      userId: "alice",
-      unread: true,
-      tab: "for-you",
     });
   });
 
@@ -154,11 +153,9 @@ describe("/api/notices", () => {
   it.each([
     ["a tab that does not exist", "?tab=done"],
     ["a tab spelled another way", "?tab=For%20you"],
-  ])("refuses %s, on the list and the count", async (_, query) => {
+  ])("refuses %s on the list", async (_, query) => {
     expect((await getNotices(get(query))).status).toBe(400);
-    expect((await getNoticeCount(get(`/count${query}`))).status).toBe(400);
     expect(service.find).not.toHaveBeenCalled();
-    expect(service.count).not.toHaveBeenCalled();
   });
 
   it("refuses a mark-all-read of one tab that names another person", async () => {

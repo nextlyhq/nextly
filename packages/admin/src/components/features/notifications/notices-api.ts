@@ -40,6 +40,15 @@ export interface NoticeListResponse {
  */
 export type InboxTab = "for-you" | "alerts";
 
+/**
+ * How many items are unread: `total` across both tabs, and `alerts`, the part
+ * of it in Alerts. One answer feeds the Inbox button and both tab counts.
+ */
+export interface InboxCounts {
+  total: number;
+  alerts: number;
+}
+
 /** What marking read names: some by id, or every unread one in a tab. */
 export type MarkNoticesRead = { ids: string[] } | { all: true; tab: InboxTab };
 
@@ -51,15 +60,9 @@ export const noticesApi = {
     protectedApi.get<NoticeListResponse>(
       `/notices?tab=${tab}&page=1&limit=${NOTICES_PAGE_SIZE}`
     ),
-  /** Unread items in both tabs, or in one. */
-  unreadCount: async (tab?: InboxTab): Promise<number> =>
-    (
-      await protectedApi.get<{ total: number }>(
-        tab === undefined
-          ? "/notices/count?unread=true"
-          : `/notices/count?unread=true&tab=${tab}`
-      )
-    ).total,
+  /** Unread items in all, and in Alerts. */
+  unreadCounts: (): Promise<InboxCounts> =>
+    protectedApi.get<InboxCounts>("/notices/count?unread=true"),
   markRead: (body: MarkNoticesRead): Promise<{ marked: number }> =>
     protectedApi.post<{ marked: number }>("/notices/read", body),
   markUnread: (body: { ids: string[] }): Promise<{ marked: number }> =>

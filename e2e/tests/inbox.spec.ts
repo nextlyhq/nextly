@@ -57,8 +57,9 @@ async function dashboardSettled(page: Page, theme: Theme = "light") {
 }
 
 /**
- * Twelve unread items, answered for the Inbox's own reads, so the count draws
- * "9+" and the popover has rows of both kinds to scan.
+ * Twelve items for you and two alerts, answered for the Inbox's own reads, so
+ * the count draws "9+", the Alerts tab draws its red count, and the popover
+ * has rows with and without a link, read and unread, to scan.
  */
 async function twelveUnreadItems(page: Page): Promise<void> {
   const at = new Date().toISOString();
@@ -70,16 +71,23 @@ async function twelveUnreadItems(page: Page): Promise<void> {
     createdAt: at,
     readAt: index % 3 === 0 ? at : null,
   }));
+  const alerts = Array.from({ length: 2 }, (_, index) => ({
+    id: `inbox-e2e-alert-${index}`,
+    kind: "jobs.failed",
+    title: `A background job failed (${index + 1})`,
+    subject: { type: "job", id: `j${index}`, link: "/admin", gone: false },
+    createdAt: at,
+    readAt: null,
+  }));
   await page.route("**/admin/api/notices**", async route => {
     try {
       const url = new URL(route.request().url());
       if (url.pathname.endsWith("/notices/count")) {
-        const tab = url.searchParams.get("tab");
-        await route.fulfill({ json: { total: tab === "alerts" ? 0 : 12 } });
+        await route.fulfill({ json: { total: 14, alerts: 2 } });
         return;
       }
       const tab = url.searchParams.get("tab");
-      const shown = tab === "alerts" ? [] : items;
+      const shown = tab === "alerts" ? alerts : items;
       await route.fulfill({
         json: {
           items: shown,
@@ -92,6 +100,26 @@ async function twelveUnreadItems(page: Page): Promise<void> {
   });
 }
 
+/** Waits for the page to come to rest, then holds it to no axe findings. */
+async function expectNoAxeFindings(page: Page): Promise<void> {
+  // Settled first: a color mid-animation is one the page never rests at.
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every(
+        animation =>
+          animation.playState !== "running" ||
+          animation.effect?.getTiming().iterations === Number.POSITIVE_INFINITY
+      )
+  );
+  const { results, findings } = await scanAxe(page);
+  expect(emptyScanReason(results)).toBeNull();
+  expect(
+    findings,
+    `axe reported ${findings.length} violation(s):\n${JSON.stringify(findings, null, 2)}`
+  ).toEqual([]);
+}
+
 for (const theme of ["light", "dark"] as Theme[]) {
   test(`the Inbox button and popover pass axe (${theme})`, async ({ page }) => {
     await twelveUnreadItems(page);
@@ -100,26 +128,21 @@ for (const theme of ["light", "dark"] as Theme[]) {
     await expect(inbox(page)).toHaveAccessibleName("Inbox, 9+ unread");
 
     await inbox(page).click();
-    await expect(page.getByRole("tablist", { name: "Inbox" })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Item 12/ })).toBeVisible();
-
-    // Settled first: a color mid-animation is one the page never rests at.
-    await page.waitForFunction(() =>
-      document
-        .getAnimations()
-        .every(
-          animation =>
-            animation.playState !== "running" ||
-            animation.effect?.getTiming().iterations ===
-              Number.POSITIVE_INFINITY
-        )
+    const tabs = page.getByRole("tablist", { name: "Inbox" });
+    await expect(tabs).toBeVisible();
+    // It opens on Alerts, which has unread items: its red count and its
+    // linked rows are scanned there, then For you's rows without a link.
+    await expect(tabs.getByRole("tab", { selected: true })).toHaveText(
+      "Alerts 2 unread"
     );
-    const { results, findings } = await scanAxe(page);
-    expect(emptyScanReason(results)).toBeNull();
-    expect(
-      findings,
-      `axe reported ${findings.length} violation(s):\n${JSON.stringify(findings, null, 2)}`
-    ).toEqual([]);
+    await expect(
+      page.getByRole("link", { name: /A background job failed \(2\)/ })
+    ).toBeVisible();
+    await expectNoAxeFindings(page);
+
+    await tabs.getByRole("tab", { name: /For you/ }).click();
+    await expect(page.getByRole("button", { name: /Item 12/ })).toBeVisible();
+    await expectNoAxeFindings(page);
   });
 }
 

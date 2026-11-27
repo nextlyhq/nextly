@@ -20,11 +20,12 @@ import { useState } from "react";
 import { cn } from "@admin/lib/utils";
 
 import { InboxRow } from "./InboxRow";
-import type { InboxTab } from "./notices-api";
+import type { InboxCounts, InboxTab } from "./notices-api";
 import {
+  tabUnread,
   useMarkNoticesRead,
   useNoticeList,
-  useTabUnreadCount,
+  useUnreadNoticeCounts,
 } from "./useNotices";
 
 /** Each tab's name, and what it says while it holds nothing. */
@@ -39,17 +40,17 @@ const TABS: ReadonlyArray<{ tab: InboxTab; label: string; empty: string }> = [
 
 /**
  * The tab the Inbox opens on: Alerts while it has unread items, For you
- * otherwise; `null` until this opening's Alerts count is in, so a count kept
- * from an earlier opening never decides it. An Alerts count that could not be
- * read opens For you, which holds the person's own items.
+ * otherwise; `null` until this opening's counts are in, so counts kept from
+ * before it opened never decide it. Counts that could not be read open For
+ * you, which holds the person's own items.
  */
-function openingTab(alerts: {
+function openingTab(counts: {
   isPending: boolean;
   isFetching: boolean;
-  data?: number;
+  data?: InboxCounts;
 }): InboxTab | null {
-  if (alerts.isPending || alerts.isFetching) return null;
-  return (alerts.data ?? 0) > 0 ? "alerts" : "for-you";
+  if (counts.isPending || counts.isFetching) return null;
+  return tabUnread(counts.data, "alerts") > 0 ? "alerts" : "for-you";
 }
 
 function isInboxTab(value: string): value is InboxTab {
@@ -65,18 +66,16 @@ export function InboxPopover({
   /** Called as an item's link is followed, so the popover can close. */
   onFollowLink: () => void;
 }): JSX.Element {
-  const counts: Record<InboxTab, ReturnType<typeof useTabUnreadCount>> = {
-    "for-you": useTabUnreadCount("for-you", true),
-    alerts: useTabUnreadCount("alerts", true),
-  };
+  // The same counts the Inbox button draws, asked again as the popover opens.
+  const counts = useUnreadNoticeCounts({ freshOnMount: true });
   const markRead = useMarkNoticesRead();
   const [chosen, setChosen] = useState<InboxTab | null>(null);
-  // Decided once, the first time the Alerts count is in, and kept: a count
+  // Decided once, the first time this opening's counts are in, and kept: a count
   // that falls as items are read must not move the person off the tab.
-  const opening = openingTab(counts.alerts);
+  const opening = openingTab(counts);
   if (chosen === null && opening !== null) setChosen(opening);
   const shown = chosen ?? opening;
-  const shownUnread = shown === null ? 0 : (counts[shown].data ?? 0);
+  const shownUnread = shown === null ? 0 : tabUnread(counts.data, shown);
   // Unavailable rather than disabled, so a keyboard user who has just marked
   // everything read keeps focus here instead of losing it to the page.
   const nothingToMark =
@@ -127,7 +126,8 @@ export function InboxPopover({
                 value={tab}
                 className="inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary data-[state=active]:bg-muted data-[state=active]:text-foreground"
               >
-                {label} <TabCount tab={tab} count={counts[tab].data ?? 0} />
+                {label}{" "}
+                <TabCount tab={tab} count={tabUnread(counts.data, tab)} />
               </Trigger>
             ))}
           </List>

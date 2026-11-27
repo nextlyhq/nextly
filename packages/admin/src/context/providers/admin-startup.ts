@@ -3,9 +3,10 @@
  * fresh tab makes before its own data, each spelled exactly as the code that
  * makes it spells it, so each takes its answer from the startup request.
  *
- * Counts are left out: they are polled on their own schedule, and a count is the kind of slow read a startup request must not
- * wait on. A plugin page adds the reads it declares it makes as it opens,
- * where it is the page a tab opens on (`startupPathsForPage`).
+ * Counts are left out: they are polled on their own schedule, and a count is
+ * the kind of slow read a startup request must not wait on. A plugin page
+ * adds the reads it declares it makes as it opens, where it is the page a tab
+ * opens on (`startupPathsForPage`).
  *
  * @module context/providers/admin-startup
  */

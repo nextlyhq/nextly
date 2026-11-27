@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * The signed-in person's Inbox: the unread count on its button, each tab's
- * unread count and newest page while it is open, and marking items read or
- * unread, which refreshes them all. Read state is the server's alone: nothing
+ * The signed-in person's Inbox: the unread counts its button and tabs draw,
+ * each tab's newest page while it is open, and marking items read or unread,
+ * which refreshes them all. Read state is the server's alone: nothing
  * here is kept in the browser beyond React Query's own cache.
  *
  * @module components/features/notifications/useNotices
@@ -20,6 +20,7 @@ import { toast } from "@admin/components/ui";
 
 import {
   noticesApi,
+  type InboxCounts,
   type InboxTab,
   type MarkNoticesRead,
   type NoticeListResponse,
@@ -46,40 +47,38 @@ export function useNoticeList(
 }
 
 /**
- * How many items are unread, for the Inbox button: one request, asked again
- * when the admin's browser tab regains focus and every minute while it is
- * visible, so a read in another browser or a new item shows without a reload.
+ * How many items are unread, in all and in Alerts: one request that the Inbox
+ * button and both tab counts read, so they always agree. It is asked again when
+ * the admin's browser tab regains focus and every minute while it is visible,
+ * so a read in another browser or a new item shows without a reload.
+ *
+ * `freshOnMount` asks again as the caller mounts, for the popover: the tab it
+ * opens on is chosen from these counts, so a count kept from before it opened
+ * must not choose it.
  */
-export function useUnreadNoticeCount(): UseQueryResult<number, Error> {
+export function useUnreadNoticeCounts({
+  freshOnMount = false,
+}: { freshOnMount?: boolean } = {}): UseQueryResult<InboxCounts, Error> {
   return useQuery({
     queryKey: [...NOTICES_KEY, "unread"],
-    queryFn: () => noticesApi.unreadCount(),
+    queryFn: () => noticesApi.unreadCounts(),
     staleTime: 10_000,
     refetchInterval: INBOX_REFRESH_MS,
     // The admin turns refetching on focus off by default; the count is the
     // one answer that must be current whenever the person comes back.
     refetchOnWindowFocus: "always",
+    ...(freshOnMount ? { refetchOnMount: "always" as const } : {}),
     retry: 1,
   });
 }
 
-/**
- * One tab's unread count, asked for only while the Inbox is open, and asked
- * again each time it opens: the tab it opens on is chosen from these counts,
- * so a count kept from an earlier opening must not choose it.
- */
-export function useTabUnreadCount(
-  tab: InboxTab,
-  enabled: boolean
-): UseQueryResult<number, Error> {
-  return useQuery({
-    queryKey: [...NOTICES_KEY, "unread", tab],
-    queryFn: () => noticesApi.unreadCount(tab),
-    enabled,
-    staleTime: 10_000,
-    refetchOnMount: "always",
-    retry: 1,
-  });
+/** A tab's share of the counts: Alerts is counted, For you is the rest. */
+export function tabUnread(
+  counts: InboxCounts | undefined,
+  tab: InboxTab
+): number {
+  if (counts === undefined) return 0;
+  return tab === "alerts" ? counts.alerts : counts.total - counts.alerts;
 }
 
 /** What a mark that did not reach the server says, so it never fails unseen. */

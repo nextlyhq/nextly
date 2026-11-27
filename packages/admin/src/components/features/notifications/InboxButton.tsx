@@ -20,7 +20,7 @@ import { useId, useState } from "react";
 import { cn } from "@admin/lib/utils";
 
 import { InboxPopover } from "./InboxPopover";
-import { useUnreadNoticeCount } from "./useNotices";
+import { useUnreadNoticeCounts } from "./useNotices";
 
 export interface InboxButtonProps {
   className?: string;
@@ -36,7 +36,7 @@ export function InboxButton({
 }: InboxButtonProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const headingId = useId();
-  const unread = useUnreadNoticeCount().data ?? 0;
+  const unread = useUnreadNoticeCounts().data?.total ?? 0;
   // What the badge draws, and what the button's name says: a person using
   // speech input says the drawn count to press it, so the name holds it,
   // outside parentheses, which Label in Name sets aside.

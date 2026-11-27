@@ -19,6 +19,7 @@ import {
 } from "@nextlyhq/ui";
 import { MoreHorizontal } from "lucide-react";
 import type { JSX, ReactNode } from "react";
+import { useRef } from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { formatRelativeTime } from "@admin/lib/dashboard";
@@ -44,6 +45,11 @@ export function InboxRow({
   const markRead = useMarkNoticesRead();
   const markUnread = useMarkNoticesUnread();
   const link = notice.subject.gone ? null : notice.subject.link;
+  const rowRef = useRef<HTMLDivElement>(null);
+  // Set as "Mark as unread" is chosen. The menu would hand focus back to its
+  // own button, which goes once the row is unread, so focus would fall to the
+  // page; it goes to the row's opening control instead, which stays.
+  const focusRowOnClose = useRef(false);
 
   // Opening is the one act that reads an item; an item already read is left
   // with the time it was first read.
@@ -54,10 +60,14 @@ export function InboxRow({
   const content = <InboxRowContent notice={notice} unread={unread} />;
 
   return (
-    <div className="group flex items-start border-b border-border last:border-b-0">
+    <div
+      ref={rowRef}
+      className="group flex items-start border-b border-border last:border-b-0"
+    >
       {link ? (
         <Link
           href={link}
+          data-inbox-open=""
           className={OPEN_CLASS}
           onClick={() => {
             markOpened();
@@ -72,7 +82,12 @@ export function InboxRow({
           {content}
         </Link>
       ) : (
-        <button type="button" className={OPEN_CLASS} onClick={markOpened}>
+        <button
+          type="button"
+          data-inbox-open=""
+          className={OPEN_CLASS}
+          onClick={markOpened}
+        >
           {content}
         </button>
       )}
@@ -90,9 +105,23 @@ export function InboxRow({
           {/* Above the Inbox popover it opens from: a menu sits at z-50 and a
               popover at z-[100], so without this it would open underneath
               the rows it belongs to and could not be clicked. */}
-          <DropdownMenuContent align="end" className="z-[110]">
+          <DropdownMenuContent
+            align="end"
+            className="z-[110]"
+            onCloseAutoFocus={event => {
+              if (!focusRowOnClose.current) return;
+              focusRowOnClose.current = false;
+              event.preventDefault();
+              rowRef.current
+                ?.querySelector<HTMLElement>("[data-inbox-open]")
+                ?.focus();
+            }}
+          >
             <DropdownMenuItem
-              onSelect={() => markUnread.mutate({ ids: [notice.id] })}
+              onSelect={() => {
+                focusRowOnClose.current = true;
+                markUnread.mutate({ ids: [notice.id] });
+              }}
             >
               Mark as unread
             </DropdownMenuItem>

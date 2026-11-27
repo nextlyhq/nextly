@@ -70,8 +70,9 @@ export function RailAccount({
 }
 
 /**
- * The Inbox is the one item that waits on the reader's permissions, so they are
- * read only where it is offered; elsewhere nothing would use the answer.
+ * Where the Inbox is offered, the foot is drawn only once the reader's
+ * permissions are in, as it was for the bell, which read them. The Inbox
+ * itself reads none; the wait keeps the foot settling as it did.
  */
 function AwaitingPermissions({
   className,

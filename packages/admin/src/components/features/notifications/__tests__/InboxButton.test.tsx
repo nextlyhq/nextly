@@ -85,7 +85,8 @@ vi.mock("@admin/lib/api/protectedApi", () => {
         server.asked.push(`GET ${path}`);
         const url = new URL(path, "https://admin.test");
         if (url.pathname === "/notices/count") {
-          return { total: unread(url.searchParams.get("tab")) };
+          // One answer for the button and both tabs, as the route gives it.
+          return { total: unread(null), alerts: unread("alerts") };
         }
         if (url.pathname === "/notices") {
           const tab = url.searchParams.get("tab");
@@ -243,6 +244,13 @@ describe("the Inbox button", () => {
 
     await openInbox();
     await screen.findByText("Spring launch was assigned to you");
+    // Opening asks the same count once more, for both tabs at once, and the
+    // shown tab's items.
+    expect(server.asked).toEqual([
+      "GET /notices/count?unread=true",
+      "GET /notices/count?unread=true",
+      "GET /notices?tab=for-you&page=1&limit=20",
+    ]);
     expect(server.asked.some(request => request.includes("journal"))).toBe(
       false
     );
@@ -461,6 +469,50 @@ describe("the Inbox popover", () => {
     await waitFor(() => expect(unreadOnServer()).toBe(1));
     expect(server.asked).toContain("POST /notices/unread");
     expect(await button("Inbox, 1 unread")).toBeInTheDocument();
+  });
+
+  it("puts focus on the row after Mark as unread, since the menu's button goes with the read state", async () => {
+    const user = userEvent.setup();
+    fill("for-you", [item("n1", "Read before", { read: true })]);
+    renderInbox();
+    await openInbox();
+    const more = await screen.findByRole("button", {
+      name: "More actions for Read before",
+    });
+    more.focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("menuitem", { name: "Mark as unread" });
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(unreadOnServer()).toBe(1));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "More actions for Read before" })
+      ).toBeNull()
+    );
+    expect(screen.getByRole("link", { name: /Read before/ })).toHaveFocus();
+    expect(screen.getByRole("tablist", { name: "Inbox" })).toBeInTheDocument();
+  });
+
+  it("keeps the tab counts with the button's while it is open, when the admin regains focus", async () => {
+    fill("for-you", [item("n1", "One"), item("n2", "Two")]);
+    renderInbox();
+    const tabs = await openInbox();
+    await waitFor(() =>
+      expect(
+        within(tabs).getByRole("tab", { name: /For you/ })
+      ).toHaveTextContent("For you 2 unread")
+    );
+
+    // Read in another browser while this Inbox stays open.
+    server.items["for-you"][0]!.readAt = new Date().toISOString();
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await button("Inbox, 1 unread");
+    expect(
+      within(tabs).getByRole("tab", { name: /For you/ })
+    ).toHaveTextContent("For you 1 unread");
   });
 
   it("marks every unread item in the tab shown read, and none in the other", async () => {
