@@ -570,7 +570,7 @@ describe("Publish without review", () => {
     const user = userEvent.setup();
     const unapproved = refusal(
       [{ path: "es", code: "NOT_APPROVED", message: "Not approved." }],
-      { _rev: "9.es:4", marks: { languages: { es: "m" }, rest: "r" } }
+      { _rev: "9.es:4", marks: { languages: { es: "m" }, shared: "s" } }
     );
     api.publishParts.mockImplementation(
       (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>

@@ -55,9 +55,12 @@ export function describedPastReview(
 /** Whether `value` is a description's marks, as the server spells them. */
 function isMarks(value: unknown): value is PartMarks {
   if (typeof value !== "object" || value === null) return false;
-  const { languages, rest } = value as { languages?: unknown; rest?: unknown };
+  const { languages, shared } = value as {
+    languages?: unknown;
+    shared?: unknown;
+  };
   return (
-    typeof rest === "string" &&
+    typeof shared === "string" &&
     typeof languages === "object" &&
     languages !== null
   );

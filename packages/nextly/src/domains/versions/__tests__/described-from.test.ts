@@ -49,31 +49,34 @@ describe("what a description was made from", () => {
     ]) {
       const moved = describedFrom(now, SPANISH).marks;
       expect(moved.languages.es).not.toBe(marks.languages.es);
-      expect(moved.rest).toBe(marks.rest);
+      expect(moved.shared).toBe(marks.shared);
     }
   });
 
-  it("marks everything not described together, and leaves the rest alone", () => {
+  it("marks nothing of a language not described, which its caller may not read", () => {
     const { marks } = describedFrom(STANDING, SPANISH);
     for (const now of [
       { ...STANDING, languages: { ...STANDING.languages, fr: 1 } },
       rewritten("fr-draft"),
-      rewritten("shared-draft"),
+      {
+        ...STANDING,
+        drafts: [
+          ...STANDING.drafts,
+          { id: "de-draft", locale: "de", revision: 1 },
+        ],
+      },
     ]) {
-      const moved = describedFrom(now, SPANISH).marks;
-      expect(moved.languages).toEqual(marks.languages);
-      expect(moved.rest).not.toBe(marks.rest);
+      expect(describedFrom(now, SPANISH).marks).toEqual(marks);
     }
   });
 
-  it("marks the shared part by its own draft, where it is described", () => {
-    const parts = { languages: ["es"], shared: true };
-    const { marks } = describedFrom(STANDING, parts);
-    const moved = describedFrom(rewritten("shared-draft"), parts).marks;
-    expect(moved.shared).not.toBe(marks.shared);
-    expect(moved.rest).toBe(marks.rest);
-    expect(moved.languages).toEqual(marks.languages);
-    expect(describedFrom(STANDING, SPANISH).marks).not.toHaveProperty("shared");
+  it("marks the shared part by its own draft, described or not", () => {
+    for (const parts of [SPANISH, { languages: ["es"], shared: true }]) {
+      const { marks } = describedFrom(STANDING, parts);
+      const moved = describedFrom(rewritten("shared-draft"), parts).marks;
+      expect(moved.shared).not.toBe(marks.shared);
+      expect(moved.languages).toEqual(marks.languages);
+    }
   });
 
   it("marks no part for a change to the document's own row, which the version names", () => {
@@ -94,7 +97,7 @@ describe("what a description was made from", () => {
       parts
     );
     expect(moved.marks.shared).not.toBe(before.marks.shared);
-    expect(moved.marks.rest).toBe(before.marks.rest);
+    expect(moved.marks.languages).toEqual({});
   });
 
   it("reads the same however the drafts were read", () => {

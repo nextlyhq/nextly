@@ -12,7 +12,6 @@ import { changedSinceDescribed, sameMarks } from "../described-changes";
 const BEFORE: PartMarks = {
   languages: { en: "e1", es: "s1" },
   shared: "h1",
-  rest: "r1",
 };
 const labelOf = (code: string) =>
   ({ en: "English", es: "Spanish" })[code] ?? code;
@@ -38,9 +37,9 @@ describe("what changed since the parts were described", () => {
   });
 
   it("names every chosen part that changed, and none that did not", () => {
-    expect(
-      said({ languages: { en: "e2", es: "s2" }, shared: "h2", rest: "r2" })
-    ).toMatch(/^English, Spanish and the shared fields changed since/);
+    expect(said({ languages: { en: "e2", es: "s2" }, shared: "h2" })).toMatch(
+      /^English, Spanish and the shared fields changed since/
+    );
     expect(said({ languages: { en: "e2", es: "s2" } })).toMatch(
       /^English and Spanish changed since/
     );
@@ -50,27 +49,22 @@ describe("what changed since the parts were described", () => {
     expect(said({ languages: { en: "e1" } })).toMatch(/^Spanish changed since/);
   });
 
-  it("says it was something else where no chosen part changed", () => {
-    expect(said({ rest: "r2" })).toMatch(
-      /^Something else in this document changed since/
-    );
+  it("names the shared fields though they were not chosen", () => {
+    expect(said({ shared: "h2" })).toMatch(/^The shared fields changed since/);
   });
 
-  it("says what no part's mark covers where nothing marked changed", () => {
-    expect(said({})).toMatch(/^The shared fields or a component changed since/);
+  it("says it was something else where nothing marked changed", () => {
+    expect(said({})).toMatch(/^Something else in this document changed since/);
   });
 
   it("says to unpublish again where that was refused", () => {
-    expect(said({ rest: "r2" }, BEFORE, "unpublish")).toMatch(
-      /then unpublish again\.$/
-    );
+    expect(said({}, BEFORE, "unpublish")).toMatch(/then unpublish again\.$/);
   });
 
   it("tells marks that differ in any part, or in the parts described", () => {
     expect(sameMarks(BEFORE, { ...BEFORE })).toBe(true);
     for (const now of [
-      { ...BEFORE, rest: "r2" },
-      { ...BEFORE, shared: undefined },
+      { ...BEFORE, shared: "h2" },
       { ...BEFORE, languages: { en: "e1" } },
       { ...BEFORE, languages: { ...BEFORE.languages, fr: "f1" } },
     ]) {
