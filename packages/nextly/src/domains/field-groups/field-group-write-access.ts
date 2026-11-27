@@ -15,13 +15,17 @@ import type { FieldConfig } from "../../collections/fields/types";
 import {
   keepDeniedAtStored,
   storedProvenance,
+  type UnreadValues,
 } from "../../shared/lib/denied-change";
 import { detachData } from "../../shared/lib/detach";
 import {
   anyFieldGroupHasAccessRule,
+  applyFieldReadAccess,
   applyFieldWriteAccess,
   callerAccessGrants,
   getFieldFunctions,
+  hidesInsideContainer,
+  type EntityKind,
   type FieldFunctions,
 } from "../../shared/lib/field-level-registry";
 import { resolveComponentFieldMap } from "../versions/tag-component-types";
@@ -35,6 +39,7 @@ import {
   type FieldGroupFieldsBySlug,
 } from "./field-group-instances";
 import {
+  liveFieldGroupReadPass,
   lookupOncePerFieldGroup,
   type FieldGroupFieldsSource,
 } from "./live-read-access";
@@ -70,6 +75,8 @@ export async function keepDeniedAtStoredOnUpdate(params: {
    * judged in every language it removes; `stored` is the write's own.
    */
   storedIn?: StoredFieldGroupsInLanguages;
+  /** What the writer may not read of the document they save; see {@link unreadBy}. */
+  unread?: UnreadValues;
 }): Promise<{
   storedPaths: ReadonlySet<string>;
   storedValues: ReadonlyMap<string, unknown>;
@@ -109,6 +116,7 @@ export async function keepDeniedAtStoredOnUpdate(params: {
         stored: params.stored,
       });
     },
+    unread: params.unread,
   });
   // The paths that now hold the row's own value, for the whole-number rule
   // to leave to the row: the write is judged after this, and a legacy
@@ -124,6 +132,74 @@ export async function keepDeniedAtStoredOnUpdate(params: {
   for (const key of Object.keys(params.data)) delete params.data[key];
   Object.assign(params.data, kept);
   return { storedPaths, storedValues };
+}
+
+/**
+ * Whether a save of this entity can carry a container back without what its
+ * writer may not read there: some field inside one, or inside a field group
+ * the entity reaches, declares a read rule. Asked before anything is read to
+ * judge it, so an installation that hides nothing inside a container, and
+ * trusted code, read nothing more.
+ */
+export function mayHideInside(
+  entity: { kind: EntityKind; slug: string },
+  fields: readonly FieldConfig[],
+  overrideAccess: boolean | undefined
+): boolean {
+  if (overrideAccess === true) return false;
+  return (
+    hidesInsideContainer(entity.kind, entity.slug) ||
+    (anyFieldGroupHasAccessRule("read") && reachesFieldGroup(fields))
+  );
+}
+
+/**
+ * What a writer may not read of the document they save: `stored`, the document
+ * as its editors are shown it, judged by the entity's own read rules and those
+ * of the field groups it holds, as a read of it is. `id` is the document's, as
+ * stored. Undefined where nothing inside it can be hidden ({@link mayHideInside}).
+ */
+export async function unreadBy(params: {
+  entity: { kind: EntityKind; slug: string };
+  id: string | undefined;
+  stored: () => Promise<Record<string, unknown>>;
+  fields: readonly FieldConfig[];
+  source: FieldGroupFieldsSource | undefined;
+  access: FieldGroupWriteAccess;
+  executor?: unknown;
+}): Promise<UnreadValues | undefined> {
+  const { entity, id, fields, source, executor } = params;
+  if (!mayHideInside(entity, fields, params.access.overrideAccess)) {
+    return undefined;
+  }
+  const access = withGrants(params.access, executor);
+  const grants = access.grants ?? callerAccessGrants(access.user);
+  const readFieldGroups = await liveFieldGroupReadPass(
+    fields,
+    source && {
+      getComponentFields: slug => source.getComponentFields(slug, executor),
+    }
+  );
+  return {
+    stored: await params.stored(),
+    applyRules: async document => {
+      // The id as stored, never one the update carries.
+      if (id !== undefined) document.id = id;
+      await applyFieldReadAccess({
+        ...entity,
+        entry: document,
+        user: access.user,
+        authenticatedScope: access.authenticatedScope,
+        overrideAccess: false,
+        grants,
+      });
+      await readFieldGroups?.(document, {
+        user: access.user,
+        authenticatedScope: access.authenticatedScope,
+        grants,
+      });
+    },
+  };
 }
 
 /**

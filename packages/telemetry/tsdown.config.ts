@@ -3,8 +3,10 @@ import { defineConfig } from "tsdown";
 // Bundles every dep (posthog-node, conf, env-paths, picocolors) into the
 // output so consumers (create-nextly-app, nextly) don't need to add them
 // as runtime dependencies.
+// `src/ci.ts` is its own entry (`@nextlyhq/telemetry/ci`) so a caller that
+// only asks "is this CI?" loads that check and not the client.
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: ["src/index.ts", "src/ci.ts"],
   format: ["esm"],
   // Declarations without a type check: `check-types` is the type check.
   // oxc writes the declarations from the source's own annotations

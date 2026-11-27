@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
+    },
+    "./ci": {
+      "types": "./dist/ci.d.ts",
+      "import": "./dist/ci.mjs"
     }
   },
   "files": [
