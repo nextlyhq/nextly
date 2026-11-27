@@ -1384,7 +1384,8 @@ describe("small blocks keep their own label and color under the bands", () => {
    * Everything else keeps jsdom's answer.
    */
   const REAL_RECT = Element.prototype.getBoundingClientRect;
-  function stubOverlayBoxes() {
+  /** `painted` moves every box on screen, as a zoom or a scroll does. */
+  function stubOverlayBoxes(painted: { y: number } = { y: 0 }) {
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
       function (this: Element) {
         if (this instanceof HTMLElement) {
@@ -1392,12 +1393,12 @@ describe("small blocks keep their own label and color under the bands", () => {
             const band = this.parentElement;
             const left = parseFloat(band?.style.left ?? "0") || 0;
             const top = parseFloat(band?.style.top ?? "0") || 0;
-            return new DOMRect(left, top, 24, 16);
+            return new DOMRect(left, top + painted.y, 24, 16);
           }
           if (this.classList.contains("nx-spacing-overlay__band")) {
             return new DOMRect(
               parseFloat(this.style.left) || 0,
-              parseFloat(this.style.top) || 0,
+              (parseFloat(this.style.top) || 0) + painted.y,
               parseFloat(this.style.width) || 0,
               parseFloat(this.style.height) || 0
             );
@@ -1483,6 +1484,35 @@ describe("small blocks keep their own label and color under the bands", () => {
     const after = band(container, "margin", "top");
     expect(after.hasAttribute("data-tight")).toBe(true);
     expect(after.hasAttribute("data-pointed")).toBe(false);
+  });
+
+  it("lets go of a band painted away from a still pointer, as a zoom does", () => {
+    // The band's own place in the layer is unchanged; only where it is
+    // painted moves, so nothing the overlay measures changes with it.
+    stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
+    const painted = { y: 0 };
+    stubOverlayBoxes(painted);
+    const editor = editorOf("a");
+    const view = mount(editor);
+    const box = band(view.container, "margin", "top").getBoundingClientRect();
+    pointAt(box.x + box.width / 2, box.y + box.height / 2);
+    expect(
+      band(view.container, "margin", "top").hasAttribute("data-pointed")
+    ).toBe(true);
+
+    painted.y = 300;
+    view.rerender(
+      <Canvas
+        document={editor.document}
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId={editor.selectedId}
+        selectedIds={editor.selection.ids}
+        overlay={<SpacingOverlay editor={editor} />}
+      />
+    );
+    expect(
+      band(view.container, "margin", "top").hasAttribute("data-pointed")
+    ).toBe(false);
   });
 
   it("hides that number again when the pointer leaves the editor from over its band", () => {

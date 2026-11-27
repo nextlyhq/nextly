@@ -27,7 +27,7 @@ import { useHoveredBlock, useHoveredBlockSetter } from "./hovered-block";
  * The block under a point of the editor's document, looking through the
  * toolbar and the rest of the chrome drawn over the canvas, or `null`.
  */
-export function blockBeneath(
+function blockBeneath(
   bar: HTMLElement,
   point: { readonly x: number; readonly y: number }
 ): string | null {

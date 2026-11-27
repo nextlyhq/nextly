@@ -83,6 +83,7 @@ import {
   canvasContentRect,
   canvasPaintedScale,
   clippedByAncestor,
+  framePointInHost,
   hasScrollbarGutter,
   layoutFragments,
   overlaySpaceOf,
@@ -639,14 +640,13 @@ function tightBandsIn(layer: HTMLElement): ReadonlySet<string> {
  * Hit-tested against the bands' own boxes, so it holds at any zoom.
  *
  * A press counts as pointing too: a tap on a touch screen sends no move. And
- * bands redrawn under a still pointer (a scroll, an edit, a reflow) are
- * hit-tested again at the last point, since no move follows to do it.
+ * bands drawn again under a still pointer (a scroll, a zoom, an edit, a
+ * reflow) are hit-tested again at the last point, since no move follows.
  */
 function usePointedBand(
   layer: React.RefObject<HTMLDivElement | null>,
   active: boolean,
-  frameKey: unknown,
-  geometry: unknown
+  frameKey: unknown
 ): string | null {
   const [pointed, setPointed] = React.useState<string | null>(null);
   const last = React.useRef<{ x: number; y: number } | null>(null);
@@ -687,14 +687,15 @@ function usePointedBand(
     };
     const onChrome = (event: PointerEvent): void =>
       at(event.clientX, event.clientY);
+    // Carried out of the frame by the one mapping every frame point takes:
+    // its border, its padding and its painted scale.
     const onFrame = (event: PointerEvent): void => {
       if (frame === null) return;
-      const box = frame.getBoundingClientRect();
-      const scale = frame.offsetWidth > 0 ? box.width / frame.offsetWidth : 1;
-      at(
-        box.left + (frame.clientLeft + event.clientX) * scale,
-        box.top + (frame.clientTop + event.clientY) * scale
-      );
+      const host = framePointInHost(frame, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+      at(host.x, host.y);
     };
     /*
      * A pointer leaving the window (or the frame) from over a band sends no
@@ -725,10 +726,13 @@ function usePointedBand(
       }
     };
   }, [layer, active, frameKey, hitTest]);
-  // After the redrawn bands are in the page, and before they are painted.
+  // After every drawing, before it is painted: a band can move under a still
+  // pointer without any measurement of it changing (a zoom scales the layer,
+  // a scroll moves it), and the test is a few box reads that set state only
+  // when a different band is under the point.
   React.useLayoutEffect(() => {
     if (active) hitTest();
-  }, [geometry, active, hitTest]);
+  });
   return pointed;
 }
 
@@ -1112,8 +1116,7 @@ export function SpacingOverlay({
   const pointed = usePointedBand(
     layer,
     !hidden && bands.length > 0,
-    canvasFrame,
-    bands
+    canvasFrame
   );
 
   return (

@@ -22,8 +22,8 @@ const CHROME = chromeStylesheetSource(url =>
 );
 
 /** Every rule as its selector and body, with comments taken out. */
-function rules(): { selector: string; body: string }[] {
-  const sheet = CHROME.replace(/\/\*[\s\S]*?\*\//g, "");
+function rules(source: string = CHROME): { selector: string; body: string }[] {
+  const sheet = source.replace(/\/\*[\s\S]*?\*\//g, "");
   return [...sheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(match => ({
     selector: (match[1] ?? "").trim(),
     body: match[2] ?? "",
@@ -31,8 +31,10 @@ function rules(): { selector: string; body: string }[] {
 }
 
 /** The rules that set `pointer-events` on the toolbar or anything in it. */
-function pointerRules(): { selector: string; body: string }[] {
-  return rules().filter(
+function pointerRules(
+  source: string = CHROME
+): { selector: string; body: string }[] {
+  return rules(source).filter(
     rule =>
       rule.selector.includes(".nx-block-toolbar") &&
       /pointer-events:/.test(rule.body)
@@ -60,14 +62,29 @@ describe("the block toolbar and the pointer", () => {
   });
 
   it("never hands the pointer back to a button on its own", () => {
-    // A child rule setting `auto` would undo the inherited `none`: a press
-    // over a covered block would land on a button the author cannot see.
-    const children = pointerRules().filter(
-      rule =>
-        rule.selector.includes(".nx-block-toolbar ") &&
-        /pointer-events:\s*auto/.test(rule.body)
-    );
-    expect(children).toEqual([]);
+    // A rule for anything in the bar setting `auto` would undo the inherited
+    // `none`: a press over a covered block would land on a button the author
+    // cannot see. Anything but the bar's own rules: its buttons by class or
+    // by element, and whatever else it holds.
+    const handingBack = (source: string) =>
+      pointerRules(source).filter(
+        rule =>
+          rule.selector
+            .split(",")
+            .map(part => part.trim())
+            .some(part =>
+              /\.nx-block-toolbar(?:__|[^\w-[]|\[[^\]]*\]\s)/.test(part)
+            ) && /pointer-events:\s*auto/.test(rule.body)
+      );
+    expect(handingBack(CHROME)).toEqual([]);
+    // The control: the rule that would undo it is caught, by class and by
+    // element.
+    for (const added of [
+      ".nx-block-toolbar__button { pointer-events: auto; }",
+      ".nx-block-toolbar button { pointer-events: auto; }",
+    ]) {
+      expect(handingBack(`${CHROME}\n${added}`), added).toHaveLength(1);
+    }
   });
 
   it("keeps the pointer while it is only faded, so its buttons can be reached", () => {

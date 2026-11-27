@@ -459,9 +459,12 @@
  * A block that holds no blocks (a Button, a Heading) gets its bands as
  * outlines with no fill, so a fill never tints the block's own color: a yellow
  * Button still looks yellow while selected. The outline keeps the band's hue,
- * from the same tokens the fills mix. Containers keep the fills above.
+ * from the same tokens the fills mix. Containers keep the fills above, and a
+ * negative margin keeps its hatch: it is drawn inside the block, and the hatch
+ * is what says the space is pulled rather than given.
  */
-.nx-spacing-overlay[data-outlines] .nx-spacing-overlay__band::before {
+.nx-spacing-overlay[data-outlines]
+  .nx-spacing-overlay__band:not([data-negative])::before {
   background-color: transparent;
   background-image: none;
   box-shadow: inset 0 0 0 1px

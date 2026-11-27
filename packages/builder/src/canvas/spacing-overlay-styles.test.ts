@@ -43,12 +43,32 @@ describe("the spacing overlay over a small block", () => {
 
   it("draws the bands of a block that holds no blocks as outlines, with no fill", () => {
     const body = ruleExactly(
-      ".nx-spacing-overlay[data-outlines] .nx-spacing-overlay__band::before"
+      ".nx-spacing-overlay[data-outlines] .nx-spacing-overlay__band:not([data-negative])::before"
     );
     expect(body).toMatch(/background-color:\s*transparent/);
     expect(body).toMatch(/background-image:\s*none/);
     // An outline in the band's own hue, from the overlay's existing tokens.
     expect(body).toMatch(/box-shadow:\s*inset 0 0 0 1px/);
     expect(body).not.toMatch(/#[\da-f]{3,8}\b|\brgba?\(/i);
+  });
+
+  it("keeps a negative margin hatched under outlines, so it still reads as pulled space", () => {
+    // No rule for outlined bands may take a negative band's hatch away.
+    const sheet = CHROME.replace(/\/\*[\s\S]*?\*\//g, "");
+    let outlining = 0;
+    for (const match of sheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selector = (match[1] ?? "").replace(/\s+/g, " ").trim();
+      if (!selector.includes("[data-outlines]")) continue;
+      if (!/background-image:\s*none/.test(match[2] ?? "")) continue;
+      outlining += 1;
+      expect(selector).toContain(":not([data-negative])");
+    }
+    // The control: the outline rule was found and judged at all.
+    expect(outlining).toBeGreaterThan(0);
+    expect(
+      ruleExactly(
+        '.nx-spacing-overlay__band[data-box="margin"][data-negative]::before'
+      )
+    ).toMatch(/background-image:\s*repeating-linear-gradient/);
   });
 });
