@@ -12,7 +12,7 @@
 // fallow-ignore-file code-duplication
 import { mysqlTable, varchar, datetime, json } from "drizzle-orm/mysql-core";
 
-import { NOTICES_INDEXES, mysqlIndexes } from "../_internal/core-indexes";
+import { NOTICES_INDEXES, mysqlIndexes } from "../_internal/core-indexes-mysql";
 import { users } from "../users/mysql";
 
 import { NOTICES_TABLE } from "./table-name";

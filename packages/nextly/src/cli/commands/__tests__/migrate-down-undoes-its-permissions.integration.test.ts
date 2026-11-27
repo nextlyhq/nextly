@@ -41,7 +41,13 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database";
-import { defineCollection, defineConfig, text } from "../../../config";
+import {
+  defineCollection,
+  defineConfig,
+  defineFieldGroup,
+  defineSingle,
+  text,
+} from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { NextlyError } from "../../../errors";
@@ -53,6 +59,7 @@ import {
   getConfiguredTestDialects,
   type TestDialect,
 } from "../../../plugins/test-nextly";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import type { mergeSetupResultIntoConfig as MergeSetupResultIntoConfig } from "../../utils/config-loader";
@@ -133,6 +140,30 @@ function eventsPlugin(renameMap?: Record<string, string>): PluginDefinition {
       ],
     },
     // As a host's `rename` leaves the definition.
+    ...(renameMap === undefined ? {} : { renameMap }),
+  });
+}
+
+/** A plugin contributing the Single `mdp-settings` and the field group `mdp-hero`, renamed by `renameMap`. */
+function shopPlugin(renameMap?: Record<string, string>): PluginDefinition {
+  return definePlugin({
+    name: "@test/mdp-shop",
+    version: "1.0.0",
+    nextly: "*",
+    contributes: {
+      singles: [
+        defineSingle({
+          slug: "mdp-settings",
+          fields: [text({ name: "brand" })],
+        }),
+      ],
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "mdp-hero",
+          fields: [text({ name: "heading" })],
+        }),
+      ],
+    },
     ...(renameMap === undefined ? {} : { renameMap }),
   });
 }
@@ -349,11 +380,13 @@ describe.each(getConfiguredTestDialects())(
       });
     }
 
-    /** Each collection's recorded owner, by slug. */
-    async function owners(): Promise<Record<string, string>> {
+    /** Each recorded owner in a registry, the collections' where none is named, by slug. */
+    async function owners(
+      registry = "dynamic_collections"
+    ): Promise<Record<string, string>> {
       return on(async adapter => {
         const rows = await adapter.executeQuery<Record<string, unknown>>(
-          `SELECT ${q}slug${q} AS slug, ${q}source${q} AS source FROM ${q}dynamic_collections${q}`
+          `SELECT ${q}slug${q} AS slug, ${q}source${q} AS source FROM ${q}${registry}${q}`
         );
         return Object.fromEntries(
           rows.map(row => [String(row.slug), String(row.source)])
@@ -404,6 +437,32 @@ describe.each(getConfiguredTestDialects())(
         "mdp-events": `plugin:${EVENTS}`,
         "mdp-shows": "code",
       });
+    }, 120_000);
+
+    it("writes a plugin's Single and field group back as the plugin's when their rename is rolled back", async () => {
+      const before = config({ plugins: [shopPlugin()] });
+      const renamed = config({
+        plugins: [
+          shopPlugin({ "mdp-settings": "mdp-prefs", "mdp-hero": "mdp-banner" }),
+        ],
+      });
+      await migrateCreate(before);
+      await migrate(before);
+      await migrateCreate(renamed);
+      await migrate(renamed);
+      expect((await owners("dynamic_singles"))["mdp-prefs"]).toBe(
+        "plugin:@test/mdp-shop"
+      );
+
+      // The configuration the rollback runs with still renames them.
+      await migrateDown(renamed);
+
+      expect((await owners("dynamic_singles"))["mdp-settings"]).toBe(
+        "plugin:@test/mdp-shop"
+      );
+      expect((await owners(MIGRATION_TARGET.registryTable))["mdp-hero"]).toBe(
+        "plugin:@test/mdp-shop"
+      );
     }, 120_000);
 
     /** The lines that say a permission's orphan mark changed. */

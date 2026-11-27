@@ -36,13 +36,13 @@ import {
   Input,
   Popover,
   PopoverAnchor,
-  PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
 import { ArrowLeft, Plus, Search } from "lucide-react";
 import * as React from "react";
 
 import { EDITOR_WORDS } from "../../editor-words";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 
 import { FontCatalogueView, type FontCatalogue } from "./font-catalogue-view";
 import {
@@ -510,7 +510,7 @@ function UploadEditor({
 }): React.JSX.Element | null {
   if (upload === undefined) return null;
   return (
-    <PopoverContent
+    <BuilderPopoverContent
       side="right"
       align="start"
       sideOffset={12}
@@ -522,7 +522,7 @@ function UploadEditor({
         onAddFace={upload.onAddFace}
         acceptFiles={upload.acceptFiles}
       />
-    </PopoverContent>
+    </BuilderPopoverContent>
   );
 }
 
@@ -793,7 +793,7 @@ function FamilyRow({
             </span>
           </button>
         </PopoverTrigger>
-        <PopoverContent
+        <BuilderPopoverContent
           side="right"
           align="start"
           sideOffset={12}
@@ -806,7 +806,7 @@ function FamilyRow({
             opens={opens}
             onRemove={onRemove}
           />
-        </PopoverContent>
+        </BuilderPopoverContent>
       </Popover>
     </li>
   );

@@ -131,6 +131,14 @@ export const SCHEMA_CASES = {
         "it while the work ran. Check the database before running it again.",
       logContext: { reason: "schema lock lost while held", command: "db:sync" },
     }),
+  // As `assertSaveHoldKept` in `domains/schema/pipeline/save-hold-check.ts` throws it.
+  COLLECTION_BEING_CHANGED: () =>
+    new NextlyError({
+      code: "COLLECTION_BEING_CHANGED",
+      publicMessage:
+        "This collection is being changed elsewhere. Try again in a moment.",
+      logContext: { reason: "save-hold-lost" },
+    }),
   // As `heldByRow` in `domains/schema/pipeline/schema-lock.ts` throws it.
   SCHEMA_LOCK_UNAVAILABLE: () =>
     NextlyError.serviceUnavailable({

@@ -1,7 +1,8 @@
 /**
  * What `nextly migrate` hands `migrateCore` besides the files: the first run's
- * record, the orphan marks an applied migration sets, and the refusal of a
- * translations column that cannot hold a newly translated field. Built in one
+ * record, the orphan marks an applied migration sets, the refusal of a
+ * translations column that cannot hold a newly translated field, and the
+ * default language a file's answers are judged against. Built in one
  * place for the command and for the migrations at start, which are the same
  * step run by a production start, so the two write the same bookkeeping.
  *
@@ -17,6 +18,7 @@ import type { DeclaredNames } from "../../../cli/utils/migration-discovery";
 import { describeError } from "../../../errors/describe-error";
 import { PermissionSeedService } from "../../auth/services/permission-seed-service";
 import type { RecordedEntities } from "../../i18n/migration/recorded-before";
+import { siteDefaultLanguage } from "../../i18n/migration/transition-recorder";
 import type { localizableConfigEntities } from "../../i18n/runtime/localizable-config-entities";
 
 import { pluginsRecordedNotInstalled } from "./command-access";
@@ -27,8 +29,10 @@ import {
   type MigrationOrphanScope,
 } from "./permission-orphans";
 
-/** The configuration the step runs for, as each of the three reads it. */
-type DeployStepConfig = Parameters<typeof configurationRegistryRows>[0] &
+/** The configuration the step runs for, as each of the four reads it. */
+type DeployStepConfig = {
+  localization?: { defaultLocale?: string };
+} & Parameters<typeof configurationRegistryRows>[0] &
   Parameters<typeof keepingUnrecordedPlugins>[1] &
   Parameters<typeof localizableConfigEntities>[0];
 
@@ -119,7 +123,10 @@ export async function recordedBeforeTheRun(
 export type DeployStepDeps = Required<
   Pick<
     MigrateCoreDeps,
-    "firstRun" | "markOrphanedPermissions" | "beforeMetadata"
+    | "defaultLanguage"
+    | "firstRun"
+    | "markOrphanedPermissions"
+    | "beforeMetadata"
   >
 >;
 
@@ -127,6 +134,8 @@ export type DeployStepDeps = Required<
 export function deployStepDeps(run: DeployStepRun): DeployStepDeps {
   const { adapter, config, logger } = run;
   return {
+    // The language a file's answers are judged against (`refuseAnswersInAnotherLanguage`).
+    defaultLanguage: () => siteDefaultLanguage(adapter, config),
     // A database with no registry record has its first run on this release: the record is
     // written once, and where no migration carries the registry, the rows come from this
     // configuration, as the starts before this release wrote them.
@@ -172,6 +181,17 @@ export function deployStepDeps(run: DeployStepRun): DeployStepDeps {
         run.declared
       );
       if (pending.length > 0) return;
+      // Each field group's translations table beside the table its registry row names.
+      const {
+        fieldGroupRegistryUnreadable,
+        readStoredFieldGroupTables,
+        storedOrNewTableName,
+      } = await import("../../field-groups/services/field-group-stored-tables");
+      const stored = await readStoredFieldGroupTables(adapter);
+      // Never names derived from a registry that could not be read: on a moved database they
+      // would be the legacy ones, and the check would judge a translations table that is not
+      // there and let the registry record definitions the real one cannot hold.
+      if (!stored.usable) throw fieldGroupRegistryUnreadable(stored.reason);
       // Judged for the configuration code still owns, as the run's translations-table pass
       // provisions it (`ensureLocalizedCompanions`): a collection a demote handed to the Schema
       // Builder keeps its translations table as the Builder has it, so its code entry refuses
@@ -179,7 +199,8 @@ export function deployStepDeps(run: DeployStepRun): DeployStepDeps {
       await refuseCompanionColumnsThatCannotHold(
         adapter,
         await configTheCodeOwnsIn(adapter, config),
-        run.recordedBefore
+        run.recordedBefore,
+        slug => storedOrNewTableName(stored, slug)
       );
     },
   };

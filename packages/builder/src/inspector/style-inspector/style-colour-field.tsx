@@ -17,12 +17,7 @@ import {
   type StyleLeaf,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
-import {
-  ColorPicker,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@nextlyhq/ui";
+import { ColorPicker, Popover, PopoverTrigger } from "@nextlyhq/ui";
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
@@ -42,6 +37,7 @@ import {
   variableTip,
 } from "../../panels/design/variable-choice";
 import { ColourPair, swatchStyle } from "../../panels/design/variable-swatch";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import type { PreferenceStore } from "../../shell-state";
 import {
   activeTokenMode,
@@ -583,7 +579,7 @@ function ColourPicker({
         described={described}
         invalid={invalid}
       />
-      <PopoverContent
+      <BuilderPopoverContent
         align="end"
         className="nx-style-inspector__picker"
         // Off here as well as on the tab: the picker is drawn outside the tab,
@@ -642,7 +638,7 @@ function ColourPicker({
           unrepresented={unrepresented}
           onColour={onColour}
         />
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

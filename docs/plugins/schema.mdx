@@ -110,6 +110,15 @@ A type that already has a field of the same name is left as it is and named in a
 warning at startup, instead of stopping the boot as a slug target does. The site keeps
 its own field; the plugin's field isn't added there.
 
+A development start adds the field's column to a Schema Builder type before it records
+the field. Where the database refuses the column (a name it finds too long, a row it
+finds too large, a table another session holds), the start warns, naming the type, the
+column and the reason, serves the type without the field, and tries again at the next
+start. A type an earlier release left with the field recorded and no column, whose reads
+fail with `ENTITY_NOT_MIGRATED`, is brought up to date by `nextly db:sync`
+([`ENTITIES_NOT_SYNCED`](/docs/cli/errors/entities-not-synced) is how it reports a
+column it still cannot add).
+
 Put `except` behind a plugin option, as above, so the site turns a type off in its
 `nextly.config.ts`. Migrations read that file, so a type that's off before its first
 migration never gets the column.
@@ -340,6 +349,22 @@ nextly prune --accept-data-loss   # actually drops them (and their data + seeded
 Builder (`ui`) entities are **always retained** — they're yours, not the plugin's. This
 is why declaring everything through `contributes` (rather than creating tables yourself
 with raw SQL through `ctx.db.raw`) matters: it's what lets uninstall be clean and reversible.
+
+A departed plugin's Singles and field groups stay too: `nextly db:sync`, with
+`--remove-orphaned` as well, keeps them and names each with its plugin. `prune` takes
+collections only. Such a Single is read as before and takes no writes until the plugin is back.
+
+On a site that keeps migration files, remove all of them with a migration instead:
+`nextly migrate:create` writes the one that drops what left your config, and `nextly migrate`
+applies it with your consent. Dropped by `prune` there, a table is one the applied migrations
+still record, and `nextly migrate` refuses until it is back.
+
+Releases up to 0.0.2-alpha.81 recorded a plugin's Singles and field groups, and collections
+under its legacy top-level `collections` key, as the app's own. A development start, a
+configuration reload or one `nextly db:sync` puts that right while the plugin is configured.
+If it has already left your config, nothing says whose they are: `db:sync` lists them as
+orphaned and `--remove-orphaned` would delete them. Put the plugin back, run
+`nextly db:sync` once, then remove it.
 
 > **Tip for plugin authors:** anything you create through `contributes` /
 > `ctx.services` is provenance-tagged and pruned automatically. `ctx.db` itself runs no

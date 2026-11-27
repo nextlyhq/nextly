@@ -45,7 +45,7 @@ import {
   readIndexNames,
 } from "../../pipeline/live-table-facts";
 import { junctionTableNameFor } from "../../services/field-column-descriptor";
-import { resolveComponentTableName } from "../../utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../../field-groups/services/field-group-storage-names";
 import { ownerRowsToRecord } from "../kept-elements";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
 
@@ -56,7 +56,7 @@ const POSTS = "fco_posts";
 const POSTS_TABLE = `dc_${POSTS}`;
 const TAGS = "fco_tags";
 const CARDS = "fco_cards";
-const CARDS_TABLE = resolveComponentTableName(CARDS);
+const CARDS_TABLE = fieldGroupTableNameFor("current", CARDS);
 
 const PLUGIN = "@t/fco-indexer";
 const MARKER = "marker";
@@ -209,7 +209,7 @@ async function stored(t: TestNextly): Promise<Field[]> {
 
 async function schemaVersionOf(
   t: TestNextly,
-  registry: "dynamic_collections" | "dynamic_components",
+  registry: "dynamic_collections" | "dynamic_field_groups",
   slug: string
 ): Promise<number> {
   const [row] = await t.adapter.executeQuery<{ v: number | string | null }>(
@@ -252,7 +252,7 @@ async function saveCards(
     {
       fields,
       confirmed: true,
-      schemaVersion: await schemaVersionOf(t, "dynamic_components", CARDS),
+      schemaVersion: await schemaVersionOf(t, "dynamic_field_groups", CARDS),
       ...extra,
     }
   ).then(
@@ -482,7 +482,7 @@ describe.each(getConfiguredTestDialects())(
       await build(t, codeIndex(CARDS_TABLE));
       const registryRow = () =>
         t.adapter.executeQuery(
-          `SELECT fields, schema_version FROM dynamic_components WHERE slug = '${CARDS}'`
+          `SELECT fields, schema_version FROM dynamic_field_groups WHERE slug = '${CARDS}'`
         );
       const before = {
         columns: await columnsOf(t, CARDS_TABLE),

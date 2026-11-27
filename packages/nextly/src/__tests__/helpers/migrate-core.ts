@@ -64,6 +64,8 @@ export async function migrateFresh(
       disconnect: () => Promise.resolve(),
       isConnected: () => true,
       getCapabilities: () => ({ dialect: fresh.dialect }),
+      // What a new database's field-group names are recorded through.
+      getDrizzle: () => fresh.db,
       executeQuery: (statement: string) => fresh.exec(statement),
       // Asked before the run's first write, whether the ledger is there to
       // read the app's migration history from. A table with no columns is a

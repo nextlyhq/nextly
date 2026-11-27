@@ -85,6 +85,12 @@ const declaredWith = (...extra: string[]): Declared => ({
 const namesLegacy = (statement: string): boolean =>
   /\bcomp_fgcn_|\bdynamic_components\b|\b_component_type\b/i.test(statement);
 
+/** Whether a statement names a group's legacy table, or the registry it would be found in. */
+const namesLegacyGroup = (statement: string): boolean =>
+  /\bcomp_fgcn_|\b(?:from|into|update|table)\s+[`"]?dynamic_components\b/i.test(
+    statement
+  );
+
 let site: StorageGenerationSite | undefined;
 
 afterEach(async () => {
@@ -126,7 +132,15 @@ describe.each(getConfiguredTestDialects())(
 
       // 1. A development start carrying an edit to the code-first group.
       const { logger, lines } = recordingLogger();
-      await site.developmentStart(declaredWith("subtitle"), logger);
+      // The boot probe among them: every statement is read, not only what the start says of it.
+      const starting = await recordStatements(site.adapter, dialect);
+      try {
+        await site.developmentStart(declaredWith("subtitle"), logger);
+      } finally {
+        starting.uninstall();
+      }
+      expect(starting.statements.length).toBeGreaterThan(0);
+      expect(starting.statements.filter(namesLegacyGroup)).toEqual([]);
       expect(await columnsOf(site.adapter, dialect, "fg_fgcn_card")).toContain(
         "subtitle"
       );
@@ -143,7 +157,13 @@ describe.each(getConfiguredTestDialects())(
       expect(await readHeading()).toBe("Kept");
 
       // 2. A configuration reload carrying a second edit.
-      await site.configurationReload(declaredWith("subtitle", "caption"));
+      const reloading = await recordStatements(site.adapter, dialect);
+      try {
+        await site.configurationReload(declaredWith("subtitle", "caption"));
+      } finally {
+        reloading.uninstall();
+      }
+      expect(reloading.statements.filter(namesLegacyGroup)).toEqual([]);
       expect(await columnsOf(site.adapter, dialect, "fg_fgcn_card")).toContain(
         "caption"
       );

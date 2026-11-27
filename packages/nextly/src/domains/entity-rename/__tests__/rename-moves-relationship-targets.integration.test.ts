@@ -24,6 +24,14 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import {
+  createTestNextlyOnSite,
+  eachSite,
+} from "../../field-groups/__tests__/helpers/both-sites";
+import {
+  type FieldGroupNaming,
+  storageNamesFor,
+} from "../../field-groups/services/field-group-storage-names";
 
 const silentLogger = {
   debug: () => undefined,
@@ -52,8 +60,12 @@ type Seeded = Parameters<typeof seedBuilderCollection>[1]["fields"];
  * refusal cases. All in one boot: a re-boot on a server dialect drops the database the first
  * provisioned.
  */
-async function seed(dialect: TestDialect, extra: Seeded = []): Promise<void> {
-  handle = await createTestNextly({ dialect });
+async function seed(
+  dialect: TestDialect,
+  naming: FieldGroupNaming,
+  extra: Seeded = []
+): Promise<void> {
+  handle = await createTestNextlyOnSite(naming, { dialect });
   const adapter = handle.adapter;
   await seedBuilderCollection(adapter, {
     slug: "authors",
@@ -141,11 +153,11 @@ async function slugs(): Promise<string[]> {
     .sort();
 }
 
-describe.each(getConfiguredTestDialects())(
-  "a rename and the relationships that point at the collection (integration, %s)",
-  dialect => {
+describe.each(eachSite())(
+  "a rename and the relationships that point at the collection (integration, %s, a site on the %s names)",
+  (dialect, naming) => {
     it("moves every stored target to the new slug, nested ones and other entities' included, and the relationship still resolves", async () => {
-      await seed(dialect);
+      await seed(dialect, naming);
 
       await rename("authors", "writers");
 
@@ -162,8 +174,11 @@ describe.each(getConfiguredTestDialects())(
           .relationTo
       ).toBe("writers");
       expect(
-        field((await stored("dynamic_components", "byline")).fields, "person")
-          .relationTo
+        field(
+          (await stored(storageNamesFor(naming).registryTable, "byline"))
+            .fields,
+          "person"
+        ).relationTo
       ).toBe("writers");
       // The stored hash describes the stored fields, so no change reads as pending.
       expect(posts.schemaHash).toBe(
@@ -190,12 +205,14 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("moves a field group's targets where its registry's storage was migrated to its new name", async () => {
-      await seed(dialect);
+      await seed(dialect, naming);
       // The field-group storage migration renames the registry; the registry's own resolver reads
-      // it under either name, and so does the rename.
-      await t().adapter.executeQuery(
-        `ALTER TABLE dynamic_components RENAME TO ${MIGRATION_TARGET.registryTable}`
-      );
+      // it under either name, and so does the rename. A new site's is under that name already.
+      if (naming === "legacy") {
+        await t().adapter.executeQuery(
+          `ALTER TABLE dynamic_components RENAME TO ${MIGRATION_TARGET.registryTable}`
+        );
+      }
 
       await rename("authors", "writers");
 
@@ -208,7 +225,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses while a polymorphic field lists the collection, naming it, and renames nothing", async () => {
-      await seed(dialect, [
+      await seed(dialect, naming, [
         {
           name: "either",
           type: "relationship",
@@ -228,7 +245,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses while a field an entity's code defines targets the collection, naming it", async () => {
-      await seed(dialect);
+      await seed(dialect, naming);
       // The posts collection now comes from code: its stored fields are its config's, which a
       // rename cannot change.
       await t().adapter.update(
@@ -245,7 +262,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses a new slug a stored field already targets, naming it", async () => {
-      await seed(dialect, [
+      await seed(dialect, naming, [
         { name: "ghost", type: "relationship", relationTo: "writers" },
       ]);
 

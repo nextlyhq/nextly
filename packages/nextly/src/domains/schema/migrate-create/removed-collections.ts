@@ -27,6 +27,8 @@ import {
   type FieldOwner,
 } from "../../collections/services/collection-dependents";
 import type { RemovedCollectionSeed } from "../../collections/services/collection-dependents-schema";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
+import { fieldGroupTableNameFor } from "../../field-groups/services/field-group-storage-names";
 import { fieldGroupPlacements } from "../../field-groups/storage/field-group-placements";
 import type { ExtensionSchemaRecord } from "../ownership/dependent-elements";
 import { collectionOwnTables } from "../services/field-column-descriptor";
@@ -95,11 +97,18 @@ export async function assertRemovedEntitiesUnused(input: {
   // A field group is named by the fields that place it, as a collection is by
   // the fields that point at it; a Single by none, so its slug is read off its
   // table.
+  // Under either naming: a history on the current field-group names drops `fg_<slug>`, which the
+  // slug names as surely as `comp_<slug>` on the legacy ones.
   const fieldGroups = namedRemoved(
     removed.fieldGroups,
     fieldGroupsNoLongerConfigured(owners, input.components),
-    resolveComponentTableName,
-    STORAGE_FORMAT.tablePrefix
+    slug => {
+      const current = fieldGroupTableNameFor("current", slug);
+      return removed.fieldGroups.includes(current)
+        ? current
+        : resolveComponentTableName(slug);
+    },
+    [STORAGE_FORMAT.tablePrefix, MIGRATION_TARGET.tablePrefix]
   );
   const singles = removed.singles.map(tableName => ({
     slug: tableName.slice(SINGLE_TABLE_PREFIX.length),
@@ -168,7 +177,7 @@ function namedRemoved(
   removedTables: readonly string[],
   goneSlugs: ReadonlySet<string>,
   tableOf: (slug: string) => string,
-  prefix: string
+  prefix: string | readonly string[]
 ): { named: NamedRemovedCollection[]; unplaced: string[] } {
   if (removedTables.length === 0) return { named: [], unplaced: [] };
   const named = namedRemovedTables(removedTables, goneSlugs, tableOf, prefix);
@@ -226,14 +235,15 @@ interface NamedRemovedCollection extends RemovedCollectionSeed {
  * has no prefix), which no field is matched against.
  *
  * @param tableOf the table a slug of this kind of entity resolves to
- * @param prefix the prefix every table of this kind starts with
+ * @param prefix the prefix every table of this kind starts with, or each one it may start with
  */
 function namedRemovedTables(
   removedTables: readonly string[],
   goneSlugs: ReadonlySet<string>,
   tableOf: (slug: string) => string,
-  prefix: string
+  prefix: string | readonly string[]
 ): NamedRemovedCollection[] {
+  const prefixes = typeof prefix === "string" ? [prefix] : prefix;
   const slugOfTable = new Map<string, string>();
   for (const slug of goneSlugs) {
     const table = tableOf(slug);
@@ -244,14 +254,16 @@ function namedRemovedTables(
   return removedTables.map(tableName => ({
     // A field group named through its old `dbName` has no prefix to read a slug from: it is called
     // by its table.
-    slug:
-      slugOfTable.get(tableName) ??
-      (tableName.startsWith(prefix)
-        ? tableName.slice(prefix.length)
-        : tableName),
+    slug: slugOfTable.get(tableName) ?? withoutPrefix(tableName, prefixes),
     tableName,
     namedBy: slugOfTable.get(tableName) ?? null,
   }));
+}
+
+/** `tableName` without the first of `prefixes` it starts with; itself where it starts with none. */
+function withoutPrefix(tableName: string, prefixes: readonly string[]): string {
+  const prefix = prefixes.find(candidate => tableName.startsWith(candidate));
+  return prefix === undefined ? tableName : tableName.slice(prefix.length);
 }
 
 /**

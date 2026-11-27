@@ -10,12 +10,14 @@ import {
   ENTITY_HEADER_GUIDANCE,
   FIELD_GROUP_HEADER_PATTERN,
   formatBlankFile,
+  formatSnapshotRecordFile,
   parseEntityHeaders,
   SCOPED_ENTITIES_MARKER,
   formatMigrationFile,
   formatTimestamp,
   slugify,
 } from "../format-file";
+import { recordedAnswerLanguage } from "../../../i18n/migration/answer-language";
 
 describe("formatMigrationFile", () => {
   const NOW = new Date("2026-04-29T15:45:00.123Z");
@@ -574,5 +576,67 @@ describe("a caller can decline to declare scope", () => {
     const out = formatMigrationFile(base);
 
     expect(parseEntityHeaders(out).scoped).toBe(true);
+  });
+});
+
+describe("the generated line every file `migrate:create` writes carries", () => {
+  // Spelled out here, not read from the constant: files already written carry these bytes, and
+  // `repair-columns` tells a generated file from one written by hand by this line alone.
+  const NOW = new Date("2026-04-29T15:45:00.123Z");
+  const LINE = "-- Generated at: 2026-04-29T15:45:00.123Z";
+  const lines = (file: string) => file.split("\n");
+
+  it("is a line of a generated migration", () => {
+    const out = formatMigrationFile({
+      name: "add_excerpt",
+      dialect: "postgresql",
+      sqlStatements: ['ALTER TABLE "dc_posts" ADD COLUMN "excerpt" text'],
+      downSqlStatements: [],
+      collections: ["posts"],
+      singles: [],
+      components: [],
+      hasUserExt: false,
+      now: NOW,
+    });
+    expect(lines(out)).toContain(LINE);
+  });
+
+  // A file holding an answer for a field kept per language records the answer's language just
+  // above it: each line read on its own, by the generated line's reader and by the language's.
+  it("is a line of a generated migration whose answers record their language, and of one with none", () => {
+    const write = (answersIn?: string) =>
+      formatMigrationFile({
+        name: "require_note",
+        dialect: "postgresql",
+        sqlStatements: [
+          'UPDATE "dc_posts_locales" SET "note" = \'noted\' WHERE "note" IS NULL',
+        ],
+        downSqlStatements: [],
+        collections: ["posts"],
+        singles: [],
+        components: [],
+        hasUserExt: false,
+        now: NOW,
+        ...(answersIn === undefined ? {} : { answersIn }),
+      });
+    const answered = write("en");
+    expect(lines(answered)).toContain(LINE);
+    expect(lines(answered)).toContain("-- Answers in: en");
+    expect(recordedAnswerLanguage(answered)).toBe("en");
+    const unanswered = write();
+    expect(lines(unanswered)).toContain(LINE);
+    expect(recordedAnswerLanguage(unanswered)).toBeUndefined();
+  });
+
+  it("is a line of a blank migration", () => {
+    expect(lines(formatBlankFile("custom_seed", "postgresql", NOW))).toContain(
+      LINE
+    );
+  });
+
+  it("is a line of a snapshot record's migration", () => {
+    expect(
+      lines(formatSnapshotRecordFile("record", "postgresql", NOW))
+    ).toContain(LINE);
   });
 });

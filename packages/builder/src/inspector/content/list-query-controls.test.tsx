@@ -576,6 +576,25 @@ describe("a list's sort", () => {
     expect(editor.apply).toHaveBeenCalledTimes(1);
   });
 
+  it("draws a row's ⋯ as a row action, in the keyboard order and named, open with its menu", async () => {
+    mount({ collection: "posts", sort: "-publishedAt,title" });
+    const more = await screen.findByRole("button", {
+      name: "More for sort by Published date",
+    });
+    // The class the row-action rule fades at rest (field-rows.css), on a
+    // button inside its row.
+    expect(more.classList.contains("nx-list-sort__more")).toBe(true);
+    expect(more.closest(".nx-list-sort")).not.toBeNull();
+    // Faded, never taken out: no tab stop removed, nothing hidden from
+    // assistive technology.
+    expect(more.getAttribute("tabindex")).not.toBe("-1");
+    expect(more.closest("[aria-hidden='true']")).toBeNull();
+    fireEvent.pointerDown(more, { button: 0, pointerType: "mouse" });
+    await screen.findByRole("menuitem", { name: /Move down/ });
+    // Open: the state the rule keeps it shown by.
+    expect(more.getAttribute("data-state")).toBe("open");
+  });
+
   it("moves a row from its menu, which has no up and down arrows beside it", async () => {
     const editor = mount({ collection: "posts", sort: "-publishedAt,title" });
     const more = await screen.findByRole("button", {

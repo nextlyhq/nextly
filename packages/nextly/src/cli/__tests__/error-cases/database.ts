@@ -3,7 +3,11 @@
  *
  * @module cli/__tests__/error-cases/database
  */
-import { connectionFailure } from "../../errors/areas/database";
+import {
+  connectionFailure,
+  databaseDialectDiffers,
+  dialectNotStated,
+} from "../../errors/areas/database";
 import { databaseEnvError } from "../../errors";
 
 import type { ErrorCases } from "./types";
@@ -31,6 +35,8 @@ export const DATABASE_CASES = {
       else process.env.DB_DIALECT = previous;
     }
   },
+  DATABASE_DIALECT_DIFFERS: () => databaseDialectDiffers("mysql", "postgresql"),
+  DIALECT_NOT_STATED: () => dialectNotStated(),
   DATABASE_UNREACHABLE: () =>
     connectionFailure(
       "postgresql",

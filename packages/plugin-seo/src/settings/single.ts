@@ -62,10 +62,12 @@ export function seoSettingsSingle(): SingleConfig {
     slug: SEO_SETTINGS_SLUG,
     label: { singular: "SEO settings" },
     description: "Rules for the whole site. A page's own values always win.",
-    // One value in every language. A plugin's entity kept per language in a
-    // site that declares no languages has storage the runtime cannot write,
-    // and a plugin cannot yet declare one kept per language only where the
-    // site has languages.
+    // Not translated: the Single has no language switcher and no publishing
+    // per language. This decides only that, not where its values are kept.
+    // Since 0.0.2-alpha.79 every text field is stored per language unless the
+    // field says `localized: false`, so its text fields (the site name, the
+    // description, the brand names and what AI tools should know) are kept in
+    // its per-language table, the default language's row holding the values.
     localized: false,
     // Edited on the plugin's own SEO settings screen, not the generic form.
     admin: { hidden: true },

@@ -112,6 +112,7 @@ describe.each(getConfiguredTestDialects())(
         name,
         dialect,
         migrationsDir,
+        fieldGroupNaming: "current",
         collections: [entity(withSummary)],
         singles: [],
         components: [],

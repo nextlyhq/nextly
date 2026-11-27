@@ -292,6 +292,20 @@ function without<T extends Record<string, unknown>>(
 const ANSWERED_CARD_FIELDS = ["title", "description", "images"];
 
 /**
+ * The fields of a card the route's own value wins for, where it sets one:
+ * what kind of thing the page is, and an article's details. The answer fills
+ * only those the route leaves unset, so a list such as the tags is never
+ * served twice, once from each.
+ */
+const ROUTE_FIRST_CARD_FIELDS = [
+  "type",
+  "publishedTime",
+  "modifiedTime",
+  "authors",
+  "tags",
+];
+
+/**
  * A card of the route's own with the answer's laid over it: the answer's
  * title in the form it is served, and the route's address for the card where
  * the answer names no canonical.
@@ -307,7 +321,12 @@ function cardOver(
         ...(answersAddress ? ["url"] : []),
       ])
     : {};
-  const answer = isRecord(answered) ? answered : {};
+  const answer = isRecord(answered)
+    ? without(
+        answered,
+        ROUTE_FIRST_CARD_FIELDS.filter(key => kept[key] !== undefined)
+      )
+    : {};
   const card: Record<string, unknown> = { ...kept, ...answer };
   const title = servedTitle(
     answer.title,
@@ -622,6 +641,16 @@ const pageMetadataAnswerSchema = z.object({
       siteName: z.string().optional(),
       locale: z.string().optional(),
       type: z.enum(["website", "article"]).optional(),
+      // An article's details, each a string or a list of strings as Open
+      // Graph's `article:*` tags carry them.
+      article: z
+        .object({
+          publishedTime: z.string().optional(),
+          modifiedTime: z.string().optional(),
+          authors: z.array(z.string()).optional(),
+          tags: z.array(z.string()).optional(),
+        })
+        .optional(),
       xAccount: z.string().optional(),
     })
     .optional(),

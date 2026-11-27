@@ -184,6 +184,22 @@ export interface PageRobots {
   nocache?: boolean;
 }
 
+/**
+ * @experimental An article's details as its card states them: Open Graph's
+ * `article:published_time`, `article:modified_time`, `article:author` and
+ * one `article:tag` per tag.
+ */
+export interface PageArticle {
+  /** When it was published, as ISO 8601: a bare date for a day alone. */
+  publishedTime?: string;
+  /** When its content last changed, as ISO 8601. */
+  modifiedTime?: string;
+  /** Its authors, each by a profile's address or else by name. */
+  authors?: string[];
+  /** Its tags, one `article:tag` each. */
+  tags?: string[];
+}
+
 /** @experimental The page's answer: the values its head is built from. */
 export interface PageMetadataAnswer {
   title?: string;
@@ -199,6 +215,12 @@ export interface PageMetadataAnswer {
     /** The page's language as the social card states it, e.g. `en_US`. */
     locale?: string;
     type?: "website" | "article";
+    /**
+     * An article's own details, placed in the card as `article:*` tags
+     * where `type` is `"article"`. Each a route's own card sets is kept as the
+     * route set it, so none is ever served twice.
+     */
+    article?: PageArticle;
     /**
      * The X (Twitter) account of the site, as `@handle`, such as `@example`:
      * the card's `twitter:site`. Open Graph has no such tag.

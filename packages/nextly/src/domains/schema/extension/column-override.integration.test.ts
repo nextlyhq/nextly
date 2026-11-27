@@ -37,7 +37,7 @@ import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import { normalizeType } from "../pipeline/diff/normalize-type";
 import type { ColumnSpec } from "../pipeline/diff/types";
 import { applyDesiredSchema } from "../pipeline/index";
-import { resolveComponentTableName } from "../utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../field-groups/services/field-group-storage-names";
 
 import type { SchemaHook } from "./draft";
 import { col } from "./dsl";
@@ -45,7 +45,7 @@ import { compileAndPublishExtensionSchema } from "./publish";
 
 const POSTS_TABLE = "dc_co_posts";
 const SITE_TABLE = resolveSingleTableName({ slug: "co_site" });
-const SEO_TABLE = resolveComponentTableName("co_seo");
+const SEO_TABLE = fieldGroupTableNameFor("current", "co_seo");
 
 const SHORT = "0123456789";
 const LONG = "0123456789X";
@@ -260,6 +260,8 @@ describeEachDialect("the app's override of a generated column", dialect => {
     await compileAndPublishExtensionSchema({
       dialect,
       plugins: [],
+      // The table the site stores the group in, as every compile of a running site is handed it.
+      fieldGroupTables: new Map([["co_seo", SEO_TABLE]]),
       config: {
         ...entities(false),
         db: { schema: { extend: [overrides(5)] } },

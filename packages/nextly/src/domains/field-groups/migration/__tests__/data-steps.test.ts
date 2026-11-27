@@ -9,7 +9,11 @@ import {
 import { MIGRATION_TARGET } from "../manifest";
 import type { MigrationStep } from "../runner";
 
-import { createTableWorld, type TableFixture } from "./helpers/table-world";
+import {
+  createTableWorld,
+  type TableFixture,
+  type TableWorldOptions,
+} from "./helpers/table-world";
 
 const RUN = "run-1";
 
@@ -26,35 +30,41 @@ function registry(rows: Record<string, unknown>[]): TableFixture {
   return { columns: ["id", "fields", "configPath"], rows };
 }
 
-function world(over: Record<string, TableFixture> = {}) {
-  return createTableWorld({
-    dynamic_collections: registry([
-      { id: "c1", fields: storedFields(), configPath: "collections/post.ts" },
-    ]),
-    dynamic_singles: registry([
-      { id: "s1", fields: storedFields(), configPath: "singles/home.ts" },
-    ]),
-    [STORAGE_FORMAT.registryTable]: registry([
-      { id: "f1", fields: storedFields(), configPath: "components/hero.ts" },
-    ]),
-    nextly_schema_events: {
-      columns: ["id", "scopeKind"],
-      rows: [
-        { id: "e1", scopeKind: "component" },
-        { id: "e2", scopeKind: "collection" },
-        { id: "e3", scopeKind: "core" },
-      ],
+function world(
+  over: Record<string, TableFixture> = {},
+  options: TableWorldOptions = {}
+) {
+  return createTableWorld(
+    {
+      dynamic_collections: registry([
+        { id: "c1", fields: storedFields(), configPath: "collections/post.ts" },
+      ]),
+      dynamic_singles: registry([
+        { id: "s1", fields: storedFields(), configPath: "singles/home.ts" },
+      ]),
+      [STORAGE_FORMAT.registryTable]: registry([
+        { id: "f1", fields: storedFields(), configPath: "components/hero.ts" },
+      ]),
+      nextly_schema_events: {
+        columns: ["id", "scopeKind"],
+        rows: [
+          { id: "e1", scopeKind: "component" },
+          { id: "e2", scopeKind: "collection" },
+          { id: "e3", scopeKind: "core" },
+        ],
+      },
+      nextly_versions: {
+        columns: ["id", "snapshot"],
+        rows: [{ id: "v1", snapshot: { _componentType: "hero" } }],
+      },
+      nextly_events: {
+        columns: ["id", "payload"],
+        rows: [{ id: "n1", payload: { data: { _componentType: "cta" } } }],
+      },
+      ...over,
     },
-    nextly_versions: {
-      columns: ["id", "snapshot"],
-      rows: [{ id: "v1", snapshot: { _componentType: "hero" } }],
-    },
-    nextly_events: {
-      columns: ["id", "payload"],
-      rows: [{ id: "n1", payload: { data: { _componentType: "cta" } } }],
-    },
-    ...over,
-  });
+    options
+  );
 }
 
 function steps(target: ReturnType<typeof world>): MigrationStep[] {
@@ -171,7 +181,10 @@ describe("rewriting the wire key inside the ledgers", () => {
   // A row the walk did not reach is not "not finished yet" — the walk ran to the
   // end of the table — so this refuses and names the row rather than reporting a
   // postcondition that a retry would silently re-attempt.
-  it("refuses, naming the row, when one was left behind", async () => {
+  it("rewrites a row a running site wrote while the step ran, and passes", async () => {
+    // A server saving content during the run writes under the spelling it knows. The step's own
+    // check finds that row; another pass rewrites it, as the first would have, rather than
+    // failing a run the site is serving through.
     const target = world();
     const step = stepNamed(target, "data:nextly_versions.snapshot");
     await step.run(target.session);
@@ -180,12 +193,151 @@ describe("rewriting the wire key inside the ledgers", () => {
       snapshot: { _componentType: "late" },
     });
 
-    await expect(step.verify(target.session)).rejects.toMatchObject({
+    await expect(step.verify(target.session)).resolves.toBe(true);
+    expect(
+      target.rows("nextly_versions").find(row => row.id === "v2")?.snapshot
+    ).toEqual({ _fieldGroupType: "late" });
+  });
+
+  /**
+   * A versions ledger that records when each row was written, as the real one does, on a database
+   * whose clock reads `databaseNow` (this process's, unless given).
+   */
+  function timedWorld(databaseNow?: () => Date) {
+    return world(
+      {
+        nextly_versions: {
+          columns: ["id", "snapshot", "updatedAt", "createdAt"],
+          rows: [
+            {
+              id: "v1",
+              snapshot: { _componentType: "hero" },
+              updatedAt: new Date("2026-01-01T00:00:00Z"),
+              createdAt: new Date("2026-01-01T00:00:00Z"),
+            },
+          ],
+        },
+      },
+      databaseNow === undefined ? {} : { databaseNow }
+    );
+  }
+
+  /** A session that writes an old-spelling row stamped `at()` before every transaction. */
+  function alwaysWriting(
+    target: ReturnType<typeof timedWorld>,
+    at: () => Date
+  ): typeof target.session {
+    let late = 0;
+    return {
+      ...target.session,
+      inTransaction: async <T>(
+        work: Parameters<typeof target.session.inTransaction>[0]
+      ): Promise<T> => {
+        // Ahead of every batch and every check: a writer no number of passes catches.
+        target.insert("nextly_versions", {
+          id: `late-${String(++late)}`,
+          snapshot: { _componentType: "late" },
+          updatedAt: at(),
+          createdAt: at(),
+        });
+        return (await target.session.inTransaction(work)) as T;
+      },
+    } as typeof target.session;
+  }
+
+  it("passes while a running site keeps writing old-spelling rows after the step began", async () => {
+    // A site that never stops saving: every row it writes after the step began is one a complete
+    // rewrite at that moment would not have touched, so the step finishes rather than chasing them.
+    const target = timedWorld();
+    const step = stepNamed(target, "data:nextly_versions.snapshot");
+    await step.run(target.session);
+
+    await expect(
+      step.verify(alwaysWriting(target, () => new Date(Date.now() + 1000)))
+    ).resolves.toBe(true);
+    expect(
+      target.rows("nextly_versions").find(row => row.id === "v1")?.snapshot
+    ).toEqual({ _fieldGroupType: "hero" });
+  });
+
+  it("refuses, naming the row, when a row written before the step began still carries the old spelling", async () => {
+    // A row that predates the step and was not rewritten is one the walk missed, whatever else is
+    // being written: the step refuses and names it rather than passing over it.
+    const target = timedWorld();
+    const step = stepNamed(target, "data:nextly_versions.snapshot");
+    await step.run(target.session);
+
+    await expect(
+      step.verify(alwaysWriting(target, () => new Date("2026-01-02T00:00:00Z")))
+    ).rejects.toMatchObject({
       logContext: {
         reason: "row rewrite did not reach every row",
         table: "nextly_versions",
-        row: "v2",
+        row: expect.stringMatching(/^late-/),
       },
+    });
+  });
+
+  it.each([
+    ["earlier in the same second the step began", 100],
+    ["in the second before it began, stored rounded up to the next", 1000],
+  ])(
+    "refuses a missed row the database stamped %s",
+    async (_when, stampedAt) => {
+      // The database's clock reads 600 ms into a whole second when the step begins. SQLite keeps
+      // whole seconds, and MySQL rounds a stamp to the column's precision, so a row written before
+      // the step can be stored on, or one second past, the whole second the step began in.
+      const second = Math.floor(Date.now() / 1000) * 1000 - 60_000;
+      const started = Date.now();
+      const databaseNow = (): Date =>
+        new Date(second + 600 + (Date.now() - started));
+      const target = timedWorld(databaseNow);
+      const step = stepNamed(target, "data:nextly_versions.snapshot");
+      await step.run(target.session);
+
+      await expect(
+        step.verify(alwaysWriting(target, () => new Date(second + stampedAt)))
+      ).rejects.toMatchObject({
+        logContext: {
+          reason: "row rewrite did not reach every row",
+          row: expect.stringMatching(/^late-/),
+        },
+      });
+    }
+  );
+
+  // The cutoff is the database's clock, which stamps the rows, never this process's: a host
+  // whose clock runs apart from the database's would misjudge which rows the site wrote since.
+  const HOUR = 60 * 60 * 1000;
+
+  it("passes under traffic when the database's clock is behind this process's", async () => {
+    // Every row the site writes during the step is stamped after the database's start, yet before
+    // this process's own time: judged on this process's clock, each would read as one the walk
+    // missed.
+    const databaseNow = (): Date => new Date(Date.now() - HOUR);
+    const target = timedWorld(databaseNow);
+    const step = stepNamed(target, "data:nextly_versions.snapshot");
+    await step.run(target.session);
+
+    await expect(
+      step.verify(
+        alwaysWriting(target, () => new Date(databaseNow().getTime() + 1000))
+      )
+    ).resolves.toBe(true);
+  });
+
+  it("refuses a missed row when the database's clock is ahead of this process's", async () => {
+    // A row the database stamped before the step began, yet after this process's own time: judged
+    // on this process's clock it would read as traffic, and the missed row would pass.
+    const databaseNow = (): Date => new Date(Date.now() + HOUR);
+    const target = timedWorld(databaseNow);
+    const step = stepNamed(target, "data:nextly_versions.snapshot");
+    await step.run(target.session);
+
+    await expect(
+      step.verify(alwaysWriting(target, () => new Date(Date.now() + HOUR / 2)))
+    ).rejects.toMatchObject({
+      logContext: { reason: "row rewrite did not reach every row" },
     });
   });
 });

@@ -117,11 +117,32 @@ export async function transitionDefaultLocale(
   adapter: DrizzleAdapter,
   config: { localization?: { defaultLocale?: string } }
 ): Promise<string | undefined> {
-  const configured = config.localization?.defaultLocale;
-  if (typeof configured === "string" && configured.length > 0) {
-    return configured;
+  if (configuredDefault(config) === undefined && !perLanguageStorageEnabled()) {
+    return undefined;
   }
-  if (!perLanguageStorageEnabled()) return undefined;
+  return siteDefaultLanguage(adapter, config);
+}
+
+/** The default language the configuration declares, where it declares one. */
+function configuredDefault(config: {
+  localization?: { defaultLocale?: string };
+}): string | undefined {
+  const configured = config.localization?.defaultLocale;
+  return typeof configured === "string" && configured.length > 0
+    ? configured
+    : undefined;
+}
+
+/**
+ * The site's default language, as a running site reads it: the one the configuration declares, else
+ * the one Settings stores, else the implicit language of a site that has neither.
+ */
+export async function siteDefaultLanguage(
+  adapter: DrizzleAdapter,
+  config: { localization?: { defaultLocale?: string } }
+): Promise<string> {
+  const configured = configuredDefault(config);
+  if (configured !== undefined) return configured;
   const stored = localizationFromStoredLanguages(
     await storedLanguageReader(adapter).rows()
   );

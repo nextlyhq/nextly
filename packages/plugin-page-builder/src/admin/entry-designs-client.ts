@@ -254,6 +254,11 @@ export const OWN_DESIGN_WORDS = {
     template === null
       ? `${plural} have no collection template yet, so this ${inSentence(singular)} isn't shown as a page on the site.`
       : `${capitalized(theTemplate(template))} isn't published yet, so this ${inSentence(singular)} isn't shown as a page on the site.`,
+  /** The Design card's heading while the site's own page shows the entry. */
+  servedBySiteHeading: "Design: your site's own page",
+  servedBySite: (plural: string): string =>
+    `${plural} are shown on the site by its own page, not by a template.`,
+  servedAt: (singular: string): string => `This ${inSentence(singular)} is at`,
   createTemplate: (plural: string): string =>
     `Create a collection template for ${inSentence(plural)}`,
   creatingTemplate: "Creating the template…",

@@ -62,7 +62,7 @@ import {
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { companionTableOf } from "../../../i18n/migration/derive-companion-spec";
 import { setPerLanguageStorage } from "../../../i18n/per-language-storage";
-import { resolveComponentTableName } from "../../utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../../field-groups/services/field-group-storage-names";
 import { setNonInteractive } from "../../migrate/can-prompt";
 import { ownerRowsToRecord } from "../kept-elements";
 import type { OwnerRecord } from "../owner-registry";
@@ -109,7 +109,7 @@ const INDEX = "mko_code_idx";
 const CONSENT = { acceptDataLoss: true };
 
 const GROUP = "mko_cards";
-const GROUP_TABLE = resolveComponentTableName(GROUP);
+const GROUP_TABLE = fieldGroupTableNameFor("current", GROUP);
 
 /** The app's configuration with a field group whose `rank` field is there or not. */
 const groupConfigWith = (withRank: boolean) =>

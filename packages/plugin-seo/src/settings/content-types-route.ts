@@ -179,6 +179,16 @@ function sourceOf(
   return undefined;
 }
 
+/** Where core says a Single was made: one a plugin contributes is made in its code. */
+function singleSourceOf(
+  record: Record<string, unknown>
+): ContentTypeSource | undefined {
+  return typeof record.source === "string" &&
+    record.source.startsWith("plugin:")
+    ? "code"
+    : sourceOf(record);
+}
+
 /** Whether a type declares its own top-level field named `seo`. */
 function hasOwnSeoField(fields: unknown): boolean {
   return entryFields(fields).some(field => field.name === "seo");
@@ -282,7 +292,7 @@ function singleTypeOf(
 ): SeoContentType {
   const record = listed.find(each => each.slug === slug) ?? {};
   const declared = entryFields(record.fields);
-  const source = sourceOf(record);
+  const source = singleSourceOf(record);
   return {
     key: singleKey(slug),
     label: textOf(record.label) ?? slug,

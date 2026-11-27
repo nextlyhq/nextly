@@ -3416,6 +3416,8 @@ export class CollectionQueryService extends BaseService {
      * sees the grant, so the waiver does not travel.
      */
     hooksWaived?: boolean;
+    /** The language the version is spelled for, where it is not the read's own. */
+    revisionLocale?: string;
     /** Translation counters the read already took (`attachDocumentVersions`). */
     knownLanguages?: {
       revisions: ReadonlyMap<string, ReadonlyMap<string, number>>;
@@ -3733,7 +3735,7 @@ export class CollectionQueryService extends BaseService {
     attachDocumentVersions(finalData, {
       stored: storedRevisions,
       localization: this.localization,
-      locale: params.locale,
+      locale: params.revisionLocale ?? params.locale,
       known: params.knownLanguages,
     });
 
@@ -4191,6 +4193,8 @@ export class CollectionQueryService extends BaseService {
     sourceLocales?: boolean;
     /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
     translations?: "all";
+    /** The language the version is spelled for, where it is not the read's own (`readOfEveryLanguage`). */
+    revisionLocale?: string;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -4659,7 +4663,7 @@ export class CollectionQueryService extends BaseService {
         localeChain !== null &&
         chainCoversVersion(localeChain, {
           localization: this.localization,
-          locale: params.locale,
+          locale: params.revisionLocale ?? params.locale,
         });
       const knownFirst = countersWithContent
         ? undefined
@@ -4919,6 +4923,7 @@ export class CollectionQueryService extends BaseService {
         rows: expandedEntries,
         hooksWaived,
         knownLanguages,
+        revisionLocale: params.revisionLocale,
         collectionName: params.collectionName,
         // The collection record this read was planned from, so a `dbName`
         // collection's contributed columns are found under its real table.
@@ -4968,6 +4973,8 @@ export class CollectionQueryService extends BaseService {
         data: paginatedResponse,
       };
     } catch (caught: unknown) {
+      const again = await this.afterMove(params, caught);
+      if (again) return this.listEntries(again);
       // A read the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
@@ -5000,6 +5007,32 @@ export class CollectionQueryService extends BaseService {
         ...errorEnvelopeFields(error),
       };
     }
+  }
+
+  /** The requests being made again after a move, so none is made a third time. */
+  private readonly madeAgain = new WeakSet<object>();
+
+  /**
+   * The request to make again, when a read filtered on a field group failed because the storage
+   * migration moved the group's table under this server (`followedMove`); undefined otherwise, and
+   * for a request already made again. What the failed read had resolved about the group's tables is
+   * left out of it.
+   */
+  private async afterMove<P extends object>(
+    params: P,
+    error: unknown
+  ): Promise<P | undefined> {
+    if (this.madeAgain.has(params)) return undefined;
+    if (!(await this.fieldGroupDataService?.followedMove(error))) {
+      return undefined;
+    }
+    const again: P = {
+      ...params,
+      resolvedComponentTables: undefined,
+      resolvedComponentTypeColumns: undefined,
+    };
+    this.madeAgain.add(again);
+    return again;
   }
 
   /**
@@ -5395,6 +5428,8 @@ export class CollectionQueryService extends BaseService {
         data: { totalDocs },
       };
     } catch (error: unknown) {
+      const again = await this.afterMove(params, error);
+      if (again) return this.countEntries(again, settled);
       return this.countFailed(params.collectionName, error, params);
     }
   }
@@ -5486,6 +5521,8 @@ export class CollectionQueryService extends BaseService {
         },
       };
     } catch (error: unknown) {
+      const again = await this.afterMove(params, error);
+      if (again) return this.countEntriesUpTo(again, settled);
       // Reported as `countEntries` reports it, so a refusal stays a typed 403.
       return this.countFailed(params.collectionName, error, params);
     }
@@ -5578,6 +5615,8 @@ export class CollectionQueryService extends BaseService {
         },
       };
     } catch (caught: unknown) {
+      const again = await this.afterMove(params, caught);
+      if (again) return this.groupEntries(again);
       // A read the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
@@ -5748,6 +5787,8 @@ export class CollectionQueryService extends BaseService {
 
       return this.timeseriesAnswer(window, interval, counted);
     } catch (caught: unknown) {
+      const again = await this.afterMove(params, caught);
+      if (again) return this.timeseriesEntries(again);
       // A read the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
@@ -5903,6 +5944,8 @@ export class CollectionQueryService extends BaseService {
     sourceLocales?: boolean;
     /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
     translations?: "all";
+    /** The language the version is spelled for, where it is not the read's own (`readOfEveryLanguage`). */
+    revisionLocale?: string;
     /**
      * Attach `_details`: where the site serves the entry, and who made and
      * changed it (`entryDetails`). Who is personal data, so the route asks
@@ -6131,7 +6174,7 @@ export class CollectionQueryService extends BaseService {
         companion &&
         chainCoversVersion(localeChain, {
           localization: this.localization,
-          locale: params.locale,
+          locale: params.revisionLocale ?? params.locale,
         }) &&
         companionReady
           ? localeChain
@@ -6721,6 +6764,7 @@ export class CollectionQueryService extends BaseService {
         rows: [expandedEntry],
         hooksWaived,
         knownLanguages,
+        revisionLocale: params.revisionLocale,
         // afterRead handlers on a read by id receive the document itself.
         single: true,
         collectionName: params.collectionName,
@@ -6767,6 +6811,8 @@ export class CollectionQueryService extends BaseService {
         resolvedEntryId,
       };
     } catch (caught: unknown) {
+      const again = await this.afterMove(params, caught);
+      if (again) return this.getEntry(again);
       // A read the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,

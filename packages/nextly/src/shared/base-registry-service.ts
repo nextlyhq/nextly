@@ -551,6 +551,34 @@ export abstract class BaseRegistryService<
   }
 
   /**
+   * Give `slug`'s row of the registry table `table` to `source`, from the owner
+   * `recorded` it was read with: its source and lock alone, in one statement
+   * that finds the row only while it is still that owner's. It touches no
+   * storage and asks nothing else of the entity, so nothing that stops the rest
+   * of an update keeps a row recorded as another owner's.
+   */
+  protected async claimRow(
+    table: string,
+    slug: string,
+    recorded: string,
+    source: string
+  ): Promise<void> {
+    await this.writeRegistry(() =>
+      this.adapter.update(
+        table,
+        { source, locked: 1, updated_at: this.formatDateForDb() },
+        {
+          and: [
+            { column: "slug", op: "=", value: slug },
+            { column: "source", op: "=", value: recorded },
+          ],
+        }
+      )
+    );
+    clearRegistryRowCache();
+  }
+
+  /**
    * Delete `slug`'s registry row and what goes with it
    * (`deleteEntityRegistryRow`) in one transaction, with the stored schema
    * version's count, and clear the cached rows once it has committed. The

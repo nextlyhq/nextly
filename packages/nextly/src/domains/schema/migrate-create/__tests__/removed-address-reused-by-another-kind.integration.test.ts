@@ -131,6 +131,7 @@ describe.each(
         collections: inputs.collections,
         singles: inputs.singles,
         components: inputs.components,
+        fieldGroupNaming: inputs.fieldGroupNaming,
         previous: inputs.latest,
         metadataUpserts: inputs.metadataUpserts,
         previousMetadataUpserts: inputs.previousMetadataUpserts,

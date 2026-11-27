@@ -25,6 +25,7 @@ import {
   _resetPerLanguageStorage,
   setPerLanguageStorage,
 } from "../../../i18n/per-language-storage";
+import { junctionTableNameFor } from "../../services/field-column-descriptor";
 import { deletionHoldOf } from "../deletion-counts";
 
 afterEach(() => {
@@ -116,6 +117,96 @@ describe("the fields a save that removes fields compares", () => {
     });
 
     expect(hold).toBeUndefined();
+  });
+
+  // A many-to-many keeps its links in a link table, which a save drops where it removes the field,
+  // makes it a single relationship, or points it at another collection: the links are counted, in
+  // that table, and compared as a column's values are.
+  const manyTo = (target: string, name = "tags"): FieldDefinition =>
+    ({
+      name,
+      type: "relationship",
+      relationTo: target,
+      hasMany: true,
+      options: { target, relationType: "manyToMany" },
+    }) as unknown as FieldDefinition;
+  const oneTo = (target: string): FieldDefinition =>
+    ({
+      name: "tags",
+      type: "relationship",
+      relationTo: target,
+      options: { target, relationType: "manyToOne" },
+    }) as unknown as FieldDefinition;
+  for (const [change, next] of [
+    ["removes", []],
+    ["makes a single relationship", [oneTo("tags")]],
+    ["points at another collection", [manyTo("labels")]],
+  ] as const) {
+    it(`counts the links of a many-to-many a save ${change}, in its link table`, async () => {
+      const hold = deletionHoldOf({
+        dialect: "sqlite",
+        tableName: "dc_posts",
+        localized: false,
+        previous: [text("title"), manyTo("tags")],
+        next: [text("title"), ...next],
+        confirmed: [{ field: "tags", count: 2 }],
+      });
+
+      expect(hold?.tables).toEqual([
+        junctionTableNameFor("dc_posts", manyTo("tags")),
+      ]);
+      expect(await refusedFields(hold!.compare(countingSqlite(3)))).toEqual([
+        "fields.tags",
+      ]);
+      await expect(hold!.compare(countingSqlite(2))).resolves.toBeUndefined();
+    });
+  }
+
+  it("leaves out a many-to-many the save keeps, or renames, with its links", () => {
+    for (const [next, renamed] of [
+      [[text("title"), manyTo("tags")], []],
+      [
+        [text("title"), manyTo("tags", "labels")],
+        [{ from: "tags", to: "labels" }],
+      ],
+    ] as const) {
+      expect(
+        deletionHoldOf({
+          dialect: "sqlite",
+          tableName: "dc_posts",
+          localized: false,
+          previous: [text("title"), manyTo("tags")],
+          next: [...next],
+          renamed: [...renamed],
+          confirmed: [],
+        })
+      ).toBeUndefined();
+    }
+  });
+
+  // A rename answer carries a many-to-many's links only where the save pairs the two fields itself
+  // (`relationshipsDroppingLinks`): the same target under the same relation kind. An answer naming
+  // a field that points elsewhere renames nothing, and the old field's link table goes with every
+  // link in it, so they are counted.
+  it("counts the links of a many-to-many a rename answer names, where the save pairs it with nothing", async () => {
+    for (const next of [[manyTo("labels", "labels")], []]) {
+      const hold = deletionHoldOf({
+        dialect: "sqlite",
+        tableName: "dc_posts",
+        localized: false,
+        previous: [text("title"), manyTo("tags")],
+        next: [text("title"), ...next],
+        renamed: [{ from: "tags", to: "labels" }],
+        confirmed: [{ field: "tags", count: 2 }],
+      });
+
+      expect(hold?.tables).toEqual([
+        junctionTableNameFor("dc_posts", manyTo("tags")),
+      ]);
+      expect(await refusedFields(hold!.compare(countingSqlite(3)))).toEqual([
+        "fields.tags",
+      ]);
+    }
   });
 
   it("compares a removed field that a rename answer names, where the save renames nothing", async () => {

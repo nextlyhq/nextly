@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { missingSchemaObject } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
+import { introspectLiveColumns } from "../../schema/pipeline/diff/introspect-live";
 import {
   _resetPerLanguageStorage,
   setPerLanguageStorage,
@@ -28,6 +29,25 @@ import {
   heroComponentMeta,
   ctaComponentMeta,
 } from "./field-group-test-helpers";
+
+vi.mock("../../schema/pipeline/diff/introspect-live", async original => ({
+  ...(await original<
+    typeof import("../../schema/pipeline/diff/introspect-live")
+  >()),
+  introspectLiveColumns: vi.fn(),
+}));
+
+/** Makes the catalog hold `tables` alone, each with a discriminator under its current name. */
+function catalogHolds(...tables: string[]): void {
+  vi.mocked(introspectLiveColumns).mockImplementation(
+    async (_db, _dialect, names) =>
+      ({
+        tables: names
+          .filter(name => tables.includes(name))
+          .map(name => ({ name, columns: [{ name: "_field_group_type" }] })),
+      }) as never
+  );
+}
 
 /**
  * Trusted server code: these cases are about how instances are stored, so
@@ -630,6 +650,111 @@ describe("FieldGroupDataService", () => {
         expect(tx.insert).toHaveBeenCalledTimes(1);
       });
     });
+
+    // A save on the caller's transaction that meets a table the storage migration moved holds the
+    // transaction's connection: on a pool of one, a read on another connection waits for it for
+    // ever. The registry's own listing never answers here, so a save that followed the move before
+    // refusing would never settle.
+    describe("when the storage migration moved its table", () => {
+      beforeEach(() => {
+        Object.assign(ctx.adapter, {
+          dialect: "sqlite",
+          afterRollback: vi.fn(),
+        });
+      });
+
+      it.each([
+        [
+          "a single instance",
+          [seoComponentField()],
+          { seo: { metaTitle: "About" } },
+        ],
+        [
+          "repeatable instances",
+          [repeatableComponentField()],
+          { features: [{ title: "One" }] },
+        ],
+        [
+          "multi-component instances",
+          [multiComponentField()],
+          { layout: [{ _componentType: "hero", heading: "Welcome" }] },
+        ],
+      ])(
+        "refuses %s to be retried, reading nothing more while it holds the transaction",
+        async (_shape, fields, data) => {
+          ctx.registry.getAllComponents = vi.fn(
+            () => new Promise<never>(() => {})
+          );
+          catalogHolds("fg_moved");
+          const tx = createMockTxContext({
+            insert: vi
+              .fn()
+              .mockRejectedValue(new Error("no such table: comp_moved")),
+          });
+
+          const error = await ctx.service
+            .saveComponentDataInTransaction(
+              tx as unknown as Parameters<
+                typeof ctx.service.saveComponentDataInTransaction
+              >[0],
+              {
+                parentId: "entry-1",
+                parentTable: "dc_pages",
+                access: TRUSTED,
+                fields,
+                data,
+              } as unknown as Parameters<
+                typeof ctx.service.saveComponentDataInTransaction
+              >[1]
+            )
+            .then(
+              () => undefined,
+              (caught: unknown) => caught
+            );
+
+          expect(
+            (error as { publicData?: unknown } | undefined)?.publicData
+          ).toMatchObject({ errors: [{ code: "FIELD_GROUP_STORAGE_MOVING" }] });
+          // The names are followed once the transaction has rolled back, and not before.
+          expect(ctx.adapter.afterRollback).toHaveBeenCalledTimes(1);
+          expect(ctx.registry.getAllComponents).not.toHaveBeenCalled();
+        }
+      );
+
+      it("keeps the save's own error when no migration has made its table yet", async () => {
+        catalogHolds();
+        const tx = createMockTxContext({
+          insert: vi
+            .fn()
+            .mockRejectedValue(new Error("no such table: comp_moved")),
+        });
+
+        const error = await ctx.service
+          .saveComponentDataInTransaction(
+            tx as unknown as Parameters<
+              typeof ctx.service.saveComponentDataInTransaction
+            >[0],
+            {
+              parentId: "entry-1",
+              parentTable: "dc_pages",
+              access: TRUSTED,
+              fields: [seoComponentField()],
+              data: { seo: { metaTitle: "About" } },
+            } as unknown as Parameters<
+              typeof ctx.service.saveComponentDataInTransaction
+            >[1]
+          )
+          .then(
+            () => undefined,
+            (caught: unknown) => caught
+          );
+
+        expect(error).toBeInstanceOf(Error);
+        expect(JSON.stringify(error)).not.toContain(
+          "FIELD_GROUP_STORAGE_MOVING"
+        );
+      });
+    });
   });
 
   describe("a virtual field-group field", () => {
@@ -1120,6 +1245,67 @@ describe("FieldGroupDataService", () => {
   // A caller judging documents by what they hold (a publish) reads strictly:
   // a field it failed to read must not stand in as an empty one, which an
   // optional field or a permissive validator would then accept.
+  describe("a read on a write's transaction meeting a table the storage migration moved", () => {
+    const read = () => {
+      Object.assign(ctx.adapter, { dialect: "sqlite", afterRollback: vi.fn() });
+      ctx.adapter.select.mockRejectedValue(
+        new Error("no such table: comp_seo")
+      );
+      return ctx.service.populateComponentDataByLanguage({
+        entry: { id: "entry-1" },
+        parentTable: "dc_pages",
+        fields: [seoComponentField()] as never,
+        executor: TX_DRIZZLE_HANDLE,
+        strict: true,
+        depth: 0,
+        languages: [{}],
+      });
+    };
+
+    it("refuses the write to be retried, following the table after the rollback", async () => {
+      catalogHolds("fg_seo");
+      await expect(read()).rejects.toMatchObject({
+        publicData: { errors: [{ code: "FIELD_GROUP_STORAGE_MOVING" }] },
+      });
+      expect(ctx.adapter.afterRollback).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads the group as empty when no migration has made its table yet", async () => {
+      catalogHolds();
+      await expect(read()).resolves.toMatchObject([{ seo: null }]);
+    });
+  });
+
+  describe("a delete on a transaction meeting a table that is missing", () => {
+    const remove = () => {
+      Object.assign(ctx.adapter, { dialect: "sqlite", afterRollback: vi.fn() });
+      return ctx.service.deleteComponentDataInTransaction(
+        createMockTxContext({
+          select: vi
+            .fn()
+            .mockRejectedValue(new Error("no such table: comp_seo")),
+        }) as never,
+        {
+          parentId: "entry-1",
+          parentTable: "dc_pages",
+          fields: [seoComponentField()] as never,
+        }
+      );
+    };
+
+    it("is refused when the migration moved it, rather than leaving its rows behind", async () => {
+      catalogHolds("fg_seo");
+      await expect(remove()).rejects.toMatchObject({
+        publicData: { errors: [{ code: "FIELD_GROUP_STORAGE_MOVING" }] },
+      });
+    });
+
+    it("has nothing to delete when no migration has made it yet", async () => {
+      catalogHolds();
+      await expect(remove()).resolves.toBeUndefined();
+    });
+  });
+
   describe("populateComponentDataMany (batch), strict", () => {
     const strictRead = (fields: Record<string, unknown>[]) =>
       ctx.service.populateComponentDataMany({
@@ -1146,7 +1332,9 @@ describe("FieldGroupDataService", () => {
     });
 
     it("refuses a zone whose component cannot be looked up, even when the error names a missing relation", async () => {
-      ctx.registry.getComponent.mockRejectedValueOnce(
+      // Every lookup fails: a registry that moved is looked up once more under the name it holds
+      // now, so only a lookup that still fails then is the failure this refuses.
+      ctx.registry.getComponent.mockRejectedValue(
         new Error('relation "dynamic_components" does not exist')
       );
 

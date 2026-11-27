@@ -69,6 +69,7 @@ import {
   landingPush,
   nextSteps,
 } from "../../domains/schema/builder-save/landing-push";
+import { settleKeptPerLanguage } from "../../domains/schema/builder-save/per-language-answers";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
   renamedFieldsOf,
@@ -115,6 +116,7 @@ import {
   schemaDraftSplit,
 } from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
+import { isConfigOwnedSource } from "../../domains/webhooks/recording-provenance";
 import { shownWorkflowSummary } from "../../domains/workflows/stage-presentation";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
@@ -156,6 +158,11 @@ import {
   refuseRefusedLeavingSettings,
   type BuilderCompanionReconcile,
 } from "../helpers/builder-schema-push";
+import {
+  confirmedDeletionsAnswer,
+  readConfirmedDeletions,
+  withCountedDrops,
+} from "../helpers/confirmed-deletions";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -381,7 +388,8 @@ function injectSingleDefaultFields<T extends SingleWithFields | null>(
   single: T
 ): T {
   if (!single) return single;
-  const isCodeFirst = single.source === "code" || single.source === "built-in";
+  const isCodeFirst =
+    isConfigOwnedSource(single.source) || single.source === "built-in";
   if (isCodeFirst) return single;
   const baseFields = single.fields ?? [];
   // Filter out any existing title/slug fields to prevent duplicates.
@@ -1667,6 +1675,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
       if (!sentFields) throw new Error("fields is required in request body");
+      // The counts of removed fields' values the review showed and the person confirmed, compared
+      // by the save just before it deletes them; refused here where malformed.
+      const confirmedDeletions = readConfirmedDeletions(body);
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
@@ -1769,7 +1780,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             hasStatus: single.status === true,
           });
           // The Single's row given each new field's stated default (`dialogRowAnswers`).
-          const { fileAnswers, legacyBundle } = dialogRowAnswers({
+          const { fileAnswers, legacyBundle: answered } = dialogRowAnswers({
             single,
             fields: fields as unknown as FieldDefinition[],
             renameResolutions,
@@ -1778,6 +1789,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             dialect: adapter.dialect,
             translatedAfter: layout.isStored,
           });
+          // A removed field whose count the person confirmed is its drop confirmed, as on a
+          // collection's save, unless the field answers itself.
+          const legacyBundle = withCountedDrops(
+            tableName,
+            answered,
+            confirmedDeletions
+          );
           // A precondition, so before anything changes: turning translation off drops each
           // language's own publish state, which loses nothing only where it is the entry's.
           if (layout.languagesMustAgreeWithEntry) {
@@ -2054,9 +2072,36 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           };
           // What the companion reconcile would drop of another owner's, refused before either road runs.
           await refuseBuilderCompanionTakingOthersElements("single", companion);
+          // Once the translations table is in step, the Single's fields kept per language are
+          // settled as the save's file settles them (`settleKeptPerLanguage`): each new field's
+          // stated default in the document's default-language row, and the person's answer for a
+          // field made required.
+          const pushThenSettle = async () => {
+            const pushed = await pushAndReconcileCompanion(
+              push,
+              desired,
+              "single",
+              companion
+            );
+            await settleKeptPerLanguage(
+              { db: adapter.getDrizzle(), dialect, entity: "single" },
+              {
+                tableName,
+                localized: isLocalized,
+                oldFields: single.fields,
+                newFields: fields as unknown as FieldDefinition[],
+                eventResolutions,
+                legacy: legacyBundle,
+                fills: undefined,
+                rowFills: fileAnswers.rowFills,
+                renameResolutions,
+              }
+            );
+            return pushed;
+          };
           const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
-            () => pushAndReconcileCompanion(push, desired, "single", companion),
+            pushThenSettle,
             {
               kind: "single",
               slug,
@@ -2074,6 +2119,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 ...(acknowledgedConversions === undefined
                   ? {}
                   : { acknowledgedConversions }),
+                ...confirmedDeletionsAnswer(confirmedDeletions),
               },
               // Its junction tables and relationship keys, which the writer does not derive itself.
               ...(builderSave === undefined

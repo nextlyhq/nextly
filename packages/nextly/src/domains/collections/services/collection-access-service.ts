@@ -23,7 +23,10 @@ import {
 } from "../../../auth/access/own-database-visitor";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
 import type { RuleFilter } from "../../../auth/access/rule-answer";
-import { askReadAsPlainRead } from "../../../auth/access/rule-language";
+import {
+  askReadAsPlainRead,
+  ruleLanguageKey,
+} from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
@@ -41,6 +44,7 @@ import type { VisitorGrantsLoader } from "../../../shared/lib/field-level-regist
 
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import type { ReadReach } from "./write-filter-match";
+import { askOnce } from "./write-tries";
 
 /**
  * The writes that limit themselves to the entries a write rule's filter
@@ -136,9 +140,38 @@ export class CollectionAccessService extends BaseService {
     if (params.overrideAccess) {
       return null;
     }
-    const ask = this.gateFor(params, false);
-    const verdict = await ask(params.operation);
-    return verdict.allowed ? null : this.refusalOf<T>(verdict, params, ask);
+    // A write made again keeps the answer its first try had (`WriteTries`).
+    return askOnce(
+      this.questionOf("access", params),
+      async () => {
+        const ask = this.gateFor(params, false);
+        const verdict = await ask(params.operation);
+        return verdict.allowed ? null : this.refusalOf<T>(verdict, params, ask);
+      },
+      { onTransaction: params.executor !== undefined }
+    );
+  }
+
+  /**
+   * The question `params` asks, as a write's later tries are answered it: the operation and what it
+   * acts on, the caller as the gate judges one, and the language the rules are told. Asked in one
+   * write, by the gate that answers with a filter (`"write"`) or the one that does not.
+   */
+  private questionOf(
+    gate: "access" | "write",
+    params: CollectionAccessParams
+  ): string {
+    return JSON.stringify([
+      gate,
+      params.operation,
+      params.collectionName,
+      params.entryId ?? null,
+      params.user?.id ?? null,
+      params.routeAuthorized === true,
+      effectiveCallerScope(params.authenticatedScope) ?? null,
+      currentPrincipal(),
+      ruleLanguageKey(),
+    ]);
   }
 
   /**
@@ -189,6 +222,25 @@ export class CollectionAccessService extends BaseService {
       }
   > {
     if (params.overrideAccess) return { denied: null };
+    // A write made again keeps the answer its first try had (`WriteTries`).
+    return askOnce(
+      this.questionOf("write", params),
+      () => this.askCollectionWrite<T>(params),
+      { onTransaction: params.executor !== undefined }
+    );
+  }
+
+  /** What the gate answers a write that applies a rule's filter. */
+  private async askCollectionWrite<T>(
+    params: CollectionAccessParams & { operation: FilteredWrite }
+  ): Promise<
+    | { readonly denied: CollectionServiceResult<T> }
+    | {
+        readonly denied: null;
+        readonly filter?: RuleFilter;
+        readonly read?: ReadReach;
+      }
+  > {
     const ask = this.gateFor(params, true);
     const verdict = await ask(params.operation);
     if (verdict.allowed) return { denied: null };

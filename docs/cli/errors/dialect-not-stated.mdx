@@ -1,0 +1,33 @@
+---
+title: DIALECT_NOT_STATED
+description: "A command that reads no database could not tell which one its migrations are for: no `--dialect`, no migration file naming one, and no `DB_DIALECT` or `DATABASE_URL`."
+---
+
+## Cause
+
+A command that reads no database could not tell which one its migrations are for: no `--dialect`, no migration file naming one, and no `DB_DIALECT` or `DATABASE_URL`.
+
+`nextly migrate:check` and `nextly migrate:create` compare the configuration with the migrations folder, which needs no database, so they run without `DATABASE_URL`. They still need to know which database the migrations are for, since each dialect writes its own SQL. They take it from, in order:
+
+1. `--dialect`;
+2. the newest migration that says: one written as a single dialect's file (`0003_seed.sqlite.sql`) by its name, any other by the dialect its header names (`-- Dialect: PostgreSQL`);
+3. `DB_DIALECT`, else the scheme of `DATABASE_URL`, read without connecting;
+4. a question, when the command runs at a terminal.
+
+When none of these says, and no terminal is attached to ask, as in CI before the first migration, the command refuses.
+
+## Fix
+
+- Pass `--dialect` with `postgresql`, `mysql` or `sqlite`, or set `DB_DIALECT`.
+- Once the first migration is written, its header names the dialect and the flag is no longer needed.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ The command could not tell which database the migrations are for.
+  Why:  It reads no database, no migration file names its dialect yet, and neither `DB_DIALECT` nor `DATABASE_URL` is set.
+  Next: Pass `--dialect` with `postgresql`, `mysql` or `sqlite`, or set `DB_DIALECT`.
+  Docs: https://nextlyhq.com/docs/cli/errors/dialect-not-stated  (DIALECT_NOT_STATED)
+```

@@ -6,13 +6,22 @@
  * TEXT unnarrowed.
  */
 import { getTableConfig as mysqlTableConfig } from "drizzle-orm/mysql-core";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { FieldConfig } from "../../../../collections/fields/types";
 import { getComponentRowColumnDescriptor } from "../../../schema/services/field-column-descriptor";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { FieldGroupSchemaService } from "../field-group-schema-service";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 const META_TITLE = { name: "meta_title", type: "text" };
 

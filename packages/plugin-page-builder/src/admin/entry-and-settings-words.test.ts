@@ -28,9 +28,12 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { HEADER_FOOTER_WORDS } from "@nextlyhq/builder";
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 import type { Node as AstNode } from "oxc-parser";
 import { describe, expect, it } from "vitest";
+
+import { NEW_PAGE_WORDS } from "./new-page/new-page-words";
 
 const PACKAGES = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -106,16 +109,12 @@ const DECIDED: readonly { word: string | RegExp; file: string }[] = [
     word: "New {…}",
     file: "plugin-page-builder/src/admin/new-page/new-page-words.ts",
   },
-  ...[
-    "Create and open builder",
-    "Start from",
-    "Blank",
-    "Address",
-    "Header & footer",
-  ].map(word => ({
-    word,
-    file: "plugin-page-builder/src/admin/new-page/new-page-words.ts",
-  })),
+  ...["Create and open builder", "Start from", "Blank", "Address"].map(
+    word => ({
+      word,
+      file: "plugin-page-builder/src/admin/new-page/new-page-words.ts",
+    })
+  ),
   {
     word: "Page settings",
     file: "plugin-page-builder/src/admin/editor/document-settings-panel.tsx",
@@ -379,6 +378,12 @@ describe("the entry and settings screens' words", () => {
       .filter(text => BANNED.some(rule => rule.test(text)))
       .map(text => ({ file, text }))
   );
+
+  it("names the header & footer with the editor's word, read from its glossary", () => {
+    expect(NEW_PAGE_WORDS.headerFooter).toBe(
+      HEADER_FOOTER_WORDS.headerAndFooter
+    );
+  });
 
   it("reads the files it claims to", () => {
     expect([...shown.keys()]).toEqual(

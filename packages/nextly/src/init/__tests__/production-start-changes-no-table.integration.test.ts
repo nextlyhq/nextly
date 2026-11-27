@@ -544,10 +544,10 @@ describe.each(getConfiguredTestDialects())(
           }
         };
         expect(await tables(), "the translation table was migrated").toContain(
-          "comp_pscn_hero_locales"
+          "fg_pscn_hero_locales"
         );
         const drop = await adapterFor();
-        await drop.executeQuery("DROP TABLE comp_pscn_hero_locales");
+        await drop.executeQuery("DROP TABLE fg_pscn_hero_locales");
         await drop.disconnect().catch(() => undefined);
 
         vi.stubEnv("NODE_ENV", "production");
@@ -568,10 +568,10 @@ describe.each(getConfiguredTestDialects())(
             { params: Promise.resolve({ params: path }) }
           );
           await startSettled();
-          expect(await tables()).not.toContain("comp_pscn_hero_locales");
+          expect(await tables()).not.toContain("fg_pscn_hero_locales");
           return;
         }
-        expect(await tables()).toContain("comp_pscn_hero_locales");
+        expect(await tables()).toContain("fg_pscn_hero_locales");
         // The translations are written and read in each language.
         const { item } = (await nextly.create({
           collection: "pscn_pages",

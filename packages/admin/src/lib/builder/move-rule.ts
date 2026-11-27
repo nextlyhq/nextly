@@ -29,7 +29,12 @@ import {
   siblingNameClash,
 } from "nextly/config";
 import type { FieldNameSurface } from "nextly/config";
-import { isFieldGroupFieldType } from "nextly/field-group-type";
+import {
+  extractFieldGroupReferences,
+  fieldGroupUsersClause,
+  isFieldGroupFieldType,
+  type FieldGroupUserNamed,
+} from "nextly/field-group-type";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
@@ -57,10 +62,15 @@ export interface MoveContext {
    * by the container's id, or `""` for the top level.
    */
   heldNames?: ReadonlyMap<string, readonly string[]>;
-  /** A field group's label and every place using it, for the refusal that names them. */
-  describeFieldGroup?: (
-    slug: string
-  ) => { label: string; usedBy: readonly string[] } | undefined;
+  /** Every place using a field group the entity uses, for the refusal that names them. */
+  describeFieldGroup?: (slug: string) => FieldGroupUsers | undefined;
+  /** For a field group's own row, the field it stands for: the field a move out of it names. */
+  fieldOfRow?: (rowId: string) => BuilderField | undefined;
+  /**
+   * For a field group's own row, the field group defining it: the nearest one, so a field of a
+   * field group inside another, or of one entry of a field accepting several, names its own.
+   */
+  fieldGroupOfRow?: (rowId: string) => string | undefined;
   /** Types the surface does not take, wherever they go. */
   excludedTypes?: readonly string[];
   /**
@@ -83,6 +93,16 @@ export interface MoveContext {
    * taken as saved where it stands.
    */
   savedContainerIdsOf?: (fieldId: string) => readonly string[] | null;
+}
+
+/**
+ * Who uses a field group, as the server lists them: each collection, Single and field group, direct
+ * uses first, then those reaching it through other field groups (`via`), and whether the reader may
+ * read every one (`complete`). `uses` is null while that list is being read, or could not be.
+ */
+export interface FieldGroupUsers {
+  uses: readonly FieldGroupUserNamed[] | null;
+  complete: boolean;
 }
 
 /**
@@ -268,7 +288,12 @@ function containerRefusal(
     );
   }
   if (isFieldGroupFieldType(container.type)) {
-    return fieldGroupRefusal(container, ctx);
+    return fieldGroupRefusal(
+      field,
+      fieldGroupSlugsOf(container),
+      called(container),
+      ctx
+    );
   }
   if (container.type !== "group" && container.type !== "repeater") {
     return refuse("not-a-container", `${called(container)} holds no fields.`);
@@ -286,21 +311,63 @@ function containerRefusal(
     : null;
 }
 
-/** The refusal of a move into a field group, naming it and every place that uses it. */
+/**
+ * The refusal of moving a row the entity's fields do not hold: a field group's own row, whose move
+ * out of the field group is refused as a move into it is, naming the row; or a field no longer
+ * there.
+ */
+function notAmongTheFields(fieldId: string, ctx: MoveContext): MoveVerdict {
+  const holder = ctx.fieldGroupFieldHolding?.(fieldId);
+  if (!holder) return refuse("not-found", "That field is no longer here.");
+  // The field group defining the row, which is where it is changed: for a field of a field group
+  // placed inside another, or of one entry of a field accepting several, not the field using it.
+  const defining = ctx.fieldGroupOfRow?.(fieldId);
+  return fieldGroupRefusal(
+    ctx.fieldOfRow?.(fieldId),
+    defining === undefined ? fieldGroupSlugsOf(holder) : [defining],
+    called(holder),
+    ctx
+  );
+}
+
+/** The field groups a field using them names: the one it uses, or each it accepts. */
+function fieldGroupSlugsOf(field: BuilderField): string[] {
+  const { single, many } = extractFieldGroupReferences(field);
+  return [...(single === undefined ? [] : [single]), ...(many ?? [])];
+}
+
+/** Said in place of a field group's users while the list of them has not been read. */
+const USERS_UNREAD = "Where else it is used could not be read.";
+
+/**
+ * The refusal of moving `moved` into or out of the field groups `slugs`, in the words the server
+ * refuses the same move with (`checkMove`'s field-group refusal): the moved field, the field group
+ * by its slug, why, then every user by the clause both read (`fieldGroupUsersClause`). Only the
+ * clause can be shared: the server's sentence is not published, so it is written again here, and a
+ * test holds the two to one fixture. While a list of users has not been read, or could not be, the
+ * refusal says so rather than naming fewer users than there are. `unnamed` is said for a field
+ * group that names none.
+ */
 function fieldGroupRefusal(
-  container: BuilderField,
+  moved: BuilderField | undefined,
+  slugs: readonly string[],
+  unnamed: string,
   ctx: MoveContext
 ): MoveVerdict {
-  const slug = container.component ?? container.components?.[0] ?? "";
-  const described = ctx.describeFieldGroup?.(slug);
-  const name = described?.label ?? slug;
-  const usedBy =
-    described && described.usedBy.length > 0
-      ? ` It is used by ${described.usedBy.join(", ")}.`
-      : "";
+  const name = slugs.length > 0 ? slugs.join(" or ") : unnamed;
+  const users = slugs.flatMap(slug => {
+    const described = ctx.describeFieldGroup?.(slug);
+    if (described === undefined) return [];
+    if (described.uses === null) return [USERS_UNREAD];
+    const clause = fieldGroupUsersClause(described.uses, described.complete);
+    return clause === "" ? [] : [clause];
+  });
   return refuse(
     "into-field-group",
-    `${called(container)} uses the field group ${name}, which is changed only in its own editor, where a change reaches every place that uses it.${usedBy}`
+    [
+      `${moved ? called(moved) : "This field"} cannot be moved into or out of the field group ${name}: a field group is changed only in its own editor.`,
+      ...users,
+    ].join(" ")
   );
 }
 
@@ -599,12 +666,7 @@ export function judgeMove(
   ctx: MoveContext
 ): MoveVerdict {
   const chain = chainTo(fields, fieldId);
-  if (!chain) {
-    const holder = ctx.fieldGroupFieldHolding?.(fieldId);
-    return holder
-      ? fieldGroupRefusal(holder, ctx)
-      : refuse("not-found", "That field is no longer here.");
-  }
+  if (!chain) return notAmongTheFields(fieldId, ctx);
   const field = chain[chain.length - 1];
   const from = chain.slice(0, -1);
   const into = target.parentFieldId

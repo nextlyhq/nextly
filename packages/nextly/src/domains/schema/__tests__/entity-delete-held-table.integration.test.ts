@@ -11,7 +11,7 @@
  * again once the holder ends finishes. PostgreSQL only: the SQLite suite runs in memory, where no
  * second connection can hold the database, and MySQL deletes in steps, as before.
  *
- * A stray table: a `comp_`-prefixed table the registry does not know and that has no
+ * A stray table: an `fg_`-prefixed table the registry does not know and that has no
  * `_parent_table` column holds no field-group values, so the teardown that sweeps those values
  * passes over it. Asking it for rows by that column fails, which on PostgreSQL aborts the
  * delete's transaction; the delete asks the catalog for the column instead, so it finishes on
@@ -34,12 +34,10 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import { fieldGroupTableNameFor } from "../../field-groups/services/field-group-storage-names";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../utils/resolve-table-name";
+import { resolveCollectionTableName } from "../utils/resolve-table-name";
 
 let instance: TestNextly | undefined;
 /** The calls a plugin's in-transaction collection-delete handler received, by slug. */
@@ -66,8 +64,8 @@ function expectChecksFirst(stopped: unknown): void {
 }
 /** The plugin's own collection, which its handler reads in the delete's transaction. */
 const DESIGNS = "edh_designs";
-/** A `comp_` table the registry does not know, with no `_parent_table` column. */
-const STRAY = "comp_edh_stray";
+/** An `fg_` table the registry does not know, with no `_parent_table` column. */
+const STRAY = "fg_edh_stray";
 
 type Kind = "collection" | "single" | "fieldGroup";
 
@@ -181,7 +179,7 @@ describe.each(getConfiguredTestDialects())(
       return {
         kind,
         slug,
-        table: resolveComponentTableName(slug),
+        table: fieldGroupTableNameFor("current", slug),
         registry: await resolveRegistryTableName(t.adapter),
       };
     }

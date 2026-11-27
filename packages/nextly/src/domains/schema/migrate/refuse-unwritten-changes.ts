@@ -20,6 +20,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { APP_OWNER } from "../../../plugins/permissions/collect-permissions";
 import type { EntitySettingsChange } from "../migrate-create/entity-settings";
+import { translationsNotRecordedNotice } from "../pending/pending-changes";
 import type { Operation } from "../pipeline/diff/types";
 
 import { configurationRegistryRows } from "./first-run";
@@ -57,6 +58,14 @@ export async function refuseUnwrittenChanges(
   const changes = await unwrittenChangesOf({
     ...args,
     recorded: (_entities, newest) => recordedInDatabase(args, newest),
+    // A project with no migration yet is named under the field-group names its database holds,
+    // as `migrate:create` writes its first migration under them.
+    firstFieldGroupNaming: async () => {
+      const { standingRegistryNaming } = await import(
+        "../../field-groups/services/field-group-new-site"
+      );
+      return standingRegistryNaming(args.adapter);
+    },
   });
   const error = unwrittenChangesError(changes, {
     baselineFirst:
@@ -64,6 +73,9 @@ export async function refuseUnwrittenChanges(
       (await holdsAnyAddedTable(args.adapter, changes.tables)),
   });
   if (error !== undefined) throw error;
+  if (changes.besideNotRecorded !== undefined) {
+    args.logger.warn(translationsNotRecordedNotice(changes.besideNotRecorded));
+  }
 }
 
 /** `tableExists`, where the adapter has it. */

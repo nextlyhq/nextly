@@ -23,7 +23,10 @@ import {
   text,
 } from "drizzle-orm/mysql-core";
 
-import { NEXTLY_JOBS_INDEXES, mysqlIndexes } from "../_internal/core-indexes";
+import {
+  NEXTLY_JOBS_INDEXES,
+  mysqlIndexes,
+} from "../_internal/core-indexes-mysql";
 
 import type { JobState } from "./types";
 

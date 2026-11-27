@@ -26,8 +26,11 @@
  * @module domains/field-groups/migration/data-steps
  */
 
+import { sql } from "drizzle-orm";
+
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { databaseNowMs } from "../../limits/store-clock";
 import type { MetaService } from "../../meta/services/meta-service";
 
 import { MIGRATION_TARGET } from "./manifest";
@@ -105,24 +108,80 @@ export const FIELD_GROUP_STORAGE_VOCABULARY: FieldGroupStorageVocabulary = {
  * for growth but not the other would be a guess about which fills up first.
  */
 const CONTENT_TARGETS: readonly RowRewriteTarget[] = [
-  { table: "nextly_versions", documentProperty: "snapshot" },
-  { table: "nextly_events", documentProperty: "payload" },
+  // A version's autosave rewrites its row in place, so its last write is `updatedAt`.
+  {
+    table: "nextly_versions",
+    documentProperty: "snapshot",
+    writtenAt: ["updatedAt", "createdAt"],
+  },
+  {
+    table: "nextly_events",
+    documentProperty: "payload",
+    writtenAt: ["createdAt"],
+  },
 ];
+
+/**
+ * The moment a content step begins, on the database's clock: the second whole second after the
+ * clock's reading, which the step waits for before its walk.
+ *
+ * A whole second, since SQLite and MySQL's events ledger keep whole seconds, and two past the
+ * reading, since MySQL rounds a stamp to its column's precision: a row written before the reading
+ * is stored at most one second past it, so before this moment, and a row written from it on is
+ * stored at or after it. Up to two seconds a step, so that no row that existed before the step is
+ * taken for one written during it.
+ *
+ * The database's clock, not this process's: the database stamps the events ledger's rows itself,
+ * and a host whose clock runs apart from it would count rows written during the step as older
+ * than it (and refuse a run under traffic), or a row the walk missed as newer (and pass over it).
+ */
+async function stepBeganAt(session: MigrationSession): Promise<Date> {
+  const now = await databaseNow(session);
+  const began = (Math.floor(now / 1000) + 2) * 1000;
+  for (let at = now; at < began; at = await databaseNow(session)) {
+    await new Promise(resolve => setTimeout(resolve, began - at));
+  }
+  return new Date(began);
+}
+
+/** The database's clock, in milliseconds since the epoch. */
+async function databaseNow(session: MigrationSession): Promise<number> {
+  const rows = await session.inTransaction(ctx =>
+    ctx.queryStatement<{ now: unknown }>(
+      sql`SELECT ${databaseNowMs(session.dialect)} AS ${sql.identifier("now")}`
+    )
+  );
+  // PostgreSQL hands a bigint back as a string; every dialect's answer reads as a number.
+  const now = Number(rows[0]?.now);
+  if (!Number.isFinite(now)) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "the database did not answer its clock",
+        answer: String(rows[0]?.now),
+      },
+    });
+  }
+  return now;
+}
+
+/** What rewrites a stored document's wire key from one vocabulary to the other. */
+function wireKeyRewrite(
+  from: FieldGroupStorageVocabulary,
+  to: FieldGroupStorageVocabulary
+): (document: unknown) => unknown {
+  return document =>
+    rewriteContentKey(document, from.wireTypeKey, to.wireTypeKey);
+}
 
 /**
  * Ask the ledger surfaces whether they are still rewritten, and refuse if not.
  *
- * The body of {@link settleLedgersStep}'s verify, exposed so a caller can ask
- * the same question without running a migration.
+ * The question {@link settleLedgersStep}'s verify asks, asked without changing anything: a step's
+ * own verify rewrites rows written while it ran before it answers, and this only reads, so a
+ * caller can ask it of a database without running, or finishing, a migration.
  *
- * Both ways a verifier can report residue are honoured, because a step is free
- * to choose either: a ledger walk THROWS, naming the offending row, while
- * `MigrationStep.verify` is declared to answer a boolean. Reading only the
- * throws would accept every surface that reports by returning — so the returned
- * answer is what decides, and the throw is allowed to pass through.
- *
- * @throws a step's own refusal where it raises one, and otherwise a refusal
- * naming the steps that answered false.
+ * @throws the refusal a step's verify raises (`unrewrittenRowRefusal`), naming the first ledger
+ * and row still carrying the old vocabulary.
  */
 export async function assertLedgersSettled(args: {
   session: MigrationSession;
@@ -131,21 +190,37 @@ export async function assertLedgersSettled(args: {
   from: FieldGroupStorageVocabulary;
   to: FieldGroupStorageVocabulary;
 }): Promise<void> {
-  const unsettled: string[] = [];
-  for (const step of buildDataMigrationSteps(args)) {
-    if (!(await step.verify(args.session))) unsettled.push(step.id);
-  }
-  if (unsettled.length > 0) {
-    throw NextlyError.serviceUnavailable({
-      logMessage:
-        "field-group migration left stored vocabulary unrewritten: " +
-        unsettled.join(", "),
-      logContext: {
-        reason: "settlement verification reported an unrewritten surface",
-        steps: unsettled.join(", "),
-      },
+  const rewrite = wireKeyRewrite(args.from, args.to);
+  for (const target of CONTENT_TARGETS) {
+    const row = await findUnrewrittenRow({
+      session: args.session,
+      target,
+      rewrite,
     });
+    // The refusal a step's own verify raises, so the two name a surface and a row alike.
+    if (row !== undefined) throw unrewrittenRowRefusal(target, row);
   }
+}
+
+/**
+ * The refusal for a ledger row still carrying the old vocabulary. Named rather than merely
+ * reported false: a row the walk did not reach is not "not finished yet" (the walk ran to the end
+ * of the table), so an operator needs the row to look at, and a retry needs to be understood as a
+ * retry of something that already claimed to be done.
+ */
+function unrewrittenRowRefusal(
+  target: RowRewriteTarget,
+  row: string
+): NextlyError {
+  return NextlyError.serviceUnavailable({
+    logMessage: `field-group migration left a row carrying the old vocabulary: ${target.table}`,
+    logContext: {
+      reason: "row rewrite did not reach every row",
+      table: target.table,
+      property: target.documentProperty,
+      row,
+    },
+  });
 }
 
 /**
@@ -161,9 +236,16 @@ export async function assertLedgersSettled(args: {
  *
  * Its `run` re-runs the ledger rewrites, which is what makes the common case
  * self-healing: a straggler row committed after its original step is simply
- * rewritten here. Its `verify` refuses only when the surface is still dirty
- * afterwards — which means a writer is active, and the answer to that is to
- * quiesce and re-run, exactly what the runner's retry offers.
+ * rewritten here. Its `verify` rewrites once more and then refuses for a row
+ * written before this step began that still carries the old key: the walk
+ * reached the end of the table, so such a row is a defect. A row written since
+ * is a server saving, under the key every writer still writes, and readers
+ * accept both; it is not waited for, or no site under traffic would settle.
+ *
+ * One row is outside that rule: one stamped before this step began by a transaction that commits
+ * after the last pass. Committed before the check, it reads as missed and the run refuses, naming
+ * it, and the next `--apply` rewrites it. Committed after the check, it is not seen at all and keeps
+ * the old key, which readers accept.
  *
  * Up only. Going down the data steps come last, so their own verify is already
  * the final word; going up the renames follow them, and a write landing during
@@ -227,6 +309,13 @@ export function buildDataMigrationSteps(args: {
  * site's history. `verify` rescans the whole table rather than trusting where
  * the batches got to, which is what keeps the checkpoint an optimisation: a
  * cursor that was wrong fails the step instead of passing one that skipped rows.
+ *
+ * The site stays up while this runs, so a server saving content writes rows
+ * under the spelling it knows while the step walks. `verify` rewrites those in
+ * one more pass, then decides on the rows written before the step began: a row
+ * written since is one a complete rewrite at that moment would not have touched
+ * either, and a site that never stops saving would keep any check that counted
+ * it from ever passing.
  */
 function contentStep(args: {
   meta: MetaService;
@@ -237,12 +326,14 @@ function contentStep(args: {
 }): MigrationStep {
   const { meta, migrationId, target, from, to } = args;
   const stepId = `data:${target.table}.${target.documentProperty}`;
-  const rewrite = (document: unknown): unknown =>
-    rewriteContentKey(document, from.wireTypeKey, to.wireTypeKey);
+  const rewrite = wireKeyRewrite(from, to);
+  // When this process's run of the step began; a verify with no run before it judges every row.
+  let began: Date | undefined;
 
   return {
     id: stepId,
     async run(session) {
+      began = await stepBeganAt(session);
       await rewriteRowsInBatches({
         session,
         meta,
@@ -253,25 +344,30 @@ function contentStep(args: {
       });
     },
     async verify(session) {
+      // Rows written while the step ran carry the spelling their writer knows: rewritten by one
+      // more pass, as the first would have, so less is left behind.
+      if (
+        (await findUnrewrittenRow({ session, target, rewrite })) !== undefined
+      ) {
+        await rewriteRowsInBatches({
+          session,
+          meta,
+          migrationId,
+          stepId,
+          target,
+          rewrite,
+        });
+      }
+      // Decided on the rows written before the step began: one of those the walk missed is a
+      // defect, while one written since is traffic.
       const unrewritten = await findUnrewrittenRow({
         session,
         target,
         rewrite,
+        ...(began === undefined ? {} : { writtenBefore: began }),
       });
       if (unrewritten === undefined) return true;
-      // Named rather than merely reported false. A row the walk did not reach is
-      // not "not finished yet" — the walk ran to the end of the table — so an
-      // operator needs the row to look at, and a retry needs to be understood as
-      // a retry of something that already claimed to be done.
-      throw NextlyError.serviceUnavailable({
-        logMessage: `field-group migration left a row carrying the old vocabulary: ${target.table}`,
-        logContext: {
-          reason: "row rewrite did not reach every row",
-          table: target.table,
-          property: target.documentProperty,
-          row: unrewritten,
-        },
-      });
+      throw unrewrittenRowRefusal(target, unrewritten);
     },
   };
 }

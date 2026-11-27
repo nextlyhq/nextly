@@ -491,7 +491,7 @@ describe.each(getConfiguredTestDialects())(
         localization,
       });
 
-      await dropCompanion(current, "comp_znsingle_locales", dialect);
+      await dropCompanion(current, "fg_znsingle_locales", dialect);
 
       const created = await current
         .getService<CollectionsHandler>("collectionsHandler")
@@ -546,7 +546,7 @@ describe("dynamic zone whose unused field group has no companion (integration)",
     });
 
     // Only the type this write does NOT use loses its companion.
-    await dropCompanion(current, "comp_znbroken_locales", "sqlite");
+    await dropCompanion(current, "fg_znbroken_locales", "sqlite");
 
     const created = await current
       .getService<CollectionsHandler>("collectionsHandler")
@@ -667,9 +667,9 @@ describe.each(getConfiguredTestDialects())(
       // The pre-migration shape: the translatable column is still on the main table, so the
       // fallback is legitimate, and the companion is not there.
       await current.adapter.executeQuery(
-        `ALTER TABLE ${q("comp_znfall")} ADD COLUMN ${q("heading")} text`
+        `ALTER TABLE ${q("fg_znfall")} ADD COLUMN ${q("heading")} text`
       );
-      await dropCompanion(current, "comp_znfall_locales", dialect);
+      await dropCompanion(current, "fg_znfall_locales", dialect);
 
       const created = await current
         .getService<CollectionsHandler>("collectionsHandler")
@@ -758,7 +758,7 @@ describe.each(getConfiguredTestDialects())(
       const quote = (id: string) =>
         dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
       await current.adapter.executeQuery(
-        `ALTER TABLE ${quote("comp_cmpread_locales")} DROP COLUMN ${quote("heading")}`
+        `ALTER TABLE ${quote("fg_cmpread_locales")} DROP COLUMN ${quote("heading")}`
       );
 
       const read = await handler.getEntry({

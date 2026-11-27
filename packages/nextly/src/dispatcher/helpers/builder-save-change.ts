@@ -24,6 +24,7 @@ import type {
 import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
+  renamedFieldsOf,
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
@@ -173,7 +174,7 @@ export async function writeBuilderSchemaChange(
       }),
   });
   if (deps === undefined) {
-    await apply();
+    await countedWithoutWriter(change, apply);
     return { registryWritten: false };
   }
   // Asked before the save writes anything, as a change reaching a relation's storage is judged
@@ -234,6 +235,48 @@ export async function writeBuilderSchemaChange(
     written?.settleFailure
   );
   return { registryWritten: false };
+}
+
+/**
+ * `apply`, the push of a save no migration writer runs, with the counts the person confirmed
+ * compared just before it deletes the removed fields' values, as a collection's push without a
+ * writer compares them: refused, with nothing deleted, where a count changed. The entity is held
+ * from before the count until the push has ended (`countedThroughApply`). Without counts, or with
+ * no adapter to count through, `apply` alone, as before.
+ */
+async function countedWithoutWriter(
+  change: Parameters<typeof writeBuilderSchemaChange>[2],
+  apply: () => Promise<unknown>
+): Promise<void> {
+  const adapter = getAdapterFromDI();
+  const confirmed = change.answers.confirmedDeletions;
+  if (adapter === undefined || confirmed === undefined) {
+    await apply();
+    return;
+  }
+  const [{ countedThroughApply, saveKindOf }, { deletionHoldOf }] =
+    await Promise.all([
+      loadCollectionSave(),
+      import("../../domains/schema/builder-save/deletion-counts"),
+    ]);
+  const hold = deletionHoldOf({
+    dialect: adapter.getCapabilities().dialect,
+    tableName: change.table,
+    localized: change.stored.localized === true,
+    previous: change.stored.fields as unknown as FieldDefinition[],
+    next: change.fields,
+    renamed: renamedFieldsOf(change.answers.renameResolutions ?? []),
+    confirmed,
+    // Where the kind keeps a removed many-to-many's values: a field group in its own row.
+    builtBy: saveKindOf(change.kind).builtBy,
+  });
+  await countedThroughApply(
+    adapter,
+    { kind: change.kind, slug: change.slug },
+    hold,
+    apply,
+    getLoggerFromDI() ?? consoleLogger
+  );
 }
 
 /**

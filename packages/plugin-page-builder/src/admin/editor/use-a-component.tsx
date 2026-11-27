@@ -15,12 +15,12 @@
  * @module admin/editor/use-a-component
  */
 import type { LayoutRegion, RegionArea } from "@nextlyhq/blocks-engine";
+import { BuilderPopoverContent } from "@nextlyhq/builder/shell";
 import {
   Button,
   Command,
   CommandList,
   Popover,
-  PopoverContent,
   PopoverTrigger,
   toast,
 } from "@nextlyhq/ui";
@@ -119,7 +119,7 @@ export function UseAComponent({
           <ChevronDown aria-hidden="true" className="size-3.5 opacity-60" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent
+      <BuilderPopoverContent
         align="start"
         className="w-72 p-0"
         onOpenAutoFocus={event => {
@@ -138,7 +138,7 @@ export function UseAComponent({
             if (component !== current) void choose(component);
           }}
         />
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

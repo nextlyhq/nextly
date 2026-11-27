@@ -19,10 +19,12 @@ import {
   type PluginContext,
   type PublicAddressType,
   type PluginProxyHandler,
+  type ProxyAnswer,
 } from "@nextlyhq/plugin-sdk";
 
 import {
   addressRecordReady,
+  addressRecordReadyWithin,
   retryFailedCatchUp,
 } from "../address-record/catch-up";
 import {
@@ -944,6 +946,66 @@ function copyAskedFor(
     : undefined;
 }
 
+/** Whether the site's code builds a page at `url`, as its build names them. */
+function builtAt(
+  config: Pick<AiOutputsConfig, "codeRoutes">,
+  url: URL
+): boolean {
+  return (config.codeRoutes?.() ?? []).some(
+    route => route.path === url.pathname
+  );
+}
+
+/**
+ * How long a request at a copy's own address waits for the address record
+ * to catch up. A catch-up with nothing to do takes a few reads; one still
+ * running past this is answered "try again" rather than held further.
+ */
+const COPY_RECORD_WAIT_MS = 5000;
+
+/**
+ * The answer at a copy's own address while the address record is not ready,
+ * as the sitemap's is: readers come back, and nothing between keeps it.
+ */
+function copyNotReady(): Response {
+  const unavailable = NextlyError.serviceUnavailable({
+    publicMessage: "The plain-text copy is being brought up to date.",
+  });
+  return new Response(unavailable.publicMessage, {
+    status: unavailable.statusCode,
+    headers: { "cache-control": "no-store", "retry-after": "120" },
+  });
+}
+
+/**
+ * What a request for a copy is answered with while the address record catches
+ * up, or `"ready"` once the record is ready to answer it. A page may not hold
+ * its address yet. A copy's own address waits for the record, up to a limit:
+ * on a server that has only just started, the catch-up is still running when
+ * the first request comes, and the site serves no page there. Past the
+ * limit, or after a catch-up that failed, it is asked to come back rather
+ * than answered not found, which a reader may keep, and a failed catch-up is
+ * tried again. Never held: a page's own address asked for by `Accept`, which
+ * the page answers; a page the site's code builds; and a copy's address
+ * where copies are switched off.
+ */
+async function waitForRecord(
+  ctx: PluginContext,
+  url: URL,
+  atPage: boolean,
+  config: AiOutputsConfig
+): Promise<ProxyAnswer | undefined | "ready"> {
+  retryFailedCatchUp();
+  if (atPage || builtAt(config, url)) return undefined;
+  const rules = await config.readRules(ctx, undefined);
+  if (rules.plainTextCopies !== true) return undefined;
+  if (await addressRecordReadyWithin(COPY_RECORD_WAIT_MS)) return "ready";
+  // A page of the site at this address, one built in code or one the record
+  // already holds, is served there as ever.
+  if ((await copiesTaken(ctx, [url.href], config)).size > 0) return undefined;
+  return { response: copyNotReady() };
+}
+
 /**
  * The Proxy handler that answers a request for a page's plain-text copy:
  * a GET or HEAD of an address ending in `.md`, or of a page's own address
@@ -956,16 +1018,22 @@ export function plainCopyProxyHandler(
 ): PluginProxyHandler {
   return {
     name: "plain-text-copies",
+    // A copy's own address is served by no page, so a Proxy still starting
+    // waits for the start rather than send it on to be answered not found.
+    // A page's own address, asked for by `Accept`, is the page's to answer,
+    // and so is a page the site's code builds at a copy's address, which the
+    // build names before anything has started.
+    claims: request => {
+      const asked = copyAskedFor(request);
+      return asked?.atPage === false && !builtAt(config, asked.url);
+    },
     async handle(request, ctx) {
       const asked = copyAskedFor(request);
       if (asked === undefined) return;
       const { url, atPage } = asked;
-      // While the address record catches up, a page may not hold its address
-      // yet: the request passes to the site as if no copy were served, and a
-      // catch-up that failed is tried again.
       if (!addressRecordReady()) {
-        retryFailedCatchUp();
-        return;
+        const waited = await waitForRecord(ctx, url, atPage, config);
+        if (waited !== "ready") return waited;
       }
       const copy = await plainCopyAt(ctx, url, config, atPage);
       if (copy === null) return;

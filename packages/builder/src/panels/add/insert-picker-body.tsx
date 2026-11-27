@@ -24,11 +24,12 @@
  */
 
 import type { BlockNode } from "@nextlyhq/blocks-engine";
-import { Popover, PopoverAnchor, PopoverContent } from "@nextlyhq/ui";
+import { Popover, PopoverAnchor } from "@nextlyhq/ui";
 import { CornerDownRight, Search } from "lucide-react";
 import * as React from "react";
 
 import { useCanvasFrame } from "../../canvas/canvas-frame-context";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 
 import { useInsertOffers, type InsertOffers } from "./insert-panel-offers";
 import { tileWhere } from "./insert-panel-tiles";
@@ -168,7 +169,7 @@ export function OpenPicker({
       }}
     >
       <PopoverAnchor virtualRef={{ current: request.anchor }} />
-      <PopoverContent
+      <BuilderPopoverContent
         side="bottom"
         align="start"
         sideOffset={8}
@@ -257,7 +258,7 @@ export function OpenPicker({
         >
           {PICKER_WORDS.browseAll}
         </button>
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

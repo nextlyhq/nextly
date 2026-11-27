@@ -37,7 +37,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { LoadConfigResult } from "../cli/utils/config-loader";
 import type { SchemaRegistry } from "../database/schema-registry";
-import type { FieldGroupNaming } from "../domains/field-groups/services/field-group-storage-names";
+import { emitHeldBuilderWarning } from "../di/builder-problems-at-start";
 import { perLanguageStorageEnabled } from "../domains/i18n/per-language-storage";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
@@ -155,6 +155,10 @@ export async function runBootTimeApplyIfDev(opts?: {
         `HMR fires, or you run \`nextly db:sync\`. ` +
         `Set NEXTLY_BOOT_APPLY_FAIL_LOUDLY=1 for full error details.`
     );
+  } finally {
+    // Where no reload read the definition file (a save left unsettled, a step that failed), what
+    // the start found in the Builder's rows is said here.
+    emitHeldBuilderWarning();
   }
 }
 
@@ -661,10 +665,26 @@ async function applyPendingMigrations(label: string): Promise<number> {
     });
     // Compiled from the same config the CLI compiles from; see
     // `MigrateCoreDeps.extensionSchema` for why it is passed, not read.
+    // Each field group's stored table and type column, so a contribution to a group is compiled,
+    // and its ownership recorded, against the table the group is in (`fg_<slug>` once migrated),
+    // as `nextly migrate` and a production start compile it.
+    const { declaredFieldGroupStorage } = await import(
+      "../domains/field-groups/services/field-group-stored-tables"
+    );
+    const fieldGroups = await declaredFieldGroupStorage(
+      drizzleAdapter,
+      configResult.config.fieldGroups
+    );
     // A collection handed to the Schema Builder as its record has it, as this
     // start's registration compiled its hooks.
     const { compileForStart } = await import("../di/development-start-hooks");
     const { schema: extensionSchema } = await compileForStart(drizzleAdapter, {
+      ...(fieldGroups === undefined
+        ? {}
+        : {
+            fieldGroupTables: fieldGroups.tables,
+            fieldGroupTypeColumns: fieldGroups.typeColumns,
+          }),
       dialect: drizzleAdapter.dialect,
       plugins: configResult.config.plugins ?? [],
       config: configResult.config,
@@ -692,6 +712,7 @@ async function applyPendingMigrations(label: string): Promise<number> {
       knownJunctions: resolvedSchema.knownJunctions,
       declaredTables: resolvedSchema.declaredTables,
       junctionsByEntity: resolvedSchema.junctionsByEntity,
+      localization: configResult.config.localization,
       label,
     });
 
@@ -743,6 +764,8 @@ export interface DevBootMigrateDeps<TLogger> {
     tables?: ReadonlySet<string>;
   };
   allowDestructive: boolean;
+  /** The default language a file's answers are judged against (`MigrateCoreDeps.defaultLanguage`). */
+  defaultLanguage: () => Promise<string>;
   /** What the run does with the registry rows (`MigrateCoreDeps.registryRows`). */
   registryRows: "insert-missing";
   ensureLedger: () => Promise<void>;
@@ -783,6 +806,8 @@ export async function migrateAtDevBoot<
   declaredTables?: ReadonlySet<string>;
   /** Each collection's custom junction names, by its slug (`declared`). */
   junctionsByEntity?: ReadonlyMap<string, ReadonlySet<string>>;
+  /** The languages the configuration declares, where it declares any. */
+  localization?: { defaultLocale?: string };
   label: string;
 }): Promise<TResult> {
   const { adapter, label } = args;
@@ -790,6 +815,9 @@ export async function migrateAtDevBoot<
   // boot does not load the migration engine.
   const { ensureSchemaEventsTable } = await import(
     "../domains/schema/events/schema-events-ddl"
+  );
+  const { siteDefaultLanguage } = await import(
+    "../domains/i18n/migration/transition-recorder"
   );
   return args.migrateCore({
     extensionSchema: args.extensionSchema,
@@ -808,6 +836,8 @@ export async function migrateAtDevBoot<
     },
     // The development boot lets the core reconcile make destructive changes.
     allowDestructive: true,
+    defaultLanguage: () =>
+      siteDefaultLanguage(adapter, { localization: args.localization }),
     // Its start keeps the registry rows in step with the code as it is
     // edited, ahead of any migration, so only absent rows are inserted here.
     registryRows: "insert-missing",
@@ -1028,27 +1058,26 @@ async function startFingerprints(
 async function declaredRows(
   config: FingerprintedConfig,
   /**
-   * The naming the site's field-group storage is on: a declared group's row names its table
-   * under it, as the sync writes the row (`field-group-storage-names`).
+   * The table a declared group's row names: the one its stored row already names, else its
+   * slug's under the naming the site's storage is on, as the sync writes the row
+   * (`storedOrNewTableName`). A group created under the other naming keeps its table.
    */
-  fieldGroupNaming: FieldGroupNaming
+  fieldGroupTable: (slug: string) => string
 ): Promise<Record<string, RowShape>> {
   const [
     { calculateSchemaHash },
     { resolveCollectionTableName },
     { resolveSingleTableName },
-    { fieldGroupTableNameFor },
   ] = await Promise.all([
     import("../domains/schema/services/schema-hash"),
     import("../domains/schema/utils/resolve-table-name"),
     import("../domains/singles/services/resolve-single-table-name"),
-    import("../domains/field-groups/services/field-group-storage-names"),
   ]);
   const tableOf: Record<FingerprintedKind, (e: FingerprintedEntity) => string> =
     {
       collection: e => resolveCollectionTableName(e.slug, e.dbName),
       single: e => resolveSingleTableName({ slug: e.slug, dbName: e.dbName }),
-      fieldGroup: e => fieldGroupTableNameFor(fieldGroupNaming, e.slug),
+      fieldGroup: e => fieldGroupTable(e.slug),
     };
   const rows: Record<string, RowShape> = {};
   for (const [kind, list] of kindsOf(config)) {
@@ -1171,12 +1200,12 @@ export async function readStartFingerprints(
       extensionFingerprint,
       configuredSchema: adapter.getConfiguredSchema?.() ?? null,
     });
-    const { resolveFieldGroupStorageNames } = await import(
-      "../domains/field-groups/services/field-group-storage-names"
+    const { readStoredFieldGroupTables, storedOrNewTableName } = await import(
+      "../domains/field-groups/services/field-group-stored-tables"
     );
-    const declared = await declaredRows(
-      config,
-      (await resolveFieldGroupStorageNames(adapter)).naming
+    const stored = await readStoredFieldGroupTables(adapter);
+    const declared = await declaredRows(config, slug =>
+      storedOrNewTableName(stored, slug)
     );
     // One read of this start's own rows, by their key prefix, whatever the
     // number of entities and whatever else `nextly_meta` holds.

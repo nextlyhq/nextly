@@ -1,0 +1,30 @@
+---
+title: FIELD_GROUP_TRANSITION_REFUSED
+description: "`nextly migrate:create --field-group-names=current` was run in a project with no migration yet, or while the config had other changes to migrate."
+---
+
+## Cause
+
+`nextly migrate:create --field-group-names=current` was run in a project with no migration yet, or while the config had other changes to migrate.
+
+`--field-group-names=current` moves an existing migration history to the current field-group names and changes nothing else. A project with no migration has no history to move, and a config with other changes would hide them in the move's snapshot, where no database that applies it would get them.
+
+## Fix
+
+Write the pending changes first, then move the history:
+
+```bash
+npx nextly migrate:create --name <name>
+npx nextly migrate:create --field-group-names=current
+```
+
+A project with no migration yet writes its first one with `npx nextly migrate:create --name <name>`.
+
+## Example
+
+```text
+✗ `--field-group-names=current` moves the history to the current field-group names, and the config has changes to "dc_posts" to migrate.
+  Why:  The move changes nothing else, so a change written into its snapshot would be missing from every database that applies it.
+  Next: Nothing was written. Write those first with `nextly migrate:create --name <name>`, then run it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-transition-refused  (FIELD_GROUP_TRANSITION_REFUSED)
+```

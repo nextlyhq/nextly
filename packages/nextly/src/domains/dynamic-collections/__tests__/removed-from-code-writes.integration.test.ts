@@ -55,6 +55,7 @@ import { seedPermissionsAndRolePresets } from "../../../init/seed-permissions";
 import {
   definePlugin,
   type PluginContext,
+  type PluginDefinition,
 } from "../../../plugins/plugin-context";
 import type { PluginVersionPinHolder } from "../../../plugins/plugin-version-pins";
 import {
@@ -133,6 +134,26 @@ const WITH_REMOVED = {
 };
 const AFTER_REMOVAL = {
   collections: [articles(DECLARED.collection)],
+  singles: [notice(DECLARED.single)],
+};
+
+/**
+ * The plugin that contributes the two removed Singles in the cases where a
+ * plugin leaves the configuration, with everything that guarded them.
+ */
+const SHOP = "@test/rw-shop";
+const shop = () =>
+  definePlugin({
+    name: SHOP,
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    contributes: {
+      singles: [notice(REMOVED.single), notice(REMOVED_EMPTY_SINGLE)],
+    },
+  });
+/** What the app declares itself throughout those cases. */
+const BESIDE_THE_PLUGIN = {
+  collections: WITH_REMOVED.collections,
   singles: [notice(DECLARED.single)],
 };
 
@@ -1268,7 +1289,8 @@ async function seedHistory(
 /** Boot with `declared` as the configuration's entities, on the case database. */
 async function boot(
   database: CaseDatabase,
-  declared: typeof WITH_REMOVED
+  declared: typeof WITH_REMOVED,
+  plugins: PluginDefinition[] = []
 ): Promise<void> {
   clearServices();
   current = await createTestNextly({
@@ -1276,8 +1298,49 @@ async function boot(
     collections: declared.collections,
     singles: declared.singles,
     localization: LOCALIZATION,
-    plugins: [probe],
+    plugins: [probe, ...plugins],
   });
+}
+
+/** A key whose role holds only the update permission of the removed Single. */
+async function editorKey(adapter: DrizzleAdapter): Promise<string> {
+  const roleId = randomBytes(12).toString("hex");
+  const now = new Date();
+  await adapter.insert("roles", {
+    id: roleId,
+    name: "Removed writer",
+    slug: "removed-writer",
+    level: 10,
+    isSystem: false,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const permissions = await adapter.executeQuery<{ id: string; slug: string }>(
+    `SELECT id, slug FROM permissions`
+  );
+  for (const { id, slug } of permissions) {
+    if (slug !== `update-${REMOVED.single}`) continue;
+    await adapter.insert("role_permissions", {
+      id: randomBytes(12).toString("hex"),
+      roleId,
+      permissionId: id,
+      createdAt: now,
+    });
+  }
+  const apiKeys = t().getService("apiKeyService") as unknown as {
+    createApiKey(
+      userId: string,
+      input: Record<string, string>
+    ): Promise<{ key: string }>;
+  };
+  return (
+    await apiKeys.createApiKey(founder, {
+      name: "removed-writer",
+      tokenType: "role-based",
+      roleId,
+      expiresIn: "unlimited",
+    })
+  ).key;
 }
 
 /** Seed the founder, the key, both entities' documents and their history. */
@@ -1603,5 +1666,176 @@ describe.each(getConfiguredTestDialects())(
       expect(hookCalls).toContain(`beforeUpdate ${DECLARED.collection}`);
       expect(hookCalls).toContain(`beforeChange ${DECLARED.collection}`);
     }, 600_000);
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "writes to the Single of a plugin that left the configuration (%s)",
+  dialect => {
+    let database: CaseDatabase | undefined;
+    const caseDb = (): CaseDatabase => {
+      if (!database) throw new Error("the case database is not open");
+      return database;
+    };
+    let removed: Target;
+    let roleKey = "";
+
+    beforeEach(async () => {
+      database = await openDatabase(dialect);
+      await boot(caseDb(), BESIDE_THE_PLUGIN, [shop()]);
+      ({ removed } = await seedBoth());
+      roleKey = await editorKey(caseDb().adapter);
+      // The deploy of the configuration without the plugin.
+      await boot(caseDb(), BESIDE_THE_PLUGIN);
+    }, 120_000);
+
+    afterEach(async () => {
+      clearServices();
+      current = undefined;
+      plugin = undefined;
+      pinHolder = undefined;
+      await database?.close();
+      database = undefined;
+      vi.unstubAllEnvs();
+      _resetEnvCache();
+    });
+
+    it("refuses every write operation on it, whoever asks, with nothing in the database changed, and still serves reads", async () => {
+      const [row] = await caseDb().adapter.executeQuery<{ source: string }>(
+        `SELECT source FROM dynamic_singles WHERE slug = '${REMOVED.single}'`
+      );
+      expect(row?.source).toBe(`plugin:${SHOP}`);
+      const before = await everyRow(caseDb().adapter);
+      hookCalls.length = 0;
+      const operations = [
+        ...OPERATIONS.filter(({ kind }) => kind === "single"),
+        {
+          name: "HTTP PATCH with a key of the role that may update it",
+          run: async () => {
+            apiKey = roleKey;
+            return httpWrite("PATCH", ["singles", REMOVED.single], {
+              headline: "Changed",
+              _overwrite: true,
+            });
+          },
+        },
+      ];
+      // More than the one road: a table emptied by a rename would pass.
+      expect(operations.length).toBeGreaterThan(10);
+      for (const operation of operations) {
+        expect
+          .soft(
+            refusalOf(await refusedWith(operation.run(removed))),
+            `${operation.name} is refused`
+          )
+          .toMatchObject({
+            code: "ENTITY_REMOVED_FROM_CODE",
+            data: { kind: "single", slug: REMOVED.single },
+            status: 409,
+          });
+      }
+      expect
+        .soft(changedTables(before, await everyRow(caseDb().adapter)))
+        .toEqual([]);
+      expect.soft(hookCalls, "no write hook ran").toEqual([]);
+
+      // The refusal names the plugin, and that putting it back is the way on.
+      const { message } = refusalOf(
+        await refusedWith(
+          t().nextly.updateSingle({
+            slug: REMOVED.single as never,
+            data: { headline: "Changed", _overwrite: true } as never,
+          })
+        )
+      );
+      expect(message).toContain(`"${REMOVED.single}"`);
+      expect(message).toContain(`"${SHOP}"`);
+      expect(message).toContain("put the plugin back");
+
+      const single = (await t().nextly.findSingle({
+        slug: REMOVED.single as never,
+      })) as unknown as { title?: string };
+      expect(single.title).toBe("Shared");
+      // One with no document is read as holding none, rather than given one.
+      await expect(
+        t().nextly.findSingle({ slug: REMOVED_EMPTY_SINGLE as never })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(changedTables(before, await everyRow(caseDb().adapter))).toEqual(
+        []
+      );
+    }, 300_000);
+
+    it("refuses the release engine's write, leaving the document as it was", async () => {
+      const repo = new ReleasesRepository(caseDb().adapter as never);
+      const release = await repo.createRelease({ title: "Go live" });
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          scopeKind: "single",
+          scopeSlug: REMOVED.single,
+          entryId: removed.singleId,
+          locale: null,
+          action: "publish",
+          createdBy: founder,
+        },
+        ANY_EDITABLE_STATE
+      );
+      await scheduleAsItStands(
+        repo,
+        release.id,
+        new Date("2020-01-01T00:00:00Z"),
+        "UTC"
+      );
+      const before = await everyRow(caseDb().adapter);
+      const mutations = createReleaseMutations({
+        contentApi: t().nextly,
+        lockServer: lockServerOf(t()),
+      });
+      const refusals: unknown[] = [];
+      await applyDueReleases({
+        repository: repo,
+        mutations: {
+          publish: async input => {
+            try {
+              await mutations.publish(input);
+            } catch (error) {
+              refusals.push(refusalOf(error));
+              throw error;
+            }
+          },
+          unpublish: input => mutations.unpublish(input),
+        },
+        runAs: {
+          findUser: async id => ({ id, isActive: true }),
+          listRoleSlugs: async () => [],
+        },
+      }).catch(() => undefined);
+
+      expect(refusals).toEqual([
+        expect.objectContaining({
+          code: "ENTITY_REMOVED_FROM_CODE",
+          data: { kind: "single", slug: REMOVED.single },
+        }),
+      ]);
+      const changed = changedTables(before, await everyRow(caseDb().adapter));
+      expect(changed.filter(table => !/release/i.test(table))).toEqual([]);
+    }, 300_000);
+
+    it("takes writes again once the plugin is back", async () => {
+      await boot(caseDb(), BESIDE_THE_PLUGIN, [shop()]);
+
+      await t().nextly.updateSingle({
+        slug: REMOVED.single as never,
+        data: {
+          title: "Back",
+          status: "published",
+          _overwrite: true,
+        } as never,
+      });
+      const single = (await t().nextly.findSingle({
+        slug: REMOVED.single as never,
+      })) as unknown as { title?: string };
+      expect(single.title).toBe("Back");
+    }, 300_000);
   }
 );

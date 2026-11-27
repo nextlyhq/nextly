@@ -1,7 +1,7 @@
 /**
- * An entry write takes its collection's hold first on MySQL (`holdEntityForWrite`), so it waits
- * while a Builder save deleting a field's values holds the collection, and goes on once the save
- * lets go. The hold a deleting save takes is the collection delete's, `holdCollectionsIn` for
+ * An entry write takes its collection's hold first (`holdEntityForWrite`), so it waits while a
+ * Builder save deleting a field's values holds the collection, and goes on once the save lets go.
+ * On MySQL the hold a deleting save takes is the collection delete's, `holdCollectionsIn` for
  * update, taken here by another session as the save takes it.
  *
  * What separates a held write from plausible wrong ones:
@@ -10,9 +10,10 @@
  *   (`createEntryInTransaction`), which the write itself holds;
  * - one that never lets go, or waits on its own hold, does not land once the hold ends.
  *
- * MySQL only: on PostgreSQL and SQLite the deleting save's own transaction keeps writes off the
- * table, and an entry write takes nothing.
+ * The cases of one session waiting for another's hold run on MySQL; what a held write is compared
+ * with runs on every database, each with its own hold.
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
@@ -25,11 +26,18 @@ import type { CollectionEntryService } from "../../../services/collections/colle
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { consoleLogger } from "../../../shared/types";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { holdEntityInProcess } from "../../dynamic-collections/services/entity-hold";
+import { namedCollectionLockNames } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
 import {
-  expectedRegistryRowOf,
   holdEntityForWrite,
+  type HoldingAdapter,
+  type LoadedRegistryRow,
+  type LoadedRegistryRowOptions,
+  loadedRegistryRowOf,
 } from "../services/entry-write-hold";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { WriteTries } from "../services/write-tries";
 
 const SLUG = "ewh_notes";
 
@@ -289,49 +297,802 @@ describe.each(getConfiguredTestDialects())(
       30_000
     );
 
-    // A delete that committed before the write looked its collection up leaves the slug absent;
-    // a collection made again under it before the write holds it is not the one the write was
-    // made for, so the write is refused, not written into it.
+    /**
+     * The write's hold of the collection in a transaction of its own, compared with `loaded`,
+     * through the adapter the app writes through.
+     */
+    const heldFor = (t: TestNextly, loaded: LoadedRegistryRow | undefined) => {
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      return t.adapter.transaction(async tx => {
+        await holdEntityForWrite(
+          tx,
+          { kind: "collection", slug: SLUG },
+          registry,
+          t.adapter as unknown as HoldingAdapter,
+          loaded
+        );
+      });
+    };
+
+    /** The write's hold of the collection, kept until `whileHeld` ends, in a transaction of its own. */
+    const heldWhile = (t: TestNextly, whileHeld: () => Promise<void>) => {
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      return t.adapter.transaction(async tx => {
+        await holdEntityForWrite(
+          tx,
+          { kind: "collection", slug: SLUG },
+          registry,
+          t.adapter as unknown as HoldingAdapter
+        );
+        await whileHeld();
+      });
+    };
+
+    /** The registry row as a write made now would load it, `data` the write's. */
+    async function loadedNow(
+      t: TestNextly,
+      data?: Record<string, unknown>,
+      options?: LoadedRegistryRowOptions
+    ): Promise<LoadedRegistryRow | undefined> {
+      clearRegistryRowCache();
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      return loadedRegistryRowOf(
+        await registry.getCollection(SLUG),
+        data,
+        options
+      );
+    }
+
+    // A write made for a collection deleted before it held it finds no row under the slug, and is
+    // refused as not found, never written into what a create of the same slug makes next.
+    /**
+     * A write's hold sought within `waitMs` while two sessions each hold one of its two names: the
+     * first let go after 2.5 s, the second after `secondLetGoAfter`, or never. What came of it, and
+     * how long it took.
+     */
+    async function soughtBehindBothNames(
+      t: TestNextly,
+      waitMs: number,
+      secondLetGoAfter?: number
+    ): Promise<{ outcome: unknown; waited: number }> {
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      const [row] = (await t.adapter.executeQuery(
+        "SELECT DATABASE() AS name"
+      )) as { name: string }[];
+      const [first, second] = namedCollectionLockNames(row.name, [SLUG]);
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      const after = (ms: number) =>
+        new Promise(resolve => setTimeout(resolve, ms));
+      return adapter.withSession(holdsFirst =>
+        adapter.withSession(async holdsSecond => {
+          await holdsFirst.execute(`SELECT GET_LOCK('${first}', 0)`);
+          await holdsSecond.execute(`SELECT GET_LOCK('${second}', 0)`);
+          const began = Date.now();
+          const seeking = t.adapter
+            .transaction(tx =>
+              registry.holdCollectionsIn(tx, [SLUG], "share", { waitMs })
+            )
+            .then(
+              () => "held",
+              (error: unknown) => error
+            )
+            .then(outcome => ({ outcome, waited: Date.now() - began }));
+          const letGo = [
+            after(2_500).then(() =>
+              holdsFirst.execute(`SELECT RELEASE_LOCK('${first}')`)
+            ),
+            ...(secondLetGoAfter === undefined
+              ? []
+              : [
+                  after(secondLetGoAfter).then(() =>
+                    holdsSecond.execute(`SELECT RELEASE_LOCK('${second}')`)
+                  ),
+                ]),
+          ];
+          const sought = await seeking;
+          await Promise.all(letGo);
+          return sought;
+        })
+      );
+    }
+
+    // MySQL's hold is two names, the old release's and the new one. A write's wait is one time over
+    // both: waited for one after the other, the second would be given the whole wait again, and the
+    // write would wait twice as long as it says. Each name is held by a session of its own, and the
+    // first let go part way.
     onMysql(
-      "refuses a write whose collection was gone when it looked and made again before it held it",
+      "waits one time over both its names, the second for what the first left",
       async () => {
         const t = await boot();
-        const registry = new DynamicCollectionService(t.adapter, consoleLogger);
-        // The delete, committed: no registry row holds the slug.
-        await t.adapter.executeQuery(
-          `UPDATE dynamic_collections SET slug = 'ewh_gone' WHERE slug = '${SLUG}'`
-        );
-        clearRegistryRowCache();
-        const expected = await expectedRegistryRowOf(
-          registry,
-          SLUG,
-          t.adapter,
-          dialect
-        );
+        const { outcome, waited } = await soughtBehindBothNames(t, 4_000);
+        expect(outcome).toMatchObject({ code: "COLLECTION_BEING_CHANGED" });
+        // Given the whole wait again it would end 6.5 s on; given none, as a server that does not
+        // read the rest of the wait as a number would give it, 2.5 s on.
+        expect(waited).toBeGreaterThan(3_300);
+        expect(waited).toBeLessThan(5_800);
+      },
+      30_000
+    );
 
-        // The collection made again under the slug, by a session holding it, as a create holds it.
-        const hold = await holdForUpdate(t, tx =>
-          tx
-            .execute(
-              `UPDATE dynamic_collections SET slug = '${SLUG}', id = 'made-again-${SLUG}' WHERE slug = 'ewh_gone'`
-            )
-            .then(() => undefined)
+    // That the server takes the rest of the wait as a wait: the second name, let go within it, is
+    // had, at the time it is let go rather than at once or not at all.
+    onMysql(
+      "takes the second name where it is let go within what the first left",
+      async () => {
+        const t = await boot();
+        const { outcome, waited } = await soughtBehindBothNames(
+          t,
+          8_000,
+          4_000
         );
-        // The write's hold, as its transaction takes it: it waits for the session, then finds
-        // the row made since.
-        const { landed, write } = await landsWhileHeld(
-          t.adapter.transaction(tx =>
-            holdEntityForWrite(tx, SLUG, registry, dialect, expected)
-          )
-        );
-        expect(landed).toBe(false);
+        expect(outcome, String(outcome)).toBe("held");
+        expect(waited).toBeGreaterThan(3_700);
+        expect(waited).toBeLessThan(7_000);
+      },
+      30_000
+    );
 
-        await hold.release();
-        await expect(write).rejects.toMatchObject({
+    it("refuses a write whose collection was deleted after it loaded it, as not found", async () => {
+      const t = await boot();
+      const loaded = await loadedNow(t, { note: "made for the deleted one" });
+      expect(loaded).toBeDefined();
+      // The delete, committed: no registry row holds the slug.
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET slug = 'ewh_gone' WHERE slug = '${SLUG}'`
+      );
+
+      await expect(heldFor(t, loaded)).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    }, 30_000);
+
+    // A write made for a collection deleted and made again under its slug before it held it finds
+    // another row there, and is refused, not written into the replacement.
+    it("refuses a write whose collection was made again under its slug after it loaded it", async () => {
+      const t = await boot();
+      const loaded = await loadedNow(t, { note: "made for the first one" });
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET id = 'made-again-${SLUG}' WHERE slug = '${SLUG}'`
+      );
+
+      await expect(heldFor(t, loaded)).rejects.toMatchObject({
+        code: "COLLECTION_BEING_CHANGED",
+      });
+    }, 30_000);
+
+    // A save that removed a field while the write waited moves the definition's version: a field the
+    // write sets that the held definition no longer has is refused by name, before anything is
+    // written. A write that sets only fields the definition keeps was still made from the earlier
+    // definition, whose removed column it would read, so it is refused as made for a definition
+    // that changed, to be made again from the new one.
+    it("refuses, by name, a field the write sets that a save removed after it loaded the definition", async () => {
+      const t = await boot();
+      const setsNote = await loadedNow(t, { title: "t", note: "n" });
+      const setsTitle = await loadedNow(t, { title: "t" });
+      const createsTitle = await loadedNow(
+        t,
+        { title: "t" },
+        { insertsOnly: true }
+      );
+      // The same create, in tries of which another is left, and none.
+      const tries = { compared: () => undefined, waitLeft: (ms: number) => ms };
+      const inTries = (remakes: boolean) =>
+        loadedNow(
+          t,
+          { title: "t" },
+          { insertsOnly: true, tries: { ...tries, remakes } }
+        );
+      const madeAgain = await inTries(true);
+      const lastTry = await inTries(false);
+      expect(setsNote?.setsFields).toEqual(["title", "note"]);
+      // The save's registry write: the definition without `note`, its version moved.
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      const row = (await registry.getCollection(SLUG)) as {
+        fields: Array<{ name: string }>;
+      };
+      const kept = JSON.stringify(
+        row.fields.filter(field => field.name !== "note")
+      );
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET fields = '${kept.replace(/'/g, "''")}', schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+
+      await expect(heldFor(t, setsNote)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.note",
+              code: "FIELD_REMOVED",
+            }),
+          ],
+        },
+      });
+      await expect(heldFor(t, setsTitle)).rejects.toMatchObject({
+        code: "COLLECTION_BEING_CHANGED",
+      });
+      // A create reads no entry through the earlier definition and writes only what it sets, so one
+      // that cannot be made again goes on; one that can is, since it reads back what it wrote.
+      await expect(heldFor(t, createsTitle)).resolves.toBeUndefined();
+      await expect(heldFor(t, lastTry)).resolves.toBeUndefined();
+      await expect(heldFor(t, madeAgain)).rejects.toMatchObject({
+        code: "COLLECTION_BEING_CHANGED",
+      });
+      // Made from the definition as the save left it, the write goes on.
+      await expect(
+        heldFor(t, await loadedNow(t, { title: "t" }))
+      ).resolves.toBeUndefined();
+    }, 30_000);
+
+    // The held definition's version is read as the registry keeps it: where it is the one the write
+    // loaded, nothing more is compared, so a write goes on whatever its loaded fields hold. A version
+    // read as no number would compare every write's fields against the held definition, a read per
+    // write, and refuse one made from a definition the cache still held.
+    it("compares nothing further where the definition's version is the one the write loaded", async () => {
+      const t = await boot();
+      const loaded = await loadedNow(t, { title: "t" });
+      expect(loaded).toBeDefined();
+
+      await expect(
+        heldFor(t, loaded && { ...loaded, fields: [...loaded.fields, "ghost"] })
+      ).resolves.toBeUndefined();
+    }, 30_000);
+
+    // A save that only adds a field moves the version too, but every field the write was made from
+    // is still there: the write goes on.
+    it("lets a write go on when a save since only added a field", async () => {
+      const t = await boot();
+      const setsTitle = await loadedNow(t, { title: "t" });
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      const row = (await registry.getCollection(SLUG)) as {
+        fields: Array<{ name: string }>;
+      };
+      const grown = JSON.stringify([
+        ...row.fields,
+        { name: "extra", type: "text" },
+      ]);
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET fields = '${grown.replace(/'/g, "''")}', schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+
+      await expect(heldFor(t, setsTitle)).resolves.toBeUndefined();
+    }, 30_000);
+
+    /** The definition the registry holds, as `change` leaves it, its version moved on. */
+    async function saveDefinition(
+      t: TestNextly,
+      change: (
+        fields: Array<{ name: string } & Record<string, unknown>>
+      ) => Array<Record<string, unknown>>
+    ): Promise<void> {
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      clearRegistryRowCache();
+      const row = (await registry.getCollection(SLUG)) as {
+        fields: Array<{ name: string } & Record<string, unknown>>;
+      };
+      const next = JSON.stringify(change(row.fields));
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET fields = '${next.replace(/'/g, "''")}', schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+    }
+
+    // A field a save keeps by name but stores differently (a many-to-many pointed at another
+    // collection, a column of another type) is a removed field to a write made from the earlier
+    // definition: the write would read or write it where, or as, it no longer is. A write that
+    // sets it, and one that reads the entry first, is refused to be made again from the new
+    // definition; a create that sets other fields only is not. An edit of a field's label alone
+    // changes nothing of how it is stored, so every write goes on.
+    it("refuses a write made for a field a save kept by name but stores differently", async () => {
+      const t = await boot();
+      const tags = (target: string) => ({
+        name: "tags",
+        type: "relationship",
+        relationTo: target,
+        hasMany: true,
+        options: { target, relationType: "manyToMany" },
+      });
+      await saveDefinition(t, fields => [...fields, tags("alpha")]);
+      const updates = await loadedNow(t, { title: "t" });
+      const updatesTags = await loadedNow(t, { title: "t", tags: ["a1"] });
+      const createsTags = await loadedNow(
+        t,
+        { title: "t", tags: ["a1"] },
+        { insertsOnly: true }
+      );
+      const createsTitle = await loadedNow(
+        t,
+        { title: "t" },
+        { insertsOnly: true }
+      );
+      // Pointed at another collection, its links are in another table.
+      await saveDefinition(t, fields =>
+        fields.map(field => (field.name === "tags" ? tags("beta") : field))
+      );
+
+      await expect(heldFor(t, updates)).rejects.toMatchObject({
+        code: "COLLECTION_BEING_CHANGED",
+      });
+      // Set, and stored differently now: named, as a removed field is.
+      const changed = (name: string) => ({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: `fields.${name}`,
+              code: "FIELD_CHANGED",
+              message: expect.stringContaining(
+                "changed while this write waited for a change"
+              ),
+            }),
+          ],
+        },
+      });
+      await expect(heldFor(t, updatesTags)).rejects.toMatchObject(
+        changed("tags")
+      );
+      await expect(heldFor(t, createsTags)).rejects.toMatchObject(
+        changed("tags")
+      );
+      await expect(heldFor(t, createsTitle)).resolves.toBeUndefined();
+
+      // A column stored as another type, the same: a write that sets it is refused naming it,
+      // whichever way it is made, and told it changed while it waited.
+      const setsNote = await loadedNow(t, { title: "t", note: "12" });
+      const createsNote = await loadedNow(
+        t,
+        { title: "t", note: "12" },
+        { insertsOnly: true }
+      );
+      await saveDefinition(t, fields =>
+        fields.map(field =>
+          field.name === "note" ? { ...field, type: "number" } : field
+        )
+      );
+      await expect(heldFor(t, setsNote)).rejects.toMatchObject(changed("note"));
+      await expect(heldFor(t, createsNote)).rejects.toMatchObject(
+        changed("note")
+      );
+    }, 30_000);
+
+    // Where values are kept per language, a repeater's or group's text inside goes to the language's
+    // own row and the rest of it to the entry's. A save that shares a field inside, or translates
+    // one, leaves the container its name and its columns and splits its value otherwise: a write
+    // prepared before it would put that text where no read looks. So does one that shares, or
+    // translates, every field a group with no name lays out inside it. Refused as any field stored
+    // differently is; a label inside changes nothing of the split, and where no value is kept per
+    // language there is none.
+    it.each([
+      { layout: "kept per language", translated: true },
+      { layout: "kept on the entry", translated: false },
+    ])(
+      "compares a container by how its text inside is split, on a collection whose values are $layout",
+      async ({ translated }) => {
+        const t = await boot(translated);
+        const slides = (caption: Record<string, unknown>) => ({
+          name: "slides",
+          type: "repeater",
+          fields: [
+            { name: "caption", type: "text", ...caption },
+            { name: "credit", type: "text" },
+          ],
+        });
+        const withSlides =
+          (caption: Record<string, unknown>) =>
+          (fields: Array<{ name: string } & Record<string, unknown>>) => [
+            ...fields.filter(field => field.name !== "slides"),
+            slides(caption),
+          ];
+        const madeNow = async () => ({
+          updates: await loadedNow(t, { title: "t" }),
+          updatesSlides: await loadedNow(t, { title: "t", slides: [] }),
+          createsSlides: await loadedNow(
+            t,
+            { title: "t", slides: [] },
+            { insertsOnly: true }
+          ),
+          createsTitle: await loadedNow(
+            t,
+            { title: "t" },
+            { insertsOnly: true }
+          ),
+        });
+        const changed = {
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "fields.slides",
+                code: "FIELD_CHANGED",
+              }),
+            ],
+          },
+        };
+        const withLaidOut =
+          (group: Record<string, unknown>) =>
+          (fields: Array<{ name: string } & Record<string, unknown>>) => [
+            ...fields.filter(field => field.name !== "slides"),
+            {
+              name: "slides",
+              type: "repeater",
+              fields: [
+                {
+                  type: "group",
+                  ...group,
+                  fields: [{ name: "caption", type: "text" }],
+                },
+                { name: "credit", type: "text" },
+              ],
+            },
+          ];
+        // Shared, then translated again: each way splits the value otherwise. The group's own flag
+        // follows the field's.
+        const saves = [
+          { begins: withSlides({}) },
+          { becomes: withSlides({ localized: false }) },
+          { becomes: withSlides({}) },
+          { begins: withLaidOut({}) },
+          { becomes: withLaidOut({ localized: false }) },
+          { becomes: withLaidOut({}) },
+          { begins: withSlides({}) },
+        ];
+        for (const { begins, becomes } of saves) {
+          if (becomes === undefined) {
+            await saveDefinition(t, begins);
+            continue;
+          }
+          const made = await madeNow();
+          await saveDefinition(t, becomes);
+          if (!translated) {
+            for (const loaded of Object.values(made)) {
+              await expect(heldFor(t, loaded)).resolves.toBeUndefined();
+            }
+            continue;
+          }
+          await expect(heldFor(t, made.updatesSlides)).rejects.toMatchObject(
+            changed
+          );
+          await expect(heldFor(t, made.createsSlides)).rejects.toMatchObject(
+            changed
+          );
+          await expect(heldFor(t, made.updates)).rejects.toMatchObject({
+            code: "COLLECTION_BEING_CHANGED",
+          });
+          await expect(heldFor(t, made.createsTitle)).resolves.toBeUndefined();
+        }
+        const made = await madeNow();
+        await saveDefinition(t, withSlides({ label: "Caption, relabelled" }));
+        for (const loaded of Object.values(made)) {
+          await expect(heldFor(t, loaded)).resolves.toBeUndefined();
+        }
+      },
+      30_000
+    );
+
+    // Turning the Draft/Published lifecycle off takes its column out with the save: a write prepared
+    // while it was on would write or read it. It is refused as made for a definition that changed,
+    // a create among them, to be made again from the definition as it stands.
+    it("refuses a write made while the collection's lifecycle was on, after a save turned it off", async () => {
+      const t = await boot();
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET status = ${dialect === "postgresql" ? "true" : "1"} WHERE slug = '${SLUG}'`
+      );
+      const updates = await loadedNow(t, { title: "t" });
+      const creates = await loadedNow(t, { title: "t" }, { insertsOnly: true });
+      const updatesStatus = await loadedNow(t, { status: "published" });
+      const createsStatus = await loadedNow(
+        t,
+        { title: "t", status: "draft" },
+        { insertsOnly: true }
+      );
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET status = ${dialect === "postgresql" ? "false" : "0"}, schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+
+      for (const loaded of [updates, creates]) {
+        await expect(heldFor(t, loaded)).rejects.toMatchObject({
           code: "COLLECTION_BEING_CHANGED",
         });
-        // Told apart from a write that read no row at all.
-        expect(expected).toBe("absent");
+      }
+      // One that sets the status is named instead: made again, it would write a column the save took
+      // out, so being told to try again would have it fail the same way each time.
+      for (const loaded of [updatesStatus, createsStatus]) {
+        await expect(heldFor(t, loaded)).rejects.toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "fields.status",
+                code: "FIELD_REMOVED",
+              }),
+            ],
+          },
+        });
+      }
+    }, 30_000);
+
+    // A collection with no lifecycle may have a field of its own named `status`, which is compared as
+    // any field is: nothing about it goes with a lifecycle.
+    it("lets a write that sets a field named status go on where the collection never had a lifecycle", async () => {
+      const t = await boot();
+      await saveDefinition(t, fields => [
+        ...fields,
+        { name: "status", type: "text" },
+      ]);
+      const sets = await loadedNow(t, { title: "t", status: "mine" });
+      await saveDefinition(t, fields =>
+        fields.map(field =>
+          field.name === "title" ? { ...field, label: "Renamed" } : field
+        )
+      );
+
+      await expect(heldFor(t, sets)).resolves.toBeUndefined();
+    }, 30_000);
+
+    // Whether the collection is translated decides where its status, and on the earlier layout its
+    // values, are kept, with no field's own flag changed.
+    it("refuses a write made while the collection was translated, after a save turned translation off", async () => {
+      const t = await boot();
+      const set = (on: boolean) =>
+        dialect === "postgresql" ? String(on) : on ? "1" : "0";
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET localized = ${set(true)} WHERE slug = '${SLUG}'`
+      );
+      const updates = await loadedNow(t, { title: "t" });
+      const creates = await loadedNow(t, { title: "t" }, { insertsOnly: true });
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET localized = ${set(false)}, schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+
+      for (const loaded of [updates, creates]) {
+        await expect(heldFor(t, loaded)).rejects.toMatchObject({
+          code: "COLLECTION_BEING_CHANGED",
+        });
+      }
+    }, 30_000);
+
+    // Whether a field is translated is read as its storage reads it: a text field is translated
+    // with no flag on a collection that keeps values per language, so the flag set to what it already
+    // is stores nothing differently. Turned off, the field moves to the entry's row. Where no value
+    // is kept per language the flag places nothing.
+    it.each([
+      { from: "no flag", to: "translated", translated: true, moves: false },
+      {
+        from: "translated",
+        to: "not translated",
+        translated: true,
+        moves: true,
+      },
+      {
+        from: "not translated",
+        to: "translated",
+        translated: false,
+        moves: null,
+      },
+    ])(
+      "compares a field by whether it is stored translated: $from to $to, on a collection that is translated: $translated",
+      async ({ from, to, translated, moves }) => {
+        const t = await boot(translated);
+        const flagOf = (side: string) =>
+          side === "no flag" ? {} : { localized: side === "translated" };
+        const withNote =
+          (flag: Record<string, unknown>) =>
+          (fields: Array<{ name: string } & Record<string, unknown>>) =>
+            fields.map(field => {
+              if (field.name !== "note") return field;
+              const { localized: _ignored, ...rest } = field;
+              return { ...rest, ...flag };
+            });
+        await saveDefinition(t, withNote(flagOf(from)));
+        const made = await loadedNow(t, { title: "t", note: "n" });
+        await saveDefinition(t, withNote(flagOf(to)));
+        // Untranslated, the flag places a value only where every entity keeps its values per
+        // language (per-language storage).
+        const changed = moves ?? storesPerLanguage({ localized: false });
+        if (changed) {
+          await expect(heldFor(t, made)).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+            publicData: {
+              errors: [
+                expect.objectContaining({
+                  path: "fields.note",
+                  code: "FIELD_CHANGED",
+                }),
+              ],
+            },
+          });
+        } else {
+          await expect(heldFor(t, made)).resolves.toBeUndefined();
+        }
+      },
+      30_000
+    );
+
+    // A write's gates were chosen by the lifecycle and translation it was made for (an update's or a
+    // publish's, where a status is set): made again under another, it would be judged by gates of the
+    // definition it was not made for. So it is refused, not made again, even where it could be.
+    it.each([
+      { change: "the lifecycle turned on", column: "status" },
+      { change: "translation turned on", column: "localized" },
+    ])(
+      "refuses, and does not make again, a write made before $change",
+      async ({ column }) => {
+        const t = await boot();
+        const set = (on: boolean) =>
+          dialect === "postgresql" ? String(on) : on ? "1" : "0";
+        const tries = new WriteTries(true);
+        const before = await loadedNow(t, { title: "t" }, { tries });
+        await t.adapter.executeQuery(
+          `UPDATE dynamic_collections SET ${column} = ${set(true)}, schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+        );
+        let made = 0;
+        const outcome = await tries
+          .make(
+            async () => {
+              made += 1;
+              await heldFor(
+                t,
+                made === 1
+                  ? before
+                  : await loadedNow(t, { title: "t" }, { tries })
+              );
+            },
+            () => Promise.resolve()
+          )
+          .then(
+            () => "made",
+            (error: unknown) => error
+          );
+        expect(outcome).toMatchObject({ code: "COLLECTION_BEING_CHANGED" });
+        expect(made).toBe(1);
+      },
+      30_000
+    );
+
+    // Set together, a field a save removed and one it stores differently are named together, each
+    // by what happened to it.
+    it("refuses a write that sets a removed and a changed field, naming each", async () => {
+      const t = await boot();
+      const tags = (target: string) => ({
+        name: "tags",
+        type: "relationship",
+        relationTo: target,
+        hasMany: true,
+        options: { target, relationType: "manyToMany" },
+      });
+      await saveDefinition(t, fields => [...fields, tags("alpha")]);
+      const loaded = await loadedNow(t, {
+        title: "t",
+        note: "n",
+        tags: ["a1"],
+      });
+      await saveDefinition(t, fields =>
+        fields
+          .filter(field => field.name !== "note")
+          .map(field => (field.name === "tags" ? tags("beta") : field))
+      );
+
+      await expect(heldFor(t, loaded)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.note",
+              code: "FIELD_REMOVED",
+            }),
+            expect.objectContaining({
+              path: "fields.tags",
+              code: "FIELD_CHANGED",
+            }),
+          ],
+        },
+      });
+    }, 30_000);
+
+    it("lets a write go on when a save since only changed a field's label", async () => {
+      const t = await boot();
+      const updates = await loadedNow(t, { title: "t", note: "n" });
+      await saveDefinition(t, fields =>
+        fields.map(field =>
+          field.name === "note" ? { ...field, label: "Remark" } : field
+        )
+      );
+
+      await expect(heldFor(t, updates)).resolves.toBeUndefined();
+    }, 30_000);
+
+    // The process keeps registry rows it has read: a refusal that names a removed field clears them,
+    // so the retry it asks for reads the definition as the save left it, even where the save ran in
+    // another process and this one's kept row is the earlier.
+    it("clears the rows this process keeps of the collection when it refuses a field a save removed", async () => {
+      const t = await boot();
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      const loaded = await loadedNow(t, { title: "t", note: "n" });
+      const names = async () =>
+        (
+          (await registry.getCollection(SLUG)) as {
+            fields: Array<{ name: string }>;
+          }
+        ).fields.map(field => field.name);
+      expect(await names()).toContain("note");
+      // Straight to the table, as a save in another process leaves it: this process keeps its row.
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET fields = '${JSON.stringify(
+          (
+            (await registry.getCollection(SLUG)) as {
+              fields: Array<{ name: string }>;
+            }
+          ).fields.filter(field => field.name !== "note")
+        ).replace(
+          /'/g,
+          "''"
+        )}', schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+      // Still the kept row: the property the refusal is held to change.
+      expect(await names()).toContain("note");
+
+      await expect(heldFor(t, loaded)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+      expect(await names()).not.toContain("note");
+    }, 30_000);
+
+    // Entry writes share the hold: two under way at once each take it while the other is open,
+    // never waiting on each other. On SQLite every transaction takes its turn anyway.
+    it.runIf(dialect !== "sqlite")(
+      "lets entry writes take the hold beside each other",
+      async () => {
+        const t = await boot();
+        let letGo: () => void = () => undefined;
+        const goes = new Promise<void>(resolve => {
+          letGo = resolve;
+        });
+        let first: () => void = () => undefined;
+        const firstHolds = new Promise<void>(resolve => {
+          first = resolve;
+        });
+        const open = heldWhile(t, async () => {
+          first();
+          await goes;
+        });
+        await firstHolds;
+        try {
+          const { landed, write } = await landsWhileHeld(heldFor(t, undefined));
+          expect(landed).toBe(true);
+          await write;
+        } finally {
+          letGo();
+          await open;
+        }
+      },
+      30_000
+    );
+
+    // On SQLite a save holds the collection in the process, and every transaction takes its turn
+    // on one connection: a write on a transaction already open, which holds that turn, is refused
+    // at once while a save holds it, rather than waiting for a save that needs the turn to finish.
+    // Refused as a write that waits out its turn is, the database busy, to be sent again after a
+    // while; waited for as that one waits, it would only be refused later, the save no further on.
+    it.runIf(dialect === "sqlite")(
+      "refuses at once, as the database being busy, a write on a transaction already open while a save holds the collection",
+      async () => {
+        const t = await boot();
+        const release = await holdEntityInProcess(t.adapter, {
+          kind: "collection",
+          slug: SLUG,
+        });
+        const began = Date.now();
+        try {
+          await expect(heldFor(t, undefined)).rejects.toMatchObject({
+            code: "DATABASE_BUSY",
+            statusCode: 503,
+            publicData: { retryAfterSeconds: 5 },
+          });
+        } finally {
+          release();
+        }
+        // Well under the five seconds a write that waits its turn would have waited.
+        expect(Date.now() - began).toBeLessThan(1_000);
+        await expect(heldFor(t, undefined)).resolves.toBeUndefined();
       },
       30_000
     );

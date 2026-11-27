@@ -129,6 +129,10 @@ import {
   readStringField,
 } from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
+import {
+  bumpSchemaVersion,
+  servedSchemaVersion,
+} from "../../../route-handler/schema-version";
 import { permissionSlug } from "../../../schemas/_zod/rbac";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
@@ -220,6 +224,10 @@ import {
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { transactionTableProbe } from "../../dashboard/table-presence";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import {
+  attemptWithoutWaitingInside,
+  shareEntityInProcess,
+} from "../../dynamic-collections/services/entity-hold";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   applyFieldGroupWriteAccessToDocument,
@@ -330,6 +338,7 @@ import {
 import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import { sameSharedStructure } from "../../i18n/shared-structure";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { poolCanSpareOne } from "../../schema/busy-table/watch-connection";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import {
   fieldsStoredOnRow,
@@ -349,6 +358,10 @@ import {
   type ChangedParts,
 } from "../../versions/changed-parts";
 import type { VersionsDbApi } from "../../versions/db-api";
+import {
+  type DocumentStanding,
+  readDocumentStanding,
+} from "../../versions/described-from";
 import {
   bumpDocumentRevision,
   changerColumns,
@@ -570,9 +583,14 @@ import {
   referrersHolding,
 } from "./entry-still-referenced";
 import {
-  type ExpectedRegistryRow,
-  expectedRegistryRowOf,
+  fieldsMoved,
   holdEntityForWrite,
+  holdWaitOf,
+  type LoadedRegistryRow,
+  loadedRegistryRowOf,
+  type LoadedRegistryRowOptions,
+  refuseOnEarlierSnapshot,
+  type WhenHeld,
 } from "./entry-write-hold";
 import { publishCallerOf, publishGate, type PublishPart } from "./publish-gate";
 import { type PartsState, publishValueIssues } from "./publish-parts";
@@ -599,6 +617,7 @@ import {
   type FilteredWriteMatch,
   type ReadReach,
 } from "./write-filter-match";
+import { savesHoldEntriesHere, WriteTries } from "./write-tries";
 
 /** The Drizzle executor shape the companion-join readers accept (a transaction
  * handle's `getDrizzle()` result, or the pooled `this.db`). */
@@ -2009,6 +2028,23 @@ interface WorkingDraftWriteContext {
    * out of `updatePayload`: what makes a save touch its language's draft.
    */
   translatedKeys?: readonly string[];
+}
+
+/**
+ * The fields `data` holds only as the defaults put in it (`defaults`), as they
+ * were put there: nobody who could have changed one did.
+ */
+function untouchedIn(
+  data: Readonly<Record<string, unknown>>,
+  defaults: Readonly<Record<string, unknown>>
+): ReadonlySet<string> {
+  return new Set(
+    Object.keys(defaults).filter(
+      name =>
+        Object.hasOwn(data, name) &&
+        isDeepStrictEqual(data[name], defaults[name])
+    )
+  );
 }
 
 /**
@@ -6664,178 +6700,184 @@ export class CollectionMutationService extends BaseService {
     // Set by a refusal inside the transaction, answered once it rolls back.
     const staleWrite: StaleWriteHolder = {};
     // The drafts it removed, counted by the delete made under the lock.
-    return this.entryTransaction(params.collectionName, async tx => {
-      // Serialize with concurrent draft-save upserts, which lock this same parent
-      // row before writing the sidecar.
-      await tx.lockRow(tableName, params.entryId);
-      if (params.updateUnderLock) {
-        // Route authorization already ran, so only the coarse re-check is
-        // skipped; the document's own rules and their filter are asked here.
-        const denied = await this.refusalOfWriteInTransaction(
-          tx,
-          {
-            collectionName: params.collectionName,
-            operation: "update",
-            entryId: params.entryId,
-            user: params.user,
-            overrideAccess: false,
-            routeAuthorized: true,
-            authenticatedScope: params.updateUnderLock.authenticatedScope,
-            executor: tx.getDrizzle(),
-          },
-          [],
-          params.locale ?? undefined
-        );
-        if (denied) throw errorFromServiceEnvelope(denied);
-      }
-      // The shared part's draft is kept apart only where each part has its own; elsewhere there
-      // is no such draft to discard, and the request is refused rather than read as another.
-      if (
-        params.shared === true &&
-        !(
-          draftsKeptByPart() &&
-          (collection as { localized?: boolean }).localized === true
-        )
-      ) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: "part",
-              code: "NO_SHARED_DRAFT",
-              message:
-                "This entry keeps no draft of its shared part on its own: discard a language's pending change instead.",
-            },
-          ],
-        });
-      }
-      const draftLocale =
-        params.shared === true
-          ? SHARED_DRAFT_SLOT
-          : workingDraftLocale({
-              documentLocalized:
-                (collection as { localized?: boolean }).localized === true,
-              requestLocale: params.locale ?? null,
-              defaultLocale: this.localization?.defaultLocale ?? null,
-            });
-      const discardedRef = {
-        scopeKind: "collection" as const,
-        scopeSlug: params.collectionName,
-        entryId: params.entryId,
-      };
-      // An entry that is not translated has one pending change, kept by
-      // part: its shared draft goes with its language's.
-      const withShared =
-        params.shared !== true &&
-        draftsKeptByPart() &&
-        (collection as { localized?: boolean }).localized !== true;
-      const { removed, judged: before } = await removePendingChangeJudged(
-        tx,
-        { ref: discardedRef, locale: draftLocale, withShared },
-        judging.check,
-        () => this.refuseIfPendingChangeMoved(tx, judging, staleWrite),
-        { main: undefined, language: undefined }
-      );
-      // The author's unsaved work recorded in the discarded language goes
-      // with it, so the editor no longer offers to restore what they threw
-      // away. Their work recorded in another language stays.
-      // Only where a pending change was removed: a discard that found none
-      // threw nothing away, and the point is then the only copy of the work.
-      // Nor for the shared part's draft: it is kept under no language, which is also how the
-      // default language's work is recorded, and discarding it throws no language's work away.
-      if (removed > 0 && params.shared !== true) {
-        await forgetRecoveryPointIn(tx, {
-          ref: discardedRef,
-          author: params.user?.id,
-          slot: draftLocale,
-          documentLocalized:
-            (collection as { localized?: boolean }).localized === true,
-          defaultLocale: this.localization?.defaultLocale ?? null,
-        });
-      }
-      // In the document's history only when there was a draft to discard.
-      if (removed > 0) {
-        // A reader of the pending change now sees the live entry, so the
-        // version they hold no longer describes what they would read.
-        await bumpDocumentRevision(
-          tx,
-          tableName,
-          { id: params.entryId },
-          actorForWrite(params.actor, params.user)
-        );
-        // Discarded over a change since the read, by choice: recorded.
-        await this.recordOverwriteIfAsked(
-          tx,
-          judging.check,
-          {
-            collection: params.collectionName,
-            id: params.entryId,
-            actor: params.actor,
-            user: params.user,
-          },
-          { ...before, locale: judging.locale }
-        );
-        if (params.onVersion) {
-          params.onVersion(
-            await documentVersionOn(tx, {
-              dialect: this.dialect,
-              table: tableName,
-              id: params.entryId,
-              languagesTable: await this.translationTableOnTx(
-                tx,
-                collection,
-                tableName
-              ),
-              localization: this.localization,
-              locale: params.locale ?? undefined,
-            })
-          );
-        }
-        await this.recordHistoryEvent(
-          tx,
-          params.collectionName,
-          params.entryId,
-          {
-            kind: "draftDiscarded",
-            actor: actorForWrite(params.actor, params.user),
-            personName: params.user?.name ?? null,
-            // The history names the part thrown away: a language's pending
-            // change by its language, the shared part's by `shared`.
-            ...(params.shared === true
-              ? { parts: { shared: true } }
-              : draftLocale
-                ? {
-                    parts: {
-                      locales: [draftLocale],
-                      ...(withShared ? { shared: true } : {}),
-                    },
-                  }
-                : {}),
-          }
-        );
-        // What the draft said about where its values came from goes with
-        // it; the live values keep their own record.
-        if (draftLocale !== null && (await this.provenanceRecorded(tx))) {
-          await discardDraftProvenance(
+    return this.entryTransaction(
+      params.collectionName,
+      async tx => {
+        // Serialize with concurrent draft-save upserts, which lock this same parent
+        // row before writing the sidecar.
+        await tx.lockRow(tableName, params.entryId);
+        if (params.updateUnderLock) {
+          // Route authorization already ran, so only the coarse re-check is
+          // skipped; the document's own rules and their filter are asked here.
+          const denied = await this.refusalOfWriteInTransaction(
             tx,
-            { ...discardedRef, locale: draftLocale },
-            (await this.sourceTextKept(tx)) ? tx : undefined
+            {
+              collectionName: params.collectionName,
+              operation: "update",
+              entryId: params.entryId,
+              user: params.user,
+              overrideAccess: false,
+              routeAuthorized: true,
+              authenticatedScope: params.updateUnderLock.authenticatedScope,
+              executor: tx.getDrizzle(),
+            },
+            [],
+            params.locale ?? undefined
+          );
+          if (denied) throw errorFromServiceEnvelope(denied);
+        }
+        // The shared part's draft is kept apart only where each part has its own; elsewhere there
+        // is no such draft to discard, and the request is refused rather than read as another.
+        if (
+          params.shared === true &&
+          !(
+            draftsKeptByPart() &&
+            (collection as { localized?: boolean }).localized === true
+          )
+        ) {
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "part",
+                code: "NO_SHARED_DRAFT",
+                message:
+                  "This entry keeps no draft of its shared part on its own: discard a language's pending change instead.",
+              },
+            ],
+          });
+        }
+        const draftLocale =
+          params.shared === true
+            ? SHARED_DRAFT_SLOT
+            : workingDraftLocale({
+                documentLocalized:
+                  (collection as { localized?: boolean }).localized === true,
+                requestLocale: params.locale ?? null,
+                defaultLocale: this.localization?.defaultLocale ?? null,
+              });
+        const discardedRef = {
+          scopeKind: "collection" as const,
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        };
+        // An entry that is not translated has one pending change, kept by
+        // part: its shared draft goes with its language's.
+        const withShared =
+          params.shared !== true &&
+          draftsKeptByPart() &&
+          (collection as { localized?: boolean }).localized !== true;
+        const { removed, judged: before } = await removePendingChangeJudged(
+          tx,
+          { ref: discardedRef, locale: draftLocale, withShared },
+          judging.check,
+          () => this.refuseIfPendingChangeMoved(tx, judging, staleWrite),
+          { main: undefined, language: undefined }
+        );
+        // The author's unsaved work recorded in the discarded language goes
+        // with it, so the editor no longer offers to restore what they threw
+        // away. Their work recorded in another language stays.
+        // Only where a pending change was removed: a discard that found none
+        // threw nothing away, and the point is then the only copy of the work.
+        // Nor for the shared part's draft: it is kept under no language, which is also how the
+        // default language's work is recorded, and discarding it throws no language's work away.
+        if (removed > 0 && params.shared !== true) {
+          await forgetRecoveryPointIn(tx, {
+            ref: discardedRef,
+            author: params.user?.id,
+            slot: draftLocale,
+            documentLocalized:
+              (collection as { localized?: boolean }).localized === true,
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          });
+        }
+        // In the document's history only when there was a draft to discard.
+        if (removed > 0) {
+          // A reader of the pending change now sees the live entry, so the
+          // version they hold no longer describes what they would read.
+          await bumpDocumentRevision(
+            tx,
+            tableName,
+            { id: params.entryId },
+            actorForWrite(params.actor, params.user)
+          );
+          // Discarded over a change since the read, by choice: recorded.
+          await this.recordOverwriteIfAsked(
+            tx,
+            judging.check,
+            {
+              collection: params.collectionName,
+              id: params.entryId,
+              actor: params.actor,
+              user: params.user,
+            },
+            { ...before, locale: judging.locale }
+          );
+          if (params.onVersion) {
+            params.onVersion(
+              await documentVersionOn(tx, {
+                dialect: this.dialect,
+                table: tableName,
+                id: params.entryId,
+                languagesTable: await this.translationTableOnTx(
+                  tx,
+                  collection,
+                  tableName
+                ),
+                localization: this.localization,
+                locale: params.locale ?? undefined,
+              })
+            );
+          }
+          await this.recordHistoryEvent(
+            tx,
+            params.collectionName,
+            params.entryId,
+            {
+              kind: "draftDiscarded",
+              actor: actorForWrite(params.actor, params.user),
+              personName: params.user?.name ?? null,
+              // The history names the part thrown away: a language's pending
+              // change by its language, the shared part's by `shared`.
+              ...(params.shared === true
+                ? { parts: { shared: true } }
+                : draftLocale
+                  ? {
+                      parts: {
+                        locales: [draftLocale],
+                        ...(withShared ? { shared: true } : {}),
+                      },
+                    }
+                  : {}),
+            }
+          );
+          // What the draft said about where its values came from goes with
+          // it; the live values keep their own record.
+          if (draftLocale !== null && (await this.provenanceRecorded(tx))) {
+            await discardDraftProvenance(
+              tx,
+              { ...discardedRef, locale: draftLocale },
+              (await this.sourceTextKept(tx)) ? tx : undefined
+            );
+          }
+          // The discarded part has nothing unpublished left to review: its
+          // review closes with the draft, in this transaction.
+          await closeReviewOnDiscard(
+            tx,
+            { adapter: this.adapter },
+            {
+              document: discardedRef,
+              part: draftLocale,
+              actor: actorForWrite(params.actor, params.user),
+              personName: params.user?.name ?? null,
+            }
           );
         }
-        // The discarded part has nothing unpublished left to review: its
-        // review closes with the draft, in this transaction.
-        await closeReviewOnDiscard(
-          tx,
-          { adapter: this.adapter },
-          {
-            document: discardedRef,
-            part: draftLocale,
-            actor: actorForWrite(params.actor, params.user),
-            personName: params.user?.name ?? null,
-          }
-        );
-      }
-      return removed;
-    }).catch(async (error: unknown) => {
+        return removed;
+        // Compared, under the hold, with the registry row this discard loaded.
+      },
+      undefined,
+      loadedRegistryRowOf(collection)
+    ).catch(async (error: unknown) => {
       // Out of date: answered after the rollback, from the entry as it is now.
       const refused = await this.refusalAfterRollback(
         { params, check: judging.check, holder: staleWrite },
@@ -6867,24 +6909,34 @@ export class CollectionMutationService extends BaseService {
    *
    * @experimental
    */
-  async takeLiveSharedValues(params: {
-    collectionName: string;
-    entryId: string;
-    /** Which language's pending change; the default when none is named. */
-    locale?: string | null;
-    /** Who took them, for the change's history. */
-    actor?: RequestActor;
-    user?: UserContext;
-    overrideAccess?: boolean;
-    routeAuthorized?: boolean;
-    authenticatedScope?: AuthenticatedScope;
-    /**
-     * The version the pending change was read at (`_rev`) and the overwrite
-     * choice (`_overwrite`): taking the live values saves the change, so it is
-     * judged as a save of it is.
-     */
-    version?: Readonly<Record<string, unknown>>;
-  }): Promise<CollectionServiceResult<TakenLiveValues>> {
+  async takeLiveSharedValues(
+    params: Parameters<CollectionMutationService["takeLiveOnce"]>[0]
+  ): Promise<CollectionServiceResult<TakenLiveValues>> {
+    return this.inWriteTries(tries => this.takeLiveOnce(params, tries));
+  }
+
+  /** {@link takeLiveSharedValues}, one try of it. */
+  private async takeLiveOnce(
+    params: {
+      collectionName: string;
+      entryId: string;
+      /** Which language's pending change; the default when none is named. */
+      locale?: string | null;
+      /** Who took them, for the change's history. */
+      actor?: RequestActor;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      routeAuthorized?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+      /**
+       * The version the pending change was read at (`_rev`) and the overwrite
+       * choice (`_overwrite`): taking the live values saves the change, so it is
+       * judged as a save of it is.
+       */
+      version?: Readonly<Record<string, unknown>>;
+    },
+    tries: WriteTries
+  ): Promise<CollectionServiceResult<TakenLiveValues>> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
@@ -6932,10 +6984,17 @@ export class CollectionMutationService extends BaseService {
       );
       judging = await this.pendingChangeJudging(params, collection);
       const judged = judging;
-      const took = await this.entryTransaction(params.collectionName, tx =>
-        this.takeLiveInTx(tx, collection, params, grants, {
-          judging: judged,
-          holder: staleWrite,
+      // Compared, under the hold, with the registry row this take loaded.
+      const took = await this.entryTransaction(
+        params.collectionName,
+        tx =>
+          this.takeLiveInTx(tx, collection, params, grants, {
+            judging: judged,
+            holder: staleWrite,
+          }),
+        undefined,
+        loadedRegistryRowOf(collection, undefined, {
+          tries,
         })
       );
       if (!took) {
@@ -7161,6 +7220,14 @@ export class CollectionMutationService extends BaseService {
   async rewriteField(
     call: FieldRewriteCall
   ): Promise<CollectionServiceResult<FieldRewriteResult>> {
+    return this.inWriteTries(tries => this.rewriteFieldOnce(call, tries));
+  }
+
+  /** {@link rewriteField}, one try of it. */
+  private async rewriteFieldOnce(
+    call: FieldRewriteCall,
+    tries: WriteTries
+  ): Promise<CollectionServiceResult<FieldRewriteResult>> {
     const { request } = call;
     // The person stays named when access is not judged: a trusted rewrite
     // made for someone is still theirs in history, as a trusted update is.
@@ -7224,28 +7291,34 @@ export class CollectionMutationService extends BaseService {
         params.authenticatedScope
       );
       const actor = actorForWrite(call.actor, params.user);
-      const done = await this.entryTransaction(params.collectionName, tx =>
-        this.rewriteFieldInTx(tx, {
-          call,
-          params,
-          collection,
-          fields,
-          tableName,
-          field: field.name,
-          localized,
-          translatedIn: translated ? (locale ?? null) : undefined,
-          languageStatusTable:
-            languageStatus && companion
-              ? {
-                  table: companion.table,
-                  companionTableName: companion.companionTableName,
-                }
-              : null,
-          check,
-          staleWrite,
-          grants,
-          actor,
-        })
+      // Compared, under the hold, with the registry row this rewrite loaded: the field it writes,
+      // removed by a save while it waited, is refused by name.
+      const done = await this.entryTransaction(
+        params.collectionName,
+        tx =>
+          this.rewriteFieldInTx(tx, {
+            call,
+            params,
+            collection,
+            fields,
+            tableName,
+            field: field.name,
+            localized,
+            translatedIn: translated ? (locale ?? null) : undefined,
+            languageStatusTable:
+              languageStatus && companion
+                ? {
+                    table: companion.table,
+                    companionTableName: companion.companionTableName,
+                  }
+                : null,
+            check,
+            staleWrite,
+            grants,
+            actor,
+          }),
+        undefined,
+        loadedRegistryRowOf(collection, { [field.name]: true }, { tries })
       );
       committed = true;
       // Answered once durable: a release holding the entry is judged again,
@@ -9170,8 +9243,249 @@ export class CollectionMutationService extends BaseService {
     // A create moves the shared part (`WHOLE_DOCUMENT`), as its hooks are
     // told, whether the entry service or a batch sent it.
     return withWriteParts(WHOLE_DOCUMENT, () =>
-      this.createEntryInParts(this.inConfiguredLocale(params), body, depth)
+      this.inWriteTries(tries =>
+        this.createEntryInParts(
+          this.inConfiguredLocale(params),
+          body,
+          depth,
+          tries
+        )
+      )
     );
+  }
+
+  /**
+   * A create's data as its first hooks and its field rules leave it, before it
+   * is validated, and the defaults put in it for fields nobody sent: the
+   * defaults, `beforeOperation`, the code and stored `beforeCreate` hooks, the
+   * generated slug and title, the caller's field rules, then the fields'
+   * `beforeValidate` hooks. Run once for a create, however often it is made
+   * (`WriteTries`).
+   */
+  private async createDataBeforeValidation(args: {
+    params: Parameters<CollectionMutationService["createEntryInParts"]>[0];
+    body: Record<string, unknown>;
+    fields: FieldDefinition[];
+    storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
+    sharedContext: Record<string, unknown>;
+    requestFacts: ReturnType<typeof resolveRequestFacts>;
+    isSlugTaken: (slug: string) => Promise<boolean>;
+  }): Promise<{
+    data: Record<string, unknown>;
+    defaults: Record<string, unknown>;
+  }> {
+    const { params, body, fields, storedHooks } = args;
+    const { sharedContext, requestFacts, isSlugTaken } = args;
+    // Execute beforeOperation hooks FIRST (before operation-specific hooks)
+    // Can modify operation arguments or throw to abort
+    // Declared defaults are seeded before the first hook phase, so every hook
+    // — beforeOperation included — sees the values the entry will hold, and a
+    // hook that removes a defaulted field is not overridden by a later pass
+    // re-adding it. Seeded onto a copy so the caller's own object is not
+    // mutated. Everything after this point (generation, write access,
+    // validation, the insert) therefore works from complete data; generation
+    // still fills only the identity fields left unresolved, and running ahead
+    // of write access matches generation, so a field the caller may not
+    // create is not reintroduced.
+    const seededBody: Record<string, unknown> = { ...body };
+    // One resolver for both write-access passes over this record, so the
+    // caller's roles and permissions are read once and both judge with one
+    // authority.
+    const writeGrants = this.callerGrants(
+      params.user,
+      params.authenticatedScope
+    );
+    // What a function default is allowed to READ, which is not the same as
+    // what this write is allowed to STORE.
+    //
+    // A function default receives the data built so far, and that data still
+    // holds every value the caller sent, including one a field rule denies
+    // them. Left alone, a default could read the forbidden value and carry it
+    // into a field the caller IS allowed to write: the denied field would be
+    // stripped below and its value persisted anyway, one column across.
+    //
+    // So the rules are applied to a COPY, and the copy is what the functions
+    // read. Applying them to the record itself would be wrong in the other
+    // direction: a rule may depend on a sibling the caller omitted BECAUSE it
+    // has a default (`data.kind === "public"` where `kind` defaults to
+    // `public`), and judging that rule before the defaults exist denies it.
+    // Deleting the value then would lose it for good, since the pass that
+    // decides correctly runs after the defaults and has nothing left to keep.
+    // A DEEP copy. The rules delete a denied value in place, and a shallow
+    // copy shares every nested group, repeater row and component with the
+    // record: the deletion would land on the record too, which is the data
+    // loss this whole arrangement exists to avoid, one level down.
+    const readableByDefaults = detachData(seededBody);
+    const fieldFunctions = getFieldFunctions(
+      "collection",
+      params.collectionName
+    );
+    await this.applyCreateFieldRules(params, readableByDefaults, writeGrants);
+    // The view is defaulted BEFORE it is judged a second time, and both
+    // halves matter.
+    //
+    // Defaulted, because a rule may depend on a sibling the caller omitted
+    // because it has a default, and a view judged without it hides a value
+    // the caller may in fact write.
+    //
+    // Judged again, because a default of its own is a value like any other:
+    // a field the caller may not write still takes its declared default
+    // here, and left in the view a later function default would read it and
+    // carry it into a field they CAN write. The pass below removes the field
+    // it came from and keeps the copy, so the rule is defeated one column
+    // across.
+    //
+    // These fill the view only. The record is filled from it afterwards, so
+    // a default the rules removed here is one the record's own pass will not
+    // put back.
+    applyFieldDefaults(readableByDefaults, fields, fieldFunctions);
+    await this.applyCreateFieldRules(params, readableByDefaults, writeGrants);
+    // The stored fields carry constant defaults; a function default exists
+    // only in the live config, which the registry captured at boot.
+    applyFieldDefaults(seededBody, fields, fieldFunctions, readableByDefaults);
+    // The defaults as they were put in, before a hook changes any in place.
+    const defaults = detachData(
+      Object.fromEntries(
+        Object.entries(seededBody).filter(
+          ([name]) => !Object.hasOwn(body, name)
+        )
+      )
+    );
+
+    const beforeOpArgs =
+      await this.hookService.hookRegistry.executeBeforeOperation({
+        collection: params.collectionName,
+        operation: "create",
+        args: { data: seededBody },
+        user: params.user
+          ? { id: params.user.id, email: params.user.email }
+          : undefined,
+        context: sharedContext,
+        req: requestFacts,
+      });
+
+    // Use modified data if returned by beforeOperation. A hook returning its
+    // own object owns what is in it, defaults included — they are not
+    // re-applied here, or a hook could never drop one.
+    const currentData =
+      (beforeOpArgs as BeforeOperationArgs)?.data ?? seededBody;
+
+    // Execute beforeCreate hooks (code-registered)
+    // Hooks run before validation and can modify the incoming data
+    const beforeContext = this.hookService.buildHookContext({
+      collection: params.collectionName,
+      operation: "create" as const,
+      data: currentData,
+      user: params.user,
+      context: sharedContext,
+      req: requestFacts,
+    });
+
+    const modifiedData = await this.hookService.hookRegistry.execute(
+      "beforeCreate",
+      beforeContext
+    );
+    const dataAfterCodeHooks = (modifiedData ?? currentData) as Record<
+      string,
+      unknown
+    >;
+
+    // Execute stored beforeCreate hooks (UI-configured)
+    // Runs after code hooks, can further modify data
+    const storedBeforeResult =
+      await this.hookService.storedHookExecutor.execute(
+        "beforeCreate",
+        storedHooks,
+        this.hookService.buildPrebuiltHookContext({
+          collection: params.collectionName,
+          operation: "create",
+          data: dataAfterCodeHooks,
+          queryDatabase: this.queryDatabaseFn,
+          user: params.user,
+          sharedContext,
+          req: requestFacts,
+        })
+      );
+    const finalData = (storedBeforeResult.data ?? dataAfterCodeHooks) as Record<
+      string,
+      unknown
+    >;
+
+    // Password fields store bcrypt hashes, never the submitted value.
+    // Runs after hooks (so hooks see the plaintext they may validate
+    // against) and before any serialization touches the column value.
+    // Enforce the schema's declared rules on the server. Every writer
+    // (admin, REST, Direct API, bulk, forms) funnels through this path,
+    // so this is where required/min/max/pattern/options are guaranteed;
+    // runs on the post-hook data and before hashing so password rules
+    // see the plaintext length, not the hash's.
+    // Generate the auto-injected `slug`/`title` BEFORE field-level write
+    // access and validation. defineCollection injects a required, unique
+    // `slug` and a NOT NULL `title`; deriving them here (slug from title,
+    // deduped for uniqueness) lets `create({ data: { title } })` succeed
+    // without a manual slug. Running before write access means a field the
+    // caller may not create is not reintroduced; the uniqueness check uses
+    // the shared connection (a plain, non-transactional create).
+    await this.applyGeneratedSlugAndTitle(
+      finalData,
+      isSlugTaken,
+      params.collectionName
+    );
+
+    // Field-level access: fields the caller may not create are stripped
+    // silently (Payload parity); overrideAccess bypasses.
+    await this.applyCreateFieldRules(params, finalData, writeGrants);
+    // The field groups this entry stores inline, inside its groups and
+    // repeaters, by their own rules: no field-group save reaches them.
+    await this.judgeInlineFieldGroups({
+      data: finalData,
+      fields,
+      params,
+      grants: writeGrants,
+    });
+
+    // Field-level beforeValidate hooks transform values ahead of the
+    // validation gate (functions resolved via the field-level registry).
+    await runFieldHooks({
+      kind: "collection",
+      slug: params.collectionName,
+      phase: "beforeValidate",
+      data: finalData,
+      operation: "create",
+      user: params.user,
+    });
+
+    return { data: finalData, defaults };
+  }
+
+  /**
+   * `data`, kept from a create's first try, with its defaults as `collection`
+   * defines them now: one nobody changed is taken out where its field is gone
+   * or stored differently, and each field that definition did not have, or
+   * whose default was taken out, takes its own. A default a hook took out
+   * stays out, and no default that is a function is called again.
+   */
+  private withDefaultsOf(
+    collection: unknown,
+    data: Record<string, unknown>,
+    made: {
+      defaults: Readonly<Record<string, unknown>>;
+      madeFor: LoadedRegistryRow | undefined;
+    }
+  ): Record<string, unknown> {
+    const now = loadedRegistryRowOf(collection);
+    if (made.madeFor === undefined || now === undefined) return data;
+    const { gone, added } = fieldsMoved(made.madeFor, now, this.dialect);
+    const taken = [...untouchedIn(data, made.defaults)].filter(name =>
+      gone.has(name)
+    );
+    for (const name of taken) delete data[name];
+    const takes = new Set([...added, ...taken]);
+    applyFieldDefaults(
+      data,
+      now.stored.filter(field => takes.has(field.name))
+    );
+    return data;
   }
 
   /** {@link createEntry}, inside the scope that says what it moves. */
@@ -9213,7 +9527,9 @@ export class CollectionMutationService extends BaseService {
       copiedFrom?: SourceReadCopy;
     },
     body: Record<string, unknown>,
-    depth?: number
+    depth: number | undefined,
+    /** The tries this is one of. */
+    tries: WriteTries
   ): Promise<CollectionServiceResult> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
@@ -9274,8 +9590,13 @@ export class CollectionMutationService extends BaseService {
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );
-      const { fields, storedHooks, tableName, sharedContext, requestFacts } =
+      const { fields, storedHooks, tableName, requestFacts, ...setup } =
         this.operationSetup(collection, params);
+      // One context for every hook of the create, however often it is made.
+      const sharedContext = await tries.once(
+        "context",
+        () => setup.sharedContext
+      );
 
       // A create that names "published" is a publish, so the publish gate's early answer is asked
       // here, before any hook runs: a create the gate holds back runs no hook, and so no side effect
@@ -9297,188 +9618,38 @@ export class CollectionMutationService extends BaseService {
               collection
             )
           : null;
-      if (earlyCreate) {
+      if (earlyCreate && !tries.madeAgain) {
         await refuseStatusSaveEarly(earlyCreate, {
           languages: [],
           shared: false,
         });
       }
 
-      // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-      // Can modify operation arguments or throw to abort
-      // Declared defaults are seeded before the first hook phase, so every hook
-      // — beforeOperation included — sees the values the entry will hold, and a
-      // hook that removes a defaulted field is not overridden by a later pass
-      // re-adding it. Seeded onto a copy so the caller's own object is not
-      // mutated. Everything after this point (generation, write access,
-      // validation, the insert) therefore works from complete data; generation
-      // still fills only the identity fields left unresolved, and running ahead
-      // of write access matches generation, so a field the caller may not
-      // create is not reintroduced.
-      const seededBody: Record<string, unknown> = { ...body };
-      // One resolver for both write-access passes over this record, so the
-      // caller's roles and permissions are read once and both judge with one
-      // authority.
-      const writeGrants = this.callerGrants(
-        params.user,
-        params.authenticatedScope
-      );
-      // What a function default is allowed to READ, which is not the same as
-      // what this write is allowed to STORE.
-      //
-      // A function default receives the data built so far, and that data still
-      // holds every value the caller sent, including one a field rule denies
-      // them. Left alone, a default could read the forbidden value and carry it
-      // into a field the caller IS allowed to write: the denied field would be
-      // stripped below and its value persisted anyway, one column across.
-      //
-      // So the rules are applied to a COPY, and the copy is what the functions
-      // read. Applying them to the record itself would be wrong in the other
-      // direction: a rule may depend on a sibling the caller omitted BECAUSE it
-      // has a default (`data.kind === "public"` where `kind` defaults to
-      // `public`), and judging that rule before the defaults exist denies it.
-      // Deleting the value then would lose it for good, since the pass that
-      // decides correctly runs after the defaults and has nothing left to keep.
-      // A DEEP copy. The rules delete a denied value in place, and a shallow
-      // copy shares every nested group, repeater row and component with the
-      // record: the deletion would land on the record too, which is the data
-      // loss this whole arrangement exists to avoid, one level down.
-      const readableByDefaults = detachData(seededBody);
-      const fieldFunctions = getFieldFunctions(
-        "collection",
-        params.collectionName
-      );
-      await this.applyCreateFieldRules(params, readableByDefaults, writeGrants);
-      // The view is defaulted BEFORE it is judged a second time, and both
-      // halves matter.
-      //
-      // Defaulted, because a rule may depend on a sibling the caller omitted
-      // because it has a default, and a view judged without it hides a value
-      // the caller may in fact write.
-      //
-      // Judged again, because a default of its own is a value like any other:
-      // a field the caller may not write still takes its declared default
-      // here, and left in the view a later function default would read it and
-      // carry it into a field they CAN write. The pass below removes the field
-      // it came from and keeps the copy, so the rule is defeated one column
-      // across.
-      //
-      // These fill the view only. The record is filled from it afterwards, so
-      // a default the rules removed here is one the record's own pass will not
-      // put back.
-      applyFieldDefaults(readableByDefaults, fields, fieldFunctions);
-      await this.applyCreateFieldRules(params, readableByDefaults, writeGrants);
-      // The stored fields carry constant defaults; a function default exists
-      // only in the live config, which the registry captured at boot.
-      applyFieldDefaults(
-        seededBody,
-        fields,
-        fieldFunctions,
-        readableByDefaults
-      );
-
-      const beforeOpArgs =
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "create",
-          args: { data: seededBody },
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: sharedContext,
-          req: requestFacts,
-        });
-
-      // Use modified data if returned by beforeOperation. A hook returning its
-      // own object owns what is in it, defaults included — they are not
-      // re-applied here, or a hook could never drop one.
-      const currentData =
-        (beforeOpArgs as BeforeOperationArgs)?.data ?? seededBody;
-
-      // Execute beforeCreate hooks (code-registered)
-      // Hooks run before validation and can modify the incoming data
-      const beforeContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "create" as const,
-        data: currentData,
-        user: params.user,
-        context: sharedContext,
-        req: requestFacts,
-      });
-
-      const modifiedData = await this.hookService.hookRegistry.execute(
-        "beforeCreate",
-        beforeContext
-      );
-      const dataAfterCodeHooks = (modifiedData ?? currentData) as Record<
-        string,
-        unknown
-      >;
-
-      // Execute stored beforeCreate hooks (UI-configured)
-      // Runs after code hooks, can further modify data
-      const storedBeforeResult =
-        await this.hookService.storedHookExecutor.execute(
-          "beforeCreate",
-          storedHooks,
-          this.hookService.buildPrebuiltHookContext({
-            collection: params.collectionName,
-            operation: "create",
-            data: dataAfterCodeHooks,
-            queryDatabase: this.queryDatabaseFn,
-            user: params.user,
-            sharedContext,
-            req: requestFacts,
-          })
-        );
-      const finalData = (storedBeforeResult.data ??
-        dataAfterCodeHooks) as Record<string, unknown>;
-
-      // Password fields store bcrypt hashes, never the submitted value.
-      // Runs after hooks (so hooks see the plaintext they may validate
-      // against) and before any serialization touches the column value.
-      // Enforce the schema's declared rules on the server. Every writer
-      // (admin, REST, Direct API, bulk, forms) funnels through this path,
-      // so this is where required/min/max/pattern/options are guaranteed;
-      // runs on the post-hook data and before hashing so password rules
-      // see the plaintext length, not the hash's.
-      // Generate the auto-injected `slug`/`title` BEFORE field-level write
-      // access and validation. defineCollection injects a required, unique
-      // `slug` and a NOT NULL `title`; deriving them here (slug from title,
-      // deduped for uniqueness) lets `create({ data: { title } })` succeed
-      // without a manual slug. Running before write access means a field the
-      // caller may not create is not reintroduced; the uniqueness check uses
-      // the shared connection (a plain, non-transactional create).
       const isSlugTaken = (slug: string) =>
         this.checkFieldUniqueness(params.collectionName, "slug", slug);
-      await this.applyGeneratedSlugAndTitle(
-        finalData,
-        isSlugTaken,
-        params.collectionName
+      // The definition the kept data was made for.
+      const madeFor = await tries.once("definition", () =>
+        loadedRegistryRowOf(collection)
       );
-
-      // Field-level access: fields the caller may not create are stripped
-      // silently (Payload parity); overrideAccess bypasses.
-      await this.applyCreateFieldRules(params, finalData, writeGrants);
-      // The field groups this entry stores inline, inside its groups and
-      // repeaters, by their own rules: no field-group save reaches them.
-      await this.judgeInlineFieldGroups({
-        data: finalData,
-        fields,
-        params,
-        grants: writeGrants,
-      });
-
-      // Field-level beforeValidate hooks transform values ahead of the
-      // validation gate (functions resolved via the field-level registry).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "beforeValidate",
-        data: finalData,
-        operation: "create",
-        user: params.user,
-      });
+      const { data: beforeValidation, defaults } = await tries.kept(
+        "prepared",
+        () =>
+          this.createDataBeforeValidation({
+            params,
+            body,
+            fields,
+            storedHooks,
+            sharedContext,
+            requestFacts,
+            isSlugTaken,
+          })
+      );
+      // Kept data, with its defaults as the definition has them now.
+      const asDefinedNow = (data: Record<string, unknown>) =>
+        tries.madeAgain
+          ? this.withDefaultsOf(collection, data, { defaults, madeFor })
+          : data;
+      let finalData = asDefinedNow(beforeValidation);
 
       // A beforeValidate hook can set `slug` after generation ran; re-sanitize
       // so the validated and stored value stays URL-safe.
@@ -9517,27 +9688,33 @@ export class CollectionMutationService extends BaseService {
       // declarations of that name mean the same moment. What the hooks leave
       // behind is judged after the field-level phase — a hook write is a
       // write the gate never saw.
-      await this.hookService.runBeforeChange({
-        collection: params.collectionName,
-        operation: "create",
-        data: finalData,
-        storedHooks,
-        queryDatabase: this.queryDatabaseFn,
-        user: params.user,
-        sharedContext,
-        req: requestFacts,
-      });
+      const validated = finalData;
+      finalData = asDefinedNow(
+        await tries.kept("changed", async () => {
+          await this.hookService.runBeforeChange({
+            collection: params.collectionName,
+            operation: "create",
+            data: validated,
+            storedHooks,
+            queryDatabase: this.queryDatabaseFn,
+            user: params.user,
+            sharedContext,
+            req: requestFacts,
+          });
 
-      // Field-level beforeChange hooks transform the final stored value
-      // (runs after validation, before hashing/serialization).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "beforeChange",
-        data: finalData,
-        operation: "create",
-        user: params.user,
-      });
+          // Field-level beforeChange hooks transform the final stored value
+          // (runs after validation, before hashing/serialization).
+          await runFieldHooks({
+            kind: "collection",
+            slug: params.collectionName,
+            phase: "beforeChange",
+            data: validated,
+            operation: "create",
+            user: params.user,
+          });
+          return validated;
+        })
+      );
 
       // The whole-number floor judges what the hooks changed: a fraction a
       // hook produced would reach the integer column and let the database
@@ -9559,6 +9736,11 @@ export class CollectionMutationService extends BaseService {
       // After every hook: a status the workflow cannot place is refused before anything is
       // stored, trusted code included.
       this.refuseUnknownStatus(params.collectionName, finalData);
+
+      // What the hooks left, before it is shaped for its columns: the fields
+      // the hold compares with the definition it finds.
+      const writtenNames = { ...finalData };
+      const untouchedDefaults = untouchedIn(finalData, defaults);
 
       const { manyToManyFields, manyToManyData, componentFieldData } =
         await this.prepareCreateWritePayload(finalData, fields);
@@ -10146,7 +10328,17 @@ export class CollectionMutationService extends BaseService {
           // written, before it commits; a gate that throws takes the create back.
           if (settleCreateGate) await settleCreateGate();
         },
-        transactionOptions
+        transactionOptions,
+        // Compared, under the hold, with the registry row this create loaded its fields from: a
+        // field it sets, its hooks' included, that a save removed while it waited is refused by
+        // name. Where it can, it is made again when a save took out any other, a default nobody
+        // changed included. Where it cannot, a save that took out none of the columns it names lets
+        // it go on.
+        loadedRegistryRowOf(collection, writtenNames, {
+          insertsOnly: true,
+          untouchedDefaults,
+          tries,
+        })
       );
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
@@ -11033,6 +11225,12 @@ export class CollectionMutationService extends BaseService {
   ) {
     // An answer that ends the change before its transaction opens.
     const answered = (answer: CollectionServiceResult) => ({ answer });
+    // Resolved through the collection so a custom tableName/dbName override is
+    // honored below, matching every other mutation. The row the hold compares,
+    // read before the table the entry is read through; see `updateEntry`.
+    const publishCollection = await this.collectionService.getCollection(
+      params.collectionName
+    );
     const toUpdate = await this.entryToUpdate({ ...params, gate: null });
     if (toUpdate.answer) return answered(toUpdate.answer);
     const { accessUser, schema, existingEntry } = toUpdate;
@@ -11041,11 +11239,6 @@ export class CollectionMutationService extends BaseService {
     // mere presence of a `status` column: a collection that defines an
     // ordinary user field named `status` has the column but no lifecycle, so
     // it is not publishable and must not demand the publish permission here.
-    // Resolved through the collection so a custom tableName/dbName override is
-    // honored below, matching every other mutation.
-    const publishCollection = await this.collectionService.getCollection(
-      params.collectionName
-    );
     const hasMainStatus =
       (publishCollection as { status?: boolean }).status === true;
     // A collection with a lifecycle is asked the lifecycle grant here, before
@@ -11465,7 +11658,9 @@ export class CollectionMutationService extends BaseService {
    */
   private async setLifecycleAllLocales(
     direction: LifecycleDirection,
-    params: AllLocalesLifecycleParams
+    params: AllLocalesLifecycleParams,
+    /** The tries this is one of. */
+    tries: WriteTries
   ): Promise<CollectionServiceResult> {
     // Refused first when the collection is removed from code: publishing or
     // withdrawing every language is a write to the entry like any other.
@@ -11567,7 +11762,11 @@ export class CollectionMutationService extends BaseService {
       // The gate's early answer, asked before the move runs any hook: a publish the gate holds
       // back runs none, whichever door it came through. A move made for a publish of chosen parts
       // was asked already, with the rest of that request. Its verdict under the row lock follows.
-      if (gateDirection === "publish" && params.gateAskedEarly !== true) {
+      if (
+        gateDirection === "publish" &&
+        params.gateAskedEarly !== true &&
+        !tries.madeAgain
+      ) {
         await refusePublishEarly({
           scope: { kind: "collection", slug: params.collectionName },
           entryId: params.entryId,
@@ -11598,11 +11797,14 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      const hooks = await this.lifecycleBeforeHooks(direction, {
-        params,
-        existingEntry: existingEntry as Record<string, unknown>,
-        collection: publishCollection,
-      });
+      // Run once for a move, however often it is made.
+      const hooks = await tries.once("beforeHooks", () =>
+        this.lifecycleBeforeHooks(direction, {
+          params,
+          existingEntry: existingEntry as Record<string, unknown>,
+          collection: publishCollection,
+        })
+      );
       if ("answer" in hooks) return hooks.answer;
       const { sharedContext, requestFacts, storedHooks } = hooks.ready;
 
@@ -12971,7 +13173,9 @@ export class CollectionMutationService extends BaseService {
           // gate that finds what it judged has changed throws, and the whole move rolls back.
           if (gateVerdict !== undefined) await gateVerdict.settle();
         },
-        transactionOptions
+        transactionOptions,
+        // Compared, under the hold, with the registry row this move loaded.
+        loadedRegistryRowOf(publishCollection, undefined, { tries })
       );
 
       // The entry was deleted out from under the publish: nothing was written or
@@ -14145,7 +14349,9 @@ export class CollectionMutationService extends BaseService {
   async publishAllLocales(
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
-    return this.setLifecycleAllLocales(PUBLISH_ALL_LOCALES, params);
+    return this.inWriteTries(tries =>
+      this.setLifecycleAllLocales(PUBLISH_ALL_LOCALES, params, tries)
+    );
   }
 
   /**
@@ -14209,7 +14415,9 @@ export class CollectionMutationService extends BaseService {
         data: null,
       };
     }
-    return this.setLifecycleAllLocales(WITHDRAW_ALL_LOCALES, params);
+    return this.inWriteTries(tries =>
+      this.setLifecycleAllLocales(WITHDRAW_ALL_LOCALES, params, tries)
+    );
   }
 
   /**
@@ -14338,6 +14546,46 @@ export class CollectionMutationService extends BaseService {
       requireEveryLanguage: requiresEveryLanguage(args.collectionName),
     };
     return state;
+  }
+
+  /**
+   * The entry's counters and drafts as they stand, for a description of its parts to say what it
+   * was made from. Its languages only where each moves on its own, as a move of them is judged.
+   *
+   * @experimental
+   */
+  async entryStanding(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<DocumentStanding | undefined> {
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const companion = await this.fileManager.loadCompanionSchema(
+      params.collectionName
+    );
+    const languagesTable = translationTableOf(
+      companion,
+      companion?.hasStatus === true &&
+        (await isCompanionReady(this.adapter, companion.companionTableName))
+    );
+    return readDocumentStanding(this.adapter, {
+      dialect: this.dialect,
+      ref: {
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId: params.entryId,
+      },
+      table: collectionTableName(collection, params.collectionName),
+      languages: languagesJudged(
+        languagesTable,
+        versionLanguagesFor({
+          localized: languagesTable !== null,
+          localization: this.localization,
+          locale: EVERY_LOCALE,
+        })
+      ),
+    });
   }
 
   /**
@@ -17261,7 +17509,10 @@ export class CollectionMutationService extends BaseService {
         body,
         locale: rawParams.locale,
       },
-      () => this.updateEntryInParts(rawParams, body, depth)
+      () =>
+        this.inWriteTries(tries =>
+          this.updateEntryInParts(rawParams, body, depth, tries)
+        )
     );
   }
 
@@ -17388,7 +17639,9 @@ export class CollectionMutationService extends BaseService {
     // is resolved away into `params` at the top of the method. See there.
     rawParams: UpdateEntryParams,
     body: Record<string, unknown>,
-    depth?: number
+    depth: number | undefined,
+    /** The tries this is one of. */
+    tries: WriteTries
   ): Promise<CollectionServiceResult> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
@@ -17639,6 +17892,13 @@ export class CollectionMutationService extends BaseService {
       // answering by language would otherwise refuse over a language that does
       // not go live.
       const publishesEveryLanguage = sweepAllLocales && gate === "publish";
+      // Collection metadata, for its relation fields and hooks and for the hold
+      // to compare: read before the table the entry is read through, so that a
+      // save landing between the two is found by the hold, rather than leaving
+      // this update a table of before it and a row of after.
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
       const toUpdate = await this.entryToUpdate({
         ...params,
         gate: publishesEveryLanguage ? null : gate,
@@ -17672,10 +17932,6 @@ export class CollectionMutationService extends BaseService {
       // from this copy.
       const storedRow = detachData(existingEntry as Record<string, unknown>);
 
-      // Get collection metadata to identify relation fields and hooks
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
-      );
       const fields = collectionFields(collection);
       const storedHooks = this.hookService.getStoredHooks(
         collection as Record<string, unknown>
@@ -17818,7 +18074,7 @@ export class CollectionMutationService extends BaseService {
           schema,
           locale: params.locale,
         })) !== null;
-      if (earlySave && !moveRefused) {
+      if (earlySave && !moveRefused && !tries.madeAgain) {
         await refuseStatusSaveEarly(
           earlySave,
           await this.livePartsOn(this.adapter, {
@@ -17842,8 +18098,12 @@ export class CollectionMutationService extends BaseService {
       );
       if (certainlyStale) return certainlyStale;
 
-      // Shared context between all hooks in this request
-      const sharedContext: Record<string, unknown> = { ...params.context };
+      // Shared context between all hooks in this request, however often the
+      // update is made
+      const sharedContext: Record<string, unknown> = await tries.once(
+        "context",
+        () => ({ ...params.context })
+      );
       // Resolved once for the whole operation, so every hook phase is told the
       // same thing about the caller and none of them re-reads a header.
       const requestFacts = resolveRequestFacts(params.request);
@@ -17860,16 +18120,19 @@ export class CollectionMutationService extends BaseService {
           params.locale
         )),
       };
-      let finalData = await this.beforeUpdateHooks({
-        collectionName: params.collectionName,
-        entryId: params.entryId,
-        body,
-        existingEntry: hookOriginal,
-        user: params.user,
-        storedHooks,
-        sharedContext,
-        requestFacts,
-      });
+      const sentBody = body;
+      let finalData = await tries.once("beforeUpdate", () =>
+        this.beforeUpdateHooks({
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          body: sentBody,
+          existingEntry: hookOriginal,
+          user: params.user,
+          storedHooks,
+          sharedContext,
+          requestFacts,
+        })
+      );
 
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
@@ -17897,36 +18160,46 @@ export class CollectionMutationService extends BaseService {
       });
       // The save as sent, before the rules keep a denied value at the row's: a save held over
       // another writer's pending change is judged against what it sent.
-      const sentBeforeRules = detachData(finalData);
-      const { storedPaths, storedValues } = await fieldAccessPass(
-        params.context,
-        {
-          kind: "collection",
-          slug: params.collectionName,
-          id: params.entryId,
-        },
-        finalData,
+      const sent = finalData;
+      const sentBeforeRules = await tries.once("sent", () => detachData(sent));
+      // Judged once however often the update is made: what it took out or kept
+      // is in the data kept after it, below.
+      const { storedPaths, storedValues } = await tries.once(
+        "fieldAccess",
         () =>
-          this.keepDeniedFieldsAtStored({
-            data: finalData,
-            storedId: String(existingEntry.id),
-            collectionName: params.collectionName,
-            stored: storedForAccess,
-            tableName,
-            fields,
-            params,
-          })
+          fieldAccessPass(
+            params.context,
+            {
+              kind: "collection",
+              slug: params.collectionName,
+              id: params.entryId,
+            },
+            sent,
+            () =>
+              this.keepDeniedFieldsAtStored({
+                data: sent,
+                storedId: String(existingEntry.id),
+                collectionName: params.collectionName,
+                stored: storedForAccess,
+                tableName,
+                fields,
+                params,
+              })
+          )
       );
 
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "beforeValidate",
-        data: finalData,
-        operation: "update",
-        user: params.user,
+      finalData = await tries.kept("beforeValidate", async () => {
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "beforeValidate",
+          data: sent,
+          operation: "update",
+          user: params.user,
+        });
+        return sent;
       });
 
       {
@@ -17964,28 +18237,32 @@ export class CollectionMutationService extends BaseService {
         existingEntry as Record<string, unknown>,
         params.locale
       );
-      await this.hookService.runBeforeChange({
-        collection: params.collectionName,
-        operation: "update",
-        data: finalData,
-        originalData: hookOriginal,
-        ...(storedStatus === undefined ? {} : { storedStatus }),
-        storedHooks,
-        queryDatabase: this.queryDatabaseFn,
-        user: params.user,
-        sharedContext,
-        req: requestFacts,
-      });
+      const validated = finalData;
+      finalData = await tries.kept("beforeChange", async () => {
+        await this.hookService.runBeforeChange({
+          collection: params.collectionName,
+          operation: "update",
+          data: validated,
+          originalData: hookOriginal,
+          ...(storedStatus === undefined ? {} : { storedStatus }),
+          storedHooks,
+          queryDatabase: this.queryDatabaseFn,
+          user: params.user,
+          sharedContext,
+          req: requestFacts,
+        });
 
-      // Field-level beforeChange hooks transform the final stored value
-      // (runs after validation, before hashing/serialization).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "beforeChange",
-        data: finalData,
-        operation: "update",
-        user: params.user,
+        // Field-level beforeChange hooks transform the final stored value
+        // (runs after validation, before hashing/serialization).
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "beforeChange",
+          data: validated,
+          operation: "update",
+          user: params.user,
+        });
+        return validated;
       });
       // Every hook has run: a conditional write made whole is judged here, on
       // what is about to be persisted, before it is shaped and written.
@@ -18016,6 +18293,10 @@ export class CollectionMutationService extends BaseService {
       if (hookIssues.length > 0) {
         throw NextlyError.validation({ errors: hookIssues });
       }
+
+      // What the hooks left, before it is shaped for its columns: the fields
+      // the hold compares with the definition it finds.
+      const writtenNames = { ...finalData };
 
       // A password the update leaves out of a container keeps its stored hash.
       // The same stored value is what its repeater rows keep their ids
@@ -20294,7 +20575,11 @@ export class CollectionMutationService extends BaseService {
           // the save rolls back.
           if (settleGate) await settleGate();
         },
-        transactionOptions
+        transactionOptions,
+        // Compared, under the hold, with the registry row this update loaded its fields from: a
+        // field it sets, its hooks' included, that a save removed while it waited is refused by
+        // name, and an update made for a definition that changed otherwise is made again.
+        loadedRegistryRowOf(collection, writtenNames, { tries })
       );
       // The transaction committed (skipped if the retry ultimately threw), so
       // the event is durable; a later hook failure must not hide the delivery.
@@ -22162,7 +22447,9 @@ export class CollectionMutationService extends BaseService {
       authenticatedScope?: AuthenticatedScope;
       appliesFilter?: boolean;
     },
-    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper }
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    // Collection metadata: for the languages the entry holds.
+    collection: Awaited<ReturnType<DynamicCollectionService["getCollection"]>>
   ) {
     // A delete rule that answers a filter allows only the entries it
     // matches, so the gate hands the filter back for the delete to match its
@@ -22178,11 +22465,6 @@ export class CollectionMutationService extends BaseService {
       // super-admin bypass does not apply to a super-admin-owned key here.
       authenticatedScope: params.authenticatedScope,
     };
-    // Collection metadata: for the languages the entry holds, and for the
-    // stored hooks the delete runs after this.
-    const collection = await this.collectionService.getCollection(
-      params.collectionName
-    );
     // A delete removes every language the entry holds, so it is asked in
     // each of them, each time told that one, and a refusal in any refuses
     // it. Each filter answered is matched in its language now, before any
@@ -22202,7 +22484,7 @@ export class CollectionMutationService extends BaseService {
       appliesFilter: params.appliesFilter !== false,
     });
     if ("refusal" in asked) return { refusal: asked.refusal };
-    return { refusal: undefined, collection, deleteLanguages, asked };
+    return { refusal: undefined, deleteLanguages, asked };
   }
 
   /**
@@ -22234,7 +22516,8 @@ export class CollectionMutationService extends BaseService {
     );
     const gate = await this.deleteGateOf(
       { ...params, overrideAccess: false, routeAuthorized: false },
-      schema
+      schema,
+      await this.collectionService.getCollection(params.collectionName)
     );
     return gate.refusal === undefined;
   }
@@ -22245,39 +22528,121 @@ export class CollectionMutationService extends BaseService {
     // A delete moves the shared part (`WHOLE_DOCUMENT`), as its hooks are
     // told, whether the entry service or a batch sent it.
     return withWriteParts(WHOLE_DOCUMENT, () =>
-      this.deleteEntryInParts(params)
+      this.inWriteTries(tries => this.deleteEntryInParts(params, tries))
+    );
+  }
+
+  /**
+   * The hooks an entry delete runs before it, of its own or in a caller's
+   * transaction: `beforeOperation`, then the code-registered `beforeDelete`,
+   * then the stored ones. Any of them throws to abort the delete.
+   */
+  private async beforeDeleteHooks({
+    collectionName,
+    entryId,
+    entry,
+    user,
+    storedHooks,
+    sharedContext,
+    requestFacts,
+    executor,
+  }: {
+    collectionName: string;
+    entryId: string;
+    /** The entry as fetched, which the hooks are handed. */
+    entry: Record<string, unknown>;
+    user?: UserContext;
+    storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
+    sharedContext: Record<string, unknown>;
+    requestFacts: ReturnType<typeof resolveRequestFacts>;
+    /**
+     * The caller's transaction, where the delete is made in one: bound to each
+     * hook's context, so a hook's read (a code hook's through
+     * `context.executor`, a stored hook's uniqueness read) stays on the
+     * connection that transaction holds rather than re-entering the pool.
+     */
+    executor?: unknown;
+  }): Promise<void> {
+    const onTransaction = executor === undefined ? {} : { executor };
+    // Execute beforeOperation hooks FIRST (before operation-specific hooks)
+    // Can modify operation arguments (id) or throw to abort
+    await this.hookService.hookRegistry.executeBeforeOperation({
+      collection: collectionName,
+      operation: "delete",
+      args: { id: entryId },
+      user: user ? { id: user.id, email: user.email } : undefined,
+      context: sharedContext,
+      req: requestFacts,
+      ...onTransaction,
+    });
+
+    // Note: For delete, we don't use modified id since we already fetched the entry
+    // and checked access. The hook can throw to abort if needed.
+
+    // Execute beforeDelete hooks (code-registered)
+    // Hooks run before deletion and can prevent deletion by throwing error
+    const beforeContext = this.hookService.buildHookContext({
+      collection: collectionName,
+      operation: "delete" as const,
+      data: entry,
+      user,
+      context: sharedContext,
+      req: requestFacts,
+      ...onTransaction,
+    });
+
+    await this.hookService.hookRegistry.execute("beforeDelete", beforeContext);
+
+    // Execute stored beforeDelete hooks (UI-configured)
+    await this.hookService.storedHookExecutor.execute(
+      "beforeDelete",
+      storedHooks,
+      this.hookService.buildPrebuiltHookContext({
+        collection: collectionName,
+        operation: "delete",
+        data: entry,
+        queryDatabase: this.queryDatabaseFn,
+        user,
+        sharedContext,
+        req: requestFacts,
+        ...onTransaction,
+      })
     );
   }
 
   /** {@link deleteEntry}, inside the scope that says what it moves. */
-  private async deleteEntryInParts(params: {
-    collectionName: string;
-    entryId: string;
-    user?: UserContext;
-    /** Who performed the delete, recorded on the outbox event. */
-    actor?: RequestActor;
-    /** When true, bypass all access control checks */
-    overrideAccess?: boolean;
-    /** When true, the route middleware already ran the RBAC gate, so it is not
-     * run again. See CollectionAccessService.checkCollectionAccess. */
-    routeAuthorized?: boolean;
-    /** Arbitrary data passed to hooks via context */
-    context?: Record<string, unknown>;
-    /** The HTTP request behind this operation, when one produced it. */
-    request?: Request;
-    /**
-     * The caller's authenticated scope. A scoped API key is judged on its OWN
-     * delete grant here, so the session super-admin bypass does not apply to a
-     * super-admin-owned key on the delete gate.
-     */
-    authenticatedScope?: AuthenticatedScope;
-    /**
-     * Whether a delete rule's filter is applied, deleting the entry only where
-     * it matches. `false` refuses a rule that answers a filter, as a bulk
-     * delete by ids does. Defaults to `true`.
-     */
-    appliesFilter?: boolean;
-  }): Promise<CollectionServiceResult> {
+  private async deleteEntryInParts(
+    params: {
+      collectionName: string;
+      entryId: string;
+      user?: UserContext;
+      /** Who performed the delete, recorded on the outbox event. */
+      actor?: RequestActor;
+      /** When true, bypass all access control checks */
+      overrideAccess?: boolean;
+      /** When true, the route middleware already ran the RBAC gate, so it is not
+       * run again. See CollectionAccessService.checkCollectionAccess. */
+      routeAuthorized?: boolean;
+      /** Arbitrary data passed to hooks via context */
+      context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
+      /**
+       * The caller's authenticated scope. A scoped API key is judged on its OWN
+       * delete grant here, so the session super-admin bypass does not apply to a
+       * super-admin-owned key on the delete gate.
+       */
+      authenticatedScope?: AuthenticatedScope;
+      /**
+       * Whether a delete rule's filter is applied, deleting the entry only where
+       * it matches. `false` refuses a rule that answers a filter, as a bulk
+       * delete by ids does. Defaults to `true`.
+       */
+      appliesFilter?: boolean;
+    },
+    /** The tries this is one of. */
+    tries: WriteTries
+  ): Promise<CollectionServiceResult> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
@@ -22298,6 +22663,11 @@ export class CollectionMutationService extends BaseService {
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
 
+      // The row the hold compares, read before the table the entry is read
+      // through; see `updateEntry`.
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
       const schema = await this.fileManager.loadDynamicSchema(
         params.collectionName
       );
@@ -22323,59 +22693,31 @@ export class CollectionMutationService extends BaseService {
       // gate `canDeleteEntry` asks too, so the two cannot drift.
       const gate = await this.deleteGateOf(
         { ...params, user: accessUser },
-        schema
+        schema,
+        collection
       );
       if (gate.refusal !== undefined) return gate.refusal;
-      const { collection, deleteLanguages } = gate;
+      const { deleteLanguages } = gate;
       const { languages: askedLanguages, filters: deleteFilters } = gate.asked;
-      const { storedHooks, tableName, sharedContext, requestFacts } =
+      const { storedHooks, tableName, requestFacts, ...setup } =
         this.operationSetup(collection, params);
+      // One context for every hook of the delete, however often it is made.
+      const sharedContext = await tries.once(
+        "context",
+        () => setup.sharedContext
+      );
       entryTable = tableName;
 
-      // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-      // Can modify operation arguments (id) or throw to abort
-      await this.hookService.hookRegistry.executeBeforeOperation({
-        collection: params.collectionName,
-        operation: "delete",
-        args: { id: params.entryId },
-        user: params.user
-          ? { id: params.user.id, email: params.user.email }
-          : undefined,
-        context: sharedContext,
-        req: requestFacts,
-      });
-
-      // Note: For delete, we don't use modified id since we already fetched the entry
-      // and checked access. The hook can throw to abort if needed.
-
-      // Execute beforeDelete hooks (code-registered)
-      // Hooks run before deletion and can prevent deletion by throwing error
-      const beforeContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "delete" as const,
-        data: entry,
-        user: params.user,
-        context: sharedContext,
-        req: requestFacts,
-      });
-
-      await this.hookService.hookRegistry.execute(
-        "beforeDelete",
-        beforeContext
-      );
-
-      // Execute stored beforeDelete hooks (UI-configured)
-      await this.hookService.storedHookExecutor.execute(
-        "beforeDelete",
-        storedHooks,
-        this.hookService.buildPrebuiltHookContext({
-          collection: params.collectionName,
-          operation: "delete",
-          data: entry,
-          queryDatabase: this.queryDatabaseFn,
+      // Run once for a delete, however often it is made.
+      await tries.once("beforeDelete", () =>
+        this.beforeDeleteHooks({
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          entry,
           user: params.user,
+          storedHooks,
           sharedContext,
-          req: requestFacts,
+          requestFacts,
         })
       );
 
@@ -22623,7 +22965,10 @@ export class CollectionMutationService extends BaseService {
             context: sharedContext,
           });
         },
-        transactionOptions
+        transactionOptions,
+        // Compared, under the hold, with the registry row this delete loaded: a collection
+        // deleted or made again under its slug while it waited is refused.
+        loadedRegistryRowOf(collection, undefined, { tries })
       );
       // Set only after the transaction resolves: `deletedRow` is true exactly
       // when the delete committed, so a commit failure never flags a durable
@@ -22918,6 +23263,11 @@ export class CollectionMutationService extends BaseService {
           return accessDenied;
         }
       }
+      // Held for the write before it reads the collection or its table, against a Builder save
+      // deleting the collection's field values (`holdEntityForWrite`): the definition is then read
+      // as the save left it, and the write never holds a read of the table a save waits on while
+      // it waits for the save. Nothing more where the caller's transaction already holds it.
+      await this.holdForEntryWrite(tx, params.collectionName);
       // Get collection metadata to identify relation fields. Runs on the
       // caller's transaction connection so this per-entry read does not re-enter
       // the pool from inside the transaction (which can stall against a small pool).
@@ -22927,6 +23277,11 @@ export class CollectionMutationService extends BaseService {
           tx.getDrizzle()
         );
       writeRow = collection as Record<string, unknown>;
+      await this.refuseMadeFromEarlier(
+        tx,
+        params.collectionName,
+        loadedRegistryRowOf(collection, body, { insertsOnly: true })
+      );
 
       // Authorization is resolved once by the batch caller before this shared
       // transaction (or here when called directly), so no permission read runs
@@ -23302,10 +23657,6 @@ export class CollectionMutationService extends BaseService {
       // nothing but the whole transaction can take the row back: a failure once
       // it is written is marked a write-integrity failure, so a batch aborts and
       // rolls back rather than carrying on and committing it.
-      // Held for the write before its row is written, on MySQL, against a Builder save deleting
-      // the collection's field values (`holdEntityForWrite`); nothing where the caller's
-      // transaction already holds it.
-      await this.holdForEntryWrite(tx, params.collectionName);
       const undoesAlone = takesSavepoints(tx);
       const { entry, createEffects } = await underSavepoint(tx, async () => {
         // Insert using transaction context
@@ -23594,27 +23945,128 @@ export class CollectionMutationService extends BaseService {
 
   /**
    * An entry write's own transaction on collection `collectionName`, holding the collection first
-   * (`holdForEntryWrite`): on MySQL a Builder save deleting the collection's field values waits for
-   * it to commit, and it waits for such a save to finish. Every transaction that writes entries
-   * opens through this, the batch writes included, so none is left without the hold.
+   * (`holdForEntryWrite`): a Builder save deleting the collection's field values waits for it to
+   * commit, and it waits for such a save to finish. Every transaction that writes entries opens
+   * through this, the batch writes included, so none is left without the hold. `loaded` is the
+   * registry row the write's operation loaded its fields from (`loadedRegistryRowOf`), compared
+   * with the row the hold reads.
    */
   async entryTransaction<T>(
     collectionName: string,
     work: (tx: TransactionContext) => Promise<T>,
-    options?: TransactionOptions
+    options?: TransactionOptions,
+    loaded?: LoadedRegistryRow
   ): Promise<T> {
-    // The registry row the write is made for, read before its transaction opens, so the hold can
-    // refuse a write whose collection was replaced while it waited (`expectedRegistryRowOf`).
-    const expected = await expectedRegistryRowOf(
-      this.collectionService,
-      collectionName,
-      this.adapter,
-      this.dialect
+    // On SQLite every transaction of the process takes its turn on one connection, so the write's
+    // share is taken before its own opens, where it can wait for a save. Inside a transaction the
+    // flow already opened, the turn is held, and the hold refuses rather than waits.
+    const sharesFirst =
+      this.dialect === "sqlite" && !this.adapter.transactionOpenInFlow();
+    const release = sharesFirst
+      ? await shareEntityInProcess(
+          this.adapter,
+          { kind: "collection", slug: collectionName },
+          busyTimeoutMs => holdWaitOf(loaded, busyTimeoutMs)
+        )
+      : undefined;
+    // On PostgreSQL a write whose transaction is its own gives it up where a save holds the
+    // collection, and waits with none open: kept through the wait, it would hold a connection of
+    // the pool the save needs to finish. A transaction the flow opened stays the flow's.
+    const leaves =
+      this.dialect === "postgresql" && !this.adapter.transactionOpenInFlow();
+    const entity = { kind: "collection", slug: collectionName } as const;
+    try {
+      if (!leaves) {
+        return await this.adapter.transaction(async tx => {
+          await this.holdForEntryWrite(tx, collectionName, loaded, {
+            sharedInProcess: sharesFirst,
+          });
+          return work(tx);
+        }, options);
+      }
+      return await attemptWithoutWaitingInside(
+        entity,
+        async () => {
+          const made: {
+            outcome: { held: true; value: T } | { held: false };
+          } = { outcome: { held: false } };
+          await this.adapter.transaction(async tx => {
+            if (
+              await this.holdForEntryWrite(tx, collectionName, loaded, {
+                whenHeld: "leave",
+              })
+            ) {
+              made.outcome = { held: true, value: (await work(tx)) as T };
+            }
+          }, options);
+          return made.outcome;
+        },
+        holdWaitOf(loaded)
+      );
+    } finally {
+      release?.();
+    }
+  }
+
+  /**
+   * Makes an entry write in tries of its own (`WriteTries`): again, from what
+   * its before hooks left, where a save changed its collection while it waited
+   * for it, with the definitions read afresh before each later try.
+   */
+  inWriteTries<T>(write: (tries: WriteTries) => Promise<T>): Promise<T> {
+    // Inside a transaction the flow opened nothing can be read afresh, and the write keeps its
+    // refusal.
+    const tries = new WriteTries(
+      savesHoldEntriesHere() && !this.adapter.transactionOpenInFlow()
     );
-    return this.adapter.transaction(async tx => {
-      await this.holdForEntryWrite(tx, collectionName, expected);
-      return work(tx);
-    }, options);
+    return tries.make(
+      () => write(tries),
+      () => this.readDefinitionsAfresh()
+    );
+  }
+
+  /**
+   * Reads the definitions this process serves again where a save changed them:
+   * the registry rows, and the tables built from them, which a save made in
+   * another process leaves here as they were until a request follows it.
+   */
+  private async readDefinitionsAfresh(): Promise<void> {
+    bumpSchemaVersion();
+    await servedSchemaVersion();
+  }
+
+  /**
+   * The registry row a batch write is made for (`loadedRegistryRowOf`), read before its
+   * transaction opens, with the fields its items' data set (`items`): compared, under the batch's
+   * hold, with the row held (`entryTransaction`'s `loaded`).
+   */
+  async loadedRegistryRowFor(
+    collectionName: string,
+    items: readonly Readonly<Record<string, unknown>>[] = [],
+    /** How the batch is made from it: creates, in tries (`LoadedRegistryRowOptions`). */
+    options?: LoadedRegistryRowOptions
+  ): Promise<LoadedRegistryRow | undefined> {
+    const row = await this.collectionService.getCollection(collectionName);
+    return loadedRegistryRowOf(row, items, options);
+  }
+
+  /**
+   * Refuses a write on a transaction its caller opened, on MySQL, that reads its collection's
+   * definition (`loaded`) from a snapshot older than a save's: compared, once for the transaction,
+   * with the definition that stands (`refuseOnEarlierSnapshot`). On the other databases a
+   * transaction's read is of the latest commit, and the write holds before it reads.
+   */
+  private refuseMadeFromEarlier(
+    tx: TransactionContext,
+    collectionName: string,
+    loaded: LoadedRegistryRow | undefined
+  ): Promise<void> {
+    return refuseOnEarlierSnapshot(
+      tx,
+      { kind: "collection", slug: collectionName },
+      this.adapter,
+      loaded
+    );
   }
 
   /**
@@ -23624,15 +24076,35 @@ export class CollectionMutationService extends BaseService {
   private holdForEntryWrite(
     tx: TransactionContext,
     collectionName: string,
-    /** The registry row the write is made for, where it was read (`expectedRegistryRowOf`). */
-    expected?: ExpectedRegistryRow
-  ): Promise<void> {
+    /** The registry row the write was made for (`loadedRegistryRowOf`); undefined, not compared. */
+    loaded?: LoadedRegistryRow,
+    options: {
+      /** Whether the write's SQLite share was taken before `tx` opened (`entryTransaction`). */
+      sharedInProcess?: boolean;
+      /**
+       * What it does where a save holds the collection on PostgreSQL (`holdEntityForWrite`). A write
+       * on a transaction its caller opened cannot be given up and opened again: it waits in it where
+       * the pool can spare a connection, and is refused at once where it cannot, the save needing
+       * the pool's only connection to finish.
+       */
+      whenHeld?: WhenHeld;
+    } = {}
+  ): Promise<boolean> {
     return holdEntityForWrite(
       tx,
-      collectionName,
+      { kind: "collection", slug: collectionName },
       this.collectionService,
-      this.dialect,
-      expected
+      this.adapter,
+      loaded,
+      {
+        ...options,
+        whenHeld:
+          options.whenHeld ??
+          (this.dialect === "postgresql" &&
+          !poolCanSpareOne(this.adapter, "postgresql")
+            ? "refuse"
+            : "wait"),
+      }
     );
   }
 
@@ -23812,6 +24284,16 @@ export class CollectionMutationService extends BaseService {
     // written row is matched against each again before the write may stand.
     const filteredWrites: FilteredTransactionWrite[] = [];
     try {
+      // Held for the write before it reads the collection or its table, against a Builder save
+      // deleting the collection's field values (`holdEntityForWrite`): the definition is then read
+      // as the save left it, and the write never holds a read of the table a save waits on while
+      // it waits for the save. Before the row lock, so before the before-hooks too: they, the
+      // workflow's publish gate and the rule withdrawing an approval on an edit read the locked
+      // current row, and the hold comes before the entry's row in every write. The share side
+      // holds up no other entry write; while the hooks run it can only lengthen a deleting save's
+      // wait, which ends at the hold's 30 seconds. Nothing more where the caller's transaction
+      // already holds it.
+      await this.holdForEntryWrite(tx, params.collectionName);
       // Get collection metadata to identify relation fields. Runs on the
       // caller's transaction connection so this per-entry read does not re-enter
       // the pool from inside the transaction (which can stall against a small pool).
@@ -23825,6 +24307,11 @@ export class CollectionMutationService extends BaseService {
       // read, and the gate a write asks and the write itself must read the same
       // body.
       body = { ...body };
+      await this.refuseMadeFromEarlier(
+        tx,
+        params.collectionName,
+        loadedRegistryRowOf(collection, body)
+      );
       // The lifecycle action this row's own gate asked and allowed, if any.
       let rowAllowed: "publish" | "unpublish" | undefined;
       // The filter the row's own gate answered: the row is matched against it
@@ -23868,15 +24355,6 @@ export class CollectionMutationService extends BaseService {
       // than per row, so the fetch is by id alone and the access service holds
       // the whole verdict.
       const fetchWhere = this.whereEq("id", entryId);
-
-      // Held for the write before its row is locked, on MySQL, against a Builder save deleting
-      // the collection's field values (`holdEntityForWrite`); nothing where the caller's
-      // transaction already holds it. Before the row lock, so before the before-hooks too: they,
-      // the workflow's publish gate and the rule withdrawing an approval on an edit read the
-      // locked current row, and the hold comes before the entry's row in every write. The share
-      // side holds up no other entry write; while the hooks run it can only lengthen a deleting
-      // save's wait, which ends at the hold's 30 seconds.
-      await this.holdForEntryWrite(tx, params.collectionName);
 
       // Fetch existing entry first (needed for owner checks and hooks). Lock the
       // row (`forUpdate`, a no-op on SQLite, which already serializes writers) so
@@ -25618,6 +26096,11 @@ export class CollectionMutationService extends BaseService {
     // database to migrate, whose remedy (send it again) would repeat it.
     let rowWritten = false;
     try {
+      // Held for the write before it reads the collection or its table, against a Builder save
+      // deleting the collection's field values (`holdEntityForWrite`): the definition is then read
+      // as the save left it, and the write never holds a read of the table a save waits on while
+      // it waits for the save. Nothing more where the caller's transaction already holds it.
+      await this.holdForEntryWrite(tx, params.collectionName);
       // Get collection metadata early. Runs on the caller's transaction
       // connection so this read does not re-enter the pool from inside the
       // transaction (which can stall against a small pool).
@@ -25626,6 +26109,11 @@ export class CollectionMutationService extends BaseService {
         tx.getDrizzle()
       );
       writeRow = collection as Record<string, unknown>;
+      await this.refuseMadeFromEarlier(
+        tx,
+        params.collectionName,
+        loadedRegistryRowOf(collection)
+      );
 
       const tableName = collectionTableName(collection, params.collectionName);
 
@@ -25705,60 +26193,16 @@ export class CollectionMutationService extends BaseService {
 
       // Execute hooks (unless skipped)
       if (options.runHooks) {
-        // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-        // Can modify operation arguments (id) or throw to abort
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "delete",
-          args: { id: entryId },
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: sharedContext,
-          req: requestFacts,
-          // Bind a beforeOperation hook that reads via context.executor to the
-          // caller's transaction connection so it does not re-enter the pool.
-          executor: tx.getDrizzle(),
-        });
-
-        // Note: For delete, we don't use modified id since we already fetched the entry
-        // and checked access. The hook can throw to abort if needed.
-
-        // Execute beforeDelete hooks (code-registered)
-        const beforeContext = this.hookService.buildHookContext({
-          collection: params.collectionName,
-          operation: "delete" as const,
-          data: entry,
+        await this.beforeDeleteHooks({
+          collectionName: params.collectionName,
+          entryId,
+          entry,
           user: params.user,
-          context: sharedContext,
-          // Bind a code beforeDelete hook that reads via context.executor to the
-          // caller's transaction connection so it does not re-enter the pool.
-          executor: tx.getDrizzle(),
-          req: requestFacts,
-        });
-
-        await this.hookService.hookRegistry.execute(
-          "beforeDelete",
-          beforeContext
-        );
-
-        // Execute stored beforeDelete hooks (UI-configured)
-        await this.hookService.storedHookExecutor.execute(
-          "beforeDelete",
           storedHooks,
-          this.hookService.buildPrebuiltHookContext({
-            collection: params.collectionName,
-            operation: "delete",
-            data: entry,
-            queryDatabase: this.queryDatabaseFn,
-            user: params.user,
-            sharedContext,
-            req: requestFacts,
-            // Bind a stored hook's uniqueness read to the caller's transaction
-            // connection so it does not re-enter the pool from inside the tx.
-            executor: tx.getDrizzle(),
-          })
-        );
+          sharedContext,
+          requestFacts,
+          executor: tx.getDrizzle(),
+        });
       }
 
       // The collection schema, two views: FieldConfig for the component cascade,
@@ -25775,10 +26219,6 @@ export class CollectionMutationService extends BaseService {
       // make the event describe values other than the row this delete removes.
       // The adapter no-ops the lock where row locking is unavailable (SQLite,
       // itself serialized).
-      // Held for the write before its row is locked, on MySQL, against a Builder save deleting
-      // the collection's field values (`holdEntityForWrite`); nothing where the caller's
-      // transaction already holds it.
-      await this.holdForEntryWrite(tx, params.collectionName);
       await tx.lockRow(tableName, entryId);
       const freshEntry = await tx.selectOne<Record<string, unknown>>(
         tableName,

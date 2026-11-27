@@ -42,7 +42,7 @@ import {
 import type { ServiceContainer } from "../../../services";
 import { CollectionFileManager } from "../../../services/collection-file-manager";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
-import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../field-groups/services/field-group-storage-names";
 import type { CollectionRegistryService } from "../services/collection-registry-service";
 
 import {
@@ -144,7 +144,7 @@ async function stateOf(t: TestNextly, slug: string, table: string) {
       ? await count(`SELECT COUNT(*) AS n FROM ${q(companion)}`)
       : 0,
     fieldGroupValues: await count(
-      `SELECT COUNT(*) AS n FROM ${q(resolveComponentTableName(META))} WHERE ${q("_parent_table")} = '${table}'`
+      `SELECT COUNT(*) AS n FROM ${q(fieldGroupTableNameFor("current", META))} WHERE ${q("_parent_table")} = '${table}'`
     ),
     registry: (await registryOf(t).getCollectionBySlug(slug)) !== null,
   };

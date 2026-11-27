@@ -109,8 +109,7 @@ export interface DynamicTableLoadOptions {
   /**
    * The slugs the running configuration declares for this registry's kind.
    *
-   * Given, a row removed from code (its source is the app's code and its slug
-   * is not declared) is registered only while every table it owns exists: its
+   * Given, a row removed from code (`isRemovedFromCode`) is registered only while every table it owns exists: its
    * main table and, where it has translatable columns, its translation table. Registering a
    * localized entity creates a missing translation table, so registering one
    * whose tables a migration dropped would bring part of it back, empty. One
@@ -321,7 +320,11 @@ export async function loadDynamicTables(
         // unregistered: see `DynamicTableLoadOptions.declaredSlugs`.
         if (
           options.declaredSlugs !== undefined &&
-          isRemovedFromCode(row, options.declaredSlugs) &&
+          isRemovedFromCode(
+            sourceTable === "dynamic_singles" ? "single" : "collection",
+            row,
+            options.declaredSlugs
+          ) &&
           !(await ownedTablesExist(
             adapter,
             { slug: row.slug, tableName: row.table_name },

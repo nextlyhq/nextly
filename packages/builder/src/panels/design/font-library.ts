@@ -554,20 +554,6 @@ export function roleStack(family: string, category?: string): string {
   return `"${cssString(family)}", ${roleGeneric(category)}`;
 }
 
-/**
- * Whether the faces draw an upright bold: some upright face at weight 600 or
- * heavier, which a browser picks for a bold heading rather than thickening a
- * lighter one. An italic bold leaves upright headings thickened.
- */
-export function drawsBold(faces: readonly FontFaceDef[]): boolean {
-  return emittableFaces(faces).some(face => {
-    if (slanted(face.style)) return false;
-    // A variable face's heavier end, which may fall between named weights.
-    const [low, high = low] = weightNumbers(face.weight);
-    return high !== undefined && high >= 600;
-  });
-}
-
 /** The specimen, one sentence with ascenders, descenders and round forms. */
 export const SPECIMEN: string =
   "Almost before we knew it, we had left the ground";

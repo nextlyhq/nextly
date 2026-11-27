@@ -17,8 +17,8 @@ import {
   navigateTo,
   Textarea,
 } from "@nextlyhq/plugin-sdk/admin";
-import { EyeOff, Lock } from "lucide-react";
-import { useId, type ReactNode, type Ref } from "react";
+import { Check, EyeOff, Lock } from "lucide-react";
+import { useId, useState, type ReactNode, type Ref } from "react";
 
 import type { Sourced } from "../resolver/order";
 import type { SeoTabContext } from "../tab/contract";
@@ -36,7 +36,15 @@ import {
   type SourceNames,
 } from "./parts";
 import { PreviewCard } from "./previews";
-import { copyFixes, useMakeFailure, type MakeFailure } from "./share-image-row";
+import {
+  failureText,
+  makeLabel,
+  MAKING_TEXT,
+  useShareImageMaking,
+  type MadeFrom,
+  type ShareImageMaking,
+} from "./share-image-making";
+import { copyFixes, madeFromOf } from "./share-image-row";
 import {
   isTyped,
   typedText,
@@ -69,7 +77,11 @@ export interface SeoPanelProps {
   onChooseImage?: () => void;
   /** The file of the share image shown while none is chosen, where read. */
   shownImageFile?: ChosenImage | undefined;
-  /** Makes a share image of the right size; answers whether it did. */
+  /**
+   * Makes a share image of the right size and sets it as the page's:
+   * answers the copy's id, or none where it set none, and rejects with the
+   * reason where the copy could not be made, which the panel says.
+   */
   onMakeShareImage?: (() => Promise<string | undefined>) | undefined;
   /** Opens the page's own content at one of its fields. */
   onGoToField?: ((field: string) => void) | undefined;
@@ -96,37 +108,32 @@ const ADVANCED_VALUES: readonly string[] = [
 
 export function SeoPanel(props: SeoPanelProps): ReactNode {
   const { context, answers, problems, values, writable, errors, onSet } = props;
-  // Whether the last share image copy asked for from the notices failed.
-  const makeFailure = useMakeFailure(values.ogImage);
+  // One state for making a share image, from the notice or the row alike.
+  const making = useShareImageMaking(values.ogImage, props.onMakeShareImage);
+  // Each "Show it under Advanced" opens the section at the share image row.
+  const [revealed, setRevealed] = useState(0);
   const names: SourceNames = {
     typeLabel: context?.typeLabel ?? "page",
     fieldLabels: context?.fieldLabels ?? {},
     ...(context?.drawnBy === undefined ? {} : { drawnBy: context.drawnBy }),
   };
   const answer = answers?.answer;
+  const chosen = values.ogImage !== null && values.ogImage !== undefined;
   return (
     <div className="flex flex-col gap-[18px] pt-4 pb-12">
-      {context?.mayChange === false ? (
-        <Note icon={<Lock className="size-4" />}>
-          <b className="font-semibold">You can't change this page's SEO.</b> You
-          can see what search engines and social networks are given. Ask someone
-          who manages the site's SEO to change it.
-        </Note>
-      ) : null}
-      {answer?.robots.from === "type" ? (
-        <Note icon={<EyeOff className="size-4" />}>
-          <b className="font-semibold">
-            Every {inSentence(names.typeLabel)} page is hidden from search.
-          </b>{" "}
-          This page stays hidden whatever its own switch says. People can still
-          share it.
-        </Note>
-      ) : null}
+      <PanelNotes
+        locked={context?.mayChange === false}
+        typeHidden={answer?.robots.from === "type"}
+        typeLabel={names.typeLabel}
+      />
       <PreviewCard answer={answer} site={context?.site} status={props.status} />
       <ProblemNotices
         problems={problems}
-        onMake={makerOf(props, makeFailure.track)}
-        makeFailed={makeFailure.failed}
+        making={making}
+        fixedByCopy={fixedByCopyOf(context)}
+        onMake={makerOf(props, making, madeFromOf(answer, names, chosen))}
+        chosenImage={props.chosenImage}
+        onReveal={() => setRevealed(count => count + 1)}
       />
       <PageTextField
         label="Title on Google"
@@ -173,7 +180,8 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
           ? {}
           : { onChooseImage: props.onChooseImage })}
         shownImageFile={props.shownImageFile}
-        onMakeShareImage={props.onMakeShareImage}
+        {...(making.make === undefined ? {} : { making })}
+        revealShareImage={revealed}
         onGoToField={props.onGoToField}
       />
       {props.receivedHref === undefined ? null : (
@@ -184,45 +192,123 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
 }
 
 /**
- * Each problem the page has, as the admin's notice, under the previews: what
- * is wrong in one sentence, and for a share image networks can't show, the
- * one action that makes a copy that they can.
+ * What holds for the whole page, above its preview: that this person can't
+ * change its SEO, and that its whole type is hidden from search.
  */
+function PanelNotes({
+  locked,
+  typeHidden,
+  typeLabel,
+}: {
+  locked: boolean;
+  typeHidden: boolean;
+  typeLabel: string;
+}): ReactNode {
+  return (
+    <>
+      {locked ? (
+        <Note icon={<Lock className="size-4" />}>
+          <b className="font-semibold">You can't change this page's SEO.</b> You
+          can see what search engines and social networks are given. Ask someone
+          who manages the site's SEO to change it.
+        </Note>
+      ) : null}
+      {typeHidden ? (
+        <Note icon={<EyeOff className="size-4" />}>
+          <b className="font-semibold">
+            Every {inSentence(typeLabel)} page is hidden from search.
+          </b>{" "}
+          This page stays hidden whatever its own switch says. People can still
+          share it.
+        </Note>
+      ) : null}
+    </>
+  );
+}
+
+/** The share image problems a 1200 × 630 copy fixes, as each is said. */
+function fixedByCopyOf(context: SeoTabContext | undefined): string[] {
+  return (context?.shareImage?.problems ?? [])
+    .filter(problem => copyFixes([problem]))
+    .map(problem => problem.message);
+}
+
 /**
  * What makes a share image of the right size from the notices, where the
  * page's image is one a copy fixes and the person may change the page.
  */
 function makerOf(
   props: SeoPanelProps,
-  track: MakeFailure["track"]
+  making: ShareImageMaking,
+  from: MadeFrom
 ): (() => void) | undefined {
-  const make = props.onMakeShareImage;
+  const make = making.make;
   const fixable = copyFixes(props.context?.shareImage?.problems);
   // Only where the group declares a share image, as the Advanced row is.
   const declared = props.context?.fields.includes("ogImage") ?? true;
   if (!props.writable || make === undefined || !fixable || !declared) {
     return undefined;
   }
-  // A copy that could not be made answers with no image: said beside the
-  // notice, so trying again is a choice rather than a silent repeat.
-  return () => track(make());
+  return () => make("notice", from);
 }
 
+/**
+ * Each problem the page has, as the admin's notice, under the previews: what
+ * is wrong in one sentence, and for a share image networks can't show, the
+ * one action that makes a copy that they can. While the copy is being made
+ * the notice says so; once made from here, a note in its place says what was
+ * made and chosen, shows it, and opens Advanced at its row; where it could not
+ * be made, the notice says why.
+ */
 function ProblemNotices({
   problems,
+  making,
+  fixedByCopy,
   onMake,
-  makeFailed,
+  chosenImage,
+  onReveal,
 }: {
   problems: readonly SeoProblem[];
+  making: ShareImageMaking;
+  /** What a 1200 × 630 copy fixes, as each share image problem says it. */
+  fixedByCopy: readonly string[];
   /** Makes a share image networks can show, where one would fix it. */
   onMake: (() => void) | undefined;
-  /** Whether the last copy asked for could not be made. */
-  makeFailed: boolean;
+  /** The page's chosen share image, once read: the copy, once made. */
+  chosenImage: ChosenImage | undefined;
+  /** Opens Advanced at the share image row. */
+  onReveal: () => void;
 }): ReactNode {
-  if (problems.length === 0) return null;
+  const made = making.made;
+  // A copy made in this visit is a 1200 × 630 JPEG by construction, so a
+  // notice of a size or a format it fixed goes at once, before the page is
+  // judged again. One a copy can't fix, such as the site's address missing,
+  // stays.
+  const shown = problems.filter(
+    problem =>
+      problem.id !== "share-image" ||
+      made === undefined ||
+      !fixedByCopy.includes(problem.text)
+  );
+  const failure = making.failureAt("notice");
+  const madeHere = made?.at === "notice" ? made : undefined;
+  // The action, and what is said of it, sit beside one notice only: the
+  // first a copy fixes, else the first about the share image.
+  const fixable = shown.findIndex(
+    problem =>
+      problem.id === "share-image" && fixedByCopy.includes(problem.text)
+  );
+  const makeAt =
+    fixable === -1
+      ? shown.findIndex(problem => problem.id === "share-image")
+      : fixable;
+  if (shown.length === 0 && madeHere === undefined) return null;
   return (
     <div className="grid gap-2">
-      {problems.map((problem, index) => (
+      {madeHere === undefined ? null : (
+        <MadeNote made={madeHere} image={chosenImage} onReveal={onReveal} />
+      )}
+      {shown.map((problem, index) => (
         <Alert
           key={`${problem.id}-${index}`}
           variant="warning"
@@ -231,19 +317,63 @@ function ProblemNotices({
         >
           <AlertDescription className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[13px]">
             <span>{problem.text}</span>
-            {problem.id === "share-image" && onMake !== undefined ? (
-              <LinkAction onClick={onMake}>Make a share image</LinkAction>
+            {index === makeAt && onMake !== undefined ? (
+              <LinkAction disabled={making.busy} onClick={onMake}>
+                {makeLabel(making.busy)}
+              </LinkAction>
             ) : null}
-            {problem.id === "share-image" && makeFailed ? (
+            {index === makeAt && making.busy ? (
+              <span className="basis-full text-muted-foreground">
+                {MAKING_TEXT}
+              </span>
+            ) : null}
+            {index === makeAt && failure !== undefined ? (
               <span className="basis-full font-medium text-danger-text">
-                The share image couldn&apos;t be made. Try again, or choose
-                another image under Advanced.
+                {failureText(
+                  failure,
+                  "Try again, or choose another image under Advanced."
+                )}
               </span>
             ) : null}
           </AlertDescription>
         </Alert>
       ))}
     </div>
+  );
+}
+
+/**
+ * A share image made from the notice, said where the notice was: what was
+ * made and from what, the copy itself as the page's chosen image, and the
+ * way to its row under Advanced, which is closed on a real page.
+ */
+function MadeNote({
+  made,
+  image,
+  onReveal,
+}: {
+  made: NonNullable<ShareImageMaking["made"]>;
+  image: ChosenImage | undefined;
+  onReveal: () => void;
+}): ReactNode {
+  const said = `Made a 1200 × 630 share image from the ${made.from.name} and chose it for this page.`;
+  return (
+    <Note tone="success" icon={<Check className="size-4" />}>
+      <span
+        data-testid="seo-share-made-notice"
+        className="flex flex-wrap items-center gap-x-3 gap-y-2"
+      >
+        {image === undefined ? null : (
+          <img
+            src={image.url}
+            alt={image.alt ?? ""}
+            className="h-[42px] w-[80px] flex-none rounded-sm bg-muted object-cover"
+          />
+        )}
+        <span role="status">{said}</span>
+        <LinkAction onClick={onReveal}>Show it under Advanced</LinkAction>
+      </span>
+    </Note>
   );
 }
 
@@ -273,7 +403,12 @@ function ReceivedLink({ href }: { href: string }): ReactNode {
   );
 }
 
-/** Where a field's value comes from, with one way back once it is typed. */
+/**
+ * Where a field's value comes from, with one way back once it is typed. While
+ * the field is automatic, it is empty and the automatic text is only its
+ * placeholder, which can't be selected or edited: "Edit the automatic text"
+ * puts it in the field, to change from there.
+ */
 function FieldSource({
   id,
   typed,
@@ -283,6 +418,7 @@ function FieldSource({
   problem,
   writable,
   onAutomatic,
+  onEditAutomatic,
 }: {
   id: string;
   typed: string;
@@ -292,6 +428,8 @@ function FieldSource({
   problem: SeoProblem | undefined;
   writable: boolean;
   onAutomatic: () => void;
+  /** Puts the automatic text in the field as typed text. */
+  onEditAutomatic: (text: string) => void;
 }): ReactNode {
   if (isTyped(typed)) {
     return (
@@ -309,6 +447,12 @@ function FieldSource({
         <span>
           <EmptyUses sourced={automatic} value={value} names={names} />
         </span>
+        <LinkAction
+          disabled={!writable}
+          onClick={() => onEditAutomatic(automatic.value)}
+        >
+          Edit the automatic text
+        </LinkAction>
       </SourceRow>
     );
   }
@@ -331,8 +475,11 @@ export interface SeoTextFieldProps {
   placeholder: string;
   /** The value used, measured as Google draws it: typed, or automatic. */
   measure: { kind: SearchText; text: string };
-  /** The line under the field saying where the value comes from, by its id. */
-  source: (id: string) => ReactNode;
+  /**
+   * The line under the field saying where the value comes from, by its id,
+   * and the field's own id beside it.
+   */
+  source: (id: string, fieldId: string) => ReactNode;
   error?: string | undefined;
   writable: boolean;
   multiline?: boolean;
@@ -462,7 +609,7 @@ export function SeoTextField({
       )}
       {/* How wide the value in use draws on Google, under what is typed. */}
       <WidthMeter id={`${id}-width`} kind={measure.kind} text={measure.text} />
-      {source(`${id}-source`)}
+      {source(`${id}-source`, id)}
       <FieldError id={`${id}-error`} error={error} />
     </div>
   );
@@ -512,7 +659,7 @@ function PageTextField({
       multiline={multiline}
       onChange={onChange}
       quiet
-      source={id => (
+      source={(id, fieldId) => (
         <FieldSource
           id={id}
           typed={typed}
@@ -522,8 +669,31 @@ function PageTextField({
           problem={problem}
           writable={writable}
           onAutomatic={() => onChange(null)}
+          onEditAutomatic={text => {
+            onChange(text);
+            focusAtEnd(fieldId);
+          }}
         />
       )}
     />
   );
+}
+
+/**
+ * Focuses the field once the text just put in it is drawn, with the caret at
+ * its end, so typing goes on from there rather than before it.
+ */
+function focusAtEnd(fieldId: string): void {
+  requestAnimationFrame(() => {
+    const field = document.getElementById(fieldId);
+    if (
+      !(field instanceof HTMLInputElement) &&
+      !(field instanceof HTMLTextAreaElement)
+    ) {
+      return;
+    }
+    field.focus();
+    const end = field.value.length;
+    field.setSelectionRange(end, end);
+  });
 }

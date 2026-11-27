@@ -33,6 +33,29 @@ const rich = (...children: unknown[]) => ({
 });
 
 describe("rich text as Markdown", () => {
+  it("writes an address the editor linked as a link, and one the author unlinked as its words", () => {
+    const value = rich(
+      paragraph(
+        text_("See "),
+        {
+          type: "autolink",
+          url: "https://example.com/a",
+          children: [text_("https://example.com/a")],
+        },
+        text_(" or "),
+        {
+          type: "autolink",
+          url: "https://example.com/b",
+          isUnlinked: true,
+          children: [text_("example.com/b")],
+        }
+      )
+    );
+    expect(markdownOfRichText(value)).toBe(
+      "See [https://example.com/a](https://example.com/a) or example.com/b"
+    );
+  });
+
   it("writes each kind of block as Markdown, in order", () => {
     const value = rich(
       { type: "heading", tag: "h2", children: [text_("Why it works")] },

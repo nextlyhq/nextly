@@ -147,9 +147,9 @@ export interface PluginPublicAddresses {
    */
   fingerprint(): Promise<string>;
   /**
-   * The site's own content types, declared in code or made in the Schema
-   * Builder, never a plugin's own or the system's: what a catch-up walks
-   * with `held`. Waits for the boot to finish, as `held` does.
+   * The site's content types, declared in code or made in the Schema Builder,
+   * and the Singles a plugin contributes; never a plugin's collection or the
+   * system's types: what a catch-up walks with `held`. Waits for the boot to finish, as `held` does.
    */
   types(): Promise<PublicAddressType[]>;
   /**

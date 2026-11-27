@@ -25,6 +25,7 @@ import {
   availableDialects,
   createScratchDatabase,
 } from "../../__tests__/helpers/fresh-database";
+import { withFieldGroupRegistryFor } from "../../domains/field-groups/services/field-group-new-site";
 import { installRegistryResolver } from "../../cli/utils/registry-resolver";
 import { getDialectTables } from "../../database/index";
 import { loadDialectTables } from "../../database/dialect-tables";
@@ -80,7 +81,9 @@ async function firstStart(adapter: DrizzleAdapter): Promise<Start> {
 
 /** The core table names the push declares for this dialect. */
 function coreTableNames(dialect: "postgresql" | "mysql"): string[] {
-  return Object.values(getDialectTables(dialect))
+  return Object.values(
+    withFieldGroupRegistryFor(dialect, getDialectTables(dialect), "current")
+  )
     .filter(table => isTable(table))
     .map(table => getTableName(table))
     .sort();

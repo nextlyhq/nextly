@@ -25,10 +25,16 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import {
+  readStoredFieldGroupTables,
+  withStoredTable,
+  type RegistryReadAdapter,
+} from "../../domains/field-groups/services/field-group-stored-tables";
+import {
   chooseRestoreEntity,
   KIND_NAMES,
   kindOption,
   resolveEntityTables,
+  type ResolvedEntityTable,
 } from "../../domains/i18n/migration/resolve-entity-table";
 import {
   restoreI18nArchive,
@@ -130,27 +136,29 @@ export async function runI18nRestore(
   }
   const { entity } = chosen;
 
-  const { companionTableName } = entity;
   logger.keyValue("Entity", `${slug} (${entity.kind})`);
-  logger.keyValue("Companion", companionTableName);
   if (options.locale) logger.keyValue("Locale", options.locale);
   if (options.field) logger.keyValue("Field", options.field);
 
-  // What a restore reads and checks, the same for a real run and a dry run.
-  const restoreArgs = {
-    collection: slug,
-    kind: entity.kind,
-    // Naming the kind is what lets a restore take rows whose owner the archive does not know.
-    claimUnknown: options.kind !== undefined,
-    companionTableName,
-    locale: options.locale,
-    field: options.field,
-    purge: options.purge,
+  // What a restore reads and checks, the same for a real run and a dry run, once the database
+  // has said which translations table the entity's values go to (`companionOf`).
+  const restoreArgsFor = (companionTableName: string) => {
+    logger.keyValue("Companion", companionTableName);
+    return {
+      collection: slug,
+      kind: entity.kind,
+      // Naming the kind is what lets a restore take rows whose owner the archive does not know.
+      claimUnknown: options.kind !== undefined,
+      companionTableName,
+      locale: options.locale,
+      field: options.field,
+      purge: options.purge,
+    };
   };
 
   // A dry run deletes nothing, so it needs no consent, and opens read-only.
   if (options.dryRun === true) {
-    await previewRestore(restoreArgs, logger);
+    await previewRestore(entity, slug, restoreArgsFor, logger);
     return;
   }
 
@@ -173,6 +181,9 @@ export async function runI18nRestore(
 
   await withAdapter(
     async adapter => {
+      const restoreArgs = restoreArgsFor(
+        await companionOf(adapter, entity, slug)
+      );
       const result = await restoreI18nArchive({
         adapter: adapter as unknown as DrizzleAdapter,
         ...restoreArgs,
@@ -271,13 +282,20 @@ export function restoreDryRunChanges(
  * real run's refusal.
  */
 async function previewRestore(
-  restoreArgs: Omit<Parameters<typeof restoreI18nArchive>[0], "adapter">,
+  entity: ResolvedEntityTable,
+  slug: string,
+  restoreArgsFor: (
+    companionTableName: string
+  ) => Omit<Parameters<typeof restoreI18nArchive>[0], "adapter">,
   logger: CommandContext["logger"]
 ): Promise<void> {
   const adapter = await openCommandAdapter({ dryRun: true }, logger);
   // Its database is not there, which the open has already said.
   if (adapter === undefined) return;
   try {
+    const restoreArgs = restoreArgsFor(
+      await companionOf(adapter, entity, slug)
+    );
     const result = await restoreI18nArchive({
       adapter: adapter as unknown as DrizzleAdapter,
       ...restoreArgs,
@@ -293,6 +311,24 @@ async function previewRestore(
   } finally {
     await adapter.disconnect();
   }
+}
+
+/**
+ * The translations table a restore writes `entity`'s values to. A field group's is read from the
+ * registry, under the table its row names: on a site on the current field-group names that is
+ * `fg_<slug>`, which the configuration alone would name `comp_<slug>`. A registry that is there
+ * but cannot be read refuses the restore (`withStoredTable`).
+ */
+async function companionOf(
+  adapter: unknown,
+  entity: ResolvedEntityTable,
+  slug: string
+): Promise<string> {
+  if (entity.kind !== "fieldGroup") return entity.companionTableName;
+  const stored = await readStoredFieldGroupTables(
+    adapter as RegistryReadAdapter
+  );
+  return withStoredTable(entity, slug, stored).companionTableName;
 }
 
 /** The action of `nextly i18n:restore`, loaded when it runs. */

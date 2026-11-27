@@ -25,7 +25,13 @@ const WHOLE: MoveContext = {
   containerChanges: true,
   describeFieldGroup: slug =>
     slug === "seo"
-      ? { label: "SEO", usedBy: ["the collection posts", "the Single home"] }
+      ? {
+          uses: [
+            { entityType: "collection", entitySlug: "posts" },
+            { entityType: "single", entitySlug: "home" },
+          ],
+          complete: true,
+        }
       : undefined,
 };
 /** What the Builder asks today. */
@@ -105,7 +111,7 @@ describe("Move to…", () => {
     );
     expect(seo?.disabled).toBe(true);
     expect(noteOf(seo!)).toBe(
-      "SEO uses the field group SEO, which is changed only in its own editor, where a change reaches every place that uses it. It is used by the collection posts, the Single home."
+      "Summary cannot be moved into or out of the field group seo: a field group is changed only in its own editor. It is used by the collection posts, the Single home."
     );
   });
 

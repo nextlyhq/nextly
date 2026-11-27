@@ -659,40 +659,99 @@ describe("a rich-text field in the Content tab", () => {
   });
 });
 
-describe("the inspector's Content and Style tabs", () => {
-  it("are underlined tabs, set at the start of the panel, over one divider", () => {
-    // Tabs, not a segmented control: Content and Style are two views of one
-    // block, not a choice of value, and the choices beside them are drawn
-    // differently on purpose.
+describe("the inspector's Content, Style and Advanced tabs", () => {
+  it("are one segmented bar across the panel, the open tab raised and heavier", () => {
     const list = ruleBody(".nx-inspector__tablist");
-    expect(list).toContain("justify-content: flex-start");
-    expect(list).toContain("height: var(--nx-builder-control-height)");
+    expect(list).toContain("display: flex");
+    expect(list).toContain("inline-size: 100%");
+    expect(list).toContain("padding: 0.125rem");
     // The builder's border token, which more contrast promotes.
-    expect(list).toContain(
-      "border-block-end: 1px solid var(--nx-builder-border)"
-    );
-    expect(list).toContain("background: transparent");
+    expect(list).toContain("border: 1px solid var(--nx-builder-border)");
+    expect(list).toContain("background: var(--nx-muted)");
+    // Each tab an equal share of the bar.
     const tab = ruleBody(".nx-inspector__tab");
-    expect(tab).toContain("flex: none");
-    expect(tab).toContain("font-size: var(--nx-builder-font-size)");
-    expect(tab).toContain("font-weight: 600");
-    expect(tab).toContain("border-block-end: 2px solid transparent");
+    expect(tab).toContain("flex: 1 1 0");
+    expect(tab).toContain("font-weight: 500");
     expect(tab).toContain("color: var(--nx-muted-foreground)");
     const active = ruleBody('.nx-inspector__tab[data-state="active"]');
     expect(active).toContain(
       "color: var(--nx-builder-text, var(--nx-foreground))"
     );
-    expect(active).toContain("border-block-end-color: var(--nx-foreground)");
+    expect(active).toContain("font-weight: 600");
+    expect(active).toContain("background: var(--nx-background)");
+    expect(active).toContain("box-shadow: 0 0 0 1px var(--nx-builder-border)");
     expect(ruleBody(".nx-inspector__tab:focus-visible")).toContain(
       "outline: 2px solid var(--nx-ring)"
     );
+    // The bar draws its own edge, so the row under it adds no line.
+    expect(ruleBody(".nx-inspector__tabrow")).not.toContain("border-block-end");
   });
 
-  it("keeps the open tab's line in forced colours", () => {
-    // Forced colours replace the palette; the line is named in system colours
-    // so the open tab stays marked.
+  it("never read as a value: taller, on a track, and raised where a value is filled", () => {
+    // Height: the bar is a control tall plus its track; a value's option is
+    // a control tall.
+    expect(ruleBody(".nx-inspector__tablist")).toContain(
+      "height: calc(var(--nx-builder-control-height) + 0.25rem)"
+    );
+    expect(ruleBody(".nx-segment__option")).toContain(
+      "min-block-size: var(--nx-builder-control-height)"
+    );
+    // Background: the bar sits on a track; a value's options are clear.
+    expect(ruleBody(".nx-segment__option")).toContain(
+      "background: transparent"
+    );
+    // The selected look: a raised surface for the open tab, the text colour
+    // filled behind a chosen value.
+    const chosen = FLAT.slice(
+      FLAT.indexOf('.nx-segment__option[aria-checked="true"]')
+    );
+    expect(chosen.slice(0, chosen.indexOf("}"))).toContain(
+      "background: var(--nx-foreground)"
+    );
+    expect(ruleBody('.nx-inspector__tab[data-state="active"]')).not.toContain(
+      "background: var(--nx-foreground)"
+    );
+  });
+
+  it("outlines the open tab in forced colours, leaving its focus ring to focus", () => {
+    // Forced colours drop the surface and the shadow; the outline is named in
+    // a system colour so the open tab stays marked, and gives way to the 2px
+    // focus ring while the tab has keyboard focus.
     expect(FLAT).toContain(
-      '@media (forced-colors: active) { .nx-inspector__tab[data-state="active"] { border-block-end-color: CanvasText; } }'
+      '@media (forced-colors: active) { .nx-inspector__tab[data-state="active"]:not(:focus-visible) { outline: 1px solid CanvasText; outline-offset: -1px; } }'
+    );
+  });
+
+  it("places a tab's match count from its label, not from the equal-width tab", () => {
+    expect(ruleBody(".nx-inspector__tab-label")).toContain(
+      "position: relative"
+    );
+    expect(ruleBody(".nx-inspector__tab")).not.toContain("position: relative");
+    expect(ruleBody(".nx-inspector__tab-count")).toContain(
+      "position: absolute"
+    );
+  });
+});
+
+describe("a row's actions", () => {
+  it("are faded while their row is at rest and their popup is shut, and kept in place", () => {
+    // Opacity, not visibility or display: the button keeps its place, its
+    // keyboard stop and its spoken name.
+    const atRest = ruleBody(
+      ':is(.nx-binding-row, .nx-list-sort):not(:hover, :focus-within) :is(.nx-binding-row__bind, .nx-list-sort__more):not( [data-open], [data-state="open"] )'
+    );
+    expect(atRest).toContain("opacity: 0");
+    expect(atRest).not.toMatch(/visibility|display/);
+  });
+
+  it("outweigh a disabled button's own fade only at rest", () => {
+    // The at-rest rule names the row and the button, so it beats the
+    // connect button's ':disabled' fade, which loads after it.
+    expect(ruleBody(".nx-binding-row__bind:disabled")).toContain(
+      "opacity: 0.5"
+    );
+    expect(FLAT.indexOf(".nx-binding-row__bind:disabled {")).toBeGreaterThan(
+      FLAT.indexOf(":is(.nx-binding-row, .nx-list-sort):not(:hover")
     );
   });
 });

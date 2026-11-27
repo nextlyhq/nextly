@@ -62,10 +62,10 @@ describe("the walk of what a module loads", () => {
   });
 
   it("finds the dialects, in the module itself and in one it imports", async () => {
-    // The resolver names them only through the registry it imports.
+    // The core schema names them only through the conversion it imports.
     for (const entry of [
-      "database/schema-registry.ts",
-      "cli/utils/registry-resolver.ts",
+      "schemas/_internal/drizzle-to-tablespec.ts",
+      "schemas/core-schema.ts",
     ]) {
       const packages = Object.keys(await packagesOf(entry));
       expect(packages, entry).toEqual(expect.arrayContaining(DIALECT_CORES));

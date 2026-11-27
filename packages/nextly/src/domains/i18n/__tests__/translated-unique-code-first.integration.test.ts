@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import { defineCollection, defineFieldGroup, text } from "../../../config";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -126,6 +126,55 @@ describeEachDialect("a code-first translated unique field", dialect => {
 
     await sync(true);
     expect(await warned()).toEqual([]);
+  });
+
+  // A field group's translations table is under the name the registry stores it in, `fg_<slug>` on
+  // a new site. Looked for under the legacy name, it was not there, and nothing was said.
+  it("names a field group's field at boot, in the table the registry stores", async () => {
+    const said: string[] = [];
+    await current.destroy();
+    current = await createTestNextly({
+      dialect,
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "tu_card",
+          localized: true,
+          fields: [text({ name: "handle" })],
+        }),
+      ],
+      localization: { locales: ["en", "fr"], defaultLocale: "en" },
+    });
+    const stored = await current.adapter.select<{ tableName: string }>(
+      "dynamic_field_groups",
+      { where: { and: [{ column: "slug", op: "=", value: "tu_card" }] } }
+    );
+    expect(stored.map(row => row.tableName)).toEqual(["fg_tu_card"]);
+
+    await warnAboutUnindexedTranslatedUnique(
+      current.adapter,
+      {
+        fieldGroups: [
+          {
+            slug: "tu_card",
+            localized: true,
+            fields: [{ name: "handle", type: "text", unique: true }],
+          },
+        ],
+      },
+      m => said.push(m),
+      [
+        {
+          kind: "fieldGroup",
+          slug: "tu_card",
+          companionTable: "fg_tu_card_locales",
+          fields: [],
+          builtBy: "fieldGroup",
+        },
+      ]
+    );
+
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('"tu_card": "handle"');
   });
 
   it("through the Direct API, refuses a duplicate as DUPLICATE and reads blanks as before", async () => {
