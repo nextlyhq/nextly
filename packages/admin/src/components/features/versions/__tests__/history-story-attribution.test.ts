@@ -78,6 +78,17 @@ describe("who acted, with who stood behind them", () => {
     ).toBe("Deployment (GitHub Actions, commit unknown)");
   });
 
+  it("says where a deployment's approval was given, beside the deployment", () => {
+    expect(
+      attributedActorName("System", {
+        door: "deploy",
+        deploymentHost: "Vercel build",
+        deploymentCommit: "3f2a1c9",
+        approvedVia: "admin",
+      })
+    ).toBe("Deployment (Vercel build, commit 3f2a1c9), approved in the admin");
+  });
+
   it("names a deployment from a person's machine by the machine", () => {
     expect(
       attributedActorName("System", {

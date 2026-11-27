@@ -16,10 +16,8 @@
  * @module domains/audit/attribution
  */
 
-import {
-  looksLikeSecret,
-  redactCredentialTokens,
-} from "../../observability/credential-shapes";
+import { looksLikeSecret } from "../../observability/credential-shapes";
+import { redactCredentialsInText } from "../../observability/mask-emails";
 import { getNextlyLogger } from "../../observability/logger";
 import { ATTRIBUTION_NAME_LENGTH } from "../../schemas/audit/widths";
 
@@ -190,34 +188,29 @@ export function storedName(value: unknown): string | undefined {
 }
 
 /**
- * Whether `name` holds a credential anywhere in it: a whole value or a token
- * inside a label (`runner glpat-…`) that the repository's catalogue of
- * credential shapes recognises, a Nextly API key (`nx_live_…`, which the
- * catalogue does not list), or a run of 64 or more characters with no space,
- * as a hex reset token or a signed value is. A long host name
- * (`long-production-project.vercel.app`) is shorter than that and is kept.
+ * Whether `name` holds a credential anywhere in it, as the repository's own
+ * running-text scanner finds one in a log line (`redactCredentialsInText`: a
+ * token with a known credential's shape wherever it sits, a `Bearer` or
+ * `Basic` value, a user and password before a host, a credential-named
+ * parameter), or one that scanner has no shape for: a Nextly API key
+ * (`nx_live_…`), or a run of 64 or more characters with no space and no dot,
+ * as a hex reset token is. A host name never makes such a run, its labels
+ * being at most 63 characters, so a long one is kept.
  */
 function holdsCredential(name: string): boolean {
   return (
     looksLikeSecret(name) ||
-    redactCredentialTokens(name, CREDENTIAL_MARK) !== name ||
+    redactCredentialsInText(name) !== name ||
     NEXTLY_KEY.test(name) ||
     LONG_UNBROKEN_RUN.test(name)
   );
 }
 
-/**
- * What the scanner puts in place of a credential it finds. A name never holds
- * it, since a name holding a control character is refused first, so any
- * change the scanner makes is a credential found.
- */
-const CREDENTIAL_MARK = "\u0000";
-
 /** A Nextly API key's documented prefix, followed by its id. */
 const NEXTLY_KEY = /nx_live_[0-9a-f]/i;
 
-/** A run of 64 or more characters with no whitespace in it. */
-const LONG_UNBROKEN_RUN = /\S{64,}/;
+/** A run of 64 or more characters with no whitespace and no dot in it. */
+const LONG_UNBROKEN_RUN = /[^\s.]{64,}/;
 
 /**
  * Whether `value` holds a control character, NUL among them: PostgreSQL

@@ -213,6 +213,9 @@ describe("attribution columns", () => {
       "runner glpat-AbCdEfGhIjKlMnOpQrSt",
       // A whole Nextly key inside a label.
       "ci nx_live_0123456789abcdef01234567_x",
+      // An authorization value after ordinary text, as the repository's
+      // running-text scanner finds one in a log line.
+      "runner Bearer abcdef0123456789",
     ]) {
       const { columns, refused } = attributionColumns({
         agent: { name: secret },
@@ -239,6 +242,15 @@ describe("attribution columns", () => {
     expect(host.columns.deploymentHost).toBe(
       "long-production-project-preview.vercel.app"
     );
+    // A host name past 63 characters is still a host: its labels are each
+    // shorter, and the dots break any run a token would make.
+    const fqdn =
+      "build-runner-0042.eu-west-1.compute.internal.example-cloud-provider.com";
+    expect(fqdn.length).toBeGreaterThan(63);
+    expect(
+      attributionColumns({ deployment: { pipeline: fqdn, commit: null } })
+        .columns.deploymentHost
+    ).toBe(fqdn);
   });
 
   it("refuses a name holding a NUL or another control character", () => {

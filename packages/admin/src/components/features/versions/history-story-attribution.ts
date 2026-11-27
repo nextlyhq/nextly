@@ -62,8 +62,17 @@ function phraseOf(
   actor: string,
   attribution: ActorAttributionWords
 ): { text: string; clauses: boolean } {
+  const approval = attribution.approvedVia
+    ? APPROVAL_PLACE_WORDS[attribution.approvedVia]
+    : undefined;
   const deployment = deploymentName(attribution);
-  if (deployment) return { text: deployment, clauses: false };
+  // A deployment is named in place of the actor, with where its approval was
+  // given when one was: its own commas are inside its parentheses.
+  if (deployment) {
+    return approval
+      ? { text: `${deployment}, ${approval}`, clauses: true }
+      : { text: deployment, clauses: false };
+  }
   const parts: string[] = [];
   if (attribution.agentName) {
     const joined = attribution.actorIsKey ? "with" : "for";
@@ -72,9 +81,6 @@ function phraseOf(
     parts.push(actor);
   }
   if (attribution.door === "local") parts.push("from the command line");
-  const approval = attribution.approvedVia
-    ? APPROVAL_PLACE_WORDS[attribution.approvedVia]
-    : undefined;
   if (approval) parts.push(approval);
   return {
     text: parts.join(", "),
