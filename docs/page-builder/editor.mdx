@@ -1207,6 +1207,15 @@ arrangement at the device you're editing: in a Row, Fill takes the rest of the r
 Row stacked on that device, a block is sized as in a Stack and Height isn't offered there.
 Values that match no choice read as **Custom**, with the CSS rows that hold them.
 
+A Fit or Fixed block sits where its parent puts its blocks: centered in a centered
+Section, at the end under one aligned to the end, at the start otherwise. Under a Stack, a
+stacked Row or a Grid, **Align** under Width moves it: the first choice, named after the
+parent (**Section's**, **Box's**, **Column's**, **Card's**), leaves it to the parent, and
+**Left**, **Center** and **Right** place this block only. Like every setting it applies at
+the device you're editing and the smaller ones, until a smaller device sets its own. A
+block saved before Align existed with Fit or Fixed kept to the left still is, and reads
+**Align: Left**.
+
 Every container has **Content width** under **Style → Layout**: **Boxed** or **Full
 width**. A new Section starts Boxed, and every other container starts Full width.
 

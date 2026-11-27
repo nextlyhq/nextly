@@ -28,6 +28,7 @@ import type { EditorState } from "../../editor-state";
 import {
   LAYOUT_CSS_NAMES,
   LAYOUT_PROPERTIES,
+  layoutAddress,
   normalBeneath,
   ownCascade,
   planAlign,
@@ -114,11 +115,11 @@ function ownAt(
 ): LayoutValues {
   const values: Partial<Record<LayoutProperty, string>> = {};
   for (const property of LAYOUT_PROPERTIES) {
+    // Stored where `layoutAddress` says: a margin side within `margin`.
     const value = readStyleValue(styles, {
       state,
       breakpoint: device,
-      property,
-      path: [],
+      ...layoutAddress(property),
     });
     if (typeof value === "string") values[property] = value;
     // A variable or token set here is a value too: kept as written, so a
@@ -310,11 +311,12 @@ export function useApply(
   return writes => {
     if (writes.length === 0) return;
     const steps = writes.map(write => ({
+      // Written where it is read (`layoutAddress`): a margin side within
+      // `margin`, any other property as its own.
       address: {
         state,
         breakpoint: write.device,
-        property: write.property,
-        path: [] as string[],
+        ...layoutAddress(write.property),
       },
       value: storedForm(write.property, write.value),
     }));
