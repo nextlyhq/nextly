@@ -8,14 +8,15 @@
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const record = vi.hoisted(() => ({ ready: false, retried: 0, holdersRead: 0 }));
+const record = vi.hoisted(() => ({ ready: false, waited: 0, holdersRead: 0 }));
 
 vi.mock("../../address-record/catch-up", () => ({
   addressRecordReady: () => record.ready,
-  // Waits for nothing here: the wait itself is the catch-up's own test's.
-  addressRecordReadyWithin: async () => record.ready,
-  retryFailedCatchUp: () => {
-    record.retried += 1;
+  // Waits for nothing here: the wait itself, which runs a failed catch-up
+  // again, is the catch-up's own test's.
+  addressRecordReadyWithin: async () => {
+    record.waited += 1;
+    return record.ready;
   },
 }));
 
@@ -37,7 +38,7 @@ vi.mock("../../address-record/participant", () => ({
 import { plainCopyProxyHandler, prefersMarkdown } from "../ai-outputs";
 
 beforeEach(() => {
-  record.retried = 0;
+  record.waited = 0;
   record.holdersRead = 0;
 });
 
@@ -57,7 +58,8 @@ describe("a copy asked for before the address record is ready", () => {
     expect(answer?.response?.status).toBe(503);
     expect(answer?.response?.headers.get("retry-after")).toBe("120");
     expect(answer?.response?.headers.get("cache-control")).toBe("no-store");
-    expect(record.retried).toBe(1);
+    // The wait, which runs a failed catch-up again, was asked once.
+    expect(record.waited).toBe(1);
     // Read while the record is not ready: whether copies are served, and
     // whether a page of the site holds the address.
     expect(readRules).toHaveBeenCalledTimes(1);
@@ -123,7 +125,7 @@ describe("a copy asked for before the address record is ready", () => {
       new Request("https://acme.example/blog/hello"),
       {} as PluginContext
     );
-    expect(record.retried).toBe(0);
+    expect(record.waited).toBe(0);
   });
 });
 

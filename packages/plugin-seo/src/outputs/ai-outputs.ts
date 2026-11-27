@@ -25,7 +25,6 @@ import {
 import {
   addressRecordReady,
   addressRecordReadyWithin,
-  retryFailedCatchUp,
 } from "../address-record/catch-up";
 import {
   addressHolders,
@@ -982,10 +981,11 @@ function copyNotReady(): Response {
  * up, or `"ready"` once the record is ready to answer it. A page may not hold
  * its address yet. A copy's own address waits for the record, up to a limit:
  * on a server that has only just started, the catch-up is still running when
- * the first request comes, and the site serves no page there. Past the
- * limit, or after a catch-up that failed, it is asked to come back rather
- * than answered not found, which a reader may keep, and a failed catch-up is
- * tried again. Never held: a page's own address asked for by `Accept`, which
+ * the first request comes, and the site serves no page there; where the
+ * record is behind, the wait runs the catch-up itself, as a failed one is
+ * tried again (`addressRecordReadyWithin`). Past the limit it is asked to
+ * come back rather than answered not found, which a reader may keep. Never
+ * held: a page's own address asked for by `Accept`, which
  * the page answers; a page the site's code builds; and a copy's address
  * where copies are switched off.
  */
@@ -995,7 +995,6 @@ async function waitForRecord(
   atPage: boolean,
   config: AiOutputsConfig
 ): Promise<ProxyAnswer | undefined | "ready"> {
-  retryFailedCatchUp();
   if (atPage || builtAt(config, url)) return undefined;
   const rules = await config.readRules(ctx, undefined);
   if (rules.plainTextCopies !== true) return undefined;

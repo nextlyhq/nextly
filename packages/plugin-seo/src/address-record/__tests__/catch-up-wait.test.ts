@@ -32,7 +32,8 @@ function catchUpOnCue(): {
     db: {
       withTransactionBounds: () =>
         new Promise((resolve, reject) => {
-          finish = () => resolve({ ran: true, recorded: 0, lost: [] });
+          finish = () =>
+            resolve({ ran: true, finished: true, recorded: 0, lost: [] });
           fail = () => reject(new Error("lock not available"));
         }),
     },

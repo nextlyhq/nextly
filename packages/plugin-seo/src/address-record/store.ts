@@ -502,6 +502,41 @@ export async function putNote(
 }
 
 /**
+ * Keep each of `entries` under its key, together: each note is made first
+ * where it is missing (with no value), then every one is written on one
+ * transaction, in the order given. Two writers at once each update the same
+ * rows in the same order, so the second waits for the first to commit, and
+ * the notes are left holding one writer's values, never a mix of both.
+ */
+export async function putNotesTogether(
+  ctx: PluginContext,
+  entries: readonly { key: string; value: string }[]
+): Promise<void> {
+  await recordReady(ctx);
+  const { notes } = await notesOn(
+    ctx.db,
+    entries.map(entry => entry.key),
+    false
+  );
+  for (const { key } of entries) {
+    if (!notes.has(key)) {
+      await insertUnlessTaken(ctx, ctx.db, addressNotes, {
+        noteKey: key,
+        kind: "meta",
+        value: null,
+      });
+    }
+  }
+  await ctx.db.transaction(async db => {
+    for (const { key, value } of entries) {
+      await db
+        .update(addressNotes, { value })
+        .where(eq(db.table(addressNotes).noteKey, key));
+    }
+  });
+}
+
+/**
  * Keep `value` under the note `key` where none is kept yet; answers the
  * value kept, this one or the one another process kept first.
  */

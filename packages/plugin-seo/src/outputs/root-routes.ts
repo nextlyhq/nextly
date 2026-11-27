@@ -8,8 +8,8 @@
 import type { PluginRoute, PluginRouteContext } from "@nextlyhq/plugin-sdk";
 
 import {
-  addressRecordReady,
-  retryFailedCatchUp,
+  RECORD_WAIT_MS,
+  addressRecordReadyWithin,
 } from "../address-record/catch-up";
 import type { CodeRoute } from "../code-pages/routes";
 import type { SiteRules } from "../resolver/page-levels";
@@ -18,6 +18,7 @@ import { ROBOTS_SERVED_BY_HEADER } from "../settings/robots-rules";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
 
 import { llmsFullTxtOf, llmsTxtOf, type AiOutputsConfig } from "./ai-outputs";
+import { keepCopy, keptCopy, keptCopyResponse } from "./last-good";
 import { listPages } from "./listing";
 import { robotsTxt, type AiCrawlerChoice } from "./robots";
 import { siteOriginFor } from "./site-origin";
@@ -45,20 +46,21 @@ export interface RootFilesConfig {
 /**
  * The site's origin for one request, and the headers that follow from it:
  * {@link siteOriginFor}, else the request's own, which nothing may cache,
- * since a request's host can be anything its sender says.
+ * since a request's host can be anything its sender says. `own` says it is
+ * the site's own.
  */
 async function originOf(
   req: Request,
   ctx: PluginRouteContext,
   config: RootFilesConfig,
   contentType: string
-): Promise<{ origin: string; headers: Record<string, string> }> {
+): Promise<{ origin: string; headers: Record<string, string>; own: boolean }> {
   const headers: Record<string, string> = { "content-type": contentType };
   const asked = new URL(req.url).origin;
   const site = await siteOriginFor(asked, ctx, config);
-  if (site !== undefined) return { origin: site, headers };
+  if (site !== undefined) return { origin: site, headers, own: true };
   headers["cache-control"] = "no-store";
-  return { origin: asked, headers };
+  return { origin: asked, headers, own: false };
 }
 
 const notFound = () => new Response("Not found", { status: 404 });
@@ -78,18 +80,62 @@ function warnOnce(message: string, warn: (message: string) => void): void {
 }
 
 /**
- * The answer while the address record catches up, or after a catch-up that
- * failed: a page may not hold its address yet, and a listing read now would
- * leave it out, so readers are asked to come back, nothing in between keeps
- * the answer, and a failed catch-up is tried again. Null once it is ready.
+ * Whether a file listing pages can be answered from the record, and if not,
+ * the answer: a page may not hold its address yet, and a listing read now
+ * would leave it out. The request waits for the record, up to
+ * {@link RECORD_WAIT_MS}, bringing it up to date itself where it is behind
+ * (`addressRecordReadyWithin`), so a catch-up goes on on a host that runs
+ * nothing between requests. Past that, the copy of `file` kept from the last
+ * good answer is served where there is one, for the site's own origin; else
+ * readers are asked to come back, and nothing in between keeps the answer.
+ * Null once the record is ready.
  */
-function catchingUp(what: string): Response | null {
-  if (addressRecordReady()) return null;
-  retryFailedCatchUp();
+async function catchingUp(
+  ctx: PluginRouteContext,
+  what: string,
+  file: string | undefined
+): Promise<Response | null> {
+  if (await addressRecordReadyWithin(RECORD_WAIT_MS)) return null;
+  const kept = file === undefined ? undefined : await keptCopy(ctx, file);
+  if (kept !== undefined) return keptCopyResponse(kept);
   return new Response(`The ${what} is being brought up to date.`, {
     status: 503,
     headers: { "cache-control": "no-store", "retry-after": "120" },
   });
+}
+
+/**
+ * The answer with `body`, kept as the last good copy of `file` where `file`
+ * is named (the site's own origin), so it can be served while the record
+ * catches up; not found where there is no body.
+ */
+async function answered(
+  ctx: PluginRouteContext,
+  file: string | undefined,
+  body: string | null,
+  headers: Record<string, string>
+): Promise<Response> {
+  if (body === null) return notFound();
+  const contentType = headers["content-type"];
+  if (file !== undefined && contentType !== undefined) {
+    await keepCopy(ctx, file, { body, contentType });
+  }
+  return new Response(body, { headers });
+}
+
+/**
+ * The name a kept copy is filed under: the file, the origin it names, the
+ * path it is served at and what of the request changes it. None where the
+ * origin is the request's own, which is never kept.
+ */
+function fileName(
+  file: string,
+  origin: { origin: string; own: boolean },
+  parts: readonly string[] = []
+): string | undefined {
+  return origin.own
+    ? JSON.stringify([file, origin.origin, ...parts])
+    : undefined;
 }
 
 /**
@@ -110,14 +156,17 @@ export async function sitemapResponse(
   const url = new URL(req.url);
   const asked = url.searchParams.get("page");
   if (asked !== null && !/^[1-9][0-9]{0,8}$/.test(asked)) return notFound();
-  const waiting = catchingUp("sitemap");
-  if (waiting !== null) return waiting;
-  const { origin, headers } = await originOf(
+  const site = await originOf(
     req,
     ctx,
     config,
     "application/xml; charset=utf-8"
   );
+  const { origin, headers } = site;
+  const sitemap = `${origin}${at ?? url.pathname}`;
+  const file = fileName("sitemap", site, [sitemap, asked ?? ""]);
+  const waiting = await catchingUp(ctx, "sitemap", file);
+  if (waiting !== null) return waiting;
   const { pages } = await listPages(ctx, {
     origin,
     readRules: config.readRules,
@@ -132,11 +181,11 @@ export async function sitemapResponse(
       : { collections: config.sitemap.collections }),
   });
   const body = sitemapAnswer(pages, {
-    sitemap: `${origin}${at ?? url.pathname}`,
+    sitemap,
     limits: config.sitemap.limits,
     ...(asked === null ? {} : { page: Number(asked) }),
   });
-  return body === null ? notFound() : new Response(body, { headers });
+  return answered(ctx, file, body, headers);
 }
 
 /** The routes serving the root files `config` turns on. */
@@ -215,7 +264,9 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
 /**
  * A route serving one of the llms files, only once switched on in the SEO
  * settings, so it is not found until then; it lists what the sitemap lists,
- * narrowed as it is.
+ * narrowed as it is. No copy of it is kept to serve while the address record
+ * catches up: it carries pages' titles, descriptions or words, which a kept
+ * copy would go on serving after the public may no longer read them.
  */
 function llmsRoute(
   path: string,
@@ -237,7 +288,7 @@ function llmsRoute(
     handler: async (req, ctx) => {
       const rules = await config.readRules(ctx, undefined);
       if (!on(rules)) return notFound();
-      const waiting = catchingUp(what);
+      const waiting = await catchingUp(ctx, what, undefined);
       if (waiting !== null) return waiting;
       const { origin, headers } = await originOf(
         req,
@@ -259,7 +310,7 @@ function llmsRoute(
         },
         rules
       );
-      return body === null ? notFound() : new Response(body, { headers });
+      return answered(ctx, undefined, body, headers);
     },
   };
 }
