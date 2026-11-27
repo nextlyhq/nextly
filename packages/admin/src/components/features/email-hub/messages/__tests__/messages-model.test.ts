@@ -238,7 +238,7 @@ describe("sendersDisplayOf", () => {
     });
   });
 
-  it("says a site template with no senders is not sent by anything yet", () => {
+  it("says one of your own templates with no senders is not sent by anything yet", () => {
     expect(sendersDisplayOf(email({ owner: { kind: "site" } }))).toEqual({
       lines: ["Not sent by anything yet"],
       incompleteNotice: null,
