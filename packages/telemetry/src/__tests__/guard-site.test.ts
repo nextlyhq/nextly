@@ -72,6 +72,15 @@ describe("the site guard", () => {
     });
   });
 
+  it("is off under Node's own test runner", () => {
+    expect(
+      resolveSiteUsage({
+        env: { NODE_TEST_CONTEXT: "child-v8" },
+        switchOn: true,
+      })
+    ).toEqual({ on: false, reason: "test-runner" });
+  });
+
   it("is off with CI set while the server runs", () => {
     expect(resolveSiteUsage({ env: { CI: "true" }, switchOn: true })).toEqual({
       on: false,

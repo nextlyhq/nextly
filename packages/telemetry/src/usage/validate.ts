@@ -87,6 +87,16 @@ export function basePropertiesFor(source: UsageSource): {
   return source === "site" ? SITE_BASE_PROPERTIES : TOOLS_BASE_PROPERTIES;
 }
 
+/**
+ * A checked value the caller can no longer change. Every value the catalog
+ * allows is a primitive or a list of primitives, so a list is copied: a
+ * caller changing its own list after `capture()`, or a `toJSON` on it,
+ * would otherwise reach the request unchecked.
+ */
+function owned(value: unknown): unknown {
+  return Array.isArray(value) ? [...(value as unknown[])] : value;
+}
+
 function isEventName(name: string): name is keyof typeof USAGE_EVENTS {
   return Object.prototype.hasOwnProperty.call(USAGE_EVENTS, name);
 }
@@ -114,12 +124,14 @@ export function checkEvent(
   for (const [key, propertySpec] of Object.entries(required)) {
     const value = properties[key];
     if (!allows(propertySpec, value)) return null;
-    out[key] = value;
+    out[key] = owned(value);
   }
   for (const [key, propertySpec] of Object.entries(optional)) {
     if (!Object.prototype.hasOwnProperty.call(properties, key)) continue;
     const value = properties[key];
-    if (value !== undefined && allows(propertySpec, value)) out[key] = value;
+    if (value !== undefined && allows(propertySpec, value)) {
+      out[key] = owned(value);
+    }
   }
   // An agent's name only ever stands beside `run_by: "agent"`; with a
   // person's run it would contradict the run it describes.

@@ -14,6 +14,9 @@ import { isMarkerSet, personOffVariable, type Env } from "./env-flags.js";
  * checked as well.
  */
 export const TEST_RUNNER_MARKERS: readonly string[] = [
+  // Node's own runner (`node --test`) marks the processes it starts.
+  "NODE_TEST_CONTEXT",
+  "NODE_TEST_WORKER_ID",
   "VITEST",
   "VITEST_WORKER_ID",
   "JEST_WORKER_ID",

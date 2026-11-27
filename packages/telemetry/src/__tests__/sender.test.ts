@@ -62,6 +62,8 @@ describe("what the sender sends", () => {
         properties: {
           command: "schema pull",
           exit_code: 0,
+          // The id inside the properties too, as the batch endpoint reads it.
+          distinct_id: MACHINE_ID,
           $process_person_profile: false,
         },
       });
@@ -171,6 +173,31 @@ describe("what the sender sends", () => {
     site.capture("first_collection_created", {});
     await site.flush();
     expect(recorder.calls).toHaveLength(0);
+  });
+
+  it("sends a list as it was checked, whatever the caller does to it after", async () => {
+    const recorder = recordingFetch();
+    const session = openToolsUsage({
+      source: "installer",
+      nextlyVersion: "1.2.3",
+      distinctId: MACHINE_ID,
+      machineEnabled: true,
+      env: {},
+      fetch: recorder.fetch,
+    });
+    const features: string[] = ["seo"];
+    session.capture("install_step", {
+      section: "features",
+      features: features as "seo"[],
+    });
+    // Changed between capture and flush: a path, and a toJSON on the list.
+    features[0] = "/home/someone/project";
+    Object.defineProperty(features, "toJSON", {
+      value: () => ["/home/someone/project"],
+    });
+    await session.flush();
+    const sent = (recorder.calls[0]?.body as Batch).batch[0]?.properties;
+    expect(sent?.features).toEqual(["seo"]);
   });
 
   it("refuses a list with a hole in it", async () => {

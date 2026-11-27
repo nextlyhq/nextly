@@ -123,6 +123,7 @@ describe("base properties", () => {
       catalog_version: CATALOG_VERSION,
       nextly_version: "0.0.2-alpha.81",
       role: "staging",
+      distinct_id: SITE_ID,
       $process_person_profile: false,
       $geoip_disable: true,
     });

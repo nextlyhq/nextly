@@ -48,13 +48,22 @@ export interface Sender {
   flush(): Promise<void>;
 }
 
-/** The request body for a batch: the events, with the transport flags. */
+/**
+ * The request body for a batch: the events, with the transport flags. The
+ * event's id is given both beside the event, as PostHog's SDKs send it, and
+ * inside its properties, as PostHog's batch endpoint documents it, so the
+ * batch reads the same way to either.
+ */
 function batchBody(project: UsageProject, events: WireEvent[]): string {
   return JSON.stringify({
     project,
     batch: events.map(e => ({
       ...e,
-      properties: { ...e.properties, ...TRANSPORT_PROPERTIES },
+      properties: {
+        ...e.properties,
+        distinct_id: e.distinct_id,
+        ...TRANSPORT_PROPERTIES,
+      },
     })),
   });
 }
