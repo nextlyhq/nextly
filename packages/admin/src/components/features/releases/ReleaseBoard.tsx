@@ -117,40 +117,13 @@ function BoardColumn({
           </span>
         ) : null}
       </h2>
-      {read.isLoading ? (
-        <div className="flex flex-col gap-2" aria-busy="true">
-          <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-16 w-full" />
-        </div>
-      ) : read.isError && read.data === undefined ? (
-        <div className="flex flex-col items-start gap-2 px-1 py-2">
-          <p className="text-sm text-muted-foreground">
-            These releases could not be loaded.
-          </p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => void read.refetch()}
-          >
-            Try again
-          </Button>
-        </div>
-      ) : releases.length === 0 ? (
-        <p className="px-1 py-2 text-sm text-muted-foreground">
-          {/* With single documents hidden, the List's words: the column is
-              not empty for want of releases, and says what left them out. */}
-          {kind === "release" ? SINGLES_HIDDEN_EMPTY : "Nothing here"}
-        </p>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {releases.map(release => (
-            <li key={release.id}>
-              <BoardTile release={release} tab={tab} zone={zone} now={now} />
-            </li>
-          ))}
-        </ul>
-      )}
+      <BoardColumnBody
+        read={read}
+        tab={tab}
+        kind={kind}
+        zone={zone}
+        now={now}
+      />
       {more > 0 ? (
         <Button
           type="button"
@@ -163,6 +136,69 @@ function BoardColumn({
         </Button>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * What a column holds under its heading: its releases, or why there are
+ * none to draw (still loading, not loaded, or nothing in the tab).
+ */
+function BoardColumnBody({
+  read,
+  tab,
+  kind,
+  zone,
+  now,
+}: {
+  read: ReturnType<typeof useReleaseBoardColumn>;
+  tab: ReleaseListTab;
+  kind: ReleaseKind | undefined;
+  zone: string;
+  now: number;
+}) {
+  const releases = read.data?.items ?? [];
+  if (read.isLoading) {
+    return (
+      <div className="flex flex-col gap-2" aria-busy="true">
+        <Skeleton className="h-16 w-full" />
+        <Skeleton className="h-16 w-full" />
+      </div>
+    );
+  }
+  if (read.isError && read.data === undefined) {
+    return (
+      <div className="flex flex-col items-start gap-2 px-1 py-2">
+        <p className="text-sm text-muted-foreground">
+          These releases could not be loaded.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void read.refetch()}
+        >
+          Try again
+        </Button>
+      </div>
+    );
+  }
+  if (releases.length === 0) {
+    return (
+      <p className="px-1 py-2 text-sm text-muted-foreground">
+        {/* With single documents hidden, the List's words: the column is
+              not empty for want of releases, and says what left them out. */}
+        {kind === "release" ? SINGLES_HIDDEN_EMPTY : "Nothing here"}
+      </p>
+    );
+  }
+  return (
+    <ul className="flex flex-col gap-2">
+      {releases.map(release => (
+        <li key={release.id}>
+          <BoardTile release={release} tab={tab} zone={zone} now={now} />
+        </li>
+      ))}
+    </ul>
   );
 }
 

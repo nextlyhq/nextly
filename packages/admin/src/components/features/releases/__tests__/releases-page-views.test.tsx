@@ -15,34 +15,25 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@admin/__tests__/utils";
 import type { ReleaseKind } from "@admin/types/releases";
 
-vi.mock(
-  "@admin/components/features/releases/ReleaseList",
-  async importOriginal => ({
-    // The real rule for which kind the switch shows; only the list is faked.
-    releaseKindShown: (
-      await importOriginal<
-        typeof import("@admin/components/features/releases/ReleaseList")
-      >()
-    ).releaseKindShown,
-    ReleaseBodyOutline: () => null,
-    ReleaseList: ({
-      hideSingles,
-      onHideSinglesChange,
-    }: {
-      hideSingles: boolean;
-      onHideSinglesChange: (next: boolean) => void;
-    }) => (
-      <label>
-        <input
-          type="checkbox"
-          checked={hideSingles}
-          onChange={event => onHideSinglesChange(event.target.checked)}
-        />
-        Hide single documents
-      </label>
-    ),
-  })
-);
+vi.mock("@admin/components/features/releases/ReleaseList", () => ({
+  ReleaseBodyOutline: () => null,
+  ReleaseList: ({
+    hideSingles,
+    onHideSinglesChange,
+  }: {
+    hideSingles: boolean;
+    onHideSinglesChange: (next: boolean) => void;
+  }) => (
+    <label>
+      <input
+        type="checkbox"
+        checked={hideSingles}
+        onChange={event => onHideSinglesChange(event.target.checked)}
+      />
+      Hide single documents
+    </label>
+  ),
+}));
 vi.mock("@admin/components/features/releases/ReleaseBoard", () => ({
   ReleaseBoard: ({ kind }: { kind?: ReleaseKind }) => (
     <p>Board of {kind ?? "every"} kind</p>

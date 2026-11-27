@@ -15,6 +15,7 @@ import { PageHeader } from "@nextlyhq/ui";
 import { useState, type JSX } from "react";
 
 import { CreateReleaseDialog } from "@admin/components/features/releases/CreateReleaseDialog";
+import { releaseKindShown } from "@admin/components/features/releases/release-list";
 import {
   ReleaseAttentionStrip,
   useAttentionStripKnown,
@@ -24,7 +25,6 @@ import { ReleaseCalendar } from "@admin/components/features/releases/ReleaseCale
 import {
   ReleaseBodyOutline,
   ReleaseList,
-  releaseKindShown,
 } from "@admin/components/features/releases/ReleaseList";
 import { Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";

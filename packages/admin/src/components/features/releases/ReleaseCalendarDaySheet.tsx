@@ -34,7 +34,11 @@ import {
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useReleaseListPage } from "@admin/hooks/queries/useReleases";
-import type { Release, ReleaseKind } from "@admin/types/releases";
+import type {
+  Release,
+  ReleaseKind,
+  ReleaseListParams,
+} from "@admin/types/releases";
 
 import {
   compareByPlacement,
@@ -115,6 +119,24 @@ export function ReleaseCalendarDaySheet({
   );
 }
 
+/**
+ * The list read of one page of a day's releases. It leaves out what the
+ * day's chips and count leave out: with `kind`, only releases of that kind.
+ */
+function dayListParams(
+  day: DayKey,
+  zone: string,
+  page: number,
+  kind: ReleaseKind | undefined
+): ReleaseListParams {
+  return {
+    day: { date: day, timezone: zone },
+    page: page + 1,
+    limit: DAY_PAGE_SIZE,
+    ...(kind ? { kind } : {}),
+  };
+}
+
 function DayList({
   day,
   zone,
@@ -131,13 +153,7 @@ function DayList({
   kind: ReleaseKind | undefined;
 }) {
   const [page, setPage] = useState(0);
-  // The day's full list leaves out what its chips and count leave out.
-  const list = useReleaseListPage({
-    day: { date: day, timezone: zone },
-    page: page + 1,
-    limit: DAY_PAGE_SIZE,
-    ...(kind ? { kind } : {}),
-  });
+  const list = useReleaseListPage(dayListParams(day, zone, page, kind));
   const total = list.data?.meta.total;
   // In the order of the times shown, as the grid draws them: the server
   // sends a page by scheduled time, and a release published late is shown at

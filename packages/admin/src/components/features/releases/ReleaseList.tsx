@@ -73,7 +73,6 @@ import {
   type Release,
   type ReleaseListParams,
   type ReleaseAttentionReason,
-  type ReleaseKind,
   type ReleaseListTab,
 } from "@admin/types/releases";
 
@@ -81,6 +80,7 @@ import {
   RELEASE_TAB_LABEL,
   RELEASE_WHEN_HEADER,
   releaseRowStatus,
+  releaseKindShown,
 } from "./release-list";
 import { readerZone } from "./release-timezone";
 import {
@@ -433,17 +433,6 @@ function pagerFor({
     itemLabel: total === 1 ? "release" : "releases",
     ariaLabel: "Release pages",
   };
-}
-
-/**
- * Which releases the Releases page shows while "Hide single documents" is on
- * or off: ordinary ones only (`release`), or every kind (`undefined`). The
- * one rule the List, the Calendar and the Board all read the switch by.
- */
-export function releaseKindShown(
-  hideSingles: boolean
-): ReleaseKind | undefined {
-  return hideSingles ? "release" : undefined;
 }
 
 /**
