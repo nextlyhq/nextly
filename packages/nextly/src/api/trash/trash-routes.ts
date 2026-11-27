@@ -173,6 +173,10 @@ export const restoreFromTrashRoute = privateToSession(
         restored: true,
         collection: result.collection,
         id: result.id,
+        // What could not come back as it was, where anything could not.
+        ...(result.notPutBack === undefined
+          ? {}
+          : { notPutBack: result.notPutBack }),
       }
     );
   })

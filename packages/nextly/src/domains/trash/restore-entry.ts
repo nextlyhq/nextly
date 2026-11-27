@@ -21,8 +21,11 @@ import type {
 import type { RequestActor } from "../../auth/request-actor";
 import { missingSchemaObject } from "../../database/missing-column";
 import { NextlyError } from "../../errors";
+import { DASHBOARD_PINS_TABLE } from "../../schemas/dashboard-pins/table-name";
 import { MEDIA_USAGE_TABLE } from "../../schemas/media-usage/table-name";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { VERSION_VIEWS_TABLE } from "../../schemas/version-views";
+import { VERSIONS_TABLE } from "../../schemas/versions/types";
 import {
   TRASH_TABLE,
   type KeptRow,
@@ -348,6 +351,8 @@ async function rowsStillValid(
     );
     return rows.filter(row => present.has(String(row.mediaId)));
   }
+  const person = PERSON_OWNED[table];
+  if (person !== undefined) return rowsOfPeopleStillThere(tx, rows, person);
   // A field-group row the delete left in place, under a field the
   // collection has since dropped, is there still: it is not written twice.
   if (table.startsWith("nextly_") || rows.some(row => !("id" in row))) {
@@ -359,6 +364,45 @@ async function rowsStillValid(
     rows.map(row => String(row.id))
   );
   return rows.filter(row => !there.has(String(row.id)));
+}
+
+/**
+ * The kept tables whose rows belong to one person, and the column naming
+ * them: a reader's dashboard pin and "last looked at" marker, and an author's
+ * recovery point. Deleting the person removes these (the pin through its
+ * foreign key, the others by the deletion itself), so a restore puts back
+ * only those of people still there: never one the deletion removed on
+ * purpose, and never one the foreign key would refuse.
+ */
+const PERSON_OWNED: Readonly<Record<string, string>> = {
+  [DASHBOARD_PINS_TABLE]: "userId",
+  [VERSION_VIEWS_TABLE]: "userId",
+  [VERSIONS_TABLE]: "createdBy",
+};
+
+/** The people's table. */
+const USERS_TABLE = "users";
+
+/**
+ * `rows` whose person, named in `column`, is still there. A row naming no
+ * one (a working draft, say, or a recovery point made with no signed-in
+ * author) is kept.
+ */
+async function rowsOfPeopleStillThere(
+  tx: TransactionContext,
+  rows: Record<string, unknown>[],
+  column: string
+): Promise<Record<string, unknown>[]> {
+  const named = (row: Record<string, unknown>): string | undefined => {
+    const value = row[column];
+    return typeof value === "string" && value !== "" ? value : undefined;
+  };
+  const people = rows.map(named).filter((id): id is string => id !== undefined);
+  const present = await idsPresent(tx, USERS_TABLE, people);
+  return rows.filter(row => {
+    const id = named(row);
+    return id === undefined || present.has(id);
+  });
 }
 
 /**

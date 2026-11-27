@@ -20,6 +20,7 @@
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { missingSchemaObject } from "../../database/missing-column";
 import type { KeptIncoming } from "../../schemas/trash";
 import { usesJunctionTable } from "../schema/field-rules";
 import {
@@ -136,10 +137,11 @@ const SAVEPOINT = "nextly_trash_incoming";
 
 /**
  * `read`, under a savepoint where the database keeps one: another
- * collection's table that is not in step with its definition (not migrated
- * yet, say) fails its read, which on PostgreSQL would otherwise abort the
- * delete's whole transaction. A failed read keeps nothing of that collection
- * and the delete goes on, as it would have before the trash.
+ * collection's table that is not in step with its definition (a table or a
+ * column not migrated yet) fails its read, which on PostgreSQL would
+ * otherwise abort the delete's whole transaction. Such a read keeps nothing
+ * of that collection and the delete goes on, as it would have before the
+ * trash; any other failure is the delete's.
  */
 async function tolerantly<T>(
   tx: TransactionContext,
@@ -157,9 +159,13 @@ async function tolerantly<T>(
     const value = await read();
     await tx.releaseSavepoint(SAVEPOINT);
     return value;
-  } catch {
+  } catch (error) {
     await tx.rollbackToSavepoint(SAVEPOINT);
     await tx.releaseSavepoint(SAVEPOINT);
+    // Only a table or column the database does not have is passed over;
+    // any other failure fails the delete, rather than leave what other
+    // entries held to it unkept without a word.
+    if (missingSchemaObject(error) === undefined) throw error;
     return undefined;
   }
 }

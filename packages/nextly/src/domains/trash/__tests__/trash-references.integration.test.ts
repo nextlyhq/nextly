@@ -24,8 +24,9 @@ process.env.NEXTLY_SECRET =
 
 import { randomUUID } from "node:crypto";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 import {
   defineCollection,
@@ -40,7 +41,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { getDialectTables } from "../../../database/index";
+import { DASHBOARD_PINS_TABLE } from "../../../schemas/dashboard-pins/table-name";
 import { TRASH_TABLE, type TrashedEntry } from "../../../schemas/trash";
+import { VERSION_VIEWS_TABLE } from "../../../schemas/version-views";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import { runWebhookDrain } from "../../webhooks/drain-runner";
 import type { WebhookEndpointRegistry } from "../../webhooks/endpoint-registry";
@@ -49,6 +53,8 @@ import {
   resetWebhookActivation,
 } from "../../webhooks/recording-activation";
 import type { WebhookEvent } from "../../webhooks/types";
+import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 
 perLanguageStorageSuite();
 
@@ -194,7 +200,113 @@ async function delivered(t: TestNextly): Promise<WebhookEvent[]> {
   return bodies;
 }
 
+/** A person, as the account tables keep one; their id. */
+async function person(t: TestNextly, id: string): Promise<string> {
+  const now = new Date();
+  const db = t.adapter.getDrizzle() as unknown as {
+    insert(table: unknown): { values(row: unknown): Promise<unknown> };
+  };
+  await db.insert(getDialectTables(t.adapter.dialect).users).values({
+    id,
+    email: `${id}@example.test`,
+    name: id,
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return id;
+}
+
+/** A reader's dashboard pin of, and "last looked at" marker on, `entryId`. */
+async function pinAndMarker(
+  t: TestNextly,
+  userId: string,
+  entryId: string
+): Promise<void> {
+  const now = new Date();
+  await t.adapter.insert(DASHBOARD_PINS_TABLE, {
+    id: randomUUID(),
+    userId,
+    targetType: "collection",
+    targetSlug: PAGES,
+    entryId,
+    pinnedAt: now,
+  });
+  await t.adapter.insert(VERSION_VIEWS_TABLE, {
+    id: randomUUID(),
+    userId,
+    scopeKind: "collection",
+    scopeSlug: PAGES,
+    entryId,
+    part: null,
+    viewKey: randomUUID(),
+    versionNo: 1,
+    previousVersionNo: null,
+    viewedAt: now,
+    visitStartedAt: now,
+    createdAt: now,
+  });
+}
+
+/** The readers whose pin, and whose marker, of `entryId` are there. */
+async function readersOf(t: TestNextly, entryId: string) {
+  const ids = async (table: string) =>
+    (
+      await t.adapter.select<{ userId: string }>(table, {
+        where: { and: [{ column: "entryId", op: "=", value: entryId }] },
+      })
+    )
+      .map(row => row.userId)
+      .sort();
+  return {
+    pins: await ids(DASHBOARD_PINS_TABLE),
+    markers: await ids(VERSION_VIEWS_TABLE),
+  };
+}
+
 describe.each(getConfiguredTestDialects())("on %s", dialect => {
+  it("a batch delete moves each entry to the trash too", async () => {
+    const t = await boot(dialect);
+    const first = await make(t, PAGES, { title: "One", slug: "one" });
+    const second = await make(t, PAGES, { title: "Two", slug: "two" });
+    // A batch names its caller: here a super-admin.
+    const admin = await superAdminUser(t, `admin-${randomUUID().slice(0, 8)}`);
+
+    await (t.getService("collectionsHandler" as never) as CollectionsHandler)
+      .getEntryService()
+      .deleteEntries({ collectionName: PAGES, user: { id: admin } }, [
+        first,
+        second,
+      ]);
+
+    expect((await trashed(t, first)).label).toBe("One");
+    expect((await trashed(t, second)).label).toBe("Two");
+  });
+
+  it("puts back pins and markers of readers still there, and none of a reader deleted since", async () => {
+    const t = await boot(dialect);
+    const id = await make(t, PAGES, { title: "Pinned", slug: "pinned" });
+    const stays = await person(t, `stays-${randomUUID().slice(0, 8)}`);
+    const leaves = await person(t, `leaves-${randomUUID().slice(0, 8)}`);
+    await pinAndMarker(t, stays, id);
+    await pinAndMarker(t, leaves, id);
+
+    await t.nextly.delete({ collection: PAGES, id });
+    expect(await readersOf(t, id)).toEqual({ pins: [], markers: [] });
+    // The reader's account goes while the entry is in the trash.
+    await t.adapter.delete("users", {
+      and: [{ column: "id", op: "=", value: leaves }],
+    });
+
+    expect(await t.nextly.trash.restore({ id })).toMatchObject({
+      restored: true,
+    });
+    expect(await readersOf(t, id)).toEqual({
+      pins: [stays],
+      markers: [stays],
+    });
+  });
+
   it("puts its field-group rows back, and never delivers a hidden field-group value", async () => {
     const t = await boot(dialect);
     await endpoint(t);
@@ -339,5 +451,93 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       restored: false,
       conflicts: [{ field: "slug" }],
     });
+  });
+});
+
+describe.each(getConfiguredTestDialects())("many-to-many on %s", dialect => {
+  const BTAGS = "trashref_btags";
+  const BPOSTS = "trashref_bposts";
+
+  /**
+   * Two Schema Builder collections, posts linking tags through a junction,
+   * made as development makes them; a tag, and a post linking it.
+   */
+  async function linked() {
+    const t = await createTestNextly({ dialect });
+    current = t;
+    const handler = t.getService("collectionsHandler" as never) as unknown as {
+      createCollection(data: Record<string, unknown>): Promise<{
+        success: boolean;
+      }>;
+    };
+    vi.stubEnv("NODE_ENV", "development");
+    try {
+      const made = [
+        await handler.createCollection({
+          name: BTAGS,
+          label: "Tag",
+          fields: [{ name: "label", type: "text" }],
+        }),
+        await handler.createCollection({
+          name: BPOSTS,
+          label: "Post",
+          fields: [
+            {
+              name: "tags",
+              type: "relationship",
+              options: { relationType: "manyToMany", target: BTAGS },
+            },
+          ],
+        }),
+      ];
+      expect(made.map(result => result.success)).toEqual([true, true]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const tag = String(
+      (await t.nextly.create({ collection: BTAGS, data: { label: "kept" } }))
+        .item.id
+    );
+    const post = String(
+      (await t.nextly.create({ collection: BPOSTS, data: { tags: [tag] } }))
+        .item.id
+    );
+    return { t, tag, post };
+  }
+
+  /** The ids of the tags `post` links, as a read gives them. */
+  async function tagsOf(t: TestNextly, post: string): Promise<string[]> {
+    const read = (await t.nextly.findByID({
+      collection: BPOSTS,
+      id: post,
+      depth: 0,
+    })) as unknown as { tags?: unknown[] };
+    return (read.tags ?? []).map(tag =>
+      typeof tag === "object" && tag !== null
+        ? String((tag as { id: unknown }).id)
+        : String(tag)
+    );
+  }
+
+  it("puts back another entry's many-to-many link to the restored entry", async () => {
+    const { t, tag, post } = await linked();
+    expect(await tagsOf(t, post)).toEqual([tag]);
+
+    // The junction's key removes the post's link with the tag.
+    await t.nextly.delete({ collection: BTAGS, id: tag });
+    expect(await tagsOf(t, post)).toEqual([]);
+
+    await t.nextly.trash.restore({ id: tag });
+
+    expect(await tagsOf(t, post)).toEqual([tag]);
+  });
+
+  it("puts back the restored entry's own many-to-many links", async () => {
+    const { t, tag, post } = await linked();
+
+    await t.nextly.delete({ collection: BPOSTS, id: post });
+    await t.nextly.trash.restore({ id: post });
+
+    expect(await tagsOf(t, post)).toEqual([tag]);
   });
 });

@@ -27,7 +27,10 @@ import type { Command } from "commander";
 
 import type { Nextly } from "../../direct-api/nextly";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
-import type { TrashConflict } from "../../domains/trash/restore-entry";
+import type {
+  NotPutBack,
+  TrashConflict,
+} from "../../domains/trash/restore-entry";
 import { NextlyError } from "../../errors/nextly-error";
 import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
@@ -192,7 +195,30 @@ function valuesOf(sets: readonly string[] = []): Record<string, string> {
 function conflictLine(conflict: TrashConflict): string {
   const where =
     conflict.locale === undefined ? "" : ` (${printable(conflict.locale)})`;
-  return `${printable(conflict.field)}${where}: "${printable(conflict.value)}" is taken by another entry`;
+  // A value behind a field read rule is not answered, so not named.
+  const value =
+    conflict.value === undefined
+      ? "its value"
+      : `"${printable(conflict.value)}"`;
+  return `${printable(conflict.field)}${where}: ${value} is taken by another entry`;
+}
+
+/** What a restore could not put back as it was, said plainly. */
+function reportNotPutBack(
+  logger: CommandContext["logger"],
+  notPutBack: NotPutBack | undefined
+): void {
+  if (notPutBack === undefined) return;
+  if (notPutBack.links > 0) {
+    logger.warn(
+      `${notPutBack.links} link(s) to or from entries deleted since were not put back.`
+    );
+  }
+  for (const field of notPutBack.relationsCleared) {
+    logger.warn(
+      `${printable(field)} pointed at an entry deleted since, and is empty now.`
+    );
+  }
 }
 
 /** New values for the conflicting fields, asked at the terminal. */
@@ -235,6 +261,7 @@ export async function runTrashRestoreCommand(
         logger.success(
           `Restored ${printable(result.id)} to ${printable(result.collection)}, as a draft where it had been published.`
         );
+        reportNotPutBack(logger, result.notPutBack);
         return;
       }
       for (const conflict of result.conflicts)
