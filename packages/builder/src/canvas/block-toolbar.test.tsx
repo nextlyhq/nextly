@@ -1557,10 +1557,13 @@ describe("BlockToolbar", () => {
       Reflect.deleteProperty(document, "elementsFromPoint");
     });
 
-    function barOverB(firstPointed: string | null) {
-      const view = render(
+    /**
+     * The bar over block b, with the pointer having moved along `path` first:
+     * over a block by its id, or over the canvas's empty ground for `null`.
+     */
+    function barOverB(path: readonly (string | null)[]) {
+      render(
         <HoveredBlockProvider>
-          <PointAt id={firstPointed} />
           {tree(editorSpy(pair(), "a"), {})}
         </HoveredBlockProvider>
       );
@@ -1571,18 +1574,27 @@ describe("BlockToolbar", () => {
         configurable: true,
         value: () => [bar, covered],
       });
-      // The pointer then leaves whatever it pointed at, for the bar.
-      view.rerender(
-        <HoveredBlockProvider>
-          <PointAt id={null} />
-          {tree(editorSpy(pair(), "a"), {})}
-        </HoveredBlockProvider>
-      );
+      for (const step of path) {
+        const target =
+          step === null
+            ? document.querySelector(".nx-canvas")
+            : document.querySelector(`[data-nx-node="${step}"]`);
+        if (target === null) throw new Error(`nothing to move over: ${step}`);
+        fireEvent.pointerMove(target, { clientX: 5, clientY: 5 });
+      }
       return bar;
     }
 
     it("steps aside for a block it covers whole, met from anywhere but the selection", () => {
-      const bar = barOverB(null);
+      const bar = barOverB([]);
+      fireEvent.pointerEnter(bar, { clientX: 10, clientY: 10 });
+      expect(bar.hasAttribute("data-lets-through")).toBe(true);
+    });
+
+    it("steps aside for it when the pointer left the selection for the empty canvas first", () => {
+      // From the selection over empty ground, then onto the bar: the last
+      // place the pointer was is no block, so it is not heading for a button.
+      const bar = barOverB(["a", null]);
       fireEvent.pointerEnter(bar, { clientX: 10, clientY: 10 });
       expect(bar.hasAttribute("data-lets-through")).toBe(true);
     });
@@ -1590,7 +1602,7 @@ describe("BlockToolbar", () => {
     it("stays for a tap, which is aimed at the button it lands on", () => {
       // A finger lands without a move before it, so nothing says where it
       // came from; what it lands on is what it means to press.
-      const bar = barOverB(null);
+      const bar = barOverB([]);
       fireEvent.pointerEnter(bar, {
         clientX: 10,
         clientY: 10,
@@ -1600,7 +1612,7 @@ describe("BlockToolbar", () => {
     });
 
     it("stays for a pointer coming up from the selection, which is heading for a button", () => {
-      const bar = barOverB("a");
+      const bar = barOverB(["a"]);
       fireEvent.pointerEnter(bar, { clientX: 10, clientY: 10 });
       expect(bar.hasAttribute("data-lets-through")).toBe(false);
       expect(bar.hasAttribute("data-faded")).toBe(false);

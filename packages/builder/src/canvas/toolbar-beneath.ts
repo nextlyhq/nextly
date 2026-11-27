@@ -21,7 +21,7 @@ import { nodeIdFromEvent } from "./canvas-addressing";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import { isElement } from "./dom-kind";
 import { overlaySpaceOf } from "./geometry-dom";
-import { useHoveredBlock, useHoveredBlockSetter } from "./hovered-block";
+import { useHoveredBlockSetter } from "./hovered-block";
 
 /**
  * The block under a point of the editor's document, looking through the
@@ -56,21 +56,53 @@ function withinSelection(
 
 /**
  * A `pointerenter` handler for the toolbar that points at the block beneath
- * it, unless the pointer last pointed at the selection or a block inside it.
+ * it, unless the pointer last moved over the selection or a block inside it.
+ *
+ * Where the pointer came from is read from its own moves, in the editor's
+ * document and, over a canvas in a frame, in the frame's: the block under
+ * each move, or nothing over the canvas's empty ground or outside it. Moves
+ * over the editor's chrome are passed over, since a pointer crossing the gap
+ * strip or the bar itself on its way up from the selection is still coming
+ * from the selection. The hovered block cannot say this: it is let go both
+ * when the pointer reaches the chrome and when it crosses empty ground.
  */
 export function useLookBeneath(
+  bar: React.RefObject<HTMLElement | null>,
   selectedIds: readonly string[],
-  document: BlockDocument
+  document: BlockDocument,
+  frameKey: unknown,
+  /**
+   * The block the bar is drawn for: the bar is mounted only while one is
+   * selected, so the moves are watched again once it is there.
+   */
+  shownFor: string | null
 ): (event: React.PointerEvent<HTMLElement>) => void {
-  const hovered = useHoveredBlock();
   const setHovered = useHoveredBlockSetter();
-  // The last block pointed at, kept past the moment the toolbar lets it go:
-  // where the pointer came from is the one thing that tells an author heading
-  // for a button from one aiming at the block beneath it.
   const last = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (hovered !== null) last.current = hovered;
-  }, [hovered]);
+    const element = bar.current;
+    if (element === null) return;
+    const onMove = (event: PointerEvent): void => {
+      const target = event.target;
+      if (
+        isElement(target) &&
+        target.closest(`[${CHROME_ATTRIBUTE}]`) !== null
+      ) {
+        return;
+      }
+      last.current = nodeIdFromEvent(target);
+    };
+    const chrome = element.ownerDocument;
+    const frame = overlaySpaceOf(element, CANVAS_ROOT_CLASS)?.frame ?? null;
+    const inner = frame?.contentDocument ?? null;
+    const both = inner !== null && inner !== chrome;
+    chrome.addEventListener("pointermove", onMove, { passive: true });
+    if (both) inner.addEventListener("pointermove", onMove, { passive: true });
+    return () => {
+      chrome.removeEventListener("pointermove", onMove);
+      if (both) inner.removeEventListener("pointermove", onMove);
+    };
+  }, [bar, frameKey, shownFor]);
   return React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
       // A finger lands on what it means to press: a tap on the bar is aimed

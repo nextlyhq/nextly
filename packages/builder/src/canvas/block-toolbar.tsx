@@ -810,7 +810,13 @@ export function BlockToolbar({
   }, [measure, hidden, selectedId, canvasFrame]);
 
   const hovered = useHoveredBlock();
-  const lookBeneath = useLookBeneath(selectedIds, document);
+  const lookBeneath = useLookBeneath(
+    bar,
+    selectedIds,
+    document,
+    canvasFrame,
+    selectedId
+  );
 
   useScrollClearance(bar, hidden, placement, canvasFrame);
   const typingAside = useTypingAside(
