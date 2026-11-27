@@ -1567,6 +1567,26 @@ describe("small blocks keep their own label and color under the bands", () => {
     );
   });
 
+  it("points at the band drawn on top where a negative margin and padding overlap", () => {
+    // The pulled-in margin is drawn first and the padding over it, so the
+    // padding is what the pointer is on where the two share pixels.
+    stubComputedStyle({ a: { marginTop: "-30px", paddingTop: "10px" } });
+    stubOverlayBoxes();
+    const { container } = mount(editorOf("a"));
+    const padding = band(container, "padding", "top");
+    const margin = band(container, "margin", "top");
+    const box = padding.getBoundingClientRect();
+    const under = margin.getBoundingClientRect();
+    // The control: the two do share the pointed pixel.
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    expect(x >= under.x && x <= under.x + under.width).toBe(true);
+    expect(y >= under.y && y <= under.y + under.height).toBe(true);
+    pointAt(x, y);
+    expect(padding.hasAttribute("data-pointed")).toBe(true);
+    expect(margin.hasAttribute("data-pointed")).toBe(false);
+  });
+
   it("hides that number again when the pointer leaves the editor from over its band", () => {
     stubComputedStyle({ a: { marginTop: "12px", marginBottom: "64px" } });
     stubOverlayBoxes();

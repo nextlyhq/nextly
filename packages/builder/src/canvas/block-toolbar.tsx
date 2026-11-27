@@ -815,7 +815,8 @@ export function BlockToolbar({
     selectedIds,
     document,
     canvasFrame,
-    selectedId
+    selectedId,
+    !hidden
   );
 
   useScrollClearance(bar, hidden, placement, canvasFrame);

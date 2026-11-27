@@ -1599,6 +1599,42 @@ describe("BlockToolbar", () => {
       expect(bar.hasAttribute("data-lets-through")).toBe(true);
     });
 
+    it("stays for a pen landing on it, which is aimed at the button there too", () => {
+      const bar = barOverB([]);
+      fireEvent.pointerEnter(bar, {
+        clientX: 10,
+        clientY: 10,
+        pointerType: "pen",
+      });
+      expect(bar.hasAttribute("data-lets-through")).toBe(false);
+    });
+
+    it("knows where the pointer came from when it was first drawn hidden", () => {
+      // Hidden first, then shown: the moves are watched from when it shows.
+      const editor = editorSpy(pair(), "a");
+      const view = render(
+        <HoveredBlockProvider>
+          {tree(editor, { hidden: true })}
+        </HoveredBlockProvider>
+      );
+      view.rerender(
+        <HoveredBlockProvider>
+          {tree(editor, { hidden: false })}
+        </HoveredBlockProvider>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      const covered = document.querySelector('[data-nx-node="b"]');
+      const own = document.querySelector('[data-nx-node="a"]');
+      if (covered === null || own === null) throw new Error("blocks not drawn");
+      Object.defineProperty(document, "elementsFromPoint", {
+        configurable: true,
+        value: () => [bar, covered],
+      });
+      fireEvent.pointerMove(own, { clientX: 5, clientY: 5 });
+      fireEvent.pointerEnter(bar, { clientX: 10, clientY: 10 });
+      expect(bar.hasAttribute("data-lets-through")).toBe(false);
+    });
+
     it("stays for a tap, which is aimed at the button it lands on", () => {
       // A finger lands without a move before it, so nothing says where it
       // came from; what it lands on is what it means to press.

@@ -75,7 +75,9 @@ export function useLookBeneath(
    * The block the bar is drawn for: the bar is mounted only while one is
    * selected, so the moves are watched again once it is there.
    */
-  shownFor: string | null
+  shownFor: string | null,
+  /** Whether the bar is drawn now: one mounted hidden is watched once shown. */
+  drawn: boolean
 ): (event: React.PointerEvent<HTMLElement>) => void {
   const setHovered = useHoveredBlockSetter();
   const last = React.useRef<string | null>(null);
@@ -102,12 +104,15 @@ export function useLookBeneath(
       chrome.removeEventListener("pointermove", onMove);
       if (both) inner.removeEventListener("pointermove", onMove);
     };
-  }, [bar, frameKey, shownFor]);
+  }, [bar, frameKey, shownFor, drawn]);
   return React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
-      // A finger lands on what it means to press: a tap on the bar is aimed
-      // at the button it lands on, never at a block beneath it.
-      if (event.pointerType === "touch") return;
+      // A finger or a pen lands on what it means to press: a tap on the bar
+      // is aimed at the button it lands on, never at a block beneath it.
+      // Only a mouse arrives by moving, which says where it came from.
+      if (event.pointerType === "touch" || event.pointerType === "pen") {
+        return;
+      }
       const from = last.current;
       if (from !== null && withinSelection(document, from, selectedIds)) {
         return;

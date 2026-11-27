@@ -658,9 +658,12 @@ function usePointedBand(
     const point = last.current;
     let found: string | null = null;
     if (element !== null && point !== null) {
-      for (const band of element.querySelectorAll<HTMLElement>(
-        ".nx-spacing-overlay__band"
-      )) {
+      // Topmost first: a later band paints over an earlier one where they
+      // share pixels (a padding band over a pulled-in negative margin).
+      const bands = [
+        ...element.querySelectorAll<HTMLElement>(".nx-spacing-overlay__band"),
+      ].reverse();
+      for (const band of bands) {
         const box = boxInFrameViewport(band);
         if (
           point.x >= box.x &&
