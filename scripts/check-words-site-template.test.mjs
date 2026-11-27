@@ -47,7 +47,10 @@ describe("the words 'site template'", () => {
       for (const folder of SCANNED) {
         mkdirSync(join(root, folder), { recursive: true });
         writeFileSync(join(root, folder, "page.md"), "Pick a site template.\n");
-        writeFileSync(join(root, folder, "clean.ts"), 'const slug = "site-templates";\n');
+        writeFileSync(
+          join(root, folder, "clean.ts"),
+          'const slug = "site-templates";\n'
+        );
       }
       expect(siteTemplateWordsInRepository(root)).toEqual(
         SCANNED.map(folder => `${folder}/page.md:1: Pick a site template.`)

@@ -68,7 +68,9 @@ function readerPages() {
   walk(resolve(repoRoot, "docs"));
   out.push("README.md");
   for (const base of ["packages", "templates"]) {
-    for (const entry of readdirSync(resolve(repoRoot, base), { withFileTypes: true })) {
+    for (const entry of readdirSync(resolve(repoRoot, base), {
+      withFileTypes: true,
+    })) {
       const readme = resolve(repoRoot, base, entry.name, "README.md");
       if (entry.isDirectory() && existsSync(readme)) out.push(repoPath(readme));
     }
@@ -84,7 +86,9 @@ export const statesTheSentence = text =>
 
 /** A text with every copy of the sentence taken out, any case. */
 const withoutSentence = text =>
-  text.split(new RegExp(SENTENCE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi")).join(" ");
+  text
+    .split(new RegExp(SENTENCE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"))
+    .join(" ");
 
 /**
  * The lines of a page that describe SQLite in an old wording, as
@@ -95,7 +99,8 @@ export function oldWordingsIn(file, text) {
   return text
     .split("\n")
     .flatMap((line, index) =>
-      /\bsqlite\b/i.test(line) && OLD_WORDINGS.some(pattern => pattern.test(line))
+      /\bsqlite\b/i.test(line) &&
+      OLD_WORDINGS.some(pattern => pattern.test(line))
         ? [`${file}:${String(index + 1)}: ${line.trim()}`]
         : []
     );
@@ -119,7 +124,11 @@ const judgesSqlite = text => /\bsqlite\b/i.test(text) && VERDICT.test(text);
 export function otherDescriptionsIn(text) {
   return text
     .split(/(?<=[.!?])\s+|\n/)
-    .filter(sentence => withoutSentence(sentence).split(/[;()|]|--|—/).some(judgesSqlite))
+    .filter(sentence =>
+      withoutSentence(sentence)
+        .split(/[;()|]|--|—/)
+        .some(judgesSqlite)
+    )
     .map(sentence => sentence.trim());
 }
 
@@ -168,7 +177,10 @@ describe("docs: how SQLite is described", () => {
     expect(oldWordingsIn("page.mdx", `SQLite is ${SENTENCE}.`)).toEqual([]);
     // The same words about something other than SQLite are not this check's.
     expect(
-      oldWordingsIn("page.mdx", "The mock mailer is for local work and demos only.")
+      oldWordingsIn(
+        "page.mdx",
+        "The mock mailer is for local work and demos only."
+      )
     ).toEqual([]);
     expect(
       statesTheSentence(
@@ -187,7 +199,9 @@ describe("docs: how SQLite is described", () => {
     ]);
     // A technical fact about SQLite passes no verdict.
     expect(
-      otherDescriptionsIn("SQLite is a local file; remote access does not exist.")
+      otherDescriptionsIn(
+        "SQLite is a local file; remote access does not exist."
+      )
     ).toEqual([]);
   });
 
