@@ -38,6 +38,7 @@ import { codePages } from "../code-pages/answers";
 import { codePagesSlug } from "../code-pages/collection";
 import type { CodeRoute, ReadCodeRoutes } from "../code-pages/routes";
 import type { StatedMarkdown } from "../code-pages/stated";
+import { codePageDocument } from "../code-pages/store";
 import { onceEach, resolveIn, servedAt } from "../languages/versions";
 import { originOf } from "../origin";
 import { isRecord, textOf } from "../plain-values";
@@ -503,6 +504,23 @@ async function* fullPagesOf(
 ): AsyncGenerator<LlmsFullPage> {
   const codeSlug = codePagesSlug(writing.ctx);
   const ahead = new Map<number, Promise<string | undefined>>();
+  try {
+    yield* pagesInOrder(pages, writing, codeSlug, ahead);
+  } finally {
+    // The file may stop before every page rendered ahead was taken: each is
+    // let finish, so what it found is kept with the rest and no render
+    // outlives the answer.
+    await Promise.allSettled(ahead.values());
+  }
+}
+
+/** The pages of {@link fullPagesOf}, rendering those built in code ahead into `ahead`. */
+async function* pagesInOrder(
+  pages: readonly ListedPage[],
+  writing: FullWriting,
+  codeSlug: string,
+  ahead: Map<number, Promise<string | undefined>>
+): AsyncGenerator<LlmsFullPage> {
   for (const [at, page] of pages.entries()) {
     const last = Math.min(pages.length, at + RENDERS_AT_ONCE);
     for (let next = at; next < last; next += 1) {
@@ -724,20 +742,26 @@ async function codeHeadsOf(
   const heads = new Map<string, HeadNames>();
   if (config.codeRoutes === undefined) return heads;
   const routes = await config.codeRoutes(ctx);
-  const { siteName } = await readRules(ctx, undefined);
-  for (const { route, answer } of await codePages(
+  const { siteName, titleFields } = await readRules(ctx, undefined);
+  const codeSlug = codePagesSlug(ctx);
+  const { fields } = titleSourcesOf(ctx, codeSlug, titleFields);
+  for (const { route, row, answer } of await codePages(
     ctx,
     only === undefined ? routes : routes.filter(route => route.path === only),
     readRules
   )) {
     const title = answer.title?.value;
-    // Named by its route's own title, as structured data names it.
+    const codeTitle = row?.code.title;
+    // Named from what structured data names it by: the page's record (the
+    // name its route gives it, else one from its address), its route's own
+    // title and its head's.
     const name = pageNameOf({
       home: route.path === "/",
-      document: {},
-      fields: [],
-      ...(title === undefined ? {} : { codeTitle: title, title }),
+      document: codePageDocument(route.path, row, undefined),
+      fields,
+      ...(codeTitle === undefined ? {} : { codeTitle }),
       codePage: true,
+      ...(title === undefined ? {} : { title }),
       ...(siteName === undefined ? {} : { siteName }),
     });
     heads.set(route.path, {

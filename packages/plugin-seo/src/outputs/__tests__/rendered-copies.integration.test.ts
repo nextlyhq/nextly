@@ -49,7 +49,11 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { lastCatchUp } from "../../address-record/catch-up";
 import { seoMetadata } from "../../code-pages/metadata";
 import { seoPlugin } from "../../plugin";
+import type { CodeRoute } from "../../code-pages/routes";
+import type { ReadRules } from "../../resolver/provider";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
+import { readSeoRules } from "../../settings/rules";
+import { llmsFullTxtOf } from "../ai-outputs";
 import { copyFailures } from "../copy-failures";
 import { RENDERING_HEADER } from "../rendered-fetch";
 
@@ -419,6 +423,70 @@ describe.each(getConfiguredTestDialects())(
           reason,
         }))
       ).toEqual([{ url: `${SITE}/pricing`, reason: "status 404" }]);
+    });
+
+    it("names a page built in code as structured data does: the name its route gives it over its title", async () => {
+      await boot(dialect);
+      await seoMetadata("/pricing", {
+        name: "Plans",
+        metadata: {
+          title: "Affordable pricing | Acme",
+          description: "Plans and prices.",
+        },
+      });
+      renderedSite({
+        "/pricing": html(
+          "Affordable pricing | Acme",
+          "<h1>Plans</h1><p>Words.</p>"
+        ),
+      });
+      expect(await llmsTxt()).toContain(`- [Plans](${SITE}/pricing.md)`);
+      expect(await rootFile("llms-full.txt")).toContain(
+        `# Plans\n\nSource: ${SITE}/pricing\n\n`
+      );
+    });
+
+    it("lets every page rendered ahead finish, and keeps what it found, where llms-full.txt stops short", async () => {
+      await boot(dialect);
+      await seoMetadata("/guide", { metadata: { title: "Guide" } });
+      await seoMetadata("/pricing", {
+        metadata: { title: "Pricing", description: "Plans and prices." },
+      });
+      // `/pricing` is rendered while `/guide` is written, and answers late.
+      vi.spyOn(globalThis, "fetch").mockImplementation(async input => {
+        const url = new URL(
+          String(input instanceof Request ? input.url : input)
+        );
+        if (url.pathname === "/pricing") {
+          await new Promise(done => setTimeout(done, 200));
+        }
+        return new Response("Gone", { status: 410 });
+      });
+      const route = (path: string): CodeRoute => ({
+        path,
+        source: "built",
+        route: `app${path}/page.tsx`,
+      });
+      const readRules: ReadRules = (ctx, locale) => readSeoRules(ctx, locale);
+      const ctx = seoCtx();
+      // Room for the file's head alone: it stops at its first page.
+      const file = await llmsFullTxtOf(
+        ctx,
+        SITE,
+        {
+          readRules,
+          codeRoutes: async () => [route("/guide"), route("/pricing")],
+        },
+        await readRules(ctx, undefined),
+        120
+      );
+
+      expect(file).toContain("The rest of the site's pages are listed");
+      expect(file).not.toContain(`Source: ${SITE}/pricing`);
+      expect((await copyFailures(ctx)).map(each => each.url).sort()).toEqual([
+        `${SITE}/guide`,
+        `${SITE}/pricing`,
+      ]);
     });
 
     it("renders no more pages for llms-full.txt once its time for rendering runs out", async () => {
