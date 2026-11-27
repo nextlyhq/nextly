@@ -112,6 +112,104 @@ describe("a package's nextly.plugin declaration", () => {
       kind: "invalid",
     });
   });
+
+  it("is read from a full declaration's registration part", () => {
+    expect(
+      readDeclaration({
+        name: PKG,
+        nextly: {
+          format: 1,
+          core: "^0.0.2-alpha.81",
+          databases: ["sqlite"],
+          plugin: { export: "seoPlugin" },
+          collections: ["redirects"],
+        },
+      })
+    ).toEqual({
+      kind: "declared",
+      registration: {
+        exportName: "seoPlugin",
+        localName: "seoPlugin",
+        call: false,
+        options: {},
+      },
+    });
+  });
+
+  it("is absent from a full declaration that leaves its registration out", () => {
+    // Registered then by the one plugin its entry exports, as a package that
+    // declares nothing is.
+    expect(
+      readDeclaration({
+        name: PKG,
+        nextly: { format: 1, core: "^1.0.0", databases: ["sqlite"] },
+      })
+    ).toEqual({ kind: "none" });
+  });
+
+  it("refuses a malformed registration block alone in the words it always used", () => {
+    // A package with only today's block is refused as it was before the
+    // declaration had a format, naming the field within the block.
+    expect(
+      readDeclaration({ name: PKG, nextly: { plugin: { export: "a-b" } } })
+    ).toEqual({
+      kind: "invalid",
+      problem:
+        "Its `nextly.plugin` does not parse: export: `export` must be a JavaScript name, or `default`",
+    });
+    expect(
+      readDeclaration({
+        name: PKG,
+        nextly: {
+          plugin: { export: "a", options: { x: { description: "X" } } },
+        },
+      })
+    ).toEqual({
+      kind: "invalid",
+      problem:
+        "Its `nextly.plugin` does not parse: `options` are given to a call, so they need `call: true`",
+    });
+  });
+
+  it("refuses a full declaration that does not parse under its own code, naming the field", () => {
+    // Not PLUGIN_DECLARATION_INVALID, whose cause is the registration block:
+    // here the block may be fine or absent, and another field is not.
+    let refused: unknown;
+    try {
+      readDeclaration({
+        name: PKG,
+        nextly: {
+          format: 1,
+          core: "^1.0.0",
+          databases: [],
+          plugin: { export: "seoPlugin" },
+        },
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(CliError);
+    const error = refused as CliError;
+    expect(error.code).toBe("PLUGIN_DECLARATION_MALFORMED");
+    expect(error.why).toContain("nextly.databases:");
+  });
+
+  it("refuses a declaration in a newer format, naming the format and the Nextly it works with", async () => {
+    let refused: unknown;
+    try {
+      readDeclaration({
+        name: PKG,
+        nextly: { format: 2, core: "^3.0.0", plugin: { export: "seoPlugin" } },
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(CliError);
+    const error = refused as CliError;
+    expect(error.code).toBe("PLUGIN_DECLARATION_FORMAT_NEWER");
+    expect(error.what).toContain("format 2");
+    expect(error.why).toContain('works with Nextly "^3.0.0"');
+  });
 });
 
 describe("a package that declares nothing", () => {

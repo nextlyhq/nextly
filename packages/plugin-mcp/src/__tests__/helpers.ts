@@ -116,7 +116,10 @@ export const bearer = (key: string): Record<string, string> => ({
   authorization: `Bearer ${key}`,
 });
 
-/** One protocol method, after the opening request, as a client makes it. */
+/**
+ * One protocol method, after the opening request, as a client makes it: naming the revision it
+ * opened with, which a client sends on every request after `initialize`.
+ */
 async function rpc<S>(
   handlers: Handlers,
   headers: Record<string, string>,
@@ -125,7 +128,10 @@ async function rpc<S>(
 ): Promise<RpcBody<S>> {
   await handlers.POST(initialize(headers), params("mcp"));
   const response = await handlers.POST(
-    post({ jsonrpc: "2.0", id: 2, method, params: rpcParams }, headers),
+    post(
+      { jsonrpc: "2.0", id: 2, method, params: rpcParams },
+      { "mcp-protocol-version": "2025-11-25", ...headers }
+    ),
     params("mcp")
   );
   return payloadOf<S>(response);

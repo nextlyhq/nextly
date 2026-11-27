@@ -225,3 +225,23 @@ export type {
   PrincipalRef,
   PrincipalReportOptions,
 } from "./principals/types";
+
+// A plugin package's declaration: the `nextly` key of its package.json, read
+// as data, and compared with the plugin's own definition.
+export {
+  PLUGIN_DATABASE_KINDS,
+  PLUGIN_PACKAGE_DECLARATION_FORMAT,
+  checkPluginPackageDeclaration,
+  comparePluginPackageDeclaration,
+  pluginPackageDeclarationJsonSchema,
+  readPluginPackageDeclaration,
+  type CheckPluginPackageDeclarationOptions,
+  type PluginContentTarget,
+  type PluginDatabaseKind,
+  type PluginDeclarationDifference,
+  type PluginDeclarationDifferenceKind,
+  type PluginPackageDeclaration,
+  type PluginPackageDeclarationReading,
+  type PluginPackageInstallOption,
+  type PluginPackageRegistration,
+} from "./declaration";
