@@ -44,9 +44,6 @@ const FAILURE_KIND = "copy-failure";
 const failureKey = (url: string): string =>
   noteKey(`plain-copy-failure:${url}`);
 
-/** How many notes one reading of the list takes: far more than it shows. */
-const MOST_READ = 500;
-
 /** How many failures the problem list shows, the most recent. */
 const MOST_SHOWN = 40;
 
@@ -75,10 +72,13 @@ function failureIn(value: string | null): CopyFailure | undefined {
     : { url, reason, retry, at };
 }
 
-/** The pages whose copy could not be made, the most recent first. */
+/**
+ * The pages whose copy could not be made, the most recent first: every
+ * page's note read, then the newest {@link MOST_SHOWN} of them taken.
+ */
 export async function copyFailures(ctx: PluginContext): Promise<CopyFailure[]> {
   try {
-    const notes = await notesOfKind(ctx, FAILURE_KIND, MOST_READ);
+    const notes = await notesOfKind(ctx, FAILURE_KIND);
     return notes
       .flatMap(note => failureIn(note.value) ?? [])
       .sort((a, b) => b.at.localeCompare(a.at))
@@ -92,6 +92,17 @@ export async function copyFailures(ctx: PluginContext): Promise<CopyFailure[]> {
     );
     return [];
   }
+}
+
+/**
+ * Forget the failures of the pages at `urls`, such as pages no longer
+ * listed, whose copy will never be asked for again to settle them.
+ */
+export function forgetCopyFailures(
+  ctx: PluginContext,
+  urls: readonly string[]
+): Promise<void> {
+  return noteCopyResults(ctx, [], urls);
 }
 
 /**

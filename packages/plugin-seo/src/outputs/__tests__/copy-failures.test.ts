@@ -44,7 +44,9 @@ vi.mock("../../address-record/store", () => ({
     await roundTrip();
     for (const key of keys) notes.delete(key);
   },
-  notesOfKind: async (_ctx: unknown, kind: string, limit: number) => {
+  // In the order the notes were made, which, like the store's key order,
+  // says nothing of which is newest; a limit, where asked, cuts it short.
+  notesOfKind: async (_ctx: unknown, kind: string, limit?: number) => {
     await roundTrip();
     return [...notes]
       .filter(([, note]) => note.kind === kind)
@@ -85,6 +87,19 @@ describe("the pages whose plain-text copy failed", () => {
       "https://acme.example/a",
       "https://acme.example/b",
     ]);
+  });
+
+  it("finds the newest failures however many pages have one", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      for (let n = 0; n < 600; n += 1) {
+        vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 0, n)));
+        await noteCopyResults(ctx, [failure(`https://acme.example/${n}`)], []);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    expect((await copyFailures(ctx))[0]?.url).toBe("https://acme.example/599");
   });
 
   it("lists the most recent failures first, and no more than forty", async () => {

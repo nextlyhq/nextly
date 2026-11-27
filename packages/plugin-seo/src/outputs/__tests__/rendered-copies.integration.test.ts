@@ -49,10 +49,19 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { lastCatchUp } from "../../address-record/catch-up";
 import { seoMetadata } from "../../code-pages/metadata";
 import { seoPlugin } from "../../plugin";
+import {
+  pageRefKey,
+  problemList,
+  type ProblemChecks,
+} from "../../problems/check";
+import type { Reader } from "../../problems/reader";
 import type { CodeRoute } from "../../code-pages/routes";
 import type { ReadRules } from "../../resolver/provider";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
 import { readSeoRules } from "../../settings/rules";
+import { structuredDataFromSettings } from "../../settings/structured-data-rules";
+import { noSocialCardRules } from "../../social/card";
+import { rulesFromOptions } from "../../structured-data/rules";
 import { llmsFullTxtOf } from "../ai-outputs";
 import { copyFailures } from "../copy-failures";
 import { RENDERING_HEADER } from "../rendered-fetch";
@@ -238,6 +247,35 @@ async function rootFile(file: string): Promise<string> {
 }
 
 const llmsTxt = (): Promise<string> => rootFile("llms.txt");
+
+/** The problem list's checks, for this site's types. */
+const CHECKS: ProblemChecks = {
+  targets: ["landings", "notes"],
+  singles: [],
+  readers: {
+    readRules: readSeoRules,
+    readStructuredDataRules: structuredDataFromSettings(
+      rulesFromOptions(undefined, undefined)
+    ),
+    readSocialCardRules: noSocialCardRules,
+  },
+};
+
+/** A reader who may read every page and type. */
+const everything: Reader = {
+  pages: async pages => new Set(pages.map(pageRefKey)),
+  readsType: () => true,
+  seesRedirects: true,
+  count: async () => 0,
+};
+
+/** The addresses the problem list names as plain-text copies that failed. */
+async function failedOnList(): Promise<string[]> {
+  const { problems } = await problemList(seoCtx(), CHECKS, everything);
+  return problems
+    .filter(problem => problem.kind === "plainCopy")
+    .map(problem => problem.subject.label);
+}
 
 /** The site's pages as its server renders them, and every request for one. */
 function renderedSite(pages: Record<string, string>) {
@@ -428,6 +466,51 @@ describe.each(getConfiguredTestDialects())(
       expect(await rootFile("llms-full.txt")).toContain(
         `Source: ${SITE}/notes/second\n\nWe launched.`
       );
+      expect(await copyFailures(seoCtx())).toEqual([]);
+    });
+
+    it("lists a failed copy only while its page is listed and copies are on, and forgets it after", async () => {
+      const t = await boot(dialect);
+      const landing = async (slug: string) =>
+        String(
+          (
+            await t.nextly.create({
+              collection: "landings",
+              data: { title: slug, slug, status: "published" },
+            })
+          ).item.id
+        );
+      const kept = await landing("kept");
+      const removed = await landing("removed");
+      renderedSite({});
+      await ask("/l/kept.md");
+      await ask("/l/removed.md");
+      expect((await failedOnList()).sort()).toEqual([
+        `${SITE}/l/kept`,
+        `${SITE}/l/removed`,
+      ]);
+
+      // A page deleted has no copy to make: it leaves the list, and its note.
+      await t.nextly.delete({ collection: "landings", id: removed });
+      expect(await failedOnList()).toEqual([`${SITE}/l/kept`]);
+      expect((await copyFailures(seoCtx())).map(each => each.url)).toEqual([
+        `${SITE}/l/kept`,
+      ]);
+      expect(kept).not.toBe(removed);
+
+      // With copies and llms-full.txt off, no copy is made at all.
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          siteName: "Acme",
+          productionAddresses: [SITE],
+          llmsTxt: true,
+          plainTextCopies: false,
+          llmsFullTxt: false,
+        },
+      });
+      expect(await failedOnList()).toEqual([]);
       expect(await copyFailures(seoCtx())).toEqual([]);
     });
 

@@ -596,23 +596,30 @@ export async function pendingNotes(ctx: PluginContext): Promise<StoredNote[]> {
 }
 
 /**
- * Up to `limit` notes of `kind`, in key order: a list kept one note an item,
- * so that writers of different items never rewrite one shared note.
+ * Every note of `kind`, in key order, read a page at a time: a list kept one
+ * note an item, so that writers of different items never rewrite one shared
+ * note. Read whole, since the keys say nothing of which items are newest.
  */
 export async function notesOfKind(
   ctx: PluginContext,
-  kind: string,
-  limit: number
+  kind: string
 ): Promise<StoredNote[]> {
   await recordReady(ctx);
   const columns = ctx.db.table(addressNotes);
-  const rows = await ctx.db
-    .select(addressNotes)
-    .where(eq(columns.kind, kind))
-    .orderBy(asc(columns.noteKey))
-    .limit(limit)
-    .all();
-  return rows.map(row => noteOf(row as unknown as Record<string, unknown>));
+  const found: StoredNote[] = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const rows = await ctx.db
+      .select(addressNotes)
+      .where(eq(columns.kind, kind))
+      .orderBy(asc(columns.noteKey))
+      .limit(PAGE)
+      .offset(offset)
+      .all();
+    found.push(
+      ...rows.map(row => noteOf(row as unknown as Record<string, unknown>))
+    );
+    if (rows.length < PAGE) return found;
+  }
 }
 
 /** Forget the notes `keys`. */
