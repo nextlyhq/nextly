@@ -70,7 +70,7 @@ function databaseLine(
   mode: string,
   source: string
 ): string {
-  return `Database: SQLite ${join(realpathSync(folder), file)} (${mode}; DATABASE_URL ${source})`;
+  return `● local · ${join(realpathSync(folder), file)} · SQLite (${mode}; DATABASE_URL ${source})`;
 }
 
 /**
@@ -288,7 +288,7 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     const cli = cliReads(project({}), ["probe"], childEnv(undefined));
     expect(cli.databaseUrl).toBeUndefined();
     expect(cli.printed).toEqual([
-      "Database: none (development; DATABASE_URL not set)",
+      "● no database (development; DATABASE_URL not set)",
     ]);
   });
 
@@ -311,7 +311,7 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
       { cwd: project({}), env: childEnv(undefined), encoding: "utf8" }
     );
     expect(JSON.parse(out)).toEqual([
-      "Database: none (production; DATABASE_URL not set)",
+      "● no database (production; DATABASE_URL not set)",
     ]);
   });
 });
@@ -362,7 +362,7 @@ describe("a second project folder's environment files", () => {
     // works in, not the one the CLI ran in.
     expect(read.printed[0]).toMatch(
       new RegExp(
-        `^Database: SQLite ${literally(join(realpathSync(other), "other-env-local.db"))} \\(development; DATABASE_URL from \\S*\\.env\\.local\\)$`
+        `^● local · ${literally(join(realpathSync(other), "other-env-local.db"))} · SQLite \\(development; DATABASE_URL from \\S*\\.env\\.local\\)$`
       )
     );
   });
@@ -452,7 +452,7 @@ describe("the --mode option and the mode line, through the program", () => {
     expect(program.opts().mode).toBe("production");
     // The file is resolved against the folder the environment was read from.
     expect(stderr.join("")).toMatch(
-      /^Database: SQLite \S+probe\.db \(production; DATABASE_URL from the process environment\)\n$/
+      /^● local · \S+probe\.db · SQLite \(production; DATABASE_URL from the process environment\)\n$/
     );
   });
 
@@ -460,14 +460,14 @@ describe("the --mode option and the mode line, through the program", () => {
     const { stdout, stderr } = await run(["probe"]);
     // The file is resolved against the folder the environment was read from.
     expect(stderr.join("")).toMatch(
-      /^Database: SQLite \S+probe\.db \(test; DATABASE_URL from the process environment\)\n$/
+      /^● local · \S+probe\.db · SQLite \(test; DATABASE_URL from the process environment\)\n$/
     );
-    expect(stdout.join("")).not.toContain("Database:");
+    expect(stdout.join("")).not.toContain("● local");
   });
 
   it("prints no mode line under --quiet", async () => {
     const { stdout, stderr } = await run(["--quiet", "probe"]);
-    expect(`${stdout.join("")}${stderr.join("")}`).not.toContain("Database:");
+    expect(`${stdout.join("")}${stderr.join("")}`).not.toContain("● local");
   });
 
   it("refuses a mode outside the three, naming them", async () => {
