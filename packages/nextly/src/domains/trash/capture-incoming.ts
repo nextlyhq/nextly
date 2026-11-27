@@ -32,6 +32,7 @@ import {
   fieldsStoredOnRow,
   junctionLinkColumnsOf,
   junctionTableTo,
+  toSnakeCase,
 } from "../schema/services/field-column-descriptor";
 
 import type { CapturedField } from "./capture-entry";
@@ -197,7 +198,7 @@ const SAVEPOINT = "nextly_trash_incoming";
  * of that collection and the delete goes on, as it would have before the
  * trash; any other failure is the delete's.
  */
-async function tolerantly<T>(
+export async function tolerantly<T>(
   tx: TransactionContext,
   read: () => Promise<T | undefined>
 ): Promise<T | undefined> {
@@ -263,7 +264,10 @@ interface IncomingInput {
 /** One field of another entity that can point at the entry, and how. */
 interface PointingField {
   field: CapturedField;
+  /** The field's name, which the definitions know it by. */
   name: string;
+  /** Its column, which a statement names: the name in snake case. */
+  column: string;
   by: "links" | "column";
 }
 
@@ -277,7 +281,9 @@ function pointingFieldsOf(
       typeof field.name === "string"
         ? pointsBy(source, field, input)
         : undefined;
-    return by === undefined ? [] : [{ field, name: String(field.name), by }];
+    if (by === undefined) return [];
+    const name = String(field.name);
+    return [{ field, name, column: toSnakeCase(name), by }];
   });
 }
 
@@ -290,22 +296,25 @@ function pointingFieldsOf(
 async function incomingColumn(
   tx: TransactionContext,
   source: RegistryRow,
-  name: string,
+  pointing: Pick<PointingField, "name" | "column">,
   input: IncomingInput
 ): Promise<KeptIncoming | undefined> {
+  const { name, column } = pointing;
   const ids =
     (await tolerantly(tx, () =>
-      incomingOwnRows(tx, source, name, input.entryId)
+      incomingOwnRows(tx, source, column, input.entryId)
     )) ?? [];
   const languageRows =
     (await tolerantly(tx, () =>
-      incomingLanguageRows(tx, source, name, input.entryId, input.tableExists)
+      incomingLanguageRows(tx, source, column, input.entryId, input.tableExists)
     )) ?? [];
   if (ids.length === 0 && languageRows.length === 0) return undefined;
+  // The column is what a restore's statement names; the field, what it is
+  // checked against in the definitions then.
   return {
     kind: "column",
     table: source.tableName,
-    column: name,
+    column,
     ids,
     ...(languageRows.length === 0 ? {} : { languageRows }),
     source: sourceOf(source, name),
@@ -320,7 +329,7 @@ function incomingThrough(
   input: IncomingInput
 ): Promise<KeptIncoming | undefined> {
   if (pointing.by === "column") {
-    return incomingColumn(tx, source, pointing.name, input);
+    return incomingColumn(tx, source, pointing, input);
   }
   return tolerantly(tx, () =>
     incomingLinks(

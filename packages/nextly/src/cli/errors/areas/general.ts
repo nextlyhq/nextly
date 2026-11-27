@@ -58,6 +58,29 @@ export const GENERAL_CODES = defineCodes({
         code: "INVALID_INPUT",
         describe: refusedInput,
       },
+      // A deleted entry a restore refused to put back, its message saying why: the entry stays
+      // in the trash, and nothing was written.
+      ...[
+        "published-with-pending-edits",
+        "restore-collection-changed",
+        "restore-fields-changed",
+        "restore-id-taken",
+      ].map(reason => ({
+        code: "CONFLICT" as const,
+        reason,
+        describe: refusedInput,
+      })),
+      {
+        // A trash command named an entry, or a collection, the trash holds nothing of for this
+        // caller: one they may not read is answered as one that is not there.
+        code: "NOT_FOUND",
+        reason: "trash-item-not-found",
+        describe: () => ({
+          what: "The trash holds no deleted entry by that id, or none of that collection.",
+          why: "A deleted entry stays in the trash for 30 days, until it is restored or the trash is emptied.",
+          next: "Run `nextly trash list` to see what the trash holds.",
+        }),
+      },
     ],
   },
   UNEXPECTED_ERROR: {

@@ -107,6 +107,12 @@ export interface TrashedEntry {
    */
   collectionId?: string;
   /**
+   * Each language's version counter, last changer and change time, by
+   * `_parent` and `_locale`: columns the language rows above are read
+   * without. Absent on a record kept before they were.
+   */
+  languageRevisions?: KeptRow[];
+  /**
    * The entry in the shape a read gives it, as its deleted event carried it:
    * what a restore's created event carries.
    */

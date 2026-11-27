@@ -46,6 +46,7 @@ import type { SensitiveFieldSource } from "../webhooks/sensitive-fields";
 
 import { fieldHasReadRule } from "./field-read-rule";
 import { keptColumn, rowGivenBack } from "./kept-values";
+import { putBackLanguageRevisions } from "./language-revisions";
 import {
   idsPresent,
   putBackIncoming,
@@ -358,6 +359,46 @@ function rowToPutBack(
   return row;
 }
 
+/** Whether a kept version row is a recovery point (an autosave). */
+function isRecoveryPoint(row: KeptRow): boolean {
+  const value = keptColumn(row, "isAutosave");
+  return value === true || value === 1;
+}
+
+/**
+ * Refuses, writing nothing, the restore of an entry that was published, in
+ * itself or in a language, and held unpublished edits (a working draft):
+ * coming back as a draft, its pending edits would have to be folded into
+ * the restored row as an unpublish folds them, which a restore does not do
+ * yet. Putting the draft back beside a draft row would let a later publish
+ * promote the old edits over newer ones. The entry stays in the trash as it
+ * was.
+ */
+function refusePublishedWithPendingEdits(
+  record: TrashRecord,
+  collection: RestoreCollection,
+  trashId: string
+): void {
+  if (!collection.lifecycle) return;
+  const companion = `${collection.tableName}${STORAGE_FORMAT.companionSuffix}`;
+  const published =
+    keptRowsOf(record.stored, collection.tableName)
+      .slice(0, 1)
+      .some(row => keptColumn(row, "status") === PUBLISHED) ||
+    keptRowsOf(record.stored, companion).some(
+      row => keptColumn(row, "_status") === PUBLISHED
+    );
+  const pending = keptRowsOf(record.stored, VERSIONS_TABLE).some(
+    row => !isRecoveryPoint(row)
+  );
+  if (!published || !pending) return;
+  throw NextlyError.conflict({
+    message:
+      "This entry was published and has unpublished edits. Restoring it is not available yet; it stays in the trash.",
+    logContext: { trashId, reason: "published-with-pending-edits" },
+  });
+}
+
 /**
  * A published row's lifecycle column put back as a draft, where the
  * collection has the lifecycle: without it, the column is the author's own.
@@ -399,7 +440,15 @@ async function rowsStillValid(
     return rows.filter(row => present.has(String(row.mediaId)));
   }
   const person = PERSON_OWNED[table];
-  if (person !== undefined) return rowsOfPeopleStillThere(tx, rows, person);
+  if (person !== undefined) {
+    const owns = person.owns ?? (() => true);
+    const theirs = await rowsOfPeopleStillThere(
+      tx,
+      rows.filter(owns),
+      person.column
+    );
+    return [...rows.filter(row => !owns(row)), ...theirs];
+  }
   // A field-group row the delete left in place, under a field the
   // collection has since dropped, is there still: it is not written twice.
   if (table.startsWith("nextly_") || rows.some(row => !("id" in row))) {
@@ -414,17 +463,29 @@ async function rowsStillValid(
 }
 
 /**
- * The kept tables whose rows belong to one person, and the column naming
- * them: a reader's dashboard pin and "last looked at" marker, and an author's
+ * The kept rows that belong to one person, and the column naming them: a
+ * reader's dashboard pin and "last looked at" marker, and an author's
  * recovery point. Deleting the person removes these (the pin through its
  * foreign key, the others by the deletion itself), so a restore puts back
  * only those of people still there: never one the deletion removed on
  * purpose, and never one the foreign key would refuse.
+ *
+ * Of the versions table only recovery points (autosaves) are a person's: a
+ * working draft names its last editor, but deleting them leaves it in place,
+ * so it comes back whoever edited it.
  */
-const PERSON_OWNED: Readonly<Record<string, string>> = {
-  [DASHBOARD_PINS_TABLE]: "userId",
-  [VERSION_VIEWS_TABLE]: "userId",
-  [VERSIONS_TABLE]: "createdBy",
+const PERSON_OWNED: Readonly<
+  Record<
+    string,
+    { column: string; owns?: (row: Record<string, unknown>) => boolean }
+  >
+> = {
+  [DASHBOARD_PINS_TABLE]: { column: "userId" },
+  [VERSION_VIEWS_TABLE]: { column: "userId" },
+  [VERSIONS_TABLE]: {
+    column: "createdBy",
+    owns: row => row.isAutosave === true || row.isAutosave === 1,
+  },
 };
 
 /** The people's table. */
@@ -609,7 +670,7 @@ export async function restoreTrashedEntry(
   const first = await readTrashRecord(deps.adapter, input.trashId);
   if (first === undefined || first.kind !== "entry") {
     throw NextlyError.notFound({
-      logContext: { trashId: input.trashId },
+      logContext: { trashId: input.trashId, reason: "trash-item-not-found" },
     });
   }
   const collection = await deps.collectionOf(first.scopeSlug);
@@ -627,9 +688,14 @@ export async function restoreTrashedEntry(
   ) {
     throw NextlyError.conflict({
       message: `The collection "${first.scopeSlug}" this entry belonged to is gone, was made again, or stores its entries elsewhere now, so it cannot be restored.`,
-      logContext: { trashId: input.trashId, table: ownTable },
+      logContext: {
+        trashId: input.trashId,
+        table: ownTable,
+        reason: "restore-collection-changed",
+      },
     });
   }
+  refusePublishedWithPendingEdits(first, collection, input.trashId);
   const columns = relationColumnsOf(collection, await deps.fieldGroups());
   const targetTables = await targetTablesOf(
     deps,
@@ -649,12 +715,14 @@ export async function restoreTrashedEntry(
     await tx.lockRow(TRASH_TABLE, input.trashId);
     const record = await readTrashRecord(tx, input.trashId);
     if (record === undefined) {
-      throw NextlyError.notFound({ logContext: { trashId: input.trashId } });
+      throw NextlyError.notFound({
+        logContext: { trashId: input.trashId, reason: "trash-item-not-found" },
+      });
     }
     if ((await idsPresent(tx, collection.tableName, [record.itemId])).size) {
       throw NextlyError.conflict({
         message: `An entry with the id "${record.itemId}" is in "${record.scopeSlug}" already, so this one cannot be restored under it.`,
-        logContext: { trashId: input.trashId },
+        logContext: { trashId: input.trashId, reason: "restore-id-taken" },
       });
     }
     // Asked with the new values put in: a value still taken, the entry's
@@ -697,6 +765,14 @@ export async function restoreTrashedEntry(
         })
       );
     }
+    // Each language's counter, changer and change time, which its rows were
+    // put back without.
+    await putBackLanguageRevisions(
+      tx,
+      deps.adapter.getCapabilities().dialect,
+      `${collection.tableName}${STORAGE_FORMAT.companionSuffix}`,
+      record.stored.languageRevisions ?? []
+    );
     let linksLeftOut = 0;
     for (const links of record.stored.links) {
       linksLeftOut += await putBackLinks(

@@ -222,6 +222,25 @@ describeEachDialect("nextly trash list, restore and empty", dialect => {
     expect(back).toMatchObject({ title: "From the CLI", slug: "cli-again" });
 
     await onTheSite(nextly => nextly.delete({ collection: POSTS, id }));
+    // A dry run names what it would do, and does nothing.
+    const wouldRestore: string[] = [];
+    await runTrashRestoreCommand(
+      id,
+      { dryRun: true },
+      contextKeeping(wouldRestore)
+    );
+    expect(wouldRestore).toContain(
+      `info: Would restore ${POSTS} entry ${id} "From the CLI"`
+    );
+    const wouldEmpty: string[] = [];
+    await runTrashEmptyCommand({ dryRun: true }, contextKeeping(wouldEmpty));
+    expect(wouldEmpty).toContain(
+      `info: Would remove ${POSTS} entry ${id} "From the CLI" for good`
+    );
+    const stillThere: string[] = [];
+    await runTrashListCommand({}, contextKeeping(stillThere));
+    expect(stillThere.find(line => line.startsWith("row: "))).toContain(id);
+
     const emptied: string[] = [];
     await runTrashEmptyCommand({}, contextKeeping(emptied));
     expect(emptied).toContain("success: Removed 1 entry for good.");

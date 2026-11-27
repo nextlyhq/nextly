@@ -21,12 +21,14 @@ process.env.NEXTLY_SECRET =
 
 import { randomUUID } from "node:crypto";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 import { defineCollection, text } from "../../../config";
+import { container } from "../../../di/container";
 import { getDialectTables } from "../../../database/index";
 import { NextlyError } from "../../../errors/nextly-error";
+import { getEventBus } from "../../../events/event-bus";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -35,8 +37,10 @@ import {
 } from "../../../plugins/test-nextly";
 import { CONTENT_EVENTS_TABLE } from "../../../schemas/content-events";
 import { TRASH_TABLE } from "../../../schemas/trash";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import { pruneContentEventsSafely } from "../../content-events/prune";
 import type { WebhookEvent } from "../../webhooks/types";
+import type { CacheRevalidator } from "../../../revalidation/types";
 import { purgeExpiredTrash } from "../trash-records";
 
 perLanguageStorageSuite();
@@ -245,15 +249,90 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     expect(stillEnded.some(e => e.endsSubject)).toBe(true);
   });
 
-  it("a published entry comes back as a draft", async () => {
+  it("a published entry comes back as a draft, announced in process as created", async () => {
     const t = await boot(dialect);
     const id = await post(t, "live", "published");
     expect(await stored(t, id)).toMatchObject({ status: "published" });
     await t.nextly.delete({ collection: POSTS, id });
+    const announced: unknown[] = [];
+    const listen = (event: { payload: unknown }) => {
+      announced.push(event.payload);
+    };
+    getEventBus().on(`collection.${POSTS}.created`, listen);
 
-    await restoreOf(t, { id });
+    try {
+      await restoreOf(t, { id });
+    } finally {
+      getEventBus().off(`collection.${POSTS}.created`, listen);
+    }
 
     expect(await stored(t, id)).toMatchObject({ status: "draft" });
+    expect(announced).toEqual([
+      expect.objectContaining({
+        id,
+        data: expect.objectContaining({ id, slug: "live" }),
+      }),
+    ]);
+  });
+
+  it("a published entry with unpublished edits is refused, and stays in the trash as it was", async () => {
+    const t = await boot(dialect);
+    const id = await post(t, "pending", "published");
+    // Its pending edits: a working draft beside the published row.
+    await t.adapter.insert(VERSIONS_TABLE, {
+      id: randomUUID(),
+      scopeKind: "collection",
+      scopeSlug: POSTS,
+      entryId: id,
+      versionNo: null,
+      status: "draft",
+      isAutosave: false,
+      snapshot: JSON.stringify({ title: "Pending" }),
+      label: null,
+      locale: "en",
+      sourceVersionNo: null,
+      createdBy: null,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      updatedAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    await t.nextly.delete({ collection: POSTS, id });
+    const [before] = await t.adapter.select(TRASH_TABLE, {
+      where: { and: [{ column: "itemId", op: "=", value: id }] },
+    });
+
+    const refused = await restoreOf(t, { id }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(NextlyError.is(refused) && refused.statusCode).toBe(409);
+    expect(NextlyError.is(refused) && refused.publicMessage).toContain(
+      "unpublished edits"
+    );
+    expect(await stored(t, id)).toBeUndefined();
+    const [after] = await t.adapter.select(TRASH_TABLE, {
+      where: { and: [{ column: "itemId", op: "=", value: id }] },
+    });
+    expect(after).toEqual(before);
+  });
+
+  it("invalidates the pages cached under the restored entry's slug", async () => {
+    const t = await boot(dialect);
+    const id = await post(t, "cached");
+    await t.nextly.delete({ collection: POSTS, id });
+    const revalidator = container.get<CacheRevalidator>("cacheRevalidator");
+    const flush = vi.spyOn(revalidator, "flush");
+
+    try {
+      await restoreOf(t, { id });
+      const tags = flush.mock.calls.flatMap(call =>
+        (call[0] as { tags: string[] }[]).flatMap(intent => intent.tags)
+      );
+      expect(tags).toContain(`nextly:${POSTS}:id:${id}`);
+      expect(tags).toContain(`nextly:${POSTS}:slug:cached`);
+    } finally {
+      flush.mockRestore();
+    }
   });
 
   it("a slug taken since is asked for again, writing nothing, and a new one restores", async () => {

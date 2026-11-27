@@ -16,6 +16,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di/service-access";
 import { TRASH_TABLE } from "../../schemas/trash";
+import type { SupportedDialect } from "../schema/services/runtime-schema-generator";
 import { sanitizedChange } from "../webhooks/envelope";
 import {
   sensitiveFieldPaths,
@@ -37,6 +38,7 @@ const MAX_LABEL = 255;
 /** Whether a core table is in the database, asked on a transaction. */
 export interface TrashTableProbe {
   tableExistsThrough(tx: TransactionContext, table: string): Promise<boolean>;
+  getCapabilities(): { dialect: SupportedDialect };
 }
 
 /** Where the once-only notice of a database without the trash goes. */
@@ -131,6 +133,7 @@ export async function moveEntryToTrash(
     fields: input.fields,
     fieldGroupTables,
     tableExists: table => db.tableExistsThrough(tx, table),
+    dialect: db.getCapabilities().dialect,
   });
   if (captured === undefined) return { trashed: false };
   const trashedAt = input.now ?? new Date();

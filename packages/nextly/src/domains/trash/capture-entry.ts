@@ -40,6 +40,7 @@ import { TRANSLATION_SOURCES_TABLE } from "../../schemas/translation-sources/tab
 import type {
   KeptIncoming,
   KeptLinks,
+  KeptRow,
   KeptTableRows,
 } from "../../schemas/trash";
 import { VERSION_VIEWS_TABLE } from "../../schemas/version-views";
@@ -50,9 +51,11 @@ import {
   junctionLinkColumnsOf,
   junctionTableTo,
 } from "../schema/services/field-column-descriptor";
+import type { SupportedDialect } from "../schema/services/runtime-schema-generator";
 
 import { captureIncoming } from "./capture-incoming";
 import { keepRow } from "./kept-values";
+import { keepLanguageRevisions } from "./language-revisions";
 
 /** The table the pins features hold on a document's versions are kept in. */
 const VERSION_PINS_TABLE = "nextly_version_pins";
@@ -80,6 +83,8 @@ export interface CaptureEntryInput {
   fieldGroupTables: readonly string[];
   /** Whether a core table is in the database, asked on the transaction. */
   tableExists: (table: string) => Promise<boolean>;
+  /** The database's dialect, which the language counters are read in. */
+  dialect: SupportedDialect;
 }
 
 /** Everything one entry stores, as the trash keeps it. */
@@ -87,6 +92,7 @@ export interface CapturedEntry {
   tables: KeptTableRows[];
   links: KeptLinks[];
   incoming: KeptIncoming[];
+  languageRevisions: KeptRow[];
 }
 
 /**
@@ -342,6 +348,12 @@ export async function captureEntry(
   await keepDocumentRecords(tx, tables, input);
   return {
     tables,
+    languageRevisions: await keepLanguageRevisions(
+      tx,
+      input.dialect,
+      `${input.tableName}${STORAGE_FORMAT.companionSuffix}`,
+      [input.entryId]
+    ),
     links: await linksOf(tx, input),
     incoming: await captureIncoming(tx, {
       collection: input.collection,

@@ -170,6 +170,8 @@ const WRITES = [
   "telemetry disable",
   "telemetry enable",
   "telemetry reset",
+  "trash empty",
+  "trash restore",
   "upgrade",
   "users:create-admin",
   "webhooks:prune",
@@ -194,6 +196,8 @@ const READS = [
   "plugins list",
   "telemetry",
   "telemetry status",
+  "trash",
+  "trash list",
   "workflow:stranded",
 ];
 

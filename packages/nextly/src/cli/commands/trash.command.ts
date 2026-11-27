@@ -6,6 +6,7 @@
  */
 import type { Command } from "commander";
 
+import { withDryRun } from "../dry-run";
 import { DATABASE_LINE, declareFirstLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
@@ -38,8 +39,7 @@ export function registerTrashCommand(program: Command): void {
   );
 
   declareFirstLine(
-    trash
-      .command("restore <id>")
+    withDryRun(trash.command("restore <id>"))
       .description(
         "Bring a deleted entry back as it was, as a draft where it had been published"
       )
@@ -59,8 +59,7 @@ export function registerTrashCommand(program: Command): void {
   );
 
   declareFirstLine(
-    trash
-      .command("empty")
+    withDryRun(trash.command("empty"))
       .description("Remove deleted entries for good")
       .option("--collection <slug>", "Only this collection's entries")
       .action(

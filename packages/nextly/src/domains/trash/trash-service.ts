@@ -15,6 +15,8 @@
  *
  * @module domains/trash/trash-service
  */
+import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
+
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import {
   callerHoldsPermission,
@@ -24,16 +26,19 @@ import {
 import { actorForWrite, type RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di/service-access";
 import { NextlyError } from "../../errors";
+import { getEventBus } from "../../events/event-bus";
 import {
   buildEntryRevalidationIntent,
   readRevalidateConfig,
 } from "../../revalidation/intent-builders";
 import { permissionSlug } from "../../schemas/_zod/rbac";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { TRASH_TABLE } from "../../schemas/trash";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import type { UserContext } from "../collections/services/collection-types";
 import { collectionTableName } from "../collections/services/collection-utils";
 import { mayReadDeletedDocument } from "../content-events/deleted-document-access";
+import { COMPANION_PARENT_COLUMN } from "../i18n/companion-columns";
 
 import {
   restoreTrashedEntry,
@@ -213,10 +218,81 @@ function refuseNonPlainValues(
 }
 
 /**
+ * The in-process `collection.<slug>.created` event of a committed restore,
+ * as a create announces one, so what reacted to the delete (a search index,
+ * say) learns the entry is back. Its data is the entry as a trusted read
+ * gives it now. Best-effort, as every collection event is: a failure never
+ * reaches the restore's caller.
+ */
+async function announceRestored(
+  collection: string,
+  id: string,
+  user: UserContext | undefined
+): Promise<void> {
+  try {
+    const read = await getService("collectionsHandler").getEntry({
+      collectionName: collection,
+      entryId: id,
+      depth: 0,
+      overrideAccess: true,
+    });
+    if (!read.success || read.data === null || read.data === undefined) {
+      return;
+    }
+    getEventBus().emit(`collection.${collection}.created`, {
+      collection,
+      id,
+      data: structuredClone(read.data),
+      user: user === undefined ? null : structuredClone(user),
+    });
+  } catch {
+    // Best-effort, as every collection event is.
+  }
+}
+
+/** The `slug` column of `table`'s rows matching `where`, where it has one. */
+async function slugsIn(table: string, where: WhereClause): Promise<string[]> {
+  try {
+    const rows = await adapter().select<{ slug?: unknown }>(table, { where });
+    return rows
+      .map(row => row.slug)
+      .filter(
+        (slug): slug is string => typeof slug === "string" && slug !== ""
+      );
+  } catch {
+    // A table this process does not hold has no slug to invalidate.
+    return [];
+  }
+}
+
+/**
+ * The slugs a restored entry is addressed by: its own row's, or, where the
+ * slug is translated, each language's. A page cached under one of them while
+ * the entry was gone (a "not found") is invalidated with them.
+ */
+async function slugsOfRestored(
+  tableName: string,
+  id: string
+): Promise<{ slug?: string; localizedSlugs?: string[] }> {
+  const [slug] = await slugsIn(tableName, {
+    and: [{ column: "id", op: "=", value: id }],
+  });
+  const localizedSlugs = await slugsIn(
+    `${tableName}${STORAGE_FORMAT.companionSuffix}`,
+    { and: [{ column: COMPANION_PARENT_COLUMN, op: "=", value: id }] }
+  );
+  return {
+    ...(slug === undefined ? {} : { slug }),
+    ...(localizedSlugs.length === 0 ? {} : { localizedSlugs }),
+  };
+}
+
+/**
  * What a committed restore sets going, as any write does: the cached reads
- * of the collection and of the entry are invalidated, so a list or a page
- * that cached the entry's absence shows it again, and the drain is offered
- * the created event. Neither failure undoes the restore.
+ * of the collection and of the entry, by its id and its slugs, are
+ * invalidated, so a list or a page that cached the entry's absence shows it
+ * again, and the drain is offered the created event. Neither failure undoes
+ * the restore.
  */
 async function afterRestore(collection: string, id: string): Promise<void> {
   const record = await getService(
@@ -227,7 +303,13 @@ async function afterRestore(collection: string, id: string): Promise<void> {
   const intent = buildEntryRevalidationIntent(
     collection,
     readRevalidateConfig(record ?? {}),
-    { id }
+    {
+      id,
+      ...(await slugsOfRestored(
+        collectionTableName(record ?? {}, collection),
+        id
+      )),
+    }
   );
   if (intent !== undefined) await entries.flushRevalidationIntents([intent]);
   await entries.offerPostCommitTxMaintenance({
@@ -344,7 +426,9 @@ async function recordFor(
     });
     if (items[0] !== undefined) return items[0];
   }
-  throw NextlyError.notFound({ logContext: { ref } });
+  throw NextlyError.notFound({
+    logContext: { ref, reason: "trash-item-not-found" },
+  });
 }
 
 /**
@@ -377,7 +461,10 @@ export async function restoreFor(
       actorName: caller.user?.name ?? null,
     }
   );
-  if (result.restored) await afterRestore(result.collection, result.id);
+  if (result.restored) {
+    await afterRestore(result.collection, result.id);
+    await announceRestored(result.collection, result.id, caller.user);
+  }
   return result;
 }
 
@@ -425,7 +512,9 @@ async function collectionsToEmpty(
   }
   if (named === undefined || allowed.length > 0) return allowed;
   if (visible.length === 0) {
-    throw NextlyError.notFound({ logContext: { collection: named } });
+    throw NextlyError.notFound({
+      logContext: { collection: named, reason: "trash-item-not-found" },
+    });
   }
   throw NextlyError.forbidden({
     logContext: { reason: "empty-not-granted", collection: named },

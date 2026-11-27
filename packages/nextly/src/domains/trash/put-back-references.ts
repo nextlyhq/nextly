@@ -13,7 +13,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import { missingSchemaObject } from "../../database/missing-column";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
@@ -134,8 +134,7 @@ async function putBackOneIncoming(
   entryId: string
 ): Promise<number> {
   if (incoming.kind === "column") {
-    await putBackColumn(tx, incoming, entryId);
-    return 0;
+    return putBackColumn(tx, incoming, entryId);
   }
   if (!(await db.tableExistsThrough(tx, incoming.table))) {
     return incoming.sourceIds.length;
@@ -158,10 +157,20 @@ async function putBackOneIncoming(
   return incoming.sourceIds.length - present.size;
 }
 
+/** How many rows of a statement's answer `n` counts. */
+async function counted(
+  tx: TransactionContext,
+  statement: SQL
+): Promise<number> {
+  const [row] = await tx.queryStatement<{ n: unknown }>(statement);
+  return Number(row?.n ?? 0);
+}
+
 /**
  * The entry's id back into another entity's relation column, where it still
  * holds nothing: on the entity's own rows, and on its rows per language for
- * a translated relation. A row gone or changed since is left as it is. Built
+ * a translated relation. A row gone or changed since is left as it is, and
+ * counted: answers how many references it could not put back. Built
  * statements, as the capture read them: the language table is keyed by its
  * entity and language, not an id.
  */
@@ -169,25 +178,47 @@ async function putBackColumn(
   tx: TransactionContext,
   incoming: Extract<KeptIncoming, { kind: "column" }>,
   entryId: string
-): Promise<void> {
+): Promise<number> {
+  let leftOut = 0;
   const column = sql.identifier(incoming.column);
   for (let at = 0; at < incoming.ids.length; at += ID_CHUNK) {
     const ids = incoming.ids.slice(at, at + ID_CHUNK);
+    const rows = sql`${sql.identifier("id")} IN (${sql.join(
+      ids.map(id => sql`${id}`),
+      sql`, `
+    )})`;
+    // Those still there and holding nothing are written, and those still
+    // holding the entry (a relation with no foreign key to clear it) hold it
+    // already; the rest were deleted or set to something else since.
+    leftOut +=
+      ids.length -
+      (await counted(
+        tx,
+        sql`SELECT COUNT(*) AS n FROM ${sql.identifier(incoming.table)} WHERE ${rows} AND (${column} IS NULL OR ${column} = ${entryId})`
+      ));
     await tx.runStatement(
-      sql`UPDATE ${sql.identifier(incoming.table)} SET ${column} = ${entryId} WHERE ${sql.identifier("id")} IN (${sql.join(
-        ids.map(id => sql`${id}`),
-        sql`, `
-      )}) AND ${column} IS NULL`
+      sql`UPDATE ${sql.identifier(incoming.table)} SET ${column} = ${entryId} WHERE ${rows} AND ${column} IS NULL`
     );
   }
   const companion = sql.identifier(
     `${incoming.table}${STORAGE_FORMAT.companionSuffix}`
   );
   for (const row of incoming.languageRows ?? []) {
+    const language = sql`${sql.identifier(COMPANION_PARENT_COLUMN)} = ${row.parent} AND ${sql.identifier("_locale")} = ${row.locale}`;
+    if (
+      (await counted(
+        tx,
+        sql`SELECT COUNT(*) AS n FROM ${companion} WHERE ${language} AND (${column} IS NULL OR ${column} = ${entryId})`
+      )) === 0
+    ) {
+      leftOut += 1;
+      continue;
+    }
     await tx.runStatement(
-      sql`UPDATE ${companion} SET ${column} = ${entryId} WHERE ${sql.identifier(COMPANION_PARENT_COLUMN)} = ${row.parent} AND ${sql.identifier("_locale")} = ${row.locale} AND ${column} IS NULL`
+      sql`UPDATE ${companion} SET ${column} = ${entryId} WHERE ${language} AND ${column} IS NULL`
     );
   }
+  return leftOut;
 }
 
 /** How many references `incoming` holds. */

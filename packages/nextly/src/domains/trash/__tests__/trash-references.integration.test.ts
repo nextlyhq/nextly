@@ -48,6 +48,7 @@ import { DASHBOARD_PINS_TABLE } from "../../../schemas/dashboard-pins/table-name
 import { TRASH_TABLE, type TrashedEntry } from "../../../schemas/trash";
 import { VERSION_VIEWS_TABLE } from "../../../schemas/version-views";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
+import { languageRevisionTable } from "../../schema/services/runtime-schema-generator";
 import { runWebhookDrain } from "../../webhooks/drain-runner";
 import type { WebhookEndpointRegistry } from "../../webhooks/endpoint-registry";
 import {
@@ -119,6 +120,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [
           text({ name: "title", localized: true }),
           relationship({ name: "page", relationTo: PAGES, localized: true }),
+          // A field name of two words, kept in a column named apart from it.
+          relationship({
+            name: "mainPage",
+            relationTo: PAGES,
+            localized: true,
+          }),
         ],
       }),
       defineCollection({ slug: TAGS, fields: [text({ name: "title" })] }),
@@ -133,6 +140,9 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           relationship({ name: "tag", relationTo: TAGS }),
           // A relation to core's own people, not to a collection.
           relationship({ name: "owner", relationTo: "users" }),
+          // Field names of two words, each kept in a column named apart.
+          relationship({ name: "leadTag", relationTo: TAGS }),
+          text({ name: "shortCode", unique: true, localized: false }),
         ],
       }),
       defineCollection({
@@ -140,6 +150,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [
           text({ name: "title" }),
           relationship({ name: "page", relationTo: PAGES }),
+          relationship({ name: "featuredPage", relationTo: PAGES }),
         ],
       }),
       defineCollection({
@@ -529,6 +540,92 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     expect(await kept()).toContain("recovery point");
   });
 
+  it("keeps the pending edits of an editor deleted since, and only their recovery points go", async () => {
+    const t = await boot(dialect);
+    const id = await make(t, PAGES, { title: "Live", slug: "edited" });
+    const editor = await person(t, `editor-${randomUUID().slice(0, 8)}`);
+    const version = (isAutosave: boolean, body: string) => ({
+      id: randomUUID(),
+      scopeKind: "collection",
+      scopeSlug: PAGES,
+      entryId: id,
+      versionNo: null,
+      status: "draft",
+      isAutosave,
+      snapshot: JSON.stringify({ title: body }),
+      label: null,
+      locale: null,
+      sourceVersionNo: null,
+      createdBy: editor,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      updatedAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    await t.adapter.insert(VERSIONS_TABLE, version(false, "pending edit"));
+    await t.adapter.insert(VERSIONS_TABLE, version(true, "recovery point"));
+    const kept = async () =>
+      (
+        await t.adapter.select<{ snapshot: unknown }>(VERSIONS_TABLE, {
+          where: {
+            and: [
+              { column: "entryId", op: "=", value: id },
+              { column: "versionNo", op: "IS NULL" },
+            ],
+          },
+        })
+      )
+        .map(row => JSON.stringify(row.snapshot))
+        .join(" ");
+
+    await t.nextly.delete({ collection: PAGES, id });
+    // The editor's account goes while the entry is in the trash.
+    await t.adapter.delete("users", {
+      and: [{ column: "id", op: "=", value: editor }],
+    });
+    await restoreOf(t, { id });
+
+    expect(await kept()).toContain("pending edit");
+    expect(await kept()).not.toContain("recovery point");
+  });
+
+  it("puts back each language's version counter, changer and change time as they were", async () => {
+    const t = await boot(dialect);
+    const id = await make(t, LNOTES, { title: "Eins" });
+    for (const title of ["Zwei", "Drei"]) {
+      await t.nextly.update({
+        collection: LNOTES,
+        id,
+        data: { title, _overwrite: true },
+      } as never);
+    }
+    const table = languageRevisionTable(
+      t.adapter.dialect,
+      `dc_${LNOTES}_locales`
+    ) as Record<string, never>;
+    const db = t.adapter.getDrizzle() as unknown as {
+      select(): {
+        from(table: unknown): {
+          where(condition: unknown): Promise<Record<string, unknown>[]>;
+        };
+      };
+    };
+    const { eq } = await import("drizzle-orm");
+    const counters = async () =>
+      (await db.select().from(table).where(eq(table._parent, id))).map(row => ({
+        locale: row._locale,
+        revision: Number(row._revision),
+        kind: row._changed_by_kind,
+        by: row._changed_by_id,
+        at: new Date(row._changed_at as string).getTime(),
+      }));
+    const before = await counters();
+    expect(before.some(row => row.revision > 1)).toBe(true);
+
+    await t.nextly.delete({ collection: LNOTES, id });
+    await restoreOf(t, { id });
+
+    expect(await counters()).toEqual(before);
+  });
+
   it("asks again for a slug taken since, though its field does not say unique", async () => {
     const t = await boot(dialect);
     const id = await make(t, PAGES, { title: "First", slug: "same" });
@@ -708,10 +805,89 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       data: { page: other, _overwrite: true },
     } as never);
 
-    await restoreOf(t, { id });
+    // The note edited since is left as it is, and counted.
+    expect(await restoreOf(t, { id })).toMatchObject({
+      restored: true,
+      notPutBack: { links: 1 },
+    });
 
     expect((await read(t, NOTES, cleared)).page).toBe(id);
     expect((await read(t, NOTES, edited)).page).toBe(other);
+  });
+
+  it("keeps and puts back relations whose column is named apart from their field", async () => {
+    const t = await boot(dialect);
+    const id = await make(t, PAGES, { title: "Lead", slug: "lead" });
+    const note = await make(t, NOTES, { title: "Points", featuredPage: id });
+    const translated = await make(t, LNOTES, { title: "Zeigt", mainPage: id });
+
+    await t.nextly.delete({ collection: PAGES, id });
+    const { stored } = await trashed(t, id);
+    expect(stored.incoming).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          column: "featured_page",
+          ids: [note],
+          source: expect.objectContaining({ field: "featuredPage" }),
+        }),
+        expect.objectContaining({
+          column: "main_page",
+          source: expect.objectContaining({ field: "mainPage" }),
+        }),
+      ])
+    );
+    // What a foreign key set to `set null` leaves.
+    await t.adapter.update(
+      `dc_${NOTES}`,
+      { featuredPage: null },
+      {
+        and: [{ column: "id", op: "=", value: note }],
+      }
+    );
+    await t.adapter.update(
+      `dc_${LNOTES}_locales`,
+      { main_page: null },
+      {
+        and: [{ column: "_parent", op: "=", value: translated }],
+      }
+    );
+
+    expect(await restoreOf(t, { id })).toMatchObject({ restored: true });
+    expect((await read(t, NOTES, note)).featuredPage).toBe(id);
+    const [language] = await t.adapter.select<{ main_page: unknown }>(
+      `dc_${LNOTES}_locales`,
+      { where: { and: [{ column: "_parent", op: "=", value: translated }] } }
+    );
+    expect(language.main_page).toBe(id);
+  });
+
+  it("clears and asks again by a field whose column is named apart from it", async () => {
+    const t = await boot(dialect);
+    const tag = await make(t, TAGS, { title: "Lead tag" });
+    const id = await make(t, PAGES, {
+      title: "Coded",
+      slug: "coded",
+      leadTag: tag,
+      shortCode: "sc-1",
+    });
+    await t.nextly.delete({ collection: PAGES, id });
+    await t.nextly.delete({ collection: TAGS, id: tag });
+    await emptyOf(t, { collection: TAGS });
+    await make(t, PAGES, { title: "Took it", slug: "took", shortCode: "sc-1" });
+
+    expect(await restoreOf(t, { id })).toEqual({
+      restored: false,
+      conflicts: [{ field: "shortCode", value: "sc-1" }],
+    });
+    expect(
+      await restoreOf(t, { id, values: { shortCode: "sc-2" } })
+    ).toMatchObject({
+      restored: true,
+      notPutBack: { relationsCleared: ["leadTag"] },
+    });
+    const back = await read(t, PAGES, id);
+    expect(back.shortCode).toBe("sc-2");
+    expect(back.leadTag ?? null).toBeNull();
   });
 
   it("never shows a title or a taken value behind a field read rule", async () => {

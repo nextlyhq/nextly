@@ -35,6 +35,9 @@ export const READ_ENTITIES: ReadonlyArray<readonly string[]> = [
   ["db:sync", "--demote", "notes"],
   ["plugins", "install", "@acme/seo"],
   ["plugins", "uninstall", "@acme/seo"],
+  ["trash", "list"],
+  ["trash", "restore", "an-id"],
+  ["trash", "empty"],
 ];
 
 /**
