@@ -55,6 +55,12 @@ export const SYSTEM_RESOURCES_IN_DISPLAY_ORDER = [
   // Placed after webhooks so the tail of the list stays the machinery an
   // operator manages rather than the content an editor does.
   "background-jobs",
+  // AI: using it on content, running its bulk jobs, and managing its
+  // settings. Last, after the machinery, since a site without AI shows
+  // these rows with nothing to act on yet.
+  "ai",
+  "bulk-ai-jobs",
+  "ai-settings",
 ] as const;
 
 /**
