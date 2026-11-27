@@ -184,6 +184,7 @@ async function rootFile(file: string, query = "", at = "http://localhost") {
     type: response.headers.get("content-type"),
     cacheControl: response.headers.get("cache-control"),
     retryAfter: response.headers.get("retry-after"),
+    lastModified: response.headers.get("last-modified"),
     body: await response.text(),
   };
 }
@@ -720,21 +721,64 @@ describe.each(getConfiguredTestDialects())(
       expect(await listed()).toEqual([]);
 
       // Only the clock is faked, and only from here: the database drivers'
-      // own timers keep running. Once the failure is old enough, the next
-      // request starts the catch-up again; once it succeeds, the sitemap is
-      // served.
+      // own timers keep running. Once the failed run's start is old enough,
+      // the next request runs the catch-up itself, awaited, and answers from
+      // the record it brought up to date.
       vi.useFakeTimers({ toFake: ["Date"] });
       try {
         vi.setSystemTime(Date.now() + RETRY_FAILED_AFTER_MS);
-        expect((await rootFile("sitemap.xml")).status).toBe(503);
-        // Twice: the retry waits for the failed run before it becomes the
-        // last one started.
-        await lastCatchUp();
-        await lastCatchUp();
         expect(await listed()).toEqual([`${SITE}/blog/hello`]);
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("serves the copy kept from its last good answer while a real catch-up runs", async () => {
+      const { t } = await boot(dialect);
+      await create(t, "posts", {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+      });
+      // Answered from a record up to date, and kept.
+      expect(await listed()).toEqual([`${SITE}/blog/hello`]);
+      await create(t, "posts", {
+        title: "Later",
+        slug: "later",
+        status: "published",
+      });
+      await forgetFingerprint(t);
+      let reached!: () => void;
+      const listing = new Promise<void>(resolve => {
+        reached = resolve;
+      });
+      let release!: () => void;
+      const held = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      // A deploy's catch-up, held once it has read every page, past the
+      // request's wait for it.
+      const run = catchUp({
+        afterListing: () => {
+          reached();
+          return held;
+        },
+      });
+      await listing;
+
+      const kept = await rootFile("sitemap.xml");
+      expect(kept.status).toBe(200);
+      expect(kept.cacheControl).toBe("public, max-age=60");
+      expect(Number.isNaN(Date.parse(kept.lastModified ?? ""))).toBe(false);
+      expect(kept.body).toContain(`<loc>${SITE}/blog/hello</loc>`);
+      expect(kept.body).not.toContain("/blog/later");
+
+      release();
+      await run;
+      expect((await listed()).sort()).toEqual([
+        `${SITE}/blog/hello`,
+        `${SITE}/blog/later`,
+      ]);
     });
 
     it("names its own files in the index it serves at the plugin's own address", async () => {

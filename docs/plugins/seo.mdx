@@ -441,9 +441,17 @@ On a site with several languages, each page is listed once in every language it 
 published in, at the address that language serves it at, such as `/en/blog/hello` and
 `/de/blog/hallo`, each with its [language links](#languages).
 
-While the address record catches up at start, the sitemap answers `503` with
-`Retry-After: 120` and `cache-control: no-store`, so no crawler or cache keeps a list that
-leaves out pages whose addresses are not recorded yet.
+The sitemap is listed from the address record, which the plugin brings up to date at start
+where content was saved while it was absent or a deploy moved addresses. A server that has
+just started waits a few seconds for that check, which on a site already up to date is a
+read or two, so its first request is answered as any other. Where the record is behind, the
+request brings it up to date itself, awaited, for up to five seconds, and a later request
+goes on from where it stopped: on a serverless host, where nothing runs between requests,
+the catch-up still finishes. Until it does, the sitemap is served from the copy kept from its
+last answer, with `Last-Modified` and `cache-control: public, max-age=60`; with no copy kept
+yet, it answers `503` with `Retry-After: 120` and `cache-control: no-store`, so no crawler or
+cache keeps a list that leaves out pages whose addresses are not recorded yet. A copy is kept
+only for the site's own address (`baseUrl` or its production addresses).
 
 Each entry carries:
 
@@ -796,7 +804,8 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
   page; a page the public may not read is listed by its address alone. It lists exactly the pages the sitemap lists, by
   the same rules, so a draft, a hidden page or a page whose canonical points elsewhere is
   never in it. Until it is switched on, `/llms.txt` is not found. Like the sitemap, it
-  answers `503` while the address record catches up at start.
+  waits for the address record at start, and while the record catches up it is served from
+  the copy kept from its last answer, or answers `503` where none is kept.
   **What AI tools should know**, on the same tab, is the site's own words placed under the
   summary, as the proposal allows: plain sentences and lists, a line beginning with `#`
   escaped so it never becomes a heading.
@@ -1958,7 +1967,8 @@ problems once you save.
   changed; when the whole site was last checked is kept on the site's own row.
 - **Serving a page runs no check.** What each check found is kept, and the list reads it.
 - **A full check waits for the plugin's record of addresses** to be brought up to date after a
-  start; until then the list asks to check again in a minute, as the sitemap asks crawlers.
+  start, bringing it up to date itself for a few seconds where it is behind; past that the list
+  asks to check again in a minute, as the sitemap asks crawlers.
 
 The list answers each person with the pages they may read, and names a collection only to its
 readers. It is served at
