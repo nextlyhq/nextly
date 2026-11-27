@@ -19,6 +19,8 @@ import {
 } from "../service";
 import { cliCredentialStore, type CliCredentialRow } from "../store";
 
+import { credentialOf } from "./memory-store";
+
 const SECRET = "an-integration-secret-of-plenty-of-characters";
 const PERSON = { id: "cli-credentials-person", email: "cli@example.com" };
 
@@ -106,11 +108,43 @@ describeEachDialect("CLI credentials", dialect => {
     });
   });
 
+  describe("a renewal racing a sign-out", () => {
+    it("does not replace the token of a sign-in revoked after it was read", async () => {
+      const store = cliCredentialStore(current.adapter);
+      // The sign-out lands between the renewal's read and its write: the
+      // store's own write must refuse to move a revoked row.
+      const racing = {
+        ...store,
+        rotate: async (change: Parameters<typeof store.rotate>[0]) => {
+          await store.revoke({ familyId: change.id }, Date.now(), "revoked");
+          return store.rotate(change);
+        },
+      };
+      const racingService = createCliCredentialService({
+        store: racing,
+        secret: SECRET,
+      });
+      const signIn = await racingService.signIn({
+        userId: PERSON.id,
+        machine: null,
+      });
+
+      expect(await racingService.renew(signIn.refreshToken)).toEqual({
+        ok: false,
+        reason: "revoked",
+      });
+      const row = await storedRow(signIn.credentialId);
+      expect(Number(row?.refreshGeneration)).toBe(0);
+      expect(row?.refreshTokenHash).toBe(hashRefreshToken(signIn.refreshToken));
+      expect(row?.revokedReason).toBe("revoked");
+    });
+  });
+
   describe("a replayed refresh token", () => {
     it("revokes the sign-in and every credential issued from it", async () => {
       const signIn = await service.signIn({ userId: PERSON.id, machine: null });
       const pass = await service.issueAgentPass({
-        signInId: signIn.credentialId,
+        from: await credentialOf(service, signIn.accessToken),
         agentName: "Claude Code",
         machine: null,
       });
@@ -156,7 +190,7 @@ describeEachDialect("CLI credentials", dialect => {
       const renewed = await service.renew(signIn.refreshToken);
       if (!renewed.ok) throw new Error(`renewal refused: ${renewed.reason}`);
       const pass = await service.issueAgentPass({
-        signInId: signIn.credentialId,
+        from: await credentialOf(service, signIn.accessToken),
         agentName: "Claude Code",
         machine: "laptop",
       });

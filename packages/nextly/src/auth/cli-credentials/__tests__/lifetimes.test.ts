@@ -15,7 +15,7 @@ import {
 } from "../refresh-token";
 import { createCliCredentialService } from "../service";
 
-import { memoryCliCredentialStore } from "./memory-store";
+import { credentialOf, memoryCliCredentialStore } from "./memory-store";
 
 // A fixture signing key: long enough for HS256, plainly not a real one.
 const SECRET = "fixture-".repeat(6);
@@ -147,11 +147,36 @@ describe("a CLI sign-in's refresh token", () => {
     });
   });
 
+  it("ends 90 days after sign-in even when its stored idle end says later", async () => {
+    const { service, store } = setup();
+    const signIn = await service.signIn({ userId: "u1", machine: null });
+    // Renewals cap the idle end at the 90-day end; a row whose idle end
+    // was written past it still ends at 90 days.
+    const row = store.rows.get(signIn.credentialId);
+    if (!row) throw new Error("no sign-in row");
+    row.idleEndsAt = START.getTime() + 120 * DAY;
+    // Accepted while its token was good, as a route would hold it.
+    const from = await credentialOf(service, signIn.accessToken);
+
+    at(90 * DAY);
+    expect(await service.renew(signIn.refreshToken)).toEqual({
+      ok: false,
+      reason: "expired",
+    });
+    expect(
+      await service.issueAgentPass({
+        from,
+        agentName: null,
+        machine: null,
+      })
+    ).toEqual({ ok: false, reason: "expired" });
+  });
+
   it("used again after it was replaced, revokes the sign-in and every credential from it", async () => {
     const { service, store } = setup();
     const signIn = await service.signIn({ userId: "u1", machine: null });
     const pass = await service.issueAgentPass({
-      signInId: signIn.credentialId,
+      from: await credentialOf(service, signIn.accessToken),
       agentName: "Claude Code",
       machine: null,
     });
@@ -202,6 +227,32 @@ describe("a CLI sign-in's refresh token", () => {
     );
   });
 
+  it("renewed while its sign-in is being revoked, is refused as revoked and not replaced", async () => {
+    const store = memoryCliCredentialStore();
+    // The sign-out lands between the renewal's read and its write.
+    const racing = {
+      ...store,
+      rotate: async (change: Parameters<typeof store.rotate>[0]) => {
+        await store.revoke({ familyId: change.id }, Date.now(), "revoked");
+        return store.rotate(change);
+      },
+    };
+    const service = createCliCredentialService({
+      store: racing,
+      secret: SECRET,
+    });
+    const signIn = await service.signIn({ userId: "u1", machine: null });
+
+    expect(await service.renew(signIn.refreshToken)).toEqual({
+      ok: false,
+      reason: "revoked",
+    });
+    const row = store.rows.get(signIn.credentialId);
+    expect(row?.refreshGeneration).toBe(0);
+    expect(row?.refreshTokenHash).toBe(hashRefreshToken(signIn.refreshToken));
+    expect(row?.revokedReason).toBe("revoked");
+  });
+
   it("made up with a known id and an earlier generation, is refused and revokes nothing", async () => {
     const { service, store } = setup();
     const signIn = await service.signIn({ userId: "u1", machine: null });
@@ -244,7 +295,12 @@ describe("a CLI sign-in's refresh token", () => {
   it("no longer renews once its sign-in is revoked", async () => {
     const { service } = setup();
     const signIn = await service.signIn({ userId: "u1", machine: null });
-    expect(await service.revoke(signIn.credentialId, "revoked")).toBe(true);
+    expect(
+      await service.revoke(
+        { credentialId: signIn.credentialId, userId: "u1" },
+        "revoked"
+      )
+    ).toBe(true);
 
     expect(await service.renew(signIn.refreshToken)).toEqual({
       ok: false,
@@ -257,12 +313,28 @@ describe("a CLI sign-in's refresh token", () => {
   });
 });
 
+describe("revoking a credential", () => {
+  it("is refused for a credential another person holds, and changes nothing", async () => {
+    const { service, store } = setup();
+    const signIn = await service.signIn({ userId: "u1", machine: null });
+
+    expect(
+      await service.revoke(
+        { credentialId: signIn.credentialId, userId: "u2" },
+        "revoked"
+      )
+    ).toBe(false);
+    expect(store.rows.get(signIn.credentialId)?.revokedAt).toBeNull();
+    expect((await service.renew(signIn.refreshToken)).ok).toBe(true);
+  });
+});
+
 describe("an agent pass", () => {
   it("lasts 4 hours", async () => {
     const { service, store } = setup();
     const signIn = await service.signIn({ userId: "u1", machine: null });
     const pass = await service.issueAgentPass({
-      signInId: signIn.credentialId,
+      from: await credentialOf(service, signIn.accessToken),
       agentName: "Claude Code",
       machine: "laptop",
     });
@@ -292,15 +364,18 @@ describe("an agent pass", () => {
     const { service } = setup();
     const signIn = await service.signIn({ userId: "u1", machine: null });
     let refresh = signIn.refreshToken;
-    for (const day of [25, 50, 75, 89]) {
+    for (const day of [25, 50, 75]) {
       at(day * DAY);
       const renewed = await service.renew(refresh);
       if (!renewed.ok) throw new Error(`renewal on day ${day} refused`);
       refresh = renewed.refreshToken;
     }
+    // An hour before the 90-day end, renewed so its idle end is later.
     at(90 * DAY - 60 * MINUTE);
+    const last = await service.renew(refresh);
+    if (!last.ok) throw new Error("last renewal refused");
     const pass = await service.issueAgentPass({
-      signInId: signIn.credentialId,
+      from: await credentialOf(service, last.accessToken),
       agentName: null,
       machine: null,
     });
@@ -309,34 +384,69 @@ describe("an agent pass", () => {
     expect(pass.expiresAt.getTime()).toBe(START.getTime() + 90 * DAY);
   });
 
-  it("is not made from a sign-in that was revoked, ended or unused for 30 days", async () => {
+  it("is not made from a sign-in revoked or left unused for 30 days since its token was accepted", async () => {
     const { service } = setup();
     const revoked = await service.signIn({ userId: "u1", machine: null });
-    await service.revoke(revoked.credentialId, "revoked");
+    const revokedFrom = await credentialOf(service, revoked.accessToken);
+    await service.revoke(
+      { credentialId: revoked.credentialId, userId: "u1" },
+      "revoked"
+    );
     expect(
       await service.issueAgentPass({
-        signInId: revoked.credentialId,
+        from: revokedFrom,
         agentName: null,
         machine: null,
       })
     ).toEqual({ ok: false, reason: "revoked" });
 
     const idle = await service.signIn({ userId: "u1", machine: null });
+    const idleFrom = await credentialOf(service, idle.accessToken);
     at(30 * DAY);
     expect(
       await service.issueAgentPass({
-        signInId: idle.credentialId,
+        from: idleFrom,
         agentName: null,
         machine: null,
       })
     ).toEqual({ ok: false, reason: "expired" });
   });
 
+  it("never lasts past the moment its sign-in would end unused", async () => {
+    const { service } = setup();
+    const signIn = await service.signIn({ userId: "u1", machine: null });
+    const from = await credentialOf(service, signIn.accessToken);
+    // An hour before the sign-in's 30 days unused run out.
+    at(30 * DAY - 60 * MINUTE);
+    const pass = await service.issueAgentPass({
+      from,
+      agentName: null,
+      machine: null,
+    });
+    if (!pass.ok) throw new Error("pass refused");
+
+    expect(pass.expiresAt.getTime()).toBe(START.getTime() + 30 * DAY);
+  });
+
+  it("is not made from a credential naming another person than its sign-in", async () => {
+    const { service } = setup();
+    const signIn = await service.signIn({ userId: "u1", machine: null });
+    const from = await credentialOf(service, signIn.accessToken);
+
+    expect(
+      await service.issueAgentPass({
+        from: { ...from, userId: "u2" },
+        agentName: null,
+        machine: null,
+      })
+    ).toEqual({ ok: false, reason: "invalid" });
+  });
+
   it("is not made from another pass", async () => {
     const { service } = setup();
     const signIn = await service.signIn({ userId: "u1", machine: null });
     const pass = await service.issueAgentPass({
-      signInId: signIn.credentialId,
+      from: await credentialOf(service, signIn.accessToken),
       agentName: null,
       machine: null,
     });
@@ -344,7 +454,7 @@ describe("an agent pass", () => {
 
     expect(
       await service.issueAgentPass({
-        signInId: pass.credentialId,
+        from: await credentialOf(service, pass.accessToken),
         agentName: null,
         machine: null,
       })
@@ -355,7 +465,7 @@ describe("an agent pass", () => {
     const { service, store } = setup();
     const signIn = await service.signIn({ userId: "u1", machine: null });
     const pass = await service.issueAgentPass({
-      signInId: signIn.credentialId,
+      from: await credentialOf(service, signIn.accessToken),
       agentName: null,
       machine: null,
     });
@@ -378,13 +488,16 @@ describe("an agent pass", () => {
     const { service } = setup();
     const signIn = await service.signIn({ userId: "u1", machine: null });
     const pass = await service.issueAgentPass({
-      signInId: signIn.credentialId,
+      from: await credentialOf(service, signIn.accessToken),
       agentName: null,
       machine: null,
     });
     if (!pass.ok) throw new Error("pass refused");
 
-    await service.revoke(pass.credentialId, "revoked");
+    await service.revoke(
+      { credentialId: pass.credentialId, userId: "u1" },
+      "revoked"
+    );
 
     expect(await service.verify(pass.accessToken, "command")).toEqual({
       ok: false,

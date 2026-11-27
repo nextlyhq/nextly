@@ -5,6 +5,7 @@
  * the row is not revoked. The database store itself is tested on every
  * dialect in `cli-credentials.integration.test.ts`.
  */
+import type { CliCredentialService, VerifiedCliCredential } from "../service";
 import type { CliCredentialRow, CliCredentialStore } from "../store";
 
 export interface MemoryCliCredentialStore extends CliCredentialStore {
@@ -50,4 +51,18 @@ export function memoryCliCredentialStore(): MemoryCliCredentialStore {
       }
     },
   };
+}
+
+/**
+ * The credential a door accepted for an access token, as a route would hold
+ * it before making a pass from it. Throws when the token is refused, so a
+ * test never makes a pass from a credential no door accepted.
+ */
+export async function credentialOf(
+  service: CliCredentialService,
+  accessToken: string
+): Promise<VerifiedCliCredential> {
+  const verified = await service.verify(accessToken, "command");
+  if (!verified.ok) throw new Error(`token refused: ${verified.reason}`);
+  return verified.credential;
 }

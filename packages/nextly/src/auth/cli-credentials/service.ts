@@ -99,9 +99,13 @@ export interface CliCredentialService {
   }): Promise<CliSignInTokens>;
   /** Replace a sign-in's refresh token and issue a new access token. */
   renew(refreshToken: string): Promise<CliCredentialResult<CliSignInTokens>>;
-  /** Make an agent pass from a live sign-in. */
+  /**
+   * Make an agent pass from a live sign-in: the credential `verify` accepted
+   * for the person's own sign-in token, never an id a caller names, so only
+   * the holder of a sign-in can make passes from it.
+   */
   issueAgentPass(input: {
-    signInId: string;
+    from: VerifiedCliCredential;
     agentName: string | null;
     machine: string | null;
   }): Promise<
@@ -120,12 +124,13 @@ export interface CliCredentialService {
     door: CliCredentialDoor
   ): Promise<CliCredentialResult<{ credential: VerifiedCliCredential }>>;
   /**
-   * End a credential now. Ending a sign-in ends every credential issued from
-   * it; ending a pass ends that pass. False when there is no such
-   * credential.
+   * End one of a person's credentials now. Ending a sign-in ends every
+   * credential issued from it; ending a pass ends that pass. False when the
+   * person holds no such credential, so a known id is not enough to end
+   * someone else's.
    */
   revoke(
-    credentialId: string,
+    input: { credentialId: string; userId: string },
     reason: CliCredentialRevokeReason
   ): Promise<boolean>;
 }
@@ -217,6 +222,7 @@ function rowRefusal(
   return null;
 }
 
+/** What a door learns of an accepted credential: who, through what, never a hash. */
 function verifiedOf(row: CliCredentialRow): VerifiedCliCredential {
   return {
     credentialId: row.id,
@@ -320,9 +326,11 @@ export function createCliCredentialService(
       idleEndsAt: Math.min(now + lifetimes.signInIdleMs, row.endsAt),
     });
     if (!moved) {
-      // Another renewal spent this token between the read and the write, or
-      // the sign-in was revoked meanwhile. Either way the token was presented
-      // twice: the same answer as a replay.
+      // The sign-in was revoked between the read and the write: refused as
+      // revoked. Otherwise another renewal spent this token meanwhile, so it
+      // was presented twice: the same answer as a replay.
+      const after = await findOne(row.id);
+      if (!after || after.revokedAt !== null) return refused("revoked");
       await store.revoke({ familyId: row.familyId }, now, "refresh-reused");
       return refused("reused");
     }
@@ -388,9 +396,14 @@ export function createCliCredentialService(
       return standing ? refused(standing) : rotate(row, now);
     },
 
-    async issueAgentPass({ signInId, agentName, machine }) {
-      const signIn = await findOne(signInId);
-      if (!signIn || signIn.purpose !== "cli-sign-in") {
+    async issueAgentPass({ from, agentName, machine }) {
+      if (from.purpose !== "cli-sign-in") return refused("invalid");
+      const signIn = await findOne(from.credentialId);
+      if (
+        !signIn ||
+        signIn.purpose !== "cli-sign-in" ||
+        signIn.userId !== from.userId
+      ) {
         return refused("invalid");
       }
       const now = Date.now();
@@ -411,7 +424,13 @@ export function createCliCredentialService(
         createdAt: now,
         lastUsedAt: null,
         idleEndsAt: null,
-        endsAt: Math.min(now + lifetimes.agentPassMs, signIn.endsAt),
+        // Never past the sign-in's end, nor past the moment it would end
+        // unused: a pass outlives neither.
+        endsAt: Math.min(
+          now + lifetimes.agentPassMs,
+          signIn.endsAt,
+          signIn.idleEndsAt ?? signIn.endsAt
+        ),
         revokedAt: null,
         revokedReason: null,
       };
@@ -436,9 +455,9 @@ export function createCliCredentialService(
       return { ok: true, credential: verifiedOf(row) };
     },
 
-    async revoke(credentialId, reason) {
+    async revoke({ credentialId, userId }, reason) {
       const row = await findOne(credentialId);
-      if (!row) return false;
+      if (!row || row.userId !== userId) return false;
       const match =
         row.familyId === row.id ? { familyId: row.id } : { id: row.id };
       await store.revoke(match, Date.now(), reason);
