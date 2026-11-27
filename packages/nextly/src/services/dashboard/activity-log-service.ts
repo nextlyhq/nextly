@@ -1238,7 +1238,9 @@ export class ActivityLogService extends BaseService {
       createdAt,
       // Nothing here is personal: the person an agent acted for is the
       // actor above, erased through the identity columns as ever.
-      ...storedAttribution(input.attribution, "activity"),
+      ...storedAttribution(input.attribution, "activity", {
+        actorIsPerson: input.actorType === "user",
+      }),
     };
   }
 

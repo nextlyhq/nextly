@@ -110,6 +110,19 @@ async function insertLegacyRows(fresh: FreshDatabase): Promise<void> {
   );
 }
 
+/** The activity log's two agent indexes exist, over agent or session, then time. */
+async function expectAgentIndexes(fresh: FreshDatabase): Promise<void> {
+  expect(await fresh.indexesOf("activity_log")).toEqual(
+    expect.arrayContaining(ACTIVITY_INDEXES)
+  );
+  expect(
+    await fresh.indexColumnsOf("activity_log", "idx_activity_log_agent_name")
+  ).toEqual(["agent_name", "created_at"]);
+  expect(
+    await fresh.indexColumnsOf("activity_log", "idx_activity_log_agent_session")
+  ).toEqual(["agent_session_id", "created_at"]);
+}
+
 /** An app with no migration files, so only the core phase has work to do. */
 const { dir: NO_MIGRATIONS, remove } = noMigrationsDir("nextly-attr-");
 afterAll(remove);
@@ -129,6 +142,7 @@ describe.each(availableDialects())(
         expect(await fresh.columnsOf("nextly_content_events")).toContain(
           EVENT_COLUMN
         );
+        await expectAgentIndexes(fresh);
       });
     }, 180_000);
 
@@ -189,7 +203,9 @@ describe.each(availableDialects())(
           actorAgentName: null,
         });
 
-        // Nothing left to add: the indexes came back with the columns.
+        // The indexes came back with the columns, each over the columns the
+        // filters read, and nothing is left to add.
+        await expectAgentIndexes(fresh);
         expect(await migrateFresh(fresh, NO_MIGRATIONS)).toBe(false);
       });
     }, 180_000);

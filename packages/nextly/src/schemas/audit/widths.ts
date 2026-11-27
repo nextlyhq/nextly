@@ -37,8 +37,8 @@ export const ATTRIBUTION_NAME_LENGTH = 191;
 /**
  * An attribution id on the activity and audit rows (session, credential,
  * approval request, approver, grant): varchar on PostgreSQL and MySQL. A uuid
- * and a key's own id both fit; a whole key or a signed token is longer and is
- * refused before it reaches the column.
+ * and a key's own id both fit. What may be stored is narrower than the width:
+ * `domains/audit/attribution` refuses anything shaped like a secret.
  */
 export const ATTRIBUTION_ID_LENGTH = 64;
 

@@ -11,7 +11,6 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import type { ActivityEvent } from "nextly/widget-result";
 
-import { attributedActorName } from "@admin/components/features/versions/history-story-attribution";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { describeActivityActor } from "@admin/lib/dashboard";
 import type { DocumentAddressOf } from "@admin/lib/navigation/useDocumentAddress";
@@ -129,14 +128,22 @@ function mapEntry(entry: ActivityLogEntry): Activity {
 }
 
 /**
- * The actor as the card shows them, with who stood behind them in the name:
- * "Claude Code, for Ana, approved on phone". The person stays the actor, so
- * their id, initials, email and deletion are theirs; the wording comes from
- * the one helper the entry history names an actor through.
+ * Who stood behind the row's actor, as the Team activity card words it, or
+ * nothing when the row says no one did (and from an older server). Kept apart
+ * from `user`, which stays the actor itself for every reader of this hook.
  */
-function attributedActor(entry: ActivityLogEntry): Activity["user"] {
-  const actor = describeActivityActor(entry);
-  return { ...actor, name: attributedActorName(actor.name, entry) };
+function attributionOf(
+  entry: ActivityLogEntry
+): Activity["attribution"] | undefined {
+  const words = {
+    agentName: entry.agentName ?? null,
+    door: entry.door ?? null,
+    approvedVia: entry.approvedVia ?? null,
+    deploymentHost: entry.deploymentHost ?? null,
+    deploymentCommit: entry.deploymentCommit ?? null,
+  };
+  if (Object.values(words).every(value => value === null)) return undefined;
+  return { ...words, actorIsKey: entry.actorType === "apiKey" };
 }
 
 /** What every row carries whatever it is about: who, what they did, when. */
@@ -149,7 +156,11 @@ function shared(
     // exists changes the name, the initials and the email it may show, and a
     // second surface deriving those rules independently is how two views of
     // the same deleted actor start disagreeing. One helper owns them.
-    user: attributedActor(entry),
+    user: describeActivityActor(entry),
+    ...(() => {
+      const attribution = attributionOf(entry);
+      return attribution ? { attribution } : {};
+    })(),
     type: entry.action,
     action: ACTION_LABELS[entry.action] ?? entry.action,
     ...(entry.event === undefined ? {} : { event: entry.event }),

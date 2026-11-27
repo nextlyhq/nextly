@@ -63,15 +63,17 @@ export function versionActor(
 
 /**
  * An event's actor, as the list names it, with the agent that acted for them
- * when one did. A person erased since is "a deleted user" beside their agent,
- * whose name is kept, so the event still says an agent made it.
+ * when one did: "Claude Code, for Sara Malik", or with a key "Cursor, with
+ * Deploy key". The agent's name outlives the person's, so an event whose
+ * person is no longer named still says an agent made it.
  */
 export function eventActor(event: DocumentEvent): StoryActor {
   if (event.actorAgentName) {
     return {
       kind: event.actorKind,
-      name: attributedActorName(event.actorName || "a deleted user", {
+      name: attributedActorName(event.actorName || "someone not recorded", {
         agentName: event.actorAgentName,
+        actorIsKey: event.actorKind === "apiKey",
       }),
     };
   }

@@ -195,65 +195,60 @@ describe("who a feed row names", () => {
     approvedVia: "phone",
   };
 
-  it("names the agent for the person, with the approval beside them, on the card", () => {
-    // The card reads the widget source's rows through this.
-    expect(activityFromRow(byAgent)?.user.name).toBe(
-      "Claude Code, for Ada, approved on phone"
-    );
-    // The person's own initials and email stay: the person is who acted.
-    expect(activityFromRow(byAgent)?.user).toMatchObject({
+  it("keeps the person as the actor on an agent's row, and carries who stood behind them", () => {
+    // `user` is read by every consumer of this hook as the person who acted;
+    // an agent's row must not change what it says.
+    const activity = activityFromRow(byAgent);
+    expect(activity?.user).toMatchObject({
       id: "u1",
+      name: "Ada",
       email: "ada@example.com",
       deleted: false,
     });
+    expect(activity?.attribution).toEqual({
+      agentName: "Claude Code",
+      door: "command",
+      approvedVia: "phone",
+      deploymentHost: null,
+      deploymentCommit: null,
+      actorIsKey: false,
+    });
   });
 
-  it("names them the same way through the activity endpoint", async () => {
+  it("carries the same through the activity endpoint", async () => {
     answer.activities = [byAgent];
     const { result } = renderHook(() => useRecentActivity(5), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.activities[0]?.user.name).toBe(
-      "Claude Code, for Ada, approved on phone"
-    );
+    const activity = result.current.data?.activities[0];
+    expect(activity?.user.name).toBe("Ada");
+    expect(activity?.attribution).toMatchObject({
+      agentName: "Claude Code",
+      approvedVia: "phone",
+    });
   });
 
-  it("says the person worked from the command line", () => {
+  it("says when the actor an agent used is a key", () => {
     expect(
-      activityFromRow({ ...row, collection: "posts", door: "local" })?.user.name
-    ).toBe("Ada, from the command line");
+      activityFromRow({
+        ...byAgent,
+        actorType: "apiKey",
+        door: "rest-key",
+      })?.attribution
+    ).toMatchObject({ agentName: "Claude Code", actorIsKey: true });
   });
 
-  it("names a deployment in place of the system", () => {
+  it("carries nothing for a row nothing stood behind, or from an older server", () => {
+    expect(activityFromRow({ ...row, collection: "posts" })).not.toHaveProperty(
+      "attribution"
+    );
     expect(
       activityFromRow({
         ...row,
         collection: "posts",
-        actorType: "system",
-        userId: "deployment",
-        userName: null,
-        userEmail: null,
-        door: "deploy",
-        deploymentHost: "Vercel build",
-        deploymentCommit: "3f2a1c9d8e7b",
-      })?.user.name
-    ).toBe("Deployment (Vercel build, commit 3f2a1c9)");
-  });
-
-  it("keeps the agent's name once the person is erased", () => {
-    const name = activityFromRow({
-      ...byAgent,
-      userName: null,
-      userEmail: null,
-      identityErasedAt: "2026-03-02T00:00:00Z",
-    })?.user.name;
-    expect(name).toMatch(/^Claude Code, for \[deleted user · u1\]/);
-    expect(name).not.toContain("Ada");
-  });
-
-  it("reads a row from a server that records no agents as before", () => {
-    expect(activityFromRow({ ...row, collection: "posts" })?.user.name).toBe(
-      "Ada"
-    );
+        agentName: null,
+        door: null,
+      })
+    ).not.toHaveProperty("attribution");
   });
 });
 

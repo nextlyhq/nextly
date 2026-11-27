@@ -17,10 +17,7 @@
  */
 
 import { getNextlyLogger } from "../../observability/logger";
-import {
-  ATTRIBUTION_ID_LENGTH,
-  ATTRIBUTION_NAME_LENGTH,
-} from "../../schemas/audit/widths";
+import { ATTRIBUTION_NAME_LENGTH } from "../../schemas/audit/widths";
 
 /**
  * The ways a call reaches a site, as a row records them.
@@ -121,15 +118,20 @@ export const EMPTY_ATTRIBUTION_COLUMNS: Readonly<AttributionColumns> =
   });
 
 /**
- * An id as these columns accept one: letters, digits and hyphens, the shape
- * of a uuid and of a key's own id.
+ * An id as these columns accept one: a uuid, or a short id of letters, digits
+ * and hyphens, at most 32 characters, which a key's own id (24 hex digits)
+ * fits.
  *
- * It is the guard that keeps a secret off the row. A whole API key carries
- * underscores (`nx_live_<id>_<secret>`), a signed token carries dots, and an
- * authorization header's value carries a space, so each is refused wherever
- * an id belongs, rather than stored because it was the right length.
+ * It is the guard that keeps a secret off the row, so it is shaped by the
+ * secrets rather than by the ids. A whole API key carries underscores
+ * (`nx_live_<id>_<secret>`), a signed token carries dots, and an
+ * authorization header's value carries a space. The secrets that use an id's
+ * own alphabet are long: a reset, invite or CSRF token is 64 hex digits and a
+ * key's secret 43 base64url characters, so a value past 32 characters is an
+ * id only when it has a uuid's exact shape.
  */
-const ID_PATTERN = new RegExp(`^[A-Za-z0-9-]{1,${ATTRIBUTION_ID_LENGTH}}$`);
+const ID_PATTERN =
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Za-z0-9-]{1,32})$/i;
 
 /** A commit as a host reports one: 7 to 40 hexadecimal digits. */
 const COMMIT_PATTERN = /^[0-9a-f]{7,40}$/i;
@@ -260,6 +262,12 @@ function deploymentColumns(
   };
 }
 
+/** What a writer knows about the row it stores attribution on. */
+export interface AttributionOptions {
+  /** Whether the row's actor is a person, whose erasure reaches the row. */
+  actorIsPerson?: boolean;
+}
+
 /**
  * The columns a caller's attribution is stored as, and the parts refused.
  *
@@ -270,11 +278,20 @@ function deploymentColumns(
  * keeps saying what it can.
  */
 export function attributionColumns(
-  attribution: ActorAttribution | null | undefined
+  given: ActorAttribution | null | undefined,
+  options: AttributionOptions = {}
 ): { columns: AttributionColumns; refused: string[] } {
   const refused: Refused = [];
-  if (!attribution) {
+  if (!given) {
     return { columns: { ...EMPTY_ATTRIBUTION_COLUMNS }, refused };
+  }
+  // A deployment is the Deployment actor's own. A row whose actor is a person
+  // is erased with that person, and a machine's name can name them, so such a
+  // row stores no deployment at all rather than one their erasure misses.
+  let attribution = given;
+  if (options.actorIsPerson && given.deployment) {
+    refused.push("deployment");
+    attribution = { ...given, deployment: undefined };
   }
   const columns: AttributionColumns = {
     ...EMPTY_ATTRIBUTION_COLUMNS,
@@ -304,9 +321,10 @@ export function attributionColumns(
  */
 export function storedAttribution(
   attribution: ActorAttribution | null | undefined,
-  trail: "activity" | "audit" | "content-event"
+  trail: "activity" | "audit" | "content-event",
+  options: AttributionOptions = {}
 ): AttributionColumns {
-  const { columns, refused } = attributionColumns(attribution);
+  const { columns, refused } = attributionColumns(attribution, options);
   if (refused.length > 0) {
     getNextlyLogger().warn({
       kind: "attribution-part-refused",

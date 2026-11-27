@@ -313,6 +313,8 @@ describe("the Team activity card", () => {
         deploymentCommit: "3f2a1c9d8e7b",
       }),
       row(4),
+      // A name with a comma of its own takes none after it: nothing was added.
+      row(5, { userName: "Malik, Sara" }),
     ]);
     const said = screen
       .getAllByTestId("entity-row-title")
@@ -329,6 +331,7 @@ describe("the Team activity card", () => {
         "Deployment (Vercel build, commit 3f2a1c9) saved Doc 3"
       ),
       expect.stringContaining("Ana saved Doc 4"),
+      expect.stringContaining("Malik, Sara saved Doc 5"),
     ]);
   });
 

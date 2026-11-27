@@ -37,8 +37,8 @@ history](/docs/versions) is where the full before-and-after lives.
 ## Agents, doors and approvals
 
 When an AI agent acts for a person, the person stays the actor and the record names the agent
-beside them. The admin's Team activity card and an entry's history read, for example,
-"Claude Code, for Sara Malik, approved on phone".
+beside them. The admin's Team activity card reads, for example, "Claude Code, for Sara Malik,
+approved on phone", and the entry's history "Claude Code, for Sara Malik".
 
 Each activity and audit record can also hold:
 
@@ -54,8 +54,10 @@ Each activity and audit record can also hold:
 
 Work at the command line on the person's own machine reads "Sara Malik, from the command line".
 
-Records hold ids only. A token, a whole API key or a signed value is refused wherever an id
-belongs, and the rest of the record is still written.
+Records hold ids only: a uuid, or a short id of at most 32 letters, digits and hyphens. A value
+shaped like a token, a whole API key or a signed value is refused wherever an id belongs, and the
+rest of the record is still written. A deployment is recorded only on the deployment's own records,
+never on a record whose actor is a person.
 
 The dashboard's activity read takes `agent` (an agent's name) and `session` (an agent session's
 id) to show only that agent's or that session's records:
@@ -79,7 +81,7 @@ person, which is what both obligations actually require.
 
 An agent that acted for the person keeps its name on those entries, since it names software
 and not anyone: after the erasure the Team activity card reads "Claude Code, for [deleted
-user · 1a2b3c4d]", and the entry's history "Claude Code, for a deleted user".
+user · 1a2b3c4d]", and the entry's history "Claude Code, for someone not recorded".
 
 ## Signed-in people a plugin defines
 

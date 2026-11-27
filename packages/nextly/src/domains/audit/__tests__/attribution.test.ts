@@ -101,6 +101,33 @@ describe("attribution columns", () => {
     });
   });
 
+  it("refuses a deployment on a person's row, so no machine name outlives their erasure", () => {
+    // A deployment is the Deployment actor's own: a row whose actor is a
+    // person is erased with them, and a machine's name ("Sara's MacBook Pro")
+    // may name them, so such a row never stores one.
+    const { columns, refused } = attributionColumns(
+      { deployment: { machine: "Sara-Maliks-MacBook-Pro" } },
+      { actorIsPerson: true }
+    );
+    expect(refused).toEqual(["deployment"]);
+    expect(columns.deploymentHost).toBeNull();
+    expect(columns.door).toBeNull();
+    // The rest of a person's row still lands.
+    expect(
+      attributionColumns(
+        { door: "local", agent: { name: "Claude Code" } },
+        { actorIsPerson: true }
+      )
+    ).toEqual({
+      columns: {
+        ...EMPTY_ATTRIBUTION_COLUMNS,
+        door: "local",
+        agentName: "Claude Code",
+      },
+      refused: [],
+    });
+  });
+
   it("refuses a door that contradicts the deployment's own", () => {
     const { columns, refused } = attributionColumns({
       door: "command",
@@ -118,6 +145,12 @@ describe("attribution columns", () => {
       "nx_live_0123456789abcdef01234567_Zm9vYmFyYmF6cXV4cXV1eHF1dXhxdXV4cXV1eA",
       "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl",
       "Bearer 5f0c2a8e-3d41-4b7a-9c55-1e2f3a4b5c6d",
+      // A reset, invite or CSRF token: 32 random bytes as hex, 64 characters
+      // of exactly the alphabet an id uses.
+      "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      // A key's secret part, 32 random bytes as base64url, here without an
+      // underscore, as about half of them are.
+      "q3Rk9Xv0bLmN2pQe7sTuVw1yZaB4cD6fG8hJ0kLm2nP",
     ];
 
     it.each(SECRETS)(
@@ -152,11 +185,12 @@ describe("attribution columns", () => {
       }
     );
 
-    it("accepts a key's own id and a uuid", () => {
+    it("accepts a key's own id, a uuid and a short readable id", () => {
       const { refused } = attributionColumns({
         door: "rest-key",
         credentialId: "0123456789abcdef01234567",
         agent: { name: "Cursor", sessionId: PASS_ID },
+        grantId: "grant-7",
       });
       expect(refused).toEqual([]);
     });

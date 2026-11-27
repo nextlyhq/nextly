@@ -16,7 +16,7 @@
  * sends nulls.
  */
 export interface ActorAttributionWords {
-  /** The agent that acted for the person ("Claude Code"). */
+  /** The agent that acted for the actor ("Claude Code"). */
   agentName?: string | null;
   /** How the call arrived: `local`, `command`, `chat-app`, `rest-key` or `deploy`. */
   door?: string | null;
@@ -26,6 +26,11 @@ export interface ActorAttributionWords {
   deploymentHost?: string | null;
   /** The commit a pipeline deployment built. */
   deploymentCommit?: string | null;
+  /**
+   * Whether the actor is an API key rather than a person. An agent acts FOR a
+   * person but WITH a key, so the phrase joins them differently.
+   */
+  actorIsKey?: boolean;
 }
 
 /** Where an approval was given, as the sentence says it. */
@@ -52,40 +57,59 @@ function deploymentName(attribution: ActorAttributionWords): string | null {
   return `Deployment (${host}, commit ${commit})`;
 }
 
-/**
- * Who acted, as one phrase: the person, or the agent for the person, then
- * "from the command line" when it ran there, then where an approval was
- * given. A deployment is named in place of the actor. A door or a place this
- * build has no words for says nothing rather than printing its code.
- *
- * @param person - The actor's name as the reader already shows it, a deleted
- *   person's label included.
- */
-export function attributedActorName(
-  person: string,
+/** The phrase, and whether it added clauses to the actor's own name. */
+function phraseOf(
+  actor: string,
   attribution: ActorAttributionWords
-): string {
+): { text: string; clauses: boolean } {
   const deployment = deploymentName(attribution);
-  if (deployment) return deployment;
-  const parts = [
-    attribution.agentName ? `${attribution.agentName}, for ${person}` : person,
-  ];
+  if (deployment) return { text: deployment, clauses: false };
+  const parts: string[] = [];
+  if (attribution.agentName) {
+    const joined = attribution.actorIsKey ? "with" : "for";
+    parts.push(`${attribution.agentName}, ${joined} ${actor}`);
+  } else {
+    parts.push(actor);
+  }
   if (attribution.door === "local") parts.push("from the command line");
   const approval = attribution.approvedVia
     ? APPROVAL_PLACE_WORDS[attribution.approvedVia]
     : undefined;
   if (approval) parts.push(approval);
-  return parts.join(", ");
+  return {
+    text: parts.join(", "),
+    clauses: Boolean(attribution.agentName) || parts.length > 1,
+  };
 }
 
 /**
- * An actor's name as the subject of a sentence: followed by a comma when the
- * name carries clauses of its own ("Claude Code, for Ana, approved on phone,
- * saved Doc 1"), so the verb reads as the actor's and not the last clause's.
- * Commas inside parentheses are the name's own ("Deployment (Vercel build,
- * commit 3f2a1c9) saved Doc 1"), and a name without clauses is left as it is.
+ * Who acted, as one phrase: the actor, or the agent for the person (with the
+ * key), then "from the command line" when it ran there, then where an
+ * approval was given. A deployment is named in place of the actor. A door or
+ * a place this build has no words for says nothing rather than printing its
+ * code.
+ *
+ * @param actor - The actor's name as the reader already shows it, a deleted
+ *   person's label included.
  */
-export function asSentenceSubject(name: string): string {
-  const outsideParentheses = name.replace(/\([^)]*\)/g, "");
-  return outsideParentheses.includes(",") ? `${name},` : name;
+export function attributedActorName(
+  actor: string,
+  attribution: ActorAttributionWords
+): string {
+  return phraseOf(actor, attribution).text;
+}
+
+/**
+ * The same phrase as the subject of a sentence: closed with a comma when it
+ * added clauses ("Claude Code, for Ana, approved on phone, saved Doc 1"), so
+ * the verb reads as the actor's and not the last clause's. A name the phrase
+ * left as it was is left alone, its own commas included ("Malik, Sara saved
+ * Doc 1").
+ */
+export function actorSubject(
+  actor: string,
+  attribution: ActorAttributionWords
+): string {
+  const { text, clauses } = phraseOf(actor, attribution);
+  return clauses ? `${text},` : text;
 }

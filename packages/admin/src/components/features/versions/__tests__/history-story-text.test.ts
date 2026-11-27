@@ -138,11 +138,25 @@ describe("eventActor", () => {
         event({ actorName: "Sara Malik", actorAgentName: "Claude Code" })
       )
     ).toEqual({ kind: "person", name: "Claude Code, for Sara Malik" });
-    // The person's name is erased with them; the agent's, which names
-    // software, stays, so the event still says an agent did it.
+    // The person's name is erased with them (or was never recorded); the
+    // agent's, which names software, stays, so the event still says an agent
+    // did it, and claims nothing about why the person is not named.
     expect(
       eventActor(event({ actorName: null, actorAgentName: "Claude Code" }))
-    ).toEqual({ kind: "person", name: "Claude Code, for a deleted user" });
+    ).toEqual({
+      kind: "person",
+      name: "Claude Code, for someone not recorded",
+    });
+    // An agent uses a key; it does not act on the key's behalf.
+    expect(
+      eventActor(
+        event({
+          actorKind: "apiKey",
+          actorName: "Deploy key",
+          actorAgentName: "Cursor",
+        })
+      )
+    ).toEqual({ kind: "apiKey", name: "Cursor, with Deploy key" });
     // An event from a server that does not record agents reads as before.
     expect(eventActor(event({ actorName: "Sara Malik" }))).toEqual({
       kind: "person",

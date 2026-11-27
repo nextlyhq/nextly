@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  asSentenceSubject,
+  actorSubject,
   attributedActorName,
 } from "../history-story-attribution";
 
@@ -87,6 +87,17 @@ describe("who acted, with who stood behind them", () => {
     ).toBe("Deployment (this machine, studio-mac)");
   });
 
+  it("says an agent acted with a key, not for it", () => {
+    // A key is not a person an agent acts on behalf of: the agent used it.
+    expect(
+      attributedActorName("API key · 1a2b3c4d", {
+        agentName: "Cursor",
+        door: "rest-key",
+        actorIsKey: true,
+      })
+    ).toBe("Cursor, with API key · 1a2b3c4d");
+  });
+
   it("ignores a door or a place it has no words for, rather than printing it", () => {
     expect(
       attributedActorName("Sara Malik", {
@@ -98,23 +109,28 @@ describe("who acted, with who stood behind them", () => {
   });
 });
 
-describe("an actor's name as a sentence's subject", () => {
-  it("closes the name's own clauses with a comma, before the verb", () => {
-    expect(asSentenceSubject("Claude Code, for Ana, approved on phone")).toBe(
-      "Claude Code, for Ana, approved on phone,"
-    );
-    expect(asSentenceSubject("Ana, from the command line")).toBe(
+describe("an actor as a sentence's subject", () => {
+  it("closes the clauses it added with a comma, before the verb", () => {
+    expect(
+      actorSubject("Ana", {
+        agentName: "Claude Code",
+        approvedVia: "phone",
+      })
+    ).toBe("Claude Code, for Ana, approved on phone,");
+    expect(actorSubject("Ana", { door: "local" })).toBe(
       "Ana, from the command line,"
     );
   });
 
-  it("leaves a name without clauses, and a deployment's own commas, as they are", () => {
-    expect(asSentenceSubject("Ana")).toBe("Ana");
-    expect(asSentenceSubject("[deleted user · u1]")).toBe(
-      "[deleted user · u1]"
-    );
-    expect(asSentenceSubject("Deployment (Vercel build, commit 3f2a1c9)")).toBe(
-      "Deployment (Vercel build, commit 3f2a1c9)"
-    );
+  it("leaves a name it added nothing to as it was, its own commas included", () => {
+    expect(actorSubject("Ana", {})).toBe("Ana");
+    expect(actorSubject("Malik, Sara", {})).toBe("Malik, Sara");
+    expect(
+      actorSubject("System", {
+        door: "deploy",
+        deploymentHost: "Vercel build",
+        deploymentCommit: "3f2a1c9",
+      })
+    ).toBe("Deployment (Vercel build, commit 3f2a1c9)");
   });
 });

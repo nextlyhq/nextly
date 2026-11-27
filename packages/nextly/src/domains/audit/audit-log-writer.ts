@@ -610,7 +610,9 @@ function auditRowInput(
       // Never erased: the person an agent acted for is the actor above, so
       // their erasure runs through the actor's columns, and what remains
       // here names software, doors and ids.
-      ...storedAttribution(event.attribution, "audit"),
+      ...storedAttribution(event.attribution, "audit", {
+        actorIsPerson: actorUserId !== null || event.actorPrincipal != null,
+      }),
     },
     identity: {
       ipAddress: event.ipAddress ?? null,
