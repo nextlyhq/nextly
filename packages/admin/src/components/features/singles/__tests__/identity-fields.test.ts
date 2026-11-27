@@ -1,7 +1,11 @@
 import type { FieldConfig } from "nextly/config";
 import { describe, it, expect } from "vitest";
 
-import { fixedIdentityNames, relaxIdentityRequired } from "../identity-fields";
+import {
+  fixedIdentityNames,
+  ownTitleInHeading,
+  relaxIdentityRequired,
+} from "../identity-fields";
 
 /** Both identity fields fixed by config, as for a Single declaring neither. */
 const BOTH = fixedIdentityNames({});
@@ -59,5 +63,32 @@ describe("relaxIdentityRequired", () => {
       true,
       false,
     ]);
+  });
+});
+
+describe("ownTitleInHeading", () => {
+  const title = (extra: Record<string, unknown>) =>
+    ({ type: "text", name: "title", ...extra }) as unknown as FieldConfig;
+
+  it("draws a plain, always-shown text title in the heading", () => {
+    expect(ownTitleInHeading(title({}))).toBe(true);
+  });
+
+  it("leaves any title the one-line heading can't hold to its own control", () => {
+    expect(ownTitleInHeading(title({ type: "number" }))).toBe(false);
+    expect(ownTitleInHeading(title({ hasMany: true }))).toBe(false);
+    expect(
+      ownTitleInHeading(title({ admin: { component: "@acme/x#Editor" } }))
+    ).toBe(false);
+    expect(ownTitleInHeading(title({ admin: { hidden: true } }))).toBe(false);
+    expect(
+      ownTitleInHeading(
+        title({
+          admin: {
+            condition: { field: "intro", operator: "exists" },
+          },
+        })
+      )
+    ).toBe(false);
   });
 });

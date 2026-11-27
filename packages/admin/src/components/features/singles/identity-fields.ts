@@ -62,14 +62,24 @@ export function relaxIdentityRequired(
 
 /**
  * Whether an author's own `title` is drawn in the document's heading, the
- * single-line text input at its head: a plain text field that is always shown.
- * Any other (a number, a field hidden or shown by a condition) is drawn
- * through its own field control instead, which knows its type and its gates;
- * the heading would send a number as a string and show a hidden value.
+ * single-line text input at its head: a plain text field holding one string,
+ * always shown, with no editor of its own. Any other (a number, a text field
+ * holding several values, one with its own `admin.component`, one hidden or
+ * shown by a condition) is drawn through its own field control instead, which
+ * knows its type, its editor and its gates; the heading would send a number or
+ * a list as one string, and show a hidden value.
  */
 export function ownTitleInHeading(field: FieldConfig): boolean {
   const gates = fieldAdminGates(field);
+  const options = field as {
+    hasMany?: unknown;
+    admin?: { component?: unknown };
+  };
   return (
-    field.type === "text" && !gates.hidden && gates.condition === undefined
+    field.type === "text" &&
+    options.hasMany !== true &&
+    options.admin?.component === undefined &&
+    !gates.hidden &&
+    gates.condition === undefined
   );
 }
