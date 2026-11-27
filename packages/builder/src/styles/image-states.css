@@ -203,18 +203,10 @@
   }
 }
 
-/* A choice's icon shows only where its words do not fit (below). */
-.nx-image-state__choice > svg {
-  display: none;
-}
-
 /* A box too small for the choices' words (`plateSize`), such as a logo's
-   place in a header row, a line of text tall: the three choices as small
-   icons, each named by its words, clear of the box's dashed edge, and set
-   far enough apart that each keeps 24px of room around its centre. Nothing
-   that only explains them is shown. What needs more room than the box has,
-   a link being typed, a link that did not load, a note, drops just below
-   the box on the editor's surface, so it is never cut off. */
+   place in a header row, a line of text tall: the choices as small icons
+   (the plate draws them so, each named by its words), clear of the box's
+   dashed edge. Nothing that only explains them is shown. */
 .nx-image-state[data-plate-size="small"] {
   padding: 0 0.375rem;
   overflow: visible;
@@ -223,9 +215,7 @@
 .nx-image-state[data-plate-size="small"] .nx-image-state__icon,
 .nx-image-state[data-plate-size="small"] .nx-image-state__title,
 .nx-image-state[data-plate-size="small"] .nx-image-state__hint,
-.nx-image-state[data-plate-size="small"]
-  .nx-image-state__progress
-  .nx-image-state__words {
+.nx-image-state[data-plate-size="small"] .nx-image-state__progress-words {
   display: none;
 }
 
@@ -239,7 +229,11 @@
   gap: 0.5rem;
 }
 
+/* Each choice is drawn 16px, and pressed anywhere in the 24px square around
+   it, which the 8px between them leaves to it alone: the target an author
+   can hit without the box growing past the line it sits on. */
 .nx-image-state[data-plate-size="small"] .nx-image-state__choice {
+  position: relative;
   width: 1rem;
   min-width: 0;
   height: 1rem;
@@ -248,23 +242,17 @@
   border-radius: var(--radius-sm);
 }
 
-.nx-image-state[data-plate-size="small"] .nx-image-state__choice > svg {
-  display: block;
-  width: 0.75rem;
-  height: 0.75rem;
-}
-
-.nx-image-state[data-plate-size="small"] .nx-image-state__choice-words {
+.nx-image-state[data-plate-size="small"] .nx-image-state__choice::after {
+  content: "";
   position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
+  inset: -0.25rem;
 }
 
-.nx-image-state[data-plate-size="small"] .nx-image-state__aside,
-.nx-image-state[data-plate-size="small"] .nx-image-state__problem {
+/* What needs more room than the box has, a link being typed, a link that
+   did not load, a note, opens just below the box on the editor's surface;
+   above it, or from its right edge, where below or rightward would run off
+   the canvas (`asideFit`), so it is never cut off. */
+.nx-image-state[data-plate-size="small"] .nx-image-state__aside {
   position: absolute;
   top: calc(100% + 0.25rem);
   left: 0;
@@ -276,4 +264,14 @@
   border: 1px solid var(--nx-builder-border);
   border-radius: var(--radius-md);
   background: var(--nx-builder-surface-raised);
+}
+
+.nx-image-state[data-aside-up] .nx-image-state__aside {
+  top: auto;
+  bottom: calc(100% + 0.25rem);
+}
+
+.nx-image-state[data-aside-end] .nx-image-state__aside {
+  right: 0;
+  left: auto;
 }

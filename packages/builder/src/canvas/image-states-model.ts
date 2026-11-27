@@ -149,6 +149,41 @@ export function plateSize(rect: {
     : "full";
 }
 
+/** A box on screen: where it starts and how big it is. */
+interface Box {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** The gap between a small plate and what drops out of it, in pixels. */
+const ASIDE_GAP = 4;
+
+/**
+ * Which way what drops out of a small plate (a link being typed, a note)
+ * opens so it stays where the canvas shows it: below the box and from its
+ * left edge, unless that runs past the room's bottom or right edge and the
+ * other way fits, where it opens above, or from the box's right edge. Read
+ * from the box, which does not move, and the aside's size, which does not
+ * change with where it opens, so the answer is the same however it is open.
+ */
+export function asideOpening(
+  box: Box,
+  aside: Pick<Box, "width" | "height">,
+  room: Box
+): { up: boolean; end: boolean } {
+  const fitsBelow =
+    box.top + box.height + ASIDE_GAP + aside.height <= room.top + room.height;
+  const fitsAbove = box.top - ASIDE_GAP - aside.height >= room.top;
+  const fitsRightward = box.left + aside.width <= room.left + room.width;
+  const fitsLeftward = box.left + box.width - aside.width >= room.left;
+  return {
+    up: !fitsBelow && fitsAbove,
+    end: !fitsRightward && fitsLeftward,
+  };
+}
+
 /** Whether a drag carries files from outside the page. */
 export function carriesFiles(transfer: DataTransfer | null): boolean {
   if (transfer === null) return false;

@@ -31,6 +31,7 @@ import {
   emptyImageBoxes,
   linkAddress,
   loadsAsImage,
+  asideOpening,
   pictureOp,
   plateSize,
   takesPicture,
@@ -129,6 +130,29 @@ describe("how a plate draws its choices", () => {
     // The 16:9 box at a narrow column's width, and at a wide one's.
     expect(plateSize({ width: 240, height: 135 })).toBe("full");
     expect(plateSize({ width: 800, height: 450 })).toBe("full");
+  });
+});
+
+describe("where what drops out of a small plate opens", () => {
+  const room = { left: 0, top: 0, width: 1000, height: 600 };
+  const aside = { width: 288, height: 96 };
+  it("below the box and from its left edge, where that fits", () => {
+    const box = { left: 100, top: 40, width: 200, height: 24 };
+    expect(asideOpening(box, aside, room)).toEqual({ up: false, end: false });
+  });
+  it("above the box near the room's bottom, as in a footer", () => {
+    const box = { left: 100, top: 560, width: 200, height: 24 };
+    expect(asideOpening(box, aside, room)).toEqual({ up: true, end: false });
+  });
+  it("from the box's right edge near the room's right edge", () => {
+    const box = { left: 860, top: 40, width: 120, height: 24 };
+    expect(asideOpening(box, aside, room)).toEqual({ up: false, end: true });
+  });
+  it("below and from the left when neither other way fits either", () => {
+    // A room too small every way keeps the usual opening.
+    const tiny = { left: 0, top: 0, width: 150, height: 60 };
+    const box = { left: 10, top: 20, width: 120, height: 24 };
+    expect(asideOpening(box, aside, tiny)).toEqual({ up: false, end: false });
   });
 });
 

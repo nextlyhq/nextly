@@ -266,6 +266,9 @@ describe("the empty box in a row", () => {
     expect(rule?.body).toMatch(/max-width:\s*100%/);
     expect(rule?.body).toMatch(/align-self:\s*stretch/);
     expect(rule?.body).not.toMatch(/aspect-ratio/);
+    // It gives up width in a row that does not wrap, down to its choices'.
+    expect(rule?.body).toMatch(/min-width:\s*5rem/);
+    expect(rule?.body).not.toMatch(/flex-shrink:\s*0/);
     // A size set on the block itself still outweighs it.
     expect(rule?.selector).toMatch(/:where\([^)]*nx-bp-core--image--in-row/);
   });

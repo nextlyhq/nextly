@@ -839,17 +839,20 @@ const IMAGE_PARTS = {
   // than 200px, nor than the row, and as tall as the row's line, which its
   // other blocks set, so it stands beside them rather than as a 16:9 band
   // across the header. A line of text tall where it sits alone on a line.
-  // A size or a proportion set on the block still outweighs these.
+  // In a row that does not wrap it gives up width with the blocks beside it,
+  // down to the room the editor's three choices need, so the row never runs
+  // past its edge for it. A size or a proportion set on the block still
+  // outweighs these.
   "in-row": {
     baseStyles: {
       base: {
         base: {
           display: "block",
           width: "200px",
+          minWidth: "5rem",
           maxWidth: "100%",
           minHeight: "1.5rem",
           alignSelf: "stretch",
-          flexShrink: 0,
         },
       },
     },
