@@ -550,6 +550,8 @@ export const COMPONENTS_METHODS: Record<
           perLanguage: storesPerLanguage(component),
           fileRetypes: false,
         },
+        // Named as its save names it, for the refusals of a container's rules the answer repeats.
+        entity: { kind: "fieldGroup", slug },
       });
     },
   },

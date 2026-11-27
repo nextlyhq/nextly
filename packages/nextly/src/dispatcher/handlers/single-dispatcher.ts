@@ -1482,6 +1482,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         body,
         builtBy: "collection",
         layout: { perLanguage: storesPerLanguage(single), fileRetypes: false },
+        // Named as its save names it, for the refusals of a container's rules the answer repeats.
+        entity: { kind: "single", slug },
       });
     },
   },

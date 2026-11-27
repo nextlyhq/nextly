@@ -18,7 +18,9 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../services";
 import { isBuilderRoute } from "../../../shared/builder-access";
+import { dispatchCollections } from "../../handlers/collection-dispatcher";
 
 import {
   collection,
@@ -27,6 +29,7 @@ import {
   LOCALIZATION,
   single,
   targetsOf,
+  type Field,
 } from "./type-change-targets-entities";
 
 // Written for per-language storage as every installation runs it (`storage-layout`): a text-like
@@ -125,9 +128,15 @@ describe.each(getConfiguredTestDialects())(
           t,
         ])
       );
+      // A number held in the group's JSON is no text until rewritten, which no save does yet: the save
+      // refuses the change where a row stores one.
       expect(inGroup.get("text")).toMatchObject({
         blocked: null,
-        outcome: "converts",
+        outcome: "may-lose",
+      });
+      expect(inGroup.get("json")).toMatchObject({
+        blocked: null,
+        outcome: "keeps",
       });
       await expect(
         targetsOf("tct_nested", ["meta", "missing"], "number")
@@ -188,6 +197,99 @@ describe.each(getConfiguredTestDialects())(
         expect(targets.get("group")).toMatchObject({ blocked: "container" });
       }
     );
+  }
+);
+
+// No save rewrites a value held in a group's JSON, and the save refuses such a change only where a
+// row stores a value, naming the field: a group holding none of the field's values takes it. The
+// picker cannot see the rows, so it leaves the change open, marked as one the save may refuse.
+describe.each(getConfiguredTestDialects())(
+  "a number held in a group, becoming a text (%s)",
+  dialect => {
+    it("is open, marked as one that may lose values: refused once a row stores one, saved while none does", async () => {
+      const basePath = await mkdtemp(join(tmpdir(), "nextly-type-targets-"));
+      folders.push(basePath);
+      vi.stubEnv("NODE_ENV", "development");
+      const test = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+        localization: LOCALIZATION,
+      });
+      instance = test;
+      // Shared, and so after the change too: the pair's rule and the stored values alone answer.
+      const number = (name: string): Field => ({
+        name,
+        type: "number",
+        localized: false,
+      });
+      const text = (name: string): Field => ({
+        name,
+        type: "text",
+        localized: false,
+      });
+      const holding = (...fields: Field[]): Field[] => [
+        { name: "meta", type: "group", fields },
+      ];
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: "tct_held",
+          label: "Post",
+          fields: holding(number("unset"), number("rating")),
+        }
+      );
+      const saving = async (fields: Field[]) => {
+        const [row] = await (
+          test.adapter as unknown as {
+            executeQuery<R>(statement: string): Promise<R[]>;
+          }
+        ).executeQuery<{ v: number | string | null }>(
+          "SELECT schema_version AS v FROM dynamic_collections WHERE slug = 'tct_held'"
+        );
+        return dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "tct_held" },
+          { fields, confirmed: true, schemaVersion: Number(row?.v ?? 1) }
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+      };
+      const toText = async (name: string) =>
+        (await targetsOf("tct_held", ["meta", name], "number")).find(
+          target => target.type === "text"
+        );
+      // One row, storing a rating and no value of `unset`.
+      await test.nextly.create({
+        collection: "tct_held",
+        locale: "en",
+        data: { title: "A", slug: "a", meta: { rating: 4 } },
+      });
+
+      for (const name of ["unset", "rating"]) {
+        expect(await toText(name)).toMatchObject({
+          blocked: null,
+          refusal: null,
+          outcome: "may-lose",
+        });
+      }
+      // The stored rating is no text until it is rewritten, which no save does.
+      expect(
+        await saving(holding(number("unset"), text("rating")))
+      ).toMatchObject({
+        publicData: {
+          errors: [{ path: "fields.meta.rating", code: "TYPE_CHANGE_BLOCKED" }],
+        },
+      });
+      // No row stores a value of `unset`, so the save goes ahead.
+      expect(
+        await saving(holding(text("unset"), number("rating")))
+      ).toBeUndefined();
+    }, 300_000);
   }
 );
 

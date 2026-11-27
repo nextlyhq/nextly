@@ -7,8 +7,12 @@ import { describe, expect, it } from "vitest";
 
 import type { FieldDefinition } from "../../../../../schemas/dynamic-collections";
 import type { SupportedDialect } from "../../../services/field-column-descriptor";
-import { fieldTypeOnDialect, type FieldTypeOnDialect } from "../field-type";
-import { pairOutcome } from "../pair-outcome";
+import {
+  fieldTypeInJson,
+  fieldTypeOnDialect,
+  type FieldTypeOnDialect,
+} from "../field-type";
+import { pairOutcome, pairOutcomeHeldInJson } from "../pair-outcome";
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
@@ -63,6 +67,48 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
     toExtra: Partial<FieldDefinition> = {}
   ) =>
     pairOutcome(typeOf(dialect, from, fromExtra), typeOf(dialect, to, toExtra));
+
+  // Inside a named group's or a repeater's JSON a save rewrites no value: each is judged as its JSON
+  // writing stands (`heldInJson`), so a value a change would rewrite may be lost there. The save
+  // refuses the change only where a row stores one, so even where every value would need it, the
+  // change is not refused whatever the values hold.
+  describe("held inside a container's JSON", () => {
+    const held = (
+      from: string,
+      to: string,
+      fromExtra: Partial<FieldDefinition> = {}
+    ) => {
+      const typed = (type: string, extra: Partial<FieldDefinition> = {}) =>
+        fieldTypeInJson(
+          { name: "f", type, ...extra } as FieldDefinition,
+          dialect,
+          "collection"
+        );
+      return pairOutcomeHeldInJson(typed(from, fromExtra), typed(to));
+    };
+
+    it("a change that would rewrite every value it holds may lose them", () => {
+      expect(held("number", "text")).toBe("may-lose");
+      expect(held("number", "text", FRACTION)).toBe("may-lose");
+      expect(held("checkbox", "text")).toBe("may-lose");
+    });
+
+    it("a change that would rewrite some of them may lose those", () => {
+      expect(held("json", "text")).toBe("may-lose");
+    });
+
+    it("a change whose new type reads each value as it is stored is marked by the rules alone", () => {
+      expect(held("select", "text", choices)).toBe("keeps");
+      expect(held("text", "textarea")).toBe("keeps");
+      expect(held("textarea", "code")).toBe("keeps");
+    });
+
+    // The control: the same pairs on the row, where the save's conversion writes the new form.
+    it("the same pairs on a field's own column convert", () => {
+      expect(outcome("number", "text")).toBe("converts");
+      expect(outcome("checkbox", "text")).toBe("converts");
+    });
+  });
 
   it("keeps every value: text to text, and a dropdown to text", () => {
     expect(outcome("text", "text")).toBe("keeps");
@@ -213,15 +259,17 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
   // every one of a decimal with more digits than a double keeps. SQLite keeps no such decimal.
   it("judges a number becoming JSON over the longest it holds", () => {
     expect(outcome("number", "json")).toBe("keeps");
-    expect(outcome("number", "json", FRACTION)).toBe("keeps");
+    // A double's column holds an infinity on PostgreSQL and SQLite, which JSON does not.
+    expect(outcome("number", "json", FRACTION)).toBe(
+      dialect === "mysql" ? "keeps" : "may-lose"
+    );
+    // SQLite's decimal column holds an infinity too (`holdsNonFinite`), which JSON does not.
     expect(
       outcome("number", "json", {
         dbType: "decimal",
       } as Partial<FieldDefinition>)
-    ).toBe("keeps");
-    expect(outcome("number", "json", DECIMAL)).toBe(
-      dialect === "sqlite" ? "keeps" : "may-lose"
-    );
+    ).toBe(dialect === "sqlite" ? "may-lose" : "keeps");
+    expect(outcome("number", "json", DECIMAL)).toBe("may-lose");
   });
 
   // A checkbox holds two values and a choice its options, each judged: the mark says what the

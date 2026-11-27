@@ -170,8 +170,9 @@ export async function collectNestedTypeChange(
  * How a value held inside JSON compares with what `to` reads: as its JSON writing stands, since no
  * conversion rewrites it, compared as JSON (`sameJson`): an object's key order is no difference, a
  * text is never a number. A stored empty list is an empty value where the new type keeps a list.
+ * The type picker marks a change of such a field by it too (`pairOutcomeHeldInJson`).
  */
-function heldInJson(
+export function heldInJson(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect
 ): StoredAsRead {

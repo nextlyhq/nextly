@@ -1053,6 +1053,8 @@ const COLLECTIONS_METHODS: Record<
           perLanguage: storesPerLanguage(collection),
           fileRetypes: container.has("builderSaveSetup"),
         },
+        // Named as its save names it, for the refusals of a container's rules the answer repeats.
+        entity: { kind: "collection", slug },
       });
     },
   },

@@ -184,6 +184,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         as?: Record<string, unknown>;
         layout?: TranslationLayout;
         builtBy?: "collection" | "fieldGroup";
+        kind?: "collection" | "single" | "fieldGroup";
       } = {}
     ) => {
       container.registerSingleton("adapter", () => ({
@@ -203,17 +204,34 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         },
         builtBy: asked.builtBy ?? "collection",
         layout: asked.layout ?? COLLECTION,
+        entity: { kind: asked.kind ?? "collection", slug: "posts" },
       });
       const body = (await response.json()) as {
-        items: { blocked: string | null; outcome: string | null }[];
+        items: {
+          blocked: string | null;
+          outcome: string | null;
+          refusal: { code: string; reason: string; steps: string[] } | null;
+        }[];
       };
       return body.items[0];
     };
-    const LEAVES = {
+    /**
+     * Unavailable in the save's own words: the type-change refusal of a translated text inside a
+     * container (`textHeldPerLanguageRefusals`), naming the entity, the field's path and its types.
+     */
+    const leaves = (path: string, entity = "Collection 'posts'") => ({
       blocked: "leaves-translation-inside",
-      refusal: null,
       outcome: null,
-    };
+      refusal: {
+        code: "TYPE_CHANGE_BLOCKED",
+        steps: [],
+        reason: expect.stringMatching(
+          new RegExp(
+            `^${entity}: field '${path}' cannot change from text to number\\. It is held inside '[^']+', which keeps the text inside it for each language[\\s\\S]*This is not available yet\\.`
+          )
+        ),
+      },
+    });
 
     it.each([
       ["a group of two texts", holding(TWO), ["meta", "note"]],
@@ -232,24 +250,33 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         ["meta", "note"],
       ],
     ])(
-      "a text in %s becoming a number: unavailable",
+      "a text in %s becoming a number: unavailable, in the save's words",
       async (_where, fields, path) => {
-        expect(await inside(fields, path, "number")).toMatchObject(LEAVES);
+        expect(await inside(fields, path, "number")).toMatchObject(
+          leaves(path.join("."))
+        );
       }
     );
 
     it.each([
-      ["a Single's", SINGLE, "collection"],
-      ["a field group's", SINGLE, "fieldGroup"],
+      ["a Single's", SINGLE, "collection", "single", "Single 'posts'"],
+      [
+        "a field group's",
+        SINGLE,
+        "fieldGroup",
+        "fieldGroup",
+        "Field group 'posts'",
+      ],
     ] as const)(
-      "unavailable in %s group too, whose save makes no file",
-      async (_of, layout, builtBy) => {
+      "unavailable in %s group too, whose save makes no file, named as its save names it",
+      async (_of, layout, builtBy, kind, entity) => {
         expect(
           await inside(holding(TWO), ["meta", "note"], "number", {
             layout,
             builtBy,
+            kind,
           })
-        ).toMatchObject(LEAVES);
+        ).toMatchObject(leaves("meta.note", entity));
       }
     );
 
@@ -261,11 +288,36 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         await inside(holding(TWO), ["meta", "note"], "textarea", {
           as: { localized: false },
         })
-      ).toMatchObject(LEAVES);
+      ).toMatchObject({
+        ...leaves("meta.note"),
+        refusal: {
+          ...leaves("meta.note").refusal,
+          reason: expect.stringContaining(
+            "field 'meta.note' cannot change from text to textarea."
+          ),
+        },
+      });
     });
 
     // The save judges the values of the structure, not the text each language keeps beside it, so a
     // change that stays translated there is open only where its pair keeps every value.
+    it("a text turned shared with any type: unavailable, in the save's words", async () => {
+      const turned = leaves("meta.note");
+      expect(
+        await inside(holding(TWO), ["meta", "note"], "code", {
+          as: { localized: false },
+        })
+      ).toMatchObject({
+        ...turned,
+        refusal: {
+          ...turned.refusal,
+          reason: expect.stringContaining(
+            "field 'meta.note' cannot change from text to code."
+          ),
+        },
+      });
+    });
+
     it("a text that stays translated is open only where every value is kept", async () => {
       const UNCHECKED = {
         blocked: "unjudged-inside",
@@ -319,7 +371,12 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         await inside(holding(TWO), ["meta", "note"], "richText", {
           layout: { perLanguage: false, fileRetypes: true },
         })
-      ).toMatchObject({ blocked: null, outcome: "converts" });
+      ).toMatchObject({
+        // Its values are on the structure there, and a text is no document until rewritten, which no
+        // save does: the save refuses the change only where a row stores one.
+        blocked: null,
+        outcome: "may-lose",
+      });
     });
 
     // Controls: what is not translated inside its container leaves nothing behind.
@@ -358,7 +415,29 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
 
     // A value every language shares there, in a type translated by its own rule, would be each
     // language's: the first later save of the container in one language takes it from the others.
-    const JOINS = {
+    /**
+     * Unavailable in the save's own words, where the save refuses it: a shared field inside a container
+     * keeping its text per language, made translated (`fieldsTurningTranslatedInside`).
+     */
+    const joins = (path = "meta.pick") => ({
+      blocked: "joins-translation-inside",
+      outcome: null,
+      refusal: {
+        code: "INVALID_INPUT",
+        steps: [],
+        reason: expect.stringMatching(
+          new RegExp(
+            `^This change to the collection "posts" isn't supported yet: "${path.replace(/\./g, "\\.")}" inside a repeater or group would become translated`
+          )
+        ),
+      },
+    });
+    /**
+     * Unavailable by the picker alone, where the save does not refuse it and loses the value all the
+     * same: the container's first text, on an entity with no translations table yet, whose table the
+     * save makes empty.
+     */
+    const FIRST_TEXT = {
       blocked: "joins-translation-inside",
       refusal: null,
       outcome: null,
@@ -406,7 +485,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
           const alone = await picked(pick(type), to, { layout: EARLIER });
           const answer = await picked(pick(type), to);
           if (alone?.blocked === null) {
-            expect(answer, label).toMatchObject(JOINS);
+            expect(answer, label).toMatchObject(joins());
             joining.add(type);
           } else {
             expect(answer, label).toEqual(alone);
@@ -427,19 +506,46 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
 
     it.each([
       ["a group with text beside it", holding([pick("select"), text("note")])],
-      ["a group with no text", holding([pick("select")])],
       [
-        "repeating rows",
+        "repeating rows with text beside it",
         holding([pick("select"), text("note")], { type: "repeater" }),
       ],
       [
-        "repeating rows with no text",
-        holding([pick("select")], { type: "repeater" }),
+        "a group with no name inside a group with text",
+        holding([
+          { name: "", type: "group", fields: [pick("select")] },
+          text("note"),
+        ]),
       ],
       [
-        "a group with no name inside a group",
-        holding([{ name: "", type: "group", fields: [pick("select")] }]),
+        "a group inside repeating rows with text",
+        holding(
+          [
+            {
+              name: "inner",
+              type: "group",
+              fields: [pick("select"), text("note")],
+            },
+          ],
+          { type: "repeater" }
+        ),
+        ["meta", "inner", "pick"],
       ],
+    ])(
+      "a select in %s becoming a text: unavailable, in the save's words",
+      async (_where, fields, path?: string[]) => {
+        const at = path ?? ["meta", "pick"];
+        expect(
+          await picked(pick("select"), "text", { fields, path: at })
+        ).toMatchObject(joins(at.join(".")));
+      }
+    );
+
+    // A container keeping no text before: its translations are made from its structure where the
+    // entity has a translations table, and nothing is taken; where it has none, the table is made empty.
+    it.each([
+      ["a group", holding([pick("select")])],
+      ["repeating rows", holding([pick("select")], { type: "repeater" })],
       [
         "a group inside repeating rows",
         holding([{ name: "inner", type: "group", fields: [pick("select")] }], {
@@ -448,14 +554,28 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         ["meta", "inner", "pick"],
       ],
     ])(
-      "a select in %s becoming a text: unavailable",
+      "a select in %s with no text, the entity keeping nothing per language, becoming a text: unavailable",
       async (_where, fields, path?: string[]) => {
         expect(
           await picked(pick("select"), "text", {
             fields,
             path: path ?? ["meta", "pick"],
           })
-        ).toMatchObject(JOINS);
+        ).toMatchObject(FIRST_TEXT);
+      }
+    );
+
+    it.each([
+      ["a group", holding([pick("select")])],
+      ["repeating rows", holding([pick("select")], { type: "repeater" })],
+    ])(
+      "a select in %s with no text, the entity keeping a text per language beside it, becoming a text: open",
+      async (_where, fields) => {
+        expect(
+          await picked(pick("select"), "text", {
+            fields: [text("headline"), ...fields],
+          })
+        ).toMatchObject({ blocked: null, refusal: null, outcome: "keeps" });
       }
     );
 
@@ -464,10 +584,10 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         await picked(pick("text", { localized: false }), "textarea", {
           as: { localized: true },
         })
-      ).toMatchObject(JOINS);
+      ).toMatchObject(joins());
       expect(
         await picked(pick("select"), "number", { as: { localized: true } })
-      ).toMatchObject(JOINS);
+      ).toMatchObject(joins());
     });
 
     // Controls: what stays shared, or was each language's already, is taken from no language.
@@ -545,6 +665,27 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         outcome,
       });
     });
+
+    // A save rewrites no value held inside a container yet: a value a change would have to rewrite into
+    // the new type's form may be lost there. The save refuses the change only where a row stores one,
+    // so even where every value would need rewriting, the change stays open, marked by it.
+    it.each([
+      ["a number", "number", null, "may-lose"],
+      ["a checkbox", "checkbox", null, "may-lose"],
+      ["JSON", "json", null, "may-lose"],
+    ])(
+      "%s kept shared inside, becoming a text: what the save does with values it does not rewrite",
+      async (_what, type, blocked, outcome) => {
+        for (const layout of [COLLECTION, EARLIER]) {
+          expect(
+            await picked(pick(type, { localized: false }), "text", {
+              as: { localized: false },
+              layout,
+            })
+          ).toMatchObject({ blocked, refusal: null, outcome });
+        }
+      }
+    );
 
     it("a field on the row answers by the row's rules, never by this one", async () => {
       expect(
