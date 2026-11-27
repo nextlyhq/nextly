@@ -92,4 +92,15 @@ describe("the Add panel's tiles", () => {
     // Written as it is ("Text & lists"), not shouted.
     expect(heading).not.toMatch(/text-transform:\s*uppercase/);
   });
+
+  it("set the search in a bordered box with a focus ring", () => {
+    const box = rule(".nx-insert-panel__search [cmdk-input-wrapper]");
+    expect(box).toMatch(/border:\s*1px solid var\(--nx-builder-border\)/);
+    expect(box).toMatch(/border-radius:/);
+    const focused = rule(
+      ".nx-insert-panel__search [cmdk-input-wrapper]:focus-within"
+    );
+    expect(focused).toMatch(/border-color:\s*var\(--nx-ring\)/);
+    expect(focused).toMatch(/box-shadow:/);
+  });
 });

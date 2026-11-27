@@ -78,6 +78,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@nextlyhq/ui";
+import { X } from "lucide-react";
 import * as React from "react";
 
 import { BlockIconMark } from "../../block-icon";
@@ -181,6 +182,8 @@ export function InsertPanel({
   // Where a dragged block's insert is counted, as a clicked one's is.
   const usage = useInsertUsage();
   const [query, setQuery] = React.useState("");
+  // The search field, which its clear button hands the cursor back to.
+  const searchField = React.useRef<HTMLInputElement | null>(null);
   // Blocks first: what an author adds most. Sections holds the patterns.
   const [tab, setTab] = usePanelTab(summoned, summonedTab);
   /*
@@ -330,11 +333,32 @@ export function InsertPanel({
         if (movesTheHighlight(event)) setMoved("keyboard");
       }}
     >
-      <CommandInput
-        value={query}
-        onValueChange={setQuery}
-        placeholder={SEARCH_PLACEHOLDERS[tab]}
-      />
+      {/*
+        The search in a box of its own, with a clear button while it holds a
+        query: emptying it by hand is a run of backspaces, and the cursor
+        goes back to the field so the next search can be typed at once.
+      */}
+      <div className="nx-insert-panel__search">
+        <CommandInput
+          ref={searchField}
+          value={query}
+          onValueChange={setQuery}
+          placeholder={SEARCH_PLACEHOLDERS[tab]}
+        />
+        {query === "" ? null : (
+          <button
+            type="button"
+            className="nx-insert-panel__clear"
+            aria-label="Clear search"
+            onClick={() => {
+              setQuery("");
+              searchField.current?.focus();
+            }}
+          >
+            <X aria-hidden="true" size={14} />
+          </button>
+        )}
+      </div>
       <PlacementLine
         document={editor.document}
         flash={flash}

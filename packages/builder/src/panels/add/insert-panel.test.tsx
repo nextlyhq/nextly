@@ -707,6 +707,29 @@ describe("InsertPanel", () => {
     ).toHaveLength(0);
   });
 
+  it("clears the search with its × and puts the cursor back in it", () => {
+    registerBlocks(
+      [
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+        { ...base, name: "acme/box", editor: { label: "Box" } },
+      ] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    const search = screen.getByPlaceholderText("Search blocks and components");
+    // Nothing to clear while the search is empty.
+    expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
+
+    fireEvent.change(search, { target: { value: "Box" } });
+    expect(screen.queryAllByRole("option")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+
+    expect((search as HTMLInputElement).value).toBe("");
+    expect(screen.queryAllByRole("option")).toHaveLength(2);
+    expect(document.activeElement).toBe(search);
+    expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
+  });
+
   it("says nothing matched, distinctly from nothing being placeable", () => {
     registerBlocks(
       [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
