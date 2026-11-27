@@ -154,7 +154,9 @@ export function isAttributionId(value: unknown): value is string {
   // shapes: a short token (`glpat-` and twenty characters) fits an id's
   // length and alphabet, and only its known shape tells it apart.
   return (
-    typeof value === "string" && ID_PATTERN.test(value) && !looksLikeSecret(value)
+    typeof value === "string" &&
+    ID_PATTERN.test(value) &&
+    !looksLikeSecret(value)
   );
 }
 
@@ -176,10 +178,20 @@ export function storedName(value: unknown): string | undefined {
   const trimmed = typeof value === "string" ? value.trim() : "";
   return trimmed !== "" &&
     trimmed.length <= ATTRIBUTION_NAME_LENGTH &&
-    !holdsControlCharacter(trimmed)
+    !holdsControlCharacter(trimmed) &&
+    // A name has no shape of its own to check, so two tests keep a token
+    // passed as a name off the row: the catalogue of credential shapes, and
+    // that a name is words. A run of 32 or more characters with no space is
+    // what every token, whole key, hex secret and signed value is, and no
+    // agent's or machine's name needs one.
+    !looksLikeSecret(trimmed) &&
+    !UNBROKEN_RUN.test(trimmed)
     ? trimmed
     : undefined;
 }
+
+/** A run of 32 or more characters with no whitespace in it. */
+const UNBROKEN_RUN = /\S{32,}/;
 
 /**
  * Whether `value` holds a control character, NUL among them: PostgreSQL

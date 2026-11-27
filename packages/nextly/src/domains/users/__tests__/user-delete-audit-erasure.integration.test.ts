@@ -742,6 +742,50 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("never stores a token passed as an agent's name, before or after erasing the person", async () => {
+      const token =
+        "nx_live_0123456789abcdef01234567_c2VjcmV0LXZhbHVlLXRoYXQtbXVzdC1uZXZlci1sYW5k";
+      const person = await users.createLocalUser({
+        email: "agent-token-name@test.local",
+        name: "Token Name",
+        password: "TestPassword123!",
+        isActive: true,
+      });
+      const personId = String(person.id);
+      await activity.logActivity({
+        actorType: "user",
+        userId: personId,
+        action: "update",
+        collection: "posts",
+        entryId: "p-token",
+        attribution: { door: "command", agent: { name: token } },
+      });
+      await auditWriter.write({
+        kind: "role-assigned",
+        actorUserId: personId,
+        attribution: { door: "command", agent: { name: token } },
+      });
+
+      const stored = async () => {
+        const { activityLog, auditLog } = tables;
+        const rows = [
+          ...(await db()
+            .select({ agentName: activityLog.agentName })
+            .from(activityLog)
+            .where(eq(activityLog.userId, personId))),
+          ...(await db()
+            .select({ agentName: auditLog.agentName })
+            .from(auditLog)
+            .where(eq(auditLog.actorUserId, personId))),
+        ];
+        expect(rows).toHaveLength(2);
+        return rows.map(row => row.agentName);
+      };
+      expect(await stored()).toEqual([null, null]);
+      await users.deleteUser(person.id);
+      expect(await stored()).toEqual([null, null]);
+    });
+
     it("erases the person an agent acted for, and keeps the agent's name", async () => {
       // An agent acting for a person records the PERSON as the actor, with the
       // agent named beside them. Deleting the person must erase them from

@@ -253,6 +253,21 @@ describe("a run of saves", () => {
         row({ createdAt: before(1) }),
       ])
     ).toEqual([1, 1]);
+    // Saves the row would word differently stay apart, even in one session:
+    // the row says the newest save's approval and door, and a merged row
+    // would claim them for every save it counts.
+    expect(
+      counts([
+        row({ createdAt: before(0), ...agent, approvedVia: "admin" }),
+        row({ createdAt: before(1), ...agent, approvedVia: "phone" }),
+      ])
+    ).toEqual([1, 1]);
+    expect(
+      counts([
+        row({ createdAt: before(0), ...agent, door: "local" }),
+        row({ createdAt: before(1), ...agent, door: "command" }),
+      ])
+    ).toEqual([1, 1]);
     // The key a cut page hands back is checked by its number of parts: the
     // count and the key itself must agree, or every cut run is refused.
     expect(JSON.parse(runKeyOf(row()) ?? "[]")).toHaveLength(RUN_KEY_PARTS);

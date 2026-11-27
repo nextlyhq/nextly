@@ -249,7 +249,11 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const byAgent = await createAs(
         t,
-        { door: "command", agent: { name: "Claude Code" }, credentialId: PASS_ID },
+        {
+          door: "command",
+          agent: { name: "Claude Code" },
+          credentialId: PASS_ID,
+        },
         "by an agent",
         "notes"
       );
@@ -258,7 +262,10 @@ describe.each(getConfiguredTestDialects())(
       const authorOf = async (entryId: string) => {
         const rows = await t
           .getService("versionsService")
-          .list({ scopeKind: "collection", scopeSlug: "notes", entryId }, { limit: 5 });
+          .list(
+            { scopeKind: "collection", scopeSlug: "notes", entryId },
+            { limit: 5 }
+          );
         const [row] = await attachVersionAuthors(rows);
         return row?.author;
       };
@@ -477,6 +484,39 @@ describe.each(getConfiguredTestDialects())(
         agentName: "ChatGPT",
         door: "chat-app",
         approvedVia: null,
+      });
+    });
+
+    it("drops a token passed as an agent's name, on every trail, and still writes the row", async () => {
+      const t = await boot(dialect);
+      const attribution: ActorAttribution = {
+        door: "command",
+        agent: { name: TOKEN, sessionId: SESSION_ID },
+        credentialId: PASS_ID,
+      };
+      await createAs(t, attribution);
+      await auditWriter(t).write({
+        kind: "login-succeeded",
+        actorUserId: PERSON.id,
+        attribution,
+      });
+
+      for (const table of [
+        "activity_log",
+        "audit_log",
+        "nextly_content_events",
+      ]) {
+        const values = await everyStoredValue(t, table);
+        expect(values.length).toBeGreaterThan(0);
+        expect(values.filter(value => value.includes(TOKEN))).toEqual([]);
+      }
+      const [activity] = await activityRows(t);
+      expect(activity).toMatchObject({
+        userId: PERSON.id,
+        userName: PERSON.name,
+        agentName: null,
+        door: "command",
+        agentSessionId: SESSION_ID,
       });
     });
 

@@ -48,10 +48,10 @@ function instantOf(value: unknown): number | undefined {
 
 /**
  * How many parts a run key has, for the check that a key handed back is one
- * `runKeyOf` wrote: kind, reference, agent, agent session, subject kind,
- * collection and entry.
+ * `runKeyOf` wrote: kind, reference, agent, agent session, door, approval
+ * place, deployment host and commit, subject kind, collection and entry.
  */
-export const RUN_KEY_PARTS = 7;
+export const RUN_KEY_PARTS = 11;
 
 /**
  * Who saved which document, for a row that may join a run; `undefined` for
@@ -88,6 +88,13 @@ export function runKeyOf(row: Record<string, unknown>): string | undefined {
     row.userId,
     row.agentName ?? null,
     row.agentSessionId ?? null,
+    // Everything else the row's actor phrase says: saves it would word
+    // differently (approved on a phone, then in the admin) stay apart, since a
+    // run shows its newest save's words for every save it counts.
+    row.door ?? null,
+    row.approvedVia ?? null,
+    row.deploymentHost ?? null,
+    row.deploymentCommit ?? null,
     row.subjectKind ?? null,
     row.collection,
     row.entryId,

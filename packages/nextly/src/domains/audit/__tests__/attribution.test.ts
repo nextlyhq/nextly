@@ -199,6 +199,33 @@ describe("attribution columns", () => {
     });
   });
 
+  it("refuses a credential passed where a name belongs", () => {
+    // A name has no shape of its own to check, so the repository's catalogue
+    // of credential shapes is what keeps a token out of it.
+    for (const secret of [
+      // Known to the catalogue of credential shapes.
+      "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+      // Not in the catalogue: a whole Nextly key, a hex reset token. Each is
+      // one long run with no space, which no name is.
+      "nx_live_0123456789abcdef01234567_Zm9vYmFyYmF6cXV4cXV1eHF1dXhxdXV4cXV1eA",
+      "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    ]) {
+      const { columns, refused } = attributionColumns({
+        agent: { name: secret },
+        deployment: { pipeline: secret, commit: null },
+      });
+      expect(refused.sort()).toEqual(["agent.name", "deployment.host"]);
+      expect(Object.values(columns)).not.toContain(secret);
+    }
+    // Ordinary names still land, a long machine name among them.
+    expect(
+      attributionColumns({
+        agent: { name: "Claude Code" },
+        deployment: { machine: "Sara-Maliks-MacBook-Pro.local" },
+      }).refused
+    ).toEqual([]);
+  });
+
   it("refuses a name holding a NUL or another control character", () => {
     // PostgreSQL cannot store a NUL: the write being recorded would fail.
     expect(
