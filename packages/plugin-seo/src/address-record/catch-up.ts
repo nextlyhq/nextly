@@ -312,8 +312,8 @@ interface CatchUpOptions {
   settleMs?: number;
   /**
    * Whether the run stops before its next step, unfinished: asked before
-   * each listing read after the first and before each page's change. Where
-   * unset, once the run's deadline has passed.
+   * each page's change. Where unset, once the run's deadline has passed and
+   * it has made its first change.
    */
   stopNow?: () => boolean;
 }
@@ -350,7 +350,16 @@ async function caughtUp(
   options: CatchUpOptions
 ): Promise<CatchUpReport> {
   const { ctx } = run;
-  const stopNow = options.stopNow ?? (() => Date.now() >= run.stopAt);
+  // Past the run's deadline, it stops before its next change, but never
+  // before its first: every run moves the record on by at least one page,
+  // so requests whose deadline the listing alone outlasts still finish it.
+  let asked = false;
+  const pastDeadline = () => {
+    const stop = asked && Date.now() >= run.stopAt;
+    asked = true;
+    return stop;
+  };
+  const stopNow = options.stopNow ?? pastDeadline;
   running += 1;
   try {
     // Every transaction it opens bounded by the database: a run started at a
@@ -436,19 +445,18 @@ const STOPPED = "stopped";
 
 /**
  * Every page of every site type, oldest first across all of them, by when
- * each was made; pages made at the same moment keep the order listed.
- * `STOPPED` where the run stops between two reads.
+ * each was made; pages made at the same moment keep the order listed. Read
+ * whole, never stopped part-way: a run stopped here would leave nothing done
+ * for the next to go on from.
  */
 async function everyPage(
   ctx: PluginContext,
-  options: CatchUpOptions,
-  stopNow: StopNow
-): Promise<HeldDocument[] | typeof STOPPED> {
+  options: CatchUpOptions
+): Promise<HeldDocument[]> {
   const updates: HeldDocument[] = [];
   for (const type of await ctx.publicAddresses.types()) {
     let after: string | undefined;
     do {
-      if (after !== undefined && stopNow()) return STOPPED;
       const page = await ctx.publicAddresses.held({
         type,
         after,
@@ -789,8 +797,7 @@ async function runCatchUp(
   if (earlier !== undefined) await beginTakingIn(ctx, earlier);
   const held = await heldRows(ctx);
   const siteTypes = await siteTypeKeys(ctx);
-  const pages = await everyPage(ctx, options, stopNow);
-  if (pages === STOPPED) return unfinished(0, []);
+  const pages = await everyPage(ctx, options);
   await options.afterListing?.();
   const was = heldBefore(held);
   const expected: Expected = new Map(
