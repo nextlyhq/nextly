@@ -799,6 +799,35 @@ describe("InsertPanel", () => {
     expect(document.activeElement).toBe(search);
   });
 
+  it("keeps the slider line's status region in the page, empty, before a search fills it", () => {
+    // A live region that is in the page before its words arrive is the one a
+    // screen reader announces; one shown along with its words may not be.
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "core/gallery",
+          editor: { label: "Gallery", keywords: ["images", "grid"] },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    const region = document.querySelector("[data-slider-notice]");
+    expect(region).not.toBeNull();
+    expect(region?.getAttribute("role")).toBe("status");
+    expect(region?.hasAttribute("hidden")).toBe(false);
+    expect(region?.textContent).toBe("");
+    fireEvent.change(
+      screen.getByPlaceholderText("Search blocks and components"),
+      { target: { value: "slider" } }
+    );
+    expect(document.querySelector("[data-slider-notice]")).toBe(region);
+    expect(region?.textContent).toBe(
+      "No slider block yet. Gallery shows pictures in a grid."
+    );
+  });
+
   it("says nothing about a slider where no Gallery can be offered", () => {
     // A library without Gallery: the line would point at a tile not there.
     registerBlocks(
@@ -2330,11 +2359,17 @@ describe("when the library was cut, or could not be read", () => {
   /** The notices, or none: they are status regions, so that is how they are found. */
   /** The library's notices: not the list's own line for "nothing matched". */
   function notices(): HTMLElement[] {
-    return screen
-      .queryAllByRole("status")
-      .filter(
-        status => status.getAttribute("data-slot") !== "command-empty-status"
-      );
+    return (
+      screen
+        .queryAllByRole("status")
+        // The palette's own regions, always in the page, are not notices:
+        // its empty state, and the slider line's region.
+        .filter(
+          status =>
+            status.getAttribute("data-slot") !== "command-empty-status" &&
+            !status.hasAttribute("data-slider-notice")
+        )
+    );
   }
 
   it("says nothing when every tier arrived whole, or is still arriving", () => {

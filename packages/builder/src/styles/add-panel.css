@@ -294,6 +294,11 @@
   color: var(--nx-muted-foreground);
 }
 
+/* An empty live region stays in the page, taking no room until it speaks. */
+.nx-insert-panel__note:empty {
+  padding: 0;
+}
+
 /*
  * The library-cut notice sits between the placement line and the tiles, and
  * closes with a rule, so the list below starts under one divider.
