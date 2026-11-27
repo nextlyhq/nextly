@@ -3,6 +3,13 @@
  * and saves that language, and leaves another language's layout as it was.
  * Translating happens on the translation page, not in the builder.
  *
+ * The builder is opened from the entry's editor, which edits the default
+ * language alone: an editor address naming another language moves on to that
+ * language's translation page, which has no builder card. So the card is never
+ * drawn beside another language, and the sentence it showed there is not looked
+ * for here; what the builder leaves of a Spanish layout stored on the same
+ * document is.
+ *
  * Runs against the `translated-pages` e2e fixture, the one localized
  * collection with a translated blocks field. The fixture is registered only
  * for the e2e run; if it is missing, the first request below fails and says so
@@ -74,15 +81,8 @@ function heading(page: Page, id: string) {
 test("opens, reloads and saves the default language only", async ({ page }) => {
   const id = await translatedPage(page);
 
-  // Arriving from the Spanish edit screen still opens the default language:
-  // the builder's address names no language.
-  await gotoAdmin(page, `/collections/translated-pages/${id}?locale=es`);
-  // Said beside the way in, since the preview above it shows the Spanish page.
-  await expect(
-    page.getByText(
-      "Opens the default language, the one the Page Builder edits."
-    )
-  ).toBeVisible();
+  // The builder's address names no language, as the editor's does not.
+  await gotoAdmin(page, `/collections/translated-pages/${id}`);
   await page
     .locator(PAGE_BUILDER_CARD)
     .getByRole("link", { name: OPEN_BUILDER_ACTION })

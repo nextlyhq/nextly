@@ -20,6 +20,7 @@ import { useEffect, useCallback, useState, useRef } from "react";
 
 import { DOCUMENT_TAB_PARAM } from "@admin/components/features/entries/EntryForm/document-tab-address";
 import { HISTORY_ADDRESS_PARAMS } from "@admin/components/features/versions/history-address";
+import { SOURCE_PARAM } from "@admin/constants/search-params";
 import {
   DOCUMENT_VIEW_ADDRESS_PARAMS,
   drawnDocumentView,
@@ -166,38 +167,60 @@ const EDITOR_ADDRESS =
   /^\/admin\/(?:collections\/[^/]+\/[^/]+|singles\/[^/]+)$/;
 
 /**
- * Whether a move only opens another tab of the editor on screen: the same
- * editor address but for the open tab. That keeps the same form mounted on
- * every editor, a new entry's among them, which has no document to stay on
- * yet.
+ * A document's translation page, whose `?source=` names the language beside
+ * the one being written and nothing that is written.
  */
-function opensAnotherTab(
+const TRANSLATION_ADDRESS =
+  /^\/admin\/translations\/(?:collections\/[^/]+\/[^/]+|singles\/[^/]+)$/;
+
+/** What a translation page shows beside its form: a source, and its history. */
+const BESIDE_TRANSLATION: readonly string[] = [
+  SOURCE_PARAM,
+  ...HISTORY_ADDRESS_PARAMS,
+];
+
+/** The keys that change only what an address's page shows beside its form. */
+function keysBeside(pathname: string): readonly string[] {
+  if (EDITOR_ADDRESS.test(pathname)) return [DOCUMENT_TAB_PARAM];
+  return TRANSLATION_ADDRESS.test(pathname) ? BESIDE_TRANSLATION : [];
+}
+
+/**
+ * Whether a move changes nothing but what the form's page shows beside it: the
+ * same address but for an editor's open tab, or for a translation page's
+ * source and history. That keeps the same form mounted on every editor, a new
+ * entry's among them, which has no document to stay on yet.
+ */
+function showsAnotherPart(
   from: { pathname: string; search: string },
   to: { pathname: string; search: string }
 ): boolean {
-  if (from.pathname !== to.pathname || !EDITOR_ADDRESS.test(from.pathname)) {
-    return false;
-  }
+  if (from.pathname !== to.pathname) return false;
+  const beside = keysBeside(from.pathname);
+  if (beside.length === 0) return false;
   const was = new URLSearchParams(from.search);
   const next = new URLSearchParams(to.search);
-  was.delete(DOCUMENT_TAB_PARAM);
-  next.delete(DOCUMENT_TAB_PARAM);
+  for (const key of beside) {
+    was.delete(key);
+    next.delete(key);
+  }
   return was.toString() === next.toString();
 }
 
 /**
  * Whether a move is between one document's edit address and its own views,
- * opens or moves through its history beside it, or opens another of its
- * editor's tabs. The same page answers all of them and keeps the same form
- * mounted, so nothing unsaved is left behind. Any other query change — a
- * language among them — still counts, and so does another document's view.
+ * opens or moves through its history beside it, opens another of its editor's
+ * tabs, or shows another source or the history beside its translation. The same page answers
+ * all of them and keeps the same form mounted, so nothing unsaved is left
+ * behind. Any other query change — a language among them — still counts, and
+ * so does another document's view.
  */
 function staysOnDocument(
   from: { pathname: string; search: string },
   to: { pathname: string; search: string },
   fields: readonly object[] | undefined
 ): boolean {
-  if (opensAnotherTab(from, to)) return true;
+  if (showsAnotherPart(from, to)) return true;
   // The guard's fields are the current document's, which is the one the
   // move would have to stay on.
   const here = documentOf(from.pathname, fields);

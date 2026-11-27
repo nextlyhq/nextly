@@ -13,8 +13,10 @@
  * @module pages/dashboard/singles/[slug]/versions
  */
 
-import type { JSX } from "react";
+import { useMemo, type JSX } from "react";
 
+import { fieldsWrittenPerLanguage } from "@admin/components/features/translations/page/translation-fields";
+import { fieldsOf } from "@admin/components/features/translations/page/useTranslationDocument";
 import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
 import {
   readLocaleParam,
@@ -38,8 +40,15 @@ export default function SingleVersionsPage({
   const document = useSingleDocument(slug);
   // Whether the Single is translated, from its schema, the read its editor
   // makes too.
-  const entityLocalized =
-    useSingleSchema(slug || undefined).data?.localized === true;
+  const single = useSingleSchema(slug || undefined).data;
+  const entityLocalized = single?.localized === true;
+  const writtenPerLanguage = useMemo(
+    () =>
+      single === undefined
+        ? undefined
+        : fieldsWrittenPerLanguage(fieldsOf(single.fields)),
+    [single]
+  );
   const documentId = document.data?.id;
   // The language the address names, as an entry's comparison page honours it:
   // a link shared from a German history opens under the German title.
@@ -72,6 +81,7 @@ export default function SingleVersionsPage({
       documentHref={buildRoute(ROUTES.SINGLE_EDIT, { slug })}
       documentTitle={documentTitle}
       entityLocalized={entityLocalized}
+      writtenPerLanguage={writtenPerLanguage}
       // Reaching this page needs `read-${slug}`; the single's own editor needs
       // `update-${slug}`. `/admin/singles` is NOT the readable alternative it
       // looks like: it redirects straight to the first single the viewer can

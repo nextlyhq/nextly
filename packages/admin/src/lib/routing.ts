@@ -161,6 +161,10 @@ const SLUG_ROUTE_ACCESS: Record<
     subject: "collection",
   },
   [ROUTES.SINGLE_EDIT]: { action: "read", subject: "single" },
+  // A translation page opens for a reader, read-only for one who may not
+  // change the language, as the editor does.
+  [ROUTES.TRANSLATION_ENTRY]: { action: "read", subject: "collection" },
+  [ROUTES.TRANSLATION_SINGLE]: { action: "read", subject: "single" },
   [ROUTES.SINGLE_VIEW]: { action: "read", subject: "single" },
   [ROUTES.SINGLE_API]: { action: "read", subject: "single" },
   [ROUTES.SINGLE_VERSIONS]: { action: "readHistory", subject: "single" },

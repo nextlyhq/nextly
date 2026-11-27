@@ -42,6 +42,7 @@ import {
   SingleForm,
   type SingleSchema,
 } from "@admin/components/features/singles";
+import { useLanguageAddressRedirect } from "@admin/components/features/translations/page/useLanguageAddressRedirect";
 import {
   CONTENT_MEASURE_LENGTH,
   CONTENT_PAGE_MEASURE,
@@ -168,6 +169,14 @@ export default function SingleEditPage({
     isLoading: isLoadingSchema,
     error: schemaError,
   } = useSingleSchema(slug);
+
+  // Every language but the default is written on its translation page.
+  useLanguageAddressRedirect({
+    document: slug ? { kind: "single", slug } : undefined,
+    localized: schema?.localized === true,
+    view: params?.view,
+    copyingFrom: seedFromLocale,
+  });
 
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({

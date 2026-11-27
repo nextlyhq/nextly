@@ -6,9 +6,9 @@
  * dashboard's Continue card all open the builder, and a middle click opens it
  * in a new tab. Opening the form by its own address keeps working and changes
  * nothing about where the next click lands. A reader who may only read lands
- * on the form, read-only; a row opened in a second language opens the form in
- * that language; and with the builder's views not published, as on a site
- * without the plugin, every row opens the form.
+ * on the form, read-only; a row opened in a second language opens its
+ * translation page in that language; and with the builder's views not
+ * published, as on a site without the plugin, every row opens the form.
  */
 import { expect, type Page, type Route } from "@playwright/test";
 
@@ -30,9 +30,8 @@ const RUN = Date.now().toString(36);
 /** The builder's address for an entry, on the field the collection names. */
 const builderAt = (id: string) =>
   new RegExp(`/admin/collections/${SLUG}/${id}/builder\\?field=sections$`);
-/** The form's address for an entry, with nothing after it but a language. */
-const formAt = (id: string, query = "") =>
-  new RegExp(`/admin/collections/${SLUG}/${id}${query.replace("?", "\\?")}$`);
+/** The form's address for an entry, with nothing after it. */
+const formAt = (id: string) => new RegExp(`/admin/collections/${SLUG}/${id}$`);
 
 /** A new draft of the collection, saved by whoever `page` is signed in as. */
 async function savePage(page: Page, title: string): Promise<string> {
@@ -126,7 +125,7 @@ test("a Continue card row opens the builder", async ({ page }) => {
   await expect(page).toHaveURL(builderAt(id));
 });
 
-test("a row opened in a second language opens the form in that language", async ({
+test("a row opened in a second language opens its translation page", async ({
   page,
 }) => {
   const title = `In Spanish ${RUN}`;
@@ -138,8 +137,17 @@ test("a row opened in a second language opens the form in that language", async 
     .getByRole("row")
     .filter({ hasText: title });
   await row.getByRole("button", { name: /^Open in Spanish/ }).click();
-  await expect(page).toHaveURL(formAt(id, "?locale=es"));
-  await expect(excerpt(page)).toBeVisible();
+  await expect(page).toHaveURL(
+    `/admin/translations/collections/${SLUG}/${id}?locale=es`
+  );
+  // The Excerpt, to be written in Spanish: the entry holds none yet, and the
+  // English it was saved with is not shown in its place.
+  await expect(
+    page
+      .getByRole("group", { name: "Excerpt", exact: true })
+      .locator('[data-slot="translation-target"]')
+      .getByRole("textbox", { name: "Excerpt", exact: true })
+  ).toHaveValue("");
 });
 
 test("a reader who may only read opens the form, read-only", async ({

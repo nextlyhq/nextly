@@ -25,3 +25,9 @@ export const LOCALE_PARAM = "locale";
  * linkable — a reviewer can be sent the exact pair.
  */
 export const TRANSLATE_PARAM = "translate";
+
+/**
+ * The language a translation page shows as its source, beside the target in
+ * `LOCALE_PARAM`. Absent means the default language.
+ */
+export const SOURCE_PARAM = "source";

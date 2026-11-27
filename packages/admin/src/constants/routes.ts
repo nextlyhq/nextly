@@ -25,6 +25,11 @@ export const ROUTES = {
 
   // Translations
   TRANSLATIONS: "/admin/translations",
+  // One document in one language: an entry by its id, or a Single. Outside
+  // /admin/collections and /admin/singles, whose third segment is a plugin's
+  // document view.
+  TRANSLATION_ENTRY: "/admin/translations/collections/[slug]/[id]",
+  TRANSLATION_SINGLE: "/admin/translations/singles/[slug]",
 
   // Content releases: a batch of documents that goes live at one instant.
   // Top-level rather than nested under a collection, because a release spans

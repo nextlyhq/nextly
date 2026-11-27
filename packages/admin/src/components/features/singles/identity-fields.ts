@@ -9,9 +9,22 @@ import type { FieldConfig } from "nextly/config";
 const IDENTITY_FIELD_NAMES = new Set(["title", "slug"]);
 
 /**
- * Return a copy of `fields` with the Single identity fields (`title`, `slug`)
- * marked not-required, at both the flat (`field.required`) and nested
+ * `field` marked not-required, at both the flat (`field.required`) and nested
  * (`field.validation.required`) shapes that `generateClientSchema` reads.
+ */
+export function relaxRequired(field: FieldConfig): FieldConfig {
+  const validation = (field as { validation?: Record<string, unknown> })
+    .validation;
+  return {
+    ...field,
+    required: false,
+    ...(validation ? { validation: { ...validation, required: false } } : {}),
+  } as FieldConfig;
+}
+
+/**
+ * Return a copy of `fields` with the Single identity fields (`title`, `slug`)
+ * marked not-required (`relaxRequired`).
  *
  * Singles render title/slug read-only from config, so the client validation
  * schema must accept a submission that doesn't carry them. All other fields
@@ -22,12 +35,6 @@ export function relaxIdentityRequired(fields: FieldConfig[]): FieldConfig[] {
     if (!("name" in field) || !IDENTITY_FIELD_NAMES.has(field.name as string)) {
       return field;
     }
-    const validation = (field as { validation?: Record<string, unknown> })
-      .validation;
-    return {
-      ...field,
-      required: false,
-      ...(validation ? { validation: { ...validation, required: false } } : {}),
-    } as FieldConfig;
+    return relaxRequired(field);
   });
 }

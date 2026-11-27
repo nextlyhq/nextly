@@ -18,6 +18,7 @@ describe("the subject a guarded route names", () => {
     ["/admin/collections/posts/create", "create", "create"],
     ["/admin/collections/posts/api", "read", "read"],
     ["/admin/collections/posts/entry-1", "read", "read"],
+    ["/admin/translations/collections/posts/entry-1", "read", "read"],
     // The history is read in every language, as the server judges it: the
     // route asks that, though the permission it names is the read.
     ["/admin/collections/posts/entry-1/versions", "read", "readHistory"],
@@ -33,6 +34,7 @@ describe("the subject a guarded route names", () => {
 
   it.each([
     ["/admin/singles/site-settings", "read", "read"],
+    ["/admin/translations/singles/site-settings", "read", "read"],
     ["/admin/singles/site-settings/api", "read", "read"],
     ["/admin/singles/site-settings/versions", "read", "readHistory"],
   ])("names a Single for %s", (path, permission, action) => {

@@ -42,6 +42,13 @@ describe("entryApi read paths — locale + fallback-locale", () => {
     expect(url).not.toContain("fallbackLocale=");
   });
 
+  it("findByID asks for every language's values only when told to", async () => {
+    await entryApi.findByID("authors", "e1", { everyLanguage: true });
+    expect(get.mock.calls[0][0] as string).toContain("translations=all");
+    await entryApi.findByID("authors", "e1", { locale: "ar" });
+    expect(get.mock.calls[1][0] as string).not.toContain("translations=");
+  });
+
   it("find (list) forwards the hyphenated ?fallback-locale=", async () => {
     await entryApi.find("authors", { locale: "ar", fallbackLocale: "none" });
     const url = fetch.mock.calls[0][0] as string;

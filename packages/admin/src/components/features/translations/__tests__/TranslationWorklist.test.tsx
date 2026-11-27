@@ -169,19 +169,17 @@ describe("TranslationWorklist", () => {
     expect(screen.getByText(/nothing not translated/i)).toBeInTheDocument();
   });
 
-  it("hands a row to the editor in the target language, translating from the source", async () => {
-    // BOTH params. With only the locale the editor opens in that language with
-    // no source beside it — the ordinary editor, not the screen the row
-    // promised.
+  it("hands a row to its translation page, in the target language and from the source", async () => {
+    // BOTH languages, so the page opens on the pair the row promised.
     renderWorklist();
     await userEvent.click(
       screen.getByRole("button", { name: "Translate Ada Lovelace in Posts" })
     );
     expect(navigateTo).toHaveBeenCalledTimes(1);
     const path = navigateTo.mock.calls[0]?.[0] as string;
-    expect(path).toContain("/admin/collections/posts/p1");
-    expect(path).toContain("locale=es");
-    expect(path).toContain("translate=en");
+    expect(path).toBe(
+      "/admin/translations/collections/posts/p1?locale=es&source=en"
+    );
   });
 
   it("names each row's action for its own document", () => {
@@ -445,10 +443,7 @@ describe("metadataVerdict", () => {
       screen.getByRole("button", { name: "Translate Banner in Banner" })
     );
     const path = navigateTo.mock.calls[0]?.[0] as string;
-    expect(path).toContain("/admin/singles/banner");
-    expect(path).not.toContain("/admin/collections/");
-    expect(path).toContain("locale=es");
-    expect(path).toContain("translate=en");
+    expect(path).toBe("/admin/translations/singles/banner?locale=es&source=en");
   });
 
   it("pages through the list with the server's own paging", async () => {
