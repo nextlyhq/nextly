@@ -1,0 +1,577 @@
+{
+  "door": "chat",
+  "tools": [
+    {
+      "name": "create_draft",
+      "title": "Fixture drafts.create",
+      "description": "A fixture operation (drafts.create) for the adapter's tests.",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["concise", "detailed"],
+            "default": "concise",
+            "description": "How much the answer carries: `concise` (the default) gives the fields that identify each item; `detailed` gives every field."
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "done"],
+        "additionalProperties": false
+      },
+      "oldNames": []
+    },
+    {
+      "name": "delete_thing",
+      "title": "Fixture things.delete",
+      "description": "A fixture operation (things.delete) for the adapter's tests.",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["concise", "detailed"],
+            "default": "concise",
+            "description": "How much the answer carries: `concise` (the default) gives the fields that identify each item; `detailed` gives every field."
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "done"],
+        "additionalProperties": false
+      },
+      "oldNames": []
+    },
+    {
+      "name": "find_entries",
+      "title": "Find entries",
+      "description": "Finds entries in a collection by text, a page at a time.",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "search": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20,
+            "description": "How many items one page holds: 20 unless given, at most 100."
+          },
+          "after": {
+            "type": "string",
+            "description": "The `page.next` cursor from the previous answer, to get the page after it. Send it with the same other inputs as the call that returned it."
+          },
+          "format": {
+            "type": "string",
+            "enum": ["concise", "detailed"],
+            "default": "concise",
+            "description": "How much the answer carries: `concise` (the default) gives the fields that identify each item; `detailed` gives every field."
+          }
+        },
+        "required": ["collection"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["draft", "published"]
+                },
+                "adminPath": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string",
+                  "contentMediaType": "text/markdown"
+                },
+                "author": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "adminPath": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["id", "name", "adminPath"],
+                  "additionalProperties": false
+                },
+                "cover": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "filename": {
+                      "type": "string"
+                    },
+                    "adminPath": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["id", "filename", "adminPath"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["id", "title", "adminPath"],
+              "additionalProperties": false
+            }
+          },
+          "page": {
+            "type": "object",
+            "description": "Where the list stands. `next` is the cursor for the next page (send it back as `after`), or null on the last page.",
+            "properties": {
+              "next": {
+                "type": ["string", "null"]
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["next", "limit"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["collection", "items"],
+        "additionalProperties": false
+      },
+      "oldNames": []
+    },
+    {
+      "name": "get_entry",
+      "title": "Get an entry",
+      "description": "Gets one entry with its fields, rich text as Markdown.",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["concise", "detailed"],
+            "default": "concise",
+            "description": "How much the answer carries: `concise` (the default) gives the fields that identify each item; `detailed` gives every field."
+          }
+        },
+        "required": ["collection", "id"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["draft", "published"]
+          },
+          "adminPath": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string",
+            "contentMediaType": "text/markdown"
+          },
+          "author": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "adminPath": {
+                "type": "string"
+              }
+            },
+            "required": ["id", "name", "adminPath"],
+            "additionalProperties": false
+          },
+          "cover": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "filename": {
+                "type": "string"
+              },
+              "adminPath": {
+                "type": "string"
+              }
+            },
+            "required": ["id", "filename", "adminPath"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "title", "adminPath"],
+        "additionalProperties": false
+      },
+      "oldNames": []
+    },
+    {
+      "name": "get_renamed",
+      "title": "Fixture renamed.get",
+      "description": "A fixture operation (renamed.get) for the adapter's tests.",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["concise", "detailed"],
+            "default": "concise",
+            "description": "How much the answer carries: `concise` (the default) gives the fields that identify each item; `detailed` gives every field."
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "done"],
+        "additionalProperties": false
+      },
+      "oldNames": ["get_old_name"]
+    },
+    {
+      "name": "get_thing",
+      "title": "Fixture things.get",
+      "description": "A fixture operation (things.get) for the adapter's tests.",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["concise", "detailed"],
+            "default": "concise",
+            "description": "How much the answer carries: `concise` (the default) gives the fields that identify each item; `detailed` gives every field."
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "done"],
+        "additionalProperties": false
+      },
+      "oldNames": []
+    },
+    {
+      "name": "purge_things",
+      "title": "Fixture things.purge",
+      "description": "A fixture operation (things.purge) for the adapter's tests.",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["concise", "detailed"],
+            "default": "concise",
+            "description": "How much the answer carries: `concise` (the default) gives the fields that identify each item; `detailed` gives every field."
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "done"],
+        "additionalProperties": false
+      },
+      "oldNames": []
+    },
+    {
+      "name": "run_webhook",
+      "title": "Fixture webhooks.run",
+      "description": "A fixture operation (webhooks.run) for the adapter's tests.",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["concise", "detailed"],
+            "default": "concise",
+            "description": "How much the answer carries: `concise` (the default) gives the fields that identify each item; `detailed` gives every field."
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "done"],
+        "additionalProperties": false
+      },
+      "oldNames": []
+    },
+    {
+      "name": "update_draft",
+      "title": "Fixture drafts.update",
+      "description": "A fixture operation (drafts.update) for the adapter's tests.",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["concise", "detailed"],
+            "default": "concise",
+            "description": "How much the answer carries: `concise` (the default) gives the fields that identify each item; `detailed` gives every field."
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "done"],
+        "additionalProperties": false
+      },
+      "oldNames": []
+    },
+    {
+      "name": "update_thing",
+      "title": "Fixture things.update",
+      "description": "A fixture operation (things.update) for the adapter's tests.",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["concise", "detailed"],
+            "default": "concise",
+            "description": "How much the answer carries: `concise` (the default) gives the fields that identify each item; `detailed` gives every field."
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "done"],
+        "additionalProperties": false
+      },
+      "oldNames": []
+    }
+  ]
+}

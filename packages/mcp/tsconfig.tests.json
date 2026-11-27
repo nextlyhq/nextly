@@ -1,0 +1,12 @@
+// Type-checks what `tsconfig.json` leaves out: the tests and their fixtures.
+// Vitest strips annotations rather than checking them, so without this a test
+// file's types are in no TypeScript program at all.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules"]
+}

@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (0ad1c4df4bd702f6). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (fe11351eb465863e). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -182,7 +182,7 @@ budget, the overrides and each operating system's caveats: the
   `storage-s3`, `storage-vercel-blob`, `storage-uploadthing`,
   `plugin-accounts`, `plugin-commerce`, `plugin-form-builder`, `plugin-mcp`, `plugin-page-builder`,
   `plugin-seo`,
-  `plugin-sdk`,
+  `plugin-sdk`, `mcp`,
   `blocks-engine`, `blocks-react`, `builder`,
   `create-nextly-app`, `eslint-config`, `eslint-plugin`, `module-specifiers`,
   `prettier-config`, `tsconfig`,

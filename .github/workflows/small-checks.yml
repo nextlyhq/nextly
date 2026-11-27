@@ -131,6 +131,7 @@ jobs:
             plugin-commerce
             plugin-form-builder
             plugin-mcp
+            mcp
             plugin-page-builder
             plugin-seo
             plugin-sdk
@@ -158,6 +159,20 @@ jobs:
         if: ${{ !cancelled() && github.event_name != 'push' }}
         working-directory: change
         run: node "$GITHUB_WORKSPACE/scripts/ai-credit.mjs"
+
+      # A changed MCP tool-list snapshot changes what agents see, so it ships
+      # with a changeset listing the package. git, run in `change/`, reads the
+      # change; the checker comes from the root and imports only Node's own
+      # modules.
+      - name: Tool-list snapshot comes with a changeset
+        if: ${{ !cancelled() && github.event_name != 'push' }}
+        working-directory: change
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+          QUEUE_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: node "$GITHUB_WORKSPACE/scripts/check-tool-snapshot-changeset.mjs"
 
       - name: Install gitleaks
         if: ${{ !cancelled() }}

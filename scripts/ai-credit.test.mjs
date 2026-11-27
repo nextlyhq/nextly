@@ -807,7 +807,8 @@ describe("what the checker runs with a fork's head checked out", () => {
     expect(setupNode.with.cache).toBeUndefined();
     // Every action is a pinned checkout or setup-node, or the checker's own title action at the root.
     expect(steps.every(step => step.run !== undefined || /^actions\/(checkout|setup-node)@[0-9a-f]{40}$/.test(String(step.uses)) || step.uses === "./.github/actions/pr-title")).toBe(true);
-    // Inside the change, only the checker and the scan run, and neither runs the change's files.
+    // Inside the change, only the checkers and the scan run, and none runs the change's files:
+    // the tool-list snapshot check, like the credit check, is the root's script reading git.
     // A working directory is read as a path, however it is spelled.
     const workspace = /^(?:\$GITHUB_WORKSPACE|\$\{\{\s*github\.workspace\s*\}\})(?:\/|$)/;
     const underChange = value => {
@@ -815,7 +816,11 @@ describe("what the checker runs with a fork's head checked out", () => {
       return path === change.with.path || path.startsWith(`${change.with.path}/`);
     };
     const inChange = steps.filter(step => underChange(step["working-directory"])).map(step => step.name);
-    expect(inChange).toEqual(["No AI credit", "Run gitleaks on the commits this run adds"]);
+    expect(inChange).toEqual([
+      "No AI credit",
+      "Tool-list snapshot comes with a changeset",
+      "Run gitleaks on the commits this run adds",
+    ]);
     // No step reaches into the change any other way: a `cd` into it, or a path under it.
     for (const step of steps) {
       expect(String(step.run ?? ""), step.name).not.toMatch(/\bcd\s+["']?(?:\.\/|\$GITHUB_WORKSPACE\/|\$\{\{\s*github\.workspace\s*\}\}\/)?change\b/);

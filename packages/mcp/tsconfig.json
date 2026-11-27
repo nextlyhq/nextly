@@ -1,0 +1,13 @@
+{
+  "extends": "@nextlyhq/tsconfig/base-bundler.json",
+  "compilerOptions": {
+    "types": ["node"],
+    // Every export states its type, so tsdown can write the published
+    // declarations with oxc, one file at a time and without a type checker.
+    "isolatedDeclarations": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "src/__tests__/**"]
+}
