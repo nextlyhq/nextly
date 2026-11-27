@@ -609,13 +609,13 @@ function rootFilesConfig(
     readStructuredDataRules: ReadStructuredDataRules;
   },
   collections: readonly string[] | undefined,
-  codeRoutes: ReadCodeRoutes
+  code: Pick<RootFilesConfig, "codeRoutes" | "codeMarkdown">
 ): RootFilesConfig {
   const sitemap = sitemapConfig(options, collections);
   return {
     ...configuredOrigin(options, sitemap),
     ...readers,
-    codeRoutes,
+    ...code,
     ...(sitemap === undefined ? {} : { sitemap }),
     ...(options.robots === false
       ? {}
@@ -635,9 +635,9 @@ function siteFileRoutes(
     readStructuredDataRules: ReadStructuredDataRules;
   },
   collections: readonly string[] | undefined,
-  codeRoutes: ReadCodeRoutes
+  code: Pick<RootFilesConfig, "codeRoutes" | "codeMarkdown">
 ): PluginRoute[] {
-  const config = rootFilesConfig(options, readers, collections, codeRoutes);
+  const config = rootFilesConfig(options, readers, collections, code);
   const routes = rootFileRoutes(config);
   const { sitemap } = config;
   if (sitemap !== undefined) {
@@ -1205,7 +1205,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         readStructuredDataRules: problemChecks.readers.readStructuredDataRules,
       },
       sitemapSubset,
-      codeRoutes
+      // The llms files link a page's copy where its Markdown is given.
+      { codeRoutes, codeMarkdown: stated.markdownAt }
     ),
     shareImageRoute(options.baseUrl),
     // The cards a page's own picture is served as where networks would not

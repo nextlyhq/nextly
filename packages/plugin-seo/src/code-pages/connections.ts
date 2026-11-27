@@ -52,6 +52,21 @@ export function keepCodeRoutes(kept: KeptCodeRoutes): void {
 }
 
 /**
+ * Record, while `next build` renders the site, that the page built in code
+ * at `path` is one this build has (`code-pages/build-record`), in the build
+ * directory the started plugin was given; nothing outside the build, or
+ * where no plugin has started.
+ */
+export async function recordBuiltCodePage(
+  ctx: PluginContext,
+  path: string
+): Promise<void> {
+  const kept = shared.__nextly_seoCodeRoutes;
+  if (!isNextBuild() || kept === undefined) return;
+  await recordBuiltPage(ctx, kept.buildDir(), path);
+}
+
+/**
  * Whether a call for `path` may be recorded: during the build, which renders
  * only the site's own addresses, or for an address the site already knows
  * of. A request for any other address must not make a row, or each made-up
@@ -103,12 +118,6 @@ async function record(
 ): Promise<void> {
   const call = callOf(ctx, input);
   if (call === undefined) return;
-  // While the site is built, the page is recorded as one this build has,
-  // whatever its row already says: the running site lists its own build's.
-  const kept = shared.__nextly_seoCodeRoutes;
-  if (isNextBuild() && kept !== undefined) {
-    await recordBuiltPage(ctx, kept.buildDir(), call.path);
-  }
   try {
     const row = await readCodePage(ctx, call.path);
     if (recorded(row, call.connection)) return;

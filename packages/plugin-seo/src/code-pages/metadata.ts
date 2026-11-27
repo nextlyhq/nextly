@@ -36,6 +36,7 @@ import { textOf } from "../plain-values";
 import { SEO_PLUGIN_NAME } from "../settings/contract";
 
 import { CODE_PAGES_CACHE_PART, codePagesSlug } from "./collection";
+import { recordBuiltCodePage } from "./connections";
 import {
   codeAddressOf,
   codePageDocument,
@@ -144,6 +145,11 @@ async function codePageAsk(
       return null;
     }
   }
+  // While the site is built, the page is recorded as one this build has,
+  // here rather than where its head is answered: a build may reuse a head a
+  // cache kept from an earlier one, and the page is this build's all the same.
+  const started = keptSeoContext();
+  if (started !== undefined) await recordBuiltCodePage(started, address);
   // The plugin's own tag, which a save on the screen expires.
   const tags = [pluginCacheTag(SEO_PLUGIN_NAME, CODE_PAGES_CACHE_PART)];
   let found: CodePageRead | null;

@@ -52,20 +52,28 @@ export interface BuildRecord {
 }
 
 /**
- * The id of the build in `buildDir`, as Next.js wrote it to `BUILD_ID`;
- * none where there is no such file, as in development, or while
- * `next build` has not yet written it.
+ * The id of the build in `buildDir`: what Next.js wrote to `BUILD_ID`, with
+ * the deployment's id after it where one is set (`NEXT_DEPLOYMENT_ID`, which
+ * Next.js sets from the site's `deploymentId` both while it builds and while
+ * it serves). Where a deployment id is set, as a host's skew protection
+ * sets it, Next.js writes the same `BUILD_ID` for every build, so the
+ * deployment's id is what tells two builds apart. None where there is no
+ * `BUILD_ID`, as in development, or while `next build` has not yet written
+ * it.
  */
 export function buildIdIn(buildDir: string): string | undefined {
+  let written: string;
   try {
-    const id = readFileSync(
+    written = readFileSync(
       join(/*turbopackIgnore: true*/ buildDir, "BUILD_ID"),
       "utf8"
     ).trim();
-    return id === "" || id.length > 255 ? undefined : id;
   } catch {
     return undefined;
   }
+  const deployment = process.env.NEXT_DEPLOYMENT_ID?.trim() ?? "";
+  const id = deployment === "" ? written : `${written}@${deployment}`;
+  return written === "" || id.length > 255 ? undefined : id;
 }
 
 /** The key one address of one build is kept under. */

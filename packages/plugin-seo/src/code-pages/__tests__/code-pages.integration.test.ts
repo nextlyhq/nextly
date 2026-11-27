@@ -872,6 +872,13 @@ describe.each(getConfiguredTestDialects())(
       } finally {
         writeFileSync(join(RECORDED, "BUILD_ID"), "build-one\n");
       }
+      // Nor by another deployment that wrote the same BUILD_ID, as Next.js
+      // does for every build where a deployment id is set.
+      vi.stubEnv("NEXT_DEPLOYMENT_ID", "dpl_other");
+      const other = await listed();
+      for (const page of pages) expect(other).not.toContain(page);
+      vi.unstubAllEnvs();
+      expect(await listed()).toEqual(expect.arrayContaining(pages));
     });
 
     it("says nothing of the build, and lists only its routes, where its prerender manifest is read", async () => {

@@ -70,11 +70,29 @@ const fn = z.custom<(...args: never[]) => unknown>(
  * A route as Next.js names it: from the root, each segment a name or a
  * variable part, a catch-all only last.
  */
+/**
+ * One segment of a route as Next.js names it: a name, `[name]`,
+ * `[...name]` or `[[...name]]`, and nothing half of one.
+ */
+const SEGMENT =
+  /^(?:[^[\]]+|\[[^[\].]+\]|\[\.\.\.[^[\].]+\]|\[\[\.\.\.[^[\].]+\]\])$/;
+
 const ROUTE = z
   .string()
   .regex(
     /^\/[^?#\s]*$/,
     "must be a route from the site's root, such as /docs/[slug]"
+  )
+  .refine(
+    route =>
+      route
+        .split("/")
+        .filter(part => part !== "")
+        .every(segment => SEGMENT.test(segment)),
+    {
+      message:
+        "must name each variable part as [name], [...name] or [[...name]]",
+    }
   )
   .refine(
     route => {

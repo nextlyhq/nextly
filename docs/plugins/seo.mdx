@@ -2414,7 +2414,9 @@ lists none of its pages, with a warning, and changes nothing else.
 
 The same option gives the Markdown a page built in code's [plain-text copy](#llmstxt-and-plain-text-copies)
 is made of, for any page its route serves, however the page is listed. Without it the copy is
-made from the page as it renders, which finds no words in a page with no `<main>`:
+made from the page as it renders: its `<main>`, or its body without the shared header and footer,
+which on a page laid out without `<main>` can hold its navigation and sidebars too. With it, the
+copy says only what the site wrote for it:
 
 ```ts
 seoPlugin({
@@ -2431,7 +2433,7 @@ seoPlugin({
 `markdown` is handed the page's `path` and its `params`, and returns the copy's Markdown, or
 nothing to fall back to the rendered page. The plugin adds the front matter (`title`,
 `description`, `url`, `last_updated`) from the page's head, and never renders the page for it, so
-the copy is served even where the site names no address of its own. A route is checked when the
+the copy is served, and linked from `llms.txt`, even where the site names no address of its own. A route is checked when the
 site starts: one that isn't from the root, or has a catch-all before its last segment, fails the
 start with a message naming it.
 

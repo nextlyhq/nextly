@@ -192,13 +192,28 @@ async function listedHeads(
   );
   const heads = await publicHeads(ctx, pages, readable, readRules);
   const codeHeads = await codeHeadsOf(ctx, config, readRules);
+  // Each page built in code whose copy is served, decided as serving it is,
+  // whether pages may be rendered read once for them all.
   const renders = await rendersPages(ctx, config);
+  const codeCopies = new Set<string>();
+  for (const page of pages) {
+    if (
+      page.holder.collection === codeSlug &&
+      (await codeCopyServed(ctx, config, page.path, renders))
+    ) {
+      codeCopies.add(page.path);
+    }
+  }
   return at => {
     const page = pages[at];
     if (page === undefined) return { readable: false };
     if (page.holder.collection === codeSlug) {
-      // Its copy is made from the page as it renders, where it may be.
-      return { ...codeHeads.get(page.path), readable: renders };
+      // Its copy is made from the Markdown the options give for it, or from
+      // the page as it renders, where it may be.
+      return {
+        ...codeHeads.get(page.path),
+        readable: codeCopies.has(page.path),
+      };
     }
     const document = readable.get(readingKey(page));
     return {
@@ -627,18 +642,16 @@ async function renderedCopyFor(
 }
 
 /**
- * The copy of the page built in code `page` made from the Markdown the
- * site's options give for it, with its front matter from its head; none
- * where they give none, or theirs gives nothing, and the copy is then made
- * from the rendered page. A source that fails is logged, and the rendered
- * page tried instead.
+ * The Markdown the site's options give for the page built in code at
+ * `path`, made; none where they give none for its route, or theirs gives
+ * nothing. A source that fails is logged, and counts as none.
  */
-async function statedCopyFor(
+async function statedMarkdownAt(
   ctx: PluginContext,
-  page: ListedPage,
-  config: AiOutputsConfig
+  config: AiOutputsConfig,
+  path: string
 ): Promise<string | null> {
-  const source = config.codeMarkdown?.(page.path);
+  const source = config.codeMarkdown?.(path);
   if (source === undefined) return null;
   let markdown: string | undefined;
   try {
@@ -646,16 +659,47 @@ async function statedCopyFor(
   } catch (error) {
     ctx.logger.warn(
       "The Markdown codeAddresses gives for a page could not be made",
-      { path: page.path, error }
+      { path, error }
     );
     return null;
   }
-  if (typeof markdown !== "string" || markdown.trim() === "") return null;
+  return typeof markdown === "string" && markdown.trim() !== ""
+    ? markdown.trim()
+    : null;
+}
+
+/**
+ * Whether the copy of the page built in code at `path` is served: made from
+ * the page as it renders, where the site lets it be (`rendersPages`), else
+ * from the Markdown its options give, where that gives some. The one answer
+ * serving a copy, its head's link and llms.txt's link read; `renders`, where
+ * the caller has read whether pages may be rendered already.
+ */
+async function codeCopyServed(
+  ctx: PluginContext,
+  config: AiOutputsConfig,
+  path: string,
+  renders?: boolean
+): Promise<boolean> {
+  if (renders ?? (await rendersPages(ctx, config))) return true;
+  return (await statedMarkdownAt(ctx, config, path)) !== null;
+}
+
+/**
+ * The copy of the page built in code `page` made from the Markdown the
+ * site's options give for it, with its front matter from its head; none
+ * where they give none, or it gives nothing, and the copy is then made from
+ * the rendered page.
+ */
+async function statedCopyFor(
+  ctx: PluginContext,
+  page: ListedPage,
+  config: AiOutputsConfig
+): Promise<string | null> {
+  const markdown = await statedMarkdownAt(ctx, config, page.path);
+  if (markdown === null) return null;
   const heads = await codeHeadsOf(ctx, config, config.readRules, page.path);
-  return withFrontMatter(
-    aboutOf(page, heads.get(page.path) ?? {}),
-    markdown.trim()
-  );
+  return withFrontMatter(aboutOf(page, heads.get(page.path) ?? {}), markdown);
 }
 
 /** Whether a copy says anything beyond its heading. */
@@ -871,10 +915,7 @@ export async function servedCopyAddress(
     const page = await copyServedAt(ctx, url, loc, config);
     if (page === null) continue;
     if (page.holder.collection === codePagesSlug(ctx)) {
-      // Made from the Markdown the options give for it, or from the page
-      // as it renders, where the site lets it be.
-      return config.codeMarkdown?.(page.path) !== undefined ||
-        (await rendersPages(ctx, config))
+      return (await codeCopyServed(ctx, config, page.path))
         ? url.href
         : undefined;
     }

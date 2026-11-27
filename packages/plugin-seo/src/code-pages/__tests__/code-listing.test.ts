@@ -150,6 +150,14 @@ describe("the codeAddresses option", () => {
     expect(() =>
       statedAddressesOf({ "/docs/[...slug]/edit": () => [] })
     ).toThrow(/catch-all only as its last segment/);
+    for (const route of ["/docs/[slug", "/docs/slug]", "/docs/[..slug]"]) {
+      expect(() => statedAddressesOf({ [route]: () => [] })).toThrow(
+        /as \[name\], \[\.\.\.name\] or \[\[\.\.\.name\]\]/
+      );
+    }
+    expect(() =>
+      statedAddressesOf({ "/docs/[[...slug]]": () => [], "/p/[id]": () => [] })
+    ).not.toThrow();
     expect(() =>
       statedAddressesOf({
         "/docs/[slug]": { markdown: "text" } as unknown as {
@@ -208,6 +216,7 @@ describe("the id of the build being served", () => {
   afterEach(() => {
     if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
     dir = undefined;
+    vi.unstubAllEnvs();
   });
 
   it("is what next build wrote, and none where it wrote none", () => {
@@ -217,5 +226,14 @@ describe("the id of the build being served", () => {
     expect(buildIdIn(dir)).toBe("abc123");
     writeFileSync(join(dir, "BUILD_ID"), "  \n");
     expect(buildIdIn(dir)).toBeUndefined();
+  });
+
+  it("is told apart by the deployment's id, where Next.js writes one BUILD_ID for every build", () => {
+    dir = mkdtempSync(join(tmpdir(), "seo-build-id-"));
+    writeFileSync(join(dir, "BUILD_ID"), "build-TfctsWXpff2fKS\n");
+    vi.stubEnv("NEXT_DEPLOYMENT_ID", "dpl_one");
+    expect(buildIdIn(dir)).toBe("build-TfctsWXpff2fKS@dpl_one");
+    vi.stubEnv("NEXT_DEPLOYMENT_ID", "dpl_two");
+    expect(buildIdIn(dir)).toBe("build-TfctsWXpff2fKS@dpl_two");
   });
 });

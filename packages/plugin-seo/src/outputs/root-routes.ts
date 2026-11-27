@@ -41,6 +41,8 @@ export interface RootFilesConfig {
   robots?: { aiCrawlers: AiCrawlerChoice };
   /** The pages the site's routes render from their own code. */
   codeRoutes?: ReadCodeRoutes;
+  /** The Markdown the options give for a page built in code, which its copy is made of. */
+  codeMarkdown?: AiOutputsConfig["codeMarkdown"];
 }
 
 /**
@@ -304,6 +306,9 @@ function llmsRoute(
           ...(config.codeRoutes === undefined
             ? {}
             : { codeRoutes: config.codeRoutes }),
+          ...(config.codeMarkdown === undefined
+            ? {}
+            : { codeMarkdown: config.codeMarkdown }),
           ...(config.sitemap?.collections === undefined
             ? {}
             : { collections: config.sitemap.collections }),

@@ -46,6 +46,7 @@ writeFileSync(
   JSON.stringify({
     "/(site)/products/[slug]/page": "app/(site)/products/[slug]/page.js",
     "/docs/[[...slug]]/page": "app/docs/[[...slug]]/page.js",
+    "/guides/[topic]/page": "app/guides/[topic]/page.js",
   })
 );
 writeFileSync(join(BUILD, "BUILD_ID"), "stated-build\n");
@@ -63,15 +64,22 @@ afterAll(() => {
   rmSync(BUILD, { recursive: true, force: true });
 });
 
-/** The site booted with its products and docs stated in the options. */
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+/**
+ * The site booted with its products and docs stated in the options; `named`
+ * false, it names no address of its own (no `baseUrl`, no production
+ * address), so no page of it is rendered to make a copy.
+ */
+async function boot(
+  dialect: TestDialect,
+  { named = true } = {}
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
     seedPublic: true,
     plugins: [
       seoPlugin({
         collections: [],
-        baseUrl: SITE,
+        ...(named ? { baseUrl: SITE } : {}),
         nextBuildDir: BUILD,
         codeAddresses: {
           // The last names no slug: it lists no page.
@@ -84,6 +92,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
             markdown: ({ params }) =>
               `# ${[params.slug ?? []].flat().join(" / ") || "Docs"}\n\nWritten for readers.`,
           },
+          // A source that gives nothing for a page.
+          "/guides/[topic]": { markdown: () => undefined },
         },
       }),
     ],
@@ -94,7 +104,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     data: {
       _overwrite: true,
       siteName: "Acme",
-      productionAddresses: [SITE],
+      productionAddresses: named ? [SITE] : [],
       plainTextCopies: true,
       llmsTxt: true,
     },
@@ -176,6 +186,32 @@ describe.each(getConfiguredTestDialects())(
         )
       ).text();
       expect(llms).toContain(`(${SITE}/docs/guides/start.md)`);
+    });
+
+    it("links a Markdown copy where no page may be rendered, and none whose Markdown gives nothing", async () => {
+      await boot(dialect, { named: false });
+      process.env.NEXT_PHASE = "phase-production-build";
+      await seoMetadata("/docs/guides/start");
+      await seoMetadata("/guides/launch");
+      delete process.env.NEXT_PHASE;
+
+      const llms = await (
+        await createDynamicHandlers().GET(
+          new Request(`${SITE}/admin/api/llms.txt`),
+          { params: Promise.resolve({ params: ["llms.txt"] }) }
+        )
+      ).text();
+      expect(llms).toContain(`(${SITE}/docs/guides/start.md)`);
+      expect(llms).toContain(`(${SITE}/guides/launch)`);
+      expect(llms).not.toContain("/guides/launch.md");
+
+      // The copy linked is served, and the one not linked is not.
+      expect((await ask("/docs/guides/start.md")).body).toContain(
+        "# guides / start\n\nWritten for readers.\n"
+      );
+      expect((await ask("/guides/launch.md")).type).not.toBe(
+        "text/markdown; charset=utf-8"
+      );
     });
   }
 );
