@@ -126,6 +126,8 @@ export function adminLink(
     return undefined;
   }
   const link = new URL(adminPath, base);
+  // The path rule above already keeps every link on the site; this second
+  // check costs nothing and holds if that rule is ever loosened.
   return link.origin === base.origin ? link.href : undefined;
 }
 

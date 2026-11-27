@@ -30,10 +30,12 @@ describe("the tool-list snapshot", () => {
       existsSync(SNAPSHOT),
       `${SNAPSHOT} is missing; write it with UPDATE_TOOL_SNAPSHOTS=1`
     ).toBe(true);
+    // Compared as data, so the formatter's line breaks in the checked-in
+    // file never count as a change; every value still must match.
     expect(
-      built,
+      JSON.parse(built),
       "The tool list changed. Review the difference, then accept it with UPDATE_TOOL_SNAPSHOTS=1 pnpm --filter @nextlyhq/mcp test"
-    ).toBe(readFileSync(SNAPSHOT, "utf8"));
+    ).toEqual(JSON.parse(readFileSync(SNAPSHOT, "utf8")));
   });
 
   it("holds every tool the door serves, sorted by name", () => {

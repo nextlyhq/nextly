@@ -6,7 +6,7 @@
  */
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport, Server } from "@modelcontextprotocol/server";
-import { NextlyError } from "nextly/errors";
+import { NextlyError, type PublicData } from "nextly/errors";
 import { z } from "zod";
 
 import type {
@@ -16,6 +16,7 @@ import type {
   OperationSource,
   RiskLevel,
 } from "../operation";
+import type { UnknownNameData } from "../errors";
 import type { ToolTableRow } from "../names";
 import { buildToolSet, type ToolBinding, type ToolSet } from "../tool-set";
 
@@ -107,14 +108,30 @@ const FIND_OUTPUT = z
   .object({ collection: z.string(), items: z.array(ENTRY) })
   .strict();
 
+/**
+ * A refusal naming something that doesn't exist, with the names the caller
+ * may use instead, in the shape the adapter reads (`UnknownNameData`). Core's
+ * public-data union does not list that shape yet, so the one cast that lets a
+ * test build it lives here, and goes when core adds the shape.
+ */
+export function unknownNameError(
+  code: "NOT_FOUND" | "VALIDATION_ERROR",
+  unknown: UnknownNameData["unknown"]
+): NextlyError {
+  const publicData: UnknownNameData = { unknown };
+  return new NextlyError({
+    code,
+    publicMessage: code === "NOT_FOUND" ? "Not found." : "Validation failed.",
+    publicData: publicData as PublicData,
+  });
+}
+
 /** A refusal naming a collection that doesn't exist, with the ones that do. */
 function unknownCollection(name: string): NextlyError {
-  return new NextlyError({
-    code: "NOT_FOUND",
-    publicMessage: "No collection by that name.",
-    publicData: {
-      unknown: { kind: "collection", name, choices: [...COLLECTIONS] },
-    },
+  return unknownNameError("NOT_FOUND", {
+    kind: "collection",
+    name,
+    choices: [...COLLECTIONS],
   });
 }
 
@@ -225,7 +242,7 @@ export const KIND_OPERATIONS: Readonly<Record<string, AgentOperation>> = {
 };
 
 /** An operation renamed from `fetch_thing` (not a verb list name) to `get_renamed`. */
-export const RENAMED = simpleOperation({
+export const RENAMED: AgentOperation = simpleOperation({
   id: "renamed.get",
   level: "read",
   effects: { idempotent: true },
@@ -289,12 +306,10 @@ export async function runFixture(
     }
     for (const field of query.fields ?? []) {
       if (!(ENTRY_FIELDS as readonly string[]).includes(field)) {
-        throw new NextlyError({
-          code: "VALIDATION_ERROR",
-          publicMessage: "Validation failed.",
-          publicData: {
-            unknown: { kind: "field", name: field, choices: [...ENTRY_FIELDS] },
-          },
+        throw unknownNameError("VALIDATION_ERROR", {
+          kind: "field",
+          name: field,
+          choices: [...ENTRY_FIELDS],
         });
       }
     }

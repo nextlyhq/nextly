@@ -3,7 +3,11 @@
  * what to do next and the request ID; close names for a name that doesn't
  * exist; and nothing from an unexpected failure's message.
  */
-import { NEXTLY_ERROR_STATUS, NextlyError } from "nextly/errors";
+import {
+  NEXTLY_ERROR_STATUS,
+  NextlyError,
+  type PublicData,
+} from "nextly/errors";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,7 +17,7 @@ import {
   type ErrorAnswerData,
 } from "../errors";
 
-import type { LoggedLine } from "./fixtures";
+import { unknownNameError, type LoggedLine } from "./fixtures";
 
 const REQUEST_ID = "req-0001";
 
@@ -84,16 +88,10 @@ describe("the error answer for each core error code", () => {
 
 describe("a name that doesn't exist", () => {
   it("names a misspelled collection and suggests the close ones the caller may use", () => {
-    const error = new NextlyError({
-      code: "NOT_FOUND",
-      publicMessage: "No collection by that name.",
-      publicData: {
-        unknown: {
-          kind: "collection",
-          name: "psots",
-          choices: ["posts", "pages", "products"],
-        },
-      },
+    const error = unknownNameError("NOT_FOUND", {
+      kind: "collection",
+      name: "psots",
+      choices: ["posts", "pages", "products"],
     });
     const result = answer(error);
     expect(textOf(result)).toContain(
@@ -105,16 +103,10 @@ describe("a name that doesn't exist", () => {
   });
 
   it("names a misspelled field and suggests the close ones", () => {
-    const error = new NextlyError({
-      code: "VALIDATION_ERROR",
-      publicMessage: "Validation failed.",
-      publicData: {
-        unknown: {
-          kind: "field",
-          name: "titel",
-          choices: ["title", "status", "body"],
-        },
-      },
+    const error = unknownNameError("VALIDATION_ERROR", {
+      kind: "field",
+      name: "titel",
+      choices: ["title", "status", "body"],
     });
     expect(textOf(answer(error))).toContain(
       "No field is called `titel`. Close names you may use: `title`."
@@ -122,16 +114,30 @@ describe("a name that doesn't exist", () => {
   });
 
   it("says when nothing the caller may use is close", () => {
-    const error = new NextlyError({
-      code: "NOT_FOUND",
-      publicMessage: "No collection by that name.",
-      publicData: {
-        unknown: { kind: "collection", name: "zzzzzz", choices: ["posts"] },
-      },
+    const error = unknownNameError("NOT_FOUND", {
+      kind: "collection",
+      name: "zzzzzz",
+      choices: ["posts"],
     });
     expect(textOf(answer(error))).toContain(
       "No collection is called `zzzzzz`, and none you may use is close to it."
     );
+  });
+
+  it("reads a kind it has no words for as no unknown name", () => {
+    // Built by hand, past the helper's types, as data from outside would arrive.
+    const outside = {
+      unknown: { kind: "table", name: "psots", choices: ["posts"] },
+    };
+    const error = new NextlyError({
+      code: "NOT_FOUND",
+      publicMessage: "Not found.",
+      publicData: outside as PublicData,
+    });
+    const text = textOf(answer(error));
+    expect(text).not.toContain("is called");
+    expect(text).not.toContain("`posts`");
+    expect(text).toContain("**Refused: `NOT_FOUND`**");
   });
 
   it("ranks close names nearest first, at most three", () => {

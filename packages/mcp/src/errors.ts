@@ -146,18 +146,33 @@ export function nearestNames(
     .map(({ choice }) => choice);
 }
 
+/** The kinds of thing an unknown-name refusal may name, each worded in the answer. */
+export const UNKNOWN_NAME_KINDS: readonly [
+  "field",
+  "collection",
+  "single",
+  "block",
+] = ["field", "collection", "single", "block"] as const;
+
+export type UnknownNameKind = (typeof UNKNOWN_NAME_KINDS)[number];
+
 /**
  * The shape an operation's refusal takes in `error.data` to name something
  * that doesn't exist, so the answer can suggest names: what kind of thing it
- * is (a field, a collection, a block), the name asked for, and the names the
- * caller may use instead.
+ * is, the name asked for, and the names the caller may use instead. The
+ * operation fills `choices` only with names the caller may read, so a
+ * suggestion never reveals one they can't.
  */
 export interface UnknownNameData {
   readonly unknown: {
-    readonly kind: string;
+    readonly kind: UnknownNameKind;
     readonly name: string;
     readonly choices: readonly string[];
   };
+}
+
+function isUnknownNameKind(value: unknown): value is UnknownNameKind {
+  return (UNKNOWN_NAME_KINDS as readonly unknown[]).includes(value);
 }
 
 function unknownNameOf(data: unknown): UnknownNameData["unknown"] | undefined {
@@ -168,8 +183,9 @@ function unknownNameOf(data: unknown): UnknownNameData["unknown"] | undefined {
   const kind = "kind" in unknown ? unknown.kind : undefined;
   const name = "name" in unknown ? unknown.name : undefined;
   const choices = "choices" in unknown ? unknown.choices : undefined;
+  // A kind the answer has no words for is read as no unknown name at all.
   if (
-    typeof kind !== "string" ||
+    !isUnknownNameKind(kind) ||
     typeof name !== "string" ||
     !Array.isArray(choices)
   ) {
