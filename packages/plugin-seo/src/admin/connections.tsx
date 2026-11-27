@@ -97,6 +97,55 @@ function useKeyCheck(reported: IndexNowKeyCheck | undefined): {
   return { check: ran ?? reported, checking, failed, run };
 }
 
+/**
+ * What the key file's check says under the switch: under way, what it
+ * found, or that it couldn't be asked, with a way to check again where the
+ * file doesn't answer.
+ */
+function KeyFileStatus({
+  checking,
+  failed,
+  line,
+  checkAgain,
+}: {
+  checking: boolean;
+  failed: boolean;
+  line: { ok: boolean; text: string } | undefined;
+  checkAgain: () => void;
+}): JSX.Element {
+  if (checking) {
+    return (
+      <p className="mt-1.5 text-xs text-muted-foreground" role="status">
+        Checking the key file…
+      </p>
+    );
+  }
+  return (
+    <>
+      <StatusLine line={line} />
+      {failed ? (
+        <StatusLine
+          line={{
+            ok: false,
+            text: "The key file couldn't be checked. Try again.",
+          }}
+        />
+      ) : null}
+      {line?.ok === false || failed ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-2"
+          onClick={checkAgain}
+        >
+          Check again
+        </Button>
+      ) : null}
+    </>
+  );
+}
+
 /** IndexNow's row: the switch, the key file's state, and the last notice. */
 function IndexNowRow({
   draft,
@@ -131,6 +180,11 @@ function IndexNowRow({
     check === undefined || (!draft.indexNow && !refused)
       ? undefined
       : keyCheckLine(check);
+  const checkAgain = () => {
+    // Refused on the way on: a check that passes switches it on.
+    if (refused) void switchOn();
+    else void run();
+  };
   return (
     <SettingsRowGroup
       label="IndexNow"
@@ -149,38 +203,12 @@ function IndexNowRow({
           void switchOn();
         }}
       />
-      {checking ? (
-        <p className="mt-1.5 text-xs text-muted-foreground" role="status">
-          Checking the key file…
-        </p>
-      ) : (
-        <>
-          <StatusLine line={keyLine} />
-          {failed ? (
-            <StatusLine
-              line={{
-                ok: false,
-                text: "The key file couldn't be checked. Try again.",
-              }}
-            />
-          ) : null}
-          {keyLine?.ok === false || failed ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="mt-2"
-              onClick={() => {
-                // Refused on the way on: a check that passes switches it on.
-                if (refused) void switchOn();
-                else void run();
-              }}
-            >
-              Check again
-            </Button>
-          ) : null}
-        </>
-      )}
+      <KeyFileStatus
+        checking={checking}
+        failed={failed}
+        line={keyLine}
+        checkAgain={checkAgain}
+      />
       {draft.indexNow ? (
         <StatusLine
           line={indexNowLine(

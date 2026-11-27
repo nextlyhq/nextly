@@ -547,26 +547,47 @@ function withNextlyDecision(
   const toPage =
     answered.headers.has(MIDDLEWARE_NEXT) ||
     answered.headers.has(MIDDLEWARE_REWRITE);
-  const asked = Object.entries(decision.requestHeaders);
-  if (toPage && asked.length > 0) {
-    const listed = answered.headers.get(OVERRIDE_HEADERS);
-    const names =
-      listed === null
-        ? [...request.headers.keys()]
-        : listed.split(",").filter(name => name !== "");
-    if (listed === null) {
-      for (const [name, value] of request.headers) {
-        added[REQUEST_HEADER_PREFIX + name] = value;
-      }
-    }
-    for (const [name, value] of asked) {
-      if (names.includes(name)) continue;
-      names.push(name);
-      added[REQUEST_HEADER_PREFIX + name] = value;
-    }
-    added[OVERRIDE_HEADERS] = names.join(",");
+  if (toPage) {
+    Object.assign(
+      added,
+      requestHeadersAdded(answered, request, decision.requestHeaders)
+    );
   }
   return withHeaders(answered, added);
+}
+
+/**
+ * The response headers that hand the page `asked` beside what `answered`
+ * already hands it, as `NextResponse.next({ request })` encodes them: none
+ * where Nextly asks for none.
+ */
+function requestHeadersAdded(
+  answered: Response,
+  request: Request,
+  asked: Record<string, string>
+): Record<string, string> {
+  const entries = Object.entries(asked);
+  if (entries.length === 0) return {};
+  const added: Record<string, string> = {};
+  const listed = answered.headers.get(OVERRIDE_HEADERS);
+  // With no list of its own, the site's answer goes on with the request's
+  // own headers, which the list must then name as well.
+  const names =
+    listed === null
+      ? [...request.headers.keys()]
+      : listed.split(",").filter(name => name !== "");
+  if (listed === null) {
+    for (const [name, value] of request.headers) {
+      added[REQUEST_HEADER_PREFIX + name] = value;
+    }
+  }
+  for (const [name, value] of entries) {
+    if (names.includes(name)) continue;
+    names.push(name);
+    added[REQUEST_HEADER_PREFIX + name] = value;
+  }
+  added[OVERRIDE_HEADERS] = names.join(",");
+  return added;
 }
 
 /**

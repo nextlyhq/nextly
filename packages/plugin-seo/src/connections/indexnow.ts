@@ -477,7 +477,7 @@ async function keyFileAnswer(
  * check can come before the switch. The read is held to the site's own
  * addresses (`fetchAs`), so it reaches nothing else.
  */
-export async function checkIndexNowKey(
+async function checkIndexNowKey(
   ctx: PluginContext,
   setup: IndexNowSetup
 ): Promise<IndexNowKeyCheck> {
