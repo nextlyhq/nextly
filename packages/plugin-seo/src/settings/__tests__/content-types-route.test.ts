@@ -25,6 +25,8 @@ function context(): PluginRouteContext {
   return {
     user: { id: "u1" },
     caller: { can: async () => true },
+    // The app declares no types in code here.
+    config: {},
     services: {
       collections: {
         getCollection: async () => ({
@@ -166,6 +168,8 @@ function siteContext(
   return {
     user: { id: "u1" },
     caller: { can: async () => true },
+    // The app declares no types in code here.
+    config: {},
     services: {
       collections: {
         getCollection: async (slug: string) => {
@@ -250,6 +254,20 @@ describe("the content types route, for the Content types tab", () => {
     });
   });
 
+  it("says a plugin's Single was made in code, and names no maker for its collection", async () => {
+    const items = await listedBy(
+      { collections: ["events"], singles: ["landing"] },
+      siteContext(
+        [{ slug: "events", source: "plugin:@acme/shop" }],
+        [{ slug: "landing", label: "Landing", source: "plugin:@acme/shop" }]
+      )
+    );
+    expect(items.map(({ kind, source }) => [kind, source])).toEqual([
+      ["collection", undefined],
+      ["single", "code"],
+    ]);
+  });
+
   it("says why a site's own type has no SEO: left out in code, or its own seo field", async () => {
     const items = await listedBy(
       { collections: ["posts"] },
@@ -291,6 +309,8 @@ describe("the fields a detail may be read from", () => {
     return {
       user: { id: "u1" },
       caller: { can: async () => true },
+      // The app declares no types in code here.
+      config: {},
       services: {
         collections: {
           getCollection: async () => ({

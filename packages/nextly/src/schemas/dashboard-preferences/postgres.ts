@@ -19,7 +19,7 @@ import { pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 import {
   DASHBOARD_PREFERENCES_INDEXES,
   pgIndexes,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-postgres";
 import { users } from "../users/postgres";
 
 import {

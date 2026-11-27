@@ -31,15 +31,22 @@ import { clearRegistryRowCache } from "../../dynamic-collections/services/collec
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import type { BuilderSaveSetup } from "../../schema/builder-save/collection-save";
 import type { SettledSave } from "../../schema/builder-save/settle-left-save";
+import { declarationTakesRow } from "../../schema/migrate/plugin/declared-owner";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
+import {
+  lookingUpRegistry,
+  notedRegistryName,
+  noteRegistryName,
+} from "../migration/moved-storage";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
 } from "../storage/field-group-field-type";
-import { resolveRegistryTableName } from "../storage/resolve-storage-names";
+import { resolveFieldGroupRegistryName } from "../storage/resolve-storage-names";
 
 import {
   fieldGroupTableNameFor,
@@ -84,6 +91,12 @@ export interface UpdateComponentOptions {
  */
 export interface CodeFirstComponentConfig {
   slug: string;
+  /**
+   * The row's origin: the app's own (`code`), or the plugin that contributed it
+   * (`pluginEntitySources`). Required, so no road that syncs a field group leaves it out and
+   * records a plugin's as the app's.
+   */
+  source: FieldGroupSource;
   label: string;
   fields: DynamicFieldGroupInsert["fields"];
   description?: string;
@@ -116,10 +129,13 @@ export interface CodeFirstComponentSource {
  * same way and cannot rewrite each other's rows.
  */
 export function toCodeFirstComponentConfig(
-  fieldGroup: CodeFirstComponentSource
+  fieldGroup: CodeFirstComponentSource,
+  /** The field group's origin (`CodeFirstComponentConfig.source`). */
+  source: FieldGroupSource
 ): CodeFirstComponentConfig {
   return {
     slug: fieldGroup.slug,
+    source,
     // The declared label, else the slug with `-` and `_` as spaces and every
     // word capitalised.
     label:
@@ -206,6 +222,23 @@ function declaredComponentMetadata(
     description: config.description ?? null,
     admin: config.admin ?? null,
   };
+}
+
+/**
+ * Whether `config` changes the columns `existing` describes: its fields by
+ * hash, or its localization. The code-first sync writes such a change through
+ * and leaves the row pending; any other rewrite keeps the row's status, as a
+ * collection's does.
+ */
+function codeFirstSchemaChanged(
+  config: CodeFirstComponentConfig,
+  existing: DynamicFieldGroupRecord,
+  schemaHash: string
+): boolean {
+  return (
+    !schemaHashesMatch(schemaHash, existing.schemaHash) ||
+    (config.localized === true) !== (existing.localized === true)
+  );
 }
 
 /**
@@ -320,9 +353,49 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * database has *before* that runs and not a fact about the database in front
    * of us. Resolved from the catalog and memoized per adapter, so the answer
    * costs one catalog read per process rather than one per query.
+   *
+   * Never on a transaction: resolving reads the catalog on another
+   * connection, which a pool of one has not got while the transaction holds
+   * it. A lookup there uses the name this process last found, and one that
+   * name fails for finds the other on its own connection (`lookingUp`).
    */
   protected override async resolveRegistryTableName(): Promise<string> {
-    return resolveRegistryTableName(this.adapter);
+    const noted = notedRegistryName(this.adapter);
+    if (noted !== undefined && this.adapter.transactionOpenInFlow()) {
+      return noted;
+    }
+    const name = await resolveFieldGroupRegistryName(this.adapter);
+    noteRegistryName(this.adapter, name);
+    return name;
+  }
+
+  /**
+   * One lookup of the registry, following it when the storage migration moved it
+   * (`lookingUpRegistry`). Here rather than at each caller, since every one of them meets it: a
+   * write asks for definitions long before it reaches the field group's own rows.
+   */
+  private lookingUp<T>(
+    executor: unknown,
+    lookup: () => Promise<T>
+  ): Promise<T> {
+    return lookingUpRegistry({ adapter: this.adapter, executor, lookup });
+  }
+
+  protected override getRecordBySlug(
+    slug: string,
+    executor?: unknown,
+    forRead = false
+  ): Promise<DynamicFieldGroupRecord | null> {
+    return this.lookingUp(executor, () =>
+      super.getRecordBySlug(slug, executor, forRead)
+    );
+  }
+
+  protected override listStored<T>(
+    view: (rows: readonly Readonly<Record<string, unknown>>[]) => T,
+    options: { forWrite?: boolean } = {}
+  ): Promise<T> {
+    return this.lookingUp(undefined, () => super.listStored(view, options));
   }
 
   protected getSearchColumns(): string[] {
@@ -348,7 +421,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * decides from the stored row and re-reads it to learn whether its own write landed.
    */
   async getComponentForWrite(slug: string): Promise<DynamicFieldGroupRecord> {
-    return this.getRecordForWrite(slug);
+    return this.lookingUp(undefined, () => this.getRecordForWrite(slug));
   }
 
   /**
@@ -359,13 +432,13 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   async findComponentForWrite(
     slug: string
   ): Promise<DynamicFieldGroupRecord | null> {
-    return this.findRecordForWrite(slug);
+    return this.lookingUp(undefined, () => this.findRecordForWrite(slug));
   }
 
   async getAllComponents(
     options?: ListComponentsOptions
   ): Promise<DynamicFieldGroupRecord[]> {
-    return this.getAllRecords(options);
+    return this.lookingUp(undefined, () => this.getAllRecords(options));
   }
 
   /**
@@ -373,7 +446,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * what a save's cycle check judges the saved definition against.
    */
   async getAllFieldLists(): Promise<DynamicFieldGroupRecord[]> {
-    return this.getAllRecordsWithColumns(["fields"], { forWrite: true });
+    return this.lookingUp(undefined, () =>
+      this.getAllRecordsWithColumns(["fields"], { forWrite: true })
+    );
   }
 
   /**
@@ -382,6 +457,10 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * one, so the read waits on no second connection, and as stored rather than cached.
    */
   async getAllTableNames(executor?: unknown): Promise<string[]> {
+    return this.lookingUp(executor, () => this.storedTableNames(executor));
+  }
+
+  private async storedTableNames(executor?: unknown): Promise<string[]> {
     try {
       const rows = await this.adapter.select<Record<string, unknown>>(
         await this.resolveRegistryTableName(),
@@ -463,7 +542,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       fields: JSON.stringify(data.fields),
       admin: data.admin ? JSON.stringify(data.admin) : null,
       source: data.source,
-      locked: (data.locked ?? data.source === "code") ? 1 : 0,
+      locked: (data.locked ?? isConfigOwnedSource(data.source)) ? 1 : 0,
       // i18n: persist the localized flag so embedded instances route translatable
       // fields to the companion `comp_<slug>_locales` table.
       localized: data.localized === true ? 1 : 0,
@@ -533,7 +612,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       fields: JSON.stringify(data.fields),
       admin: data.admin ? JSON.stringify(data.admin) : null,
       source: data.source,
-      locked: (data.locked ?? data.source === "code") ? 1 : 0,
+      locked: (data.locked ?? isConfigOwnedSource(data.source)) ? 1 : 0,
       // i18n: persist the localized flag so embedded instances route translatable
       // fields to the companion `comp_<slug>_locales` table.
       localized: data.localized === true ? 1 : 0,
@@ -564,7 +643,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * Update a Component's metadata.
    *
    * @throws NextlyError(NOT_FOUND) when no Component matches the slug.
-   * @throws NextlyError(FORBIDDEN) when the Component is locked and the source isn't "code".
+   * @throws NextlyError(FORBIDDEN) when the Component is locked and the source is neither "code" nor a plugin's.
    */
   async updateComponent(
     slug: string,
@@ -774,11 +853,12 @@ export class FieldGroupRegistryService extends BaseRegistryService<
               // config file. Pinning it here makes the check and the write one statement, which is
               // the whole reason this method exists rather than a read followed by an update.
               //
-              // Only for a non-code caller: `source: "code"` IS the owner, and the read above already
-              // permits it, so requiring `locked = false` there would refuse every code sync.
+              // Only for a caller that is neither code nor a plugin: either IS the owner, and the
+              // read above already permits it, so requiring `locked = false` there would refuse
+              // every code sync.
               // Safe as an equality because the column is NOT NULL with a default, so there is no
               // third state for it to miss.
-              ...(options?.source !== "code"
+              ...(!isConfigOwnedSource(options?.source)
                 ? [{ column: "locked", op: "=" as const, value: false }]
                 : []),
             ],
@@ -1044,7 +1124,10 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     for (const config of configs) {
       try {
-        const existing = await this.findRecordForWrite(config.slug);
+        const recorded = await this.findRecordForWrite(config.slug);
+        // Whose the row is, before anything below can leave the rest of it as it is.
+        const existing = recorded && (await this.claimedBy(config, recorded));
+        const claimed = existing !== recorded;
         const schemaHash = calculateSchemaHash(config.fields);
         // The pointer decision `writeRecordedComponent` shares: a stored name
         // that differs from the derived one is repaired or reported, never
@@ -1073,7 +1156,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
               schemaHash,
               desiredTableName
             ),
-            source: "code",
+            source: config.source,
             locked: true,
             configPath: config.configPath,
           });
@@ -1136,6 +1219,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
             existing: settled,
             schemaHash,
             repairedTableName,
+            claimed,
             result,
           });
         }
@@ -1169,6 +1253,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     existing: DynamicFieldGroupRecord;
     schemaHash: string;
     repairedTableName: string | undefined;
+    /** Whether the sync gave the row to this declaration (`claimedBy`). */
+    claimed: boolean;
     result: SyncComponentResult;
   }): Promise<void> {
     const { config, existing, schemaHash, repairedTableName, result } = args;
@@ -1179,26 +1265,75 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       repairedTableName
     );
     if (step === "update") {
+      // Judged as a collection's row is: only a schema change (hash or localization) leaves the
+      // row pending. Help text or a repaired table pointer changes no column, so the row keeps
+      // the status it had; writing the field list alone would otherwise mark it pending.
+      const schemaChanged = codeFirstSchemaChanged(
+        config,
+        existing,
+        schemaHash
+      );
       await this.updateComponent(
         config.slug,
         {
           ...declaredComponentRow(config, schemaHash, repairedTableName),
           configPath: config.configPath,
           locked: true,
+          ...(schemaChanged
+            ? {}
+            : { migrationStatus: existing.migrationStatus }),
         },
-        { source: "code" }
+        { source: config.source }
       );
       result.updated.push(config.slug);
     } else if (step === "metadata") {
       await this.updateComponent(
         config.slug,
         { ...declaredComponentMetadata(config), locked: true },
-        { source: "code" }
+        { source: config.source }
       );
+      result.updated.push(config.slug);
+    } else if (args.claimed) {
       result.updated.push(config.slug);
     } else {
       result.unchanged.push(config.slug);
     }
+  }
+
+  /**
+   * Gives each row of `declared` to its declaration, where that takes it from another owner
+   * (`declarationTakesRow`). `nextly db:sync` asks it before its push, so a push that is refused
+   * leaves no row recorded as another's.
+   */
+  async claimDeclared(
+    declared: readonly Pick<CodeFirstComponentConfig, "slug" | "source">[]
+  ): Promise<void> {
+    const recorded = new Map(
+      (await this.getAllComponents()).map(row => [row.slug, row])
+    );
+    for (const config of declared) {
+      const row = recorded.get(config.slug);
+      if (row !== undefined) await this.claimedBy(config, row);
+    }
+  }
+
+  /**
+   * `recorded`, given to `config`'s declaration where that takes it from another owner
+   * (`declarationTakesRow`). Asked before anything that can leave the row as it is, so a field
+   * group whose table cannot be brought in line is still recorded as whose it is.
+   */
+  private async claimedBy(
+    config: Pick<CodeFirstComponentConfig, "slug" | "source">,
+    recorded: DynamicFieldGroupRecord
+  ): Promise<DynamicFieldGroupRecord> {
+    if (!declarationTakesRow(config.source, recorded)) return recorded;
+    await this.claimRow(
+      await this.resolveRegistryTableName(),
+      config.slug,
+      recorded.source,
+      config.source
+    );
+    return { ...recorded, source: config.source, locked: true };
   }
 
   /**
@@ -1220,11 +1355,10 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   ): "update" | "metadata" | "unchanged" {
     if (
       repairedTableName !== undefined ||
-      !schemaHashesMatch(schemaHash, existing.schemaHash) ||
+      codeFirstSchemaChanged(config, existing, schemaHash) ||
       // Field settings the hash omits (help text, placeholder, hidden): the
       // stored field list carries them, so a change to one alone rewrites it.
-      fieldSettingsChanged(config.fields, existing.fields) ||
-      (config.localized === true) !== (existing.localized === true)
+      fieldSettingsChanged(config.fields, existing.fields)
     ) {
       return "update";
     }
@@ -1458,6 +1592,45 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         { fieldGroupRegistryName: () => this.resolveRegistryTableName() }
       )
     );
+  }
+
+  /**
+   * The collections and Singles that place the field group `componentSlug` INLINE: inside a named
+   * repeater or group, where its instances are held in the container's own value rather than in
+   * the field group's table (`fieldGroupPlacements`, the one walk of where a field list places
+   * field groups). A placement at an entity's own level, even inside a nameless group, is direct
+   * and not listed. Reads every stored field list as the delete's check does, and fails as it does.
+   */
+  async findInlinePlacements(componentSlug: string): Promise<
+    {
+      entityType: "collection" | "single";
+      entitySlug: string;
+      fieldPath: string;
+    }[]
+  > {
+    const { readFieldOwners } = await import(
+      "../../collections/services/collection-dependents"
+    );
+    const { fieldGroupPlacements } = await import(
+      "../storage/field-group-placements"
+    );
+    const owners = await readFieldOwners(this.adapter, {
+      fieldGroupRegistryName: () => this.resolveRegistryTableName(),
+    });
+    return owners.flatMap(owner => {
+      const { entityType, entitySlug } = owner;
+      if (entityType === "fieldGroup") return [];
+      return fieldGroupPlacements(owner.fields)
+        .filter(
+          placement =>
+            !placement.direct && placement.slugs.includes(componentSlug)
+        )
+        .map(placement => ({
+          entityType,
+          entitySlug,
+          fieldPath: placement.path,
+        }));
+    });
   }
 
   /**
@@ -1750,7 +1923,7 @@ function refuseChangeOutsideCode(
   slug: string,
   source: string | undefined
 ): void {
-  if (!existing.locked || source === "code") return;
+  if (!existing.locked || isConfigOwnedSource(source)) return;
   throw NextlyError.definedInCode({
     thing: "component",
     change: "change",

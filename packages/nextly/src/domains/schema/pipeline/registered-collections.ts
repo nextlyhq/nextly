@@ -143,6 +143,47 @@ export function configTheCodeOwns<
 }
 
 /**
+ * `config` with each collection a demote handed to the Schema Builder described by its registry row
+ * instead of the code entry the schema syncs ignore (`withoutHandedToBuilder`): its table, fields,
+ * lifecycle and translation, its columns by the Builder's rules, and no compound index, which no
+ * row holds. A plugin's collection is never replaced.
+ *
+ * For compiling the extension schema, which reads entities from the configuration alone: a schema
+ * hook is then judged by the columns the collection's table has. Only an entry still in the
+ * configuration is replaced: a collection the Builder made, or one whose entry was removed, is not
+ * one a hook may extend.
+ */
+export function configWithRecordedHandOvers<
+  C extends {
+    collections?: readonly unknown[];
+    plugins?: Parameters<typeof pluginCollectionSources>[0];
+  },
+>(config: C, registered: readonly RegisteredCollectionRow[]): C {
+  const handedOver = new Map(
+    registered.filter(isHandedToBuilder).map(row => [row.slug, row])
+  );
+  if (config.collections === undefined || handedOver.size === 0) return config;
+  const plugins = pluginCollectionSources(config.plugins ?? []);
+  const collections = config.collections.map(entry => {
+    const slug = slugOf(entry);
+    const row =
+      slug === undefined || plugins.has(slug)
+        ? undefined
+        : handedOver.get(slug);
+    if (row?.tableName === undefined) return entry;
+    return {
+      slug,
+      dbName: row.tableName,
+      fields: row.fields ?? [],
+      status: row.status === true,
+      localized: row.localized === true,
+      builderOwned: true,
+    };
+  });
+  return Object.assign({}, config, { collections });
+}
+
+/**
  * Whether a registry row belongs to code-first config or a plugin rather than the Schema Builder.
  *
  * `locked` is the persisted answer; `source` corroborates it for a row written before the flag was

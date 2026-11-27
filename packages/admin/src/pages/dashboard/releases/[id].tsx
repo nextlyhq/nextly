@@ -15,10 +15,12 @@ import type { JSX } from "react";
 
 import { ReleaseDetail } from "@admin/components/features/releases/ReleaseDetail";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { Breadcrumbs } from "@admin/components/shared/breadcrumbs";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import { useRelease } from "@admin/hooks/queries/useReleases";
 
 interface ReleaseDetailPageProps {
   params?: { id?: string };
@@ -28,10 +30,21 @@ export default function ReleaseDetailPage({
   params,
 }: ReleaseDetailPageProps): JSX.Element {
   const id = typeof params?.id === "string" ? params.id : undefined;
+  // The read the release's own page makes, so the trail names it at no cost.
+  const release = useRelease(id);
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
+        {/* Where the page is, in the top bar: under Releases, by the
+            release's own title once it is read. */}
+        <Breadcrumbs
+          items={[
+            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+            { label: "Releases", href: ROUTES.RELEASES },
+            { label: release.data?.title ?? "Release" },
+          ]}
+        />
         <Link
           href={ROUTES.RELEASES}
           className="mb-4 inline-block text-sm text-muted-foreground hover:text-foreground"

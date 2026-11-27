@@ -11,8 +11,9 @@
  * merges and undoes the same way (`site-font-roles-model`). What a row writes
  * is said on hover and, while "Show CSS names" is on, under the row.
  *
- * Under them, when headings are drawn in one of the site's fonts that has no
- * bold, a line says so, with "Add Bold" for a font from the catalogue.
+ * A "Fonts" section header heads them, lined up with the panel's other
+ * section headers, with "Manage fonts…" at its end: the way to the Fonts
+ * screen, where fonts and their weights are added.
  *
  * @module site-font-roles
  */
@@ -21,30 +22,32 @@ import type {
   SiteTextMap,
   SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
-import { Button, Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
+import { Popover, PopoverTrigger } from "@nextlyhq/ui";
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import { ChoiceList } from "../../choice-list";
-import { FONT_ROLE_WORDS, noBoldWords } from "../../editor-words";
+import { EDITOR_WORDS, FONT_ROLE_WORDS } from "../../editor-words";
 import { CssHint, CssNamesLine } from "../../inspector/css-hint";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 
-import type { CatalogueAddRequest } from "./font-catalogue-view";
-import { Refusal, useRefusableWrite } from "./panel-actions";
 import {
   firstFamily,
   fontRoleSetting,
   fontRoleWrites,
-  missingBold,
   roleFamilies,
   withFontRole,
   type FontRole,
-  type MissingBold,
   type RoleFamily,
 } from "./site-font-roles-model";
 
 export interface SiteFontRolesProps {
-  readonly tokens: SiteTokenSet;
+  /**
+   * The site's variables, or `undefined` while they are being read or when
+   * they could not be. Without them the header and "Manage fonts…" still
+   * show, so the Fonts screen stays in reach, and the two rows do not.
+   */
+  readonly tokens: SiteTokenSet | undefined;
   readonly onChange: (tokens: SiteTokenSet) => void;
   readonly readOnly: boolean;
   /** The Site text rows the site's code supplies. */
@@ -55,13 +58,6 @@ export interface SiteFontRolesProps {
   readonly fromCode: readonly FontFaceDef[];
   /** Open the site's fonts, where fonts are added. Absent, no link shows. */
   readonly onManageFonts?: (() => void) | undefined;
-  /**
-   * Add cuts of a catalogue family to the site, resolving to a message when
-   * refused. Absent, "Add Bold" is not offered.
-   */
-  readonly onAddCut?:
-    | ((request: CatalogueAddRequest) => Promise<string | undefined>)
-    | undefined;
 }
 
 /** One entry of a role's list. */
@@ -178,7 +174,7 @@ function shownOf(
   };
 }
 
-/** The two rows, and the missing-Bold line under them. */
+/** The Fonts header, with "Manage fonts…" at its end, over the two rows. */
 export function SiteFontRoles({
   tokens,
   onChange,
@@ -187,34 +183,53 @@ export function SiteFontRoles({
   faces,
   fromCode,
   onManageFonts,
-  onAddCut,
 }: SiteFontRolesProps): React.JSX.Element {
+  const headingId = React.useId();
   const families = React.useMemo(
     () => roleFamilies(faces ?? [], fromCode),
     [faces, fromCode]
   );
-  const missing = missingBold(tokens, families);
-  const pick = (role: FontRole, stack: string | undefined): void =>
-    onChange(withFontRole(tokens, role, stack, supplied));
   return (
-    <section className="nx-font-roles" aria-label="Body and headings fonts">
-      {(["body", "heading"] as const).map(role => (
-        <FontRoleRow
-          key={role}
-          role={role}
-          tokens={tokens}
-          choices={choicesFor(role, families)}
-          readOnly={readOnly}
-          onPick={stack => pick(role, stack)}
-          onManageFonts={onManageFonts}
-        />
-      ))}
-      {missing === undefined ? null : (
-        <MissingBoldLine
-          missing={missing}
-          onAddCut={readOnly ? undefined : onAddCut}
-        />
-      )}
+    <section
+      className="nx-vars__group nx-font-roles"
+      aria-labelledby={headingId}
+    >
+      {/* The panel's own section header, so it lines up with the others. */}
+      <div className="nx-vars__group-head">
+        <h3 className="nx-vars__group-name" id={headingId}>
+          {EDITOR_WORDS.fonts}
+        </h3>
+        {/* Shown read-only too: the Fonts screen is where a site's fonts are
+            seen, as the link under the rows showed them before. The mark is
+            where focus returns when that screen closes. */}
+        {onManageFonts === undefined ? null : (
+          <button
+            type="button"
+            className="nx-vars__link nx-font-roles__manage"
+            onClick={onManageFonts}
+            data-fonts-manage=""
+          >
+            Manage fonts…
+          </button>
+        )}
+      </div>
+      {/* The rows need the site's variables; until they are read, or when
+          they cannot be, the header above is all that shows. */}
+      {tokens === undefined
+        ? null
+        : (["body", "heading"] as const).map(role => (
+            <FontRoleRow
+              key={role}
+              role={role}
+              tokens={tokens}
+              choices={choicesFor(role, families)}
+              readOnly={readOnly}
+              onPick={stack =>
+                onChange(withFontRole(tokens, role, stack, supplied))
+              }
+              onManageFonts={onManageFonts}
+            />
+          ))}
     </section>
   );
 }
@@ -288,7 +303,7 @@ function FontRoleRow({
           </PopoverTrigger>
         </CssHint>
         <CssNamesLine id={namesId} names={["font-family"]} />
-        <PopoverContent
+        <BuilderPopoverContent
           align="start"
           sideOffset={4}
           collisionPadding={8}
@@ -329,40 +344,8 @@ function FontRoleRow({
               </div>
             )}
           </div>
-        </PopoverContent>
+        </BuilderPopoverContent>
       </Popover>
-    </div>
-  );
-}
-
-/** "<font> has no Bold…", with "Add Bold" where the catalogue can add it. */
-function MissingBoldLine({
-  missing,
-  onAddCut,
-}: {
-  missing: MissingBold;
-  onAddCut:
-    | ((request: CatalogueAddRequest) => Promise<string | undefined>)
-    | undefined;
-}): React.JSX.Element {
-  const { busy, refusal, run } = useRefusableWrite();
-  const { add } = missing;
-  return (
-    <div className="nx-font-roles__note" role="status">
-      <p className="nx-font-roles__note-text">{noBoldWords(missing.family)}</p>
-      {add === undefined || onAddCut === undefined ? null : (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="nx-font-roles__add"
-          disabled={busy}
-          onClick={() => void run(() => onAddCut(add))}
-        >
-          {FONT_ROLE_WORDS.addBold}
-        </Button>
-      )}
-      <Refusal refusal={refusal} />
     </div>
   );
 }

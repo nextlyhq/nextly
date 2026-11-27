@@ -34,7 +34,11 @@ import {
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useReleaseListPage } from "@admin/hooks/queries/useReleases";
-import type { Release } from "@admin/types/releases";
+import type {
+  Release,
+  ReleaseKind,
+  ReleaseListParams,
+} from "@admin/types/releases";
 
 import {
   compareByPlacement,
@@ -45,7 +49,11 @@ import {
 } from "./release-calendar";
 import { zoneDisplayName } from "./release-calendar-zones";
 import { releaseTimeOfDay, releaseTimeText } from "./release-time";
-import { ReleaseStatusMark } from "./ReleaseListCells";
+import {
+  ReleaseStatusMark,
+  SINGLES_HIDDEN_EMPTY,
+  SingleDocumentMark,
+} from "./ReleaseListCells";
 import {
   ReleaseRowDialogs,
   ReleaseRowMenuButton,
@@ -62,6 +70,7 @@ export function ReleaseCalendarDaySheet({
   isToday,
   overdue,
   now,
+  kind,
   onClose,
   onReturnFocus,
 }: {
@@ -72,6 +81,8 @@ export function ReleaseCalendarDaySheet({
   /** The ids the server calls overdue, or `null` while not known. */
   overdue: ReadonlySet<string> | null;
   now: number;
+  /** Only releases of this kind, as the calendar it opened from is read. */
+  kind?: ReleaseKind;
   onClose: () => void;
   /**
    * Put focus back where the list was opened from. The sheet is opened
@@ -100,11 +111,30 @@ export function ReleaseCalendarDaySheet({
             isToday={isToday}
             overdue={overdue}
             now={now}
+            kind={kind}
           />
         ) : null}
       </SheetContent>
     </Sheet>
   );
+}
+
+/**
+ * The list read of one page of a day's releases. It leaves out what the
+ * day's chips and count leave out: with `kind`, only releases of that kind.
+ */
+function dayListParams(
+  day: DayKey,
+  zone: string,
+  page: number,
+  kind: ReleaseKind | undefined
+): ReleaseListParams {
+  return {
+    day: { date: day, timezone: zone },
+    page: page + 1,
+    limit: DAY_PAGE_SIZE,
+    ...(kind ? { kind } : {}),
+  };
 }
 
 function DayList({
@@ -113,19 +143,17 @@ function DayList({
   isToday,
   overdue,
   now,
+  kind,
 }: {
   day: DayKey;
   zone: string;
   isToday: boolean;
   overdue: ReadonlySet<string> | null;
   now: number;
+  kind: ReleaseKind | undefined;
 }) {
   const [page, setPage] = useState(0);
-  const list = useReleaseListPage({
-    day: { date: day, timezone: zone },
-    page: page + 1,
-    limit: DAY_PAGE_SIZE,
-  });
+  const list = useReleaseListPage(dayListParams(day, zone, page, kind));
   const total = list.data?.meta.total;
   // In the order of the times shown, as the grid draws them: the server
   // sends a page by scheduled time, and a release published late is shown at
@@ -192,6 +220,7 @@ function DayList({
           zone={zone}
           overdue={overdue}
           now={now}
+          kind={kind}
           onOpen={openDialog}
         />
       </div>
@@ -234,6 +263,7 @@ function DayListBody({
   zone,
   overdue,
   now,
+  kind,
   onOpen,
 }: {
   list: ReturnType<typeof useReleaseListPage>;
@@ -241,6 +271,7 @@ function DayListBody({
   zone: string;
   overdue: ReadonlySet<string> | null;
   now: number;
+  kind: ReleaseKind | undefined;
   onOpen: (dialog: OpenDialog) => void;
 }) {
   if (list.isError) {
@@ -266,7 +297,11 @@ function DayListBody({
       <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
         <CalendarClock className="size-5 text-muted-foreground" aria-hidden />
         <p className="text-sm text-muted-foreground">
-          Nothing runs on this day.
+          {/* With single documents hidden, the List's words, so an empty
+              day is not taken for one with nothing on it. */}
+          {kind === "release"
+            ? SINGLES_HIDDEN_EMPTY
+            : "Nothing runs on this day."}
         </p>
       </div>
     );
@@ -319,11 +354,26 @@ function DayListRow({
         {releaseTimeOfDay(instant, zone) ?? "—"}
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
+        {/* The link holds the title and the single-document mark, as the
+            list's row does, so a screen reader hears the same name for the
+            same release in both places. Only the title underlines on hover.
+            The space is for the link's name: without it a screen reader runs
+            the title and the mark together as one word. Where the sheet is
+            narrow the mark wraps under the title, as on a Board tile, so the
+            title keeps its width and is cut only when it alone is too long. */}
         <Link
           href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
-          className="truncate text-sm font-medium text-foreground hover:underline"
+          className="group flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"
         >
-          {release.title}
+          <span className="min-w-0 max-w-full truncate text-sm font-medium text-foreground group-hover:underline">
+            {release.title}
+          </span>
+          {release.kind === "single" ? (
+            <>
+              {" "}
+              <SingleDocumentMark />
+            </>
+          ) : null}
         </Link>
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
           {status ? <ReleaseStatusMark status={status} /> : null}

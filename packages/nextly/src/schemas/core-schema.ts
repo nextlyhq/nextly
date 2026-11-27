@@ -27,6 +27,7 @@ import {
   CACHE_TAG_EXPIRIES_TABLE,
   cacheTagExpiriesTables,
 } from "./cache-tag-expiries";
+import { CLI_CREDENTIALS_TABLE, cliCredentialsTables } from "./cli-credentials";
 import { contentEventsTables } from "./content-events";
 import { dashboardPinsTables } from "./dashboard-pins";
 import { dashboardPreferencesTables } from "./dashboard-preferences";
@@ -80,6 +81,7 @@ import {
 } from "./spent-challenges";
 import { STORAGE_FORMAT } from "./storage-format";
 import { translationProvenanceTables } from "./translation-provenance";
+import { translationSourcesTables } from "./translation-sources";
 import { userTables } from "./users";
 import { versionPinsTables } from "./version-pins";
 import { versionViewsTables } from "./version-views";
@@ -234,6 +236,10 @@ export function getCoreSchema(
     // handlers. Declared here for the same reason as its neighbours: a table
     // outside this set is never created on a real installation.
     ...Object.values(cacheTagExpiriesTables(dialect)),
+    // `nextly_cli_credentials` — the sign-ins and passes the command line and
+    // agents hold. Declared here for the same reason as its neighbours: a table
+    // outside this set is never created on a real installation.
+    ...Object.values(cliCredentialsTables(dialect)),
     // `nextly_spent_challenges` — the two-factor challenges already answered,
     // so an answer is accepted once on every instance. Declared here for the
     // same reason as its neighbours: a table outside this set is never created
@@ -273,6 +279,10 @@ export function getCoreSchema(
     // records into it before it exists, so core-reconcile creating it is
     // sufficient, as for `nextly_versions`.
     ...Object.values(translationProvenanceTables(dialect)),
+    // The source text each translation was made from. Nothing keeps any in it
+    // before it exists, so core-reconcile creating it is sufficient, as for
+    // `nextly_versions`.
+    ...Object.values(translationSourcesTables(dialect)),
     // A plugin schedule's windows. Nothing writes them before they exist, so
     // core-reconcile creating them is sufficient.
     ...Object.values(scheduleWindowsTables(dialect)),
@@ -388,6 +398,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   PLUGIN_EVENTS_TABLE,
   PLUGIN_EVENT_DELIVERIES_TABLE,
   LIMIT_STORE_TABLE,
+  CLI_CREDENTIALS_TABLE,
   CACHE_TAG_EXPIRIES_TABLE,
   SPENT_CHALLENGES_TABLE,
   SCHEMA_OWNERS_TABLE,
@@ -412,6 +423,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_review_states",
   "nextly_workflow_settings",
   "nextly_translation_provenance",
+  "nextly_translation_sources",
   "nextly_schedule_windows",
   "nextly_content_events",
   "nextly_content_event_parts",

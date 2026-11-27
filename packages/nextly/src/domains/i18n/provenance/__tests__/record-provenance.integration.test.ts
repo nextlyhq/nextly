@@ -69,7 +69,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           json({ name: "meta", localized: true }),
         ],
       }),
-      // Drafts of a structure per language: a held change to its rows goes live with a publish.
+      // Drafts of one structure in every language, each language's text beside it.
       defineCollection({
         slug: "playlists",
         localized: true,
@@ -78,7 +78,6 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [
           repeater({
             name: "tracks",
-            localized: true,
             fields: [text({ name: "label" })],
           }),
         ],
@@ -89,14 +88,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         fields: [text({ name: "constructor", localized: true })],
       }),
-      // A structure per language: each language holds its own rows.
+      // One structure in every language: each language holds the same rows, with its own text.
       defineCollection({
         slug: "menus",
         localized: true,
         fields: [
           repeater({
             name: "items",
-            localized: true,
             fields: [text({ name: "label" })],
           }),
         ],
@@ -684,7 +682,9 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(rows)).not.toContain("m-1@example.com");
     });
 
-    it("records which row each row of a structure per language was translated or copied from", async () => {
+    // Rows are one structure in every language, so a row's text is translated or copied from the
+    // same row in the other language: each row's record names that row.
+    it("records which row each row's text was translated or copied from", async () => {
       await boot(dialect);
       const created = (await t!.nextly.create({
         collection: "menus",
@@ -705,20 +705,20 @@ describe.each(getConfiguredTestDialects())(
             .map(row => [row.fieldPath, [row.origin, row.originRowId]])
         );
 
-      // A machine translation names the row each of its rows was made from.
+      // A machine translation names the row each row's text was made from: the same row.
       await save(
         id,
         "es",
         {
           items: [
-            { id: "s1", label: "Inicio" },
-            { id: "s2", label: "Acerca de" },
+            { id: "r1", label: "Inicio" },
+            { id: "r2", label: "Acerca de" },
           ],
           _provenance: {
             items: {
               origin: "machine",
               engine: "deepl",
-              rows: { s1: "r1", s2: "r2" },
+              rows: { r1: "r1", r2: "r2" },
             },
           },
         },
@@ -726,8 +726,8 @@ describe.each(getConfiguredTestDialects())(
         "menus"
       );
       expect(await rowOrigins("es")).toEqual({
-        "items#s1": ["machine", "r1"],
-        "items#s2": ["machine", "r2"],
+        "items#r1": ["machine", "r1"],
+        "items#r2": ["machine", "r2"],
       });
 
       // A copy from another language keeps each row as the row it copied.
@@ -748,19 +748,6 @@ describe.each(getConfiguredTestDialects())(
         "items#r1": ["copy", "r1"],
         "items#r2": ["copy", "r2"],
       });
-
-      // A row removed from the language takes its record with it.
-      await save(
-        id,
-        "fr",
-        {
-          items: [{ id: "r1", label: "Accueil" }],
-          _provenance: { items: { origin: "copy", sourceLocale: "en" } },
-        },
-        undefined,
-        "menus"
-      );
-      expect(await rowOrigins("fr")).toEqual({ "items#r1": ["copy", "r1"] });
     });
     it("reads a write's claims by their own names, never a member every object inherits", async () => {
       // A field or a row named `constructor` has no claim unless the write names one: an object's
@@ -953,9 +940,10 @@ describe.each(getConfiguredTestDialects())(
         valueFingerprint: valueFingerprint("Corto"),
       });
     });
-    it("forgets a row's record when a published draft no longer has the row", async () => {
-      // Spanish was published with rows a and b, each recorded. A held change keeps a alone; once
-      // it goes live, b's record goes with b, and a's is the draft's.
+    it("forgets a row's record in every language when the row is removed", async () => {
+      // Spanish was published with rows a and b, each recorded. Rows are one structure in every
+      // language, so removing b is a change to every language: once it goes live, b's record goes
+      // with b in Spanish too, and a's stays.
       await boot(dialect);
       const created = (await t!.nextly.create({
         collection: "playlists",
@@ -1000,29 +988,15 @@ describe.each(getConfiguredTestDialects())(
           .sort();
       expect(await livePaths()).toEqual(["tracks", "tracks#a", "tracks#b"]);
 
-      const held = await save(
+      // b removed in English, published: the one structure loses it in every language.
+      const removed = await save(
         id,
-        "es",
-        {
-          tracks: [{ id: "a", label: "Uno" }],
-          _provenance: {
-            tracks: { origin: "machine", engine: "e1", rows: { a: "a" } },
-          },
-        },
-        { apiKey: "key-1" },
+        "en",
+        { tracks: [{ id: "a", label: "One" }], status: "published" },
+        undefined,
         "playlists"
       );
-      expect(held, JSON.stringify(held)).toMatchObject({ success: true });
-      const goingLive = await save(
-        id,
-        "es",
-        { status: "published" },
-        { apiKey: "key-1" },
-        "playlists"
-      );
-      expect(goingLive, JSON.stringify(goingLive)).toMatchObject({
-        success: true,
-      });
+      expect(removed, JSON.stringify(removed)).toMatchObject({ success: true });
       expect(await livePaths()).toEqual(["tracks", "tracks#a"]);
     });
     it("records a value a publish gives over its held draft's", async () => {

@@ -36,6 +36,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { fieldGroupTableNameFor } from "../../field-groups/services/field-group-storage-names";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import { resolveTransitionStore } from "../../i18n/migration/transition-recorder";
@@ -57,10 +58,7 @@ import {
 } from "../services/entity-owned-data";
 import { junctionTablesOf } from "../services/field-column-descriptor";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../utils/resolve-table-name";
+import { resolveCollectionTableName } from "../utils/resolve-table-name";
 
 const workflows = registerVersionPinHolder({
   name: "owned-data-test-workflows",
@@ -171,6 +169,11 @@ const PROBES: Record<EntityOwnedData, (owner: Owner) => Promise<number>> = {
       scopeKind: owner.kind,
       scopeSlug: owner.slug,
     }),
+  translationSources: owner =>
+    rowsIn("nextly_translation_sources", {
+      scopeKind: owner.kind,
+      scopeSlug: owner.slug,
+    }),
   translationTransition: async owner =>
     (
       await readI18nTransitionState(
@@ -246,6 +249,19 @@ const SEEDS: Partial<Record<EntityOwnedData, (owner: Owner) => Promise<void>>> =
         valueFingerprint: "f",
         origin: "person",
         writtenAt: new Date(),
+      });
+    },
+    translationSources: async owner => {
+      await t().adapter.insert("nextly_translation_sources", {
+        id: randomUUID(),
+        scopeKind: owner.kind,
+        scopeSlug: owner.slug,
+        entryId: owner.entryId,
+        sourceLocale: "en",
+        fieldPath: "label",
+        fingerprint: "f",
+        content: { value: "hello" },
+        recordedAt: new Date(),
       });
     },
     translationTransition: async owner => {
@@ -401,7 +417,7 @@ async function makeOwner(kind: OwningEntityKind): Promise<Owner> {
       slug: NOTES,
       table,
       junctions: junctionTablesOf(table, [targetsField]),
-      valuesTable: resolveComponentTableName(META),
+      valuesTable: fieldGroupTableNameFor("current", META),
       registry: REGISTRY_TABLES.collection ?? "",
       entryId: String(created.item.id),
     };
@@ -429,7 +445,7 @@ async function makeOwner(kind: OwningEntityKind): Promise<Owner> {
       slug: BANNER,
       table,
       junctions: junctionTablesOf(table, [targetsField]),
-      valuesTable: resolveComponentTableName(META),
+      valuesTable: fieldGroupTableNameFor("current", META),
       registry: REGISTRY_TABLES.single ?? "",
       entryId: String(row?.id),
     };
@@ -450,9 +466,9 @@ async function makeOwner(kind: OwningEntityKind): Promise<Owner> {
   return {
     kind,
     slug: CARD,
-    table: resolveComponentTableName(CARD),
+    table: fieldGroupTableNameFor("current", CARD),
     junctions: [],
-    valuesTable: resolveComponentTableName(BADGE),
+    valuesTable: fieldGroupTableNameFor("current", BADGE),
     registry: await resolveRegistryTableName(t().adapter),
     entryId: "",
   };

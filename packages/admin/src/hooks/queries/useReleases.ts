@@ -299,6 +299,32 @@ function calendarHasPendingRelease(
 }
 
 /**
+ * One column of the Releases Board: the first few releases of one tab, with
+ * the tab's true count.
+ *
+ * Read on the fast cadence whatever the column holds, as the tab counts are:
+ * a release moves between tabs on its own when its moment passes, and a
+ * column that went slow because it held nothing pending (an empty Needs
+ * attention) would leave a release that just left Scheduled off the board.
+ *
+ * `kind` narrows the column as it narrows the list (`release` leaves out
+ * single-document releases), so the true count is of what can be shown.
+ */
+export function useReleaseBoardColumn(
+  tab: ReleaseListTab,
+  limit: number,
+  kind?: ReleaseKind
+): UseQueryResult<ReleaseListResponse, Error> {
+  const params: ReleaseListParams = { tab, limit, ...(kind ? { kind } : {}) };
+  return useQuery({
+    queryKey: releaseKeys.list(params),
+    queryFn: () => fetchReleases(params),
+    refetchInterval: PENDING_RELEASE_POLL_MS,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/**
  * How many releases each tab holds, under the same search and filter as the
  * list.
  *

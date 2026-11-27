@@ -126,6 +126,30 @@ describe("what an entity owns", () => {
     }
   });
 
+  it.each(["single", "fieldGroup"] as const)(
+    "keeps a plugin's %s only as a main table too, so its translations table is named on its own",
+    kind => {
+      const entity = (source: string) =>
+        coveredEntity({
+          kind,
+          slug: "x",
+          tableName: "t_x",
+          source,
+          fields: [],
+        });
+      expect(entity("code")).toMatchObject({ tables: ["t_x", "t_x_locales"] });
+      expect(entity("plugin:seo")).toMatchObject({
+        tables: ["t_x"],
+        excluded: true,
+      });
+      expect(
+        entityOwners([entity("plugin:seo") as CoveredEntity]).ownerOf(
+          "t_x_locales"
+        )
+      ).toBeUndefined();
+    }
+  );
+
   it("gives no entity a table that a plugin's entity has as its main table", () => {
     // The plugin's main table is spelled as `posts`' explicit junction table.
     const plugin = coveredEntity({
@@ -269,6 +293,7 @@ describe("a run's deletions with the entities they remove", () => {
       "the field groups' tables",
       "nextly_i18n_archive",
       "nextly_translation_provenance",
+      "nextly_translation_sources",
       "nextly_versions",
       "nextly_version_pins",
       "nextly_version_views",
@@ -519,21 +544,27 @@ describe("counting an entity's rows in each shared table", () => {
       return [{ n: count(table, params) }];
     },
   });
-  const [, archive, provenance, autosaves, pins, views] = entityRowsOf(posts);
+  const [, archive, provenance, sources, autosaves, pins, views] =
+    entityRowsOf(posts);
 
   it("counts the entity's own rows in each, and leaves out a table holding none or absent", async () => {
     const db = connection(
       [
         "nextly_i18n_archive",
         "nextly_translation_provenance",
+        "nextly_translation_sources",
         "nextly_versions",
         "nextly_version_pins",
       ],
       (table, params) => {
         // Only the entity's rows are counted: its kind and slug are what the condition binds.
         if (params[1] !== "posts") return 99;
-        if (table === "nextly_translation_provenance")
-          return params[0] === "collection" ? 3 : 99;
+        const translations = {
+          nextly_translation_provenance: 3,
+          nextly_translation_sources: 4,
+        }[table];
+        if (translations !== undefined)
+          return params[0] === "collection" ? translations : 99;
         if (table === "nextly_versions") return params[2] === 1 ? 2 : 99;
         if (table === "nextly_i18n_archive")
           return params[0] === "unknown" ? 0 : 1;
@@ -541,13 +572,14 @@ describe("counting an entity's rows in each shared table", () => {
       }
     );
     expect(
-      await countEntityRows([archive, provenance, autosaves, pins, views], {
-        db,
-        dialect: "sqlite",
-      })
+      await countEntityRows(
+        [archive, provenance, sources, autosaves, pins, views],
+        { db, dialect: "sqlite" }
+      )
     ).toEqual([
       { ...archive, count: 1 },
       { ...provenance, count: 3 },
+      { ...sources, count: 4 },
       { ...autosaves, count: 2 },
     ]);
   });

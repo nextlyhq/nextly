@@ -481,13 +481,15 @@ async function notesOn(
  * Keep `value` under the note `key`: one update where the note is there, an
  * insert where it is not, and the update again where another process made it
  * at the same moment. A caller that has just read the note `absent` starts
- * with the insert.
+ * with the insert. A note made here is of `kind`, `meta` unless given: a
+ * list kept one note an item names its own kind, to be read back by it
+ * ({@link notesOfKind}).
  */
 export async function putNote(
   ctx: PluginContext,
   key: string,
   value: string,
-  { absent = false }: { absent?: boolean } = {}
+  { absent = false, kind = "meta" }: { absent?: boolean; kind?: string } = {}
 ): Promise<void> {
   await recordReady(ctx);
   const byKey = eq(ctx.db.table(addressNotes).noteKey, key);
@@ -495,10 +497,45 @@ export async function putNote(
   if (!absent && (await write()) > 0) return;
   const made = await insertUnlessTaken(ctx, ctx.db, addressNotes, {
     noteKey: key,
-    kind: "meta",
+    kind,
     value,
   });
   if (!made) await write();
+}
+
+/**
+ * Keep each of `entries` under its key, together: each note is made first
+ * where it is missing (with no value), then every one is written on one
+ * transaction, in the order given. Two writers at once each update the same
+ * rows in the same order, so the second waits for the first to commit, and
+ * the notes are left holding one writer's values, never a mix of both.
+ */
+export async function putNotesTogether(
+  ctx: PluginContext,
+  entries: readonly { key: string; value: string }[]
+): Promise<void> {
+  await recordReady(ctx);
+  const { notes } = await notesOn(
+    ctx.db,
+    entries.map(entry => entry.key),
+    false
+  );
+  for (const { key } of entries) {
+    if (!notes.has(key)) {
+      await insertUnlessTaken(ctx, ctx.db, addressNotes, {
+        noteKey: key,
+        kind: "meta",
+        value: null,
+      });
+    }
+  }
+  await ctx.db.transaction(async db => {
+    for (const { key, value } of entries) {
+      await db
+        .update(addressNotes, { value })
+        .where(eq(db.table(addressNotes).noteKey, key));
+    }
+  });
 }
 
 /**
@@ -547,6 +584,33 @@ export async function pendingNotes(ctx: PluginContext): Promise<StoredNote[]> {
     const rows = await ctx.db
       .select(addressNotes)
       .where(eq(columns.kind, "pending"))
+      .orderBy(asc(columns.noteKey))
+      .limit(PAGE)
+      .offset(offset)
+      .all();
+    found.push(
+      ...rows.map(row => noteOf(row as unknown as Record<string, unknown>))
+    );
+    if (rows.length < PAGE) return found;
+  }
+}
+
+/**
+ * Every note of `kind`, in key order, read a page at a time: a list kept one
+ * note an item, so that writers of different items never rewrite one shared
+ * note. Read whole, since the keys say nothing of which items are newest.
+ */
+export async function notesOfKind(
+  ctx: PluginContext,
+  kind: string
+): Promise<StoredNote[]> {
+  await recordReady(ctx);
+  const columns = ctx.db.table(addressNotes);
+  const found: StoredNote[] = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const rows = await ctx.db
+      .select(addressNotes)
+      .where(eq(columns.kind, kind))
       .orderBy(asc(columns.noteKey))
       .limit(PAGE)
       .offset(offset)

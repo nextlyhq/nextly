@@ -99,7 +99,7 @@ function partWith(part: string, params: StaticParams): string[] | undefined {
  * `/blog/[topic]` and `{ topic: "seo" }`; nothing where a part has no value,
  * or the address is not one a visitor can be served at.
  */
-function addressOfParams(
+export function addressOfParams(
   route: string,
   params: StaticParams
 ): string | undefined {

@@ -51,6 +51,7 @@ import { dirname, relative, resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import type { FieldGroupNaming } from "../../domains/field-groups/services/field-group-storage-names";
 import { refuseWhileSaveLeftPartWay } from "../../domains/schema/builder-save/save-in-progress";
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
@@ -118,14 +119,17 @@ import { topoSortPlugins } from "../../plugins/topo-sort";
 import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import type { CommandContext } from "../context";
 import { projectPath, reportDryRun } from "../dry-run";
+import { databaseDialectDiffers } from "../errors/areas/database";
 import {
   consentTookTheName,
   migrationCreateCancelled,
   migrationDeletionsDeclined,
+  fieldGroupNamesOptionInvalid,
   migrationNameRequired,
   recordSnapshotNeedsAppMigration,
 } from "../errors/areas/migrate-create";
 import {
+  type CliError,
   configDeclarationError,
   exitWithError,
   toCliError,
@@ -133,15 +137,13 @@ import {
 import {
   type CLIDatabaseAdapter,
   createCliAdapter,
+  detectDialectFromUrl,
   getDialectDisplayName,
   type MissingDatabase,
   openDryRunAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
-import {
-  requireDatabaseEnv,
-  loadConfigOrExit,
-} from "../utils/command-prerequisites";
+import { loadConfigOrExit } from "../utils/command-prerequisites";
 import { bundleAndRequire } from "../utils/config-bundler";
 import { loadConfig } from "../utils/config-loader";
 import {
@@ -151,6 +153,7 @@ import {
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import { formatDuration } from "../utils/logger";
+import { readWithoutDatabase } from "../utils/project-dialect";
 
 import { commandRun } from "./command-run";
 import { isPluginDefinition } from "./plugin-definition-shape";
@@ -160,6 +163,9 @@ import { isPluginDefinition } from "./plugin-definition-shape";
 // ============================================================================
 
 export interface MigrateCreateCommandOptions {
+  /** The dialect the migration is written for, where nothing else says (`projectDialect`). */
+  dialect?: SupportedDialect;
+
   /**
    * Migration name (required for non-blank). Slug-cased; the timestamp
    * prefix is added automatically.
@@ -219,6 +225,14 @@ export interface MigrateCreateCommandOptions {
   recordSnapshot?: boolean;
 
   /**
+   * `--field-group-names=current`: write the migration that moves the history's field groups to
+   * the current names (`dynamic_field_groups`, `fg_<slug>`). It changes nothing in the database,
+   * whose storage `nextly migrate:field-groups` moves. Refused while the config has changes to
+   * migrate. The name defaults to `field_group_current_names`.
+   */
+  fieldGroupNames?: string;
+
+  /**
    * `--dry-run`: plan the migration as a real run does, rename questions included, print it and
    * the files it would write, and write nothing. A refusal of the plan is reported and exits 0.
    */
@@ -262,7 +276,9 @@ interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
  */
 function recordModeReader(
   recording: boolean | undefined,
-  dryRun: boolean | undefined
+  dryRun: boolean | undefined,
+  /** The dialect the migrations are for, which the database is opened as (`readWithoutDatabase`). */
+  dialect: SupportedDialect
 ): {
   read?: (tableName: string) => Promise<readonly string[]>;
   close: () => Promise<void>;
@@ -273,7 +289,10 @@ function recordModeReader(
   let adapter: Promise<CLIDatabaseAdapter | MissingDatabase> | undefined;
   return {
     read: async tableName => {
-      adapter ??= dryRun === true ? openDryRunAdapter() : createCliAdapter();
+      adapter ??=
+        dryRun === true
+          ? openDryRunAdapter({ dialect })
+          : createCliAdapter({ dialect });
       const opened = await adapter;
       if ("missing" in opened) return [];
       const { companionColumnNames } = await import(
@@ -292,16 +311,37 @@ function recordModeReader(
 }
 
 /**
- * What the file is written against for an older unique index a field that stops being unique
- * leaves holding its column (`liveUniqueIndexes`): the database `DATABASE_URL` names, opened
- * read-only on the first read, as the deletion counts open it, and closed by `close`. Nothing is
- * opened for a run with no field that stops being unique. One that cannot be read within the counts'
- * connect limit answers undefined, which the run says, and the file drops only Nextly's own index.
+ * `--record-snapshot` reads the translations tables of the database `DATABASE_URL` names, and
+ * records them in a migration written for `dialect`: one whose scheme names another database
+ * would record that database's tables, so it is refused before anything is read. A URL whose
+ * scheme names none is opened as `dialect`, and its driver says whether it is one. A dry run
+ * reports the refusal instead, as it reports every other the real run would make.
  */
-function uniqueIndexReader(dialect: SupportedDialect): {
-  read: (
-    tableName: string
-  ) => Promise<ReadonlyMap<string, readonly (string | null)[]> | undefined>;
+function refuseRecordingAnotherDialect(
+  options: Pick<ResolvedMigrateCreateOptions, "recordSnapshot" | "dryRun">,
+  dialect: SupportedDialect,
+  logger: CommandContext["logger"]
+): void {
+  if (options.recordSnapshot !== true) return;
+  const url = process.env.DATABASE_URL;
+  const named = url ? detectDialectFromUrl(url) : undefined;
+  if (named === undefined || named === dialect) return;
+  const refusal = databaseDialectDiffers(dialect, named);
+  // A dry run reports what the real run would refuse, and exits 0.
+  if (options.dryRun === true) {
+    reportDryRun(logger, { changes: [], refusals: [dryRunLineOf(refusal)] });
+    process.exit(0);
+  }
+  exitWithError(logger, refusal);
+}
+
+/**
+ * The database `DATABASE_URL` names, opened read-only on the first ask, as the deletion counts open
+ * it, and closed by `close`. One that cannot be reached within the counts' connect limit answers
+ * undefined.
+ */
+function reachableDatabase(dialect: SupportedDialect): {
+  open: () => Promise<CLIDatabaseAdapter | undefined>;
   close: () => Promise<void>;
 } {
   let opening: Promise<CLIDatabaseAdapter | MissingDatabase> | undefined;
@@ -331,8 +371,58 @@ function uniqueIndexReader(dialect: SupportedDialect): {
     return opened;
   };
   return {
+    open,
+    close: async () => {
+      await opened?.disconnect().catch(() => undefined);
+    },
+  };
+}
+
+/**
+ * The field-group names the database is on, for the first migration of a project
+ * (`AppMigrationInputsArgs.firstFieldGroupNaming`): a site an earlier release set up by its
+ * development starts holds its groups under the legacy names, and a migration that made them under
+ * the current ones would be one its own database could not record. Undefined where the database
+ * holds no registry or cannot be read.
+ */
+async function databaseFieldGroupNaming(
+  dialect: SupportedDialect
+): Promise<FieldGroupNaming | undefined> {
+  // A URL whose scheme names another database is not the one this migration is for.
+  const url = process.env.DATABASE_URL;
+  const named = url ? detectDialectFromUrl(url) : undefined;
+  if (named !== undefined && named !== dialect) return undefined;
+  const database = reachableDatabase(dialect);
+  try {
+    const adapter = await database.open();
+    if (adapter === undefined) return undefined;
+    const { standingRegistryNaming } = await import(
+      "../../domains/field-groups/services/field-group-new-site"
+    );
+    return await standingRegistryNaming(adapter as unknown as DrizzleAdapter);
+  } catch {
+    return undefined;
+  } finally {
+    await database.close();
+  }
+}
+
+/**
+ * What the file is written against for an older unique index a field that stops being unique
+ * leaves holding its column (`liveUniqueIndexes`), read from {@link reachableDatabase}. Nothing is
+ * opened for a run with no field that stops being unique. One that cannot be read answers
+ * undefined, which the run says, and the file drops only Nextly's own index.
+ */
+function uniqueIndexReader(dialect: SupportedDialect): {
+  read: (
+    tableName: string
+  ) => Promise<ReadonlyMap<string, readonly (string | null)[]> | undefined>;
+  close: () => Promise<void>;
+} {
+  const database = reachableDatabase(dialect);
+  return {
     read: async tableName => {
-      const adapter = await open();
+      const adapter = await database.open();
       if (adapter === undefined) return undefined;
       const { readUniqueIndexesByColumn } = await import(
         "../../domains/schema/pipeline/live-table-facts"
@@ -349,9 +439,7 @@ function uniqueIndexReader(dialect: SupportedDialect): {
         return undefined;
       }
     },
-    close: async () => {
-      await opened?.disconnect().catch(() => undefined);
-    },
+    close: database.close,
   };
 }
 
@@ -376,6 +464,8 @@ const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
   // `upgrade`'s localisation steps: two configured language codes that become one.
   "NEXTLY_LANGUAGE_CODES_COLLIDE",
   "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
+  // A column the upgrade moves held by an index on more than it: refused before anything changes.
+  "NEXTLY_UPGRADE_COLUMN_HELD",
   // `migrate:resolve`'s checks: the file, its snapshot, the live schema
   // against it, and the ledger's state for the mode asked for.
   "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
@@ -410,10 +500,14 @@ export function dryRunRefusalOf(error: unknown): string | undefined {
     )
   ) {
     // As the real run prints it: the CLI error it maps to, with its code.
-    const printed = toCliError(error);
-    return `${printed.what} ${printed.why} ${printed.next} (${printed.code})`;
+    return dryRunLineOf(toCliError(error));
   }
   return error.publicMessage;
+}
+
+/** The refusal a dry run reports for `error`, in the words the real run ends with. */
+function dryRunLineOf(error: CliError): string {
+  return `${error.what} ${error.why} ${error.next} (${error.code})`;
 }
 
 /**
@@ -608,6 +702,52 @@ async function within<T>(
 }
 
 /**
+ * Refuses a change whose deletions take an element another owner built on the app's tables
+ * (`removed-elements.ts`), read from the database `DATABASE_URL` names, opened read-only as the
+ * deletion counts open it. Where no database is there to read, the run says the change was not
+ * checked here: `nextly migrate` checks the file against its own database before its first
+ * statement. A database that is there but whose record of other owners' elements cannot be read
+ * refuses, as everywhere else.
+ */
+async function refuseRemovingOthersElementsIn(
+  deletions: readonly Deletion[],
+  dialect: SupportedDialect,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  if (!deletions.some(deletion => deletion.core !== true)) return;
+  const opened = await openDryRunAdapter({ dialect }).catch(
+    (error: unknown): MissingDatabase => ({
+      missing: error instanceof Error ? error.message : String(error),
+    })
+  );
+  if ("missing" in opened) {
+    logger.warn(
+      `What this migration removes was not checked against what other owners built on its tables, because no database could be read (${opened.missing}). \`nextly migrate\` checks it before running the file.`
+    );
+    return;
+  }
+  try {
+    const { databaseRemovedElementsSources, refuseRemovingOthersElements } =
+      await import("../../domains/schema/ownership/removed-elements");
+    await refuseRemovingOthersElements({
+      deletions,
+      dialect,
+      entity: "The migration",
+      // The CLI adapter is the Drizzle adapter its factory made, as every command that reads with
+      // it treats it.
+      sources: databaseRemovedElementsSources(
+        opened as unknown as DrizzleAdapter,
+        dialect
+      ),
+      // The code-first change has the fields' columns: each column names its field.
+      fieldOf: (_table, column) => column,
+    });
+  } finally {
+    await opened.disconnect();
+  }
+}
+
+/**
  * The judge `generateMigration` calls with what the plan deletes, before it
  * writes anything: counted where the database can be read, then
  *
@@ -685,6 +825,19 @@ export async function runMigrateCreate(
   if (options.recordSnapshot === true && (options.blank || options.plugin)) {
     exitWithError(logger, recordSnapshotNeedsAppMigration());
   }
+  // The transition writes the app's migration and snapshot alone, and only to the current names.
+  if (
+    options.fieldGroupNames !== undefined &&
+    (options.fieldGroupNames !== "current" ||
+      options.blank === true ||
+      options.plugin !== undefined ||
+      options.recordSnapshot === true)
+  ) {
+    exitWithError(
+      logger,
+      fieldGroupNamesOptionInvalid(options.fieldGroupNames)
+    );
+  }
 
   if (options.plugin) {
     // A plugin's module is never generated with a drop, so the consent has nothing to cover here.
@@ -716,18 +869,16 @@ export async function runMigrateCreate(
 
   logger.header("Migrate Create");
 
-  // F11 PR 3: dialect comes from DATABASE_URL (no DB connection needed —
-  // we just need to know which SQL flavor to emit). validateDatabaseEnv
-  // handles the parsing without opening a connection.
-  const dbValidation = requireDatabaseEnv(logger);
-  const dialect = dbValidation.dialect;
-
   // Resolve the migration name. --name flag takes precedence over the
   // positional argument. Required for non-blank invocations.
   const name =
     options.name ??
     nameArg ??
-    (options.recordSnapshot === true ? "record_translated_fields" : undefined);
+    (options.recordSnapshot === true
+      ? "record_translated_fields"
+      : options.fieldGroupNames === "current"
+        ? "field_group_current_names"
+        : undefined);
   if (!options.blank && !name) {
     // `--accept-data-loss` takes an optional list, so a name written after it is read as the list.
     if (typeof options.acceptDataLoss === "string") {
@@ -758,8 +909,6 @@ export async function runMigrateCreate(
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
-  logger.keyValue("Dialect", getDialectDisplayName(dialect));
-
   // A real run holds the project's migration files from here, its first read
   // of the folder, to its files' write, questions included, so no other
   // writer reads the same snapshot or writes beside it. A dry run writes
@@ -771,6 +920,21 @@ export async function runMigrateCreate(
   });
   held.enter();
   try {
+    // The SQL to write is the dialect's, which needs no database: from `--dialect`, the migration
+    // history or the environment, read without connecting. Read once the folder is held, so the
+    // history is the one this run writes after, not one another writer has since added to.
+    const definitionFile = configResult.config.db.uiSchemaFile;
+    const { dialect, definitionPresent, definitionIgnored } =
+      await readWithoutDatabase({
+        flag: options.dialect,
+        projectRoot: cwd,
+        migrationsDir,
+        definitionFile,
+        logger,
+      });
+    logger.keyValue("Dialect", getDialectDisplayName(dialect));
+    refuseRecordingAnotherDialect(options, dialect, logger);
+
     // A Builder save this machine left part-way against this database refuses the command, a
     // blank migration's included: what it would write from is not what the database holds. Asked
     // once the folder is held, so a save that started while this waited for it is seen too.
@@ -799,6 +963,15 @@ export async function runMigrateCreate(
         options.dryRun === true
       );
       return;
+    }
+
+    // What the run writes from is what the project commits: a Builder definition file git
+    // ignores is named, though the run goes on, since the developer writing the migration has it.
+    // A blank migration reads no definition, so it is named only here.
+    if (definitionPresent && definitionIgnored) {
+      logger.warn(
+        `The Schema Builder's definition file, ${definitionFile}, is ignored by git, so the migration is written from a file the project does not commit, and \`migrate:check\` refuses it. Commit ${definitionFile}.`
+      );
     }
 
     // The data-loss consent, read before anything is planned, so a malformed
@@ -850,6 +1023,7 @@ export async function runMigrateCreate(
         migrationsDir,
         dialect,
         logger,
+        firstFieldGroupNaming: () => databaseFieldGroupNaming(dialect),
       });
     } catch (error) {
       // A field declaration Nextly cannot use ends the run as `migrate:check`
@@ -891,7 +1065,13 @@ export async function runMigrateCreate(
     // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
     if (nothing && options.recordSnapshot === true)
       nothingToRecord(logger, options.dryRun);
-    if (nothing && !declaresPermissions) {
+    // The move to the current field-group names is written even for a project that has nothing
+    // left: its history still records names, which the first entity it gains is written under.
+    if (
+      nothing &&
+      !declaresPermissions &&
+      options.fieldGroupNames !== "current"
+    ) {
       logger.warn(
         "No collections, singles, components, or extension tables defined in config."
       );
@@ -905,7 +1085,11 @@ export async function runMigrateCreate(
 
     // `--record-snapshot` records which fields are translated as the database holds them, so it reads
     // the translations tables, connecting only once it has one to check. Every other run stays offline.
-    const live = recordModeReader(options.recordSnapshot, options.dryRun);
+    const live = recordModeReader(
+      options.recordSnapshot,
+      options.dryRun,
+      dialect
+    );
     // An older unique index a field that stops being unique leaves holding its column is read from
     // the database, and only then (`uniqueIndexReader`).
     const uniques = uniqueIndexReader(dialect);
@@ -930,6 +1114,9 @@ export async function runMigrateCreate(
         components,
         // The starting point the inputs were checked against, read once.
         previous: inputs.latest,
+        // The names the inputs resolved field groups under: the history's, or the current names
+        // for a new project, whose history starts on them.
+        fieldGroupNaming: inputs.fieldGroupNaming,
         metadataUpserts,
         previousMetadataUpserts,
         permissions,
@@ -938,12 +1125,16 @@ export async function runMigrateCreate(
         // Fields moved into or out of a group are looked for, and asked about as renames are.
         codeMoves: { acceptAll: options.acceptMoves === true },
         recordSnapshot: options.recordSnapshot === true,
+        fieldGroupTransition: options.fieldGroupNames === "current",
         liveCompanionColumns: live.read,
         liveUniqueIndexes: uniques.read,
         dryRun: options.dryRun === true,
         releaseHeldBack: options.releaseHeldBack === true,
-        judgeDeletions: deletions =>
-          judgeMigrationDeletions(deletions, {
+        judgeDeletions: async deletions => {
+          // What the change removes takes no element another owner built there, judged before
+          // the consent is asked for and before anything is written.
+          await refuseRemovingOthersElementsIn(deletions, dialect, logger);
+          return judgeMigrationDeletions(deletions, {
             consent,
             dialect,
             dryRun: options.dryRun === true,
@@ -952,7 +1143,8 @@ export async function runMigrateCreate(
             counted: listed => {
               counted = listed;
             },
-          }),
+          });
+        },
       });
     } catch (error) {
       // F11 PR 3 review fix #3: distinguish "operator cancelled prompt"

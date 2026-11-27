@@ -28,14 +28,29 @@ type Env = Readonly<Record<string, string | undefined>>;
 /**
  * The pool a Vercel function takes when neither the adapter config nor the
  * `DB_POOL_*` variables say otherwise: at most three connections, none held
- * open, and an idle connection closed after five seconds. Each setting the
- * config or the environment gives replaces only its own field.
+ * open, an idle connection closed after five seconds, and a request that
+ * finds all three held waiting five seconds for one (`connectionTimeoutMs`)
+ * before it fails as database busy. Each setting the config or the
+ * environment gives replaces only its own field.
+ *
+ * The wait is shorter than a long-running server's fifteen seconds because a
+ * pool this small is held whole by a few concurrent requests, and a request
+ * that cannot have a connection soon is better answered busy, which the
+ * admin retries, than kept for most of a function's run. The same setting
+ * bounds opening a new connection, which takes well under a second to a
+ * reachable database.
  */
 export const SERVERLESS_POOL_DEFAULTS: Readonly<{
   max: number;
   min: number;
   idleTimeoutMs: number;
-}> = Object.freeze({ max: 3, min: 0, idleTimeoutMs: 5000 });
+  connectionTimeoutMs: number;
+}> = Object.freeze({
+  max: 3,
+  min: 0,
+  idleTimeoutMs: 5000,
+  connectionTimeoutMs: 5000,
+});
 
 /**
  * Whether this process runs on Vercel, in a function or in a build: Vercel

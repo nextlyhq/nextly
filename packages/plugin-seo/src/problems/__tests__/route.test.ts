@@ -9,8 +9,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const ready = vi.hoisted(() => ({ record: true }));
 
 vi.mock("../../address-record/catch-up", () => ({
-  addressRecordReady: () => ready.record,
-  retryFailedCatchUp: () => undefined,
+  RECORD_WAIT_MS: 0,
+  // Waits for nothing here: the wait itself is the catch-up's own test's.
+  addressRecordReadyWithin: async () => ready.record,
 }));
 
 const calls = vi.hoisted(() => ({

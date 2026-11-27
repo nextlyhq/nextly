@@ -8,6 +8,7 @@
  * @module plugin
  */
 import { createRequire } from "node:module";
+import { resolve } from "node:path";
 
 import {
   definePlugin,
@@ -24,6 +25,7 @@ import {
   type PluginRoute,
   type Secret,
 } from "@nextlyhq/plugin-sdk";
+import { z } from "zod";
 
 import {
   CATCH_UP_TRANSACTION_BOUNDS,
@@ -47,6 +49,7 @@ import {
 } from "./address-record/store";
 import { BULK_PAGE } from "./bulk/contract";
 import { bulkRoutes } from "./bulk/route";
+import { readCodeListing } from "./code-pages/code-listing";
 import { codePagesCollection } from "./code-pages/collection";
 import {
   keepCodeRoutes,
@@ -54,10 +57,15 @@ import {
 } from "./code-pages/connections";
 import { PAGES_PAGE, PAGES_PAGE_HREF } from "./code-pages/contract";
 import { codePageRoutes } from "./code-pages/route";
-import { readCodeBuild, type CodeRoute } from "./code-pages/routes";
+import { readCodeBuild, type ReadCodeRoutes } from "./code-pages/routes";
+import {
+  statedAddressesOf,
+  type CodeAddressesOption,
+} from "./code-pages/stated";
 import { codeAddressOf } from "./code-pages/store";
 import {
   indexNowKeyProxyHandler,
+  indexNowKeyRoutes,
   watchForIndexNow,
 } from "./connections/indexnow";
 import { INDEXNOW_HOST } from "./connections/indexnow-send";
@@ -120,8 +128,10 @@ import {
   redirectsProxyHandler,
   type GoneAnswerOptions,
 } from "./redirects/proxy-handler";
+import { proxySeenNotes } from "./redirects/proxy-seen";
 import { redirectRoutes } from "./redirects/routes";
 import { PAGE_BUILDER_PLUGIN } from "./resolver/design-level";
+import type { TitleFields } from "./resolver/own-name";
 import type { SiteRules } from "./resolver/page-levels";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import { withSeoOff } from "./resolver/seo-off";
@@ -160,8 +170,10 @@ import {
   withSocialCard,
   type SocialCardOptions,
 } from "./social/card";
+import { shareCardRoute } from "./social/card-route";
 import { shareImageRoute } from "./social/route";
 import { decideStanding, stagingGuard } from "./staging/guard";
+import { keepStartWork, lastStartWork } from "./start-work";
 import { withStructuredData } from "./structured-data/provider";
 import {
   checkedTypeRules,
@@ -367,12 +379,62 @@ export interface SeoPluginOptions {
    */
   pagePermissions?: boolean;
   /**
+   * @experimental The field each content type's pages are named from, by
+   * the type's key: a collection's slug, or `"single:<slug>"`. A field's
+   * name, or a dotted path into a group (`"hero.heading"`). The page's own
+   * name is what `{Title}` stands for in a title pattern, what structured
+   * data names the page, and what llms.txt, llms-full.txt and plain-text
+   * copies list it as.
+   *
+   * Without it a type's pages are named from the field its admin names its
+   * entries by (`admin.useAsTitle`), else `title`, `name` or `heading`. A
+   * Single's `title` that Nextly keeps for it, filled from its label ("Blog
+   * Page"), names its page only where nothing else does: the title its
+   * route gives it comes first.
+   *
+   * ```ts
+   * seoPlugin({
+   *   titleFields: { "single:blog": "hero.heading", posts: "headline" },
+   * });
+   * ```
+   */
+  titleFields?: Record<string, string>;
+  /**
    * @experimental Where `next build` writes, relative to the app's
    * directory: `.next` unless the app's `next.config` sets `distDir`. The
    * pages the site's routes render from their own code are read from it,
    * for Pages and the sitemap.
    */
   nextBuildDir?: string;
+  /**
+   * @experimental Pages built in code that no build names, and the Markdown
+   * a page built in code's plain-text copy is made of, by route as Next.js
+   * names it, route groups left out. A route's params, as its
+   * `generateStaticParams` would name them, list its pages in the sitemap,
+   * llms.txt and Pages: for a route rendered on demand, such as one whose
+   * pages come from a database. Stating a route says it calls
+   * `seoMetadata`. A `markdown` function makes the copy of any page the
+   * route serves, from its address and params; the plugin adds the front
+   * matter. Params missing a part of the route list no page, with a
+   * warning.
+   *
+   * ```ts
+   * seoPlugin({
+   *   codeAddresses: {
+   *     "/products/[slug]": async () =>
+   *       (await products()).map(product => ({ slug: product.slug })),
+   *     "/docs/[[...slug]]": {
+   *       params: () => source.generateParams(),
+   *       markdown: ({ params }) => docsMarkdown(params.slug),
+   *     },
+   *   },
+   * });
+   * ```
+   *
+   * A page a production build rendered with `seoMetadata` needs no entry
+   * here: the build records it, in the database, for the running site.
+   */
+  codeAddresses?: CodeAddressesOption;
   /**
    * @experimental The address of the site's own page to show for an address
    * made Gone on SEO › Redirects, such as `"/gone"`. The Proxy reads that
@@ -505,7 +567,8 @@ function subsetOf(
  */
 function rulesReader(
   options: { hiddenTypes?: readonly string[] },
-  types: Pick<SeoTypes, "keys">
+  types: Pick<SeoTypes, "keys">,
+  titleFields: TitleFields | undefined
 ): ReadRules {
   const hiddenTypes = [...new Set(options.hiddenTypes ?? [])];
   return async (ctx, locale) => {
@@ -521,8 +584,37 @@ function rulesReader(
       ...(saved.hiddenTypes === undefined && hiddenTypes.length > 0
         ? { hiddenTypes }
         : {}),
+      ...(titleFields === undefined ? {} : { titleFields }),
     };
   };
+}
+
+/** A field's name, or a dotted path into groups: what `titleFields` names. */
+const TITLE_FIELD_PATH = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
+
+/** The `titleFields` option, checked when the site starts. */
+const titleFieldsSchema = z.record(
+  z.string().trim().min(1),
+  z.string().regex(TITLE_FIELD_PATH, "a field's name, or a dotted path")
+);
+
+/**
+ * The `titleFields` option, checked, so a misspelled path fails when the
+ * site starts rather than leaving a type named as before in silence.
+ */
+function titleFieldsOf(
+  option: SeoPluginOptions["titleFields"]
+): TitleFields | undefined {
+  if (option === undefined) return undefined;
+  const parsed = titleFieldsSchema.safeParse(option);
+  if (!parsed.success) {
+    throw new Error(
+      `seoPlugin: titleFields must map each content type's key to a field's name or a dotted path (${parsed.error.issues
+        .map(issue => `${issue.path.join(".")}: ${issue.message}`)
+        .join("; ")})`
+    );
+  }
+  return parsed.data;
 }
 
 /** What the sitemap lists, for the problem checks; nothing where it is off. */
@@ -573,13 +665,13 @@ function rootFilesConfig(
     readStructuredDataRules: ReadStructuredDataRules;
   },
   collections: readonly string[] | undefined,
-  codeRoutes: () => readonly CodeRoute[]
+  code: Pick<RootFilesConfig, "codeRoutes" | "codeMarkdown">
 ): RootFilesConfig {
   const sitemap = sitemapConfig(options, collections);
   return {
     ...configuredOrigin(options, sitemap),
     ...readers,
-    codeRoutes,
+    ...code,
     ...(sitemap === undefined ? {} : { sitemap }),
     ...(options.robots === false
       ? {}
@@ -599,9 +691,9 @@ function siteFileRoutes(
     readStructuredDataRules: ReadStructuredDataRules;
   },
   collections: readonly string[] | undefined,
-  codeRoutes: () => readonly CodeRoute[]
+  code: Pick<RootFilesConfig, "codeRoutes" | "codeMarkdown">
 ): PluginRoute[] {
-  const config = rootFilesConfig(options, readers, collections, codeRoutes);
+  const config = rootFilesConfig(options, readers, collections, code);
   const routes = rootFileRoutes(config);
   const { sitemap } = config;
   if (sitemap !== undefined) {
@@ -625,7 +717,7 @@ function ownRulesCheckRoute(
   readers: {
     readRules: ReadRules;
     readStructuredDataRules: ReadStructuredDataRules;
-    codeRoutes: () => readonly CodeRoute[];
+    codeRoutes: ReadCodeRoutes;
     sitemapSubset: readonly string[] | undefined;
   }
 ): PluginRoute {
@@ -723,6 +815,49 @@ function goneAnswerOf(page: string | undefined): GoneAnswerOptions {
   return { gonePage: address };
 }
 
+/**
+ * `fields` each translated per language unless it says otherwise: a field that names its own
+ * `localized` keeps it, and a field a language cannot keep whole is left as it is, since the
+ * configuration refuses the flag on it at load: a repeater, group or component keeps one structure
+ * in every language (its own fields say what of it is translated), and a password or a virtual
+ * field is never translated.
+ */
+function perLanguageFields<
+  F extends {
+    type?: unknown;
+    localized?: unknown;
+    virtual?: unknown;
+    options?: unknown;
+  },
+>(fields: readonly F[]): F[] {
+  return fields.map(field =>
+    field.localized !== undefined ||
+    (typeof field.type === "string" && KEPT_WHOLE_NEVER.has(field.type)) ||
+    isVirtual(field)
+      ? field
+      : { ...field, localized: true }
+  );
+}
+
+/** The field types `localized: true` is refused on at load: one structure, or never translated. */
+const KEPT_WHOLE_NEVER = new Set([
+  "repeater",
+  "group",
+  "component",
+  "fieldGroup",
+  "password",
+]);
+
+/** Whether a field is virtual, stored nowhere: said on the field or in its options. */
+function isVirtual(field: { virtual?: unknown; options?: unknown }): boolean {
+  return (
+    field.virtual === true ||
+    (typeof field.options === "object" &&
+      field.options !== null &&
+      (field.options as { virtual?: unknown }).virtual === true)
+  );
+}
+
 export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Always nest the fields (default or custom) under a single `seo` group so
   // every project exposes SEO consistently at `entry.seo.*`.
@@ -734,11 +869,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const seoGroup = group({
     name: "seo",
     label: "SEO",
-    fields: seoFields,
     // Kept per language wherever the content is translated, so each language
-    // has its own title, description and canonical; on a type that is not
-    // translated, one value as before.
-    localized: true,
+    // has its own title, description, canonical and the rest; on a type that
+    // is not translated, one value as before. A group keeps one structure in
+    // every language and cannot itself be translated, so each field inside
+    // says so (`perLanguageFields`).
+    fields: perLanguageFields(seoFields),
     // Where a page's SEO has its own permission, a write of it by anyone
     // without that permission for the page's type keeps the stored SEO, and
     // the rest of the page is saved. Reading it is the page's own read.
@@ -753,10 +889,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const types = seoTypesOf(options);
 
   const sitemapSubset = subsetOf(options.sitemap, types);
-  const readRules = rulesReader(options, types);
+  // The field each type's pages are named from, where the site chooses one.
+  const titleFields = titleFieldsOf(options.titleFields);
+  const readRules = rulesReader(options, types, titleFields);
   // The addresses redirects hold, kept for the Proxy and dropped whenever a
   // redirect saved here commits.
   const redirectKeys = heldRedirectKeys();
+  // Notes that the Proxy runs, for every handler the plugin gives it.
+  const proxySeen = proxySeenNotes();
   // The pages the site's routes render from their own code, read from the
   // build each time they are asked for, so a new deploy is read as it is.
   const codeBuild = () =>
@@ -765,7 +905,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         ? {}
         : { buildDir: options.nextBuildDir }
     );
-  const codeRoutes = () => codeBuild().routes;
+  // Where the build is, where `next build` writes its id.
+  const buildDir = () =>
+    resolve(process.cwd(), options.nextBuildDir ?? ".next");
+  // What the site states in its options, checked here so a mistyped route
+  // fails when the site starts.
+  const stated = statedAddressesOf(options.codeAddresses);
+  // Every page built in code the running site has: what its build files
+  // name, what the build being served recorded, and what the options state.
+  const codeListing = (ctx: PluginContext) =>
+    readCodeListing(ctx, { build: codeBuild, buildDir, stated });
+  const codeRoutes: ReadCodeRoutes = async ctx =>
+    (await codeListing(ctx)).routes;
   // The site's configured origin, where the sitemap is served and a baseUrl
   // is set, for every output that names the site's addresses.
   const siteOrigin = configuredOrigin(
@@ -776,8 +927,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // answers them and the head that links them make one decision.
   const plainCopies = {
     readRules,
-    // A page built in code is copied too, from the page as it renders.
+    // A page built in code is copied too, from the Markdown the options
+    // give for it, else from the page as it renders.
     codeRoutes,
+    // The pages the build's files name, which the Proxy reads before
+    // anything has started.
+    builtRoutes: () => codeBuild().routes,
+    codeMarkdown: stated.markdownAt,
     ...siteOrigin,
     ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
   };
@@ -790,7 +946,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Checked here, so a misspelled type or detail fails when the site starts.
   const readStructuredDataRules = rulesFromOptions(
     options.baseUrl,
-    options.structuredData
+    options.structuredData,
+    titleFields
   );
   const readSocialCardRules = socialCardFromSettings(
     socialCardRulesFromOptions(options.baseUrl, options.socialCard)
@@ -968,11 +1125,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // answers, so the order changes nothing a visitor gets.
     // A page's plain-text copy and the IndexNow key, once switched on, are
     // answered here too, each at its own address only.
+    // Each notes that the Proxy runs, through one note-taker, so a Proxy
+    // running any of them is seen, whatever it is matched for.
     proxy: [
-      stagingGuard(readRules),
-      redirectsProxyHandler(redirectKeys, undefined, goneAnswer),
-      plainCopyProxyHandler(plainCopies),
-      indexNowKeyProxyHandler({ readRules, ...siteOrigin }),
+      stagingGuard(readRules, proxySeen),
+      redirectsProxyHandler(redirectKeys, undefined, goneAnswer, proxySeen),
+      plainCopyProxyHandler(plainCopies, proxySeen),
+      indexNowKeyProxyHandler({ readRules, ...siteOrigin }, proxySeen),
     ],
     // The optional connections' own state, their credentials sealed: core
     // encrypts each secret path and never returns it to the admin.
@@ -1102,6 +1261,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   routes.push(
     // The Connections tab's reads, and Search Console's sign-in.
     ...searchConsoleRoutes({ readRules, client: googleClient, ...siteOrigin }),
+    // The IndexNow key file at the site's root, which needs no Proxy, and the
+    // Connections tab's check that it answers.
+    ...indexNowKeyRoutes({ readRules, ...siteOrigin }),
     ...siteFileRoutes(
       options,
       {
@@ -1109,12 +1271,16 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         readStructuredDataRules: problemChecks.readers.readStructuredDataRules,
       },
       sitemapSubset,
-      codeRoutes
+      // The llms files link a page's copy where its Markdown is given.
+      { codeRoutes, codeMarkdown: stated.markdownAt }
     ),
     shareImageRoute(options.baseUrl),
+    // The cards a page's own picture is served as where networks would not
+    // show the picture in full, cut when first fetched.
+    shareCardRoute(options.baseUrl),
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
-    contentTypesRoute(types),
+    contentTypesRoute(types, titleFields),
     // Which sitemap pages the own robots.txt rules being typed would block.
     ownRulesCheckRoute(options, {
       readRules,
@@ -1153,7 +1319,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // entry's SEO.
     ...codePageRoutes({
       readRules,
-      build: codeBuild,
+      build: codeListing,
       origin: () =>
         options.baseUrl === undefined
           ? undefined
@@ -1179,6 +1345,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       readBrand: ctx => readBrandFacts(ctx),
       readSetupWaiting: setupWaiting,
       importSetup,
+      codeListing,
     })
   );
 
@@ -1269,7 +1436,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       registerSeoPageChecks(ctx, problemChecks);
       // Each saved page's sitemap date moved only where its content changed.
       watchContentDates(ctx, types);
-      keepCodeRoutes(codeRoutes);
+      keepCodeRoutes({ read: codeRoutes, buildDir });
       // Changed pages noted for IndexNow, told once they settle.
       stopIndexNow = watchForIndexNow(ctx, { readRules, ...siteOrigin }, types);
     },
@@ -1278,17 +1445,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // forget the catch-up's fingerprint, so the first start after the
     // install records them. A full uninstall drops the record instead.
     //
-    // Each first waits for the catch-up under way: the command that runs the
-    // hook boots the app for it, which starts one, and tears that boot down
-    // once the hook returns. Left running, the catch-up would read services
-    // the teardown has taken away, store its fingerprint after the hook
-    // forgot it, or write to a record an uninstall is dropping.
+    // Each first waits for the start's background work, the catch-up under
+    // way among it: the command that runs the hook boots the app for it,
+    // which starts the work, and tears that boot down once the hook returns.
+    // Left running, the work would read services the teardown has taken
+    // away, store the catch-up's fingerprint after the hook forgot it, or
+    // write to a record an uninstall is dropping.
     async onInstall(ctx) {
-      await lastCatchUp();
+      await lastStartWork();
       await forgetCatchUpFingerprint(ctx);
     },
     async onUninstall(ctx, { keepData }) {
-      await lastCatchUp();
+      await lastStartWork();
       if (keepData) await forgetCatchUpFingerprint(ctx);
     },
     async destroy() {
@@ -1305,23 +1473,31 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // process answers any save, or a page could take an address the
       // collection says another holds. One read once it has moved.
       await recordReady(ctx);
+      // The start's background work runs one part after another, never side
+      // by side: on a serverless host the pool holds three connections, or
+      // one in the Proxy's function, and parts running together would take
+      // every one of them while the admin's first requests wait for one.
+      //
       // Started, not awaited: it waits for the boot to finish, and brings the
       // record up to date with content saved while the plugin was absent or
-      // addresses a deploy moved.
-      void startCatchUp(ctx);
-      // Started, not awaited, for the same reason: the content fingerprints
-      // an earlier release kept, brought up to date while the field group
-      // rows they were taken from are as they were, so a save that rewrites
-      // them does not move a page's date. One read once that is done.
-      void startFingerprintUpgrade(ctx);
-      // The not-found log an earlier version kept in a collection, moved to
-      // the plugin's table; one count once there is nothing left to move.
+      // addresses a deploy moved. First, as the outputs wait for it.
+      const catchUp = startCatchUp(ctx);
+      // Started, not awaited, for the same reason, once the catch-up has
+      // settled: the content fingerprints an earlier release kept, brought up
+      // to date while the field group rows they were taken from are as they
+      // were, so a save that rewrites them does not move a page's date. One
+      // read once that is done.
+      const upgrade = startFingerprintUpgrade(ctx, catchUp);
+      // Then the not-found log an earlier version kept in a collection, moved
+      // to the plugin's table; one count once there is nothing left to move.
       // Bounded as the catch-up's are: it runs unawaited, and a function
       // frozen with one of its transactions open must not keep that
       // transaction's locks.
-      void ctx.db
-        .withTransactionBounds(CATCH_UP_TRANSACTION_BOUNDS, () =>
-          moveLoggedRows(ctx)
+      const moved = upgrade
+        .then(() =>
+          ctx.db.withTransactionBounds(CATCH_UP_TRANSACTION_BOUNDS, () =>
+            moveLoggedRows(ctx)
+          )
         )
         .catch((error: unknown) => {
           ctx.logger.error(
@@ -1351,15 +1527,21 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         }
       );
       // Decided once, the first time the plugin starts on a site: whether a
-      // site with no production address known is kept out of search.
-      void decideStanding(ctx).catch((error: unknown) => {
-        ctx.logger.error(
-          "The SEO plugin could not record the site's standing",
-          {
-            error,
-          }
-        );
-      });
+      // site with no production address known is kept out of search. Last
+      // of the start's background work, one part at a time.
+      // Kept, so a hook that tears the boot down waits for all of it.
+      keepStartWork(
+        moved
+          .then(() => decideStanding(ctx))
+          .catch((error: unknown) => {
+            ctx.logger.error(
+              "The SEO plugin could not record the site's standing",
+              {
+                error,
+              }
+            );
+          })
+      );
     },
   });
 }

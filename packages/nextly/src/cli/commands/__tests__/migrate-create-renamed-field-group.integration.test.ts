@@ -3,7 +3,7 @@
  * `nextly migrate:create` and `nextly migrate`, and `nextly migrate:down` puts them back under the
  * old name, on every configured dialect.
  *
- * A field group's values live in the group's own table (`comp_<slug>`), keyed by the parent's table
+ * A field group's values live in the group's own table (`fg_<slug>`), keyed by the parent's table
  * and the FIELD NAME (`_parent_table`, `_parent_field`), so the parent table has no column to
  * rename. A migration that only compares columns writes nothing for the rename, and every stored
  * value stays keyed by the old name, where nothing reads it: the field reads empty after the
@@ -95,7 +95,7 @@ function declarations(names: Names, zoneOrder: string[]) {
       ],
     }),
   ];
-  // Shares `comp_rk_seo` with the posts and keeps its field's name.
+  // Shares `fg_rk_seo` with the posts and keeps its field's name.
   const singles = [
     defineSingle({
       slug: "rk_home",
@@ -314,19 +314,19 @@ describe.each(getConfiguredTestDialects())(
       const renamed = await start(dialect, url, after);
       // The values read back through the new names.
       expect(await readBack(renamed.app, V2, id)).toEqual(stored);
-      expect(await keys(renamed.adapter, "comp_rk_seo")).toEqual(
+      expect(await keys(renamed.adapter, "fg_rk_seo")).toEqual(
         ["dc_rk_posts.legacySeo", "single_rk_home.seo"].sort()
       );
-      expect(await keys(renamed.adapter, "comp_rk_cta")).toEqual(
-        ["comp_rk_hero.button", "dc_rk_posts.sections"].sort()
+      expect(await keys(renamed.adapter, "fg_rk_cta")).toEqual(
+        ["fg_rk_hero.button", "dc_rk_posts.sections"].sort()
       );
 
       const { upSql, downSql } = parseSqlSections(
         await migrationFile("rename_groups")
       );
       // Its rows move inside the migration's own statements, both ways.
-      expect(upSql).toMatch(/UPDATE\s+\S*comp_rk_seo/);
-      expect(downSql).toMatch(/UPDATE\s+\S*comp_rk_seo/);
+      expect(upSql).toMatch(/UPDATE\s+\S*fg_rk_seo/);
+      expect(downSql).toMatch(/UPDATE\s+\S*fg_rk_seo/);
 
       // Rolled back, every row is keyed by its first name again.
       await shutdownServices().catch(() => {});
@@ -337,11 +337,11 @@ describe.each(getConfiguredTestDialects())(
         down.said.join("\n")
       ).toBeUndefined();
       const back = await start(dialect, url, before);
-      expect(await keys(back.adapter, "comp_rk_seo")).toEqual(
+      expect(await keys(back.adapter, "fg_rk_seo")).toEqual(
         ["dc_rk_posts.seo", "single_rk_home.seo"].sort()
       );
-      expect(await keys(back.adapter, "comp_rk_cta")).toEqual(
-        ["comp_rk_hero.cta", "dc_rk_posts.layout"].sort()
+      expect(await keys(back.adapter, "fg_rk_cta")).toEqual(
+        ["fg_rk_hero.cta", "dc_rk_posts.layout"].sort()
       );
       expect(await readBack(back.app, V1, id)).toEqual(stored);
     });
@@ -411,7 +411,7 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (post.legacySeo as { metaTitle?: unknown } | null)?.metaTitle
       ).toBe("Kept title");
-      expect(await keys(renamed.adapter, "comp_rk_seo")).toEqual([
+      expect(await keys(renamed.adapter, "fg_rk_seo")).toEqual([
         "dc_rk_posts.legacySeo",
       ]);
       // The new field is stored and read on its own.
@@ -434,8 +434,8 @@ describe.each(getConfiguredTestDialects())(
       const { upSql, downSql } = parseSqlSections(
         await migrationFile("rename_and_add_seo")
       );
-      expect(upSql).toMatch(/UPDATE\s+\S*comp_rk_seo/);
-      expect(downSql).toMatch(/UPDATE\s+\S*comp_rk_seo/);
+      expect(upSql).toMatch(/UPDATE\s+\S*fg_rk_seo/);
+      expect(downSql).toMatch(/UPDATE\s+\S*fg_rk_seo/);
 
       await shutdownServices().catch(() => {});
       loaded.config = defineConfig({
@@ -454,7 +454,7 @@ describe.each(getConfiguredTestDialects())(
         down.said.join("\n")
       ).toBeUndefined();
       const back = await start(dialect, url, v1);
-      expect(await keys(back.adapter, "comp_rk_seo")).toEqual([
+      expect(await keys(back.adapter, "fg_rk_seo")).toEqual([
         "dc_rk_posts.seo",
       ]);
       const restored = (await back.app.nextly.findByID({

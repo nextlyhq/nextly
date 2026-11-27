@@ -24,6 +24,7 @@ import { gotoAdmin } from "./support/admin";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { createEntry, expectOk } from "./support/runtime-collection";
 import { LOCK } from "./support/locks";
+import { saveFromBar } from "./support/document-bar";
 
 // One signed-in user for the whole file: signing in spends the auth budget.
 // Shares state with other specs; see support/locks.ts for what each lock guards.
@@ -182,10 +183,7 @@ async function save(path: string): Promise<void> {
       response.url().includes(path) &&
       ["PATCH", "PUT"].includes(response.request().method())
   );
-  await page
-    .getByRole("button", { name: /^(Save draft|Save changes|Save)$/ })
-    .first()
-    .click();
+  await saveFromBar(page);
   expect((await written).ok()).toBe(true);
 }
 

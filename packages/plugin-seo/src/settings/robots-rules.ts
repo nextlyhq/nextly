@@ -12,12 +12,12 @@
  * said to join or take the place of the rules that crawler would otherwise
  * follow.
  *
- * It imports only the crawler list, so the settings screen reads it without
- * server code.
+ * It imports only the crawler list and the shared AI-training opt-out's
+ * token, so the settings screen reads it without server code.
  *
  * @module settings/robots-rules
  */
-import { AI_CRAWLERS } from "../outputs/ai-crawlers";
+import { AI_CRAWLERS, AI_TRAINING_OPT_OUT } from "../outputs/ai-crawlers";
 
 /** The most lines the box keeps, and the longest line. */
 export const MAX_OWN_RULE_LINES = 200;
@@ -462,6 +462,16 @@ function sitemapFinding(line: number, value: string): RuleFinding | undefined {
  * about with the rule it is close to, any other kept with a note.
  */
 function otherFieldFinding(line: number, field: string): RuleFinding {
+  // The tick beside the AI tools choice writes this line from the choice,
+  // so one typed here as well would say the site's preference twice, and
+  // the two can disagree.
+  if (field.toLowerCase() === "content-signal") {
+    return {
+      line,
+      level: "note",
+      message: `Line ${line} is a Content-Signal line. It isn't a standard robots.txt rule; it's kept, and crawlers may ignore it. The Content-Signal tick under AI tools writes one from your choice, so use one or the other.`,
+    };
+  }
   const meant = meantField(field);
   if (meant !== undefined) {
     return {
@@ -627,28 +637,42 @@ function rulesSaid(group: RuleGroup): string {
  * included.
  */
 function namedFindings(groups: readonly RuleGroup[]): RuleFinding[] {
-  const findings: RuleFinding[] = [];
-  for (const group of groups) {
-    for (const { agent, written, line } of group.agentLines) {
-      if (agent === "*") continue;
-      const ai = AI_NAMES.get(agent);
-      if (ai !== undefined) {
-        const these = group.rules.length === 1 ? "this rule" : "these rules";
-        findings.push({
-          line,
-          level: "note",
-          message: `Line ${line} names ${ai}, so ${ai} follows ${these} joined with what the AI tools choice above asks of it, and no longer the rules for every crawler${rulesSaid(group)}. A page the choice keeps it from opens only with an Allow line.`,
-        });
-      } else {
-        findings.push({
-          line,
-          level: "note",
-          message: `Line ${line} names ${written}, so ${written} follows only the rules under it and skips those for every crawler, Nextly's own included.`,
-        });
-      }
-    }
+  return groups.flatMap(group =>
+    group.agentLines
+      .filter(({ agent }) => agent !== "*")
+      .map(named => namedFinding(group, named))
+  );
+}
+
+/** What is said about one name in a group, by what the name stands for. */
+function namedFinding(
+  group: RuleGroup,
+  { agent, written, line }: RuleGroup["agentLines"][number]
+): RuleFinding {
+  // Not a crawler: the policy token AI companies read for which pages they
+  // may train on. The choices that ask trainers away write a group for it
+  // too, which these rules join.
+  if (agent === AI_TRAINING_OPT_OUT) {
+    return {
+      line,
+      level: "note",
+      message: `Line ${line} names ${AI_TRAINING_OPT_OUT}, the shared AI-training opt-out, which isn't a crawler: AI companies that read it don't train on the pages its Disallow lines name. Allow AI search, not training and Block all AI tools write Disallow: / for it, joined with these rules, so a page they close opens only with an Allow line.`,
+    };
   }
-  return findings;
+  const ai = AI_NAMES.get(agent);
+  if (ai !== undefined) {
+    const these = group.rules.length === 1 ? "this rule" : "these rules";
+    return {
+      line,
+      level: "note",
+      message: `Line ${line} names ${ai}, so ${ai} follows ${these} joined with what the AI tools choice above asks of it, and no longer the rules for every crawler${rulesSaid(group)}. A page the choice keeps it from opens only with an Allow line.`,
+    };
+  }
+  return {
+    line,
+    level: "note",
+    message: `Line ${line} names ${written}, so ${written} follows only the rules under it and skips those for every crawler, Nextly's own included.`,
+  };
 }
 
 /** What reading the box found: each finding, in line order, and whether any refuses. */

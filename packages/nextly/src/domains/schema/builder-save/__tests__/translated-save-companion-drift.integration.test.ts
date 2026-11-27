@@ -93,7 +93,7 @@ const KINDS: Kind[] = [
   },
   {
     name: "a field group",
-    table: "comp_band",
+    table: "fg_band",
     create: untranslated =>
       dispatchComponents(
         "createComponent",
@@ -157,6 +157,32 @@ for (const dialect of getConfiguredTestDialects()) {
         ).executeQuery<T>(statement);
       const definitionOf = (table: string): Promise<TableDefinition> =>
         readTableDefinition(statement => exec(statement), dialect, table);
+
+      // A group keeping its text per language has an overlay column on the translations table,
+      // which the history records as an overlay. A later save is not drift over it: refused, its
+      // advice to drop what the history does not record would delete that text.
+      it("is not refused as drift over a group's overlay column an earlier save added", async () => {
+        await kind.create();
+        const settings = {
+          name: "settings",
+          type: "group",
+          fields: [{ name: "headline", type: "text" }],
+        };
+        await kind.save(t, [...FIELDS, settings]);
+        expect(
+          (await definitionOf(`${kind.table}_locales`)).columns.map(c => c.name)
+        ).toContain("settings");
+
+        await kind.save(t, [
+          ...FIELDS,
+          settings,
+          { name: "note", type: "text", localized: false },
+        ]);
+
+        expect(
+          (await definitionOf(kind.table)).columns.map(c => c.name)
+        ).toContain("note");
+      });
 
       it("is refused as drift before anything changes", async () => {
         await kind.create();

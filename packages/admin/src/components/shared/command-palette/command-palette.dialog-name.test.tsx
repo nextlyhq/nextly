@@ -42,7 +42,7 @@ describe("the command palette's dialog", () => {
       dialog.getAttribute("aria-describedby") ?? ""
     );
     expect(described?.textContent).toBe(
-      "Go to a page, run an action or find a user, and press Enter to choose it."
+      "Go to a collection, a Single, a page or a person, or run an action, and press Enter to choose it."
     );
   });
 });

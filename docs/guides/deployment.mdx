@@ -51,7 +51,7 @@ A scaffolded Nextly project ships this `build` script in `package.json`:
 ```json
 {
   "scripts": {
-    "build": "nextly migrate && next build"
+    "build": "nextly migrate --mode production && next build"
   }
 }
 ```
@@ -115,13 +115,13 @@ Use a managed PostgreSQL service that's reachable from Vercel's IP ranges:
 - [Supabase](https://supabase.com)
 - [PlanetScale](https://planetscale.com) (MySQL)
 
-SQLite is **not** suitable for Vercel deployments -- the file would be wiped on every cold start. See [Database](/docs/database) for adapter-specific guidance.
+SQLite is great on your own machine and on a single server; on Vercel, choose PostgreSQL, because a function's file would be wiped on every cold start. See [Database](/docs/database) for adapter-specific guidance.
 
 #### Database connections on Vercel
 
 A Vercel function instance serves many requests and is suspended between them, and a suspended instance keeps the database connections it holds open. A pool sized for a long-running server, ten connections kept for thirty seconds, can then use up a small database's connection limit across a handful of instances, and new connections fail with "too many connections".
 
-So on Vercel (where `VERCEL` is set, in functions and builds) the PostgreSQL and MySQL adapters default to a small pool: at most 3 connections, none kept open, and an idle connection closed after 5 seconds. Install `@vercel/functions` in the app as well:
+So on Vercel (where `VERCEL` is set, in functions and builds) the PostgreSQL and MySQL adapters default to a small pool: at most 3 connections, none kept open, an idle connection closed after 5 seconds, and a request that finds all three held waiting at most 5 seconds for one (`pool.connectionTimeoutMs`; a Neon database keeps its 20). Install `@vercel/functions` in the app as well:
 
 ```bash
 pnpm add @vercel/functions
@@ -163,7 +163,7 @@ pnpm build
 pnpm start
 ```
 
-The scaffolded `build` script runs `nextly migrate && next build`, and `pnpm start` is `next start`. If you'd rather run migrations as a separate step (recommended for production with zero-downtime deploys), drop `nextly migrate` from `build` and run it via your CI pipeline before promoting the new release.
+The scaffolded `build` script runs `nextly migrate --mode production && next build`, and `pnpm start` is `next start`. `--mode production` makes `nextly migrate` read `.env.production` as `next build` does, even when the host builds with `NODE_ENV` unset. If you'd rather run migrations as a separate step (recommended for production with zero-downtime deploys), drop `nextly migrate --mode production` from `build` and run it via your CI pipeline before promoting the new release.
 
 ### Environment variables
 
@@ -177,15 +177,15 @@ To rate-limit sign-in per client and record real client addresses, let Nextly re
 
 ### Migrations on deploy
 
-For self-hosted deploys, the same forward-only model applies. Run `nextly migrate` against the production database **before** the new app binary takes traffic. A production start does not bring the registry, the permissions, the role grants or the tables up to date itself: until `nextly migrate` runs, a declared field the database lacks answers `ENTITY_NOT_MIGRATED`, and against an empty database the start refuses, naming `nextly migrate`. A changed `dbName` needs a migration of its own (see [A changed `dbName`](/docs/guides/production-migrations#a-changed-dbname)), and a site whose tables its starts made before this release takes a baseline before upgrading (see [Upgrading a site whose starts made its tables](/docs/guides/production-migrations#upgrading-a-site-whose-starts-made-its-tables)).
+For self-hosted deploys, the same forward-only model applies. Run `nextly migrate --mode production` against the production database **before** the new app binary takes traffic. A production start does not bring the registry, the permissions, the role grants or the tables up to date itself: until `nextly migrate` runs, a declared field the database lacks answers `ENTITY_NOT_MIGRATED`, and against an empty database the start refuses, naming `nextly migrate`. A changed `dbName` needs a migration of its own (see [A changed `dbName`](/docs/guides/production-migrations#a-changed-dbname)), and a site whose tables its starts made before this release takes a baseline before upgrading (see [Upgrading a site whose starts made its tables](/docs/guides/production-migrations#upgrading-a-site-whose-starts-made-its-tables)).
 
 Do not move production back to a Nextly release from before the one where starts stopped writing this bookkeeping: such a release seeds the permissions and the preset role grants at every production start, from its own configuration, and nothing turns that off. See [Production migrations](/docs/guides/production-migrations) for GitHub Actions, Railway, Render, Fly.io, and AWS examples.
 
 ## When the database is busy
 
-A request waits for a database connection for at most `pool.connectionTimeoutMs`, 15 seconds by default (20 on Neon, from the PostgreSQL adapter's provider defaults), on every dialect: for a free pooled connection on PostgreSQL and MySQL, and on SQLite for the one connection behind the transactions ahead of it. A request still waiting after that fails with the code `DATABASE_BUSY`, status 503, and a `Retry-After: 5` header. The statement or transaction that waited did not run, but anything the request committed before it stays committed: a request that does its writing in one transaction can be sent again as it is, and one that writes in several steps is safe to repeat only where those steps are.
+A request waits for a database connection for at most `pool.connectionTimeoutMs`, 15 seconds by default (5 on Vercel, and 20 on Neon, from the PostgreSQL adapter's provider defaults), on every dialect: for a free pooled connection on PostgreSQL and MySQL, and on SQLite for the one connection behind the transactions ahead of it. A request still waiting after that fails with the code `DATABASE_BUSY`, status 503, and a `Retry-After: 5` header. The statement or transaction that waited did not run, but anything the request committed before it stays committed: a request that does its writing in one transaction can be sent again as it is, and one that writes in several steps is safe to repeat only where those steps are.
 
-A steady stream of `DATABASE_BUSY` means the pool is too small for the traffic, or something holds its connections too long. Look for long transactions first, then raise `pool.max` within your database's connection limit, or raise `pool.connectionTimeoutMs` if a longer wait suits your traffic better than a retry. Both are set on the adapter: see the connection pool sections for [PostgreSQL](/docs/database/postgres#connection-pool), [MySQL](/docs/database/mysql#connection-pool) and [SQLite](/docs/database/sqlite#sqlite-specific-options).
+Each such wait is logged as a warning ("A PostgreSQL request waited 15000 ms for a database connection and none was free"), even where the request answers without the failure: the check of the stored schema version that every admin request makes, for one, is waited for at most 2 seconds and then serves the schema the process already has, logging that it did. A steady stream of these warnings, or of `DATABASE_BUSY`, means the pool is too small for the traffic, or something holds its connections too long. Look for long transactions first, then raise `pool.max` within your database's connection limit, or raise `pool.connectionTimeoutMs` if a longer wait suits your traffic better than a retry. Both are set on the adapter: see the connection pool sections for [PostgreSQL](/docs/database/postgres#connection-pool), [MySQL](/docs/database/mysql#connection-pool) and [SQLite](/docs/database/sqlite#sqlite-specific-options).
 
 ## Client addresses and the auth rate limit
 
@@ -277,13 +277,13 @@ Before going live, verify:
 
 - [ ] `NODE_ENV=production`.
 - [ ] `NEXTLY_SECRET` is at least 32 characters (generated with `openssl rand -base64 32`).
-- [ ] `DATABASE_URL` points to a production database (not localhost / SQLite).
+- [ ] `DATABASE_URL` points to your production database, not one on your own machine. SQLite is great on your own machine and on a single server; on Vercel, choose PostgreSQL.
 - [ ] `NEXT_PUBLIC_APP_URL` is the public URL of your deployment.
 - [ ] `NEXTLY_ALLOWED_ORIGINS` lists the origin browsers use whenever it differs from the address the self-hosted server listens on (behind a proxy, by IP or hostname, or in a container), and any additional CSRF origins (separate frontend domain, mobile bundle, etc.).
 - [ ] Storage adapter is configured for non-ephemeral filesystems (no local disk on serverless).
 - [ ] An email provider is configured (Resend, SMTP, or SendLayer) -- without one, password-reset and verification tokens are returned in the API response as a development fallback.
 - [ ] The first administrator exists: created at `/admin/setup` with the setup token, or with `nextly users:create-admin`.
-- [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending and zero unfinished), by a `nextly migrate` that runs before each deploy serves: a production start writes no registry rows, permissions or role grants itself, and creates or changes no table.
+- [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending and zero unfinished), by a `nextly migrate --mode production` that runs before each deploy serves: a production start writes no registry rows, permissions or role grants itself, and creates or changes no table.
 - [ ] The reverse proxy / load balancer terminates TLS and forwards real client headers.
 - [ ] `security.trustProxy` is `true` on Vercel or behind a proxy every request passes through, with `TRUSTED_PROXY_IPS` listing any hops in front of it (see [Client addresses and the auth rate limit](#client-addresses-and-the-auth-rate-limit)).
 - [ ] Database backups are configured (your hosting provider's snapshots, point-in-time recovery, etc.).

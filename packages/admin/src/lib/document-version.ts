@@ -70,8 +70,8 @@ export function versionOf(doc: unknown): string | undefined {
 }
 
 /**
- * The editor's copy of a document, as a publish of every language compares
- * it: the version it started from, and the read it was loaded with.
+ * The editor's copy of a document, as a publish of chosen parts compares it:
+ * the version it started from, and the read it was loaded with.
  */
 export interface ShownCopy {
   version: string | undefined;
@@ -94,16 +94,16 @@ export interface ShownCopyHandle {
 }
 
 /**
- * What a publish of every language refused because the document changed
- * since says, once the document is read again.
+ * What a write held back because the document changed since says, once the
+ * document is read again.
  */
-export const PUBLISH_ALL_CHANGED_SINCE =
+const CHANGED_SINCE_OPENED =
   "This document changed since you opened it. It now shows the current version; publish again if you still want to.";
 
 /** A write held back: the language on screen changed since the editor opened it. */
 class ChangedSinceOpened extends Error {
   constructor() {
-    super(PUBLISH_ALL_CHANGED_SINCE);
+    super(CHANGED_SINCE_OPENED);
     this.name = "ChangedSinceOpened";
   }
 }
@@ -112,16 +112,16 @@ class ChangedSinceOpened extends Error {
 const READ_REFUSED = new Set([403, 404]);
 
 /**
- * A publish of every language by a caller refused the read of one of them:
+ * A publish by a caller refused the read of one of the document's languages:
  * it can carry no version naming every language, so it says it is made over
  * whatever each holds, which the server records as an overwrite.
  */
 export const OVERWRITE_EVERY_LANGUAGE = { overwrite: true } as const;
 
-/** What a publish of every language says it was made from. */
+/** What a publish judged on every language says it was made from. */
 export type EveryLanguageVersion = string | typeof OVERWRITE_EVERY_LANGUAGE;
 
-/** The body a publish of every language sends: its version, the overwrite choice, or nothing. */
+/** What such a publish sends: its version, the overwrite choice, or nothing. */
 export function everyLanguageBody(
   version: EveryLanguageVersion | undefined
 ): Record<string, unknown> {
@@ -132,7 +132,8 @@ export function everyLanguageBody(
 }
 
 /**
- * The version a publish of every language sends: a read of every language's.
+ * The version a publish of chosen parts sends: a read of every language's,
+ * since the publish is judged on the document's own row and each language's.
  * From an editor, the language on screen is read too, the way the editor read
  * it, and must still be at the version the editor's copy started from, or the
  * publish would make live a change the editor never saw. Every language is
@@ -147,8 +148,8 @@ export async function versionToPublishEveryLanguage(
 ): Promise<EveryLanguageVersion | undefined> {
   let refused = false;
   const every = await readEvery().catch((reason: unknown) => {
-    // A caller who may publish every language may still be refused a read of
-    // one of them: the publish then chooses to overwrite, and the server
+    // A caller who may publish may still be refused a read of one of the
+    // languages: the publish then chooses to overwrite, and the server
     // decides what it may publish.
     if (isApiError(reason) && READ_REFUSED.has(reason.status)) {
       refused = true;
@@ -156,12 +157,33 @@ export async function versionToPublishEveryLanguage(
     }
     throw reason;
   });
-  if (shown?.version !== undefined) {
-    if (versionOf(await readShown(shown)) !== shown.version) {
-      throw new ChangedSinceOpened();
-    }
-  }
+  await refuseIfMovedSinceShown(shown, readShown);
   return refused ? OVERWRITE_EVERY_LANGUAGE : versionOf(every);
+}
+
+/**
+ * The version a publish of chosen parts sends where the server described them: the one the
+ * description was made from, so a part changed since is refused rather than put live as something
+ * else. From an editor, the language on screen must still be as the editor opened it.
+ */
+export async function versionDescribed(
+  described: string,
+  shown: ShownCopy | undefined,
+  readShown: (copy: ShownCopy) => Promise<unknown>
+): Promise<string> {
+  await refuseIfMovedSinceShown(shown, readShown);
+  return described;
+}
+
+/** Refuses a write from an editor whose language on screen changed since it was opened. */
+async function refuseIfMovedSinceShown(
+  shown: ShownCopy | undefined,
+  readShown: (copy: ShownCopy) => Promise<unknown>
+): Promise<void> {
+  if (shown?.version === undefined) return;
+  if (versionOf(await readShown(shown)) !== shown.version) {
+    throw new ChangedSinceOpened();
+  }
 }
 
 /** Whether a write was refused because the document changed since the editor's copy, before it was sent or by the server. */

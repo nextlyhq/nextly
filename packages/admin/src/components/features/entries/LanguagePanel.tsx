@@ -35,7 +35,6 @@ import { CopyFromLanguageMenu } from "./CopyFromLanguageMenu";
 import { useCopyFromLanguageScope } from "./CopyFromLanguageScope";
 import { useEntryLocale } from "./EntryLocaleContext";
 import { StateDot } from "./LanguageStateDot";
-import { PublishAllConfirm } from "./PublishAllConfirmDialog";
 import {
   languageState,
   languageStateLabel,
@@ -47,7 +46,6 @@ import {
   type TranslationCounts,
 } from "./translation-meta";
 import type { CopyFromLanguage } from "./useCopyFromLanguage";
-import { usePublishAllLanguages } from "./usePublishAllLanguages";
 
 export interface LanguagePanelProps {
   /** The entry's `_translations` map, keyed by locale code. */
@@ -59,19 +57,11 @@ export interface LanguagePanelProps {
    * seed the target survives the refetch the switch triggers.
    */
   onSelect?: (code: string, options?: { seedFrom?: string }) => void;
-  /** Whether the collection has the Draft/Published lifecycle. */
-  hasStatus?: boolean;
   /**
    * Withholds every mutating action (reading a past version: nothing here may
    * write the live document). States stay readable.
    */
   actionsDisabled?: boolean;
-  /**
-   * Withholds publishing every language. The same as `actionsDisabled` unless
-   * given: it changes only each language's status, which the publish
-   * permission judges, so a user held from every edit may still be offered it.
-   */
-  publishAllDisabled?: boolean;
   /**
    * Withholds opening another language. The same as `actionsDisabled` unless
    * given: a user who may only read the document is held from every mutation
@@ -168,16 +158,16 @@ function StateLegend() {
 }
 
 /**
- * The panel's title row: what it is, how far along it is, and what can be done
- * to every language at once.
+ * The panel's title row: what it is, how far along it is, and what fills the
+ * language being edited. Nothing here publishes: what goes live is chosen from
+ * the header's publish menu.
  *
  * Wraps, because this row carries a label, a progress meter, a count and up to
- * two actions inside a ~320px rail. Fixed on one line the actions ran past the
- * card — measured, "Publish all" was drawn 47px beyond its edge while a
- * non-default language was being edited, which is exactly when it is the
- * control an author wants. The ROWS below solved the same squeeze by letting
- * their describing half give way; there is no such half here, since every part
- * of this row is either a number or a verb.
+ * two actions inside a ~320px rail, and fixed on one line the actions run past
+ * the card while a non-default language is being edited, which is exactly when
+ * they are the controls an author wants. The ROWS below solved the same
+ * squeeze by letting their describing half give way; there is no such half
+ * here, since every part of this row is either a number or a verb.
  *
  * Whether the translate action applies is decided by the caller and arrives as
  * ONE boolean. Three conditions ANDed inside the JSX read as one long line and
@@ -187,10 +177,6 @@ function StateLegend() {
 function PanelHeader({
   counts,
   actionsDisabled,
-  publishAllDisabled,
-  canPublishAll,
-  publishPending,
-  onPublishAll,
   offersTranslate,
   onTranslate,
   copy,
@@ -207,10 +193,6 @@ function PanelHeader({
   activeState: LanguageState;
   metaKnown: boolean;
   actionsDisabled: boolean;
-  publishAllDisabled: boolean;
-  canPublishAll: boolean;
-  publishPending: boolean;
-  onPublishAll: () => void;
   offersTranslate: boolean;
   onTranslate: () => void;
 }) {
@@ -248,18 +230,6 @@ function PanelHeader({
           onClick={onTranslate}
         >
           Translate
-        </Button>
-      )}
-      {canPublishAll && (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-7 px-2 text-xs"
-          disabled={publishAllDisabled || publishPending}
-          onClick={onPublishAll}
-        >
-          {publishPending ? "Publishing…" : "Publish all"}
         </Button>
       )}
     </div>
@@ -417,23 +387,6 @@ function activeLanguageView(
     // An absent map is not an empty document — see `seedVerb`.
     metaKnown: translations !== undefined,
   };
-}
-
-/**
- * How many languages hold a saved change nobody has published.
- *
- * Stated in the publish-all confirm, because publishing every language is the
- * one action in this panel that can put another person's held edit on the
- * public site.
- */
-function pendingLanguageCount(
-  locales: readonly { code: string }[],
-  translations: Record<string, LocaleTranslationMeta> | undefined
-): number | null {
-  // Unknown, not none, where the states were not read: the confirmation then
-  // warns that any held change goes live rather than claim there is none.
-  if (translations === undefined) return null;
-  return locales.filter(l => translations[l.code]?.pendingChange).length;
 }
 
 /**
@@ -658,8 +611,10 @@ function LanguageRow({
               disabled={actionsDisabled}
               // Named for the language it acts on. Read out of context — a
               // screen reader listing this panel's controls — three buttons
-              // all saying "Start from…" name no language at all.
-              aria-label={`${seedVerb(state, metaKnown)} ${label} from another language`}
+              // all saying "Start from…" name no language at all. The name
+              // starts with the visible text, so a speech-input user saying
+              // what they see reaches it (label in name).
+              aria-label={`${seedVerb(state, metaKnown)} from… another language, into ${label}`}
               onClick={onSeed}
             >
               {seedVerb(state, metaKnown)} from…
@@ -718,6 +673,8 @@ export function DocumentLanguagePanel({
   translations?: Record<string, LocaleTranslationMeta> | undefined;
   locale?: string | undefined;
   onLocaleChange?: LanguagePanelProps["onSelect"] | undefined;
+  /** Accepted from the document panel; nothing here reads it. */
+  hasStatus?: boolean | undefined;
 }): JSX.Element | null {
   return (
     <LanguagePanel
@@ -727,13 +684,6 @@ export function DocumentLanguagePanel({
       {...(onLocaleChange === undefined ? {} : { onSelect: onLocaleChange })}
     />
   );
-}
-
-/** The publish hook's options: the lifecycle flag only where the caller knows it. */
-function publishOptions(
-  hasStatus: boolean | undefined
-): Parameters<typeof usePublishAllLanguages>[0] {
-  return hasStatus === undefined ? {} : { hasStatus };
 }
 
 /**
@@ -795,27 +745,22 @@ export function LanguagePanel({
   translations,
   activeLocale,
   onSelect,
-  hasStatus,
   actionsDisabled = false,
-  publishAllDisabled = actionsDisabled,
   navigationDisabled = actionsDisabled,
   sharedChangesPending,
   reviewStages,
   className,
 }: LanguagePanelProps): JSX.Element | null {
-  const [confirmPublishAll, setConfirmPublishAll] = useState(false);
   const [filter, setFilter] = useState("");
   const filterId = useId();
   const { enabled, locales, defaultLocale } = useLocalization();
   const { collectionLocalized, isNonDefaultLocale, onEnterTranslationMode } =
     useEntryLocale();
   const copy = useCopyFromLanguageScope();
-  const publish = usePublishAllLanguages(publishOptions(hasStatus));
 
   if (!hasLanguages(enabled, collectionLocalized, locales.length)) return null;
 
   const active = activeLocale ?? defaultLocale;
-  const pendingCount = pendingLanguageCount(locales, translations);
   const counts = translationCounts(
     translations,
     locales.map(l => l.code)
@@ -833,10 +778,6 @@ export function LanguagePanel({
         activeState={activeLanguage.state}
         metaKnown={activeLanguage.metaKnown}
         actionsDisabled={actionsDisabled}
-        publishAllDisabled={publishAllDisabled}
-        canPublishAll={publish.available}
-        publishPending={publish.pending}
-        onPublishAll={() => setConfirmPublishAll(true)}
         offersTranslate={offersTranslateMode(
           onEnterTranslationMode,
           isNonDefaultLocale,
@@ -846,14 +787,6 @@ export function LanguagePanel({
       />
 
       <SharedChangesNotice pending={sharedChangesPending} />
-
-      <PublishAllConfirm
-        open={confirmPublishAll}
-        held={publishAllDisabled}
-        onOpenChange={setConfirmPublishAll}
-        pendingCount={pendingCount}
-        publish={publish}
-      />
 
       <LanguageFilter
         offered={offersFilter}

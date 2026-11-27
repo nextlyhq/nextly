@@ -13,10 +13,23 @@ import {
   type EveryLanguageVersion,
 } from "@admin/lib/document-version";
 
-import type { PublishAllLanguageOutcome } from "./publishAllPreview";
-
 /** Which way the parts move. */
 export type PublishPartsDirection = "publish" | "unpublish";
+
+/** What a publish does, or would do, to one chosen language. */
+export type PublishLanguageOutcome =
+  | { locale: string; outcome: "goes-live-with-pending-change" }
+  | { locale: string; outcome: "stays-published" }
+  | { locale: string; outcome: "goes-live" }
+  | { locale: string; outcome: "shows-fallback"; fallback: string | null }
+  | {
+      locale: string;
+      outcome: "out-of-date";
+      /** The shared fields it is behind on that the caller may read. */
+      fields: string[];
+      /** How many more it is behind on that the caller may not read. */
+      hiddenCount?: number;
+    };
 
 /** What an unpublish does, or would do, to one chosen language. */
 export type UnpublishLanguageOutcome = {
@@ -26,8 +39,18 @@ export type UnpublishLanguageOutcome = {
 
 /** What a publish or an unpublish does, or would do, to one chosen language. */
 export type PartsLanguageOutcome =
-  | PublishAllLanguageOutcome
+  | PublishLanguageOutcome
   | UnpublishLanguageOutcome;
+
+/**
+ * A mark of each language a description describes, and of the shared fields: equal in two
+ * descriptions where nothing of that part was saved between them. A language it does not describe
+ * has none.
+ */
+export interface PartMarks {
+  languages: Readonly<Record<string, string>>;
+  shared: string;
+}
 
 /** What a request did, or would do, to each part it chose. */
 export interface PublishPartsResult {
@@ -39,6 +62,10 @@ export interface PublishPartsResult {
     /** Whether the shared fields were added to the request: the document's first publish. */
     added: boolean;
   };
+  /** In a description, the version it was made from, which a move of the same parts sends. */
+  _rev?: string;
+  /** In a description, what says which part changed since. */
+  marks?: PartMarks;
 }
 
 /** The parts chosen, and how the request is made. */

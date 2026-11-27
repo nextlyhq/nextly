@@ -9,12 +9,18 @@
  * @module cli/commands/dev-build
  */
 
+import { resolve } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { configTheCodeOwnsIn } from "../../di/load-dynamic-tables";
+import {
+  configTheCodeOwnsIn,
+  configWithRecordedHandOversIn,
+} from "../../di/load-dynamic-tables";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { dashboardPinsPresent } from "../../domains/dashboard/dashboard-pins";
+import type { FieldGroupNaming } from "../../domains/field-groups/services/field-group-storage-names";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
@@ -41,6 +47,8 @@ import {
 } from "../../domains/schema/busy-table/bounds";
 import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
 import type { Deletion } from "../../domains/schema/migrate/data-loss-consent";
+import { pluginEntitySources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
+import { keepsMigrationFiles } from "../../domains/schema/migrate-create/snapshot-io";
 import { refuseFieldGroupSwitches } from "../../domains/schema/pipeline/companion-shape-switches";
 import { registryRows } from "../../domains/schema/pipeline/recorded-fields";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -92,6 +100,7 @@ import {
   performSinglesAutoSync,
   performSinglesReconcile,
 } from "./dev-server";
+import { reportKeptPluginEntities } from "./kept-plugin-entities";
 
 // ============================================================================
 // Orphan Record Type
@@ -157,6 +166,22 @@ async function runSyncStatements(
   });
 }
 
+/** What the three syncs' kept lines are written with (`reportKeptPluginEntities`). */
+function keptReport(
+  config: LoadConfigResult["config"],
+  options: ResolvedDevOptions,
+  logger: CommandContext["logger"]
+): Parameters<typeof reportKeptPluginEntities>[3] {
+  return {
+    logger,
+    keepsMigrationFiles: async () =>
+      keepsMigrationFiles({
+        cwd: options.cwd,
+        migrationsDir: config.db.migrationsDir,
+      }),
+  };
+}
+
 // ============================================================================
 // Extension schema
 // ============================================================================
@@ -178,13 +203,18 @@ export async function publishExtensionSchema(
   adapter: CLIDatabaseAdapter,
   context: CommandContext
 ): Promise<void> {
-  const { compileAndPublishExtensionSchema } = await import(
-    "../../domains/schema/extension/publish"
-  );
+  const { compileAndPublishExtensionSchema, declaresExtensionSchema } =
+    await import("../../domains/schema/extension/publish");
   const capabilities = (adapter as unknown as DrizzleAdapter).getCapabilities();
   // Each field group under its stored table, so a contribution to a group attaches to the table
   // it is in: `fg_<slug>` on a site whose field-group storage was migrated.
-  const fieldGroups = await storedFieldGroupsOf(adapter, configResult.config);
+  const fieldGroups = await storedFieldGroupsOf(
+    adapter,
+    configResult.config,
+    // Asked only where the database has no registry: a dry run over an empty one, which a real
+    // run would have set up by now (`ensureCoreTables`).
+    () => newDatabaseNamingOf(configResult.config, context.cwd)
+  );
   await compileAndPublishExtensionSchema({
     ...(fieldGroups === undefined
       ? {}
@@ -194,7 +224,18 @@ export async function publishExtensionSchema(
         }),
     dialect: capabilities.dialect,
     plugins: configResult.config.plugins ?? [],
-    config: configResult.config,
+    // A collection handed to the Schema Builder as its record has it, so a hook on its table is
+    // judged by the columns the push keeps, not by the code entry the push ignores.
+    // Read only where something declares a schema: with none, the compile reads no entity.
+    config: declaresExtensionSchema({
+      plugins: configResult.config.plugins ?? [],
+      config: configResult.config,
+    })
+      ? await configWithRecordedHandOversIn(
+          adapter as unknown as DrizzleAdapter,
+          configResult.config
+        )
+      : configResult.config,
     // The connected server's limits: a push that declares a check or
     // expression index the server cannot hold is refused before applying.
     server: capabilities,
@@ -203,6 +244,40 @@ export async function publishExtensionSchema(
       debug: m => context.logger.debug(m),
     },
   });
+}
+
+/**
+ * Records each Single and field group the configuration declares as its declaration's, before the
+ * first push: the collections' push, where it is refused, ends the run before their own syncs.
+ * A collection is recorded by its own sync, ahead of that push.
+ */
+export async function claimDeclaredOwners(
+  configResult: LoadConfigResult,
+  adapter: CLIDatabaseAdapter,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const { config } = configResult;
+  const live = adapter as unknown as DrizzleAdapter;
+  const serviceLogger: ServiceLogger = {
+    info: (msg: string) => logger.debug(msg),
+    warn: (msg: string) => logger.warn(msg),
+    error: (msg: string) => logger.error(msg),
+    debug: (msg: string) => logger.debug(msg),
+  };
+  const sources = pluginEntitySources(config.plugins ?? []);
+  await new SingleRegistryService(live, serviceLogger).claimDeclared(
+    config.singles.map(({ slug }) => ({
+      slug,
+      source: sources.singles.get(slug) ?? "code",
+    }))
+  );
+  await new FieldGroupRegistryService(live, serviceLogger).claimDeclared(
+    config.fieldGroups.map(({ slug }) => ({
+      slug,
+      source: sources.fieldGroups.get(slug) ?? "code",
+    }))
+  );
 }
 
 // ============================================================================
@@ -277,6 +352,14 @@ export async function syncCollections(
     throw error;
   }
 
+  // From the rows read above: the sync writes only what the configuration declares.
+  await reportKeptPluginEntities(
+    "collection",
+    recordedCollections,
+    config.collections,
+    keptReport(config, options, logger)
+  );
+
   // Display sync results
   displaySyncResults(result, options, context);
 
@@ -340,10 +423,14 @@ export async function syncSingles(
     serviceLogger
   );
 
+  // Each Single's origin, by the rule a start and a reload give it.
+  const sources = pluginEntitySources(config.plugins ?? []).singles;
+
   // Transform SingleConfig[] to CodeFirstSingleConfig[]
   const codeFirstConfigs: CodeFirstSingleConfig[] = config.singles.map(
     single => ({
       slug: single.slug,
+      source: sources.get(single.slug) ?? "code",
       label: single.label?.singular ?? toTitleCase(single.slug),
       fields: single.fields,
       description: single.description,
@@ -394,15 +481,20 @@ export async function syncSingles(
     }
   }
 
+  await reportKeptPluginEntities(
+    "single",
+    await singleRegistry.getAllSingles(),
+    config.singles,
+    keptReport(config, options, logger)
+  );
+
   // Display sync results
   displaySinglesSyncResults(result, options, context);
 
   // Auto-sync: Create data tables for created/updated Singles and set status to 'applied'
   const autoSyncEnabled = options.autoSync !== false;
-  if (
-    autoSyncEnabled &&
-    (result.created.length > 0 || result.updated.length > 0)
-  ) {
+  // Also with nothing created or updated: it takes entities an earlier run recorded failed.
+  if (autoSyncEnabled) {
     await performSinglesAutoSync(
       config,
       adapter,
@@ -460,10 +552,14 @@ export async function syncComponents(
     serviceLogger
   );
 
+  // Each field group's origin, by the rule a start and a reload give it.
+  const sources = pluginEntitySources(config.plugins ?? []).fieldGroups;
+
   // Transform FieldGroupConfig[] to CodeFirstComponentConfig[]
   const codeFirstConfigs: CodeFirstComponentConfig[] = config.fieldGroups.map(
     component => ({
       slug: component.slug,
+      source: sources.get(component.slug) ?? "code",
       label: component.label?.singular ?? toTitleCase(component.slug),
       fields: component.fields,
       description: component.description,
@@ -524,15 +620,20 @@ export async function syncComponents(
     }
   }
 
+  await reportKeptPluginEntities(
+    "component",
+    await componentRegistry.getAllComponents(),
+    config.fieldGroups,
+    keptReport(config, options, logger)
+  );
+
   // Display sync results
   displayComponentsSyncResults(result, options, context);
 
   // Auto-sync: Create data tables for created/updated Components and set status to 'applied'
   const autoSyncEnabled = options.autoSync !== false;
-  if (
-    autoSyncEnabled &&
-    (result.created.length > 0 || result.updated.length > 0)
-  ) {
+  // Also with nothing created or updated: it takes entities an earlier run recorded failed.
+  if (autoSyncEnabled) {
     await performComponentsAutoSync(
       config,
       adapter,
@@ -1210,15 +1311,28 @@ async function storedFieldGroupTableOf(
 /** Where each declared field group is stored, as the extension compile takes it. */
 async function storedFieldGroupsOf(
   adapter: unknown,
-  config: { fieldGroups?: readonly unknown[] }
+  config: { fieldGroups?: readonly unknown[] },
+  newDatabaseNaming?: () => Promise<FieldGroupNaming>
 ) {
   const { declaredFieldGroupStorage } = await import(
     "../../domains/field-groups/services/field-group-stored-tables"
   );
   return declaredFieldGroupStorage(
     adapter as Parameters<typeof declaredFieldGroupStorage>[0],
-    config.fieldGroups
+    config.fieldGroups,
+    newDatabaseNaming
   );
+}
+
+/** The names an empty database of the project starts its field groups on. */
+export async function newDatabaseNamingOf(
+  config: LoadConfigResult["config"],
+  cwd: string
+): Promise<FieldGroupNaming> {
+  const { emptyDatabaseFieldGroupNaming } = await import(
+    "../../domains/schema/migrate/new-database-naming"
+  );
+  return emptyDatabaseFieldGroupNaming(resolve(cwd, config.db.migrationsDir));
 }
 
 export async function ensureLocalizedCompanions(
@@ -1496,6 +1610,8 @@ export async function ensureLocalizedCompanions(
             kind,
             entity.slug
           ),
+          // A container's overlay column added now is seeded as the default language's text.
+          defaultLocale: transitions?.defaultLocale,
         },
         reportCompanionFailure(
           "update",
@@ -1523,6 +1639,63 @@ export async function ensureLocalizedCompanions(
           "index",
           "Unique translated fields are not enforced in each language until it is"
         )
+      );
+    }
+  }
+  // The Schema Builder's own entities, which the configuration does not declare: after the push,
+  // each one stored per language has its existing translations table brought into step, as the
+  // configuration's are, so a container's overlay column an earlier release never made is made,
+  // and seeded with the default language's text, here, by `nextly migrate` and a start alike. The
+  // Builder makes and drops those tables itself, so nothing is created for them.
+  if (phase === "afterApply") {
+    const [{ readLayoutScanEntities }, { builtByFor }] = await Promise.all([
+      import("../../di/layout-scan-entities"),
+      import("../../domains/schema/pipeline/registered-collections"),
+    ]);
+    const declared = new Set(
+      groups.flatMap(([, group, resolveTableName]) =>
+        group.map(entity => resolveTableName(entity))
+      )
+    );
+    for (const entity of await readLayoutScanEntities(
+      adapter as unknown as DrizzleAdapter,
+      declared
+    )) {
+      if (!storesPerLanguage(entity)) continue;
+      const companionTableName = `${entity.tableName}_locales`;
+      if (
+        !(await (adapter as unknown as DrizzleAdapter).tableExists(
+          companionTableName
+        ))
+      ) {
+        continue;
+      }
+      // A field group's transitions are recorded as `fieldGroup`, as its builder is named.
+      const kind = entity.kind === "component" ? "fieldGroup" : entity.kind;
+      await reconcileCompanionColumns(
+        adapter as unknown as DrizzleAdapter,
+        {
+          builtBy: builtByFor(kind, entity.builderOwned),
+          slug: entity.slug,
+          tableName: entity.tableName,
+          fields: entity.fields as { name: string; type: string }[],
+          dialect,
+          status: publishesPerLanguage(entity),
+          versionScope: versionScopeForEntityKind(kind),
+          defaultLocale: transitions?.defaultLocale,
+        },
+        error => {
+          logger.error(
+            `Could not update the translations table for "${entity.slug}" (${companionTableName}). ` +
+              `Its containers' text cannot be read until it matches: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+          failures.push(entity.slug);
+        },
+        message =>
+          logger.warn(
+            `The translations table for "${entity.slug}" (${companionTableName}): ${message}`
+          )
       );
     }
   }

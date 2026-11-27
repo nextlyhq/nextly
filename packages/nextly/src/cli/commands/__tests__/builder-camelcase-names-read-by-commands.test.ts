@@ -225,7 +225,7 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         ).toEqual(["summary", "metaTitle"]);
       }
       // The tables' columns, as the snapshot the next run diffs against holds them.
-      for (const table of ["dc_cases", "single_about", "comp_teaser"]) {
+      for (const table of ["dc_cases", "single_about", "fg_teaser"]) {
         const columns = recorded.snapshot.tables
           .find(t => t.name === table)
           ?.columns.map(column => column.name);

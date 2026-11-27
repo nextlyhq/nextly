@@ -3,25 +3,35 @@
  * of the watch's own beside it, read from the pool's state when the watch starts, not its size.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
-import { openWatchConnection } from "../watch-connection";
+import {
+  openPostgresBesidePool,
+  openWatchConnection,
+} from "../watch-connection";
 
 /** A stand-in for node-postgres's pool: `open` connections, `idle` of them free. */
 function pgAdapter(state: { max: number; open: number; idle: number }) {
   const ownConnections: string[] = [];
+  // What the watch's own connection was asked, and the error it can be made to report.
+  const own = { queries: 0, ends: 0, fail: () => undefined as void };
+  const asked = { pool: 0 };
   class Client {
     connect() {
       ownConnections.push("opened");
       return Promise.resolve();
     }
     query() {
+      own.queries += 1;
       return Promise.resolve({ rows: [] });
     }
     end() {
+      own.ends += 1;
       return Promise.resolve();
     }
-    on() {
+    on(_event: string, listener: (error: unknown) => void) {
+      own.fail = () => listener(new Error("the connection dropped"));
       return this;
     }
   }
@@ -31,11 +41,23 @@ function pgAdapter(state: { max: number; open: number; idle: number }) {
     idleCount: state.idle,
     Client,
   };
+  // What the client was made with, as its constructor receives it.
+  const made: { options: Record<string, unknown> }[] = [];
+  class MadeClient extends Client {
+    constructor(options: Record<string, unknown>) {
+      super();
+      made.push({ options });
+    }
+  }
+  pool.Client = MadeClient as unknown as typeof Client;
   const adapter = {
     getDrizzle: () => ({ $client: pool }),
-    queryStatement: () => Promise.resolve([]),
+    queryStatement: () => {
+      asked.pool += 1;
+      return Promise.resolve([]);
+    },
   } as unknown as DrizzleAdapter;
-  return { adapter, ownConnections };
+  return { adapter, ownConnections, own, asked, made, pool };
 }
 
 /** A stand-in for mysql2's promise pool around its core pool. */
@@ -57,7 +79,59 @@ function mysqlAdapter(state: { limit: number; open: number; free: number }) {
   return { adapter, sessions: () => sessions };
 }
 
+describe("openPostgresBesidePool", () => {
+  // pg-pool keeps its pool's password, and its TLS key, where a spread of its options loses them
+  // (they are not enumerable); a connection made from the spread alone then cannot sign in, or
+  // present the key. An app that gives the connection as separate options, rather than a URL that
+  // carries the password in its own text, signs in with the password given to the pool.
+  it("makes its connection with the pool's password and TLS key, which its options keep out of a spread", async () => {
+    const { adapter, made, pool } = pgAdapter({ max: 1, open: 1, idle: 0 });
+    const tls = Object.defineProperty({}, "key", {
+      value: "the key",
+      enumerable: false,
+    });
+    Object.defineProperty(pool.options, "password", {
+      value: "the password",
+      enumerable: false,
+    });
+    Object.assign(pool.options, { host: "db", user: "u", ssl: tls });
+
+    const connection = await openPostgresBesidePool(adapter, "a name");
+    await connection?.close();
+
+    expect(made).toHaveLength(1);
+    expect(made[0]?.options).toMatchObject({
+      host: "db",
+      user: "u",
+      password: "the password",
+      application_name: "a name",
+    });
+    expect((made[0]?.options.ssl as { key?: unknown }).key).toBe("the key");
+  });
+});
+
 describe("openWatchConnection", () => {
+  // Its own PostgreSQL connection, once it reports an error, answers nothing more: the watch asks
+  // through the pool from then on.
+  it("asks through the PostgreSQL pool once its own connection has dropped", async () => {
+    const { adapter, own, asked } = pgAdapter({ max: 1, open: 1, idle: 0 });
+    const connection = await openWatchConnection(adapter, "postgresql");
+    await connection.query(sql`SELECT 1`);
+    expect({ own: own.queries, pool: asked.pool }).toEqual({ own: 1, pool: 0 });
+
+    own.fail();
+    await connection.query(sql`SELECT 1`);
+    expect({ own: own.queries, pool: asked.pool }).toEqual({ own: 1, pool: 1 });
+  });
+
+  it("closes its own PostgreSQL connection once, however often it is closed", async () => {
+    const { adapter, own } = pgAdapter({ max: 1, open: 1, idle: 0 });
+    const connection = await openWatchConnection(adapter, "postgresql");
+    await connection.close();
+    await connection.close();
+    expect(own.ends).toBe(1);
+  });
+
   it("opens a PostgreSQL connection of its own where every pooled one is busy", async () => {
     const { adapter, ownConnections } = pgAdapter({ max: 4, open: 4, idle: 0 });
     const connection = await openWatchConnection(adapter, "postgresql");

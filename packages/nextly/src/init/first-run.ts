@@ -21,6 +21,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { recordNewSiteOrWarn as recordNewSite } from "../domains/field-groups/services/field-group-new-site";
 import {
   busyTableBounds,
   type BusyTableBounds,
@@ -108,6 +109,11 @@ export interface EnsureFirstRunSetupArgs {
    * this module once.
    */
   extensionSchema?: ExtensionSchema | undefined;
+  /**
+   * The names a new database's field-group storage starts on: the project's
+   * migration history's (`new-database-naming`). Absent, the current names.
+   */
+  newSiteFieldGroupNaming?: "legacy" | "current";
 }
 
 export type EnsureFirstRunSetupResult =
@@ -821,8 +827,23 @@ async function setUpNewDatabase(
   // depend on plugin config.
   const extensionSchema =
     args.extensionSchema ?? getActiveExtensionSchema(dialect);
+  const {
+    standingRegistryNaming,
+    withFieldGroupRegistryFor,
+    recordNewSiteOrWarn,
+  } = await import("../domains/field-groups/services/field-group-new-site");
+  // A new site starts its field groups on the current names
+  // (`field-group-new-site`), unless its project's history begins on the
+  // legacy ones. A database with a registry and no ledger keeps the one it has.
+  const standing = await standingRegistryNaming(adapter);
+  const fieldGroupNaming =
+    standing ?? args.newSiteFieldGroupNaming ?? "current";
   const staticTables = {
-    ...deps.getDialectTables(dialect),
+    ...withFieldGroupRegistryFor(
+      dialect,
+      deps.getDialectTables(dialect),
+      fieldGroupNaming
+    ),
     ...(extensionSchema?.drizzle ?? {}),
   };
   const result = await deps.freshPushSchema(
@@ -887,6 +908,15 @@ async function setUpNewDatabase(
   await markMediaUsageRecordedOnNewSite(
     adapter,
     staticTables.nextlyMeta,
+    logger
+  );
+
+  await recordNewSiteNaming(
+    // A registry that stood already is no new site's: what its storage went through is its marker's.
+    standing === undefined ? fieldGroupNaming : undefined,
+    staticTables.nextlyMeta !== undefined,
+    recordNewSiteOrWarn,
+    adapter,
     logger
   );
 
@@ -1231,4 +1261,23 @@ async function markMediaUsageRecordedOnNewSite(
       `[nextly] Could not mark the media usage record complete (${err instanceof Error ? err.message : String(err)}). Run \`nextly media reindex-usage\` once.`
     );
   }
+}
+
+/**
+ * Records that a new site's field groups start on the current names, beside the registry it
+ * describes, where the dialect's tables hold the record's table (`hasMeta`). A failure is reported
+ * rather than thrown (`recordNewSiteOrWarn`).
+ */
+async function recordNewSiteNaming(
+  naming: "legacy" | "current" | undefined,
+  hasMeta: boolean,
+  record: typeof recordNewSite,
+  adapter: EnsureFirstRunSetupArgs["adapter"],
+  logger: EnsureFirstRunSetupArgs["logger"]
+): Promise<void> {
+  if (naming !== "current" || !hasMeta) return;
+  await record(
+    adapter as unknown as Parameters<typeof record>[0],
+    logger as unknown as Parameters<typeof record>[1]
+  );
 }

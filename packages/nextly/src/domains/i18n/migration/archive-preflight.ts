@@ -28,6 +28,10 @@ import {
   liveCompanionColumns,
   localizedColumnsOnMain,
 } from "../runtime/companion-io";
+import {
+  fieldsTurningTranslatedInside,
+  type StructuredField,
+} from "../shared-structure";
 
 import { companionColumnsThatCannotHold } from "./companion-column-holds";
 import {
@@ -35,6 +39,7 @@ import {
   type UniqueTranslatedColumn,
 } from "./companion-unique-indexes";
 import { ddlType } from "./ddl-types";
+import { fieldTurningTranslatedRefusal } from "./disable-keeping-overlays";
 import { ensureI18nArchive } from "./ensure-archive";
 import { fieldsJoiningTranslation } from "./field-joins-translation";
 import {
@@ -61,8 +66,10 @@ import {
 } from "./move-keeps-definition";
 import {
   buildLeavingFieldsArchiveStatements,
+  disableDroppingOverlays,
   type FieldRename,
   fieldsLeavingTranslation,
+  overlaysLeftBehind,
 } from "./reconcile-companion";
 import type { I18nTransitionKind } from "./transition-state";
 import {
@@ -221,6 +228,18 @@ export async function archiveFieldsLeavingTranslation(args: {
     return;
   }
   if (!args.isLocalized) {
+    // A repeater's or group's text kept per language has no way home onto its structure, so
+    // turning translation off is refused before anything changes, naming each one the companion
+    // holds an overlay for (`disableDroppingOverlays`), as a migration file's refusal names them.
+    const overlays = disableDroppingOverlays({
+      slug: args.entity,
+      kind: args.kind,
+      oldFields: args.oldFields,
+      dialect: args.adapter.dialect,
+      builtBy: args.builtBy,
+      liveCompanionColumns: (await companionColumns()).map(c => c.name),
+    });
+    if (overlays) throw overlays;
     await refuseRenameAsTranslationEnds(args);
     // Turning translation off restores each field from the companion under the name it had, so
     // a translated field removed beside an added one is restored under a name no field has.
@@ -239,6 +258,29 @@ export async function archiveFieldsLeavingTranslation(args: {
   // Before the early return below: a change that only removes and adds translated fields changes
   // no field's translation, and is exactly the one that would drop a column unasked.
   refuseTranslatedFieldsRemovedBesideAdded(args, oldFields);
+  // A repeater or group left keeping no text inside would have its overlay dropped, with every
+  // language's text in it (`overlaysLeftBehind`): refused before anything changes. Its fields
+  // changing translation is no field leaving translation, so this too goes before the early return.
+  const leftBehind = overlaysLeftBehind({
+    slug: args.entity,
+    kind: args.kind,
+    oldFields,
+    newFields: args.newFields,
+    dialect: args.adapter.dialect,
+    builtBy: args.builtBy,
+    liveCompanionColumns: (await companionColumns()).map(c => c.name),
+  });
+  if (leftBehind) throw leftBehind;
+  // A shared field inside a container keeping its text per language made translated: its stored
+  // value, every language's, would be taken by the first language saved
+  // (`fieldsTurningTranslatedInside`). Refused before anything changes, translation staying on.
+  if (args.wasLocalized && args.isLocalized) {
+    const turning = fieldTurningTranslatedRefusal(
+      { kind: args.kind, slug: args.entity },
+      fieldsTurningTranslatedInside(oldFields, args.newFields)
+    );
+    if (turning) throw turning;
+  }
   // Nothing to judge or archive when no field changes whether it is translated, or its name.
   if (leaving.size === 0 && joining.length === 0 && !rename) {
     return;

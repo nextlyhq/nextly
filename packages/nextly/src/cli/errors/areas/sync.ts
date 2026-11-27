@@ -26,6 +26,10 @@ function fieldGroupCommand(error: NextlyError): string {
 }
 
 export const SYNC_CODES = defineCodes({
+  ENTITIES_NOT_SYNCED: {
+    cause:
+      "`db:sync` could not add a column or create a table for some entities, so it recorded them failed and synced the rest.",
+  },
   LOCALIZATION_NOT_PROVISIONED: {
     cause:
       "`db:sync` could not create the translation tables of a localized entity, so its translations cannot be written or read.",
@@ -82,6 +86,10 @@ export const SYNC_CODES = defineCodes({
   DEMOTE_PLUGIN_COLLECTION: {
     cause:
       "`db:sync --demote` names a collection a plugin contributes, which stays the plugin's.",
+  },
+  DEMOTE_LOSES_UNIQUE_INDEX: {
+    cause:
+      "`db:sync --demote` names a collection with a unique index declared in `indexes`, which the Schema Builder cannot hold.",
   },
   SYNC_CONFIRMATION_REQUIRED: {
     cause:
@@ -190,6 +198,22 @@ export function demotePluginCollection(slug: string, plugin: string): CliError {
   });
 }
 
+/**
+ * `db:sync --demote <slug>` for a collection whose unique indexes, each by the fields it is declared
+ * on, the Schema Builder's record cannot hold.
+ */
+export function demoteLosesUniqueIndex(
+  slug: string,
+  indexes: readonly (readonly string[])[]
+): CliError {
+  const named = indexes.map(fields => `(${fields.join(", ")})`).join(" and ");
+  return new CliError("DEMOTE_LOSES_UNIQUE_INDEX", {
+    what: `Collection '${slug}' was not demoted: it would lose its unique index${indexes.length === 1 ? "" : "es"} on ${named}.`,
+    why: "The Schema Builder cannot hold an index declared in `indexes`. The next schema sync would drop it, and entries that repeat those values would be accepted from then on, unless another unique field refuses them.",
+    next: `Keep '${slug}' in code, or give the rule up first: take it out of \`indexes\` in \`nextly.config.ts\` (an index on one field can be \`unique: true\` on that field instead), then demote.`,
+  });
+}
+
 /** `--promote`/`--demote` cannot ask its confirmation, and `--yes` was not given. */
 export function syncConfirmationRequired(
   flag: "--promote" | "--demote",
@@ -199,6 +223,22 @@ export function syncConfirmationRequired(
     what: `\`db:sync ${flag} ${slug}\` changed nothing: it asks before it changes anything.`,
     why: "No terminal is attached to ask (or `--non-interactive` was given, or `CI` is set), and `--yes` was not given.",
     next: `Run \`nextly db:sync ${flag} ${slug} --yes\` to answer it yes.`,
+  });
+}
+
+/**
+ * `db:sync` once everything else is done, for the entities whose column or table the database
+ * refused: each named with what was refused and why.
+ */
+export function entitiesNotSynced(
+  entities: readonly { slug: string; detail: string }[]
+): CliError {
+  return new CliError("ENTITIES_NOT_SYNCED", {
+    what: `\`db:sync\` could not add a column or create a table, so these entities are recorded failed: ${entities
+      .map(({ slug, detail }) => `\`${slug}\` (${detail})`)
+      .join(", ")}.`,
+    why: "The database refused the statement. Everything else was synced, and the steps over data an earlier release stored wait for a run that syncs every entity.",
+    next: "Fix the cause, then run `nextly db:sync` again; it retries them.",
   });
 }
 

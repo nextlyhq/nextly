@@ -323,7 +323,7 @@ for (const dialect of getConfiguredTestDialects()) {
       );
       const t = await startWithPages();
 
-      const live = await liveColumns(t, "comp_fgnbadge");
+      const live = await liveColumns(t, "fg_fgnbadge");
       expect(LAID_OUT_COLUMNS.filter(column => !live.has(column))).toEqual([]);
       // Each is nullable, as a field that is not required is anywhere.
       expect(
@@ -354,7 +354,7 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(deep.badge?.owner).toMatchObject({ id: ownerId, title: "Owner" });
 
       // The values sit in the badge's own row, under the fields' columns.
-      const rows = await t.adapter.select("comp_fgnbadge", {});
+      const rows = await t.adapter.select("fg_fgnbadge", {});
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ note: "N", count: 7 });
     }, 120_000);
@@ -393,7 +393,7 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(changed.filter(statement => !/motto/.test(statement))).toEqual([]);
       expect(changed).toHaveLength(1);
       expect(changed[0]).toMatch(/ADD/i);
-      const live = await liveColumns(t, "comp_fgnbadge");
+      const live = await liveColumns(t, "fg_fgnbadge");
       expect(
         [...LAID_OUT_COLUMNS, "motto"].filter(column => !live.has(column))
       ).toEqual([]);
@@ -414,7 +414,7 @@ for (const dialect of getConfiguredTestDialects()) {
      */
     async function bringForward(acknowledged: string[]): Promise<void> {
       const t = await startWithPages();
-      const before = await liveColumns(t, "comp_fgnbadge");
+      const before = await liveColumns(t, "fg_fgnbadge");
       expect(LAID_OUT_COLUMNS.filter(column => before.has(column))).toEqual([]);
 
       // Reconcile keeps the fields and names the columns still to come, rather than removing the
@@ -481,7 +481,7 @@ for (const dialect of getConfiguredTestDialects()) {
           `one ADD of ${column}`
         ).toHaveLength(1);
       }
-      const after = await liveColumns(t, "comp_fgnbadge");
+      const after = await liveColumns(t, "fg_fgnbadge");
       expect(LAID_OUT_COLUMNS.filter(column => !after.has(column))).toEqual([]);
       expect(
         LAID_OUT_COLUMNS.filter(column => after.get(column)?.nullable !== true)
@@ -530,7 +530,7 @@ for (const dialect of getConfiguredTestDialects()) {
       ).createFieldGroup({
         slug: "fgnbadge",
         label: "Badge",
-        tableName: "comp_fgnbadge",
+        tableName: "fg_fgnbadge",
         fields: besideTheGroup(),
         source: "ui",
         locked: false,
@@ -556,7 +556,7 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(
           notices.some(
             notice =>
-              notice.startsWith("comp_fgnbadge ") &&
+              notice.startsWith("fg_fgnbadge ") &&
               notice.endsWith(`adds the column ${column}.`)
           ),
           `a notice naming ${column}`
@@ -566,7 +566,7 @@ for (const dialect of getConfiguredTestDialects()) {
       await bringForward([
         ...LAID_OUT_COLUMNS,
         // The index the reference inside the group asks for, named by its table.
-        "comp_fgnbadge",
+        "fg_fgnbadge",
       ]);
     }, 120_000);
 
@@ -589,7 +589,7 @@ for (const dialect of getConfiguredTestDialects()) {
       ).createFieldGroup({
         slug: "fgnbadge",
         label: "Badge",
-        tableName: "comp_fgnbadge",
+        tableName: "fg_fgnbadge",
         fields: besideTheGroup(),
         source: "ui",
         locked: false,
@@ -615,7 +615,7 @@ for (const dialect of getConfiguredTestDialects()) {
       // names no column the table does not hold.
       const registered = registeredComponentColumns(
         t.adapter as never,
-        "comp_fgnbadge"
+        "fg_fgnbadge"
       );
       expect(registered).toBeDefined();
       expect(

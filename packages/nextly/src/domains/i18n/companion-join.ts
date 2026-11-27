@@ -25,6 +25,7 @@ import { RELEASE_PUBLISHED_STATUS } from "../releases/release-scope";
 import { DOCUMENT_REVISION_COLUMN } from "../versions/document-revision";
 import { draftsKeptByPart } from "../versions/part-drafts";
 
+import { isBlank } from "./blank-value";
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
 import { nonBlankColumnSql } from "./non-blank-sql";
 import {
@@ -37,6 +38,13 @@ import {
 } from "./provenance/field-status";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
 import { buildCompanionStampTable } from "./runtime/companion-stamp-table";
+import { withComponentShapes } from "./runtime/component-shapes";
+import {
+  assembleStoredValue,
+  type SharedStructureShape,
+  splitStoredValue,
+  type StructuredField,
+} from "./shared-structure";
 import type { TranslationFilterState } from "./translation-filter-states";
 
 /**
@@ -73,12 +81,25 @@ export interface LocalizedFieldRef {
    * databases hand back as text: only such a field's text is read back to the value it encodes.
    */
   json?: boolean;
+  /**
+   * Set for a repeater or group that keeps one structure in every language and translations
+   * inside it: its column here holds a language's OVERLAY (its translatable values keyed by row
+   * id), and its structure stays on the main row. A read assembles the two
+   * (`assembleStoredValue`), each value inside falling back on its own; it is never a value to
+   * resolve or compare whole.
+   */
+  sharedStructure?: SharedStructureShape;
+  /**
+   * Set beside `sharedStructure` for a container placing a component inside it, whose values its
+   * rows hold inline: the container's definition, which its shape is read again from once the
+   * components' fields are read (`withComponentShapes`). Until then the shape holds only what the
+   * container translates of its own.
+   */
+  placingComponents?: StructuredField;
 }
 
-/** Blank = "not translated": null, undefined, or empty string fall back. 0/false are real values. */
-export function isBlank(value: unknown): boolean {
-  return value === null || value === undefined || value === "";
-}
+// The blank rule lives beside nothing else, so the shared-structure assembly reads the same one.
+export { isBlank };
 
 /**
  * Resolve one localized field's value from its per-locale values along a fallback `chain`
@@ -253,9 +274,12 @@ export async function populateCompanionFieldsByLanguage(
   });
   if (companionRows === undefined) return undefined;
 
+  // A container placing a component is put back by its component's fields, read on this read's
+  // own handle (`withComponentShapes`).
+  const refs = await withComponentShapes(localizedFields, db);
   for (const language of languages) {
     fillCompanionFields({
-      localizedFields,
+      localizedFields: refs,
       statusValues: args.statusValues,
       revealed: args.revealed,
       idKey: args.idKey,
@@ -525,6 +549,25 @@ export function fillCompanionFields(args: {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
     const found: Record<string, string | null> = {};
     for (const field of args.localizedFields) {
+      if (field.sharedStructure) {
+        // The structure is on the main row; a row read without it (a read of the translated
+        // values alone) has nothing to fill and keeps no key for it.
+        if (!Object.hasOwn(row, field.name)) continue;
+        const overlays = args.localeChain.map(
+          code => perLocaleRows[code]?.[field.column]
+        );
+        row[field.name] = assembleStoredValue(
+          row[field.name],
+          overlays,
+          field.sharedStructure
+        );
+        // The first language whose overlay holds anything, as a whole field's source.
+        if (args.sources) {
+          const index = overlays.findIndex(overlay => !isBlank(overlay));
+          found[field.name] = index < 0 ? null : args.localeChain[index];
+        }
+        continue;
+      }
       const chain = field.unique === true ? ownLanguage : args.localeChain;
       const perLocaleValue: Record<string, unknown> = {};
       for (const code of chain) {
@@ -713,6 +756,49 @@ export interface PopulateCompanionAllArgs {
 }
 
 /**
+ * The structures of `source`'s repeaters and groups keeping one structure in every language, by
+ * field name: what an every-language read lays each language's overlay on
+ * (`populateCompanionFieldsAllLocales`), which reads into rows holding their id alone. Taken from a
+ * row as read (one language's text on it, named by field) or as stored (named by column): either
+ * way its structure alone, the text
+ * split off by its shape, read with its components' fields on `db`.
+ */
+export async function structuresBeside(
+  source: Record<string, unknown>,
+  localizedFields: readonly LocalizedFieldRef[],
+  db: unknown
+): Promise<Record<string, unknown>> {
+  if (!localizedFields.some(field => field.sharedStructure)) return {};
+  return structuresIn(source, await withComponentShapes(localizedFields, db));
+}
+
+/**
+ * {@link structuresBeside} by refs whose shapes already hold their components' fields
+ * (`withComponentShapes`): what a read of many rows takes, resolving the shapes once for them all.
+ */
+export function structuresIn(
+  source: Record<string, unknown>,
+  refs: readonly LocalizedFieldRef[]
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of refs) {
+    if (!field.sharedStructure) continue;
+    // A row as read names it by field, a main row as stored by column.
+    const key = Object.hasOwn(source, field.name)
+      ? field.name
+      : Object.hasOwn(source, field.column)
+        ? field.column
+        : null;
+    if (key === null) continue;
+    out[field.name] = splitStoredValue(
+      source[key],
+      field.sharedStructure
+    ).structure;
+  }
+  return out;
+}
+
+/**
  * `locale=all` variant (admin/export): instead of one resolved value, set each localized field
  * to a language-keyed object (`{ en: "...", de: "..." }`) covering every configured locale.
  * Missing translations are `null`. Mutates `rows` in place; a companion that is not there yet is
@@ -743,6 +829,8 @@ export async function populateCompanionFieldsAllLocales(
   });
   if (companionRows === undefined) return;
 
+  // A container placing a component is put back by its component's fields (`withComponentShapes`).
+  const refs = await withComponentShapes(localizedFields, db);
   const byParent = indexCompanionRowsByParent(
     companionRows,
     args.statusValues,
@@ -751,8 +839,23 @@ export async function populateCompanionFieldsAllLocales(
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
-    for (const field of localizedFields) {
+    for (const field of refs) {
       const keyed: Record<string, unknown> = {};
+      if (field.sharedStructure) {
+        // Each language's value assembled from the one structure and that language's overlay
+        // alone, where the row holds the structure.
+        if (!Object.hasOwn(row, field.name)) continue;
+        const shape = field.sharedStructure;
+        for (const code of locales) {
+          keyed[code] = assembleStoredValue(
+            row[field.name],
+            [perLocaleRows[code]?.[field.column]],
+            shape
+          );
+        }
+        row[field.name] = keyed;
+        continue;
+      }
       for (const code of locales) {
         keyed[code] = perLocaleRows[code]?.[field.column] ?? null;
       }

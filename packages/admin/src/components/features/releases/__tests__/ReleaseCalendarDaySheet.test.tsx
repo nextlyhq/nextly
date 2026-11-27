@@ -9,7 +9,13 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fireEvent, render, screen, waitFor } from "@admin/__tests__/utils";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@admin/__tests__/utils";
 import type { Release } from "@admin/types/releases";
 
 const { dayListMock } = vi.hoisted(() => ({ dayListMock: vi.fn() }));
@@ -20,6 +26,7 @@ vi.mock("@admin/hooks/queries/useReleases", async importOriginal => ({
 }));
 
 import { ReleaseCalendarDaySheet } from "../ReleaseCalendarDaySheet";
+import { SINGLES_HIDDEN_EMPTY } from "../ReleaseListCells";
 
 const release = (n: number): Release => ({
   id: `r${n}`,
@@ -155,5 +162,83 @@ describe("the day's list", () => {
       )
     );
     expect(await screen.findByText("Nothing runs on this day.")).toBeTruthy();
+  });
+});
+
+describe("single-document releases in the day's list", () => {
+  it("marks a single-document release as the list does, and no other", () => {
+    held = [
+      { ...release(1), title: "Opening hours", kind: "single" },
+      release(2),
+    ];
+    renderSheet();
+    const rows = screen.getAllByRole("listitem");
+    const single = rows.find(row => row.textContent?.includes("Opening hours"));
+    const ordinary = rows.find(row => row.textContent?.includes("Launch 02"));
+    // The mark is the parent of its words' own span.
+    const mark = within(single as HTMLElement).getByText(
+      "Single document"
+    ).parentElement;
+    expect(mark?.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    expect(
+      within(ordinary as HTMLElement).queryByText("Single document")
+    ).toBeNull();
+  });
+
+  it("names a single-document release's link with its mark, as the list's row is named", () => {
+    held = [
+      { ...release(1), title: "Opening hours", kind: "single" },
+      release(2),
+    ];
+    renderSheet();
+    // The list's row is one link holding the title and the mark, so a screen
+    // reader hears both; the day's link must be heard the same way.
+    expect(
+      screen.getByRole("link", { name: "Opening hours Single document" })
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Launch 02" })).toBeTruthy();
+  });
+
+  it("asks for ordinary releases only while single documents are hidden", () => {
+    render(
+      <ReleaseCalendarDaySheet
+        day="2026-10-23"
+        zone="UTC"
+        isToday={false}
+        overdue={new Set()}
+        now={Date.parse("2026-10-21T12:00:00.000Z")}
+        kind="release"
+        onClose={() => undefined}
+        onReturnFocus={() => undefined}
+      />
+    );
+    expect(dayListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "release" })
+    );
+  });
+
+  it("says the day is empty because single documents are hidden, as the list says it", () => {
+    held = [];
+    render(
+      <ReleaseCalendarDaySheet
+        day="2026-10-23"
+        zone="UTC"
+        isToday={false}
+        overdue={new Set()}
+        now={Date.parse("2026-10-21T12:00:00.000Z")}
+        kind="release"
+        onClose={() => undefined}
+        onReturnFocus={() => undefined}
+      />
+    );
+    expect(screen.getByText(SINGLES_HIDDEN_EMPTY)).toBeInTheDocument();
+    expect(screen.queryByText("Nothing runs on this day.")).toBeNull();
+  });
+
+  it("says nothing runs on the day when nothing is hidden", () => {
+    held = [];
+    renderSheet();
+    expect(screen.getByText("Nothing runs on this day.")).toBeInTheDocument();
+    expect(screen.queryByText(SINGLES_HIDDEN_EMPTY)).toBeNull();
   });
 });

@@ -296,7 +296,14 @@ describe.each(getConfiguredTestDialects())(
           )._rev
         );
       const startedFrom = await noteRev();
-      const path = ["collections", NOTES, "entries", id, "versions", "autosave"];
+      const path = [
+        "collections",
+        NOTES,
+        "entries",
+        id,
+        "versions",
+        "autosave",
+      ];
 
       // Saved and read as the editor does for a collection not marked
       // translated: no language on either request.

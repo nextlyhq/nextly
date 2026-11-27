@@ -13,7 +13,7 @@
  * What would separate a correct program from a broken one:
  * - a command that declares no first line;
  * - a first line printed by the command's own code, after it loads;
- * - a database command whose first line is not the `Database: …` line;
+ * - a database command whose first line is not the database line (`● local · …`);
  * - a line printed under `--quiet`, which keeps a run to its errors.
  */
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -36,7 +36,7 @@ import { declaredFirstLine } from "../first-line";
 import { createProgram } from "../program";
 
 import { commandAt } from "./helpers/answer-only-invocations";
-import { runsAnAction } from "./helpers/first-line-invocations";
+import { hasAction } from "./helpers/first-line-invocations";
 // The same judges the start-up timing script loads, from the one module it loads them from.
 import {
   commandPathOf,
@@ -125,7 +125,7 @@ async function beforeTheAction(
 }
 
 const INVOCATIONS = firstLineInvocations(createProgram()).filter(args =>
-  runsAnAction(createProgram(), pathOf(args))
+  hasAction(commandAt(createProgram(), pathOf(args)))
 );
 
 /** The words of `args` that name the command, before its own arguments. */
@@ -160,7 +160,7 @@ describe("every command prints its first line before its code loads", () => {
         expect(wrongFirstLine(createProgram(), path, line)).toBeUndefined();
         if (first?.kind === "database") {
           // The database the test's own `.env` names, not one from elsewhere.
-          expect(line).toMatch(/^Database: SQLite .*first-line\.db \(/);
+          expect(line).toMatch(/^● local · .*first-line\.db · SQLite \(/);
         }
       }
     }

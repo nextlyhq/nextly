@@ -120,10 +120,11 @@ describe("reconcileSingleTables", () => {
 /**
  * The registry read every reconcile goes through, at boot and in `db:sync`.
  *
- * A Single removed from code (a code row whose slug the configuration no
- * longer declares) is not offered to the reconcile, so its dropped table is
- * not created again. A Builder Single is never in the configuration and is
- * still offered, as is a code Single the configuration declares.
+ * A Single removed from code (a code row, or a plugin's, whose slug the
+ * configuration no longer declares) is not offered to the reconcile, so its
+ * dropped table is not created again. A Builder Single is never in the
+ * configuration and is still offered, as is a Single the configuration
+ * declares, a plugin's among them.
  */
 describe("singleTableSources", () => {
   const registry = {
@@ -144,8 +145,15 @@ describe("singleTableSources", () => {
     expect(await sources.registeredSingles()).toEqual([
       { slug: "homepage", tableName: "single_homepage" },
       { slug: "notice", tableName: "single_notice" },
-      { slug: "seo", tableName: "single_seo" },
     ]);
+    // A plugin's Single its configuration declares is offered.
+    expect(
+      await singleTableSources(
+        registry,
+        async () => [],
+        new Set(["seo"])
+      ).registeredSingles()
+    ).toContainEqual({ slug: "seo", tableName: "single_seo" });
   });
 
   it("creates no table for a removed Single whose table is gone", async () => {
@@ -157,7 +165,6 @@ describe("singleTableSources", () => {
     expect(create.mock.calls.map(([single]) => single.slug)).toEqual([
       "homepage",
       "notice",
-      "seo",
     ]);
   });
 });

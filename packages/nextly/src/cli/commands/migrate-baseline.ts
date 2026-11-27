@@ -30,7 +30,16 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 
-import { deriveCompanionSpec } from "../../domains/i18n/migration/derive-companion-spec";
+import {
+  namingOfRegistry,
+  type FieldGroupNaming,
+} from "../../domains/field-groups/services/field-group-storage-names";
+import { declaredFieldGroupStorage } from "../../domains/field-groups/services/field-group-stored-tables";
+import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
+import {
+  deriveCompanionSpec,
+  deriveCompanionTableSpec,
+} from "../../domains/i18n/migration/derive-companion-spec";
 import {
   buildCompanionCreateFromLive,
   buildCompanionCreateOnlySql,
@@ -266,7 +275,7 @@ async function ledgerExists(adapter: CLIDatabaseAdapter): Promise<boolean> {
  */
 function annotateLocalization(
   snapshot: NextlySchemaSnapshot,
-  companionColumns: ReadonlyMap<string, string[]>
+  companionColumns: ReadonlyMap<string, CompanionColumnsKept>
 ): NextlySchemaSnapshot {
   if (companionColumns.size === 0) return snapshot;
   return {
@@ -277,10 +286,25 @@ function annotateLocalization(
       // Both markers, because the consumer needs both: `buildDisableSpec`
       // returns null when `localizedColumns` is absent, so a table marked
       // localized with no recorded columns still leaves a later disable
-      // emitting nothing and the translations orphaned.
-      return { ...table, localized: true, localizedColumns: columns };
+      // emitting nothing and the translations orphaned. A container's overlay
+      // columns are recorded apart (`overlayColumns`), as `migrate:create`
+      // records them, so no disable or field-leaving path moves one.
+      return {
+        ...table,
+        localized: true,
+        localizedColumns: columns.localized,
+        ...(columns.overlays.length > 0
+          ? { overlayColumns: columns.overlays }
+          : {}),
+      };
     }),
   };
+}
+
+/** A companion's columns as a baseline records them: translated values, and containers' overlays. */
+interface CompanionColumnsKept {
+  localized: string[];
+  overlays: string[];
 }
 /**
  * `CREATE TABLE` for each companion standing in the database.
@@ -306,7 +330,7 @@ function buildCompanionStatements(args: {
   adoptUnknown: boolean;
 }): {
   statements: string[];
-  columnsByMain: Map<string, string[]>;
+  columnsByMain: Map<string, CompanionColumnsKept>;
   undescribed: CompanionMismatch[];
 } {
   if (args.companionTables.length === 0) {
@@ -315,7 +339,7 @@ function buildCompanionStatements(args: {
   const present = new Set(args.companionTables);
   const liveByTable = new Map(args.liveCompanions.tables.map(t => [t.name, t]));
   const statements: string[] = [];
-  const columnsByMain = new Map<string, string[]>();
+  const columnsByMain = new Map<string, CompanionColumnsKept>();
   const undescribed: CompanionMismatch[] = [];
 
   for (const entity of args.entities) {
@@ -330,12 +354,12 @@ function buildCompanionStatements(args: {
     // that recorded the config's answer would describe a database that never
     // existed.
     const liveColumns = new Set((liveTable?.columns ?? []).map(c => c.name));
-    const spec = deriveCompanionSpec({
+    const derive: Parameters<typeof deriveCompanionTableSpec>[0] = {
       builtBy: entity.builtBy,
       slug: entity.slug,
       dbName: entity.tableName,
       fields: entity.fields as Parameters<
-        typeof deriveCompanionSpec
+        typeof deriveCompanionTableSpec
       >[0]["fields"],
       dialect: args.dialect,
       defaultLocale: args.defaultLocale,
@@ -347,8 +371,17 @@ function buildCompanionStatements(args: {
       // it from the config's Draft/Published flag would emit a companion the
       // adopted one does not match in either direction.
       status: liveColumns.has(COMPANION_STATUS_COLUMN),
-    });
+    };
+    // The table the config describes, a container's overlay columns among its
+    // columns, as `migrate:create` and the runtime build it
+    // (`deriveCompanionTableSpec`); the translated values alone, which a later
+    // disable restores, archives and drops (`deriveCompanionSpec`). An overlay
+    // is described too, so a companion holding one is adopted like any other.
+    const spec = deriveCompanionTableSpec(derive);
     if (!spec) continue;
+    const translated = new Set(
+      (deriveCompanionSpec(derive)?.columns ?? []).map(c => c.name)
+    );
 
     const described = new Set(spec.columns.map(c => c.name));
     const missing = [...liveColumns].filter(
@@ -379,12 +412,13 @@ function buildCompanionStatements(args: {
       // Every translated column the companion holds, undescribed ones
       // included: a later disable has to bring all of them home, and one it
       // does not know about is one it strands.
-      columnsByMain.set(
-        entity.tableName,
-        [...liveColumns]
-          .filter(n => !COMPANION_STRUCTURAL_COLUMNS.has(n))
-          .sort()
-      );
+      const kept = [...liveColumns]
+        .filter(n => !COMPANION_STRUCTURAL_COLUMNS.has(n))
+        .sort();
+      columnsByMain.set(entity.tableName, {
+        localized: kept.filter(n => !described.has(n) || translated.has(n)),
+        overlays: kept.filter(n => described.has(n) && !translated.has(n)),
+      });
       continue;
     }
 
@@ -401,10 +435,14 @@ function buildCompanionStatements(args: {
     );
     // The column names the companion actually declares, which is what a
     // later disable transition restores, archives and drops.
-    columnsByMain.set(
-      entity.tableName,
-      reconciled.map(c => c.name)
-    );
+    columnsByMain.set(entity.tableName, {
+      localized: reconciled
+        .map(c => c.name)
+        .filter(name => translated.has(name)),
+      overlays: reconciled
+        .map(c => c.name)
+        .filter(name => !translated.has(name)),
+    });
   }
   return { statements, columnsByMain, undescribed };
 }
@@ -413,6 +451,12 @@ export interface BaselineCoreDeps {
   adapter: CLIDatabaseAdapter;
   db: unknown;
   dialect: SupportedDialect;
+  /**
+   * The field-group names the database keeps its groups under, which the snapshot records: a
+   * database whose storage moved to the current names starts a history on them. Legacy when
+   * omitted.
+   */
+  fieldGroupNaming?: FieldGroupNaming;
   /** Absolute path to the `migrations/` directory. */
   migrationsDir: string;
   logger: CommandContext["logger"];
@@ -1059,7 +1103,9 @@ async function adopt(deps: BaselineCoreDeps): Promise<BaselineCoreResult> {
               undefined,
               undefined,
               // A baseline is a project's first migration: written from none.
-              { parent: null, merges: [] }
+              { parent: null, merges: [] },
+              // The names the database keeps field groups under, which every later file follows.
+              deps.fieldGroupNaming ?? "legacy"
             ),
           () => prepareWhole(sqlPath, sqlContent),
         ]);
@@ -1201,6 +1247,11 @@ export async function runMigrateBaseline(
     }
 
     const config = configResult.config;
+    // The names this database keeps field groups under, read from its own registry: the history
+    // this command starts records them, and the entities below are declared under them.
+    const fieldGroupNaming = namingOfRegistry(
+      await resolveRegistryNameFromCatalog(adapter as unknown as DrizzleAdapter)
+    );
     // Config and the Builder manifest, merged the way generation merges them
     // and resolved once. Every command that compares a live database against a
     // snapshot reads the same answer, because assembling it per call site is
@@ -1209,6 +1260,7 @@ export async function runMigrateBaseline(
       projectRoot: cwd,
       config,
       deferredExtends: configResult.deferredExtends,
+      fieldGroupNaming,
     });
 
     // The app stream's extension schema, compiled exactly as `migrate:create`
@@ -1221,6 +1273,23 @@ export async function runMigrateBaseline(
       config,
       dialect,
       logger: { warn: m => logger.warn(m) },
+      // A contribution to a field group attaches to the table the database holds it in, with the
+      // type column that table has.
+      ...(fieldGroupNaming === "legacy"
+        ? {}
+        : {
+            fieldGroupTables: new Map(
+              resolved.entities
+                .filter(entity => entity.kind === "fieldGroup")
+                .map(entity => [entity.slug, entity.tableName])
+            ),
+            fieldGroupTypeColumns: (
+              await declaredFieldGroupStorage(
+                adapter as unknown as DrizzleAdapter,
+                resolved.entities.filter(entity => entity.kind === "fieldGroup")
+              )
+            )?.typeColumns,
+          }),
     });
 
     // A dry run reports a history refusal as the real run's, and exits 0.
@@ -1228,6 +1297,7 @@ export async function runMigrateBaseline(
       adapter,
       db,
       dialect,
+      fieldGroupNaming,
       migrationsDir,
       logger,
       name: options.name,
@@ -1401,8 +1471,10 @@ function refusalLines(
       "column that is there. These have no field to say what they hold, and",
       "adopting without them would rebuild the table missing translations.",
       "",
-      "Either restore the localized fields to your config, or drop",
-      "the columns if the content is no longer needed.",
+      "Either restore the fields that keep them to your config, or adopt the",
+      "tables as they stand with --adopt-unknown, which keeps every column and",
+      "what it holds. Drop a column only once its content is no longer needed:",
+      "dropping it deletes that text in every language.",
     ];
   }
   return [

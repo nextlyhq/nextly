@@ -12,6 +12,7 @@ import { NextlyError } from "../../../../errors";
 import { getI18nArchiveDdl } from "../../../../schemas/nextly-i18n-archive/ddl";
 import { ddlType } from "../ddl-types";
 import { fieldToLocalizedColumnSpec } from "../field-to-column-spec";
+import { buildOverlaySeedStatements } from "../generate-up";
 import {
   type CompanionTransitionArgs,
   buildCompanionTransitionStatements,
@@ -88,6 +89,176 @@ beforeEach(() => {
 });
 
 afterEach(() => sqlite.close());
+
+describe("buildCompanionTransitionStatements — enable, a container's text on main", () => {
+  // A repeater keeping one structure in every language: its structure stays on the main table and
+  // each language's text sits in its overlay column. Turned on, the default language's overlay is
+  // seeded from the value main holds, so a first save in another language, which writes the
+  // structure without its text, leaves the default language its own text.
+  const SLIDES = {
+    name: "slides",
+    type: "repeater" as const,
+    fields: [
+      { name: "caption", type: "text" as const },
+      { name: "rank", type: "number" as const },
+    ],
+  };
+  const STORED = JSON.stringify([{ id: "r1", caption: "Hello", rank: 1 }]);
+
+  beforeEach(() => {
+    sqlite.exec(`ALTER TABLE "single_hero" ADD COLUMN "slides" TEXT`);
+    sqlite
+      .prepare(`UPDATE "single_hero" SET "slides" = ? WHERE "id" = ?`)
+      .run(STORED, "h1");
+  });
+
+  it.each([
+    ["beside a translated field", [...FIELDS, SLIDES]],
+    [
+      "whose translations table holds overlays alone",
+      [{ name: "views", type: "number" as const }, SLIDES],
+    ],
+  ])(
+    "seeds the default language's overlay from the main table, %s",
+    (_, fields) => {
+      const plan = buildCompanionTransitionStatements({
+        builtBy: "codeFirst" as const,
+        slug: "hero",
+        kind: "collection" as const,
+        tableName: "single_hero",
+        dialect: "sqlite",
+        defaultLocale: "en",
+        ...NO_STATUS_HISTORY,
+        wasLocalized: false,
+        isLocalized: true,
+        oldFields: fields,
+        newFields: fields,
+        companionExists: false,
+      });
+      run(plan.statements);
+
+      const rows = sqlite
+        .prepare(
+          `SELECT "_parent", "_locale", "slides" FROM "single_hero_locales"`
+        )
+        .all();
+      expect(rows).toEqual([{ _parent: "h1", _locale: "en", slides: STORED }]);
+      // The structure stays on main.
+      expect(mainColumns()).toContain("slides");
+    }
+  );
+
+  // The seed runs again where a column it adds already stands: an upgraded site whose newest
+  // snapshot records no overlay columns has its seed planned once more by the next
+  // `migrate:create`, after editors have saved. By then main holds the structure alone, without
+  // the text, so a seed copying it over a row's overlay replaces that language's text with the
+  // bare structure, and every text in it reads as none. It fills only an overlay not yet written.
+  it("leaves an overlay already written alone when it runs again, filling only one not yet written", () => {
+    const plan = buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
+      slug: "hero",
+      kind: "collection" as const,
+      tableName: "single_hero",
+      dialect: "sqlite",
+      defaultLocale: "en",
+      ...NO_STATUS_HISTORY,
+      wasLocalized: false,
+      isLocalized: true,
+      oldFields: [...FIELDS, SLIDES],
+      newFields: [...FIELDS, SLIDES],
+      companionExists: false,
+    });
+    run(plan.statements);
+    // Saved since: main holds the structure alone, English its own text by row.
+    const written = JSON.stringify({ r1: { caption: "Hello again" } });
+    sqlite
+      .prepare(`UPDATE "single_hero" SET "slides" = ? WHERE "id" = ?`)
+      .run(JSON.stringify([{ id: "r1", rank: 1 }]), "h1");
+    sqlite
+      .prepare(
+        `UPDATE "single_hero_locales" SET "slides" = ? WHERE "_parent" = ? AND "_locale" = ?`
+      )
+      .run(written, "h1", "en");
+    // A second entry whose English overlay was never written.
+    const bare = JSON.stringify([{ id: "r2", caption: "Second", rank: 2 }]);
+    sqlite
+      .prepare(`INSERT INTO "single_hero" ("id","slides") VALUES (?,?)`)
+      .run("h2", bare);
+
+    run(
+      buildOverlaySeedStatements(
+        {
+          dialect: "sqlite",
+          mainTable: "single_hero",
+          companionTable: "single_hero_locales",
+          defaultLocale: "en",
+        },
+        ["slides"]
+      )
+    );
+
+    const overlays = Object.fromEntries(
+      (
+        sqlite
+          .prepare(
+            `SELECT "_parent", "slides" FROM "single_hero_locales" WHERE "_locale" = 'en'`
+          )
+          .all() as { _parent: string; slides: string }[]
+      ).map(row => [row._parent, row.slides])
+    );
+    expect(overlays.h1).toBe(written);
+    expect(overlays.h2).toBe(bare);
+  });
+});
+
+describe("buildCompanionTransitionStatements — a container left keeping no text", () => {
+  // Translation stays on. The repeater's last translated field is made shared, so the repeater no
+  // longer keeps its text apart: its overlay column would be dropped with every language's text,
+  // while its structure on main was stored without it. Refused, naming it, before any statement.
+  const slides = (caption: Record<string, unknown>) => ({
+    name: "slides",
+    type: "repeater" as const,
+    fields: [
+      { name: "caption", type: "text" as const, ...caption },
+      { name: "rank", type: "number" as const },
+    ],
+  });
+  const change = (newFields: CompanionTransitionArgs["newFields"]) =>
+    buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
+      slug: "hero",
+      kind: "collection" as const,
+      tableName: "single_hero",
+      dialect: "sqlite",
+      defaultLocale: "en",
+      ...NO_STATUS_HISTORY,
+      wasLocalized: true,
+      isLocalized: true,
+      oldFields: [...FIELDS, slides({})],
+      newFields,
+      companionExists: true,
+      liveCompanionColumns: ["heading", "slides"],
+    });
+
+  it.each([
+    ["its last translated field made shared", slides({ localized: false })],
+    [
+      "the container marked not translated",
+      { ...slides({}), localized: false },
+    ],
+  ])("refuses the change, naming the container: %s", (_, now) => {
+    expect(() => change([...FIELDS, now])).toThrow(
+      /repeaters and groups "slides" keep their text per language/
+    );
+  });
+
+  it("drops the overlay of a container removed outright, and keeps one still holding text", () => {
+    const removed = change(FIELDS).statements.join("\n");
+    expect(removed).toMatch(/DROP COLUMN "slides"/);
+    const kept = change([...FIELDS, slides({})]).statements.join("\n");
+    expect(kept).not.toMatch(/"slides"/);
+  });
+});
 
 describe("buildCompanionTransitionStatements — enable", () => {
   it("seeds the companion default locale from main, then drops the translatable column", () => {

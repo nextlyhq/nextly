@@ -289,11 +289,20 @@ export async function createAdapterFromEnv(
    * `db.postgres.schema` is the first: it comes from `nextly.config.ts`, not
    * from an env var, and the adapter is the thing that has to apply it.
    */
-  options?: { schema?: string; readOnly?: boolean }
+  options?: {
+    schema?: string;
+    readOnly?: boolean;
+    /**
+     * Pool settings a start asks for, each winning over its `DB_POOL_*`
+     * variable, as the Proxy's start in a serverless function does.
+     */
+    pool?: BaseAdapterConfig["pool"];
+  }
 ): Promise<DrizzleAdapter> {
   return createAdapter({
     ...(options?.schema !== undefined ? { schema: options.schema } : {}),
     ...(options?.readOnly === true ? { readOnly: true } : {}),
+    ...(options?.pool !== undefined ? { pool: options.pool } : {}),
   });
 }
 

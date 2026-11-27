@@ -257,3 +257,39 @@ describe("collectUnresolvedRelationTargets, for a container whose fields are not
     expect(collectUnresolvedRelationTargets(config)).toEqual([]);
   });
 });
+
+describe("validateCrossPluginRelations, for a relationship inside another field", () => {
+  // Which entity such a field points at may be the app's to say, as the pages a form redirects to
+  // are: the plugin holding the field cannot declare a dependency on whichever plugin owns them.
+  const a = plug("@t/pages", { contributes: { collections: [coll("pages")] } });
+  const nested = (name: string) =>
+    ({
+      name,
+      type: "group",
+      fields: [
+        {
+          name: "redirectPage",
+          type: "relationship",
+          relationTo: ["pages"],
+        },
+      ],
+    }) as unknown as FieldConfig;
+
+  it("needs no dependsOn for one nested in an entity's field", () => {
+    const b = plug("@t/forms", {
+      contributes: { collections: [coll("forms", [nested("settings")])] },
+    });
+
+    expect(() => validateCrossPluginRelations([a, b])).not.toThrow();
+  });
+
+  it("needs no dependsOn for one nested in a field contributes.extend adds", () => {
+    const b = plug("@t/forms", {
+      contributes: {
+        extend: [{ target: "posts", fields: [nested("settings")] }],
+      },
+    });
+
+    expect(() => validateCrossPluginRelations([a, b])).not.toThrow();
+  });
+});

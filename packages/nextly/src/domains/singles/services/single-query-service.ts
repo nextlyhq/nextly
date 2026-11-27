@@ -39,6 +39,7 @@ import {
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { SYSTEM_ACTOR } from "../../../auth/request-actor";
+import { ownIdentityFieldNames } from "../../../collections/config/declared-config";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import {
@@ -144,6 +145,7 @@ import {
   populateCompanionFieldsAllLocales,
   populateTranslationStatus,
   selectEntryWithCompanion,
+  structuresBeside,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -181,6 +183,14 @@ import {
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import {
+  containerShapesOf,
+  withComponentShapes,
+} from "../../i18n/runtime/component-shapes";
+import {
+  type SharedStructureShape,
+  splitStoredValue,
+} from "../../i18n/shared-structure";
+import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
@@ -209,6 +219,7 @@ import {
   draftsKeptByPart,
   findPartDrafts,
   holdsPendingChange,
+  partKeysOf,
   SHARED_DRAFT_SLOT,
 } from "../../versions/part-drafts";
 import { hasLifecycle } from "../../versions/recorded-status";
@@ -252,6 +263,23 @@ import {
  * the system column or receives a wrong-typed default.
  */
 const SINGLE_IDENTITY_FIELDS = new Set(["title", "slug"]);
+
+/**
+ * The `title`/`slug` a Single's author declared as fields of their own (`ownIdentityFieldNames`),
+ * with their label/slug seed removed from `defaults`. Such a field is content, not Nextly's
+ * identity: no system field stands in its place, so the seed is not its value. Removed before any
+ * default is resolved, so a function default reading the document built so far never sees the
+ * label as the author's value; the field then takes its own default like any other, and an
+ * optional one starts empty.
+ */
+function withoutOwnIdentitySeeds(
+  defaults: Record<string, unknown>,
+  codeFirstFields: readonly unknown[] | undefined
+): ReadonlySet<string> {
+  const own = new Set<string>(ownIdentityFieldNames(codeFirstFields));
+  for (const name of own) delete defaults[name];
+  return own;
+}
 
 /**
  * A Single's default document, built but not yet written. The read path judges
@@ -962,9 +990,16 @@ export class SingleQueryService extends BaseService {
             _sharedChangesPending: parts.shared !== undefined,
           }
         : document;
+    // A structured field's held share is laid over the Single as this read
+    // assembled it, in the language it reads.
     const workingDraft = parts
       ? holdsPendingChange(parts)
-        ? { snapshot: combinedDraft({}, parts) }
+        ? {
+            snapshot: combinedDraft({}, parts, {
+              keys: await partKeysOf(singleMeta.fields),
+              live: doc,
+            }),
+          }
         : undefined
       : await draftRepo.findWorkingDraft(draftRef, view.draftLocale);
     if (!workingDraft) return { doc: withSharedSignal(doc) };
@@ -1914,7 +1949,7 @@ export class SingleQueryService extends BaseService {
         stored: storedRevisions,
         translations,
         countersFirst,
-        locale: options.locale,
+        locale: options.revisionLocale ?? options.locale,
       });
 
       // After every gate above: only a read already granted is told who
@@ -2143,12 +2178,7 @@ export class SingleQueryService extends BaseService {
     doc: SingleDocument | null;
     translations: JoinedTranslations | undefined;
   }> {
-    const joinable = await this.joinableTranslations(
-      slug,
-      singleMeta,
-      options.locale,
-      options.fallbackLocale
-    );
+    const joinable = await this.joinableTranslations(slug, singleMeta, options);
     if (!joinable) {
       // Inside a read routed to a plugin's transaction the row is read with a
       // shared lock (`readLocksRows`): the latest committed row, held until
@@ -2196,8 +2226,11 @@ export class SingleQueryService extends BaseService {
   private async joinableTranslations(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    locale: string | undefined,
-    fallbackLocale: string | false | undefined
+    {
+      locale,
+      fallbackLocale,
+      revisionLocale,
+    }: Pick<GetSingleOptions, "locale" | "fallbackLocale" | "revisionLocale">
   ): Promise<Omit<JoinedTranslations, "companionRows"> | null> {
     const parts = await this.languageReadParts(
       slug,
@@ -2211,7 +2244,7 @@ export class SingleQueryService extends BaseService {
       !parts ||
       !chainCoversVersion(parts.localeChain, {
         localization: this.localization,
-        locale,
+        locale: revisionLocale ?? locale,
       })
     ) {
       return null;
@@ -2277,7 +2310,11 @@ export class SingleQueryService extends BaseService {
       fillCompanionFields({
         rows: [doc],
         companionRows: translations.companionRows,
-        localizedFields: translations.companion.localizedFields,
+        // A container placing a component is put back by its component's fields.
+        localizedFields: await withComponentShapes(
+          translations.companion.localizedFields,
+          this.adapter.getDrizzle()
+        ),
         localeChain: translations.localeChain,
         idKey: "id",
         statusValues:
@@ -2341,7 +2378,16 @@ export class SingleQueryService extends BaseService {
     if (!companion) return;
     // Read into a copy keyed by id, then attached beside the document's own
     // values: the document keeps every field in its own language and type.
-    const everyLanguage: Record<string, unknown> = { id: doc.id };
+    // Its repeaters and groups keeping one structure carry it, for each language's text to be
+    // laid on (`structuresBeside`).
+    const everyLanguage: Record<string, unknown> = {
+      id: doc.id,
+      ...(await structuresBeside(
+        doc,
+        companion.localizedFields,
+        this.adapter.getDrizzle()
+      )),
+    };
     await populateCompanionFieldsAllLocales({
       db: this.adapter.getDrizzle(),
       companionTable: companion.table,
@@ -2586,6 +2632,9 @@ export class SingleQueryService extends BaseService {
     const codeFirstFields = this.singleRegistryService.getCodeFirstFields(
       singleMeta.slug
     );
+    // The author's own `title`/`slug`, whose label/slug seed is dropped before any default is
+    // resolved (`withoutOwnIdentitySeeds`).
+    const ownIdentity = withoutOwnIdentitySeeds(defaults, codeFirstFields);
     // Both lists are read at the row's level (`fieldsStoredOnRow`): a field inside a group with no
     // name is a column of this row, with a default like one beside the group, and a required one
     // is NOT NULL, so leaving it out of this insert failed the first read.
@@ -2683,8 +2732,13 @@ export class SingleQueryService extends BaseService {
       // which still needs the label). When a Single redefines `title`/`slug` as a
       // NON-text column, the string seed is invalid regardless of whether the
       // field is required: use its type default when required, otherwise drop the
-      // seed so it is never inserted/seeded into (e.g.) a numeric column.
-      if (SINGLE_IDENTITY_FIELDS.has(field.name)) {
+      // seed so it is never inserted/seeded into (e.g.) a numeric column. An
+      // author's own `title`/`slug` had its seed dropped above, and takes the
+      // last branch like any other field.
+      if (
+        SINGLE_IDENTITY_FIELDS.has(field.name) &&
+        !ownIdentity.has(field.name)
+      ) {
         // A Single's table is built by the same service that builds collections. The question
         // asked here — does this kind store text — is answered the same way whatever built the
         // table, so the builtBy cannot change the outcome; it is stated rather than defaulted so
@@ -2870,9 +2924,25 @@ export class SingleQueryService extends BaseService {
     // target a non-existent column and fail the auto-create.
     const localizedDefaults: Record<string, unknown> = {};
     const insertDefaults: Record<string, unknown> = {};
+    // A repeater or group keeping one structure in every language with its text in an overlay:
+    // its default's structure goes on the main row and its text to the default language's row, as
+    // a save splits it. Inserted whole, the main row would hold text no language reads from there,
+    // and the first save, putting the structure right, would move every language's version.
+    // A container placing a component is read with that component's fields
+    // (`containerShapesOf`), as every save and read splits it: one whose only
+    // text is inside a component is split too, so its default text is the
+    // default language's rather than the structure's.
+    const sharedShapes = storesPerLanguage(singleMeta)
+      ? await containerShapesOf(rowFields, this.adapter.getDrizzle())
+      : new Map<string, SharedStructureShape>();
     for (const [key, value] of Object.entries(defaults)) {
       if (noColumnFieldNames.has(key)) continue;
-      if (localizedNames.has(key)) {
+      const shape = sharedShapes.get(key);
+      if (shape) {
+        insertDefaults[key] = splitStoredValue(value, shape).structure;
+        // Whole: the seed splits it by the same shape (`splitLocalizedWrite`).
+        localizedDefaults[key] = value;
+      } else if (localizedNames.has(key)) {
         localizedDefaults[key] = value;
       } else {
         insertDefaults[key] = value;
@@ -2964,9 +3034,16 @@ export class SingleQueryService extends BaseService {
     );
     if (!companion) return;
 
+    // A container placing a component is split by that component's fields, read on this
+    // transaction, as a save splits it: one whose only text is inside a component keeps that text
+    // as the default language's.
+    const localizedFields = await withComponentShapes(
+      companion.localizedFields,
+      tx.getDrizzle()
+    );
     const { companion: companionData } = splitLocalizedWrite(
       localizedDefaults,
-      companion.localizedFields
+      localizedFields
     );
     const companionStatus = companion.hasStatus
       ? (status ?? "draft")
@@ -2995,7 +3072,7 @@ export class SingleQueryService extends BaseService {
         entryId: parentId,
         locale: this.localization.defaultLocale,
         values: companionData,
-        localizedFields: companion.localizedFields,
+        localizedFields,
         languagesTable: companion.companionTableName,
         savedBy: SYSTEM_ACTOR,
       }
@@ -3096,9 +3173,10 @@ export class SingleQueryService extends BaseService {
     ) {
       return { doc, translations: undefined };
     }
+    // A container placing a component is split by that component's fields, as the seed splits it.
     const { companion: values } = splitLocalizedWrite(
       built.localizedDefaults,
-      seed.localizedFields
+      await withComponentShapes(seed.localizedFields, this.adapter.getDrizzle())
     );
     const status = (built.document as { status?: string }).status;
     return {

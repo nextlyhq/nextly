@@ -1,13 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
-import type { PluginContext } from "../../plugins/plugin-context";
+import type {
+  PluginContext,
+  PluginDefinition,
+} from "../../plugins/plugin-context";
 import {
   clearProxyHandlers,
   markProxyHandlersReady,
   registerProxyHandler,
 } from "../../plugins/proxy/proxy-registry";
-import type { ProxyAnswer } from "../../plugins/proxy/proxy-types";
+import type {
+  PluginProxyHandler,
+  ProxyAnswer,
+} from "../../plugins/proxy/proxy-types";
 import { createNextlyProxy, type NextlyProxyDeps } from "../proxy";
 
 const config = {} as SanitizedNextlyConfig;
@@ -40,7 +46,47 @@ const request = () =>
     headers: { cookie: "a=1" },
   });
 
-afterEach(() => clearProxyHandlers());
+afterEach(() => {
+  clearProxyHandlers();
+  vi.useRealTimers();
+});
+
+/** A copy handler as a plugin contributes it: it claims every `.md` address. */
+const copyHandler: PluginProxyHandler = {
+  name: "copies",
+  claims: request => new URL(request.url).pathname.endsWith(".md"),
+  handle: request =>
+    new URL(request.url).pathname.endsWith(".md")
+      ? { response: new Response("the copy", { status: 200 }) }
+      : undefined,
+};
+
+/** A site's config whose one plugin contributes `handler`. */
+function configWith(handler: PluginProxyHandler): SanitizedNextlyConfig {
+  const plugin = {
+    name: "p",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    contributes: { proxy: [handler] },
+  } as PluginDefinition;
+  return { plugins: [plugin] } as unknown as SanitizedNextlyConfig;
+}
+
+/** A start that finishes, registering `handler`, only when told to. */
+function startOnCue(handler: PluginProxyHandler) {
+  let finish: () => void = () => undefined;
+  const start = vi.fn(
+    () =>
+      new Promise<void>(resolve => {
+        finish = () => {
+          registerProxyHandler({ pluginName: "p", handler }, ctx);
+          markProxyHandlersReady();
+          resolve();
+        };
+      })
+  );
+  return { start, finish: () => finish() };
+}
 
 describe("the site's Proxy", () => {
   it("lets every request through where no plugin contributes a handler", async () => {
@@ -117,5 +163,92 @@ describe("the site's Proxy", () => {
 
     expect(await createNextlyProxy(config, deps)(request())).toBeUndefined();
     expect(calls).toEqual([]);
+  });
+
+  it("waits for a start under way on a request only a handler can answer, then answers it", async () => {
+    // The first request of a cold server is for a page's plain-text copy:
+    // no page serves it, so going on to the page would answer not found.
+    const { deps, calls } = fakeNext();
+    const { start, finish } = startOnCue(copyHandler);
+    deps.start = start;
+
+    const answering = createNextlyProxy(
+      configWith(copyHandler),
+      deps
+    )(new Request("https://example.com/blog/hello.md"));
+    await Promise.resolve();
+    finish();
+    const response = await answering;
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(response?.status).toBe(200);
+    expect(await response?.text()).toBe("the copy");
+    expect(calls).toEqual([]);
+  });
+
+  it("asks a claimed request to come back where the start outlasts the wait, and keeps the start running", async () => {
+    vi.useFakeTimers();
+    const { deps } = fakeNext();
+    deps.start = () => new Promise<never>(() => {});
+    const waitUntil = vi.fn();
+
+    const answering = createNextlyProxy(configWith(copyHandler), deps)(
+      new Request("https://example.com/blog/hello.md"),
+      { waitUntil }
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    const response = await answering;
+
+    expect(response?.status).toBe(503);
+    expect(response?.headers.get("retry-after")).toBe("30");
+    expect(response?.headers.get("cache-control")).toBe("no-store");
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+  });
+
+  it("never holds a request no handler claims, and keeps the start it begins running", async () => {
+    const { deps, calls } = fakeNext();
+    deps.start = () => new Promise<never>(() => {});
+    const waitUntil = vi.fn();
+
+    expect(
+      await createNextlyProxy(configWith(copyHandler), deps)(
+        new Request("https://example.com/blog/hello"),
+        { waitUntil }
+      )
+    ).toBeUndefined();
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([]);
+  });
+
+  it("lets a claimed request through where Nextly cannot start", async () => {
+    const { deps } = fakeNext();
+    deps.start = async () => {
+      throw new Error("no database");
+    };
+
+    expect(
+      await createNextlyProxy(
+        configWith(copyHandler),
+        deps
+      )(new Request("https://example.com/blog/hello.md"))
+    ).toBeUndefined();
+  });
+
+  it("takes a claim that throws as no claim, and never holds the request", async () => {
+    const { deps } = fakeNext();
+    deps.start = () => new Promise<never>(() => {});
+    const throwing: PluginProxyHandler = {
+      ...copyHandler,
+      claims: () => {
+        throw new Error("broken claim");
+      },
+    };
+
+    expect(
+      await createNextlyProxy(
+        configWith(throwing),
+        deps
+      )(new Request("https://example.com/blog/hello.md"))
+    ).toBeUndefined();
   });
 });

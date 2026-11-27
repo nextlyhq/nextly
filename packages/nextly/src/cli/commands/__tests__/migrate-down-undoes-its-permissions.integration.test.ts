@@ -20,6 +20,9 @@
  * - A plugin installed after the newest snapshot, before the rolled-back
  *   migration, keeps its permissions and every grant.
  * - A declared permission orphaned by hand is restored by the next run.
+ * - Rolling back a migration that renamed a plugin's collection (`renameMap`) writes the row of the
+ *   slug the plugin declares back as the plugin's, though the configuration still renames it, and
+ *   where the point records the app's own collection on the new slug too.
  * - Before the registry record exists, a rollback between two migrations
  *   whose snapshots predate the registry metadata changes no orphan mark.
  */
@@ -38,7 +41,13 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database";
-import { defineCollection, defineConfig, text } from "../../../config";
+import {
+  defineCollection,
+  defineConfig,
+  defineFieldGroup,
+  defineSingle,
+  text,
+} from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { NextlyError } from "../../../errors";
@@ -50,6 +59,7 @@ import {
   getConfiguredTestDialects,
   type TestDialect,
 } from "../../../plugins/test-nextly";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import type { mergeSetupResultIntoConfig as MergeSetupResultIntoConfig } from "../../utils/config-loader";
@@ -114,6 +124,50 @@ const SEO_V2 = plugin(
   ["read", "mdp-seo"],
   ["audit", "mdp-seo"]
 );
+const EVENTS = "@test/mdp-events";
+/** A plugin contributing `mdp-events`, which the host renames by `renameMap`. */
+function eventsPlugin(renameMap?: Record<string, string>): PluginDefinition {
+  return definePlugin({
+    name: EVENTS,
+    version: "1.0.0",
+    nextly: "*",
+    contributes: {
+      collections: [
+        defineCollection({
+          slug: "mdp-events",
+          fields: [text({ name: "body" })],
+        }),
+      ],
+    },
+    // As a host's `rename` leaves the definition.
+    ...(renameMap === undefined ? {} : { renameMap }),
+  });
+}
+
+/** A plugin contributing the Single `mdp-settings` and the field group `mdp-hero`, renamed by `renameMap`. */
+function shopPlugin(renameMap?: Record<string, string>): PluginDefinition {
+  return definePlugin({
+    name: "@test/mdp-shop",
+    version: "1.0.0",
+    nextly: "*",
+    contributes: {
+      singles: [
+        defineSingle({
+          slug: "mdp-settings",
+          fields: [text({ name: "brand" })],
+        }),
+      ],
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "mdp-hero",
+          fields: [text({ name: "heading" })],
+        }),
+      ],
+    },
+    ...(renameMap === undefined ? {} : { renameMap }),
+  });
+}
+
 /** A plugin installed after the newest snapshot. */
 const LATE = plugin("@test/mdp-late", "1.0.0", ["sync", "mdp-late"]);
 
@@ -226,7 +280,11 @@ describe.each(getConfiguredTestDialects())(
       const { context, said } = command();
       setNonInteractive(true);
       try {
-        await runMigrateCreate(`step${clock}`, { cwd: state.dir }, context);
+        await runMigrateCreate(
+          `step${clock}`,
+          { cwd: state.dir, acceptDataLoss: true },
+          context
+        );
       } catch (error) {
         throw new Error(
           `migrate:create failed: ${messageOf(error)}\n${said.join("\n")}`
@@ -242,7 +300,10 @@ describe.each(getConfiguredTestDialects())(
       tick();
       const { context, said } = command();
       try {
-        await runMigrate({ cwd: state.dir, throwOnFailure: true }, context);
+        await runMigrate(
+          { cwd: state.dir, throwOnFailure: true, acceptDataLoss: true },
+          context
+        );
       } catch (error) {
         throw new Error(
           `migrate failed: ${messageOf(error)}\n${said.join("\n")}`
@@ -318,6 +379,91 @@ describe.each(getConfiguredTestDialects())(
           .sort();
       });
     }
+
+    /** Each recorded owner in a registry, the collections' where none is named, by slug. */
+    async function owners(
+      registry = "dynamic_collections"
+    ): Promise<Record<string, string>> {
+      return on(async adapter => {
+        const rows = await adapter.executeQuery<Record<string, unknown>>(
+          `SELECT ${q}slug${q} AS slug, ${q}source${q} AS source FROM ${q}${registry}${q}`
+        );
+        return Object.fromEntries(
+          rows.map(row => [String(row.slug), String(row.source)])
+        );
+      });
+    }
+
+    it("writes the slug a plugin declares back as the plugin's when its rename is rolled back", async () => {
+      // The configuration folds the plugin's collection in, under the slug the host gives it.
+      const before = config({ plugins: [eventsPlugin()] });
+      const renamed = config({
+        plugins: [eventsPlugin({ "mdp-events": "mdp-shows" })],
+      });
+      await migrateCreate(before);
+      await migrate(before);
+      expect((await owners())["mdp-events"]).toBe(`plugin:${EVENTS}`);
+      await migrateCreate(renamed);
+      await migrate(renamed);
+
+      // The configuration the rollback runs with still renames it.
+      await migrateDown(renamed);
+
+      expect((await owners())["mdp-events"]).toBe(`plugin:${EVENTS}`);
+    }, 120_000);
+
+    it("does so too where the app's own collection held the new slug until the rename", async () => {
+      // The point the rollback goes back to records both slugs: the app's and the plugin's.
+      const before = config({
+        extra: ["mdp-shows"],
+        plugins: [eventsPlugin()],
+      });
+      const renamed = config({
+        plugins: [eventsPlugin({ "mdp-events": "mdp-shows" })],
+      });
+      await migrateCreate(before);
+      await migrate(before);
+      expect(await owners()).toMatchObject({
+        "mdp-events": `plugin:${EVENTS}`,
+        "mdp-shows": "code",
+      });
+      await migrateCreate(renamed);
+      await migrate(renamed);
+
+      await migrateDown(renamed);
+
+      // The row re-created takes the plugin; the one that stayed keeps the owner it had.
+      expect(await owners()).toMatchObject({
+        "mdp-events": `plugin:${EVENTS}`,
+        "mdp-shows": "code",
+      });
+    }, 120_000);
+
+    it("writes a plugin's Single and field group back as the plugin's when their rename is rolled back", async () => {
+      const before = config({ plugins: [shopPlugin()] });
+      const renamed = config({
+        plugins: [
+          shopPlugin({ "mdp-settings": "mdp-prefs", "mdp-hero": "mdp-banner" }),
+        ],
+      });
+      await migrateCreate(before);
+      await migrate(before);
+      await migrateCreate(renamed);
+      await migrate(renamed);
+      expect((await owners("dynamic_singles"))["mdp-prefs"]).toBe(
+        "plugin:@test/mdp-shop"
+      );
+
+      // The configuration the rollback runs with still renames them.
+      await migrateDown(renamed);
+
+      expect((await owners("dynamic_singles"))["mdp-settings"]).toBe(
+        "plugin:@test/mdp-shop"
+      );
+      expect((await owners(MIGRATION_TARGET.registryTable))["mdp-hero"]).toBe(
+        "plugin:@test/mdp-shop"
+      );
+    }, 120_000);
 
     /** The lines that say a permission's orphan mark changed. */
     const markLines = (said: readonly string[]) =>

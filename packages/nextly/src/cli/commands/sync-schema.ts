@@ -32,6 +32,7 @@ import type { LoadConfigResult } from "../utils/config-loader";
 
 import type { ResolvedDevOptions } from "./db-sync";
 import {
+  claimDeclaredOwners,
   ensureLocalizedCompanions,
   publishExtensionSchema,
   syncCollections,
@@ -46,6 +47,7 @@ async function pushEntities(
   options: ResolvedDevOptions,
   context: CommandContext
 ): Promise<void> {
+  await claimDeclaredOwners(configResult, adapter, context);
   await syncCollections(configResult, adapter, options, context);
   await syncSingles(configResult, adapter, options, context);
   await syncComponents(configResult, adapter, options, context);
@@ -130,17 +132,37 @@ export async function fieldsLeavingForSync(
   // keeps its translated fields as the Builder's record has them, whatever its code entry says, so
   // nothing of it is judged as leaving translation. Read only where a move is judged.
   const owned = mover ? await configTheCodeOwnsIn(live, config) : config;
-  // A field group's table is the one its config names, as the companion passes take it.
   const leaving = mover
-    ? await mover.fieldsLeavingUnder(
-        live,
-        owned,
-        new Map(),
-        recordedBefore,
-        m => report.error(m)
+    ? await fieldsLeavingAtStoredTables(mover, live, owned, recordedBefore, m =>
+        report.error(m)
       )
     : { entries: [], refused: [] };
   return { recordedBefore, mover, leaving, owned };
+}
+
+/**
+ * The fields leaving translation (`fieldsLeavingUnder`), each field group judged at its stored
+ * table, as the companion passes take it: `fg_<slug>` on a site on the current names. Judged at
+ * another, its values would stay in a translations column nothing reads once the field is shared.
+ */
+async function fieldsLeavingAtStoredTables(
+  mover: typeof LeavingMove,
+  live: DrizzleAdapter,
+  owned: LoadConfigResult["config"],
+  recordedBefore: Awaited<ReturnType<typeof readRecordedEntities>>,
+  report: (message: string) => void
+): ReturnType<typeof LeavingMove.fieldsLeavingUnder> {
+  const { declaredFieldGroupStorage } = await import(
+    "../../domains/field-groups/services/field-group-stored-tables"
+  );
+  const stored = await declaredFieldGroupStorage(live, owned.fieldGroups);
+  return mover.fieldsLeavingUnder(
+    live,
+    owned,
+    stored?.tables ?? new Map<string, string>(),
+    recordedBefore,
+    report
+  );
 }
 
 /**
@@ -262,10 +284,10 @@ async function keepRecordedTranslated(
   const { config } = configResult;
   try {
     // Asked again only to find them; its refusals were reported when the run first asked.
-    const still = await run.mover.fieldsLeavingUnder(
+    const still = await fieldsLeavingAtStoredTables(
+      run.mover,
       run.live,
       run.owned,
-      new Map(),
       run.recordedBefore,
       () => undefined
     );

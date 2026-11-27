@@ -38,7 +38,18 @@ describe("checklistItemText", () => {
       brand: `${SECTION}/settings?tab=brand`,
       import: `${SECTION}/pages/import`,
       searchConsole: `${SECTION}/settings?tab=connections`,
+      proxy: `${SECTION}/redirects`,
+      codePages: `${SECTION}/pages`,
     });
+  });
+
+  it("says how many pages built in code are listed, or that they are not", () => {
+    expect(
+      checklistItemText({ id: "codePages", done: true, pages: 395 }).label
+    ).toBe("Pages built in code are listed: 395 pages");
+    expect(
+      checklistItemText({ id: "codePages", done: false, pages: 26 }).label
+    ).toBe("List the pages your routes with a variable part build");
   });
 
   it("names how many content types want a pattern", () => {

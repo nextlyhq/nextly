@@ -50,8 +50,11 @@ export interface ProviderDefaultsOptions {
    * instances keep their open connections: the pool size and idle timeout
    * come from `SERVERLESS_POOL_DEFAULTS` instead of the provider's, whatever
    * the provider, since a suspended instance holds a Neon or Supabase
-   * connection as surely as any other. The provider keeps every other
-   * setting: SSL, the connection and statement timeouts, the connect retries.
+   * connection as surely as any other. So does the wait for a connection,
+   * except on Neon: pg bounds opening a connection with the same setting, and
+   * a Neon compute waking from suspend needs longer than the serverless wait
+   * to accept one. The provider keeps every other setting: SSL, the statement
+   * timeout, the connect retries.
    */
   serverless?: boolean;
 }
@@ -69,6 +72,10 @@ export function getProviderDefaults(
     poolMax: SERVERLESS_POOL_DEFAULTS.max,
     poolMin: SERVERLESS_POOL_DEFAULTS.min,
     idleTimeoutMs: SERVERLESS_POOL_DEFAULTS.idleTimeoutMs,
+    connectionTimeoutMs:
+      provider === "neon"
+        ? defaults.connectionTimeoutMs
+        : SERVERLESS_POOL_DEFAULTS.connectionTimeoutMs,
   };
 }
 

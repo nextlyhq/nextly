@@ -403,7 +403,7 @@ describe("a relationship switched to many by db:sync — sqlite", () => {
 
     // The registry still records one entry, so the rows and the record agree.
     const [row] = await adapterOf().executeQuery<{ fields: unknown }>(
-      `SELECT "fields" FROM "dynamic_components" WHERE "slug" = 'hero'`
+      `SELECT "fields" FROM "dynamic_field_groups" WHERE "slug" = 'hero'`
     );
     const fields = (
       typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields

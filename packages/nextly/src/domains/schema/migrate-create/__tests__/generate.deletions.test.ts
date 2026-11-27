@@ -45,6 +45,42 @@ const PAGES: MinimalConfigEntity = {
 describe("generateMigration's deletions", () => {
   let migrationsDir: string;
 
+  // A dropped table is named as the removed group's under the names the history is on.
+  it("says why a removed field group's table is dropped, under the current names", async () => {
+    const run = (components: MinimalConfigEntity[], name: string, now: Date) =>
+      generateMigration({
+        name,
+        dialect: "postgresql",
+        migrationsDir,
+        collections: [],
+        singles: [],
+        components,
+        fieldGroupNaming: "current",
+        nonInteractive: true,
+        now,
+      });
+    await run(
+      [
+        {
+          slug: "card",
+          tableName: "fg_card",
+          fields: [{ name: "heading", type: "text" }],
+          settings: { source: "code", settings: { fields: [] } as never },
+        },
+      ],
+      "initial",
+      NOW
+    );
+    await run([], "removed", new Date(NOW.getTime() + 60_000));
+
+    const [, file] = (await readdir(migrationsDir))
+      .filter(f => f.endsWith(".sql"))
+      .sort();
+    expect(await readFile(join(migrationsDir, file!), "utf-8")).toContain(
+      "table fg_card: field group card is no longer in the config"
+    );
+  });
+
   /**
    * The latest snapshot holds `entities`, written by a first run as a project's first migration is,
    * so it records each entity as well as its table.

@@ -5,7 +5,7 @@
 // column safe.
 
 import { getColumns } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 // The validators and generators below are imported so the projections can be checked against the
 // code that consumes them, not only against themselves: a declared set nobody reads would satisfy
@@ -43,6 +43,15 @@ import {
   type SystemColumnDialect,
   type SystemColumnKind,
 } from "../system-columns";
+import { loadDialectTables } from "../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 const sorted = (names: Iterable<string>): string[] => [...names].sort();
 

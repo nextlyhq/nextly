@@ -31,10 +31,15 @@ import {
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { lastCatchUp } from "../../address-record/catch-up";
+import {
+  catchUp,
+  forgetCatchUpFingerprint,
+  lastCatchUp,
+} from "../../address-record/catch-up";
 import { seoPlugin } from "../../plugin";
 import type { ReadRules } from "../../resolver/provider";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
+import { recordRouteValues } from "../../route-values/store";
 import { readSeoRules } from "../../settings/rules";
 import { llmsFullTxtOf } from "../ai-outputs";
 
@@ -150,6 +155,14 @@ async function boot(dialect: TestDialect) {
         access: open,
         fields: [text({ name: "title" })],
         publicAddress: "/index.html",
+      }),
+      // A Single declaring no title: Nextly keeps one, its label.
+      defineSingle({
+        slug: "journal",
+        label: { singular: "Blog Page" },
+        access: open,
+        fields: [richText({ name: "intro" })],
+        publicAddress: "/journal",
       }),
       // A page whose own address is the one `/blog/hello`'s copy would have.
       defineSingle({
@@ -325,8 +338,9 @@ describe.each(getConfiguredTestDialects())(
       expect(await llmsLinks()).not.toContain(`${SITE}/blog/hidden`);
       expect(file.body).toContain("# Acme\n\n> Acme makes rockets.\n");
       expect(file.body).toContain("## Blog posts\n");
+      // Each page by its own name, without the site's name its title ends with.
       expect(file.body).toContain(
-        `- [Post hello | Acme](${SITE}/blog/hello): A short hello.`
+        `- [Post hello](${SITE}/blog/hello): A short hello.`
       );
 
       await switches(t, { llmsTxt: false });
@@ -409,7 +423,11 @@ describe.each(getConfiguredTestDialects())(
       expect((await ask("/blog/hello")).body).toBe("the page");
       // The home page's copy is at index.md, and at index.html.md too.
       const home = await ask("/index.md");
-      expect(withoutFrontMatter(home.body)).toBe("# Welcome\n");
+      // Named by its whole title, as structured data names a home page, its
+      // description beneath where it has no other words.
+      expect(withoutFrontMatter(home.body)).toBe(
+        "# Welcome \\| Acme\n\nAcme makes rockets.\n"
+      );
       expect(home.body).toContain(`\nurl: ${SITE}/\n`);
       expect(home.link).toBe(`<${SITE}/>; rel="canonical"`);
       expect(await ask("/index.html.md")).toEqual(home);
@@ -489,14 +507,49 @@ describe.each(getConfiguredTestDialects())(
       await switches(t, { plainTextCopies: true, llmsTxt: true });
 
       expect(withoutFrontMatter((await ask("/index.html.md")).body)).toBe(
-        "# Old index\n"
+        "# Old index\n\nAcme makes rockets.\n"
       );
       expect(withoutFrontMatter((await ask("/index.md")).body)).toBe(
-        "# Welcome\n"
+        "# Welcome \\| Acme\n\nAcme makes rockets.\n"
       );
       const links = await llmsLinks();
       expect(links).toContain(`${SITE}/index.html.md`);
       expect(links).toContain(`${SITE}/index.md`);
+    });
+
+    it("serves a copy asked for while the address record still catches up, as on a server just started", async () => {
+      const t = await boot(dialect);
+      await post(t, "hello", "published");
+      await switches(t, { plainTextCopies: true });
+      if (seoContext === undefined) throw new Error("the plugin never started");
+      // A whole catch-up under way, held once it has read every page, as the
+      // first request of a server just started finds the one its start
+      // began: it does not wait for the request, nor the request for it.
+      await forgetCatchUpFingerprint(seoContext);
+      let reached: () => void = () => undefined;
+      const atHold = new Promise<void>(resolve => (reached = resolve));
+      let release: () => void = () => undefined;
+      const held = new Promise<void>(resolve => (release = resolve));
+      const run = catchUp({
+        afterListing: async () => {
+          reached();
+          await held;
+        },
+      });
+      await atHold;
+
+      const asking = ask("/blog/hello.md");
+      // Long enough for the request to find the record not ready.
+      await new Promise(resolve => setTimeout(resolve, 100));
+      release();
+      const copy = await asking;
+      await run;
+
+      // The copy, not the page the site would answer not found with.
+      expect(copy.body).not.toBe("the page");
+      expect(copy.status).toBe(200);
+      expect(copy.type).toBe("text/markdown; charset=utf-8");
+      expect(copy.link).toBe(`<${SITE}/blog/hello>; rel="canonical"`);
     });
 
     it("serves a copy at its own address as a cacheable file kept out of search, pointing to llms.txt", async () => {
@@ -664,7 +717,7 @@ describe.each(getConfiguredTestDialects())(
         )
       ).toBe(true);
       expect(full.body).toContain(
-        `# Post hello | Acme\n\nSource: ${SITE}/blog/hello\n\nA short hello.\n\nRockets go up.`
+        `# Post hello\n\nSource: ${SITE}/blog/hello\n\nA short hello.\n\nRockets go up.`
       );
       // What the public may not read is named by its address alone.
       expect(full.body).toContain(`Source: ${SITE}/members/plans`);
@@ -679,6 +732,80 @@ describe.each(getConfiguredTestDialects())(
       // Not without llms.txt, though its own switch is on.
       await switches(t, { llmsTxt: false, llmsFullTxt: true });
       expect((await rootFile("llms-full.txt")).status).toBe(404);
+    });
+
+    it("names a Single by its route's title over the label Nextly keeps for it, with no markup and no site name", async () => {
+      const t = await boot(dialect);
+      await t.nextly.updateSingle({
+        slug: "journal",
+        data: {
+          _overwrite: true,
+          intro: body(paragraph(words("What I think."))),
+        },
+      });
+      // What the Single's route gave its head, as the head records it.
+      const ctx = seoContext;
+      if (ctx === undefined) throw new Error("no SEO plugin context");
+      await recordRouteValues(
+        ctx,
+        {
+          type: "single:journal",
+          id: "",
+          language: await ctx.publicAddresses.defaultLanguage(),
+        },
+        { title: "Thoughts & <span>Insights</span> | Acme" }
+      );
+      await switches(t, {
+        llmsTxt: true,
+        llmsFullTxt: true,
+        plainTextCopies: true,
+      });
+
+      const list = (await rootFile("llms.txt")).body;
+      expect(list).toContain(`- [Thoughts & Insights](${SITE}/journal.md)`);
+      expect(list).not.toContain("Blog Page");
+      const full = (await rootFile("llms-full.txt")).body;
+      expect(full).toContain(
+        `# Thoughts & Insights\n\nSource: ${SITE}/journal\n\nWhat I think.\n`
+      );
+      expect(full).not.toContain("Blog Page");
+      const copy = withoutFrontMatter((await ask("/journal.md")).body);
+      expect(copy).toBe("# Thoughts \\& Insights\n\nWhat I think.\n");
+    });
+
+    it("names an entry by the name its route gives it in structured data, as structured data does", async () => {
+      const t = await boot(dialect);
+      const id = await post(t, "jasper", "published");
+      const ctx = seoContext;
+      if (ctx === undefined) throw new Error("no SEO plugin context");
+      // What the entry's route gave its head, its name among it.
+      await recordRouteValues(
+        ctx,
+        {
+          type: "posts",
+          id,
+          language: await ctx.publicAddresses.defaultLanguage(),
+        },
+        { title: "Jasper vs Rext AI | Acme" },
+        { name: "Jasper or Rext AI?" }
+      );
+      // The head's own call, which tells no name, keeps it.
+      await recordRouteValues(
+        ctx,
+        {
+          type: "posts",
+          id,
+          language: await ctx.publicAddresses.defaultLanguage(),
+        },
+        { title: "Jasper vs Rext AI | Acme" }
+      );
+      await switches(t, { llmsTxt: true, plainTextCopies: true });
+
+      const list = (await rootFile("llms.txt")).body;
+      expect(list).toContain(`- [Jasper or Rext AI?](${SITE}/blog/jasper.md)`);
+      expect(withoutFrontMatter((await ask("/blog/jasper.md")).body)).toBe(
+        "# Jasper or Rext AI?\n\nAcme makes rockets.\n"
+      );
     });
 
     it("builds no page's words past where llms-full.txt stops short", async () => {

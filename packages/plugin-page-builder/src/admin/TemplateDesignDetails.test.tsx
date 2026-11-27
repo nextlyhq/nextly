@@ -55,6 +55,7 @@ function answer(templateId = "t1"): EntryDesignsResponse {
       templateAllowed: true,
       mayCreateTemplate: false,
       mayGiveDesign: true,
+      servedBySite: null,
       entry: "e1",
       templatesCollection: "templates",
       names: { singular: "Post", plural: "Posts" },

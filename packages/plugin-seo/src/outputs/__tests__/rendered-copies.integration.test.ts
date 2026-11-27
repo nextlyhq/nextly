@@ -10,8 +10,12 @@
  *   from the page's head, and llms.txt links it;
  * - the page is asked for once, as HTML, marked as a copy's request, and a
  *   request so marked is never itself answered with a copy;
- * - a page that does not render as HTML has no copy: the request is the
- *   site's to answer;
+ * - a page that does not render as HTML is copied as its name and
+ *   description, never as nothing, and is named, with why, for the problem
+ *   list until it renders again;
+ * - llms-full.txt holds a page built in code's rendered words, its
+ *   description where it does not render, and its description where the
+ *   file's time for rendering has run out, which is noted too;
  * - a page whose stored fields hold words is copied from them, never
  *   rendered;
  * - where the site names no address of its own, no page is rendered, and
@@ -30,6 +34,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import type { SanitizedNextlyConfig } from "nextly";
 import {
   createTestNextly,
@@ -42,9 +47,23 @@ import { createDynamicHandlers, createNextlyProxy } from "nextly/runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
-import { seoMetadata } from "../../code-pages/metadata";
+import { seoMetadata, seoStructuredData } from "../../code-pages/metadata";
 import { seoPlugin } from "../../plugin";
+import {
+  pageRefKey,
+  problemList,
+  type ProblemChecks,
+} from "../../problems/check";
+import type { Reader } from "../../problems/reader";
+import type { CodeRoute } from "../../code-pages/routes";
+import type { ReadRules } from "../../resolver/provider";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
+import { readSeoRules } from "../../settings/rules";
+import { structuredDataFromSettings } from "../../settings/structured-data-rules";
+import { noSocialCardRules } from "../../social/card";
+import { rulesFromOptions } from "../../structured-data/rules";
+import { llmsFullTxtOf } from "../ai-outputs";
+import { copyFailures } from "../copy-failures";
 import { RENDERING_HEADER } from "../rendered-fetch";
 
 const SITE = "https://acme.example";
@@ -99,11 +118,34 @@ writeFileSync(
 
 let current: TestNextly | undefined;
 
+/** The SEO plugin's own context in the current test, from its start. */
+let seoContext: PluginContext | undefined;
+
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  seoContext = undefined;
   vi.restoreAllMocks();
 });
+
+/** The SEO plugin's context, which the current test's boot kept. */
+function seoCtx(): PluginContext {
+  if (seoContext === undefined) throw new Error("no SEO plugin context");
+  return seoContext;
+}
+
+/** `plugin`, keeping the context it starts with. */
+function keepingContext(
+  plugin: ReturnType<typeof seoPlugin>
+): ReturnType<typeof seoPlugin> {
+  return {
+    ...plugin,
+    init(ctx) {
+      seoContext = ctx;
+      return plugin.init?.(ctx);
+    },
+  };
+}
 
 afterAll(() => {
   rmSync(BUILD, { recursive: true, force: true });
@@ -132,11 +174,13 @@ async function boot(
         }
       : {}),
     plugins: [
-      seoPlugin({
-        collections: ["landings", "notes"],
-        ...(named ? { baseUrl: SITE } : {}),
-        nextBuildDir: languages ? LANGUAGE_BUILD : BUILD,
-      }),
+      keepingContext(
+        seoPlugin({
+          collections: ["landings", "notes"],
+          ...(named ? { baseUrl: SITE } : {}),
+          nextBuildDir: languages ? LANGUAGE_BUILD : BUILD,
+        })
+      ),
     ],
     collections: [
       // A page whose words are its layout: nothing a copy can read.
@@ -174,6 +218,7 @@ async function boot(
       productionAddresses: named ? [SITE] : [],
       plainTextCopies: true,
       llmsTxt: true,
+      llmsFullTxt: true,
     },
   });
   return current;
@@ -193,12 +238,43 @@ async function ask(path: string, headers: Record<string, string> = {}) {
   };
 }
 
-async function llmsTxt(): Promise<string> {
+async function rootFile(file: string): Promise<string> {
   const response = await createDynamicHandlers().GET(
-    new Request(`${SITE}/admin/api/llms.txt`),
-    { params: Promise.resolve({ params: ["llms.txt"] }) }
+    new Request(`${SITE}/admin/api/${file}`),
+    { params: Promise.resolve({ params: [file] }) }
   );
   return response.text();
+}
+
+const llmsTxt = (): Promise<string> => rootFile("llms.txt");
+
+/** The problem list's checks, for this site's types. */
+const CHECKS: ProblemChecks = {
+  targets: ["landings", "notes"],
+  singles: [],
+  readers: {
+    readRules: readSeoRules,
+    readStructuredDataRules: structuredDataFromSettings(
+      rulesFromOptions(undefined, undefined)
+    ),
+    readSocialCardRules: noSocialCardRules,
+  },
+};
+
+/** A reader who may read every page and type. */
+const everything: Reader = {
+  pages: async pages => new Set(pages.map(pageRefKey)),
+  readsType: () => true,
+  seesRedirects: true,
+  count: async () => 0,
+};
+
+/** The addresses the problem list names as plain-text copies that failed. */
+async function failedOnList(): Promise<string[]> {
+  const { problems } = await problemList(seoCtx(), CHECKS, everything);
+  return problems
+    .filter(problem => problem.kind === "plainCopy")
+    .map(problem => problem.subject.label);
 }
 
 /** The site's pages as its server renders them, and every request for one. */
@@ -299,17 +375,291 @@ describe.each(getConfiguredTestDialects())(
       expect(copy.body).toContain("# Spring sale\n\nHalf off everything.\n");
     });
 
-    it("leaves a page that does not render as HTML to the site", async () => {
+    it("copies a page that does not render as its name and description, and names it for the problem list until it does", async () => {
       const t = await boot(dialect);
       await t.nextly.create({
         collection: "landings",
-        data: { title: "Gone", slug: "gone", status: "published" },
+        data: {
+          title: "Gone",
+          slug: "gone",
+          status: "published",
+          seo: { metaDescription: "A sale that ended." },
+        },
       });
       renderedSite({});
-      // The page has nothing to copy but its title: its stored copy stands.
-      expect((await ask("/l/gone.md")).body).toContain("# Gone\n");
-      await seoMetadata("/pricing", { metadata: { title: "Pricing" } });
-      expect((await ask("/pricing.md")).body).toBe("the page");
+      // The page has nothing to copy but its title: its name and
+      // description stand in for its words.
+      expect((await ask("/l/gone.md")).body).toContain(
+        "---\n\n# Gone\n\nA sale that ended.\n"
+      );
+      await seoMetadata("/pricing", {
+        metadata: { title: "Pricing", description: "Plans and prices." },
+      });
+      const copy = await ask("/pricing.md");
+      expect(copy.type).toBe("text/markdown; charset=utf-8");
+      expect(copy.body).toContain("---\n\n# Pricing\n\nPlans and prices.\n");
+      expect(
+        (await copyFailures(seoCtx())).map(({ url, reason, retry }) => ({
+          url,
+          reason,
+          retry,
+        }))
+      ).toEqual([
+        {
+          url: `${SITE}/pricing`,
+          reason: "status 404",
+          retry: `${SITE}/pricing.md`,
+        },
+        {
+          url: `${SITE}/l/gone`,
+          reason: "status 404",
+          retry: `${SITE}/l/gone.md`,
+        },
+      ]);
+
+      // Once the page renders, asking again copies it and takes it off.
+      renderedSite({
+        "/pricing": html("Pricing | Acme", "<h1>Pricing</h1><p>Words.</p>"),
+      });
+      expect((await ask("/pricing.md")).body).toContain(
+        "# Pricing\n\nWords.\n"
+      );
+      expect((await copyFailures(seoCtx())).map(each => each.url)).toEqual([
+        `${SITE}/l/gone`,
+      ]);
+    });
+
+    it("takes a page off the problem list once its copy is made from its own words, at its copy or in llms-full.txt", async () => {
+      const t = await boot(dialect);
+      const note = async (slug: string) =>
+        String(
+          (
+            await t.nextly.create({
+              collection: "notes",
+              data: { title: slug, slug, status: "published" },
+            })
+          ).item.id
+        );
+      const first = await note("first");
+      const second = await note("second");
+      // Neither holds words yet, and neither renders: both are noted.
+      renderedSite({});
+      await ask("/notes/first.md");
+      await ask("/notes/second.md");
+      expect(
+        (await copyFailures(seoCtx())).map(each => each.url).sort()
+      ).toEqual([`${SITE}/notes/first`, `${SITE}/notes/second`]);
+
+      // Each gains words of its own: its copy is made from them, never
+      // rendered, and that settles it.
+      for (const id of [first, second]) {
+        await t.nextly.update({
+          collection: "notes",
+          id,
+          data: { body: "We launched.", _overwrite: true },
+        });
+      }
+      expect((await ask("/notes/first.md")).body).toContain("We launched.");
+      expect((await copyFailures(seoCtx())).map(each => each.url)).toEqual([
+        `${SITE}/notes/second`,
+      ]);
+      expect(await rootFile("llms-full.txt")).toContain(
+        `Source: ${SITE}/notes/second\n\nWe launched.`
+      );
+      expect(await copyFailures(seoCtx())).toEqual([]);
+    });
+
+    it("lists a failed copy only while its page is listed and copies are on, and forgets it after", async () => {
+      const t = await boot(dialect);
+      const landing = async (slug: string) =>
+        String(
+          (
+            await t.nextly.create({
+              collection: "landings",
+              data: { title: slug, slug, status: "published" },
+            })
+          ).item.id
+        );
+      const kept = await landing("kept");
+      const removed = await landing("removed");
+      renderedSite({});
+      await ask("/l/kept.md");
+      await ask("/l/removed.md");
+      expect((await failedOnList()).sort()).toEqual([
+        `${SITE}/l/kept`,
+        `${SITE}/l/removed`,
+      ]);
+
+      // A page deleted has no copy to make: it leaves the list, and its note.
+      await t.nextly.delete({ collection: "landings", id: removed });
+      expect(await failedOnList()).toEqual([`${SITE}/l/kept`]);
+      expect((await copyFailures(seoCtx())).map(each => each.url)).toEqual([
+        `${SITE}/l/kept`,
+      ]);
+      expect(kept).not.toBe(removed);
+
+      // With copies and llms-full.txt off, no copy is made at all.
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          siteName: "Acme",
+          productionAddresses: [SITE],
+          llmsTxt: true,
+          plainTextCopies: false,
+          llmsFullTxt: false,
+        },
+      });
+      expect(await failedOnList()).toEqual([]);
+      expect(await copyFailures(seoCtx())).toEqual([]);
+    });
+
+    it("writes a page built in code into llms-full.txt with its rendered words, or its description where it does not render", async () => {
+      await boot(dialect);
+      await seoMetadata("/pricing", {
+        metadata: { title: "Pricing", description: "Plans and prices." },
+      });
+      renderedSite({
+        "/pricing": html(
+          "Pricing | Acme",
+          "<h1>Pricing</h1><p>Starter is <strong>$9</strong> a month.</p>"
+        ),
+      });
+      expect(await rootFile("llms-full.txt")).toContain(
+        `# Pricing\n\nSource: ${SITE}/pricing\n\nStarter is **$9** a month.\n`
+      );
+      expect(await copyFailures(seoCtx())).toEqual([]);
+    });
+
+    it("gives llms-full.txt a page built in code's description, and notes it, where the page does not render", async () => {
+      await boot(dialect);
+      await seoMetadata("/pricing", {
+        metadata: { title: "Pricing", description: "Plans and prices." },
+      });
+      renderedSite({});
+      expect(await rootFile("llms-full.txt")).toContain(
+        `# Pricing\n\nSource: ${SITE}/pricing\n\nPlans and prices.\n`
+      );
+      // Asked for again where it was found: llms-full.txt itself.
+      expect(
+        (await copyFailures(seoCtx())).map(({ url, reason, retry }) => ({
+          url,
+          reason,
+          retry,
+        }))
+      ).toEqual([
+        {
+          url: `${SITE}/pricing`,
+          reason: "status 404",
+          retry: `${SITE}/llms-full.txt`,
+        },
+      ]);
+    });
+
+    it("names a page built in code as structured data does: the name its route gives it over its title", async () => {
+      await boot(dialect);
+      await seoMetadata("/pricing", {
+        name: "Plans",
+        metadata: {
+          title: "Affordable pricing | Acme",
+          description: "Plans and prices.",
+        },
+      });
+      renderedSite({
+        "/pricing": html(
+          "Affordable pricing | Acme",
+          "<h1>Plans</h1><p>Words.</p>"
+        ),
+      });
+      expect(await llmsTxt()).toContain(`- [Plans](${SITE}/pricing.md)`);
+      expect(await rootFile("llms-full.txt")).toContain(
+        `# Plans\n\nSource: ${SITE}/pricing\n\n`
+      );
+    });
+
+    it("names a page built in code by the name its route gives it in structured data, as structured data does", async () => {
+      await boot(dialect);
+      const call = {
+        structuredDataHints: { name: "Plans" },
+        metadata: { title: "Pricing", description: "Plans and prices." },
+      };
+      // The page's render: its head, then its structured data, which is the
+      // call that tells the name; a later head's call keeps it.
+      await seoMetadata("/pricing", call);
+      await seoStructuredData("/pricing", call);
+      await seoMetadata("/pricing", call);
+      renderedSite({});
+      expect(await llmsTxt()).toContain(`- [Plans](${SITE}/pricing.md)`);
+      expect((await ask("/pricing.md")).body).toContain(
+        "---\n\n# Plans\n\nPlans and prices.\n"
+      );
+    });
+
+    it("lets every page rendered ahead finish, and keeps what it found, where llms-full.txt stops short", async () => {
+      await boot(dialect);
+      await seoMetadata("/guide", { metadata: { title: "Guide" } });
+      await seoMetadata("/pricing", {
+        metadata: { title: "Pricing", description: "Plans and prices." },
+      });
+      // `/pricing` is rendered while `/guide` is written, and answers late.
+      vi.spyOn(globalThis, "fetch").mockImplementation(async input => {
+        const url = new URL(
+          String(input instanceof Request ? input.url : input)
+        );
+        if (url.pathname === "/pricing") {
+          await new Promise(done => setTimeout(done, 200));
+        }
+        return new Response("Gone", { status: 410 });
+      });
+      const route = (path: string): CodeRoute => ({
+        path,
+        source: "built",
+        route: `app${path}/page.tsx`,
+      });
+      const readRules: ReadRules = (ctx, locale) => readSeoRules(ctx, locale);
+      const ctx = seoCtx();
+      // Room for the file's head alone: it stops at its first page.
+      const file = await llmsFullTxtOf(
+        ctx,
+        SITE,
+        {
+          readRules,
+          codeRoutes: async () => [route("/guide"), route("/pricing")],
+        },
+        await readRules(ctx, undefined),
+        120
+      );
+
+      expect(file).toContain("The rest of the site's pages are listed");
+      expect(file).not.toContain(`Source: ${SITE}/pricing`);
+      expect((await copyFailures(ctx)).map(each => each.url).sort()).toEqual([
+        `${SITE}/guide`,
+        `${SITE}/pricing`,
+      ]);
+    });
+
+    it("renders no more pages for llms-full.txt once its time for rendering runs out", async () => {
+      await boot(dialect);
+      await seoMetadata("/pricing", {
+        metadata: { title: "Pricing", description: "Plans and prices." },
+      });
+      const asked = renderedSite({
+        "/pricing": html("Pricing | Acme", "<h1>Pricing</h1><p>Words.</p>"),
+      });
+      // Every reading of the clock is half a minute after the last: the
+      // file's time for rendering has run out before its first page.
+      let now = Date.now();
+      vi.spyOn(Date, "now").mockImplementation(() => (now += 30_000));
+      const full = await rootFile("llms-full.txt");
+      vi.mocked(Date.now).mockRestore();
+
+      expect(full).toContain(
+        `# Pricing\n\nSource: ${SITE}/pricing\n\nPlans and prices.\n`
+      );
+      expect(asked).toEqual([]);
+      expect((await copyFailures(seoCtx())).map(each => each.reason)).toEqual([
+        "llms-full.txt ran out of time before rendering it",
+      ]);
     });
 
     it("copies a page whose fields hold words from them, never rendering it", async () => {

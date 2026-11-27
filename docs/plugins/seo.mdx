@@ -163,8 +163,8 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 | `nosnippet`          | checkbox | No text under the page's link in any Google result                                                                                                                       |
 | `noimageindex`       | checkbox | Asks Google not to index the pictures on the page                                                                                                                        |
 | `unavailableAfter`   | date     | When the page leaves search. After it, the page is served `noindex` and leaves the sitemap and `llms.txt`                                                                |
-| `noarchive`          | checkbox | Asks search engines not to keep a stored copy. Google doesn't use it                                                                                                     |
-| `nocache`            | checkbox | The same request, as some search engines spell it. Google doesn't use it                                                                                                 |
+| `noarchive`          | checkbox | Asks search engines not to keep a stored copy. Google doesn't use it; Bing also keeps the page out of Copilot's answers and AI training                                  |
+| `nocache`            | checkbox | The same request, as some search engines spell it. Google doesn't use it; with it, Bing's Copilot uses only the page's address, title and snippet                        |
 
 <Callout type="warn">
 **Ticking `noindex` does not on its own keep a page out of search results.** The plugin
@@ -275,7 +275,9 @@ The tab shows, in order:
   from, such as "Empty uses the Posts pattern: `{Title} | {Site name}`" or "Empty uses the
   post's excerpt": the content type's pattern, one of the page's own fields, or the site's
   defaults. Typing marks it **Typed for this page**, with one action, **Go back to
-  automatic**, that empties it again.
+  automatic**, that empties it again. While a field is automatic it is empty, so its text
+  can't be selected or edited in place: **Edit the automatic text**, under it, puts that
+  text in the field with the cursor at its end, to change from there.
 - **Advanced**, closed until opened: hiding the page from search, its official address
   (the canonical), a different title and description when shared, the share image, the
   [structured data type](#structured-data), with what the type still lacks, and
@@ -377,6 +379,7 @@ in `optionalDependsOn`.
 | `socialCard`      | `{ siteName, language, xAccount }`                               | none               | The site's name, language and X account on every page's [social card](#social-cards)                             |
 | `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                              |
 | `nextBuildDir`    | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code) |
+| `codeAddresses`   | `{ [route]: params function, or { params, markdown } }`          | none               | Experimental. [Pages built in code no build names](#pages-a-build-cant-name), and the Markdown of their copies   |
 | `gonePage`        | `string`                                                         | none               | Experimental. The site's own page shown with a [Gone (410)](#redirects) answer, such as `"/gone"`                |
 | `urlFor`          | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                                        |
 | `basePath`        | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                                          |
@@ -439,9 +442,18 @@ On a site with several languages, each page is listed once in every language it 
 published in, at the address that language serves it at, such as `/en/blog/hello` and
 `/de/blog/hallo`, each with its [language links](#languages).
 
-While the address record catches up at start, the sitemap answers `503` with
-`Retry-After: 120` and `cache-control: no-store`, so no crawler or cache keeps a list that
-leaves out pages whose addresses are not recorded yet.
+The sitemap is listed from the address record, which the plugin brings up to date at start
+where content was saved while it was absent or a deploy moved addresses. A server that has
+just started waits a few seconds for that check, which on a site already up to date is a
+read or two, so its first request is answered as any other. Where the record is behind, the
+request brings it up to date itself, awaited, for up to five seconds, and a later request
+goes on from where it stopped: on a serverless host, where nothing runs between requests,
+the catch-up still finishes. Until it does, the sitemap is served from the copy kept from its
+last answer, with `Last-Modified` and `cache-control: public, max-age=60`; with no copy kept
+yet, it answers `503` with `Retry-After: 120` and `cache-control: no-store`, so no crawler or
+cache keeps a list that leaves out pages whose addresses are not recorded yet. A copy is kept
+only for the site's own address (`baseUrl` or its production addresses), and only of the
+sitemap, a list of addresses.
 
 Each entry carries:
 
@@ -536,11 +548,46 @@ These are requests. Well-behaved tools follow them; some ignore them. Asking Goo
 use your pages for AI training (`Google-Extended`) also limits what Gemini can use from
 them. Google Search and Bing are not affected by any choice.
 
+`"search"` and `"block"` also write the shared AI-training opt-out, a group of its own that
+names a policy token rather than a crawler:
+
+```txt
+User-agent: __usage_ai-training
+Disallow: /
+```
+
+AI companies that read it don't train on the pages it disallows; `Disallow: /` covers every
+page, the admin and your own rules' paths included. A `User-agent: *` group never applies to
+the token, so it is always named. Anthropic honours it now, and Google and Microsoft plan to in
+2027; it is an individual IETF draft (`draft-kelley-aipref-training-preference-signal`), not yet
+a standard. `"all"` writes nothing for it.
+
 The crawler names come from each provider's own page (OpenAI, Anthropic, Google, Apple, Common
-Crawl, Meta, Amazon, Perplexity, DuckDuckGo and Mistral), last checked on 13 November 2026. Two crawlers are never asked to stay away, because they visit only what the site itself
+Crawl, Meta, Amazon, Perplexity, DuckDuckGo and Mistral), last checked on 27 November 2026. Two crawlers are never asked to stay away, because they visit only what the site itself
 asked for: OpenAI's ads checker `OAI-AdsBot`, which visits only pages submitted as ads in
 ChatGPT, and `Google-CloudVertexBot`, which crawls only for a Vertex AI agent the site's owner
 set up.
+
+Six fetch a page because a person asked for it, and their providers say robots.txt may not
+apply to them: `ChatGPT-User`, `Perplexity-User`, `meta-externalfetcher`, `Amzn-User`,
+`Google-Agent` and `Google-GeminiNotebook`. `"block"` still asks them to stay away; the
+settings screen lists them apart, as "User-triggered: robots.txt may not apply".
+
+#### A Content-Signal line
+
+**Add a Content-Signal line**, a tick under the AI tools choice, off by default, states the
+choice in the group for every crawler:
+
+```txt
+User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
+Allow: /
+```
+
+`"all"` writes `ai-train=yes`, `"search"` `ai-train=no`, and `"block"` `ai-input=no` and
+`ai-train=no`; `search=yes` always. Content-Signal is Cloudflare's proposal, not a standard:
+some scanners and Cloudflare read it, and crawlers that don't know it skip it, so no rule of
+the file changes with it. The tick is saved with your own rules, so it needs no migration.
 
 ### Your own rules
 
@@ -564,12 +611,14 @@ Each line is read as you type, the way crawlers read robots.txt:
   **Block these pages anyway**. The confirmation is kept with the rules' text and the pages it
   named, so it is asked again when either changes. Each such page stays an error on the
   problem list while the rule stands.
-- A misspelt rule (`Dissalow`) is warned about. A line that is not a standard rule, such as
-  `Content-Signal`, is kept with a note that crawlers may ignore it.
+- A misspelt rule (`Dissalow`) is warned about. A line that is not a standard rule is kept with
+  a note that crawlers may ignore it; a `Content-Signal` line's note also points to the tick
+  above, so the site doesn't state its preference twice.
 - A group naming a crawler is followed by that crawler instead of the rules for every crawler,
   Nextly's own included. For an AI crawler, such as `User-agent: GPTBot`, it is joined with the
   group the AI tools choice writes for it, so a page the choice keeps it from opens only with an
-  `Allow` line; the screen says so.
+  `Allow` line; the screen says so. A group naming `__usage_ai-training` joins the opt-out
+  group the choice writes in the same way.
 - A rule needs a `User-agent` line above it, and a line holding a control character is
   refused, so nothing in the box can start a group of its own you did not write.
 
@@ -581,9 +630,15 @@ plugin's rules are not the ones crawlers read; the plugin reads the site's robot
 production address for that header, at most every ten minutes. The rules are a new field of the settings Single: a site that applies its schema with
 migrations runs `nextly migrate:create` and then `nextly migrate` after upgrading.
 
+### Outside robots.txt
+
 robots.txt can't take a site out of Google's AI Overviews or AI Mode without taking it out of
-Google Search: they read pages with Google Search's own crawler. A page's snippet controls
-keep its text out of them.
+Google Search: they read pages with Google Search's own crawler. Search Console's
+**Settings > Search generative AI** setting leaves a site out of AI Overviews, AI Mode and
+Discover's AI features, and Google says it isn't a ranking signal; a page's snippet controls
+keep one page's text out of them. Bing Webmaster Tools sets whether Bing may use your pages
+for AI training and for grounding Copilot's answers, from 15 December 2026. The settings
+screen's **Outside robots.txt** row links to both.
 
 ### The site's address, and why it affects caching
 
@@ -736,13 +791,30 @@ for a few seconds after the last save, so a burst of saves makes one notice, and
 the save has finished: a save never waits for IndexNow, and a working draft's save sends
 nothing.
 
-The site proves it owns its pages with a key served at its root, `/<key>.txt`, answered by the
-site's [Proxy](/docs/plugins/proxy) while IndexNow is on. The key is made the first time a
-notice is sent and kept encrypted in the plugin's settings. Every notice goes to
-`api.indexnow.org` only. A refused key (`403` or `422`), a rate limit (`429`) or an endpoint
-that cannot be reached is shown on the Connections tab and listed on the problem list until a
-later notice goes through; the next change is sent again. Notices name the site's production
-address, so IndexNow needs one saved.
+The site proves it owns its pages with a key served at its root, `/<key>.txt`, while IndexNow
+is on. `withNextly()` in `next.config` rewrites that address to the plugin, so the key needs no
+Proxy; a site with a [Proxy](/docs/plugins/proxy) answers it there too. A site not wrapped in
+`withNextly()` adds the rewrite itself, after its own files:
+
+```ts
+// next.config.ts, in rewrites().afterFiles
+{ source: "/:key([0-9a-f]{32}).txt", destination: "/admin/api/indexnow-key/:key" }
+```
+
+Switching IndexNow on in Settings › Connections first reads the key file at the site's
+production address, as Bing will, making the key if there is none yet. Where the file doesn't
+answer with the key, the switch stays off and says so, with **Check again**: Bing refuses every
+notice from a site whose key it can't read. While IndexNow is on, the row shows **Key file:
+answering ✓** and the file is read again once a day. The key is kept encrypted in the plugin's
+settings and never shown in the admin.
+
+Every notice goes to `api.indexnow.org` only. Its `200` is shown as sent. A `202` means the
+notice was received and the key will be read later, so the plugin reads the key file then too:
+the notice is shown as accepted where the file answers, and as a refused key where it doesn't. A
+refused key (`403` or `422`), a rate limit (`429`) or an endpoint that cannot be reached is
+shown on the Connections tab and listed on the problem list until a later notice goes through;
+the next change is sent again. Notices name the site's production address, so IndexNow needs
+one saved.
 
 The plugin may reach only `api.indexnow.org`, `oauth2.googleapis.com`, `www.googleapis.com`
 and `searchconsole.googleapis.com`, each request given ten seconds and following no redirect.
@@ -789,19 +861,26 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
 
 - **`/llms.txt`** is a plain list of the site's pages, in the format the
   [llms.txt proposal](https://llmstxt.org) sets out: the site's name as the heading, its
-  default description beneath it, and each page as a link under its content type, with the
-  title and description its head carries, worked out from what the public may read of the
-  page; a page the public may not read is listed by its address alone. It lists exactly the pages the sitemap lists, by
+  default description beneath it, and each page as a link under its content type, by its
+  [own name](#a-pages-own-name) and with the description its head carries, worked out from
+  what the public may read of the page; a page the public may not read is listed by its
+  address alone. It lists exactly the pages the sitemap lists, by
   the same rules, so a draft, a hidden page or a page whose canonical points elsewhere is
   never in it. Until it is switched on, `/llms.txt` is not found. Like the sitemap, it
-  answers `503` while the address record catches up at start.
+  waits for the address record at start, and answers `503` while a real catch-up outlasts that
+  wait. No copy of it, or of `llms-full.txt`, is kept to serve meanwhile: they carry pages'
+  titles, descriptions and words, which a kept copy would go on serving after the public may
+  no longer read them.
   **What AI tools should know**, on the same tab, is the site's own words placed under the
   summary, as the proposal allows: plain sentences and lists, a line beginning with `#`
   escaped so it never becomes a heading.
 - **`/llms-full.txt`**, its own switch, served only beside llms.txt and off by default:
-  llms.txt's head, then every page llms.txt lists, in its order, each as its title, its
-  address (`Source:`) and the words of its plain-text copy. A page the public may not read
-  is named by its address alone. It stops before a page that would take it past 5 MB and
+  llms.txt's head, then every page llms.txt lists, in its order, each as its own name, its
+  address (`Source:`) and the words of its plain-text copy. A page built in code is written
+  from the Markdown `codeAddresses` gives for it, else from the page as it renders, four
+  pages at a time and within 20 seconds for the whole file; a page whose words can't be had
+  (it doesn't render, or the file's time ran out) is written with its description and listed
+  under **Problems**. A page the public may not read is named by its address alone. It stops before a page that would take it past 5 MB and
   ends by pointing to llms.txt for the rest. llms.txt links it while it is on. It is not
   part of the llms.txt proposal; some tools ask for it (ChatGPT's fetcher most, by one
   vendor's logs), others read llms.txt and each page's copy instead.
@@ -809,15 +888,21 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
   address with `.md` added: `/blog/hello.md` for `/blog/hello`, and `/index.md` for the
   home page (and for any address ending in a slash; `/index.html.md` answers too). The copy
   starts with front matter naming the page (`title` and `description` as its head carries
-  them, `url`, and `last_updated`, as the sitemap dates it), then the page's title as a
-  heading, then the words of its text, long text, rich text and picture fields, in the
-  order its type declares them, those inside its groups and repeaters included. Rich
+  them, `url`, and `last_updated`, as the sitemap dates it), then the page's own name as a
+  heading, then the words of its fields, in the order its type declares them, those inside
+  its groups and repeaters included. Text holding HTML (a site that colours a word with a
+  `<span>`) is written as the words it shows. Rich
   text's headings, lists, links, quotes, code, tables and images are written as Markdown,
   with the bold, italic, struck-through and code a reader sees inside a line; a picture
   field shows its image with its alt text; every link and image written from the site's
   root is made whole (`https://example.com/pricing`). A field group's rich text is read
-  too. A page's SEO fields, its address, fields holding a choice, a number or a date, and
-  other documents read with it, such as an author, are left out. With copies on,
+  too. A fact that means nothing without its name is written beside its field's label: a
+  choice as `Pricing: Free` (the option's label, not its stored value), a ticked box as
+  `Official: yes`, a text field holding only a web or mail address as
+  `Repository: <https://…>`, chips as a list under the label, and another page a
+  relationship names, where the public may read it, as `Author: Sam`, linked to its address
+  where it has one. A page's SEO fields, its address, numbers, dates, code, JSON and
+  pictures drawn in SVG (an icon, a logo) are left out. With copies on,
   `/llms.txt` links each page's copy, and each listed page's head links its copy with
   `<link rel="alternate" type="text/markdown">`.
 
@@ -845,11 +930,21 @@ default, for one) would otherwise serve Markdown at the page's address. It is ne
 noindex there, so a cache's mistake can never mark the page. A browser never asks for
 Markdown, so it is always served the page.
 
+A copy asked for at its `.md` address on a server that has only just started is still
+answered: the Proxy waits for Nextly's start, and the copy for the address record to catch
+up, each for a few seconds at most. Past that wait, it answers `503` with
+`cache-control: no-store` and a `Retry-After` header, as the sitemap does, rather than the
+not-found page a reader might keep, unless a page of the site is at that address, which is
+then served. Asked for at the page's own address, it is never held: the page is served until
+the copy can be.
+
 No reader is told apart by who it is: neither output looks at the user agent, and every
 reader asking the same way gets the same answer. llms.txt is its own file. A copy is
 answered by the site's [Proxy](/docs/plugins/proxy), so the site needs its `proxy.ts`, as
-[redirects](#redirects) do, and its matcher must reach addresses ending in `.md`: a matcher
-that leaves out every address with a dot in its last part leaves the copies to the site. A
+[redirects](#redirects) do, with the matcher `nextlyProxyMatcher` holds, which reaches
+addresses ending in `.md`: a matcher that leaves out every address with a dot in its last part
+leaves the copies to the site. Until the Proxy has handled a request, Settings keeps the switch
+off and says why, and Problems lists copies switched on but not served. A
 site that ships its own `public/llms.txt` or `app/llms.txt/route.ts` keeps serving it.
 
 A copy is made from the page as it is stored, the fields the site renders, wherever those
@@ -862,10 +957,42 @@ the site names one; it reads its `<main>` (or its body, without the header and f
 its headings, paragraphs, lists, links, quotes, code, tables and described images as
 Markdown; scripts, styles, navigation, forms, dialogs and anything hidden are left out, and an
 image with no alt text is decoration, said nothing of. Such a copy is kept for five minutes.
-Its front matter is the page's head. Where the page does not answer with HTML in ten seconds,
-a page built in code has no copy, and the request is the site's to answer; a page whose fields
-hold only its title keeps the copy made from them. With copies on, llms.txt links these pages'
-copies too, and their head links them.
+Its front matter is the page's head. Where the page does not answer with HTML in ten seconds
+(an error, a redirect, a page over 6 MB, or one with no main content), its copy is its name
+and its description, never an empty page, and **Problems** lists it as **Plain-text copy
+could not be made**, with why (`status 500`, `timed out after 10 s`) and a **Try again** link
+to where it was asked for: its copy, or llms-full.txt. A copy made with the page's words, once
+it renders or once it has stored words of its own, takes the problem off.
+With copies on, llms.txt links these pages' copies too, and their head links them.
+
+### A page's own name
+
+llms.txt, llms-full.txt and each copy's heading list a page by its own name, the one
+structured data names the page by (`WebPage.name`), with no markup and without the site's
+name its title ends with: `Pricing`, not `Pricing | Acme`. It is the name the page's route
+gives it in structured data where it gives one; else the first of the type's title fields
+with a value; else the title the page's route gives its head; else its head's title. A home
+page is named by its whole title, which is the site's own.
+
+A type's title fields are the field the `titleFields` option names for it, then the field its
+admin names its entries by (`admin.useAsTitle`), then `title`, `name` and `heading`. The same
+fields fill `{Title}` in a [title pattern](#title-patterns).
+
+A Single's `title` is Nextly's own unless the Single declares it: filled from its label, such
+as "Blog Page". It names the page only where nothing else does, so a Single with a heading of
+its own, or a route that gives its head a title, is named by that instead. Name the field
+yourself where neither fits:
+
+```ts
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+
+seoPlugin({
+  titleFields: { "single:blog": "hero.heading", posts: "headline" },
+});
+```
+
+Keys are a collection's slug or `single:<slug>`; values a field's name or a dotted path into a
+group. A value that is neither is refused when the site starts.
 
 ## Languages
 
@@ -926,9 +1053,11 @@ declares. Each row shows the title and description search is given for the page,
 comes from (its own value, the page's code, or the pattern it was made from), and its **Status**:
 the most serious problem the [problem list](#problems) holds for the page, else **Not connected**
 for a page built in code whose route doesn't call the plugin, **Hidden** for a page kept out of
-search, or **Good**. **Unconfirmed** marks a page a route with a variable part recorded while the
-server can't read the build's list of the addresses those routes declare
-([why](#pages-built-in-code)). A page no check has reached for you says **Not checked** rather than **Good**:
+search, or **Good**. **Unconfirmed** marks a page a route with a variable part recorded while
+nothing confirms the build being served has it ([why](#pages-built-in-code)). Above the list, a
+line says how many pages built in code the build being served recorded, from which build and
+when (`395 pages built in code from build abc123, recorded 28 Nov 2026, 09:14`); it is a warning
+only where that build recorded none and the server can't read its prerender manifest either. A page no check has reached for you says **Not checked** rather than **Good**:
 no problem listed for it is no evidence of none. **Links** says how many other pages link to the
 page and how many it links to (`3 in · 5 out`), counting each page once, however many links it
 holds, from the links in each page's content in the same language; a dash for a page built in
@@ -1021,8 +1150,9 @@ starts with `{Title} | {Site name}`, using the separator chosen on General. Each
 Content types holds its pattern: the variables the type offers can be clicked in, and an example
 title from the type's newest page updates as you type.
 
-- `{Title}` is the page's own title, `{Site name}` the site's name, and any other variable one of
-  the type's own text or number fields, such as `{Category}`.
+- `{Title}` is the page's own title, read from the type's
+  [title fields](#a-pages-own-name), `{Site name}` the site's name, and any other variable one
+  of the type's own text or number fields, such as `{Category}`.
 - A pattern naming a variable the type has no field for is refused before it can be saved.
 - A pattern whose variables a page has no value for gives way to the next source in the order
   below, rather than leaving a gap in the title.
@@ -1181,6 +1311,8 @@ them in each listed page's `robots` tag; a page hidden from search is served non
     problem list names it until the date is removed.
   - **Controls for other search engines**: `noarchive` and `nocache`, closed away, each its
     own switch and off by default. Google uses neither, and no other setting turns either on.
+    Bing reads both for Copilot: `noarchive` keeps the page out of Copilot's answers and AI
+    training, and `nocache` limits Copilot to the page's address, title and snippet.
 
 A route that sets its own limits in `robots` keeps them where they are stricter: the smaller
 image preview and snippet, and the earlier date, are served.
@@ -1251,7 +1383,59 @@ seoPlugin({
 
 The image's alt text is the media item's own, so give share images alt text in the media library.
 
+Where a route's own metadata states a picture that is one of the page's own pictures (its cover or
+featured image, the same address, or its path at the site's production address), the card states the
+size the media library stores for it, never the size the route wrote. A route that writes every
+picture as `1200 × 630` would otherwise have the head claim a share card's size for a picture of
+another shape, and the check below would never say it is cropped. The route's own alt text for it
+stays, and the media item's fills in where the route gives none.
+
+### Article details on the card
+
+A page described as an article of any kind (Article, Blog post or Technical article, see
+[Structured data](#structured-data)) also gets the article details Open Graph reads, with
+`og:type` `article`:
+
+- `article:published_time`, its date published;
+- `article:modified_time`, the date its content last changed;
+- `article:author`, each author's own page where they have one, else their name;
+- `article:tag`, one per tag.
+
+They come from the same details its structured data states, so the two never give the page
+different dates, authors or tags, and they are stated only where its structured data is, with every
+detail its type needs. A value the route's own `openGraph` sets (`type`, `publishedTime`,
+`modifiedTime`, `authors` or `tags`) is kept as the route set it, and the plugin's is not added
+beside it, so no tag is served twice.
+
 ### Share images of the right size
+
+A page's automatic share image, its own picture (a cover or featured image), is served at the right
+size by itself. Where networks would not show the picture in full (the wrong shape, narrower than
+1200 pixels, or an SVG, AVIF or WebP file), the head names a 1200 × 630 JPEG cut from it around its
+focal point, with the picture's alt text, at the plugin's
+`/admin/api/plugins/@nextlyhq/plugin-seo/share-card/<media id>/<version>.jpg`. The version is taken
+from the picture's stored file and focal point, so a new picture, a replaced file or a moved focal
+point is a new address and a new card, and a card is never served from an earlier picture. A new alt
+text needs no new card: the alt is read from the picture with the page's head.
+
+The card is cut when its address is first fetched, from the picture as the site serves it (on
+`baseUrl` where set), and answered with a year's cache, so the browser and any CDN in front of the
+site keep it. Nothing is stored, and naming the card reads nothing the head does not read already,
+so it costs a page's head nothing. An address naming an earlier version is sent on to the current
+card. The route is public, since networks fetch cards with no session, and holds one client to 60
+cuts a minute. It needs `sharp`, as making a share image does; without it, the picture is served as
+it is and the SEO tab says what keeps it from showing. The address assumes the Nextly handler is
+mounted at `/admin/api`, as a scaffolded project mounts it.
+
+Networks fetch a card as crawlers do, and robots.txt keeps crawlers out of `/admin/`, so the
+plugin's robots.txt allows the cards' path,
+`Allow: /admin/api/plugins/@nextlyhq/plugin-seo/share-card/`; the longer rule wins, so nothing else
+under the admin is opened. A site that serves its own robots.txt, such as with core's
+`nextlyRobots`, adds the same path to its `allow` list.
+
+A share image chosen for the page, or one made with **Make a share image**, is the page's own and is
+never replaced: it is served as it is, and the tab says if networks would crop it. The sitemap lists
+the page's picture itself, not the card.
 
 Networks show a share image in full at 1200 × 630. A picture narrower than 1200 pixels, or whose
 width is not between 1.8 and 2.0 times its height, is cropped or shrunk. `shareImageProblems(ctx,
@@ -1280,11 +1464,18 @@ is set. A picture that storage will not serve to an anonymous reader is refused,
 could load it either. It needs the `sharp` image library, which the media library uses to read image sizes:
 install it with `npm install sharp`.
 
+Under **Advanced**, a card cut from the page's picture is shown as the share image, with what it
+was cut from and that it follows that picture.
+
 In the SEO tab, the **When shared** preview says how the share image fits the card: the size every
 network shows in full, or where a picture of another shape is cut, with a dashed line where the card
-cuts a taller one. Under **Advanced**, a share image of the wrong size offers **Make a share image**.
-Once made, the copy is the page's share image, the row says **Made for this page** and what it was
-made from, and **Go back to automatic** returns to the page's own picture.
+cuts a taller one. Under **Advanced**, a share image of the wrong size offers **Make a share image**, as the
+notice above the fields does. While the copy is being made, both buttons say **Making…** and
+wait, so a second click makes no second copy. Once made, the copy is the page's share image, the
+row says **Made for this page** and what it was made from, and **Go back to automatic** returns to
+the page's own picture. Made from the notice, a note in its place says so, shows the copy, and
+**Show it under Advanced** opens Advanced at its row. A copy that can't be made is said where it
+was asked for, with the route's reason, such as a picture the site does not serve publicly.
 
 ## Structured data
 
@@ -1378,6 +1569,11 @@ holds a date. Where it is empty, as a correction date is on a page never correct
 page's [`<lastmod>`](#the-sitemap-and-robotstxt) date, when its content last changed, rather than
 the row's own `updatedAt`, which every save moves, an SEO-only one included. Map `dateModified`
 (or `datePublished`) to read another field.
+
+A date field that keeps a day alone, as `date()` does by default (`pickerAppearance: "dayOnly"`,
+or `"monthOnly"`), stores the day as midnight in UTC, a time nobody chose. Its value is stated as
+the date alone, `2026-11-26`, which schema.org and Open Graph both read as a date, rather than
+`2026-11-26T00:00:00.000Z`. A field that holds a time of day (`"dayAndTime"`) keeps it.
 
 A detail can also be read from one of the dates every entry holds by itself: `createdAt`, and
 `firstPublishedAt` on a type with drafts and publishing. A type with no publish date of its own can
@@ -1603,14 +1799,17 @@ Redirects answer from the site's Proxy, before the page is served, so a page tha
 
 ```ts
 // src/proxy.ts
-import { createNextlyProxy } from "nextly/runtime";
+import { composeProxy, createNextlyProxy } from "nextly/runtime";
 
 import nextlyConfig from "../nextly.config";
 
-export const proxy = createNextlyProxy(nextlyConfig);
+export const proxy = composeProxy(createNextlyProxy(nextlyConfig));
 
+// The pattern `nextlyProxyMatcher` (from "nextly/runtime") holds, written out.
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|admin(?:/|$)|.*\\.(?:js|mjs|cjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|flac|m4a|mov)$).*)",
+  ],
 };
 ```
 
@@ -1627,42 +1826,38 @@ What the plugin adds to each request is kept off the database:
 - **A page request no redirect is for reads nothing.** Each server reads the addresses redirects hold once, keeps them as a set, and reads them again in the background every 15 seconds. Only a request whose address, or a range above it, a redirect holds reads the database, to choose the redirect.
 - **The staging guard reads only the environment** when `NEXTLY_PRODUCTION_ADDRESSES` is set, which is the setting to use on a production site. Without it, the SEO settings' addresses are read by a server's first request and kept, read again in the background every 30 seconds.
 - **Each server notes once an hour that its Proxy runs**, in the background, which is how the admin knows redirects are served.
+- **On Vercel the Proxy holds one database connection at most**, in its own function, and closes it before the function is suspended: see [On a serverless host](/docs/plugins/proxy#on-a-serverless-host).
 
-Nextly starts on a server's first request through the Proxy and lets requests through as the page alone until it has, so a cold server never waits; redirects apply from the first request after the start. A redirect that must hold from a server's very first request, or a site that needs only a few fixed redirects and a staging `noindex`, is better served by `redirects()` and `headers()` in `next.config`, which run with no function call.
+Nextly starts on a server's first request through the Proxy and lets requests through as the page alone until it has, so a cold server never waits; redirects apply from the first request after the start. The one exception is a page's [plain-text copy](#llmstxt-and-plain-text-copies) at its `.md` address, which no page of the site serves: that request waits for the start. A redirect that must hold from a server's very first request, or a site that needs only a few fixed redirects and a staging `noindex`, is better served by `redirects()` and `headers()` in `next.config`, which run with no function call.
 
 #### A site that already has `middleware.ts`
 
-Next.js 16 refuses to build an app with both `middleware.ts` and `proxy.ts`, and `proxy.ts` cannot run on the Edge runtime. To wire the plugin, rename `middleware.ts` to `proxy.ts`, keep the site's own rules in it, and hand the rest to Nextly. The rules then run on Node.js, which runs everything the Edge runtime does:
+Next.js 16 refuses to build an app with both `middleware.ts` and `proxy.ts`, and `proxy.ts` cannot run on the Edge runtime. To wire the plugin, rename `middleware.ts` to `proxy.ts`, keep the site's own rules in a function, and hand both to `composeProxy`. The rules then run on Node.js, which runs everything the Edge runtime does:
 
 ```ts
 // src/proxy.ts, formerly src/middleware.ts
 import { NextResponse, type NextRequest } from "next/server";
-import { createNextlyProxy } from "nextly/runtime";
+import { composeProxy, createNextlyProxy } from "nextly/runtime";
 
 import nextlyConfig from "../nextly.config";
 
-const nextly = createNextlyProxy(nextlyConfig);
-
-// The site's own rules, as its middleware had them: a response for a
-// request they answer, such as a 410 or a redirect, and nothing otherwise.
-declare function siteRules(request: NextRequest): Response | undefined;
-
-export async function proxy(request: NextRequest) {
-  const own = siteRules(request);
-  if (own !== undefined) return own;
-  // A redirect, or the page with the headers the plugin adds.
-  const response = (await nextly(request)) ?? NextResponse.next();
-  // What the site added to every page goes on whichever response is sent.
+// The site's own rules, as its middleware had them.
+function siteProxy(request: NextRequest) {
+  const response = NextResponse.next();
   response.headers.set("x-frame-options", "DENY");
   return response;
 }
 
+export const proxy = composeProxy(createNextlyProxy(nextlyConfig), siteProxy);
+
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|admin(?:/|$)|.*\\.(?:js|mjs|cjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|flac|m4a|mov)$).*)",
+  ],
 };
 ```
 
-Keep the site's matcher, written out in the file. A request the site's own rules answer is sent as they made it, without the plugin's headers; call `nextly(request)` first instead where the staging guard's `noindex` must reach those responses too. A rewrite the site's rules make (`NextResponse.rewrite`) is answered before the plugin sees the request, as before.
+Nextly's handlers are asked first: a redirect, a page gone, a plain-text copy or the IndexNow key is answered by the plugin, and the site's function is not called for it. Every other request goes to the site's function, and its answer is sent with the plugin's headers added where it set none of its own, its cookies untouched. A site whose rules need more addresses than the matcher above adds its own patterns beside it; the plugin is asked only about the addresses its own pattern matches. [Proxy handlers](/docs/plugins/proxy#a-site-with-a-proxy-of-its-own) has the details.
 
 #### Is the Proxy running?
 
@@ -1800,7 +1995,9 @@ it is published in and at its address there, as its head would be served, for:
   [How wide a title or description is](#how-wide-a-title-or-description-is));
 - a canonical typed for the page that names another address, unless the page is marked as having
   first appeared on another site, which makes that address the one meant;
-- a link in its content to an address of a content type that no page holds;
+- a link in its content (rich text, a Page Builder button block, or a field holding an
+  address, such as `href`, `linkUrl` or `buttonLink`) to an address of a content type that no
+  page holds;
 - a listed page no other page links to (**Page no other page links to**, a notice): search engines
   and visitors find pages by following links, so it is found only through the sitemap. Its home page
   and a page kept out of search are never named. Only the links in pages' content are read, the
@@ -1882,7 +2079,8 @@ problems once you save.
   changed; when the whole site was last checked is kept on the site's own row.
 - **Serving a page runs no check.** What each check found is kept, and the list reads it.
 - **A full check waits for the plugin's record of addresses** to be brought up to date after a
-  start; until then the list asks to check again in a minute, as the sitemap asks crawlers.
+  start, bringing it up to date itself for a few seconds where it is behind; past that the list
+  asks to check again in a minute, as the sitemap asks crawlers.
 
 The list answers each person with the pages they may read, and names a collection only to its
 readers. It is served at
@@ -2122,14 +2320,31 @@ needs (`.next/required-server-files.json`), so a Vercel deployment and a `standa
 carry them with no setting. A deploy that copies only part of `.next` must keep both: without
 the app paths manifest the screen lists no page built in code.
 
+A host may not ship the prerender manifest with the server all the same. So `next build` also
+records, in the site's database, each page built in code it renders whose route calls
+`seoMetadata`, and each address a route wrapped in [`seoStaticParams`](#pages-a-sitemap-lists-while-next-build-runs)
+declares, under the build's own id (`.next/BUILD_ID`, which every Next.js server reads to
+start). The running site lists the pages the build it serves recorded, whatever build files it
+has: a page prerendered once and never rendered again included. Pages lists each with
+**Recorded by build** and the build's id. This needs the database while the site is built, as
+the build's own reads of content do; a build with no database records nothing, and its server
+lists from the prerender manifest alone. The plugin's table for it (`seo__code_addresses`) is
+created by its migration: run `nextly migrate` after upgrading. Rows of other builds are
+dropped once they are 90 days old.
+
+The prerender manifest stays the cross-check where it is there: an address it says answered not
+found is left out, however else it is known, and so is an address no route of the build serves.
+
 Without a readable prerender manifest (missing, not JSON, or listing no pages on a production
-server), the addresses routes with a variable part declared can't be confirmed. The screen then
-shows a banner naming the file, and the server logs one warning saying so. Each route with no
-variable part is still listed. Each address such a route recorded when it last rendered, which
-`next build` does for every page it renders, is listed as **Unconfirmed** when a route of this
-build could serve it, and a recorded address no route could serve is left out. What is set for
-an unconfirmed page still reaches it whenever its route serves it. The sitemap, `llms.txt` and
-the plain-text copies list confirmed pages only, so they leave it out until the file can be read.
+server) and with nothing recorded by the build being served, the addresses routes with a
+variable part declared can't be confirmed. The screen then shows a warning naming the file, and
+the server logs one warning saying so. Each route with no variable part is still listed. Each
+address such a route recorded when it last rendered is listed as **Unconfirmed** when a route of
+this build could serve it, and a recorded address no route could serve is left out. What is set
+for an unconfirmed page still reaches it whenever its route serves it. The sitemap, `llms.txt`
+and the plain-text copies list confirmed pages only, so they leave it out. The Overview's setup
+checklist, on a site whose build has routes with a variable part, says whether those pages are
+listed, and how many pages built in code are.
 
 What is set there reaches the page once its route adds one line, calling `seoMetadata` with
 its address:
@@ -2280,6 +2495,53 @@ A sitemap rendered per request needs none of this: the plugin's own `/sitemap.xm
 per request, as is a site's `app/sitemap.ts` with `export const dynamic = "force-dynamic"`. One
 with a `revalidate` is still first made during the build, so without `seoStaticParams` it lists
 those pages only from its first refresh.
+
+### Pages a build can't name
+
+A route rendered on demand, with no `generateStaticParams`, such as one whose pages come from the
+database, has addresses no build names. State them in the plugin's `codeAddresses` option
+(experimental), by route as Next.js names it, route groups left out, with a function returning
+the route's params as `generateStaticParams` would:
+
+```ts
+seoPlugin({
+  codeAddresses: {
+    "/products/[slug]": async () =>
+      (await products()).map(product => ({ slug: product.slug })),
+  },
+});
+```
+
+Each page the params make is listed in the sitemap, `llms.txt` and Pages (**Stated in the
+plugin's options**), as a page whose route calls `seoMetadata`: the plugin can't see the route,
+so stating it says so. The params are read again at most once a minute. Params missing a part of
+the route list no page, and the server logs a warning naming the route; a function that throws
+lists none of its pages, with a warning, and changes nothing else.
+
+The same option gives the Markdown a page built in code's [plain-text copy](#llmstxt-and-plain-text-copies)
+is made of, for any page its route serves, however the page is listed. Without it the copy is
+made from the page as it renders: its `<main>`, or its body without the shared header and footer,
+which on a page laid out without `<main>` can hold its navigation and sidebars too. With it, the
+copy says only what the site wrote for it:
+
+```ts
+seoPlugin({
+  codeAddresses: {
+    "/docs/[[...slug]]": {
+      // Optional: the build lists the docs it renders.
+      params: () => source.generateParams(),
+      markdown: ({ params }) => docsMarkdown(params.slug),
+    },
+  },
+});
+```
+
+`markdown` is handed the page's `path` and its `params`, and returns the copy's Markdown, or
+nothing to fall back to the rendered page. The plugin adds the front matter (`title`,
+`description`, `url`, `last_updated`) from the page's head, and never renders the page for it, so
+the copy is served, and linked from `llms.txt`, even where the site names no address of its own. A route is checked when the
+site starts: one that isn't from the root, or has a catch-all before its last segment, fails the
+start with a message naming it.
 
 <Callout type="info">
 **The list of routes comes from the build.** The plugin reads the routes and the addresses

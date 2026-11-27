@@ -190,8 +190,27 @@ export type MigrationOutcome =
        * what makes a run exclusive.
        */
       lock: LockObservation;
+      /**
+       * A run that stopped part-way, as the marker records it: killed, its connection dropped, or
+       * stopped on a busy table. Reported only beside a `not-held` lock: a marker mid-run is also
+       * what a run still going looks like, and only nobody holding the lock says it stopped. The
+       * next `--apply` finishes it, working out where it stopped from the names and rows the
+       * database holds.
+       */
+      stopped?: { direction: MigrationDirection; step: number };
     }
-  | { ran: true; direction: MigrationDirection; steps: number };
+  | {
+      ran: true;
+      direction: MigrationDirection;
+      steps: number;
+      /**
+       * Whether a server that was running before the migration must restart to go on serving
+       * field-group content. Running servers find the moved names on their own (their reads and
+       * saves re-resolve a name that has gone), so a completed run answers `false`; the field is
+       * the run's answer so the command reports it rather than a sentence of its own.
+       */
+      restartNeeded: boolean;
+    };
 
 export interface RunMigrationArgs {
   adapter: DrizzleAdapter;
@@ -246,6 +265,12 @@ export interface RunMigrationArgs {
    */
   lockWaitMs?: number;
   /**
+   * How long a writing run's hold on the schema lock lasts before it must be renewed, in seconds.
+   * Absent, the production lease. A run that dies stops renewing, and the next run waits out the
+   * lease, so a test that kills a run shortens it.
+   */
+  leaseSeconds?: number;
+  /**
    * How a writing run's renames wait for a table another database session is using: the bounds
    * and where each try's notice goes. A step that stays busy past them stops the run with
    * `NEXTLY_TABLE_BUSY`, and the next run resumes from it. Absent, from the environment
@@ -261,8 +286,9 @@ export interface RunMigrationArgs {
  * Migrate field-group storage, or report why there was nothing to do.
  *
  * Idempotent: a database already at the target generation returns without
- * touching anything, which is what lets this sit on a path that runs on every
- * deploy rather than needing to be invoked once and remembered.
+ * touching anything, so running it again is safe. It runs only when an operator
+ * runs `migrate:field-groups --apply`: no start, `nextly migrate` or deploy step
+ * reaches it, since it renames tables a running site reads.
  */
 export async function runFieldGroupMigration(
   args: RunMigrationArgs
@@ -345,6 +371,12 @@ export async function runFieldGroupMigration(
   };
 
   /**
+   * The run the last attempt's marker records as stopped part-way, if any: read with the marker,
+   * as the lock is, so every preview exit reports it without being handed it.
+   */
+  let observedStop: { direction: MigrationDirection; step: number } | undefined;
+
+  /**
    * Whether a writer is demonstrably present.
    *
    * 🔴 The retry requires this, and a torn-SHAPED refusal is not enough on its own. Several of
@@ -416,14 +448,25 @@ export async function runFieldGroupMigration(
   const previewOutcome = async (args: {
     renames: readonly { readonly from: string; readonly to: string }[];
     basis: PlanBasis;
-  }): Promise<MigrationOutcome> => ({
-    ran: false,
-    reason: "dry-run",
-    direction,
-    renames: args.renames,
-    basis: args.basis,
-    lock: await observeContention(),
-  });
+  }): Promise<MigrationOutcome> => {
+    const lock = await observeContention();
+    // A marker mid-run is what a run still going looks like too. It reads as stopped only when no
+    // one holds the lock: a claim a dead run left lapses when it is no longer renewed, so `held`
+    // means a run may still be going, and `unknown` says nothing either way.
+    const stopped =
+      observedStop !== undefined && lock.kind === "not-held"
+        ? observedStop
+        : undefined;
+    return {
+      ran: false,
+      reason: "dry-run",
+      direction,
+      renames: args.renames,
+      basis: args.basis,
+      lock,
+      ...(stopped === undefined ? {} : { stopped }),
+    };
+  };
 
   /**
    * What the last attempt saw, so the next one can tell whether anything moved.
@@ -522,6 +565,9 @@ export async function runFieldGroupMigration(
             ...(args.lockWaitMs !== undefined
               ? { waitMs: args.lockWaitMs }
               : {}),
+            ...(args.leaseSeconds !== undefined
+              ? { leaseSeconds: args.leaseSeconds }
+              : {}),
             // The run's own bounds, for a busy SQLite database met while the lock is taken.
             ...(busyTable === undefined
               ? {}
@@ -552,6 +598,10 @@ export async function runFieldGroupMigration(
     // First, so it describes this attempt whatever this attempt goes on to raise.
     observedLock = session.lock;
     const state = await readMigrationState(meta);
+    observedStop =
+      state.status === "migrating"
+        ? { direction: state.direction, step: state.step }
+        : undefined;
     const rows = await readRegistryRows(
       adapter,
       dialect,
@@ -920,7 +970,8 @@ export async function runFieldGroupMigration(
     logger.info(
       `Field group storage migrated ${direction} (${String(steps.length)} steps).`
     );
-    return { ran: true, direction, steps: steps.length };
+    // Running servers re-resolve a moved name on their next read or save, so none must restart.
+    return { ran: true, direction, steps: steps.length, restartNeeded: false };
   };
 
   // 🔴 The RETRY IS OF THE WHOLE SESSION, not of the catalog read, and that is the entire

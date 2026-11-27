@@ -97,7 +97,7 @@ async function createFieldGroup(slug: string, fields: unknown[]) {
 async function rowCounts(t: TestNextly, slugs: string[]): Promise<number[]> {
   const counts: number[] = [];
   for (const slug of slugs) {
-    counts.push((await t.adapter.select(`comp_${slug}`, {})).length);
+    counts.push((await t.adapter.select(`fg_${slug}`, {})).length);
   }
   return counts;
 }

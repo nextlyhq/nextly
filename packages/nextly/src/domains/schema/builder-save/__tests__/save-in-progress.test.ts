@@ -288,6 +288,44 @@ describe("refuseWhileSaveLeftPartWay", () => {
     expect(await check("tenant_b")).toBe("notice");
   });
 
+  // `migrate:check` runs with no database named (CI holds no credentials): it cannot tell whose a
+  // marker is, so a save this host left against any database refuses it; another host's is still
+  // that host's notice.
+  it("with no database named, refuses a marker of this host whatever database it names", async () => {
+    vi.stubEnv("DATABASE_URL", "");
+    try {
+      const unnamed = () => {
+        const notices: string[] = [];
+        return refuseWhileSaveLeftPartWay({
+          projectRoot,
+          notice: line => notices.push(line),
+        }).then(
+          () => notices,
+          (refused: unknown) => ({ refused })
+        );
+      };
+      leaveMarker(
+        "collection-posts-here.json",
+        markerOf("posts", hostname(), databaseIdentity(URL_HERE))
+      );
+      expect(await unnamed()).toEqual({ refused: expect.anything() });
+
+      rmSync(saveInProgressFolder(projectRoot), {
+        recursive: true,
+        force: true,
+      });
+      leaveMarker(
+        "collection-posts-there.json",
+        markerOf("posts", "a-teammates-laptop", databaseIdentity(URL_HERE))
+      );
+      expect(await unnamed()).toEqual([
+        expect.stringContaining("a-teammates-laptop"),
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("refuses a marker that cannot be read, naming the file", async () => {
     leaveMarker("collection-posts.json", "{ not json");
 

@@ -1,7 +1,13 @@
 import { createRequire } from "node:module";
 
 import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
-import { select, text } from "nextly";
+import {
+  fieldGroup,
+  password,
+  select,
+  text,
+  validateCollectionConfig,
+} from "nextly";
 import type { FieldConfig } from "nextly";
 import { describe, expect, it } from "vitest";
 
@@ -101,8 +107,58 @@ describe("seoPlugin", () => {
   it("nests custom fields under the seo group too", () => {
     const custom = [text({ name: "focusKeyword" })];
     const plugin = seoPlugin({ collections: ["pages"], fields: custom });
-    // Custom overrides stay under `seo`, not at the collection's top level.
-    expect(seoGroup(plugin).fields).toBe(custom);
+    // Custom overrides stay under `seo`, not at the collection's top level, each translated
+    // per language where the content is.
+    expect(seoGroup(plugin).fields).toEqual([
+      { ...custom[0], localized: true },
+    ]);
+  });
+
+  // Only a field that can be translated as a whole is marked: a component keeps one structure in
+  // every language, and a password or a virtual field is never translated, so each refuses the
+  // flag at load, and a custom SEO config holding one would stop the site from starting.
+  it("marks translated only the custom fields a language can keep, so the collection still loads", () => {
+    const custom: FieldConfig[] = [
+      text({ name: "focusKeyword" }),
+      fieldGroup({ name: "card", component: "seocard" }),
+      password({ name: "previewKey" }),
+      text({ name: "shareUrl", virtual: true }),
+    ];
+    const group = seoGroup(
+      seoPlugin({ collections: ["pages"], fields: custom })
+    );
+
+    expect(
+      (group.fields as { name: string; localized?: boolean }[]).map(f => [
+        f.name,
+        f.localized,
+      ])
+    ).toEqual([
+      ["focusKeyword", true],
+      ["card", undefined],
+      ["previewKey", undefined],
+      ["shareUrl", undefined],
+    ]);
+    const loaded = validateCollectionConfig({
+      slug: "pages",
+      localized: true,
+      fields: [group as FieldConfig],
+    });
+    expect(loaded.errors).toEqual([]);
+  });
+
+  // A group keeps one structure in every language and is refused at load when marked
+  // translated: the group says nothing, and each field inside says it is translated, so every
+  // language keeps its own title, description and canonical, as before.
+  it("translates each SEO field, and never marks the group itself", () => {
+    const group = seoGroup(seoPlugin({ collections: ["pages"] }));
+    expect(group).not.toHaveProperty("localized");
+    for (const field of group.fields as {
+      name: string;
+      localized?: boolean;
+    }[]) {
+      expect(field.localized, field.name).toBe(true);
+    }
   });
 
   it("serves the sitemap and robots.txt at the site root by default, and the sitemap at its old address too", () => {
@@ -121,6 +177,10 @@ describe("seoPlugin", () => {
       ["GET", "/connections/search-console/callback", undefined, undefined],
       ["POST", "/connections/search-console/disconnect", undefined, undefined],
       ["GET", "/connections/search-console/report", undefined, undefined],
+      // The IndexNow key file at the root, through withNextly's rewrite, and
+      // the Connections tab's check of it.
+      ["GET", "/indexnow-key/:key", "root", true],
+      ["POST", "/connections/indexnow/key-check", undefined, undefined],
       ["GET", "/sitemap.xml", "root", true],
       ["GET", "/robots.txt", "root", true],
       // Registered always; it answers once switched on in the settings.
@@ -128,6 +188,8 @@ describe("seoPlugin", () => {
       ["GET", "/llms-full.txt", "root", true],
       ["GET", "/sitemap.xml", undefined, true],
       ["POST", "/share-image", undefined, undefined],
+      // The cards a page's own picture is served as, fetched by networks.
+      ["GET", "/share-card/:media/:file", undefined, true],
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
       // Which sitemap pages own robots.txt rules being typed would block.
@@ -239,10 +301,13 @@ describe("seoPlugin", () => {
       "/connections/search-console/callback",
       "/connections/search-console/disconnect",
       "/connections/search-console/report",
+      "/indexnow-key/:key",
+      "/connections/indexnow/key-check",
       "/robots.txt",
       "/llms.txt",
       "/llms-full.txt",
       "/share-image",
+      "/share-card/:media/:file",
       "/settings/content-types",
       "/settings/robots-rules-check",
       "/settings/document",
@@ -288,10 +353,13 @@ describe("seoPlugin", () => {
       "/connections/search-console/callback",
       "/connections/search-console/disconnect",
       "/connections/search-console/report",
+      "/indexnow-key/:key",
+      "/connections/indexnow/key-check",
       // Switched on and off in the settings, not by these options.
       "/llms.txt",
       "/llms-full.txt",
       "/share-image",
+      "/share-card/:media/:file",
       "/settings/content-types",
       "/settings/robots-rules-check",
       "/settings/document",

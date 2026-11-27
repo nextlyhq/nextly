@@ -119,10 +119,6 @@
     "count": 1,
     "digests": ["df5c00e784446f44"]
   },
-  "packages/admin/src/hooks/queries/usePublishAllLocales.ts": {
-    "count": 1,
-    "digests": ["0674b55cfffb8080"]
-  },
   "packages/admin/src/lib/builder/to-manifest-entity.test.ts": {
     "count": 1,
     "digests": ["84404c4f29f8bc78"]
@@ -191,18 +187,12 @@
     "digests": ["a532c6cee9e6e280"]
   },
   "packages/nextly/src/cli/commands/migrate-check.ts": {
-    "count": 4,
-    "digests": [
-      "1e69da4e9a7faed6",
-      "ac4363b1f74caedb",
-      "b0fd26dbfaf30d0a",
-      "f373ffe8aadde1d6"
-    ]
+    "count": 3,
+    "digests": ["1e69da4e9a7faed6", "ac4363b1f74caedb", "b0fd26dbfaf30d0a"]
   },
   "packages/nextly/src/cli/commands/migrate-create.ts": {
-    "count": 6,
+    "count": 5,
     "digests": [
-      "18f2238cc394bca5",
       "3225700ed3a040a4",
       "73fba5789fd7e691",
       "8b4c17691b8fc012",

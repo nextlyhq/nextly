@@ -42,6 +42,10 @@ import {
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import {
+  refuseFieldGroupFieldsChangedInHost,
+  withFieldGroupCopiesJudged,
+} from "../../domains/field-groups/field-group-fields-read-only";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import {
   appLanguageOrder,
@@ -54,7 +58,10 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
-import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
+import {
+  storesPerLanguage,
+  translationLayoutChange,
+} from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
 import {
@@ -62,6 +69,7 @@ import {
   landingPush,
   nextSteps,
 } from "../../domains/schema/builder-save/landing-push";
+import { settleKeptPerLanguage } from "../../domains/schema/builder-save/per-language-answers";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
   renamedFieldsOf,
@@ -108,6 +116,7 @@ import {
   schemaDraftSplit,
 } from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
+import { isConfigOwnedSource } from "../../domains/webhooks/recording-provenance";
 import { shownWorkflowSummary } from "../../domains/workflows/stage-presentation";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
@@ -144,10 +153,16 @@ import {
   builderSchemaPush,
   leavingSettingsStep,
   pushAndReconcileCompanion,
+  refuseBuilderCompanionTakingOthersElements,
   reconcileBuilderCompanion,
   refuseRefusedLeavingSettings,
   type BuilderCompanionReconcile,
 } from "../helpers/builder-schema-push";
+import {
+  confirmedDeletionsAnswer,
+  readConfirmedDeletions,
+  withCountedDrops,
+} from "../helpers/confirmed-deletions";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -159,12 +174,14 @@ import {
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
+import { movesRefusedFirst } from "../helpers/readable-field-owners";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
 import {
   offsetPaginationToMeta,
   unwrapServiceResult,
 } from "../helpers/service-envelope";
+import { respondTypeChangeTargets } from "../helpers/type-change-targets";
 import {
   parseRichTextFormat,
   parseRichTextStyles,
@@ -189,6 +206,10 @@ import { PublishPartsBody } from "./publish-parts-body";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import { assertSingleTablesUnowned } from "./single-table-family";
+import {
+  respondKeepCurrent,
+  respondSourceChange,
+} from "./source-review-handlers";
 import {
   assertLabelRequestValid,
   autosaveForDocument,
@@ -367,7 +388,8 @@ function injectSingleDefaultFields<T extends SingleWithFields | null>(
   single: T
 ): T {
   if (!single) return single;
-  const isCodeFirst = single.source === "code" || single.source === "built-in";
+  const isCodeFirst =
+    isConfigOwnedSource(single.source) || single.source === "built-in";
   if (isCodeFirst) return single;
   const baseFields = single.fields ?? [];
   // Filter out any existing title/slug fields to prevent duplicates.
@@ -909,33 +931,38 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // the service persists the intent, applies the DDL, provisions the localized companion
       // and records the outcome. Splitting them here is what left a created table with no row
       // describing it whenever the process stopped in between.
+      // A field group's fields are changed only in its own editor, a new Single's too: the
+      // service judges the save's copies under its schema lock.
+      const request: Parameters<typeof svc.metadata.createSingle>[0] = {
+        slug: b.slug,
+        label: b.label,
+        tableName,
+        description: b.description,
+        fields: b.fields,
+        admin: b.admin,
+        source: "ui",
+        locked: false,
+        // Forward the Draft/Published flag so admin-created Singles that
+        // opt in light up the Save Draft / Publish split.
+        status: b.status === true,
+        // i18n: persist the Internationalization flag so the single reads/writes per language.
+        localized: b.localized === true,
+        // Persist version history from the create payload; without it a Single
+        // created with the switch on is written unversioned and the switch
+        // reads as off the moment the editor loads. Retention rides along.
+        versions: resolveBuilderVersions(b.versions, b.versionsMaxPerDoc),
+        // Cache-revalidation opt-out from the create payload (null = standard
+        // tags, { disable: true } = off), so the write path reads it back.
+        revalidate: resolveBuilderRevalidate(b.revalidate),
+        // Webhook recording opt-out from the create payload (null = record,
+        // { record: false } = off), so boot reads it back after a restart.
+        webhooks: resolveBuilderWebhooks(b.webhooks),
+        schemaHash,
+      };
       const { record: single, migrationStatus } =
-        await svc.metadata.createSingle({
-          slug: b.slug,
-          label: b.label,
-          tableName,
-          description: b.description,
-          fields: b.fields,
-          admin: b.admin,
-          source: "ui",
-          locked: false,
-          // Forward the Draft/Published flag so admin-created Singles that
-          // opt in light up the Save Draft / Publish split.
-          status: b.status === true,
-          // i18n: persist the Internationalization flag so the single reads/writes per language.
-          localized: b.localized === true,
-          // Persist version history from the create payload; without it a Single
-          // created with the switch on is written unversioned and the switch
-          // reads as off the moment the editor loads. Retention rides along.
-          versions: resolveBuilderVersions(b.versions, b.versionsMaxPerDoc),
-          // Cache-revalidation opt-out from the create payload (null = standard
-          // tags, { disable: true } = off), so the write path reads it back.
-          revalidate: resolveBuilderRevalidate(b.revalidate),
-          // Webhook recording opt-out from the create payload (null = record,
-          // { record: false } = off), so boot reads it back after a restart.
-          webhooks: resolveBuilderWebhooks(b.webhooks),
-          schemaHash,
-        });
+        await withFieldGroupCopiesJudged(getComponentRegistryFromDI(), () =>
+          svc.metadata.createSingle(request)
+        );
 
       // Auto-seed read/update permissions for the new single.
       if (container.has("permissionSeedService")) {
@@ -1140,6 +1167,23 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   publishSingleParts: singlePartsLifecycle("publish", "Published."),
   unpublishSingleParts: singlePartsLifecycle("unpublish", "Unpublished."),
 
+  getSingleSourceChange: {
+    execute: async (_svc, p, _body, request) =>
+      respondSourceChange(
+        { kind: "single", slug: requireParam(p, "slug", "Single slug") },
+        p,
+        request
+      ),
+  },
+  keepSingleTranslation: {
+    execute: async (_svc, p, body, request) =>
+      respondKeepCurrent(
+        { kind: "single", slug: requireParam(p, "slug", "Single slug") },
+        body,
+        request
+      ),
+  },
+
   previewPublishAllSingleLocales: {
     // What publishing every language would do, language by language, without
     // doing it. Asked as the publish is: the service judges the publish
@@ -1277,6 +1321,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             enrichedData as unknown as SingleWithFields
           ),
           ...draftSplitResponseFields(draftSplit),
+          // Which of `title` and `slug` are the author's own fields, so the
+          // editor saves them as stored or typed; the others it pins to the
+          // Single's label and slug.
+          ownIdentityFields: svc.registry.getOwnIdentityFields(slug),
           // The workflow that holds this Single's publishing, so the editor
           // knows whether a review state is coming before it reads one: one
           // with none publishes without waiting. `null` where none is
@@ -1389,31 +1437,54 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The schema change and the registry row are written by one service call, because a lock has
       // to cover both and cannot do that from here: the DDL would already have run by the time a
       // lock taken inside the registry service was acquired.
-      const saved = await withFieldRenameAnswers(renames, () =>
-        svc.metadata.updateSingleSchema({
-          slug,
-          existing,
-          updateData,
-          fields: schemaFields,
-          isLocalized,
-          wasLocalized,
-          // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
-          // the record inside its exclusion and needs to tell an explicit `localized: false` from
-          // this handler having filled in the value it read.
-          localizedRequested: b.localized !== undefined,
-          hasStatus,
-          wasStatus,
-          // Whether the request SET the toggle, which is not the same as changing it: saving it at
-          // its current value still reaches the companion, and that is what repairs a localized
-          // single whose companion `_status` was never provisioned.
-          statusRequested: b.status !== undefined,
-        })
+      // A field group's fields are changed only in its own editor: the service judges the save's
+      // copies under its schema lock.
+      const saved = await withFieldGroupCopiesJudged(
+        getComponentRegistryFromDI(),
+        () =>
+          withFieldRenameAnswers(renames, () =>
+            svc.metadata.updateSingleSchema({
+              slug,
+              existing,
+              updateData,
+              fields: schemaFields,
+              isLocalized,
+              wasLocalized,
+              // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
+              // the record inside its exclusion and needs to tell an explicit `localized: false` from
+              // this handler having filled in the value it read.
+              localizedRequested: b.localized !== undefined,
+              hasStatus,
+              wasStatus,
+              // Whether the request SET the toggle, which is not the same as changing it: saving it at
+              // its current value still reaches the companion, and that is what repairs a localized
+              // single whose companion `_status` was never provisioned.
+              statusRequested: b.status !== undefined,
+            })
+          )
       );
 
       return respondMutation(schemaSaveAnswer(slug, saved), saved.record);
     },
   },
 
+  // The type picker's answer for a saved field of a Single, as a collection's (`respondTypeChangeTargets`).
+  singleTypeChangeTargets: {
+    execute: async (svc, p, body) => {
+      const slug = requireParam(p, "slug", "Single slug");
+      const single = await svc.registry.getSingleBySlug(slug);
+      if (!single) throw NextlyError.notFound({ message: "Single not found" });
+      refuseChangeDefinedInCode(single, "Single", slug);
+      // A Single's table is made by the same builder as a collection's. Its save is applied by its
+      // push, which retypes no translations column.
+      return respondTypeChangeTargets({
+        fields: (single.fields ?? []) as unknown as FieldDefinition[],
+        body,
+        builtBy: "collection",
+        layout: { perLanguage: storesPerLanguage(single), fileRetypes: false },
+      });
+    },
+  },
   previewSingleSchemaChanges: {
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");
@@ -1434,6 +1505,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         lifecycleEnabled:
           single.status === true || readRequestedLifecycle(body) === true,
       });
+      // A field group's fields are changed only in its own editor: the review refuses what the
+      // apply would.
+      await refuseFieldGroupFieldsChangedInHost(
+        sentFields,
+        getComponentRegistryFromDI(),
+        () => single.fields
+      );
       // Only named fields at the top level, as every road that saves a Single takes them.
       assertTopLevelFieldsNamed(sentFields);
       // Planned as the save will write them: an earlier-shaped relationship in its stored shape.
@@ -1601,6 +1679,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
       if (!sentFields) throw new Error("fields is required in request body");
+      // The counts of removed fields' values the review showed and the person confirmed, compared
+      // by the save just before it deletes them; refused here where malformed.
+      const confirmedDeletions = readConfirmedDeletions(body);
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
@@ -1640,6 +1721,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           const single = await svc.registry.getSingleForWrite(slug);
           if (!single) throw new Error("Single not found");
           refuseChangeDefinedInCode(single, "Single", slug);
+          // A field group's fields are changed only in its own editor: a save that changes them
+          // here is refused, compared with each field group as stored under the lock, so an edit
+          // in its own editor cannot land between the comparison and this write.
+          await refuseFieldGroupFieldsChangedInHost(
+            sentFields,
+            getComponentRegistryFromDI(),
+            () => single.fields
+          );
           // An earlier-shaped relationship the editor read is written back in its stored shape,
           // through a rename the save makes, against the row this save is checked and written
           // against.
@@ -1695,7 +1784,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             hasStatus: single.status === true,
           });
           // The Single's row given each new field's stated default (`dialogRowAnswers`).
-          const { fileAnswers, legacyBundle } = dialogRowAnswers({
+          const { fileAnswers, legacyBundle: answered } = dialogRowAnswers({
             single,
             fields: fields as unknown as FieldDefinition[],
             renameResolutions,
@@ -1704,6 +1793,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             dialect: adapter.dialect,
             translatedAfter: layout.isStored,
           });
+          // A removed field whose count the person confirmed is its drop confirmed, as on a
+          // collection's save, unless the field answers itself.
+          const legacyBundle = withCountedDrops(
+            tableName,
+            answered,
+            confirmedDeletions
+          );
           // A precondition, so before anything changes: turning translation off drops each
           // language's own publish state, which loses nothing only where it is the entry's.
           if (layout.languagesMustAgreeWithEntry) {
@@ -1778,6 +1874,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             moves,
             writes: builderSave !== undefined,
             pushReason: () => entityPushReason(builderSave, pushes),
+            refusedFirst: travelling =>
+              movesRefusedFirst(adapter, travelling, {
+                before: single.fields as unknown as FieldDefinition[],
+                after: fields as unknown as FieldDefinition[],
+                localized: layout.isStored || layout.wasStored,
+              }),
           });
           // A field leaving translation has preconditions of its own, asked before the push alters
           // anything.
@@ -1859,7 +1961,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               fields: {
                 tableName,
                 builtBy: "collection",
-                oldFields: (single.fields ?? []) as unknown as FieldDefinition[],
+                oldFields: (single.fields ??
+                  []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
                 wasLocalized,
                 isLocalized,
@@ -1971,9 +2074,38 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               );
             }
           };
+          // What the companion reconcile would drop of another owner's, refused before either road runs.
+          await refuseBuilderCompanionTakingOthersElements("single", companion);
+          // Once the translations table is in step, the Single's fields kept per language are
+          // settled as the save's file settles them (`settleKeptPerLanguage`): each new field's
+          // stated default in the document's default-language row, and the person's answer for a
+          // field made required.
+          const pushThenSettle = async () => {
+            const pushed = await pushAndReconcileCompanion(
+              push,
+              desired,
+              "single",
+              companion
+            );
+            await settleKeptPerLanguage(
+              { db: adapter.getDrizzle(), dialect, entity: "single" },
+              {
+                tableName,
+                localized: isLocalized,
+                oldFields: single.fields,
+                newFields: fields as unknown as FieldDefinition[],
+                eventResolutions,
+                legacy: legacyBundle,
+                fills: undefined,
+                rowFills: fileAnswers.rowFills,
+                renameResolutions,
+              }
+            );
+            return pushed;
+          };
           const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
-            () => pushAndReconcileCompanion(push, desired, "single", companion),
+            pushThenSettle,
             {
               kind: "single",
               slug,
@@ -1991,6 +2123,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 ...(acknowledgedConversions === undefined
                   ? {}
                   : { acknowledgedConversions }),
+                ...confirmedDeletionsAnswer(confirmedDeletions),
               },
               // Its junction tables and relationship keys, which the writer does not derive itself.
               ...(builderSave === undefined

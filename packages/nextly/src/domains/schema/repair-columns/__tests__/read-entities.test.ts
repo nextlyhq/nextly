@@ -17,6 +17,8 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { toCliError } from "../../../../cli/errors";
+import { NextlyError } from "../../../../errors";
 import { readRepairEntities } from "../read-entities";
 
 /** Every read and existence check of a file, by path, as the modules under test make them. */
@@ -166,47 +168,153 @@ describe("readRepairEntities: which registries are read", () => {
   });
 });
 
+/** The error `run` stops on, as the command ends with it. */
+async function stopOf(run: Promise<unknown>) {
+  const error: unknown = await run.then(
+    () => {
+      throw new Error("expected the run to stop");
+    },
+    (reason: unknown) => reason
+  );
+  const { code, what, why, next } = toCliError(error);
+  return { code, what, why, next };
+}
+
+const row = (slug: string, over: Record<string, unknown> = {}) => ({
+  slug,
+  tableName: `dc_${slug}`,
+  fields: [],
+  source: "ui",
+  ...over,
+});
+
 describe("readRepairEntities: a registry row that names no table", () => {
   it.each([undefined, "", 7])(
     "stops the run, naming the row (table name %s)",
     async tableName => {
-      registry.collections = [
-        { slug: "rcposts", tableName: "dc_rcposts", fields: [], source: "ui" },
-        { slug: "rcbroken", tableName, fields: [], source: "ui" },
-      ];
-      registry.singles = [];
-      registry.fieldGroups = [];
-      await expect(read(["dynamic_collections"])).rejects.toMatchObject({
-        code: "CONFIGURATION_ERROR",
-        logMessage: expect.stringContaining(
-          'collection registry row "rcbroken"'
-        ) as unknown,
+      registry.collections = [row("rcposts"), row("rcbroken", { tableName })];
+      expect(await stopOf(read(["dynamic_collections"]))).toEqual({
+        code: "REGISTRY_ROW_WITHOUT_TABLE",
+        what: 'The registry row of the collection "rcbroken" names no table.',
+        why: "Its `table_name` in `dynamic_collections` is empty, so where the collection's columns are cannot be known.",
+        next: "Set the row's `table_name` to the collection's table, then run `nextly repair-columns` again.",
       });
     }
   );
+
+  it.each(["dynamic_components", "dynamic_field_groups"])(
+    "names the registry the database has (%s)",
+    async table => {
+      registry.fieldGroups = [row("card", { tableName: "" })];
+      expect((await stopOf(read([table]))).why).toContain(`\`${table}\``);
+    }
+  );
+
+  it("names every such row, collections first, then Singles, then field groups", async () => {
+    registry.collections = [
+      row("posts", { tableName: "" }),
+      row("pages", { tableName: "" }),
+    ];
+    registry.singles = [row("home", { tableName: "" })];
+    registry.fieldGroups = [row("card", { tableName: "" })];
+    expect(
+      await stopOf(
+        read(["dynamic_collections", "dynamic_singles", "dynamic_components"])
+      )
+    ).toEqual({
+      code: "REGISTRY_ROW_WITHOUT_TABLE",
+      what: 'The registry rows of the collections "posts" and "pages", the Single "home" and the field group "card" name no table.',
+      why: "Their `table_name` in `dynamic_collections`, `dynamic_singles` and `dynamic_components` is empty, so where their columns are cannot be known.",
+      next: "Set each row's `table_name` to its table, then run `nextly repair-columns` again.",
+    });
+  });
+
+  it("comes before a diverged row, whichever registry holds each", async () => {
+    registry.collections = [];
+    registry.singles = [row("home", { tableName: "" })];
+    registry.fieldGroups = [row("card", { migrationStatus: "diverged" })];
+    expect(
+      await stopOf(read(["dynamic_singles", "dynamic_components"]))
+    ).toMatchObject({
+      code: "REGISTRY_ROW_WITHOUT_TABLE",
+      what: 'The registry row of the Single "home" names no table.',
+    });
+  });
 });
 
 describe("readRepairEntities: a registry row marked as diverged", () => {
-  it("stops the run, naming the row and the state, rather than read it as never applied", async () => {
-    // Its tables were changed and its stored definition was not: reporting its columns as
-    // pending a migration would send the owner to repeat the change the state forbids.
-    registry.collections = [];
-    registry.singles = [];
-    registry.fieldGroups = [
-      {
-        slug: "card",
-        tableName: "comp_card",
-        fields: [],
-        source: "ui",
-        migrationStatus: "diverged",
-      },
-    ];
-    await expect(read(["dynamic_field_groups"])).rejects.toMatchObject({
-      code: "CONFIGURATION_ERROR",
-      logMessage: expect.stringMatching(
-        /field group registry row "card".*diverged/
-      ) as unknown,
+  // Its tables were changed and its stored definition was not: reporting its columns as pending a
+  // migration would send the owner to repeat the change the state forbids.
+  const diverged = (slug: string, over: Record<string, unknown> = {}) =>
+    row(slug, { migrationStatus: "diverged", locked: false, ...over });
+
+  it("stops the run at a field group the admin may repair, and says how", async () => {
+    registry.fieldGroups = [diverged("card")];
+    expect(await stopOf(read(["dynamic_field_groups"]))).toEqual({
+      code: "REGISTRY_ROW_DIVERGED",
+      what: 'The registry row of the field group "card" is marked as diverged.',
+      why: "Its tables were changed and its stored definition still describes the previous shape, so what the database last had applied cannot be known.",
+      next: 'In development, open Field Groups in the admin and choose "Repair definition" on "card". Then run `nextly repair-columns` again.',
     });
+  });
+
+  it("sends a field group locked to code to the sync, which the admin's repair refuses", async () => {
+    registry.fieldGroups = [diverged("card", { source: "code", locked: true })];
+    const { next } = await stopOf(read(["dynamic_components"]));
+    expect(next).toBe(
+      'In development, run `nextly db:sync` or start the app, which repairs "card" where the configuration declares it. Then run `nextly repair-columns` again.'
+    );
+  });
+
+  it.each([
+    [
+      "code, its row written before the flag",
+      { source: "code", locked: false },
+    ],
+    ["a plugin", { source: "plugin:forms", locked: false }],
+  ])("sends a field group owned by %s to the sync", async (_owner, owned) => {
+    registry.fieldGroups = [diverged("card", owned)];
+    expect((await stopOf(read(["dynamic_components"]))).next).toContain(
+      "`nextly db:sync`"
+    );
+  });
+
+  it("offers neither for a collection or a Single, which have no repair", async () => {
+    registry.collections = [diverged("posts")];
+    expect((await stopOf(read(["dynamic_collections"]))).next).toBe(
+      'Make the stored definition of the collection "posts" match its tables and set its `migration_status` to `synced`. Then run `nextly repair-columns` again.'
+    );
+  });
+
+  it("tells a collection and a Single of one slug apart", async () => {
+    registry.collections = [diverged("home")];
+    registry.singles = [diverged("home", { tableName: "single_home" })];
+    expect(
+      (await stopOf(read(["dynamic_collections", "dynamic_singles"]))).next
+    ).toBe(
+      'Make the stored definitions of the collection "home" and the Single "home" match their tables and set their `migration_status` to `synced`. Then run `nextly repair-columns` again.'
+    );
+  });
+
+  it("names every such row, each with its own next step", async () => {
+    registry.fieldGroups = [
+      diverged("card"),
+      diverged("hero"),
+      diverged("promo", { source: "code", locked: true }),
+    ];
+    expect(await stopOf(read(["dynamic_components"]))).toEqual({
+      code: "REGISTRY_ROW_DIVERGED",
+      what: 'The registry rows of the field groups "card", "hero" and "promo" are marked as diverged.',
+      why: "Their tables were changed and their stored definitions still describe the previous shape, so what the database last had applied cannot be known.",
+      next: 'In development, open Field Groups in the admin and choose "Repair definition" on "card" and "hero". In development, run `nextly db:sync` or start the app, which repairs "promo" where the configuration declares it. Then run `nextly repair-columns` again.',
+    });
+  });
+});
+
+describe("a configuration error this command does not raise", () => {
+  it("is not read as one of its stops", () => {
+    const error = NextlyError.configuration({ logMessage: "No config." });
+    expect(toCliError(error).code).toBe("UNEXPECTED_ERROR");
   });
 });
 
@@ -349,6 +457,29 @@ describe("readRepairEntities: Builder entities as configured", () => {
     await expect(read(["dynamic_collections"])).rejects.toMatchObject({
       code: "NEXTLY_UI_SCHEMA_INVALID",
     });
+  });
+});
+
+describe("readRepairEntities: a field group's table", () => {
+  // A configuration names no field group's table: the registry does, under the names the site is on.
+  it("is the one the registry stores it in, on a site on the current names", async () => {
+    registry.fieldGroups = [
+      {
+        slug: "card",
+        tableName: "fg_card",
+        fields: [{ name: "heading", type: "text" }],
+        source: "code",
+        migrationStatus: "synced",
+      },
+    ];
+    const [card] = await read(["dynamic_field_groups"], {
+      fieldGroups: [
+        { slug: "card", fields: [{ name: "heading", type: "text" }] },
+      ],
+    });
+    expect(card).toMatchObject({ slug: "card", table: "fg_card" });
+    // Not as an entity the next migration moves to another table.
+    expect(JSON.stringify(card)).not.toContain("comp_card");
   });
 });
 

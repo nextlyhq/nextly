@@ -338,6 +338,50 @@ describe("what the plugin contributes, and when", () => {
   });
 });
 
+describe("the tool list's order", () => {
+  /** The tool names one freshly built endpoint lists, in the order it lists them. */
+  async function listedByAFreshBuild(): Promise<string[]> {
+    const response = await routeFor("POST").handler(
+      new Request(ENDPOINT, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          host: "cms.example.com",
+          "mcp-protocol-version": "2025-11-25",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      }),
+      SOME_CALLER
+    );
+    // The answer is one JSON body or one SSE frame, depending on how the
+    // library chose to stream it; either way it carries one JSON-RPC message.
+    const text = await response.text();
+    const frame = text.split("\n").find(line => line.startsWith("data: "));
+    const body = JSON.parse(frame ? frame.slice(6) : text) as {
+      result?: { tools?: { name: string }[] };
+    };
+    return (body.result?.tools ?? []).map(tool => tool.name);
+  }
+
+  it("is the same fixed order on two separate builds", async () => {
+    // Each call builds the plugin, its routes and its handler anew, as two
+    // processes of one install would. An agent and a tool-list snapshot both
+    // compare lists position by position, so the order is part of the answer.
+    const first = await listedByAFreshBuild();
+    const second = await listedByAFreshBuild();
+
+    expect(first).toEqual([
+      "get_initial_context",
+      "get_workflow",
+      "get_review_state",
+      "list_waiting_for_review",
+      "submit_for_review",
+    ]);
+    expect(second).toEqual(first);
+  });
+});
+
 describe("a protocol server is only ever built for a caller", () => {
   const OPTIONS = {
     allowedHosts: ["cms.example.com"],

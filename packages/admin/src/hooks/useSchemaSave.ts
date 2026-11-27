@@ -40,6 +40,7 @@ import {
   withDecidedRenames,
 } from "@admin/lib/builder/rename-answers";
 import type { SettingChange } from "@admin/lib/builder/settings-changes";
+import { refusedTypeChangesOf } from "@admin/lib/builder/type-change-refusals";
 import {
   type ConfirmedDeletion,
   confirmedDeletionsOf,
@@ -205,9 +206,9 @@ export interface UseSchemaSaveReturn {
     renameResolutions: SchemaRenameResolution[]
   ) => void;
   /**
-   * The server's refusals of the draft's moves, by field id, each with its message as written
-   * (`refusedMovesOf`): shown at each field's row while the draft is the one the server judged.
-   * Empty once the fields, or the settings sent with them, change.
+   * The server's refusals of the draft's moves and type changes, by field id, each with its message
+   * as written (`refusedMovesOf`, `refusedTypeChangesOf`): shown at each field's row while the draft
+   * is the one the server judged. Empty once the fields, or the settings sent with them, change.
    */
   refusedMoves: ReadonlyMap<string, string>;
 }
@@ -219,9 +220,10 @@ const NO_REFUSED_MOVES: ReadonlyMap<string, string> = new Map();
 const NO_PENDING_CHANGES: readonly PendingChange[] = [];
 
 /**
- * The server's refusals of a draft's moves (`refusedMovesOf`), kept with the draft and the
- * settings they judged: an edit, an undo or a settings change since is judged afresh by the next
- * save, so the refusals mark no field once the draft is another.
+ * The server's refusals of a draft's moves (`refusedMovesOf`) and of its type changes
+ * (`refusedTypeChangesOf`), kept with the draft and the settings they judged: an edit, an undo or a
+ * settings change since is judged afresh by the next save, so the refusals mark no field once the
+ * draft is another. A field refused for both shows its move's.
  */
 function useMoveRefusals(
   moves: readonly DraftMove[],
@@ -240,7 +242,10 @@ function useMoveRefusals(
   } | null>(null);
   const markRefusedMoves = useCallback(
     (err: unknown) => {
-      const byField = refusedMovesOf(err, moves);
+      const byField = new Map([
+        ...refusedTypeChangesOf(err, pendingChanges),
+        ...refusedMovesOf(err, moves),
+      ]);
       setRefused(
         byField.size === 0
           ? null

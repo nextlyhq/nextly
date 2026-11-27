@@ -35,6 +35,7 @@ import { runFileMigrations } from "../../../../cli/commands/migrate";
 import { createLogger } from "../../../../cli/utils/logger";
 import { writeAppliedFieldsRow } from "../../../../dispatcher/helpers/applied-fields-row";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import { runBootTimeApplyIfDev } from "../../../../init/boot-apply";
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -572,6 +573,71 @@ describe.each(getConfiguredTestDialects())(
 
       expect(settled.map(s => s.outcome)).toEqual(["left"]);
       expect(await recordRow(t), "the record stays").toBeDefined();
+      expect(sqlFiles(), "the save's files stay").toEqual(
+        [...filesBefore, ...written].sort()
+      );
+    }, 300_000);
+
+    // The same for a field group, whose table is under the name the site stores it in (`fg_<slug>`
+    // on a new site). Judged under the legacy name, no table was judged, and the stopped save was
+    // undone over a translations table that had moved on.
+    it("keeps a field group's record whose translations table stands at neither end", async () => {
+      const GROUP = "settle_card";
+      const GROUP_KEY = `builder-save-in-progress:fieldGroup:${GROUP}`;
+      const t = await boot();
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: GROUP,
+          label: GROUP,
+          localized: true,
+          fields: [text("heading", { localized: true })],
+        }
+      );
+      expect(
+        await t.adapter.tableExists(`fg_${GROUP}_locales`),
+        "the translations table"
+      ).toBe(true);
+      const filesBefore = sqlFiles();
+      const [row] = await t.adapter.select<{ schemaVersion: unknown }>(
+        "dynamic_field_groups",
+        { where: { and: [{ column: "slug", op: "=", value: GROUP }] } }
+      );
+      const reached = new Promise<void>(resolve => {
+        kill.reached = resolve;
+      });
+      kill.at = point => point.startsWith("unit:");
+      stopped = dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: GROUP },
+        {
+          fields: translatedAdd,
+          localized: true,
+          confirmed: true,
+          schemaVersion: Number(row?.schemaVersion ?? 1),
+        }
+      ).catch((error: unknown) => error);
+      const outcome = await Promise.race([
+        reached.then(() => "reached"),
+        stopped.then(answer => `the save ended first: ${String(answer)}`),
+      ]);
+      expect(outcome, "the save never reached the kill point").toBe("reached");
+      const written = sqlFiles().filter(f => !filesBefore.includes(f));
+      expect(written.length).toBeGreaterThan(0);
+      const quote = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      await t.adapter.executeQuery(
+        `ALTER TABLE ${quote(`fg_${GROUP}_locales`)} ADD COLUMN ${quote("by_hand")} ${dialect === "mysql" ? "VARCHAR(10)" : "TEXT"}`
+      );
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["left"]);
+      const entry = await new MetaService(t.adapter, consoleLogger).getEntry(
+        GROUP_KEY
+      );
+      expect(entry.present, "the record stays").toBe(true);
       expect(sqlFiles(), "the save's files stay").toEqual(
         [...filesBefore, ...written].sort()
       );

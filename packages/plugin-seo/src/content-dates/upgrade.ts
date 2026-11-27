@@ -143,15 +143,27 @@ let started: Promise<void> | undefined;
 /**
  * Start `upgradeKeptFingerprints`, not awaited by the start: it reads
  * published pages, which waits for the boot to finish. A failure is logged,
- * and the next start tries again.
+ * and the next start tries again. Where `after` is given, the pass begins
+ * once it settles, so the start's background work holds one database
+ * connection at a time; the pass is the one {@link lastFingerprintUpgrade}
+ * answers from the moment this is called.
  */
-export function startFingerprintUpgrade(ctx: PluginContext): Promise<void> {
-  started = upgradeKeptFingerprints(ctx).catch((error: unknown) => {
-    ctx.logger.error(
-      "The SEO plugin could not bring its kept content fingerprints up to date",
-      { error }
-    );
-  });
+export function startFingerprintUpgrade(
+  ctx: PluginContext,
+  after: Promise<unknown> = Promise.resolve()
+): Promise<void> {
+  const settled = after.then(
+    () => undefined,
+    () => undefined
+  );
+  started = settled
+    .then(() => upgradeKeptFingerprints(ctx))
+    .catch((error: unknown) => {
+      ctx.logger.error(
+        "The SEO plugin could not bring its kept content fingerprints up to date",
+        { error }
+      );
+    });
   return started;
 }
 

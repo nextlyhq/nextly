@@ -48,6 +48,7 @@ import {
 } from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import type { StructuredField } from "../../i18n/shared-structure";
 import type {
   BuilderSaveSetup,
   CollectionSaveDeps,
@@ -59,6 +60,7 @@ import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import { assertSaveLeavesNoFieldGroupCycle } from "../field-group-cycles";
+import { judgeFieldGroupCopies } from "../field-group-fields-read-only";
 import { typeColumnForNewTable } from "../storage/resolve-storage-names";
 
 import { assertNotDiverged } from "./assert-not-diverged";
@@ -287,6 +289,8 @@ export class FieldGroupMetadataService {
       input.fields,
       null
     );
+    // Another field group's fields are changed only in its own editor, for a request's save.
+    await judgeFieldGroupCopies(input.fields);
     await this.assertSaveLeavesNoCycle(input.slug, input.fields);
     // A translated field marked unique needs an index this server may not be able to key. Refused
     // here, before the main table: the companion is provisioned after it, and a failure there is
@@ -510,7 +514,14 @@ export class FieldGroupMetadataService {
         input.fields,
         existing.fields ?? []
       );
+      // Another field group's fields are changed only in its own editor, for a request's save.
+      await judgeFieldGroupCopies(input.fields, () => existing.fields);
       await this.assertSaveLeavesNoCycle(input.slug, input.fields);
+      await this.assertInlineTextKept(
+        input.slug,
+        existing.fields ?? [],
+        input.fields
+      );
     }
 
     const localized = requestedLocalized ?? wasLocalized;
@@ -581,6 +592,26 @@ export class FieldGroupMetadataService {
         wasLocalized,
         isLocalized: localized,
         surface: "builder",
+      });
+    }
+
+    // What the companion reconcile below would drop of another owner's, refused before it runs or
+    // the writer writes anything (`removed-elements.ts`).
+    if (
+      this.adapter &&
+      (input.fields !== undefined || localized !== wasLocalized)
+    ) {
+      const { refuseComponentCompanionTakingOthersElements } = await import(
+        "./field-group-table-provisioning"
+      );
+      await refuseComponentCompanionTakingOthersElements({
+        slug: existing.slug,
+        tableName: existing.tableName,
+        oldFields: existing.fields as unknown as FieldDefinition[],
+        newFields: fields,
+        localized,
+        wasLocalized,
+        adapter: this.adapter,
       });
     }
 
@@ -1308,6 +1339,55 @@ export class FieldGroupMetadataService {
    * others. Judged inside the exclusion against every field group as stored now, so two saves that
    * each close half of a cycle cannot both pass.
    */
+  /**
+   * Refuse an edit turning a field of this field group translated or shared while a collection or
+   * Single places it inline (inside a repeater or group, its instances held in that container's
+   * value). Such a container keeps each language's text of the field group's fields apart from
+   * its structure, by the field group's fields as they are now
+   * (`componentFieldsChangingTranslation`), and nothing converts the rows already stored: turned
+   * translated, a first save in a language
+   * strips the text every language read; turned shared, every language's text stops being read at
+   * once. Refused before anything changes, naming the fields and where it is placed.
+   */
+  private async assertInlineTextKept(
+    slug: string,
+    before: unknown,
+    after: unknown
+  ): Promise<void> {
+    const { componentFieldsChangingTranslation } = await import(
+      "../../i18n/shared-structure"
+    );
+    const changing = componentFieldsChangingTranslation(
+      slug,
+      (Array.isArray(before) ? before : []) as StructuredField[],
+      (Array.isArray(after) ? after : []) as StructuredField[]
+    );
+    if (changing.length === 0) return;
+    const placed = await this.registry.findInlinePlacements(slug);
+    if (placed.length === 0) return;
+    const fields = changing.map(name => `"${name}"`).join(", ");
+    const where = placed
+      .map(
+        p =>
+          `the ${p.entityType === "single" ? "Single" : "collection"} "${p.entitySlug}" (${p.fieldPath})`
+      )
+      .join(", ");
+    throw NextlyError.invalidInput({
+      message:
+        `Changing whether ${fields} of the field group "${slug}" is translated isn't supported ` +
+        `yet: it is placed inside a repeater or group in ${where}, and the text already stored ` +
+        `there, in every language, would be lost. Nothing was changed. To go on today, leave ` +
+        `${fields} as translated or shared as it is; or add a new field for the other kind of ` +
+        `text and fill it.`,
+      logContext: {
+        reason: "field-group-inline-translation-change",
+        slug,
+        fields: changing,
+        placed,
+      },
+    });
+  }
+
   private async assertSaveLeavesNoCycle(
     slug: string,
     fields: unknown

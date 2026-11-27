@@ -227,7 +227,7 @@ describe.each(getConfiguredTestDialects())(
           depth: 0,
         } as never)) as Doc;
         const holderId = String((read.one as Doc | undefined)?.id);
-        const holder = await rawRow("comp_pwholder", holderId);
+        const holder = await rawRow("fg_pwholder", holderId);
         expect(await hashes(valuesAt(holder.box, "pin")[0], "in-c")).toBe(true);
       });
 
@@ -309,14 +309,14 @@ describe.each(getConfiguredTestDialects())(
 
       expect(valuesAt(read.direct, "pin")).toEqual([]);
       const directId = String((read.direct as Doc | undefined)?.id);
-      const stored = await rawRow("comp_pwpin", directId);
+      const stored = await rawRow("fg_pwpin", directId);
       expect(await hashes(stored.pin, "direct-d")).toBe(true);
     });
   }
 );
 
 describe.each(getConfiguredTestDialects())(
-  "a password in a translated container, read in every language (%s)",
+  "a password in a container whose text is kept per language, read in every language (%s)",
   (dialect: TestDialect) => {
     let t: TestNextly;
     let trusted: Nextly;
@@ -338,9 +338,9 @@ describe.each(getConfiguredTestDialects())(
             slug: "pwlpin",
             fields: [text({ name: "heading" }), password({ name: "pin" })],
           }),
-          // A translated field group whose translated group holds a password
-          // of its own and one in a field group inline: both are kept on the
-          // companion row, per language.
+          // A translated field group whose group holds a password of its own
+          // and one in a field group inline, in its one structure, and its
+          // text per language in its overlay on the companion row.
           defineFieldGroup({
             slug: "pwlbox",
             localized: true,
@@ -348,7 +348,6 @@ describe.each(getConfiguredTestDialects())(
               text({ name: "heading" }),
               group({
                 name: "box",
-                localized: true,
                 fields: [
                   text({ name: "b" }),
                   password({ name: "pin" }),
@@ -370,15 +369,13 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "title" }),
               // A password of the collection's own, and one in a field group
-              // held inline, each in a translated group.
+              // held inline, each in a group whose text is kept per language.
               group({
                 name: "own",
-                localized: true,
                 fields: [text({ name: "a" }), password({ name: "pin" })],
               }),
               group({
                 name: "wrap",
-                localized: true,
                 fields: [fieldGroup({ name: "held", component: "pwlpin" })],
               }),
               fieldGroup({ name: "fg", component: "pwlbox" }),

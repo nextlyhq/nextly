@@ -1,13 +1,13 @@
 ---
 title: SQLite
-description: Set up Nextly with SQLite. SQLite is for local demos only -- this page covers when (and when not) to use it, install instructions, file paths, WAL mode, and limitations.
+description: Set up Nextly with SQLite, which is great on your own machine and on a single server; on Vercel, choose PostgreSQL. This page covers when (and when not) to use it, install instructions, file paths, WAL mode, and limitations.
 ---
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-> **SQLite is for local demos only.** Concurrent writes serialize on a single file lock, the database is fragile across process crashes and shared filesystems, there is no SSL or network access, and you will likely hit issues even during serious local development. Use **PostgreSQL** for any meaningful work -- with the compose file on the PostgreSQL page, `docker compose up -d postgres` starts one. Set `DB_DIALECT=postgresql` and point `DATABASE_URL` at it. See the [PostgreSQL setup page](/docs/database/postgres#local-development-with-docker).
+> **SQLite is great on your own machine and on a single server; on Vercel, choose PostgreSQL.** The database is one file beside your app, so it needs no server and starts with the project. Writes take turns on that file, which suits one app on one machine. On Vercel and other serverless hosts each function has its own short-lived disk, so a file written there neither lasts nor reaches the others: use **PostgreSQL** there, and wherever several servers share one database. See the [PostgreSQL setup page](/docs/database/postgres).
 
-The SQLite adapter wraps [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) -- a synchronous C++ binding -- behind the same async `DrizzleAdapter` interface as the other dialects. It is in the codebase so a one-off demo, a quick `npx create-nextly-app@alpha` walk-through, or a tiny in-memory test suite Just Works without any infrastructure.
+The SQLite adapter wraps [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) -- a synchronous C++ binding -- behind the same async `DrizzleAdapter` interface as the other dialects. It needs no infrastructure: `npx create-nextly-app@alpha` uses it by default, and a test suite can run it in memory.
 
 > **Minimum version: SQLite 3.38.** The pinned `better-sqlite3` ships a much newer SQLite (3.45+ at time of writing), so users on this package always pass the version check. See [database support](/docs/database/support).
 
@@ -98,7 +98,7 @@ In-memory databases are extremely fast but disappear when the process exits. Eac
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `wal` | `boolean` | `true` | Enable WAL (Write-Ahead Logging) mode for better concurrent-read performance. Auto-disabled for in-memory and read-only databases. |
-| `busyTimeout` | `number` (ms) | `5000` | How long to wait when another process holds the database file, before the write fails as `DATABASE_BUSY` (the driver's `SQLITE_BUSY`). |
+| `busyTimeout` | `number` (ms) | `5000` | How long to wait when another process holds the database file, or a Schema Builder save holds the entry's collection, before the write fails as `DATABASE_BUSY` (for the file, the driver's `SQLITE_BUSY`). |
 | `pool.connectionTimeoutMs` | `number` (ms) | `15000` | How long a transaction waits for the database connection behind the transactions ahead of it, before it fails as `DATABASE_BUSY`. `0` waits without limit. |
 | `foreignKeys` | `boolean` | `true` | Enable `PRAGMA foreign_keys = ON`. SQLite ships with this off by default; the adapter turns it on. |
 | `memory` | `boolean` | `false` | Open an in-memory database. Overrides `url`. |
@@ -114,7 +114,7 @@ const adapter = createSqliteAdapter({
 });
 ```
 
-A request can wait in two places on SQLite, and each has its own setting. The adapter has one connection, so a transaction waits for the ones ahead of it to finish, for at most `pool.connectionTimeoutMs`, the same setting that bounds the wait for a pooled connection on PostgreSQL and MySQL. A write also waits while another process holds the database file, for at most `busyTimeout`. Either wait running out answers the request as `DATABASE_BUSY` (503, `Retry-After: 5`), and the transaction or write that waited does not run.
+A request can wait in two places on SQLite, and each has its own setting. The adapter has one connection, so a transaction waits for the ones ahead of it to finish, for at most `pool.connectionTimeoutMs`, the same setting that bounds the wait for a pooled connection on PostgreSQL and MySQL. A write also waits while another process holds the database file, or while a Schema Builder save that deletes a field's values holds its collection, for at most `busyTimeout`. Either wait running out answers the request as `DATABASE_BUSY` (503, `Retry-After: 5`), and the transaction or write that waited does not run. A write in a transaction already open does not wait for such a save, which needs the connection the transaction has: it is refused at once, as `DATABASE_BUSY` too.
 
 ## WAL mode
 
@@ -140,10 +140,10 @@ DATABASE_URL=file:./data/nextly.db
 
 SQLite is intentionally simple, and that simplicity is the trade-off:
 
-- **Single writer.** Only one write operation at a time -- writes are globally serialized regardless of WAL mode. Concurrent writes from different processes wait on the busy timeout, then fail. Not viable for any real workload.
+- **Single writer.** Only one write operation at a time -- writes are globally serialized regardless of WAL mode. Concurrent writes from different processes wait on the busy timeout, then fail, so one app on one server is the shape it suits.
 - **No connection pooling.** A single file handle. `getPoolStats()` returns `null`. There is no path to scale write throughput across connections.
 - **No SSL / TLS.** SQLite is a local file; remote access does not exist. If your app is in another container, the file is not.
-- **Fragile across crashes and shared filesystems.** Process crashes during writes can leave WAL files in inconsistent states; running over NFS / SMB / Docker bind mounts can corrupt the database.
+- **Local disk only.** SQLite's locking relies on the file sitting on a local disk; running it over NFS, SMB or some Docker bind mounts can corrupt the database.
 - **Weaker schema operations.** SQLite's `ALTER TABLE` is much more limited than PostgreSQL or MySQL -- some column changes require recreating the table. Nextly's migration model handles this where possible, but you will hit cases the other dialects handle natively.
 - **Weaker types.** SQLite uses dynamic typing with type affinity; numbers, strings, and dates flow through with less validation than PostgreSQL or MySQL provide.
 - **No `ILIKE`.** Case-insensitive search folds both sides, then compares with `LIKE`. SQLite's own `LOWER()` folds ASCII letters only, so Nextly registers a Unicode case fold, `nextly_fold_case()`, on every connection it opens and folds with that: "CRÈME" finds "crème" as on PostgreSQL and MySQL. A connection opened by other software does not have the function, and a Nextly search run on one fails with `no such function: nextly_fold_case` rather than matching ASCII letters only.
@@ -198,7 +198,7 @@ The adapter reports the following capabilities at runtime:
 
 ## Next steps
 
-- [PostgreSQL setup](/docs/database/postgres) -- the database you should use instead
+- [PostgreSQL setup](/docs/database/postgres) -- for Vercel, several servers, or the full feature set
 - [Database overview](/docs/database) -- feature comparison across dialects
 - [Database support](/docs/database/support) -- minimum versions
 - [Production migrations](/docs/guides/production-migrations) -- forward-only deploy patterns

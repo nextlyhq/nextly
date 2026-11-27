@@ -39,7 +39,7 @@ export function createMediaCommand(): Command {
       .action(
         lazyAction(async () => (await import("./media")).mediaOrphansAction)
       ),
-    startLine("Looking for unused thumbnails...")
+    startLine("Looking for unused thumbnails...", "may connect")
   );
   declareFirstLine(
     media
@@ -56,7 +56,7 @@ export function createMediaCommand(): Command {
       .action(
         lazyAction(async () => (await import("./media")).mediaRemoveSizesAction)
       ),
-    startLine("Looking for stored image sizes...")
+    startLine("Looking for stored image sizes...", "may connect")
   );
   // `--dry-run` carries the one meaning and help line it has everywhere.
   declareFirstLine(
@@ -69,7 +69,7 @@ export function createMediaCommand(): Command {
     ).action(
       lazyAction(async () => (await import("./media")).mediaReindexUsageAction)
     ),
-    startLine("Reindexing where media is used...")
+    startLine("Reindexing where media is used...", "may connect")
   );
   return media;
 }

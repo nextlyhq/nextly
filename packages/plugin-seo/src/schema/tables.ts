@@ -28,7 +28,7 @@ export const SCHEMA_PREFIX = "seo";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** The columns of {@link notFoundLog}, as `defineTable` checks and publishes them. */
 type NotFoundLogColumns = {
@@ -229,10 +229,65 @@ export const contentDates: TableDefinition<
   }
 );
 
+/** The columns of {@link codeAddresses}, as `defineTable` checks and publishes them. */
+type CodeAddressesColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly addressKey: ColumnBuilder<string, false, false>;
+  readonly buildId: ColumnBuilder<string, false, false>;
+  readonly path: ColumnBuilder<string, false, false>;
+  readonly route: ColumnBuilder<string, true, false>;
+  readonly declared: ColumnBuilder<boolean, false, true>;
+  readonly recordedAt: ColumnBuilder<Date, false, false>;
+};
+
+/**
+ * The pages built in code each production build of the site served, as
+ * `next build` recorded them: one row per address and build, so the running
+ * site lists the pages its own build made without reading Next.js's build
+ * files, which a host may not ship with the server.
+ *
+ * A row is written while `next build` renders the site: for each page whose
+ * route answered its head through `seoMetadata` (`declared` false), and for
+ * each address a route wrapped in `seoStaticParams` declared (`declared`
+ * true, with the route as Next.js names it). `buildId` is the build's own
+ * id, from `.next/BUILD_ID`, which the running server reads to find its
+ * rows. `addressKey` is the SHA-256 of the build id and the address, unique,
+ * so build workers recording one page at once meet on one row. Never
+ * written while the site is served, and never changed once written.
+ */
+export const codeAddresses: TableDefinition<
+  "code_addresses",
+  CodeAddressesColumns
+> = defineTable<"code_addresses", CodeAddressesColumns>(
+  "code_addresses",
+  {
+    id: col.id(),
+    addressKey: col.char(64),
+    buildId: col.varchar(255),
+    // Long text, so an address of any length fits.
+    path: col.longText(),
+    route: col.longText({ nullable: true }),
+    declared: col.boolean({ default: false }),
+    recordedAt: col.timestamp(),
+  },
+  {
+    indexes: [
+      { columns: ["addressKey"], unique: true },
+      // The running site reads its own build's rows.
+      { columns: ["buildId"] },
+      // Rows of builds long replaced are dropped by when they were recorded.
+      { columns: ["recordedAt"] },
+    ],
+  }
+);
+
 /** Every table this plugin declares, in the order its migrations create them. */
 export const SEO_TABLES: readonly [
   typeof notFoundLog,
   typeof addressClaims,
   typeof addressNotes,
   typeof contentDates,
-] = [notFoundLog, addressClaims, addressNotes, contentDates];
+  typeof codeAddresses,
+] = [notFoundLog, addressClaims, addressNotes, contentDates, codeAddresses];

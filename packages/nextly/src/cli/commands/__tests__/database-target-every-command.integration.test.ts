@@ -102,7 +102,7 @@ describe.skipIf(OTHER_LEG)("every command that opens a database", () => {
     "says which one first, from .env.local, and opens no other",
     async () => {
       const file = join(project, "from-env-local.db");
-      const line = `Database: SQLite ${file} (development; DATABASE_URL from .env.local)`;
+      const line = `● local · ${file} · SQLite (development; DATABASE_URL from .env.local)`;
       const invocations = everyCommandInvocation(createProgram());
 
       const runs = await inTurns(invocations, 4, async args => ({

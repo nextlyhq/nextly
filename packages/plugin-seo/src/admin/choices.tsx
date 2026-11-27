@@ -6,6 +6,7 @@
  */
 import type { JSX } from "react";
 
+import { AI_TRAINING_OPT_OUT } from "../outputs/ai-crawlers";
 import type { AiCrawlerChoice, SiteKind } from "../settings/contract";
 
 /** Each kind of site, and what choosing it changes. */
@@ -36,6 +37,12 @@ export const SITE_KIND_CHOICES: readonly {
   },
 ];
 
+/**
+ * What the two choices that ask trainers away also write: the shared
+ * AI-training opt-out, which no crawler's name stands for, and who reads it.
+ */
+const TRAINING_OPT_OUT_NOTE = `Also adds the shared AI-training opt-out (${AI_TRAINING_OPT_OUT}), which Anthropic honours now and Google and Microsoft plan to in 2027.`;
+
 /** Each choice of what AI tools may do, and what it means. */
 export const AI_CHOICES: readonly {
   value: AiCrawlerChoice;
@@ -51,14 +58,12 @@ export const AI_CHOICES: readonly {
   {
     value: "search",
     title: "Allow AI search, not training",
-    detail:
-      "Tools that answer questions, like ChatGPT search and Perplexity, can read and cite pages. Tools that collect pages to train AI models are asked not to.",
+    detail: `Tools that answer questions, like ChatGPT search and Perplexity, can read and cite pages. Tools that collect pages to train AI models are asked not to. ${TRAINING_OPT_OUT_NOTE}`,
   },
   {
     value: "block",
     title: "Block all AI tools",
-    detail:
-      "Asks every known AI tool to stay away. Google and Bing search are not affected.",
+    detail: `Asks every known AI tool to stay away. Google and Bing search are not affected. ${TRAINING_OPT_OUT_NOTE}`,
   },
 ];
 

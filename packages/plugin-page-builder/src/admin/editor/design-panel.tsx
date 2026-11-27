@@ -155,11 +155,17 @@ function revealWhenDrawn(
   );
 }
 
-/** Focus the first element matching `selector`, once it is drawn. */
+/**
+ * Focus the first element matching `selector`, once it is drawn; or, where
+ * it is still not drawn when the looking stops (a part of the tab whose code
+ * is slow to arrive, or failed to), the first matching `fallback`, so focus
+ * never stays on a control that has gone.
+ */
 function focusWhenDrawn(
   root: React.RefObject<HTMLElement | null>,
   selector: string,
-  tries: number
+  tries: number,
+  fallback?: string
 ): void {
   window.setTimeout(
     () => {
@@ -167,7 +173,11 @@ function focusWhenDrawn(
       if (root.current === null) return;
       const target = root.current.querySelector<HTMLElement>(selector);
       if (target === null) {
-        if (tries > 1) focusWhenDrawn(root, selector, tries - 1);
+        if (tries > 1) {
+          focusWhenDrawn(root, selector, tries - 1, fallback);
+        } else if (fallback !== undefined) {
+          root.current.querySelector<HTMLElement>(fallback)?.focus();
+        }
         return;
       }
       target.focus();
@@ -175,6 +185,9 @@ function focusWhenDrawn(
     tries === REVEAL_TRIES ? 0 : 50
   );
 }
+
+/** The tab the panel shows, where focus lands when nothing nearer is drawn. */
+const SHOWN_TAB = '[role="tab"][aria-selected="true"]';
 
 /**
  * A request from outside the panel to show one group of one tab, such as the
@@ -320,14 +333,16 @@ export function DesignPanel({
   const searching = search.trim() !== "";
   // Back to Type, with focus on the "Manage fonts…" that opened the screen
   // once the tab is drawn again, or on what the screen sent the author to,
-  // such as the Headings font's picker.
+  // such as the Headings font's picker. Both sit in parts of the tab whose
+  // code is fetched when the tab first draws them, so where one is still
+  // not drawn when the looking stops, focus goes to the Type tab itself.
   const close = React.useCallback(
     (focus?: string) => {
       view.choose("type");
       // Handed straight to a button's onClick, `close` is given the click:
       // only a selector names where focus goes.
       const target = typeof focus === "string" ? focus : "[data-fonts-manage]";
-      focusWhenDrawn(root, target, REVEAL_TRIES);
+      focusWhenDrawn(root, target, REVEAL_TRIES, SHOWN_TAB);
     },
     [view]
   );

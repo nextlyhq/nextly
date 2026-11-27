@@ -55,7 +55,15 @@ describe("VersionDiffView", () => {
     render(<VersionDiffView scope={scope} from={1} to={2} />);
 
     expect(screen.getByText("Views")).toBeInTheDocument();
-    expect(screen.getByText(/Comparing version/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "P" &&
+          (element.textContent ?? "").startsWith(
+            "Changes from Version 1 to Version 2."
+          )
+      )
+    ).toBeInTheDocument();
     expect(screen.getByText(/1 of 1 fields changed/)).toBeInTheDocument();
     // Every field is read, so the count and the fold cover the whole document.
     expect(useVersionDiffMock).toHaveBeenCalledWith(
@@ -454,7 +462,7 @@ describe("VersionDiffView", () => {
 
     render(<VersionDiffView scope={scope} from={1} to={2} />);
 
-    expect(screen.getByRole("button", { name: "Side by side" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "Side by side" })).toBeDisabled();
   });
 
   it("says only system fields changed, never identical, with the control to show them", async () => {
@@ -517,5 +525,138 @@ describe("VersionDiffView", () => {
     expect(
       screen.getByText("No changes in the fields you can read.")
     ).toBeInTheDocument();
+  });
+});
+
+describe("VersionDiffView, drawn as the comparison page draws it", () => {
+  const text = (
+    name: string,
+    label: string,
+    status: "changed" | "unchanged"
+  ) => ({
+    kind: "text" as const,
+    name,
+    label,
+    type: "text",
+    status,
+    segments:
+      status === "changed"
+        ? [
+            { op: -1 as const, text: "then" },
+            { op: 1 as const, text: "now" },
+          ]
+        : [{ op: 0 as const, text: "same" }],
+  });
+  const answer = (fields: ReturnType<typeof text>[]) => ({
+    data: { from: 4, to: 7, locale: null, hasChanges: true, fields },
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+
+  it("says which two versions it compares, by the names the host gives them", () => {
+    useVersionDiffMock.mockReturnValue(
+      answer([text("title", "Title", "changed")])
+    );
+
+    render(
+      <VersionDiffView
+        scope={scope}
+        from={4}
+        to={7}
+        fromLabel="24 Nov, 11:22"
+        toLabel="Current draft"
+      />
+    );
+
+    expect(
+      screen.getByText((_, element) =>
+        element?.tagName === "P"
+          ? element.textContent?.startsWith(
+              "Changes from 24 Nov, 11:22 to Current draft."
+            ) === true
+          : false
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("shows unchanged fields among the changed ones, in the form's order", async () => {
+    useVersionDiffMock.mockReturnValue(
+      answer([
+        text("title", "Title", "changed"),
+        text("excerpt", "Excerpt", "unchanged"),
+        text("body", "Body", "changed"),
+      ])
+    );
+
+    render(<VersionDiffView scope={scope} from={4} to={7} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show 1 unchanged field" })
+    );
+
+    expect(
+      screen.getAllByRole("heading", { level: 3 }).map(h => h.textContent)
+    ).toEqual(["Title", "Excerpt", "Body"]);
+  });
+
+  it("splits each changed field in place, naming each side over it", () => {
+    useVersionDiffMock.mockReturnValue(
+      answer([
+        text("title", "Title", "changed"),
+        text("body", "Body", "changed"),
+      ])
+    );
+
+    render(
+      <VersionDiffView
+        scope={scope}
+        from={4}
+        to={7}
+        view="side"
+        fromLabel="24 Nov, 11:22"
+        toLabel="Current draft"
+      />
+    );
+
+    // Over each field's own two columns, not once over the page: a field far
+    // down a long document still says which side is which.
+    for (const name of ["Title", "Body"]) {
+      const field = screen
+        .getByRole("heading", { name })
+        .closest("[data-field-change]") as HTMLElement;
+      expect(within(field).getByText("24 Nov, 11:22")).toBeVisible();
+      expect(within(field).getByText("Current draft")).toBeVisible();
+    }
+  });
+
+  it("offers the host's action in each field's heading row", () => {
+    useVersionDiffMock.mockReturnValue(
+      answer([
+        text("title", "Title", "changed"),
+        text("excerpt", "Excerpt", "unchanged"),
+      ])
+    );
+
+    render(
+      <VersionDiffView
+        scope={scope}
+        from={4}
+        to={7}
+        fieldAction={node =>
+          node.status === "unchanged" ? null : (
+            <button type="button">{`Restore this field: ${node.name}`}</button>
+          )
+        }
+      />
+    );
+
+    const heading = screen.getByRole("heading", { name: "Title" });
+    expect(heading.parentElement).toContainElement(
+      screen.getByRole("button", { name: "Restore this field: title" })
+    );
+    expect(
+      screen.queryByRole("button", { name: /Restore this field: excerpt/ })
+    ).toBeNull();
   });
 });

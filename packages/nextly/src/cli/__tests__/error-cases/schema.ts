@@ -3,6 +3,10 @@
  *
  * @module cli/__tests__/error-cases/schema
  */
+import {
+  rowsDivergedError,
+  rowsWithoutTableError,
+} from "../../../domains/schema/repair-columns/stop-errors";
 import { clearLeftoverStorage } from "../../../domains/schema/services/leftover-storage";
 import {
   assertAdapterPostgresSchema,
@@ -36,6 +40,26 @@ async function rejectedBy(fn: () => Promise<unknown>): Promise<unknown> {
 }
 
 export const SCHEMA_CASES = {
+  // As `nextly repair-columns` stops on a collection's row whose table name is empty.
+  REGISTRY_ROW_WITHOUT_TABLE: () =>
+    rowsWithoutTableError([
+      {
+        kind: "collection",
+        slug: "posts",
+        registryTable: "dynamic_collections",
+        codeOwned: false,
+      },
+    ]),
+  // As `nextly repair-columns` stops on a field group the admin may repair.
+  REGISTRY_ROW_DIVERGED: () =>
+    rowsDivergedError([
+      {
+        kind: "fieldGroup",
+        slug: "card",
+        registryTable: "dynamic_components",
+        codeOwned: false,
+      },
+    ]),
   // A Single created again after its first attempt was removed, whose field-group rows still name
   // its table as their parent. No table of its own stands, so no database is read: the rows found
   // elsewhere refuse the create before anything is dropped.
@@ -106,6 +130,14 @@ export const SCHEMA_CASES = {
         "db:sync finished, but could not keep the schema lock to the end: another run took " +
         "it while the work ran. Check the database before running it again.",
       logContext: { reason: "schema lock lost while held", command: "db:sync" },
+    }),
+  // As `assertSaveHoldKept` in `domains/schema/pipeline/save-hold-check.ts` throws it.
+  COLLECTION_BEING_CHANGED: () =>
+    new NextlyError({
+      code: "COLLECTION_BEING_CHANGED",
+      publicMessage:
+        "This collection is being changed elsewhere. Try again in a moment.",
+      logContext: { reason: "save-hold-lost" },
     }),
   // As `heldByRow` in `domains/schema/pipeline/schema-lock.ts` throws it.
   SCHEMA_LOCK_UNAVAILABLE: () =>

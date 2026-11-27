@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { decidePermission } from "../../../auth/access/decide";
 import { actorForUser } from "../../../auth/access/resolve-actor";
+import { directRoleIdsOfUsers } from "../../../services/lib/permissions";
 import {
   getConfiguredTestDialects,
   type TestNextly,
@@ -198,6 +199,85 @@ describe.each(getConfiguredTestDialects())(
             asked.length > 2 ? answers.get(holderKey(stored[1])) : "holds",
         }).toEqual(expected);
       }
+    });
+
+    it("reads a person's roles by their id as the database matches it, in another case", async () => {
+      // The batched read of role assignments answers by the id asked. Where the database matches
+      // an id in another case to the stored one (MySQL), that spelling holds the stored person's
+      // roles; where it compares exactly, it holds none, as the database answered it.
+      t = await bootSteps(dialect);
+      const app = t;
+      const clearers = await role(app, "case-roles", [["sign-off", "posts"]]);
+      await person(app, "casey", []);
+      await giveRole(app, "casey", clearers);
+      const matchesOtherCase =
+        (
+          await app.adapter.select<{ id: unknown }>("users", {
+            columns: ["id"],
+            where: { and: [{ column: "id", op: "=", value: "CASEY" }] },
+          })
+        ).length > 0;
+      if (dialect === "mysql") expect(matchesOtherCase).toBe(true);
+
+      const roles = await directRoleIdsOfUsers(["CASEY", "casey"]);
+
+      expect({
+        asked: [...(roles.get("CASEY") ?? [])],
+        stored: [...(roles.get("casey") ?? [])],
+      }).toEqual({
+        asked: matchesOtherCase ? [clearers] : [],
+        stored: [clearers],
+      });
+    });
+
+    it("answers a spelling in another case as the database matched it, across statements", async () => {
+      // A batch of more than 500 ids reads a statement per 500, so the stored spelling and another
+      // case of it can land in different statements, and where the database matches both (MySQL)
+      // each statement returns the same row. It is still one person, and one role.
+      t = await bootSteps(dialect);
+      const app = t;
+      const clearers = await role(app, "chunk-clearers", [
+        ["sign-off", "posts"],
+      ]);
+      await person(app, "casey", []);
+      await giveRole(app, "casey", clearers);
+      const matched = async (table: "users" | "roles", id: string) =>
+        (
+          await app.adapter.select<{ id: unknown }>(table, {
+            columns: ["id"],
+            where: { and: [{ column: "id", op: "=", value: id }] },
+          })
+        ).length > 0;
+      const fillers = (kind: "user" | "role") =>
+        Array.from({ length: 500 }, (_, n) => ({
+          kind,
+          id: `nobody-${kind}-${n}`,
+        }));
+      const userSpelled = "CASEY";
+      const roleSpelled = clearers.toUpperCase();
+      const asked = [
+        { kind: "user" as const, id: "casey" },
+        { kind: "role" as const, id: clearers },
+        ...fillers("user"),
+        ...fillers("role"),
+        { kind: "user" as const, id: userSpelled },
+        { kind: "role" as const, id: roleSpelled },
+      ];
+
+      const answers = await holderAnswers(
+        app.adapter,
+        asked,
+        "sign-off",
+        "posts"
+      );
+
+      expect({
+        user: answers.get(holderKey({ kind: "user", id: userSpelled })),
+        role: answers.get(holderKey({ kind: "role", id: roleSpelled })),
+      }).toEqual({
+        user: (await matched("users", userSpelled)) ? "holds" : "not-found",
+        role: (await matched("roles", roleSpelled)) ? "holds" : "not-found",
+      });
     });
 
     it("names a missing person and a deactivated one, who hold nothing", async () => {

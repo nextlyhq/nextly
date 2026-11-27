@@ -15,11 +15,20 @@
  * table.
  */
 import { getColumns, type Table } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { FieldConfig } from "../../../../collections/fields/types";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { FieldGroupSchemaService } from "../field-group-schema-service";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// Each dialect's builders, which this file reaches; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 const FIELDS = [
   { name: "headline", type: "text" },

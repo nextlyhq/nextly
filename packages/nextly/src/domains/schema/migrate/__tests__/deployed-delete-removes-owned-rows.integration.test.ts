@@ -57,7 +57,14 @@ import { _resetEnvCache } from "../../../../shared/lib/env";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { ensureI18nArchive } from "../../../i18n/migration/ensure-archive";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
-import { resolveComponentTableName } from "../../utils/resolve-table-name";
+import {
+  eachSite,
+  seedSite,
+} from "../../../field-groups/__tests__/helpers/both-sites";
+import {
+  type FieldGroupNaming,
+  fieldGroupTableNameFor,
+} from "../../../field-groups/services/field-group-storage-names";
 import { setNonInteractive } from "../can-prompt";
 import { KILL_AT_VARIABLE, withStopPoints } from "../stop-points";
 
@@ -86,7 +93,7 @@ const OTHER = "dpr_other";
 const TAGS = "dpr_tags";
 const NOTES_TABLE = `dc_${NOTES}`;
 const OTHER_TABLE = `dc_${OTHER}`;
-const META_TABLE = resolveComponentTableName(META);
+const metaTable = () => fieldGroupTableNameFor(siteNaming, META);
 
 /**
  * The points a run reaches once the delete file is recorded, in order, as a stop names them after
@@ -106,6 +113,12 @@ const AFTER_THE_FILE = [
 /** Whether `point` is the one named `at`, after the file's or the collection's name, or alone. */
 const isPoint = (point: string, at: string) =>
   point === at || point.endsWith(`: ${at}`);
+
+/**
+ * The names the case's site keeps its field groups on: what its Builder saves write its history on,
+ * and so what the database it deploys to is set up on.
+ */
+let siteNaming: FieldGroupNaming = "current";
 
 let dir: string;
 let closers: Array<() => Promise<void>> = [];
@@ -267,7 +280,11 @@ async function createInTheBuilder(): Promise<void> {
     {
       name: OTHER,
       label: OTHER,
-      fields: [fieldGroup({ name: "meta", component: META })],
+      localized: true,
+      fields: [
+        text({ name: "body", localized: true }),
+        fieldGroup({ name: "meta", component: META }),
+      ],
     }
   );
 }
@@ -355,6 +372,19 @@ async function seedSharedRows(
     origin: "machine",
     writtenAt: now,
   });
+  await adapter.insert("nextly_translation_sources", {
+    id: randomUUID(),
+    scopeKind: "collection",
+    scopeSlug: slug,
+    entryId: "e1",
+    sourceLocale: "en",
+    // A translated field of both collections: text kept for a field a collection does not
+    // translate goes with any migrate run, whatever was deleted.
+    fieldPath: "body",
+    fingerprint: "f",
+    content: { value: "a" },
+    recordedAt: now,
+  });
 }
 
 /** How many rows of each kind `slug` (whose table is `table`) holds on `adapter`. */
@@ -379,7 +409,7 @@ async function rowsOf(
   const scoped = `${q("scope_kind")} = ${p(1)} AND ${q("scope_slug")} = ${p(2)}`;
   return {
     fieldGroupValues: await count(
-      META_TABLE,
+      metaTable(),
       `${q("_parent_table")} = ${p(1)}`,
       [table]
     ),
@@ -405,6 +435,10 @@ async function rowsOf(
       scoped,
       ["collection", slug]
     ),
+    translationSources: await count("nextly_translation_sources", scoped, [
+      "collection",
+      slug,
+    ]),
   };
 }
 
@@ -417,6 +451,7 @@ const NONE = {
   seenMarkers: 0,
   translationArchive: 0,
   translationProvenance: 0,
+  translationSources: 0,
 };
 
 /** How many migrations the deployed database's ledger records applied. */
@@ -460,9 +495,13 @@ function deleteFile(): { name: string; drops: number } {
   return { name, drops: (sql.match(/DROP TABLE/gi) ?? []).length };
 }
 
-describe.each(getConfiguredTestDialects())(
-  "a collection deleted in the Builder, on a deployed database (%s)",
-  dialect => {
+describe.each(eachSite())(
+  "a collection deleted in the Builder, on a deployed database (%s, a site on the %s names)",
+  (dialect, naming) => {
+    beforeEach(() => {
+      siteNaming = naming;
+    });
+
     /**
      * The Builder's create, applied to the deployed database with an entry in each collection and
      * the shared rows of both, then the Builder's delete of `dpr_notes`, written and not yet
@@ -470,6 +509,7 @@ describe.each(getConfiguredTestDialects())(
      */
     async function readyToDelete() {
       const own = await openDatabase(dialect, "builder");
+      await seedSite(siteNaming, own.adapter, dialect);
       const deployed = await openDatabase(dialect, "deployed");
 
       reach(dialect, own.url);

@@ -573,7 +573,8 @@ export class PostgresAdapter extends DrizzleAdapter {
         // fails as busy, not as an unexplained driver error.
         this.pool = reportPoolWaitTimeout(
           new Pool(poolConfig),
-          poolConfig.connectionTimeoutMillis
+          poolConfig.connectionTimeoutMillis,
+          this.config.logger
         );
 
         // Handle pool errors (background errors on idle clients)
@@ -737,6 +738,13 @@ export class PostgresAdapter extends DrizzleAdapter {
     } catch (error) {
       throw this.classifyError(error);
     }
+    // A session's connection may be ended while no statement runs on it (by the server, or by
+    // another session's `pg_terminate_backend`), and node-postgres reports that as an `error` event
+    // on the checked-out client, which has no listener while checked out: unheard, it would end the
+    // process. Heard here, the session's next statement fails with it instead, and the client is
+    // destroyed on release rather than pooled.
+    const sessionEnded = (): void => undefined;
+    client.on("error", sessionEnded);
     try {
       return await work({
         execute: async <R = unknown>(
@@ -760,6 +768,7 @@ export class PostgresAdapter extends DrizzleAdapter {
         },
       });
     } finally {
+      client.removeListener("error", sessionEnded);
       client.release(true);
     }
   }

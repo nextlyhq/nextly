@@ -41,6 +41,7 @@ import {
   getSendTestTarget,
   getTemplateEngine,
   getTemplateSenders,
+  listSampleRecords,
   readAsLiquid,
   overrideTemplate,
   resetTemplate,
@@ -56,6 +57,7 @@ import {
   type EmailTemplatePreviewResult,
   type SendTestEmailResult,
   type SendTestTarget,
+  type SampleRecords,
   type TemplateEngine,
   type TemplateTestDraft,
   type EmailTemplateComparison,
@@ -120,6 +122,11 @@ export const emailTemplateKeys = {
   /** What sends a template, read fresh for the delete guard. */
   senders: (id: string): readonly ["emailTemplates", "senders", string] =>
     [...emailTemplateKeys.all(), "senders", id] as const,
+  /** The real records a template's owner offers for its test data. */
+  sampleRecords: (
+    id: string
+  ): readonly ["emailTemplates", "sampleRecords", string] =>
+    [...emailTemplateKeys.all(), "sampleRecords", id] as const,
 };
 
 // ============================================================
@@ -362,6 +369,23 @@ export function useSendTestTarget(
     queryKey: emailTemplateKeys.testTarget(templateId, providerId),
     queryFn: () => getSendTestTarget(templateId, providerId),
     enabled: (options?.enabled ?? true) && Boolean(templateId),
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/**
+ * The real records a template's owner offers for its test data. Asked once
+ * per opening and not retried: a 404 (none offered) and a 403 (not readable
+ * by this person) are answers, not failures.
+ */
+export function useSampleRecords(
+  templateId: string | undefined
+): UseQueryResult<SampleRecords, Error> {
+  return useQuery<SampleRecords, Error>({
+    queryKey: emailTemplateKeys.sampleRecords(templateId ?? ""),
+    queryFn: () => listSampleRecords(templateId ?? ""),
+    enabled: Boolean(templateId),
     staleTime: 0,
     retry: false,
   });

@@ -92,7 +92,7 @@ import {
   permissionsDeclaredBy,
   type SnapshotDeclarations,
 } from "./permission-orphans";
-import { pluginCollectionSources } from "./plugin/plugin-collection-sources";
+import { declaredEntitySources } from "./plugin/plugin-collection-sources";
 import {
   addedEntities,
   clearedSettings,
@@ -579,7 +579,7 @@ export async function planRollbackBookkeeping(args: {
   const writeDeps: RegistryWriteDeps = {
     adapter,
     logger: args.logger,
-    collectionSources: pluginCollectionSources(args.config.plugins ?? []),
+    entitySources: declaredEntitySources(args.config.plugins ?? []),
   };
   const perFile = await typeChangedRowsPerDown({
     metaDir,

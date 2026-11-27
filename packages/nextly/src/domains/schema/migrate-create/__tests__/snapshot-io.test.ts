@@ -13,6 +13,8 @@ import {
   newestSnapshotName,
   parseSnapshotFile,
   SnapshotFileError,
+  snapshotFieldGroupNaming,
+  snapshotFileNaming,
   snapshotPathOf,
   verifyMigrationHash,
   writeSnapshot,
@@ -186,6 +188,248 @@ describe("snapshot-io", () => {
       expect(parsed.snapshot.tables[0].name).toBe("dc_posts");
     });
 
+    // A history on the legacy field-group names is written exactly as before the record existed.
+    it("writes a legacy snapshot byte for byte as before the field-group naming record", async () => {
+      const snapshot = {
+        tables: [
+          {
+            name: "comp_card",
+            columns: [
+              { name: "_component_type", type: "text", nullable: true },
+            ],
+          },
+        ],
+      };
+      const sql = "SELECT 1;";
+      const unnamed = await readFile(
+        await writeSnapshot(metaDir, "20260101_000000_000_a", snapshot, sql),
+        "utf-8"
+      );
+      const named = await readFile(
+        await writeSnapshot(
+          metaDir,
+          "20260101_000000_000_b",
+          snapshot,
+          sql,
+          {},
+          undefined,
+          undefined,
+          undefined,
+          "legacy"
+        ),
+        "utf-8"
+      );
+      expect(named).toBe(unnamed);
+      const parsed = JSON.parse(named) as Record<string, unknown>;
+      expect(parsed.version).toBe(1);
+      expect(parsed).not.toHaveProperty("fieldGroupStorage");
+      expect(snapshotFieldGroupNaming(parseSnapshotFile(named, "a"))).toBe(
+        "legacy"
+      );
+    });
+
+    // An older CLI refuses any version but 1 ("upgrade your CLI"), so it stops at a history on the
+    // current names instead of planning to drop each fg_ table and create its comp_ twin.
+    it("writes a snapshot on the current field-group names as version 2, which an older CLI refuses", async () => {
+      const raw = await readFile(
+        await writeSnapshot(
+          metaDir,
+          "20260101_000000_000_c",
+          { tables: [] },
+          "SELECT 1;",
+          {},
+          undefined,
+          undefined,
+          undefined,
+          "current"
+        ),
+        "utf-8"
+      );
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      expect(parsed.version).toBe(2);
+      expect(parsed.fieldGroupStorage).toBe("current");
+      expect(snapshotFieldGroupNaming(parseSnapshotFile(raw, "c"))).toBe(
+        "current"
+      );
+    });
+
+    // A release before the record could write the current names into a version 1 snapshot after
+    // the site's storage moved. Only a moved database's field-group tables hold the current type
+    // column, so such a snapshot is on the current names, and is read so.
+    it("reads an unmarked snapshot whose field-group tables hold the current type column as current", () => {
+      expect(
+        snapshotFieldGroupNaming({
+          migration: "20261101_120000_000_add_banner",
+          snapshot: {
+            tables: [
+              {
+                name: "fg_banner",
+                columns: [
+                  { name: "_parent_id", type: "text", nullable: false },
+                  { name: "_parent_table", type: "text", nullable: false },
+                  { name: "_parent_field", type: "text", nullable: false },
+                  { name: "_order", type: "integer", nullable: false },
+                  { name: "_field_group_type", type: "text", nullable: true },
+                ],
+              },
+            ],
+          } as never,
+        })
+      ).toBe("current");
+    });
+
+    // Storage moved before any group existed, then an earlier release made the first one: its
+    // table is the slug's current name, still on the legacy type column. The snapshot's own record
+    // of the group says the name is its slug's, so the snapshot is on the current names.
+    it("reads an unmarked snapshot holding a recorded group's fg_ table as current, whatever its type column", () => {
+      const snapshot = {
+        tables: [
+          {
+            name: "fg_banner",
+            columns: [
+              { name: "_parent_id", type: "text", nullable: false },
+              { name: "_parent_table", type: "text", nullable: false },
+              { name: "_parent_field", type: "text", nullable: false },
+              { name: "_order", type: "integer", nullable: false },
+              { name: "_component_type", type: "text", nullable: true },
+            ],
+          },
+        ],
+      } as never;
+      const recorded = (settings: Record<string, unknown>) => ({
+        collections: {},
+        singles: {},
+        fieldGroups: {
+          banner: { source: "builder" as const, settings: settings as never },
+        },
+      });
+
+      expect(
+        snapshotFieldGroupNaming({
+          snapshot,
+          entities: recorded({ fields: [] }),
+        })
+      ).toBe("current");
+      // A table its author named fg_banner says nothing about the names.
+      expect(
+        snapshotFieldGroupNaming({
+          snapshot,
+          entities: recorded({ fields: [], dbName: "fg_banner" }),
+        })
+      ).toBe("legacy");
+    });
+
+    // A template's older-format file records no tables: it says outright, and one from before it
+    // could is legacy. A word it does not know is refused, not taken for either.
+    it("reads a template's older-format file by its own word", () => {
+      const file = (fieldGroupStorage?: unknown) =>
+        JSON.stringify({
+          version: 1,
+          collections: [],
+          singles: [],
+          ...(fieldGroupStorage === undefined ? {} : { fieldGroupStorage }),
+        });
+      expect(snapshotFileNaming(file(), "t.snapshot.json")).toBe("legacy");
+      expect(snapshotFileNaming(file("current"), "t.snapshot.json")).toBe(
+        "current"
+      );
+      expect(() =>
+        snapshotFileNaming(file("newest"), "t.snapshot.json")
+      ).toThrow(/t\.snapshot\.json is invalid: expected fieldGroupStorage/);
+    });
+
+    // What `migrate:create` starts from in a template's project: the same word, as any snapshot's.
+    it.each([
+      ["current", { version: 2, fieldGroupStorage: "current" }],
+      [undefined, { version: 1 }],
+    ] as const)(
+      "starts a template's first migration on the names its file says (%s)",
+      async (said, expected) => {
+        const root = await mkdtemp(join(tmpdir(), "nextly-template-"));
+        const metaDir = join(root, "meta");
+        await mkdir(metaDir, { recursive: true });
+        await writeFile(join(root, "0001_blog.sql"), "SELECT 1;");
+        await writeFile(
+          join(metaDir, "0001_blog.snapshot.json"),
+          JSON.stringify({
+            version: 1,
+            collections: [],
+            singles: [],
+            ...(said === undefined ? {} : { fieldGroupStorage: said }),
+          })
+        );
+        const latest = await loadLatestSnapshot(metaDir, () => ({
+          tables: [],
+        }));
+        expect(latest?.template).toBe(true);
+        expect(latest?.data).toMatchObject(expected);
+        expect(latest?.data.fieldGroupStorage).toBe(said);
+      }
+    );
+
+    // A slug-derived legacy table beside them cannot be on the same names: no reading of the
+    // snapshot plans against the tables the database holds, so it is refused.
+    it("refuses an unmarked snapshot that holds field groups under both namings", () => {
+      let thrown: unknown;
+      try {
+        snapshotFieldGroupNaming({
+          migration: "20261101_120000_000_add_banner",
+          snapshot: {
+            tables: [
+              {
+                name: "fg_banner",
+                columns: [
+                  { name: "_parent_id", type: "text", nullable: false },
+                  { name: "_parent_table", type: "text", nullable: false },
+                  { name: "_parent_field", type: "text", nullable: false },
+                  { name: "_order", type: "integer", nullable: false },
+                  { name: "_field_group_type", type: "text", nullable: true },
+                ],
+              },
+              {
+                name: "comp_card",
+                columns: [
+                  { name: "_parent_id", type: "text", nullable: false },
+                  { name: "_parent_table", type: "text", nullable: false },
+                  { name: "_parent_field", type: "text", nullable: false },
+                  { name: "_order", type: "integer", nullable: false },
+                  { name: "_component_type", type: "text", nullable: true },
+                ],
+              },
+            ],
+          } as never,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as { logContext?: unknown }).logContext).toMatchObject({
+        reason: "field-group-history-names-unrecorded",
+        migration: "20261101_120000_000_add_banner",
+        current: ["fg_banner"],
+        legacy: ["comp_card"],
+      });
+    });
+
+    // Only a field group's table says which names the history is on: a collection's own column
+    // that happens to be spelled `_field_group_type` says nothing about them.
+    it("reads an unmarked snapshot as legacy when only a non-field-group table has that column", () => {
+      expect(
+        snapshotFieldGroupNaming({
+          snapshot: {
+            tables: [
+              {
+                name: "dc_posts",
+                columns: [
+                  { name: "id", type: "text", nullable: false },
+                  { name: "_field_group_type", type: "text", nullable: true },
+                ],
+              },
+            ],
+          } as never,
+        })
+      ).toBe("legacy");
+    });
+
     // Every declared permission, by owner, travels in the snapshot so it alone says what they were;
     // a snapshot written without the record keeps no key, which a reader takes as saying nothing.
     it("writes the permission record it is given, and none when given none", async () => {
@@ -279,6 +523,37 @@ describe("snapshot-io", () => {
         { name: "idx_dc_x_slug", columns: ["slug"], unique: true },
       ]);
       expect(y.indexes).toBeUndefined();
+    });
+
+    // A container's overlay column is what the next run reads to know the column is there: a
+    // snapshot that drops it has the next `migrate:create` add the column again.
+    it("persists a translated table's overlay columns, so the next run knows they are there", async () => {
+      const snapshot = {
+        tables: [
+          {
+            name: "dc_x",
+            columns: [{ name: "id", type: "text", nullable: false }],
+            localized: true,
+            localizedColumns: ["title"],
+            overlayColumns: ["slides", "box"],
+          },
+        ],
+      };
+      await writeSnapshot(
+        metaDir,
+        "20260601_120000_002_overlay",
+        snapshot,
+        "-- sql"
+      );
+      await writeFile(
+        join(metaDir, "..", "20260601_120000_002_overlay.sql"),
+        "",
+        "utf-8"
+      );
+      const loaded = await loadLatestSnapshot(metaDir);
+      const x = loaded!.data.snapshot.tables.find(t => t.name === "dc_x")!;
+      expect(x.overlayColumns).toEqual(["box", "slides"]);
+      expect(x.localizedColumns).toEqual(["title"]);
     });
 
     it("sorts tables and columns alphabetically for reproducibility", async () => {
@@ -436,7 +711,35 @@ describe("snapshot-io", () => {
       ).toThrow(/expected version: 1/);
     });
 
-    it("throws on wrong version (e.g. future v2 snapshot)", () => {
+    it("throws on a version it does not know (e.g. a future v3 snapshot)", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({
+            version: 3,
+            migrationHash: VALID_HASH,
+            snapshot: { tables: [] },
+          }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/expected version: 1 or 2, got 3\. .*upgrade your CLI/);
+    });
+
+    // The field-group naming record and the version go together, so a file whose two disagree
+    // was edited by hand and is refused rather than read by either one.
+    it("accepts a version 2 snapshot on the current field-group names", () => {
+      const parsed = parseSnapshotFile(
+        JSON.stringify({
+          version: 2,
+          fieldGroupStorage: "current",
+          migrationHash: VALID_HASH,
+          snapshot: { tables: [] },
+        }),
+        "test.snapshot.json"
+      );
+      expect(snapshotFieldGroupNaming(parsed)).toBe("current");
+    });
+
+    it("refuses a version 2 snapshot that does not say it is on the current names", () => {
       expect(() =>
         parseSnapshotFile(
           JSON.stringify({
@@ -446,7 +749,35 @@ describe("snapshot-io", () => {
           }),
           "test.snapshot.json"
         )
-      ).toThrow(/expected version: 1, got 2/);
+      ).toThrow(/fieldGroupStorage: "current" in a version 2 snapshot/);
+    });
+
+    it("refuses a version 1 snapshot that says it is on the current names", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({
+            version: 1,
+            fieldGroupStorage: "current",
+            migrationHash: VALID_HASH,
+            snapshot: { tables: [] },
+          }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/expected version: 2 for a snapshot on the current/);
+    });
+
+    it("refuses a field-group naming record it does not know", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({
+            version: 2,
+            fieldGroupStorage: "legacy",
+            migrationHash: VALID_HASH,
+            snapshot: { tables: [] },
+          }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/fieldGroupStorage to be "current" when present/);
     });
 
     it("throws on missing migrationHash", () => {

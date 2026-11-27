@@ -363,8 +363,8 @@ const PATHS: readonly SavePath[] = [
     name: "a field group's Builder apply",
     kind: "fieldGroup",
     slug: "sts_card",
-    table: "comp_sts_card",
-    registry: "dynamic_components",
+    table: "fg_sts_card",
+    registry: "dynamic_field_groups",
     create: async (_t, fields) => {
       await dispatchComponents(
         "createComponent",
@@ -379,7 +379,7 @@ const PATHS: readonly SavePath[] = [
         {
           fields,
           confirmed: true,
-          schemaVersion: await versionOf(t, "dynamic_components", "sts_card"),
+          schemaVersion: await versionOf(t, "dynamic_field_groups", "sts_card"),
           ...answers,
         }
       ),

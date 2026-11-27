@@ -94,7 +94,26 @@ function context(): PluginContext {
   };
   const ctx = {
     self: { collections: {} },
-    config: {},
+    // Each Single here declares its own `title`, so its pages are named by it.
+    config: {
+      singles: [
+        "about",
+        "blog",
+        "code",
+        "contact",
+        "doc",
+        "faq",
+        "guide",
+        "help",
+        "home",
+        "pricing",
+        "product",
+        "story",
+      ].map(slug => ({
+        slug,
+        fields: [{ name: "title", type: "text" }],
+      })),
+    },
     publicAddresses: { defaultLanguage: async () => "en" },
     services: {
       ownCollections: { listEntries },
@@ -298,6 +317,31 @@ describe("the page's own name", () => {
     expect(nodeOf(brandInTitle.nodes, "WebPage")?.name).toBe(
       "Why we built Rext AI"
     );
+  });
+
+  it("is a Single's route title over the title Nextly keeps for it, or the field the site chooses", async () => {
+    // "blog-index" declares no title: its `title` is its label, Nextly's.
+    const input = (document: Record<string, unknown>): PageMetadataInput => ({
+      ...singleInput("blog-index", { id: "s9", ...document }),
+      code: { title: "Thoughts & Insights | Rext AI" },
+    });
+    const fromRoute = await buildStructuredData(
+      context(),
+      input({ title: "Blog Page" }),
+      answerAt("/blog", "Thoughts & Insights | Rext AI"),
+      rules()
+    );
+    const chosen = await buildStructuredData(
+      context(),
+      input({ title: "Blog Page", hero: { heading: "Field notes" } }),
+      answerAt("/blog", "Thoughts & Insights | Rext AI"),
+      rules({ titleFields: { "single:blog-index": "hero.heading" } })
+    );
+
+    expect(nodeOf(fromRoute.nodes, "WebPage")?.name).toBe(
+      "Thoughts & Insights"
+    );
+    expect(nodeOf(chosen.nodes, "WebPage")?.name).toBe("Field notes");
   });
 
   it("is a page built in code's own name, or else its route's title over one made from its address", async () => {
@@ -1201,5 +1245,56 @@ describe("the structured data options", () => {
       defaultAuthor: { name: "Rext AI Team", url: "/about" },
       breadcrumbs: { home: "Rext AI", names: { "/blog": "Blog" } },
     });
+  });
+});
+
+describe("an article's card details", () => {
+  it("are its dates, its author's page and one tag each, from the same details", async () => {
+    const { article } = await buildStructuredData(
+      context(),
+      entryInput("posts", POST),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI | Rext AI"),
+      rules({ types: { posts: { type: "blogPosting" } } })
+    );
+    expect(article).toEqual({
+      publishedTime: "2026-09-24T13:52:11.914Z",
+      modifiedTime: "2026-11-03T09:47:39.000Z",
+      authors: [`${ORIGIN}/authors/sajad-hussain`],
+      tags: ["Comparison", "AI writing"],
+    });
+  });
+
+  it("name an author with no page of their own by name", async () => {
+    // A byline typed as text, rather than an author entry with a page.
+    const { author: _entry, ...rest } = POST;
+    const { article } = await buildStructuredData(
+      context(),
+      entryInput("posts", { ...rest, writer: "Sajad Hussain" }),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({ types: { posts: { type: "article" } } })
+    );
+    expect(article?.authors).toEqual(["Sajad Hussain"]);
+  });
+
+  it("are none for a page that is not an article", async () => {
+    const { article } = await buildStructuredData(
+      context(),
+      entryInput("posts", POST),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({ types: { posts: { type: "webPage" } } })
+    );
+    expect(article).toBeUndefined();
+  });
+
+  it("are none for an article left out for a missing detail", async () => {
+    const { author: _none, ...anonymous } = POST;
+    const { article, problems } = await buildStructuredData(
+      context(),
+      entryInput("posts", anonymous),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({ types: { posts: { type: "blogPosting" } } })
+    );
+    expect(problems.map(problem => problem.detail)).toContain("author");
+    expect(article).toBeUndefined();
   });
 });

@@ -26,6 +26,7 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import type { UnregisteredCollectionRow } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import type { CollectionArtifacts } from "../../dynamic-collections/services/dynamic-collection-service";
+import { judgeFieldGroupCopies } from "../../field-groups/field-group-fields-read-only";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import {
@@ -61,6 +62,7 @@ import { fieldsDroppedFromRow } from "../../schema/services/translated-drops";
 import { loadUiSchema } from "../../schema/ui-schema/loader";
 import { withSystemTextFields } from "../system-text-fields";
 
+import type { ConfirmedEntries } from "./collection-entry-counts";
 import { collectionSaveIssuesDdl } from "./collection-save-issues-ddl";
 import { collectionTableName } from "./collection-utils";
 import type { TeardownAdapter } from "./teardown-adapter-in-transaction";
@@ -883,6 +885,9 @@ export class CollectionMetadataService extends BaseService {
     await assertGlobalResourceSlugAvailable(this.adapter, data.name, {
       addressKind: "collection",
     });
+    // A field group's fields are changed only in its own editor, for a request's save: asked
+    // outside the result mapping below, so its code and field reach the answer.
+    await judgeFieldGroupCopies(data.fields);
     try {
       const artifacts = await this.collectionService.generateCollection(data);
 
@@ -1308,6 +1313,14 @@ export class CollectionMetadataService extends BaseService {
     params: { collectionName: string },
     body: Parameters<CollectionMetadataService["updateCollection"]>[1]
   ): Promise<MetadataServiceResult> {
+    // A field group's fields are changed only in its own editor, for a request's save: asked
+    // outside the result mapping below, so its code and field reach the answer.
+    await judgeFieldGroupCopies(
+      body.fields,
+      async () =>
+        (await this.collectionService.getCollection(params.collectionName))
+          .fields
+    );
     try {
       // The collection as it stands before the save, read inside the lock: what the apply changes
       // it from.
@@ -1720,6 +1733,12 @@ export class CollectionMetadataService extends BaseService {
     collectionName: string;
     /** Collections deleted in the same operation, after `collectionName`. */
     together?: readonly string[];
+    /**
+     * Each collection's entries as its delete review showed them: counted again where the delete
+     * holds the collections, and refused with nothing removed where one moved. Absent, none is
+     * compared.
+     */
+    confirmedEntries?: readonly ConfirmedEntries[];
   }): Promise<MetadataServiceResult> {
     // The whole delete holds the schema lock: the rows it reads, the dependents it asks about,
     // the teardown and the drop. Each of those reads describes storage a migration could be
@@ -1908,7 +1927,7 @@ export class CollectionMetadataService extends BaseService {
         slug: slugs[index],
         collection: collections[index],
       }));
-      await this.removeTogether(ordered);
+      await this.removeTogether(ordered, params.confirmedEntries);
 
       return {
         success: true,
@@ -1986,11 +2005,12 @@ export class CollectionMetadataService extends BaseService {
    * committed.
    */
   private async removeTogether(
-    ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>
+    ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>,
+    confirmedEntries: readonly ConfirmedEntries[] | undefined
   ): Promise<void> {
     const deps = this.saveDeps();
     if (deps !== undefined) {
-      await this.removeThroughWriter(ordered, deps);
+      await this.removeThroughWriter(ordered, deps, confirmedEntries);
       return;
     }
     const { splitStatements } = await import(
@@ -2007,7 +2027,8 @@ export class CollectionMetadataService extends BaseService {
       // elsewhere `nextly migrate` applies the file.
       unregistered = await this.removeRegistered(
         ordered,
-        this.isDevelopment() ? splitStatements([drop.migrationSQL]) : []
+        this.isDevelopment() ? splitStatements([drop.migrationSQL]) : [],
+        confirmedEntries
       );
     } catch (error) {
       await this.withdrawDropMigration(drop.migrationFileName);
@@ -2034,18 +2055,21 @@ export class CollectionMetadataService extends BaseService {
    */
   private async removeRegistered(
     ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>,
-    drops: readonly string[]
+    drops: readonly string[],
+    confirmedEntries: readonly ConfirmedEntries[] | undefined
   ): Promise<Map<string, UnregisteredCollectionRow>> {
     const [
       { teardownAdapterIn },
       { runCollectionDeleteHandlers },
       { getActiveHookRegistry },
       { collectionDeleteFailure },
+      { refuseEntriesChanged },
     ] = await Promise.all([
       import("./teardown-adapter-in-transaction"),
       import("./collection-delete-plugins"),
       import("../../../hooks/hook-registry"),
       import("./collection-delete-failure"),
+      import("./collection-entry-counts"),
     ]);
     const { deleteTransactionInTries } = await import(
       "./delete-transaction-tries"
@@ -2089,6 +2113,19 @@ export class CollectionMetadataService extends BaseService {
             // again since names a new collection, which this delete must not
             // touch. Refused here, before anything is removed.
             assertHeldAsLoaded(ordered, hold.ids);
+            // The entries the person confirmed deleting, counted again here, while the rows are
+            // held and before any plugin's handler or DDL runs: an entry write holds its
+            // collection's row for share, so none lands between this count and the removal, and
+            // a writer's files drop tables no write can reach once the rows are gone.
+            await refuseEntriesChanged(
+              tx,
+              ordered.map(({ slug, collection }) => ({
+                slug,
+                tableName: collection.tableName,
+              })),
+              confirmedEntries,
+              this.dialect
+            );
             // The plugins' handlers next: what they remove is plain rows, so
             // here, before any DDL, a handler that throws rolls the whole
             // delete back on every dialect, MySQL included, whose table drops
@@ -2164,7 +2201,8 @@ export class CollectionMetadataService extends BaseService {
    */
   private async removeThroughWriter(
     ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>,
-    deps: CollectionSaveDeps
+    deps: CollectionSaveDeps,
+    confirmedEntries: readonly ConfirmedEntries[] | undefined
   ): Promise<void> {
     const { checkSaveHistory, prepareCollectionSave, undoThenThrow } =
       await loadCollectionSave();
@@ -2226,7 +2264,7 @@ export class CollectionMetadataService extends BaseService {
     // the writer; the tables are dropped by the files written above.
     let unregistered: Map<string, UnregisteredCollectionRow>;
     try {
-      unregistered = await this.removeRegistered(ordered, []);
+      unregistered = await this.removeRegistered(ordered, [], confirmedEntries);
     } catch (error) {
       return withdrawAllThenThrow(error);
     }

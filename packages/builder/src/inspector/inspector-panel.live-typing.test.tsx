@@ -40,7 +40,7 @@ import {
 } from "vitest";
 
 import { useEditorState, type EditorState } from "../editor-state";
-import { escapeFieldEdit } from "../field-edit";
+import { escapeFieldEdit, finishFieldEdit } from "../field-edit";
 import { InspectorPanel } from "./inspector-panel";
 
 beforeAll(() => {
@@ -144,6 +144,16 @@ function typeInto(field: HTMLElement, text: string, from = ""): void {
     value += character;
     fireEvent.change(field, { target: { value } });
   }
+}
+
+/** The Text colour row's typed field, its section opened. */
+function colourField(): HTMLInputElement {
+  row("color");
+  const field = document.querySelector<HTMLInputElement>(
+    '[data-property="color"] input'
+  );
+  if (field === null) throw new Error("no colour field");
+  return field;
 }
 
 function mount(): void {
@@ -377,6 +387,73 @@ describe("the Style tab's typed fields", () => {
       void editor().undo();
     });
     expect(styleOf("color")).toBe("#0000ff");
+  });
+
+  it("never applies a colour name on its way to a longer name", () => {
+    // "yellow" is a colour, and "yellow 500" (a saved colour's name, or a
+    // slip) is not: written as typed, the canvas turned yellow, and leaving
+    // the field kept "yellow " while the field said "not a color".
+    mount();
+    openStyle();
+    const field = colourField();
+    fireEvent.change(field, { target: { value: "" } });
+    typeInto(field, "yellow");
+    expect(styleOf("color")).toBe("#0000ff");
+    typeInto(field, " 500", "yellow");
+    expect(styleOf("color")).toBe("#0000ff");
+    fireEvent.blur(field);
+    expect(styleOf("color")).toBe("#0000ff");
+    expect(editor().undoDepth).toBe(0);
+    // The typed text stays, for the author to correct.
+    expect(field.value).toBe("yellow 500");
+  });
+
+  it("writes a colour typed by name when the edit ends, on Enter or blur", () => {
+    mount();
+    openStyle();
+    const field = colourField();
+    fireEvent.change(field, { target: { value: "" } });
+    typeInto(field, "red");
+    expect(styleOf("color")).toBe("#0000ff");
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(styleOf("color")).toBe("red");
+    fireEvent.change(field, { target: { value: "" } });
+    typeInto(field, "green");
+    fireEvent.blur(field);
+    expect(styleOf("color")).toBe("green");
+  });
+
+  it("puts the colour from before back when the edit ends on text that is no colour", () => {
+    // A whole hex colour is drawn as it is typed. One more key makes text
+    // that is not a colour, and leaving there kept the hex on the canvas,
+    // and in the save, under a field saying it is not a colour.
+    mount();
+    openStyle();
+    const field = colourField();
+    fireEvent.change(field, { target: { value: "" } });
+    typeInto(field, "#ff0000");
+    expect(styleOf("color")).toBe("#ff0000");
+    typeInto(field, "x", "#ff0000");
+    fireEvent.blur(field);
+    expect(styleOf("color")).toBe("#0000ff");
+    expect(editor().undoDepth).toBe(0);
+    expect(field.value).toBe("#ff0000x");
+    // And its refusal, which the colour going back must not clear.
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("writes a colour name still being typed when the page is saved from the field", () => {
+    // Not in the page while it is typed, so the page counts it as unsaved
+    // work, and a save made with focus still in the field writes it first.
+    mount();
+    openStyle();
+    const field = colourField();
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: "" } });
+    typeInto(field, "red");
+    expect(styleOf("color")).toBe("#0000ff");
+    act(() => finishFieldEdit());
+    expect(styleOf("color")).toBe("red");
   });
 
   it("keeps a unit picked straight after typing in the same undo step", () => {

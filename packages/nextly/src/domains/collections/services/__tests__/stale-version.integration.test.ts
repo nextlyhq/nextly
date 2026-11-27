@@ -9,7 +9,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../../config";
+import { defineCollection, group, text } from "../../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -109,6 +109,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [
           text({ name: "title", localized: true }),
           text({ name: "note", localized: false }),
+          // One structure in every language: its label translated, its code shared.
+          group({
+            name: "box",
+            fields: [
+              text({ name: "label", localized: true }),
+              text({ name: "code", localized: false }),
+            ],
+          }),
         ],
       }),
       defineCollection({
@@ -611,6 +619,113 @@ describe.each(getConfiguredTestDialects())(
       });
       const counters = await languageCounters(t, [id]);
       expect(counters[`${id}.es`]).toBe(2);
+    });
+
+    // A group whose structure a save writes back as stored changed nothing every language shares:
+    // only the language's text moved, so another language's version still stands. A change to its
+    // shared field moves every language's. Broken, the English save of the group's text alone
+    // makes a Spanish save from before it out of date, which nobody changed.
+    it("judges a save of a group's text on its own language, and of its shared field on every language", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", box: { label: "Label", code: "c1" } }
+      );
+      const id = idOf(created);
+      const es = await update(
+        t,
+        DOCS,
+        id,
+        { box: { label: "Etiqueta", code: "c1" }, _overwrite: true },
+        { locale: "es" }
+      );
+      const readEs = revOf(es);
+
+      await update(
+        t,
+        DOCS,
+        id,
+        { box: { label: "Label again", code: "c1" }, _overwrite: true },
+        { locale: "en" }
+      );
+      const fine = await update(
+        t,
+        DOCS,
+        id,
+        { box: { label: "Etiqueta nueva", code: "c1" }, _rev: readEs },
+        { locale: "es" }
+      );
+      expect(fine.success, JSON.stringify(fine)).toBe(true);
+
+      await update(
+        t,
+        DOCS,
+        id,
+        { box: { label: "Label again", code: "c2" }, _overwrite: true },
+        { locale: "en" }
+      );
+      const afterShared = await update(
+        t,
+        DOCS,
+        id,
+        { box: { label: "Otra", code: "c2" }, _rev: revOf(fine) },
+        { locale: "es" }
+      );
+      expect(afterShared).toMatchObject({
+        success: false,
+        statusCode: 409,
+        code: "STALE_VERSION",
+      });
+    });
+
+    // The same through a batch: a default-language batch edit of a group's text alone leaves its
+    // structure as stored, so the document's own version stays and another language's reader
+    // still saves. Moved anyway, Spanish's version would be refused as stale.
+    it("judges a batch edit of a group's text on its own language", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", box: { label: "Label", code: "c1" } }
+      );
+      const id = idOf(created);
+      const es = await update(
+        t,
+        DOCS,
+        id,
+        { box: { label: "Etiqueta", code: "c1" }, _overwrite: true },
+        { locale: "es" }
+      );
+
+      const batch = await serviceOf(t).updateMany(
+        DOCS,
+        [
+          {
+            id,
+            data: {
+              box: { label: "Label again", code: "c1" },
+              _overwrite: true,
+            },
+          },
+        ],
+        { overrideAccess: true } as never
+      );
+      expect(batch.errors, JSON.stringify(batch)).toEqual([]);
+      // The batch wrote English: a batch that skipped it would keep the version too.
+      const english = (await t.nextly.findByID({
+        collection: DOCS,
+        id,
+        locale: "en",
+      })) as { box: { label?: string; code?: string } };
+      expect(english.box).toMatchObject({ label: "Label again", code: "c1" });
+
+      const fine = await update(
+        t,
+        DOCS,
+        id,
+        { box: { label: "Etiqueta nueva", code: "c1" }, _rev: revOf(es) },
+        { locale: "es" }
+      );
+      expect(fine.success, JSON.stringify(fine)).toBe(true);
     });
 
     it("names who changed it last and when, to a caller who may read it, and never a value", async () => {

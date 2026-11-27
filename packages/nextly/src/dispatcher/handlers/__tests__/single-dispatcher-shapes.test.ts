@@ -102,6 +102,7 @@ type Registry = {
   updateSingle: ReturnType<typeof vi.fn>;
   deleteSingle: ReturnType<typeof vi.fn>;
   assertNothingDependsOn: ReturnType<typeof vi.fn>;
+  getOwnIdentityFields: ReturnType<typeof vi.fn>;
 };
 type Entry = {
   get: ReturnType<typeof vi.fn>;
@@ -125,6 +126,8 @@ function makeRegistry(overrides: Partial<Registry> = {}): Registry {
     deleteSingle: vi.fn(),
     // A delete asks what depends on the Single before it removes anything; nothing does here.
     assertNothingDependsOn: vi.fn().mockResolvedValue(undefined),
+    // A schema read names the identity fields the author declared; none here.
+    getOwnIdentityFields: vi.fn().mockReturnValue([]),
     ...overrides,
   };
 }
@@ -204,6 +207,39 @@ describe("dispatchSingles, paginated lists (respondList)", () => {
   });
 });
 
+describe("dispatchSingles, the fields of a Single defined in code", () => {
+  it.each(["code", "plugin:@acme/shop", "built-in"])(
+    "adds none to one whose source is %s, and a title and slug to the Builder's",
+    async source => {
+      const fields = [{ name: "brand", type: "text" }];
+      const registry = makeRegistry({
+        listSingles: vi.fn().mockResolvedValue({
+          data: [
+            { slug: "shop", source, fields },
+            { slug: "made", source: "ui", fields },
+          ],
+          total: 2,
+        }),
+      });
+      wireDi(registry, makeEntry());
+
+      const response = (await dispatchSingles(
+        "listSingles",
+        { limit: "10", offset: "0" },
+        undefined
+      )) as Response;
+
+      const { items } = (await response.json()) as {
+        items: { fields: { name: string }[] }[];
+      };
+      expect(items.map(item => item.fields.map(field => field.name))).toEqual([
+        ["brand"],
+        ["title", "slug", "brand"],
+      ]);
+    }
+  );
+});
+
 describe("dispatchSingles, single-doc reads (respondDoc)", () => {
   it("getSingleSchema returns bare doc body", async () => {
     const fakeSingle = {
@@ -227,7 +263,7 @@ describe("dispatchSingles, single-doc reads (respondDoc)", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     // source: "code" means injectSingleDefaultFields returns the fields
-    // unchanged, so the body is the original doc plus TWO derived fields.
+    // unchanged, so the body is the original doc plus THREE derived fields.
     // `draftsEnabled` is not decoration: it is how the admin learns whether a
     // status-less save will be stored as a working draft or written live, and
     // draft-split-eligibility.ts is explicit that every call site must derive
@@ -235,9 +271,13 @@ describe("dispatchSingles, single-doc reads (respondDoc)", () => {
     // behaviour while the server performs the other. `workflow` names the
     // workflow attached to the Single, null where none is, so the editor
     // knows before a save whether publishing waits for review.
+    // `ownIdentityFields` names the `title`/`slug` the author declared as
+    // their own, which the editor saves as stored rather than pinning to the
+    // Single's label and slug; read from the registry, which answers none.
     expect(body).toEqual({
       ...fakeSingle,
       draftsEnabled: false,
+      ownIdentityFields: [],
       workflow: null,
     });
     expect(body).not.toHaveProperty("data");

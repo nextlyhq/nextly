@@ -4,9 +4,9 @@
  *
  * The description is the server's own answer to the same request with `describe: true`, so what
  * the dialog says each part will do is what the publish then does. The move is sent with the
- * version of every language, from a read of every language just before, as publishing every
- * language is: a part that changed since the editor read it is refused rather than put live
- * unseen.
+ * version the description was made from: a part that changed since is refused rather than put live
+ * unseen. A move nothing was described for is sent with the version of every language, from a read
+ * of every language just before.
  *
  * @experimental Until publishing per language is complete.
  *
@@ -25,6 +25,7 @@ import { recordingsSettled } from "@admin/hooks/useSnapshotAutosave";
 import {
   EVERY_LANGUAGE,
   refusedAsChangedSince,
+  versionDescribed,
   versionToPublishEveryLanguage,
   type ShownCopy,
 } from "@admin/lib/document-version";
@@ -46,6 +47,9 @@ export type PartsTarget =
 
 /** The parts asked about or moved, without the version, which the hook reads itself. */
 export type PartsRequest = Omit<PublishPartsChoice, "version" | "describe">;
+
+/** The parts moved, with the version their description was made from, where they were described. */
+export type PartsMove = PartsRequest & { described?: string };
 
 /** The request, sent to the target's route. */
 function send(
@@ -75,6 +79,26 @@ function detailKey(target: PartsTarget): readonly unknown[] {
     : singleDocumentKeys.detail(target.slug);
 }
 
+/** The part of a description's key every description of the target shares. */
+const PARTS_DESCRIPTION = "parts-description";
+
+/**
+ * What the request would do, asked of the server once, without changing anything. A description
+ * writes nothing and is sent no version: it describes the document as it stands, and answers the
+ * version that is.
+ */
+export function describeParts(
+  target: PartsTarget,
+  direction: PublishPartsDirection,
+  request: PartsRequest
+): Promise<PublishPartsResult> {
+  return send(target, direction, {
+    ...request,
+    describe: true,
+    version: undefined,
+  });
+}
+
 /**
  * What the chosen parts would do, asked of the server without changing anything. Not asked while
  * `enabled` is false or nothing is chosen.
@@ -93,24 +117,30 @@ export function usePublishPartsDescription(args: {
   return useQuery({
     queryKey: [
       ...detailKey(target),
-      "parts-description",
+      PARTS_DESCRIPTION,
       direction,
       request.locales,
       request.shared ?? false,
     ],
-    // A description writes nothing, and carries no version: it describes the
-    // document as it stands.
-    queryFn: () =>
-      send(target, direction, {
-        ...request,
-        describe: true,
-        version: undefined,
-      }),
+    queryFn: () => describeParts(target, direction, request),
     enabled: enabled && chosen,
     // Always read afresh when asked: what a part would do changes with every save.
     staleTime: 0,
     retry: false,
   });
+}
+
+/**
+ * Asks again what the parts would do, once something a description is judged by changed beside
+ * the document itself: a step that approves a part moves no content.
+ */
+export function useDescribePartsAgain(target: PartsTarget): () => void {
+  const queryClient = useQueryClient();
+  return () => {
+    void queryClient.invalidateQueries({
+      queryKey: [...detailKey(target), PARTS_DESCRIPTION],
+    });
+  };
 }
 
 export interface UsePublishPartsOptions {
@@ -128,25 +158,28 @@ export function usePublishParts({
 }: UsePublishPartsOptions): UseMutationResult<
   PublishPartsResult,
   Error,
-  PartsRequest,
+  PartsMove,
   unknown
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (request: PartsRequest) => {
+    mutationFn: async ({ described, ...request }: PartsMove) => {
       const copy = shown?.();
+      const readShown = (shownCopy: ShownCopy) =>
+        readIn(target, { locale: shownCopy.locale, draft: shownCopy.draft });
       // A recording of the editor's work already sent must land before the publish: one landing
       // after it would be offered as current work made from the document before it went live.
       // Pending throughout, so the action shows busy while it waits.
       await recordingsSettled(copy?.recordings ?? null);
       return send(target, direction, {
         ...request,
-        version: await versionToPublishEveryLanguage(
-          () => readIn(target, { locale: EVERY_LANGUAGE }),
-          copy,
-          shownCopy =>
-            readIn(target, { locale: shownCopy.locale, draft: shownCopy.draft })
-        ),
+        version: await (described === undefined
+          ? versionToPublishEveryLanguage(
+              () => readIn(target, { locale: EVERY_LANGUAGE }),
+              copy,
+              readShown
+            )
+          : versionDescribed(described, copy, readShown)),
       });
     },
     onSuccess: () => {

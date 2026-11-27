@@ -1,0 +1,29 @@
+---
+title: FIELD_GROUP_HISTORY_NAMES_UNRECORDED
+description: "A migration snapshot an earlier release wrote holds field groups under both the current and the legacy names, and records neither."
+---
+
+## Cause
+
+A migration snapshot an earlier release wrote holds field groups under both the current and the legacy names, and records neither.
+
+A release that predates the record of field-group names wrote this snapshot after `nextly migrate:field-groups` moved the site's field groups to the current names (`dynamic_field_groups`, `fg_<slug>`, `_field_group_type`). A snapshot like that, with only the current names in it, is read as on the current names. This one also holds a field group's table under its legacy name (`comp_<slug>`, `_component_type`), so it is on neither naming, and no reading of it plans against the tables the database holds. `nextly migrate:create`, `nextly migrate:check` and `nextly migrate` refuse it.
+
+## Fix
+
+Start the history again from the database as it stands. Run the baseline: on a project that already has migrations it changes nothing, and lists each migration with the step that clears it.
+
+```bash
+npx nextly migrate:baseline
+```
+
+Clear each migration as it says, then run `npx nextly migrate:baseline` again. It records every table under the names and with the columns the database holds, on the current field-group names. Commit the files it writes, and apply them with `npx nextly migrate` on every other database the project deploys to.
+
+## Example
+
+```text
+✗ The snapshot of migration 20261101_120000_000_add_banner holds field groups under both the current names (fg_banner with _field_group_type) and the legacy ones (comp_card with _component_type), and does not record which names the history is on.
+  Why:  An earlier release wrote it after this site's field groups moved, and no reading of it plans against the tables the database holds.
+  Next: Nothing was written or applied. Re-baseline the history with `nextly migrate:baseline`: it lists how to clear the existing migrations, then records the tables as the database holds them.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-history-names-unrecorded  (FIELD_GROUP_HISTORY_NAMES_UNRECORDED)
+```

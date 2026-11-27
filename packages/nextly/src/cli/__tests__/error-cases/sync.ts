@@ -11,7 +11,9 @@ import {
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   demoteCollectionNotFound,
+  demoteLosesUniqueIndex,
   demotePluginCollection,
+  entitiesNotSynced,
   promoteCollectionNotFound,
   restoreCollectionRequired,
   restoreEntityRefusal,
@@ -51,10 +53,16 @@ function restoreRefusal(
 }
 
 export const SYNC_CASES = {
+  ENTITIES_NOT_SYNCED: () =>
+    entitiesNotSynced([
+      { slug: "seo", detail: "priority: Duplicate column name 'priority'" },
+    ]),
   PROMOTE_COLLECTION_NOT_FOUND: () => promoteCollectionNotFound("posts"),
   DEMOTE_COLLECTION_NOT_FOUND: () => demoteCollectionNotFound("posts"),
   DEMOTE_PLUGIN_COLLECTION: () =>
     demotePluginCollection("posts", "@acme/forms"),
+  DEMOTE_LOSES_UNIQUE_INDEX: () =>
+    demoteLosesUniqueIndex("posts", [["tenant", "code"]]),
   SYNC_CONFIRMATION_REQUIRED: () =>
     syncConfirmationRequired("--promote", "posts"),
   I18N_RESTORE_COLLECTION_REQUIRED: () => restoreCollectionRequired(),

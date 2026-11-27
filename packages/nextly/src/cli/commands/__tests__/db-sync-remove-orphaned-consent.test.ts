@@ -168,7 +168,9 @@ vi.mock("../../../shared/lib/assert-plugin-field-declarations", () => ({
   assertPluginFieldDeclarations: () => {},
 }));
 vi.mock("../../../domains/schema/extension/publish", () => ({
+  // Nothing declares a schema hook here, so nothing is compiled.
   compileAndPublishExtensionSchema: async () => {},
+  declaresExtensionSchema: () => false,
 }));
 vi.mock("../../../domains/schema/services/schema-change-exclusion", () => ({
   withSchemaChangeExcluded: async (
@@ -230,6 +232,7 @@ vi.mock("../../../services/collections/collection-sync-service", () => ({
 
 vi.mock("../../../services/singles/single-registry-service", () => ({
   SingleRegistryService: class {
+    async claimDeclared() {}
     async syncCodeFirstSingles() {
       return emptySync;
     }
@@ -241,6 +244,7 @@ vi.mock("../../../services/singles/single-registry-service", () => ({
 
 vi.mock("../../../services/field-groups/field-group-registry-service", () => ({
   FieldGroupRegistryService: class {
+    async claimDeclared() {}
     async syncCodeFirstComponents() {
       return emptySync;
     }

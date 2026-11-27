@@ -125,6 +125,8 @@ import {
 import {
   buildCompanionSchema,
   type CompanionSchema,
+  sharedStructuresIn,
+  storedStructureOf,
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
@@ -132,8 +134,13 @@ import {
   companionNotReadyMessage,
   isCompanionReady,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapesOf } from "../../i18n/runtime/component-shapes";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { partsTogether, type ChangedParts } from "../../versions/changed-parts";
+import {
+  type DocumentStanding,
+  readDocumentStanding,
+} from "../../versions/described-from";
 import {
   bumpDocumentRevision,
   documentVersionOn,
@@ -149,11 +156,13 @@ import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import {
   draftSlotParts,
   draftsKeptByPart,
+  partKeysOf,
   SHARED_DRAFT_SLOT,
 } from "../../versions/part-drafts";
 import {
   judgeSharedValues,
   type LanguageOutcome,
+  languageChangesAlone,
   languagesGoingLiveAsStored,
   languagesTold,
   type LiveSharedDocument,
@@ -162,6 +171,7 @@ import {
   type PendingChange,
   pendingChangesByLanguage,
   pendingChangesInSaveOrder,
+  type PendingStructure,
   type PublishableShape,
   promotionBlockers,
   promotionIssuesOf,
@@ -221,7 +231,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { liveSharedSingle } from "./live-shared-single";
+import { liveSharedSingle, withLiveStructures } from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
@@ -233,7 +243,11 @@ import {
   runSingleStatusMoveBeforeHooks,
   type SingleBeforeHookCall,
 } from "./single-before-update";
-import { recordSingleProvenance } from "./single-provenance";
+import {
+  dropRemovedRowsText,
+  recordSingleProvenance,
+  type SingleProvenanceDeps,
+} from "./single-provenance";
 import {
   checkSingleAccess,
   getSingleHookCollection,
@@ -866,6 +880,45 @@ export class SinglePublishAllService extends BaseService {
             message: `Single "${slug}" has no document to publish`,
           },
         };
+  }
+
+  /**
+   * The counters and drafts of the Single's document as they stand, for a description of its parts
+   * to say what it was made from. Its languages only where each moves on its own, as a move of
+   * them is judged.
+   *
+   * @experimental
+   */
+  async documentStanding(
+    slug: string,
+    id: string
+  ): Promise<DocumentStanding | undefined> {
+    const singleMeta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      slug,
+      this.logger,
+      { intent: "write" }
+    );
+    if (!singleMeta) return undefined;
+    const { companion, companionPublishable } = await this.resolveLifecycle(
+      slug,
+      singleMeta
+    );
+    const languagesTable = translationTableOf(companion, companionPublishable);
+    return readDocumentStanding(this.adapter, {
+      dialect: this.adapter.dialect,
+      ref: { scopeKind: "single", scopeSlug: slug, entryId: id },
+      table: singleMeta.tableName,
+      languages: languagesJudged(
+        languagesTable,
+        versionLanguagesFor({
+          localized: languagesTable !== null,
+          localization: this.localization,
+          locale: EVERY_LOCALE,
+        })
+      ),
+    });
   }
 
   /**
@@ -1552,7 +1605,9 @@ export class SinglePublishAllService extends BaseService {
             tx,
             companion,
             plan.existingDoc.id,
-            [...statuses.keys()]
+            [...statuses.keys()],
+            // A repeater's or group's text is laid on the structure the Single holds.
+            plan.existingDoc
           )
         : new Map<string, Record<string, unknown>>();
     const translated = new Set(
@@ -2177,7 +2232,7 @@ export class SinglePublishAllService extends BaseService {
     // writer's. A language with nothing pending goes live as it is stored,
     // judged when it was saved as a draft and never as published, so it is
     // judged as a promotion of an empty change in the same outcome.
-    const stored = await this.pendingChanges(tx, plan);
+    const stored = await this.pendingChanges(tx, plan, tx);
     // Derived from the stored changes, which carry the same languages as the
     // merged ones below: merging shared values replaces a change's values,
     // never a change or its language.
@@ -2687,6 +2742,53 @@ export class SinglePublishAllService extends BaseService {
     return componentSlug => schemas.get(componentSlug);
   }
 
+  /** What the provenance recording of this service's writes needs. */
+  private provenanceDeps(): SingleProvenanceDeps {
+    return {
+      adapter: this.adapter,
+      logger: this.logger,
+      defaultLocale: this.localization?.defaultLocale,
+    };
+  }
+
+  /**
+   * The structures a promoted language's overlays are the text of, by column: each container's
+   * that the pending change put on the main row (`main`), and the live row's for a container the
+   * change held only text of. Read only where an overlay written has no structure in `main`.
+   */
+  private async structuresHeld(
+    tx: TransactionContext,
+    tableName: string,
+    entryId: string,
+    main: Record<string, unknown>,
+    companion: CompanionSchema,
+    companionValues: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const missing = companion.localizedFields.filter(
+      field =>
+        field.sharedStructure !== undefined &&
+        Object.hasOwn(companionValues, field.column) &&
+        !Object.hasOwn(main, field.column)
+    );
+    if (missing.length === 0) return main;
+    const row = await tx.selectOne<Record<string, unknown>>(tableName, {
+      where: this.whereEq("id", entryId),
+    });
+    const structures: Record<string, unknown> = { ...main };
+    // Read under the key the row holds it by (`storedStructureOf`), and kept
+    // under its column, which the provenance record matches on. A structure
+    // not found is left out, so the overlay is recorded as it is rather than
+    // laid on nothing.
+    for (const { name, column } of missing) {
+      const structure =
+        row === null || row === undefined
+          ? undefined
+          : storedStructureOf(row, { field: name, column });
+      if (structure !== undefined) structures[column] = structure;
+    }
+    return structures;
+  }
+
   private async promotePendingChanges(
     tx: TransactionContext,
     plan: PublishPlan,
@@ -2697,10 +2799,18 @@ export class SinglePublishAllService extends BaseService {
     access: FieldGroupWriteAccess
   ): Promise<void> {
     if (pending.length === 0) return;
-    const { singleMeta, existingDoc, companion } = plan;
+    const { singleMeta, existingDoc } = plan;
+    // A container placing a component is split by its component's fields, read on this
+    // transaction (`withComponentShapes`).
+    const companion = await withComponentShapesOf(
+      plan.companion,
+      tx.getDrizzle()
+    );
     // So the type tags the drafts record come off at every depth.
     const componentFields = await this.componentFieldsOn(tx, plan.fieldConfigs);
 
+    // The languages whose pending text this publish has written so far.
+    const promotedLocales: string[] = [];
     for (const draft of pending) {
       // The pending change carries no lifecycle of its own; the statuses this
       // publish writes are the ones that count.
@@ -2717,6 +2827,23 @@ export class SinglePublishAllService extends BaseService {
         componentFields
       );
       delete main.status;
+      // The structures the row holds before this change goes live, of the
+      // containers it rewrites: what tells a component instance that changed
+      // type. Read only where the change puts a container's structure down.
+      const placed = companion
+        ? sharedStructuresIn(main, companion.localizedFields)
+        : [];
+      const before =
+        placed.length > 0
+          ? ((await tx.selectOne<Record<string, unknown>>(
+              singleMeta.tableName,
+              {
+                where: this.whereEq("id", existingDoc.id),
+                columns: placed.map(written => written.column),
+              }
+            )) ?? undefined)
+          : undefined;
+      if (draft.locale) promotedLocales.push(draft.locale);
 
       if (Object.keys(main).length > 0) {
         await tx.update(
@@ -2728,6 +2855,20 @@ export class SinglePublishAllService extends BaseService {
           },
           this.whereEq("id", existingDoc.id)
         );
+      }
+      // A row the promoted structure removed takes its text with it in every
+      // language, as a save's removal does.
+      if (companion) {
+        await dropRemovedRowsText(this.provenanceDeps(), tx, {
+          slug: singleMeta.slug,
+          entryId: existingDoc.id,
+          companion,
+          written: placed,
+          before,
+          // Every language this publish has put down so far keeps its text:
+          // it is the new structure's already.
+          writtenLocales: promotedLocales,
+        });
       }
       if (
         companion &&
@@ -2744,24 +2885,28 @@ export class SinglePublishAllService extends BaseService {
           savedBy: plan.actor,
         });
         // The held draft's record of where its values came from goes live
-        // with them.
-        await recordSingleProvenance(
-          {
-            adapter: this.adapter,
-            logger: this.logger,
-            defaultLocale: this.localization?.defaultLocale,
-          },
-          tx,
-          {
-            slug: singleMeta.slug,
-            entryId: existingDoc.id,
-            locale: draft.locale,
-            values: companionValues,
-            localizedFields: companion.localizedFields,
-            savedBy: plan.actor,
-            promotesDraft: true,
-          }
-        );
+        // with them. A container's overlay is recorded with the structure the
+        // row now holds, as the draft's record was: this draft's, or the live
+        // one where the draft changed only its text.
+        await recordSingleProvenance(this.provenanceDeps(), tx, {
+          slug: singleMeta.slug,
+          entryId: existingDoc.id,
+          locale: draft.locale,
+          values: companionValues,
+          structures: await this.structuresHeld(
+            tx,
+            singleMeta.tableName,
+            existingDoc.id,
+            main,
+            companion,
+            companionValues
+          ),
+          localizedFields: companion.localizedFields,
+          languagesTable: companion.companionTableName,
+          companionTable: companion.table,
+          savedBy: plan.actor,
+          promotesDraft: true,
+        });
       }
       await this.promoteComponents(
         tx,
@@ -2952,7 +3097,9 @@ export class SinglePublishAllService extends BaseService {
             tx,
             companion,
             plan.existingDoc.id,
-            promoted
+            promoted,
+            // A repeater's or group's text is laid on the structure the Single holds.
+            plan.existingDoc
           )
         : new Map<string, Record<string, unknown>>();
     const holdsComponents = pending.some(
@@ -2997,20 +3144,53 @@ export class SinglePublishAllService extends BaseService {
    */
   private async pendingChanges(
     tx: TransactionContext | DrizzleAdapter,
-    plan: PublishPlan
+    plan: PublishPlan,
+    /**
+     * The publish's transaction, where the changes' values are read to be written: a language's
+     * held text inside a repeater, group or component is then laid on the Single's live
+     * structure in that language. Left out by a caller that reads only which languages are
+     * pending.
+     */
+    valuesOn?: TransactionContext
   ): Promise<PendingChange[]> {
     if (!plan.draftsEligible) return [];
     const { parts } = plan;
+    const structure: PendingStructure | null = valuesOn
+      ? {
+          keys: await partKeysOf(plan.fieldConfigs, {
+            executor: valuesOn.getDrizzle(),
+          }),
+          liveIn: locale =>
+            withLiveStructures(
+              valuesOn,
+              this.adapter,
+              plan.existingDoc,
+              plan.companion,
+              locale,
+              {
+                fieldGroupDataService: this.fieldGroupDataService,
+                singleMeta: plan.singleMeta,
+              }
+            ),
+        }
+      : null;
     if (parts === undefined) {
-      return pendingChangesInSaveOrder(tx, this.workingDraftRef(plan));
+      return pendingChangesInSaveOrder(
+        tx,
+        this.workingDraftRef(plan),
+        structure
+      );
     }
     // Languages moved without the shared part promote their own changes alone. Kept by part, a
     // language's change as stored holds its own values only, where the save-order read lays the
     // shared draft's under it, which would put the shared changes live without the shared part.
     if (!parts.shared && draftsKeptByPart()) {
       return (
-        await new VersionsRepository(tx).findAllWorkingDrafts(
-          this.workingDraftRef(plan)
+        await languageChangesAlone(
+          await new VersionsRepository(tx).findAllWorkingDrafts(
+            this.workingDraftRef(plan)
+          ),
+          structure
         )
       ).filter(
         change => change.locale !== null && parts.locales.has(change.locale)
@@ -3019,7 +3199,7 @@ export class SinglePublishAllService extends BaseService {
     // Each chosen language's change, and the shared part's own (kept under no language) only
     // where the shared part moves.
     return (
-      await pendingChangesInSaveOrder(tx, this.workingDraftRef(plan))
+      await pendingChangesInSaveOrder(tx, this.workingDraftRef(plan), structure)
     ).filter(change => movesPart(parts, change.locale));
   }
 
@@ -3170,7 +3350,7 @@ export class SinglePublishAllService extends BaseService {
       (await tx.selectOne<Record<string, unknown>>(plan.singleMeta.tableName, {
         where: this.whereEq("id", plan.existingDoc.id),
       })) ?? plan.existingDoc;
-    const stored = await this.pendingChanges(tx, plan);
+    const stored = await this.pendingChanges(tx, plan, tx);
     const document =
       stored.length > 0 ? await this.liveSharedDocument(tx, plan) : null;
     const reader = this.fieldNameReader(plan, caller);
@@ -3864,7 +4044,9 @@ export class SinglePublishAllService extends BaseService {
           tx,
           plan.companion,
           plan.existingDoc.id,
-          told.map(language => language.locale)
+          told.map(language => language.locale),
+          // Laid on the structure the publish left, as each language's text is.
+          publishedRow
         )
       : new Map<string, Record<string, unknown>>();
 

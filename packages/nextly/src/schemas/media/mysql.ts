@@ -26,7 +26,7 @@ import {
   type AnyMySqlColumn,
 } from "drizzle-orm/mysql-core";
 
-import { MEDIA_INDEXES, mysqlIndexes } from "../_internal/core-indexes";
+import { MEDIA_INDEXES, mysqlIndexes } from "../_internal/core-indexes-mysql";
 import { users } from "../users/mysql";
 
 /** `media` columns, a fresh builder record per call (see `core-table-contributions`). */

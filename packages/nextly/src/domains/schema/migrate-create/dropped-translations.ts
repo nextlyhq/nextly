@@ -12,6 +12,7 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { fieldGroupTableNames } from "../../field-groups/services/field-group-storage-names";
 import {
   companionUniqueIndexStatements,
   uniqueColumnsWithKind,
@@ -153,7 +154,7 @@ function recordedEntityOf(
   if (record === undefined) return undefined;
   for (const kind of Object.keys(RECORD_KEYS) as I18nTransitionKind[]) {
     for (const [slug, entry] of Object.entries(record[RECORD_KEYS[kind]])) {
-      if (recordedEntityTable(kind, slug, entry) === table)
+      if (recordedEntityTables(kind, slug, entry).includes(table))
         return { kind, slug, entry };
     }
   }
@@ -161,30 +162,42 @@ function recordedEntityOf(
 }
 
 /**
- * The table a recorded entity's declaration names, by the rule `nextly migrate`
+ * The tables a recorded entity's declaration can name, by the rule `nextly migrate`
  * reads it by. A field group's is the table its record names where it names
  * one (`tableName`, or `dbName`): one made under a name its author chose keeps
- * it, which its slug alone does not give.
+ * it, which its slug alone does not give. Otherwise it is under its slug's name
+ * in the naming its history is on, which the declaration does not say, so both
+ * are named.
  */
-export function recordedEntityTable(
+export function recordedEntityTables(
   kind: I18nTransitionKind,
   slug: string,
   entry: RecordedEntitySettings
-): string {
+): string[] {
   const { tableName, dbName } = entry.settings;
   if (kind === "fieldGroup") {
-    if (typeof tableName === "string") return tableName;
-    if (typeof dbName === "string") return dbName;
+    if (typeof tableName === "string") return [tableName];
+    if (typeof dbName === "string") return [dbName];
+    return fieldGroupTableNames(slug);
   }
+  return [recordedEntityTable(kind, slug, entry)];
+}
+
+/**
+ * The one table a recorded collection's or Single's declaration names, by the rule `nextly
+ * migrate` reads it by: its `dbName` where it names one, else its slug's. A field group's may be
+ * under either naming, so it is asked of {@link recordedEntityTables}.
+ */
+export function recordedEntityTable(
+  kind: "collection" | "single",
+  slug: string,
+  entry: RecordedEntitySettings
+): string {
+  const { dbName } = entry.settings;
   const named = typeof dbName === "string" ? { slug, dbName } : { slug };
-  switch (kind) {
-    case "collection":
-      return DEFAULT_TABLE_NAME_RESOLVERS.collection(named);
-    case "single":
-      return DEFAULT_TABLE_NAME_RESOLVERS.single(named);
-    case "fieldGroup":
-      return DEFAULT_TABLE_NAME_RESOLVERS.component(named);
-  }
+  return kind === "collection"
+    ? DEFAULT_TABLE_NAME_RESOLVERS.collection(named)
+    : DEFAULT_TABLE_NAME_RESOLVERS.single(named);
 }
 
 /** A recorded field, as the companion's classifier reads one. */

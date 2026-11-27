@@ -1,6 +1,6 @@
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 
@@ -14,6 +14,15 @@ import {
   type ObservedColumn,
   type StorageObserver,
 } from "../steps";
+
+// The count of registry writes is kept by its own module, tested there. Here it is noted on the
+// handle of the transaction it was made on, where the statements of that transaction are.
+vi.mock("../../../schema/schema-version", () => ({
+  countRegistryWriteOn: async (ctx: { getDrizzle(): { counted(): void } }) => {
+    ctx.getDrizzle().counted();
+  },
+}));
+const COUNTED = "the registry write counted";
 
 const PRESERVING = identifierCaseRules({ dialect: "postgresql" });
 
@@ -162,6 +171,7 @@ function createWorld(initial: {
         // instead would accept identifiers this dialect refuses to quote and
         // parameters it never extracts, and certify a statement no driver
         // could run.
+        getDrizzle: () => ({ counted: () => statements.push(COUNTED) }),
         async runStatement(statement: SQL) {
           const compiled = new PgDialect().sqlToQuery(statement);
           apply(compiled.sql, compiled.params);
@@ -287,6 +297,23 @@ describe("rename steps", () => {
     expect(w.pointersOf(LEGACY_REGISTRY)).toEqual(["fg_hero"]);
     expect(w.transactionCount()).toBe(1);
     await expect(tableStep?.verify(w.session)).resolves.toBe(true);
+  });
+
+  // A server keeps the registry row it read until the count moves, and until then addresses the
+  // table by the name it had.
+  it("counts the registry write in the transaction that moved its pointer, once it has", async () => {
+    const w = world();
+    const [tableStep] = stepsFor(w, entries);
+    await tableStep?.run(w.session);
+
+    const counted = w.statements.indexOf(COUNTED);
+    const moved = w.statements.findIndex(
+      text => /^UPDATE/i.test(text) && text.includes(LEGACY_REGISTRY)
+    );
+    expect(moved).toBeGreaterThanOrEqual(0);
+    expect(counted).toBeGreaterThan(moved);
+    expect(w.statements.filter(text => text === COUNTED)).toHaveLength(1);
+    expect(w.transactionCount()).toBe(1);
   });
 
   // The state the pairing exists to prevent, and the reason `verify` checks the

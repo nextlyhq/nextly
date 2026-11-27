@@ -74,6 +74,37 @@ describe("llms.txt", () => {
     );
   });
 
+  it("writes each page's title as given, never reading it as markup again", async () => {
+    // A name already read from markup: `<Button>` is words here.
+    const title = "Using <Button>";
+    const file = llmsTxt({
+      name: "Acme",
+      entries: [
+        { section: "Pages", title, url: "https://acme.example/button" },
+      ],
+    });
+    expect(file).toContain("- [Using <Button>](https://acme.example/button)");
+    const full = await llmsFullTxt({
+      name: "Acme",
+      pages: [{ title, url: "https://acme.example/button", body: "Words." }],
+    });
+    expect(full).toContain("# Using <Button>\n\nSource:");
+  });
+
+  it("reads its pages one at a time from an async source, as each is built", async () => {
+    async function* pages() {
+      yield { title: "One", url: "https://acme.example/one", body: "First." };
+      yield { title: "Two", url: "https://acme.example/two", body: "Second." };
+    }
+    const file = await llmsFullTxt({ name: "Acme", pages: pages() });
+    expect(file).toContain(
+      "# One\n\nSource: https://acme.example/one\n\nFirst."
+    );
+    expect(file).toContain(
+      "# Two\n\nSource: https://acme.example/two\n\nSecond."
+    );
+  });
+
   it("links an address holding parentheses or spaces whole", () => {
     const file = llmsTxt({
       name: "Acme",
@@ -130,8 +161,8 @@ describe("what the site says to AI tools, and the whole site in one file", () =>
     );
   });
 
-  it("writes llms-full.txt as llms.txt's head, then every page's words under its title and address", () => {
-    const file = llmsFullTxt({
+  it("writes llms-full.txt as llms.txt's head, then every page's words under its title and address", async () => {
+    const file = await llmsFullTxt({
       name: "Acme",
       description: "Acme makes rockets.",
       intro: "Ask us anything.",
@@ -172,9 +203,9 @@ describe("what the site says to AI tools, and the whole site in one file", () =>
     );
   });
 
-  it("stops before a page that would take it past its size, and says so", () => {
+  it("stops before a page that would take it past its size, and says so", async () => {
     const body = `# Big\n\n${"word ".repeat(400)}\n`;
-    const file = llmsFullTxt({
+    const file = await llmsFullTxt({
       name: "Acme",
       maxBytes: 3000,
       listUrl: "https://acme.example/llms.txt",

@@ -118,7 +118,7 @@ describe("getProviderDefaults inside serverless functions", () => {
     }
   });
 
-  it("keeps each provider's other settings", () => {
+  it("keeps each provider's other settings, and waits 5 s for a connection except on Neon", () => {
     for (const provider of ["standard", "neon", "supabase"] as const) {
       const own = getProviderDefaults(provider);
       const serverless = getProviderDefaults(provider, { serverless: true });
@@ -127,8 +127,13 @@ describe("getProviderDefaults inside serverless functions", () => {
         poolMax: 3,
         poolMin: 0,
         idleTimeoutMs: 5000,
+        // Neon keeps its own: the same setting bounds opening a connection,
+        // and a Neon compute waking from suspend needs longer.
+        connectionTimeoutMs: provider === "neon" ? 20000 : 5000,
       });
     }
+    // The serverless wait is shorter than a long-running server's.
+    expect(getProviderDefaults("standard").connectionTimeoutMs).toBe(15000);
   });
 
   it("leaves a long-running server's pool as the provider sets it", () => {

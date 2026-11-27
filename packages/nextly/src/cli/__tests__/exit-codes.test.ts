@@ -20,7 +20,7 @@ import { createProgram } from "../program";
 import { commandAt, commandPaths } from "./helpers/answer-only-invocations";
 
 const SHARED =
-  "0 done or nothing to do · 1 failed or refused · 130 interrupted";
+  "0 done or nothing to do · 1 failed or refused · 4 stopped by the start-up probe (NEXTLY_STARTUP_PROBE is set) · 130 interrupted";
 
 /** The codes each command adds, as its help must print them. */
 const OWN: Record<string, string[]> = {
@@ -79,6 +79,16 @@ describe("every command's help ends with its exit codes", () => {
     expect(help.trimEnd().endsWith(block)).toBe(true);
     // Once: a block added twice would still end the help.
     expect(help.split("Exit codes:")).toHaveLength(2);
+  });
+
+  it("leaves the start-up probe's code to the probe", () => {
+    // A command that exited 4 for something of its own would read as a run
+    // the probe stopped, and one the probe stopped as that.
+    const own = Object.values(OWN)
+      .flat()
+      .flatMap(line => [...line.matchAll(/(?:^|: |, )(\d+) /g)].map(m => m[1]));
+    expect(own).toContain("2");
+    expect(own).not.toContain("4");
   });
 
   it("names its own codes only for commands the program defines", () => {

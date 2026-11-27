@@ -128,6 +128,40 @@ describe("a collection's named lock", () => {
     );
   });
 
+  // A write made again waits only for what its earlier tries left of its one wait, in whole seconds
+  // and never less than it has; with none left it takes a free name and waits for no other. Given a
+  // wait, the second name is waited for only as long as the first left; left out, each on its own.
+  it.each([
+    { waitMs: undefined, seconds: 30, leftToTheSecond: 0 },
+    { waitMs: 12_400, seconds: 13, leftToTheSecond: 1 },
+    { waitMs: 0, seconds: 0, leftToTheSecond: 1 },
+  ])(
+    "waits $seconds seconds where it is given $waitMs milliseconds",
+    async ({ waitMs, seconds, leftToTheSecond }) => {
+      const { tx, statements, registry } = mysqlHold();
+
+      await registry.holdCollectionsIn(
+        tx,
+        ["posts"],
+        "share",
+        waitMs === undefined ? undefined : { waitMs }
+      );
+
+      const taken = statements.filter(query => query.sql.includes("GET_LOCK"));
+      expect(taken).toHaveLength(1);
+      // Each name is followed by its wait, in the one statement that takes both.
+      expect(
+        taken[0].params.flatMap((param, index) =>
+          isLockName(param) ? [taken[0].params[index + 1]] : []
+        )
+      ).toEqual([seconds, seconds]);
+      // The time gone since the statement began, taken from the wait of every name but the first.
+      expect(taken[0].sql.split("SYSDATE(6)")).toHaveLength(
+        leftToTheSecond + 1
+      );
+    }
+  );
+
   it("refuses as COLLECTION_BEING_CHANGED when a name is not got in time, releasing the ones it got", async () => {
     // The first of the two names got, the second not.
     const { tx, statements, registry } = mysqlHold({ taken: 1 });
@@ -160,9 +194,7 @@ describe("a collection's named lock", () => {
  * `site_a`, the registry holds `posts` and `authors`, and the take of the names answers `taken`
  * (every name by default), or fails when `takeFails`.
  */
-function mysqlHold(
-  options: { taken?: number; takeFails?: boolean } = {}
-): {
+function mysqlHold(options: { taken?: number; takeFails?: boolean } = {}): {
   tx: TransactionContext;
   statements: { sql: string; params: unknown[] }[];
   registry: DynamicCollectionRegistryService;

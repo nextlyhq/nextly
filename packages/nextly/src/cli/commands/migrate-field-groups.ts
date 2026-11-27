@@ -3,9 +3,19 @@
  *
  * Field groups were once called components, and the old vocabulary is still in the database: the
  * registry table, every field group's data table, and the column that says which field group a
- * stored row belongs to. This command renames them. Nothing about the running application changes —
- * it already reads whichever generation a database holds — so this is a tidy-up that can be done
- * per site, at a time of the operator's choosing, rather than a flag day.
+ * stored row belongs to. This command renames them, while the site stays up: a server that was
+ * running before the run finds the new names on its next read or save, and a save that meets the
+ * run between two of its steps is refused with a message to retry. So this can be done per site,
+ * at a time of the operator's choosing, rather than a flag day. It runs only when an operator asks
+ * for it here: no start, `nextly migrate` or deploy step reaches it.
+ *
+ * A rollback (`--down`) serves a running site the same way: a save that meets it is refused with
+ * the same message to retry, on a server already on the current names too.
+ *
+ * Content a server saves while the run rewrites stored documents keeps the key it was saved under.
+ * A save that began before the last rewrite and commits after it either makes the run refuse, naming
+ * the row, and running it again finishes it, or, committed after the run's last check, keeps the old
+ * key too. Both keys are read.
  *
  * ## It previews by default, and that is the interface
  *
@@ -30,6 +40,8 @@
  *
  * @module cli/commands/migrate-field-groups
  */
+
+import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
@@ -104,6 +116,12 @@ export async function runMigrateFieldGroups(
 
   logger.keyValue("Direction", direction);
   logger.keyValue("Mode", dryRun ? "preview (nothing is written)" : "apply");
+  if (!dryRun) {
+    // Said before anything runs, so an operator reads it before a save is refused, not after.
+    logger.warn(
+      "While this runs, content saves to field groups may be refused with a message to retry them. Reads keep working."
+    );
+  }
   logger.newline();
 
   await withAdapter(
@@ -124,6 +142,20 @@ export async function runMigrateFieldGroups(
         ...getFieldGroupRegistryAliases(dialect),
       });
       drizzleAdapter.setTableResolver(schemaRegistry);
+
+      // A preview too: it names what a real run would do, and this one would refuse.
+      if (direction === "down") {
+        const { refuseRollbackUnderCurrentHistory } = await import(
+          "../../domains/schema/migrate/field-group-rollback"
+        );
+        await refuseRollbackUnderCurrentHistory({
+          adapter: drizzleAdapter,
+          migrationsDir: resolve(
+            options.cwd ?? process.cwd(),
+            configResult.config.db.migrationsDir
+          ),
+        });
+      }
 
       const { runFieldGroupMigration } = await import(
         "../../domains/field-groups/migration/run"
@@ -161,6 +193,16 @@ function reportOutcome(
     logger.success(
       `Field-group storage migrated ${outcome.direction}. ${String(outcome.steps)} step(s) completed.`
     );
+    // The run's own answer, so the line cannot claim what the run did not establish.
+    if (outcome.restartNeeded) {
+      logger.warn(
+        "Restart every running server so it serves field-group content from the new names."
+      );
+    } else {
+      logger.info(
+        "No running server needs a restart: each finds the new names on its next read or save."
+      );
+    }
     return;
   }
 
@@ -180,6 +222,18 @@ function reportOutcome(
     `Preview of a ${outcome.direction} migration. Nothing was written.`
   );
   logger.newline();
+
+  if (outcome.stopped !== undefined) {
+    // A run that stopped part-way is the first thing an operator needs to know: the plan below is
+    // what is left of it, and `--apply` finishes it rather than starting over.
+    logger.warn(
+      `An earlier ${outcome.stopped.direction} run stopped part-way, after step ${String(outcome.stopped.step)}.`
+    );
+    logger.warn(
+      "--apply finishes it from the names and rows this database holds."
+    );
+    logger.newline();
+  }
 
   if (outcome.renames.length === 0) {
     logger.info("No storage objects would be renamed.");

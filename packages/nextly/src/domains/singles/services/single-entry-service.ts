@@ -446,6 +446,8 @@ export class SingleEntryService extends BaseService {
           );
           return "state" in read ? read : asServiceResult(read);
         }),
+      standing: () =>
+        this.publishAllService.documentStanding(slug, document.id),
       gate: publishGate(),
       collection: slug,
       scopeKind: "single",

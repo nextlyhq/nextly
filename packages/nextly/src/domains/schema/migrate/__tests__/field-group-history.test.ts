@@ -1,0 +1,292 @@
+/**
+ * How `nextly migrate` keeps a database's field-group storage and the project's history on the
+ * same names: which file needs moved storage, when a moved database behind a legacy history may
+ * go on, and how its legacy snapshots are read while the move is pending.
+ */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+/** The registry the database holds, and the tables its rows name. */
+const database = vi.hoisted(() => ({
+  registry: "dynamic_field_groups" as
+    | "dynamic_field_groups"
+    | "dynamic_components",
+  tables: new Map<string, string>(),
+  /** The columns the catalog describes, by table. */
+  live: [] as Array<{ name: string; columns: Array<{ name: string }> }>,
+}));
+vi.mock("../../pipeline/diff/introspect-live", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../pipeline/diff/introspect-live")
+  >()),
+  introspectLiveColumns: vi.fn(async () => ({ tables: database.live })),
+}));
+vi.mock(
+  "../../../field-groups/storage/resolve-storage-names",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../field-groups/storage/resolve-storage-names")
+    >()),
+    resolveRegistryNameFromCatalog: vi.fn(async () => database.registry),
+  })
+);
+vi.mock(
+  "../../../field-groups/services/field-group-stored-tables",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../field-groups/services/field-group-stored-tables")
+    >()),
+    readStoredFieldGroupTables: vi.fn(async () => ({
+      tables: database.tables,
+      usable: true,
+      naming: "current",
+    })),
+  })
+);
+
+import {
+  isFieldGroupTransition,
+  refuseMovedStorageBehindLegacyHistory,
+  refuseTypeColumnsHistoryDoesNotRecord,
+  underDatabaseFieldGroupNames,
+} from "../field-group-history";
+
+const adapter = {} as DrizzleAdapter;
+const CURRENT = {
+  fieldGroupStorage: "current" as const,
+  snapshot: { tables: [] },
+};
+const LEGACY = { snapshot: { tables: [] } };
+
+beforeEach(() => {
+  database.registry = "dynamic_field_groups";
+  database.tables = new Map();
+  database.live = [];
+});
+
+/** A field-group table, as a snapshot or the catalog describes it, with `typeColumn`. */
+function groupTable(name: string, typeColumn: string) {
+  return {
+    name,
+    columns: [
+      { name: "id", type: "text", nullable: false },
+      { name: typeColumn, type: "text", nullable: true },
+    ],
+  };
+}
+
+// A table an earlier release created after the move keeps the legacy type column. A history that
+// says it was renamed would plan against a column the table does not have; one that records the
+// column it holds, as a baseline of the database does, is held to the truth.
+describe("a moved database with a table still on the legacy type column", () => {
+  // The catalog's columns are `database.live`; the adapter only has to carry its dialect.
+  const catalogAdapter = {
+    dialect: "sqlite",
+    getDrizzle: () => ({}),
+  } as unknown as DrizzleAdapter;
+
+  beforeEach(() => {
+    database.tables = new Map([["hero", "fg_hero"]]);
+    database.live = [groupTable("fg_hero", "_component_type")];
+  });
+
+  it("is refused where the history, read under the database's names, records the current column", async () => {
+    let thrown: unknown;
+    try {
+      await refuseTypeColumnsHistoryDoesNotRecord({
+        adapter: catalogAdapter,
+        snapshots: [
+          {
+            fieldGroupNaming: "legacy",
+            snapshot: {
+              tables: [groupTable("comp_hero", "_component_type")],
+            } as never,
+          },
+        ],
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as { logContext?: unknown }).logContext).toMatchObject({
+      reason: "field-group-type-column-not-recorded",
+      tables: ["fg_hero"],
+    });
+  });
+
+  it("goes on where the history records the column the table holds", async () => {
+    await expect(
+      refuseTypeColumnsHistoryDoesNotRecord({
+        adapter: catalogAdapter,
+        snapshots: [
+          {
+            fieldGroupNaming: "current",
+            snapshot: {
+              tables: [groupTable("fg_hero", "_component_type")],
+            } as never,
+          },
+        ],
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("goes on for a database whose field groups have not moved", async () => {
+    database.registry = "dynamic_components";
+    await expect(
+      refuseTypeColumnsHistoryDoesNotRecord({
+        adapter: catalogAdapter,
+        snapshots: [
+          {
+            fieldGroupNaming: "legacy",
+            snapshot: {
+              tables: [groupTable("comp_hero", "_field_group_type")],
+            } as never,
+          },
+        ],
+      })
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("the file that needs moved field-group storage", () => {
+  it("is the first on the current names, after legacy files or at the start of a history", () => {
+    expect(isFieldGroupTransition(LEGACY, CURRENT)).toBe(true);
+    // A history that starts on the current names, as a baseline of a moved database writes one.
+    expect(isFieldGroupTransition(null, CURRENT)).toBe(true);
+    expect(isFieldGroupTransition(CURRENT, CURRENT)).toBe(false);
+    expect(isFieldGroupTransition(LEGACY, LEGACY)).toBe(false);
+    expect(isFieldGroupTransition(null, LEGACY)).toBe(false);
+  });
+});
+
+describe("a moved database behind a legacy history", () => {
+  it("goes on when the next file to apply is the move to the current names", async () => {
+    await expect(
+      refuseMovedStorageBehindLegacyHistory({
+        adapter,
+        newestApplied: "legacy",
+        nextPending: "current",
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("is refused while a legacy file is still to apply before the move", async () => {
+    await expect(
+      refuseMovedStorageBehindLegacyHistory({
+        adapter,
+        newestApplied: "legacy",
+        nextPending: "legacy",
+      })
+    ).rejects.toThrow(/nextly migrate:create --field-group-names=current/);
+  });
+
+  it("is not refused on a database that has not moved", async () => {
+    database.registry = "dynamic_components";
+    await expect(
+      refuseMovedStorageBehindLegacyHistory({
+        adapter,
+        newestApplied: "legacy",
+        nextPending: undefined,
+      })
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("a legacy snapshot read under a moved database's names", () => {
+  const legacySnapshot = {
+    fieldGroupNaming: "legacy" as const,
+    snapshot: {
+      tables: [
+        {
+          name: "comp_card",
+          columns: [{ name: "_component_type", type: "text", nullable: true }],
+        },
+        {
+          // A collection's own table name that shares the prefix, which the storage migration
+          // never renamed.
+          name: "comp_archive",
+          columns: [{ name: "title", type: "text", nullable: true }],
+        },
+      ],
+    },
+  };
+
+  it("renames only the tables the moved registry holds, never by the prefix alone", async () => {
+    database.tables = new Map([["card", "fg_card"]]);
+
+    const [read] = await underDatabaseFieldGroupNames(adapter, [
+      legacySnapshot,
+    ]);
+
+    expect(read?.snapshot.tables.map(table => table.name)).toEqual([
+      "fg_card",
+      "comp_archive",
+    ]);
+    expect(read?.snapshot.tables[0]?.columns.map(c => c.name)).toEqual([
+      "_field_group_type",
+    ]);
+  });
+
+  // The storage migration keeps a table under a name of its own and moves only its type column.
+  it("moves the type column of a group stored under a name of its own", async () => {
+    database.tables = new Map([["seo", "my_seo_block"]]);
+
+    const [read] = await underDatabaseFieldGroupNames(adapter, [
+      {
+        fieldGroupNaming: "legacy" as const,
+        snapshot: {
+          tables: [
+            {
+              name: "my_seo_block",
+              columns: [
+                { name: "_component_type", type: "text", nullable: true },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(read?.snapshot.tables[0]?.name).toBe("my_seo_block");
+    expect(read?.snapshot.tables[0]?.columns.map(c => c.name)).toEqual([
+      "_field_group_type",
+    ]);
+  });
+
+  // The storage migration keeps an author-chosen `fg_` name too: it is read by its slug, never
+  // guessed from the prefix as a renamed `comp_` table.
+  it("keeps an author-chosen fg_ table under its own name, and moves its type column", async () => {
+    database.tables = new Map([["hero", "fg_archive"]]);
+
+    const [read] = await underDatabaseFieldGroupNames(adapter, [
+      {
+        fieldGroupNaming: "legacy" as const,
+        snapshot: {
+          tables: [
+            {
+              name: "fg_archive",
+              columns: [
+                { name: "_component_type", type: "text", nullable: true },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(read?.snapshot.tables[0]?.name).toBe("fg_archive");
+    expect(read?.snapshot.tables[0]?.columns.map(c => c.name)).toEqual([
+      "_field_group_type",
+    ]);
+  });
+
+  it("reads them as they are on a database that has not moved", async () => {
+    database.registry = "dynamic_components";
+    const [read] = await underDatabaseFieldGroupNames(adapter, [
+      legacySnapshot,
+    ]);
+    expect(read?.snapshot.tables.map(table => table.name)).toEqual([
+      "comp_card",
+      "comp_archive",
+    ]);
+  });
+});

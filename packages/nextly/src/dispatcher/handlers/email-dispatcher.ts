@@ -27,6 +27,7 @@ import {
   respondDoc,
   respondList,
   respondMutation,
+  type PaginationMeta,
 } from "../../api/response-shapes";
 import { withErrorHandler } from "../../api/with-error-handler";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
@@ -47,6 +48,12 @@ import { brandSettingsUpdateSchema } from "../../domains/email/brand-settings";
 import { EmailDeliveryActivity } from "../../domains/email/delivery-activity";
 import { draftPreviewSchema } from "../../domains/email/draft-preview-request";
 import { toDescriptor } from "../../domains/email/provider-definition";
+import {
+  listSampleRecords,
+  loadSampleRecord,
+  type OwnerSampleRecords,
+  type SampleRecordCaller,
+} from "../../domains/email/sample-records";
 import { sendOutcomeMessage } from "../../domains/email/send-outcome";
 import type { EmailDeliveryService } from "../../domains/email/services/email-delivery-service";
 import { getEmailProviderRegistry } from "../../domains/email/services/email-provider-registry";
@@ -68,13 +75,19 @@ import type { EmailProviderService } from "../../services/email/email-provider-s
 import type { EmailService } from "../../services/email/email-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
 import { consoleLogger } from "../../shared/types";
-import { readAuthenticatedActor } from "../helpers/authenticated-actor";
+import {
+  readAuthenticatedActor,
+  readAuthenticatedScope,
+} from "../helpers/authenticated-actor";
+import { requireAuthenticatedUser } from "../helpers/authenticated-user";
 import {
   getAdapterFromDI,
   getEmailProviderServiceFromDI,
   getEmailTemplateServiceFromDI,
 } from "../helpers/di";
 import type { MethodHandler, Params } from "../types";
+
+import { readAccessCallerForDispatch } from "./read-access-caller";
 
 interface EmailProviderServices {
   providerService: EmailProviderService;
@@ -686,7 +699,66 @@ const EMAIL_TEMPLATE_METHODS: Record<
       return respondData(preview);
     },
   },
+  listSampleRecords: {
+    // The real records the template's owner offers for its test data, newest
+    // first, to a caller who may read what they are read from; `meta.label`
+    // says what they are ("A real order"). One page, never more.
+    execute: async (svc, p) => {
+      const { records, caller } = await sampleRecordsFor(svc, p.templateId);
+      const { label, items } = await listSampleRecords(records?.source, caller);
+      const meta: PaginationMeta & { label: string } = {
+        total: items.length,
+        page: 1,
+        limit: items.length,
+        totalPages: 1,
+        hasNext: false,
+        hasPrev: false,
+        label,
+      };
+      // A record's label is the loader's text, never re-read as a date.
+      const response = respondList(items, meta);
+      response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+      return response;
+    },
+  },
+  loadSampleRecord: {
+    // One record's values for the preview, by variable name. Read for this
+    // answer and kept nowhere.
+    execute: async (svc, p) => {
+      const { records, caller } = await sampleRecordsFor(svc, p.templateId);
+      const variables = await loadSampleRecord(records, p.recordId, caller);
+      // The values fill the preview exactly as the loader gave them: a date
+      // is never rewritten in the installation's timezone on the way.
+      const response = respondDoc({ id: p.recordId, variables });
+      response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+      return response;
+    },
+  },
 };
+
+/**
+ * The real records a template's running owner offers for its test data, and
+ * the caller as the access decision reads them, which the sample-records
+ * module asks before the owner's loader runs.
+ */
+async function sampleRecordsFor(
+  svc: EmailTemplateServices,
+  templateId: string
+): Promise<{
+  records: OwnerSampleRecords | undefined;
+  caller: SampleRecordCaller;
+}> {
+  const user = requireAuthenticatedUser();
+  const template = await svc.templateService.getTemplate(templateId);
+  return {
+    records: svc.templateService.ownerSampleRecords(template.slug),
+    caller: {
+      readCaller: readAccessCallerForDispatch(user),
+      userId: user.id,
+      scope: readAuthenticatedScope(),
+    },
+  };
+}
 
 /** Parse a request body, turning a schema refusal into the validation envelope. */
 /** A template's declared variables, checked where a save gives them. */

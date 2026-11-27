@@ -59,7 +59,7 @@ import {
 } from "../plugins/test-nextly";
 import { _recordRegisteredLocalizationForTest } from "../route-handler/auth-handler";
 import { createDynamicHandlers } from "../routeHandler";
-import { STORAGE_FORMAT } from "../schemas/storage-format";
+import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
 import type { ServiceContainer } from "../services";
 import { sanitizeConfig } from "../shared/types/config";
 
@@ -81,7 +81,7 @@ const WITH_SUMMARY: Field[] = [...BASE, { name: "summary", type: "text" }];
 const REGISTRIES = [
   "dynamic_collections",
   "dynamic_singles",
-  STORAGE_FORMAT.registryTable,
+  MIGRATION_TARGET.registryTable,
 ] as const;
 
 /**
@@ -91,10 +91,10 @@ const REGISTRIES = [
 const TABLES = [
   "dc_posts",
   "single_home",
-  "comp_promo",
+  "fg_promo",
   "dc_drafts",
   "single_about",
-  "comp_cta",
+  "fg_cta",
 ] as const;
 
 /** The production refusal's message, which names migrations and no switch. */
@@ -383,7 +383,7 @@ const ROADS: Road[] = [
           fields: WITH_SUMMARY,
           confirmed: true,
           schemaVersion: await schemaVersionOf(
-            STORAGE_FORMAT.registryTable,
+            MIGRATION_TARGET.registryTable,
             "promo"
           ),
         }),
@@ -652,7 +652,7 @@ describe.each(getConfiguredTestDialects())(
       [
         "nextly/api/field-groups POST",
         ROADS.find(r => r.road === "nextly/api/field-groups POST"),
-        "comp_cta",
+        "fg_cta",
       ],
     ] as const)(
       "%s applies in development where showBuilder is true",

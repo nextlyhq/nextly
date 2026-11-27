@@ -126,7 +126,7 @@ describe("readOwnRules: warnings and notes", () => {
 
   it("keeps a line that is not a standard rule, with a note", () => {
     const read = readOwnRules(
-      "User-agent: *\nDisallow: /search\nContent-Signal: search=yes, ai-train=no"
+      "User-agent: *\nDisallow: /search\nCrawl-delay: 10"
     );
     expect(read.findings).toEqual([
       {
@@ -137,6 +137,34 @@ describe("readOwnRules: warnings and notes", () => {
       },
     ]);
     expect(read.refused).toBe(false);
+  });
+
+  it("keeps a Content-Signal line, pointing to the tick that writes one from the choice", () => {
+    const read = readOwnRules(
+      "User-agent: *\nDisallow: /search\ncontent-signal: search=yes, ai-train=no"
+    );
+    expect(read.findings).toEqual([
+      {
+        line: 3,
+        level: "note",
+        message:
+          "Line 3 is a Content-Signal line. It isn't a standard robots.txt rule; it's kept, and crawlers may ignore it. The Content-Signal tick under AI tools writes one from your choice, so use one or the other.",
+      },
+    ]);
+    expect(read.refused).toBe(false);
+  });
+
+  it("explains a group naming the shared AI-training opt-out as joined with the choice's, not as a crawler", () => {
+    expect(
+      readOwnRules("User-agent: __usage_ai-training\nAllow: /docs/").findings
+    ).toEqual([
+      {
+        line: 1,
+        level: "note",
+        message:
+          "Line 1 names __usage_ai-training, the shared AI-training opt-out, which isn't a crawler: AI companies that read it don't train on the pages its Disallow lines name. Allow AI search, not training and Block all AI tools write Disallow: / for it, joined with these rules, so a page they close opens only with an Allow line.",
+      },
+    ]);
   });
 
   it("explains a group that names an AI crawler as joined with the AI choice, without refusing it", () => {

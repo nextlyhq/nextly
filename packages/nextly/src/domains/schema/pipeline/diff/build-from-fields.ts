@@ -32,6 +32,10 @@ import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { fieldGroupStructuralDefaults } from "../../../field-groups/services/field-group-schema-service";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
+  keepsTranslationsInside,
+  type StructuredField,
+} from "../../../i18n/shared-structure";
+import {
   assertIndexBuildable,
   type WeighedColumn,
 } from "../../extension/naming";
@@ -505,8 +509,19 @@ export function buildDesiredTableFromFields(
   const describeUserColumn = tableName.startsWith("single_")
     ? getSingleRowColumnDescriptor
     : getColumnDescriptor;
-  for (const field of stored) {
-    if (localizedNames.has(field.name)) continue; // lives in the companion table
+  for (const stored_ of stored) {
+    if (localizedNames.has(stored_.name)) continue; // lives in the companion table
+    // A repeater or group keeping one structure on a translated entity has its main column
+    // nullable, whatever its `required` says: `required` is judged on save, as a translated
+    // field's is. Its rows get their structure only from `nextly migrate`'s data step where an
+    // earlier release translated it whole, and a NOT NULL column there cannot be made before
+    // that step runs, which a migration must not wait for.
+    const field =
+      options.localized === true &&
+      stored_.required === true &&
+      keepsTranslationsInside(stored_, true)
+        ? { ...stored_, required: false }
+        : stored_;
     const desc = describeUserColumn(
       // The descriptor's input type is FieldDefinition; this util is
       // structurally compatible (same name/type/required/hasMany/relationTo

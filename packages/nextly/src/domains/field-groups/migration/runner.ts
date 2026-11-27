@@ -17,10 +17,12 @@
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { MetaService } from "../../meta/services/meta-service";
+import { reachStopPoint } from "../../schema/migrate/stop-points";
 
 import type { MigrationSession } from "./session";
 import { advanceStep } from "./state";
 import { runStepInTries, type StepBusyTable } from "./step-tries";
+import { DATA_STEP_COMMITTED, RENAME_STEP_COMMITTED } from "./stop-point-names";
 
 /**
  * One unit of migration work.
@@ -160,6 +162,15 @@ export async function runMigrationSteps(args: {
     }
 
     applied.push(change);
+
+    // The step has committed and its position is not yet recorded: on MySQL each rename commits on
+    // its own, so a run can stop exactly here, and a test stops it here to prove the next run works
+    // out the step from the database rather than from the marker.
+    await reachStopPoint(
+      step.changesStructure === true
+        ? RENAME_STEP_COMMITTED
+        : DATA_STEP_COMMITTED
+    );
 
     // A gate is re-entered by every invocation, so its position is deliberately
     // never written. Recording it would let the next run step over the check.

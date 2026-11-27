@@ -17,12 +17,7 @@ import {
   type StyleLeaf,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
-import {
-  ColorPicker,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@nextlyhq/ui";
+import { ColorPicker, Popover, PopoverTrigger } from "@nextlyhq/ui";
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
@@ -42,6 +37,7 @@ import {
   variableTip,
 } from "../../panels/design/variable-choice";
 import { ColourPair, swatchStyle } from "../../panels/design/variable-swatch";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 import type { PreferenceStore } from "../../shell-state";
 import {
   activeTokenMode,
@@ -62,6 +58,13 @@ import { useFieldDescription } from "../css-hint";
 import { InheritedValue } from "./inherited-value";
 import type { CommitOutcome } from "./style-field-surroundings";
 import { useDraft, TextField, useTypesLive } from "./style-text-field";
+import {
+  connectSuggestion,
+  TypedRefusalLine,
+  useTypedColourCommit,
+  useTypedRefusal,
+} from "./typed-colour-commit";
+import { TypedColourSuggestions } from "./typed-colour-suggestions";
 
 /**
  * Whether Control held with a primary press means a CONTEXT MENU here.
@@ -318,9 +321,13 @@ export function ColourField({
   onType?: ((value: StyleValue | null) => CommitOutcome) | undefined;
 }): React.JSX.Element {
   const noteId = React.useId();
+  // Whether the box writes as it is typed: the text field's own answer, which
+  // is no for a shared style, written once when the edit ends.
+  const typesLive = useTypesLive();
   // Lifted out of the text field because two controls edit one value: a draft
   // private to the field would leave the swatch painting a superseded one.
   const { draft, setDraft, edited, reset, live } = useDraft(stored);
+  const { refused, setRefused, refusalId } = useTypedRefusal(draft);
   const commitColour = rememberingCommit(
     onCommit,
     React.useContext(RecentColoursStore)
@@ -336,12 +343,32 @@ export function ColourField({
   );
   // A keystroke's and a picker move's write.
   const typed = typedOrCommitted(onType, onCommit);
-  const { commitInstead, closed, onColour } = usePickerWrites({
+  const typedCommit = useTypedColourCommit({
+    choices,
+    stored,
+    draft,
+    typesLive,
+    onCommit,
+    commitColour,
+    setRefused,
+  });
+  const picker = usePickerWrites({
     commitColour,
     onMove: typed,
     reset,
     setDraft,
   });
+  // Every other way of writing the value ends what the box refused: the
+  // picker, a recent colour, a suggestion and Unlink alike.
+  const commitInstead = (value: StyleValue | null): CommitOutcome => {
+    setRefused(undefined);
+    return picker.commitInstead(value);
+  };
+  const onColour = (value: string): void => {
+    setRefused(undefined);
+    picker.onColour(value);
+  };
+  const { closed } = picker;
   // What the surface is currently SHOWING: the draft while a literal is being
   // typed, so the swatch follows the field, and the stored value for a
   // reference, which no field is editing. Named once and resolved once, rather
@@ -370,9 +397,12 @@ export function ColourField({
     tokens,
     mode,
     obscuredBy,
-    describedBy,
+    describedBy: describedByAll(refusalId, describedBy),
     noteId,
   });
+  // Refused by the box itself or by the write: either way the text was not
+  // taken, and the box says so.
+  const invalid = describedBy !== undefined || refused !== undefined;
 
   return (
     <>
@@ -422,22 +452,42 @@ export function ColourField({
           // what the document holds are one contract — and a second copy of it
           // beside the first is what drifts, silently, in the direction of
           // losing an edit.
-          <TextField
-            id={id}
-            control={control}
-            stored={stored}
+          <TypedColourSuggestions
+            fieldId={id}
             draft={draft}
-            setDraft={setDraft}
-            tokens={tokens}
-            describedBy={describes}
-            // The REFUSAL alone. `describes` also carries the contrast verdict,
-            // which is supplementary text and never a complaint.
-            invalid={describedBy !== undefined}
-            live={live}
-            // Remembered among Recent colours once, when the edit ends.
-            onType={typed}
-            onCommit={commitColour}
-          />
+            offered={choices}
+            onChoose={variable =>
+              connectSuggestion(variable, {
+                fieldId: id,
+                typesLive,
+                live,
+                commitColour,
+                commitInstead,
+                clearRefusal: () => setRefused(undefined),
+              })
+            }
+          >
+            <TextField
+              id={id}
+              control={control}
+              stored={stored}
+              draft={draft}
+              setDraft={value => {
+                // Typed in again: the box's refusal no longer describes it.
+                setRefused(undefined);
+                setDraft(value);
+              }}
+              tokens={tokens}
+              describedBy={describes}
+              // The REFUSAL alone. `describes` also carries the contrast
+              // verdict, which is supplementary text and never a complaint.
+              invalid={invalid}
+              live={live}
+              // Remembered among Recent colours once, when the edit ends.
+              onType={typed}
+              onCommit={typedCommit}
+            />
+          </TypedColourSuggestions>
         ) : (
           <ColourUnlink
             held={held}
@@ -451,8 +501,14 @@ export function ColourField({
           />
         )}
       </div>
+      <TypedRefusalLine
+        id={refusalId}
+        refused={refused}
+        connected={reference !== null}
+      />
       <ContrastNote id={noteId} contrast={contrast} />
-      <RawColourNote stored={stored} />
+      {/* Advice about the stored colour, not about text that was refused. */}
+      {invalid ? null : <RawColourNote stored={stored} />}
     </>
   );
 }
@@ -583,7 +639,7 @@ function ColourPicker({
         described={described}
         invalid={invalid}
       />
-      <PopoverContent
+      <BuilderPopoverContent
         align="end"
         className="nx-style-inspector__picker"
         // Off here as well as on the tab: the picker is drawn outside the tab,
@@ -642,7 +698,7 @@ function ColourPicker({
           unrepresented={unrepresented}
           onColour={onColour}
         />
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }
@@ -723,7 +779,7 @@ function usePickerWrites({
   reset: () => void;
   setDraft: (value: string) => void;
 }): {
-  commitInstead: (value: StyleValue | null) => void;
+  commitInstead: (value: StyleValue | null) => CommitOutcome;
   closed: (outcome: PickerClose) => void;
   onColour: (value: string) => void;
 } {
@@ -748,11 +804,18 @@ function usePickerWrites({
    * such choice, and joins the front of Recent colours again; a variable or
    * a clear is no colour of its own and is not remembered.
    */
-  const commitInstead = (value: StyleValue | null): void => {
+  const commitInstead = (value: StyleValue | null): CommitOutcome => {
     pending.current = null;
+    // Answered back, so a choice whose write is refused can leave focus where
+    // it was. "unchanged" stands only if the gesture ran no write at all.
+    const answer: { outcome: CommitOutcome } = { outcome: "unchanged" };
     // In the gesture's run, so the moves before it and the choice are one
     // step.
-    gesture.end(() => settle(commitColour(value), reset));
+    gesture.end(() => {
+      answer.outcome = commitColour(value);
+      settle(answer.outcome, reset);
+    });
+    return answer.outcome;
   };
   /*
    * The picker closed, whichever outcome that close had.

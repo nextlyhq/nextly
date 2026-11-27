@@ -22,6 +22,11 @@ import { originsFrom, PRODUCTION_ADDRESSES_ENV } from "../canonical";
 import { siteWide } from "../permissions";
 import { isRecord, textOf } from "../plain-values";
 import { singleKey } from "../problems/page-types";
+import {
+  ownTitleIn,
+  titleSourcesOf,
+  type TitleFields,
+} from "../resolver/own-name";
 
 import {
   CONTENT_TYPES_ROUTE_PATH,
@@ -37,16 +42,19 @@ import {
   type SwitchedOffType,
 } from "./contract";
 import { patternFields } from "./pattern-fields";
-import { TITLE_FIELDS } from "./patterns";
 
-/** The example a stored page gives for `fields`. */
+/**
+ * The example a stored page gives for `fields`, its title read from
+ * `titleFields`, the fields its type's pages are named from, as the page's
+ * head fills `{Title}` from them, so the preview shows the title the page
+ * is published with.
+ */
 function exampleOf(
   document: Readonly<Record<string, unknown>>,
-  fields: readonly PatternField[]
+  fields: readonly PatternField[],
+  titleFields: readonly string[]
 ): PatternExample {
-  const title = TITLE_FIELDS.map(name => textOf(document[name])).find(
-    value => value !== undefined
-  );
+  const title = ownTitleIn(document, titleFields)?.value;
   const values: Record<string, string | number> = {};
   for (const { name } of fields) {
     const value = document[name];
@@ -179,6 +187,16 @@ function sourceOf(
   return undefined;
 }
 
+/** Where core says a Single was made: one a plugin contributes is made in its code. */
+function singleSourceOf(
+  record: Record<string, unknown>
+): ContentTypeSource | undefined {
+  return typeof record.source === "string" &&
+    record.source.startsWith("plugin:")
+    ? "code"
+    : sourceOf(record);
+}
+
 /** Whether a type declares its own top-level field named `seo`. */
 function hasOwnSeoField(fields: unknown): boolean {
   return entryFields(fields).some(field => field.name === "seo");
@@ -228,7 +246,8 @@ async function readableEntries(
 async function contentTypeOf(
   ctx: PluginRouteContext,
   slug: string,
-  withoutAddress: ReadonlySet<string>
+  withoutAddress: ReadonlySet<string>,
+  titleFields: TitleFields | undefined
 ): Promise<SeoContentType> {
   const meta: unknown = await ctx.services.collections.getCollection(slug, {});
   const record = isRecord(meta) ? meta : {};
@@ -247,7 +266,11 @@ async function contentTypeOf(
   const { newest: entry, count } = await readableEntries(ctx, slug);
   let example: PatternExample | undefined;
   if (entry !== undefined) {
-    example = exampleOf(entry, fields);
+    example = exampleOf(
+      entry,
+      fields,
+      titleSourcesOf(ctx, slug, titleFields).fields
+    );
     if (isPublic) {
       const address = await publicAddressOf(
         { kind: "collection", slug },
@@ -282,7 +305,7 @@ function singleTypeOf(
 ): SeoContentType {
   const record = listed.find(each => each.slug === slug) ?? {};
   const declared = entryFields(record.fields);
-  const source = sourceOf(record);
+  const source = singleSourceOf(record);
   return {
     key: singleKey(slug),
     label: textOf(record.label) ?? slug,
@@ -380,10 +403,13 @@ async function switchedOff(
  * The route that lists the collections the plugin adds SEO to, and
  * after them the site's other types, marked as having none.
  */
-export function contentTypesRoute(types: {
-  readonly collections: readonly string[];
-  readonly singles?: readonly string[];
-}): PluginRoute {
+export function contentTypesRoute(
+  types: {
+    readonly collections: readonly string[];
+    readonly singles?: readonly string[];
+  },
+  titleFields?: TitleFields
+): PluginRoute {
   return siteWide({
     method: "GET",
     path: CONTENT_TYPES_ROUTE_PATH,
@@ -407,7 +433,7 @@ export function contentTypesRoute(types: {
       const collections = types.collections;
       const items: ListedContentType[] = [];
       for (const slug of collections) {
-        items.push(await contentTypeOf(ctx, slug, withoutAddress));
+        items.push(await contentTypeOf(ctx, slug, withoutAddress, titleFields));
       }
       const singles = types.singles ?? [];
       if (singles.length > 0) {

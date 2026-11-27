@@ -11,6 +11,12 @@
  * still answers, and schedules only later reads; a reload that failed leaves
  * the served version where it was and is tried again until one loads, even
  * where the stored version is back to the one served.
+ *
+ * A routine read that waits (for a pooled connection, as a starved pool makes
+ * it) holds no request past `SCHEMA_VERSION_WAIT_MS`: each is answered with
+ * the version served before, the wait is logged once, and the read still
+ * settles the version for the requests after it. A read a change marked here
+ * asked for, and a reload, are waited for in full.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +24,8 @@ const read = vi.hoisted(() => ({
   seq: 1,
   count: 0,
   gate: null as null | Promise<void>,
+  /** What each read rejects with, as a driver's error; none where null. */
+  fails: null as null | Error,
   /** How long each read takes, on the faked clock. */
   takesMs: 0,
 }));
@@ -26,16 +34,18 @@ const reloads = vi.hoisted(() => ({
   /** What each reload answers: whether every entity registered. */
   loads: true,
   takesMs: 0,
+  gate: null as null | Promise<void>,
 }));
 /** Moves the faked clock, as a slow read or reload would. */
 const clock = vi.hoisted(() => ({ spend: (_ms: number) => {} }));
 const forgets = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("../../init/reload-dynamic-tables", () => ({
-  reloadDynamicTables: () => {
+  reloadDynamicTables: async () => {
     reloads.count += 1;
+    if (reloads.gate) await reloads.gate;
     clock.spend(reloads.takesMs);
-    return Promise.resolve(reloads.loads);
+    return reloads.loads;
   },
 }));
 vi.mock("../../di/service-access", () => ({
@@ -49,6 +59,7 @@ const database = {
         limit: async () => {
           read.count += 1;
           if (read.gate) await read.gate;
+          if (read.fails) throw read.fails;
           // A slow read, but not forever: a check that reads again because its
           // own read took long finds a quick one from the fourth on, so it
           // stops and the count says how often it read.
@@ -69,6 +80,7 @@ import "../../init/reload-dynamic-tables";
 import {
   bumpSchemaVersion,
   SCHEMA_VERSION_READ_INTERVAL_MS,
+  SCHEMA_VERSION_WAIT_MS,
   servedSchemaVersion,
 } from "../schema-version";
 
@@ -94,7 +106,9 @@ beforeEach(() => {
   read.seq = 1;
   read.count = 0;
   read.gate = null;
+  read.fails = null;
   reloads.count = 0;
+  reloads.gate = null;
   forgets.count = 0;
   // A fresh adapter object per case, as a new start's would be.
   container.registerSingleton("adapter", () => ({ ...adapter }));
@@ -103,7 +117,145 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   container.clear();
+});
+
+/** A promise and the function that settles it. */
+function opening(): { gate: Promise<void>; open: () => void } {
+  let open = () => {};
+  const gate = new Promise<void>(resolve => {
+    open = resolve;
+  });
+  return { gate, open };
+}
+
+/** Records whether `answer` has settled, and with what. */
+function watched<T>(answer: Promise<T>): { settled: boolean; value?: T } {
+  const seen: { settled: boolean; value?: T } = { settled: false };
+  void answer.then(value => {
+    seen.settled = true;
+    seen.value = value;
+  });
+  return seen;
+}
+
+describe("a request while the read of the stored version waits", () => {
+  beforeEach(() => {
+    // The bound is a timer: faked with the clock, so a case moves both.
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+    clock.spend = ms => vi.advanceTimersByTime(ms);
+  });
+
+  it("is answered within the bound with the version served before, and the wait is logged once", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await servedSchemaVersion()).toBe(1);
+    await vi.advanceTimersByTimeAsync(SCHEMA_VERSION_READ_INTERVAL_MS + 1);
+
+    // The next read waits, as one waiting for a pooled connection does.
+    const { gate, open } = opening();
+    read.gate = gate;
+    read.seq = 2;
+    const answers = Array.from({ length: 3 }, () =>
+      watched(servedSchemaVersion())
+    );
+    await vi.advanceTimersByTimeAsync(SCHEMA_VERSION_WAIT_MS - 1);
+    expect(answers.map(answer => answer.settled)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    await vi.advanceTimersByTimeAsync(1);
+    // Every request goes on with the version served before, not the one
+    // the read will find, and none waited past the bound.
+    expect(answers).toEqual(Array(3).fill({ settled: true, value: 1 }));
+    expect(read.count).toBe(2);
+    const slow = warn.mock.calls.filter(([line]) =>
+      String(line).includes("has not answered in")
+    );
+    expect(slow).toHaveLength(1);
+
+    // The read goes on, and settles the version for the requests after it.
+    open();
+    await vi.waitFor(() => expect(reloads.count).toBe(2));
+    expect(await servedSchemaVersion()).toBe(2);
+    expect(read.count).toBe(2);
+  });
+
+  it("waits the read out where a change marked here asked for it", async () => {
+    expect(await servedSchemaVersion()).toBe(1);
+    const { gate, open } = opening();
+    read.gate = gate;
+    read.seq = 2;
+    bumpSchemaVersion();
+    const answer = watched(servedSchemaVersion());
+    await vi.advanceTimersByTimeAsync(SCHEMA_VERSION_WAIT_MS * 3);
+    // Its answer is the change itself: the version before it would tell the
+    // admin its own save is not served.
+    expect(answer.settled).toBe(false);
+    open();
+    await vi.waitFor(() => expect(answer).toEqual({ settled: true, value: 2 }));
+  });
+
+  it("waits out a reload the read found it needs", async () => {
+    expect(await servedSchemaVersion()).toBe(1);
+    await vi.advanceTimersByTimeAsync(SCHEMA_VERSION_READ_INTERVAL_MS + 1);
+    const { gate, open } = opening();
+    reloads.gate = gate;
+    read.seq = 2;
+    const answer = watched(servedSchemaVersion());
+    await vi.waitFor(() => expect(reloads.count).toBe(2));
+    await vi.advanceTimersByTimeAsync(SCHEMA_VERSION_WAIT_MS * 3);
+    // Another copy changed the schema: the request is served once this
+    // copy's definitions follow it.
+    expect(answer.settled).toBe(false);
+    open();
+    await vi.waitFor(() => expect(answer).toEqual({ settled: true, value: 2 }));
+  });
+});
+
+describe("a read of the stored version that fails", () => {
+  it("is logged with its code when it begins and when the code changes, not while it lasts", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failures = () =>
+      warn.mock.calls.filter(([line]) =>
+        String(line).includes("Could not read the stored schema version")
+      );
+    // A first read that succeeds, so the failures below begin after it.
+    expect(await servedSchemaVersion()).toBe(1);
+
+    read.fails = Object.assign(new Error("Waited 5000 ms for a connection"), {
+      code: "NEXTLY_POOL_WAIT_TIMEOUT",
+    });
+    for (let i = 0; i < 3; i += 1) {
+      vi.advanceTimersByTime(SCHEMA_VERSION_READ_INTERVAL_MS + 1);
+      // The version served before, as ever for a failed read.
+      expect(await servedSchemaVersion()).toBe(1);
+    }
+    expect(read.count).toBe(4);
+    expect(failures()).toHaveLength(1);
+    expect(String(failures()[0]?.[0])).toContain("(NEXTLY_POOL_WAIT_TIMEOUT)");
+
+    // Found in the cause chain, as a query error wrapping the driver's.
+    read.fails = new Error("Failed query", {
+      cause: Object.assign(new Error("connection lost"), { code: "57P01" }),
+    });
+    vi.advanceTimersByTime(SCHEMA_VERSION_READ_INTERVAL_MS + 1);
+    await servedSchemaVersion();
+    expect(failures()).toHaveLength(2);
+    expect(String(failures()[1]?.[0])).toContain("(57P01)");
+
+    // A read that succeeds ends it: the next failure is logged again.
+    read.fails = null;
+    vi.advanceTimersByTime(SCHEMA_VERSION_READ_INTERVAL_MS + 1);
+    await servedSchemaVersion();
+    read.fails = new Error("connection lost again", {
+      cause: Object.assign(new Error("gone"), { code: "57P01" }),
+    });
+    vi.advanceTimersByTime(SCHEMA_VERSION_READ_INTERVAL_MS + 1);
+    await servedSchemaVersion();
+    expect(failures()).toHaveLength(3);
+  });
 });
 
 describe("the schema version a server copy serves", () => {

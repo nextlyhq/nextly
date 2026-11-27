@@ -428,7 +428,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       { slug: "promo", label: "Promo", localized: true, fields: TRANSLATED }
     );
     await query(
-      `INSERT INTO ${quote(dialect, "comp_promo")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
+      `INSERT INTO ${quote(dialect, "fg_promo")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
         `VALUES ('promo-1', 'entry-1', 'dc_pages', 'promo', 7)`
     );
     for (const [locale, value] of [
@@ -437,7 +437,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       ["ar", "مرحبا"],
     ]) {
       await query(
-        `INSERT INTO ${quote(dialect, "comp_promo_locales")} (${["_parent", "_locale", "heading"].map(c => quote(dialect, c)).join(", ")}) ` +
+        `INSERT INTO ${quote(dialect, "fg_promo_locales")} (${["_parent", "_locale", "heading"].map(c => quote(dialect, c)).join(", ")}) ` +
           `VALUES ('promo-1', '${locale}', '${value}')`
       );
     }

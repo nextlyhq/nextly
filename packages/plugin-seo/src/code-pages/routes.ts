@@ -14,7 +14,10 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
-import { FRAMEWORK_CRAWL_EXCLUSIONS } from "@nextlyhq/plugin-sdk";
+import {
+  FRAMEWORK_CRAWL_EXCLUSIONS,
+  type PluginContext,
+} from "@nextlyhq/plugin-sdk";
 
 import { isRecord } from "../plain-values";
 
@@ -36,7 +39,19 @@ export interface CodeRoute {
    * recorded yet.
    */
   declared?: true;
+  /**
+   * How an address not named by the build's files is known: recorded in the
+   * database while the build that is served rendered it
+   * (`code-pages/build-record`), or stated in the plugin's `codeAddresses`.
+   * Either says its route calls `seoMetadata`, so `declared` is set too.
+   */
+  listedBy?: "build-record" | "options";
 }
+
+/** The pages built in code the running site has, read when asked. */
+export type ReadCodeRoutes = (
+  ctx: PluginContext
+) => Promise<readonly CodeRoute[]>;
 
 /** An address the build prerendered, and the route that rendered it. */
 export interface Prerendered {
@@ -320,6 +335,12 @@ export interface CodeBuild {
   routes: CodeRoute[];
   dynamic: DynamicRoute[];
   unreadable?: UnreadableBuild;
+  /**
+   * The addresses the build's render answered not found, where its
+   * prerender manifest says so: no page is served there, however else the
+   * address is known.
+   */
+  notFound?: string[];
 }
 
 /**
@@ -377,9 +398,13 @@ export function readCodeBuild(options: CodeRoutesOptions = {}): CodeBuild {
   dynamic.sort((left, right) =>
     left.address < right.address ? -1 : left.address > right.address ? 1 : 0
   );
+  const notFound = read.prerendered.flatMap(each =>
+    each.notFound === true ? [each.path] : []
+  );
   const build: CodeBuild = {
     routes: codeRoutesOf(appPaths, read.prerendered, fileOf),
     dynamic,
+    ...(notFound.length === 0 ? {} : { notFound }),
   };
   // Only a build there is: with no app paths there is nothing to confirm.
   if ("problem" in read && appPaths.length > 0 && expectsPrerenderManifest()) {
@@ -458,4 +483,43 @@ export function dynamicRouteServing(
     }
   }
   return found?.route;
+}
+
+/** A segment of an address, as a route's page is handed it. */
+function decoded(part: string): string {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
+}
+
+/**
+ * The params the route `pattern` (as Next.js names it, such as
+ * `/docs/[[...slug]]`) hands its page at `path`, as `generateStaticParams`
+ * would have named them; none where the route does not serve `path`. An
+ * optional catch-all serving its route's own address has no value, as
+ * Next.js hands it none.
+ */
+export function paramsOfAddress(
+  pattern: string,
+  path: string
+): Record<string, string | string[]> | undefined {
+  const segments = pattern.split("/").filter(part => part !== "");
+  const parts = path.split("/").filter(part => part !== "");
+  if (!serves(segments, parts)) return undefined;
+  const params: Record<string, string | string[]> = {};
+  for (const [at, segment] of segments.entries()) {
+    const name = /^\[{1,2}(?:\.\.\.)?([^\]]+)\]{1,2}$/.exec(segment)?.[1];
+    const kind = kindOf(segment);
+    if (name === undefined || kind === "fixed") continue;
+    if (kind === "one") {
+      params[name] = decoded(parts[at] ?? "");
+      continue;
+    }
+    // A catch-all is a route's last segment: the rest of the address.
+    const rest = parts.slice(at).map(decoded);
+    if (rest.length > 0) params[name] = rest;
+  }
+  return params;
 }

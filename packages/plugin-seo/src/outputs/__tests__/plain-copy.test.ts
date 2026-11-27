@@ -1,13 +1,17 @@
 /**
  * A page's plain-text copy: the words its content fields show, in their
- * order, with rich text written as Markdown, and nothing a visitor never
- * reads: not the page's SEO, its address, its bookkeeping, or the fields that
- * hold choices, numbers or other documents.
+ * order, with rich text written as Markdown, markup written as the words it
+ * shows, a fact beside its field's label (a choice, a ticked box, chips, an
+ * address, another page), and nothing a visitor never reads: not the page's
+ * SEO, its address, its bookkeeping, numbers, or drawings in SVG.
  */
 import {
+  checkbox,
+  chips,
   fieldGroup,
   group,
   number,
+  radio,
   relationship,
   repeater,
   richText,
@@ -22,8 +26,11 @@ import {
   copyAddressOf,
   copyPathsOf,
   markdownOfRichText,
+  descriptionCopyOf,
   pagesOfCopy,
   plainCopyOf,
+  plainTitle,
+  relatedKey,
 } from "../plain-copy";
 
 const text_ = (value: string) => ({ type: "text", text: value, format: 0 });
@@ -33,6 +40,29 @@ const rich = (...children: unknown[]) => ({
 });
 
 describe("rich text as Markdown", () => {
+  it("writes an address the editor linked as a link, and one the author unlinked as its words", () => {
+    const value = rich(
+      paragraph(
+        text_("See "),
+        {
+          type: "autolink",
+          url: "https://example.com/a",
+          children: [text_("https://example.com/a")],
+        },
+        text_(" or "),
+        {
+          type: "autolink",
+          url: "https://example.com/b",
+          isUnlinked: true,
+          children: [text_("example.com/b")],
+        }
+      )
+    );
+    expect(markdownOfRichText(value)).toBe(
+      "See [https://example.com/a](https://example.com/a) or example.com/b"
+    );
+  });
+
   it("writes each kind of block as Markdown, in order", () => {
     const value = rich(
       { type: "heading", tag: "h2", children: [text_("Why it works")] },
@@ -356,6 +386,8 @@ describe("a page's plain-text copy", () => {
       [
         "# Hello world",
         "A short hello.",
+        // A choice, by the label the page shows, beside its field's label.
+        "Category: News",
         "The body.",
         "Why?",
         "Because.",
@@ -364,7 +396,7 @@ describe("a page's plain-text copy", () => {
     );
   });
 
-  it("leaves out the address, the SEO group, choices, numbers and other documents", () => {
+  it("leaves out the address, the SEO group, numbers, and another page it was not told of", () => {
     const copy = plainCopyOf({
       title: "T",
       titleField: "title",
@@ -378,7 +410,193 @@ describe("a page's plain-text copy", () => {
         seo: { metaTitle: "Meta only" },
       },
     });
-    expect(copy).toBe("# T\n");
+    expect(copy).toBe("# T\n\nCategory: News\n");
+  });
+
+  it("writes the words markup shows, never the markup", () => {
+    const copy = plainCopyOf({
+      title: "Things I've Built",
+      fields: [
+        text({ name: "tagline" }),
+        textarea({ name: "intro" }),
+        text({ name: "sum" }),
+      ],
+      document: {
+        tagline: "Fast <strong>&amp;</strong> <em>simple</em>",
+        intro: "<p>One.</p><p>Two<br>lines</p><script>track()</script>",
+        // Words with no markup stay as typed, an angle bracket and all.
+        sum: "a < b & c",
+      },
+    });
+    expect(copy).toBe(
+      [
+        "# Things I've Built",
+        "Fast \\& simple",
+        "One.\nTwo\nlines",
+        "a \\< b \\& c",
+      ].join("\n\n") + "\n"
+    );
+    expect(copy).not.toMatch(/span|strong|script|track/);
+    // A title is read from markup once, by whoever chooses it.
+    expect(
+      plainTitle('Things I\'ve <span class="text-primary">Built</span>')
+    ).toBe("Things I've Built");
+  });
+
+  it("reads a tag whole, a quoted > in it and all, breaks a line at any <br>, and keeps words beside a drawing", () => {
+    const copy = plainCopyOf({
+      title: "Hello",
+      fields: [textarea({ name: "intro" }), text({ name: "label" })],
+      document: {
+        intro: 'One<br class="gap">Two',
+        label: '<svg viewBox="0 0 8 8"></svg>Docs',
+      },
+    });
+    expect(copy).toBe("# Hello\n\nOne\nTwo\n\nDocs\n");
+    expect(plainTitle('<span title="a > b">Hello</span>')).toBe("Hello");
+  });
+
+  it("reads the characters markup spells by name, as the rendered page does", () => {
+    const copy = plainCopyOf({
+      title: "Don’t stop",
+      fields: [textarea({ name: "intro" })],
+      document: { intro: "<p>Don&rsquo;t &mdash; stop&hellip;</p>" },
+    });
+    expect(copy).toBe("# Don’t stop\n\nDon’t — stop…\n");
+    expect(plainTitle("Don&rsquo;t <em>stop</em>")).toBe("Don’t stop");
+  });
+
+  it("writes its title as given, never reading a name already read from markup as markup again", () => {
+    const copy = plainCopyOf({
+      title: "Using <Button>",
+      fields: [],
+      document: {},
+    });
+    expect(copy).toBe("# Using \\<Button\\>\n");
+  });
+
+  it("leaves out a drawing in SVG, as a value or as a picture", () => {
+    const copy = plainCopyOf({
+      title: "T",
+      base: "https://acme.example/t",
+      fields: [
+        text({ name: "icon" }),
+        upload({ name: "logo", relationTo: "media" }),
+        upload({ name: "badge", relationTo: "media" }),
+        upload({ name: "photo", relationTo: "media" }),
+      ],
+      document: {
+        icon: '<svg viewBox="0 0 24 24"><path d="M0 0h24"/></svg>',
+        logo: {
+          url: "/media/logo.svg",
+          mimeType: "image/svg+xml",
+          alt: "Logo",
+        },
+        badge: { url: "/media/badge.svg", alt: "Badge" },
+        photo: { url: "/media/cat.png", mimeType: "image/png", alt: "A cat" },
+      },
+    });
+    expect(copy).toBe("# T\n\n![A cat](https://acme.example/media/cat.png)\n");
+    expect(copy).not.toMatch(/svg/i);
+  });
+
+  it("writes each fact beside its field's label: choices by their label, a ticked box, chips and addresses", () => {
+    const copy = plainCopyOf({
+      title: "GitHub MCP",
+      fields: [
+        select({
+          name: "pricing",
+          options: [
+            { label: "Free and open source", value: "free" },
+            { label: "Paid", value: "paid" },
+          ],
+        }),
+        radio({
+          name: "licence",
+          label: "Licence",
+          options: [{ label: "MIT licence", value: "mit" }],
+        }),
+        select({
+          name: "platforms",
+          hasMany: true,
+          options: [
+            { label: "macOS", value: "mac" },
+            { label: "Linux", value: "linux" },
+          ],
+        }),
+        checkbox({ name: "official" }),
+        checkbox({ name: "deprecated" }),
+        chips({ name: "useCases", label: "Use cases" }),
+        text({ name: "repository" }),
+      ],
+      document: {
+        pricing: "free",
+        licence: "mit",
+        platforms: ["mac", "linux"],
+        official: true,
+        deprecated: false,
+        useCases: ["Review pull requests", "Triage issues"],
+        repository: "https://github.com/github/github-mcp-server",
+      },
+    });
+    expect(copy).toBe(
+      [
+        "# GitHub MCP",
+        "Pricing: Free and open source",
+        "Licence: MIT licence",
+        "Platforms: macOS, Linux",
+        "Official: yes",
+        "Use cases:\n\n- Review pull requests\n- Triage issues",
+        "Repository: <https://github.com/github/github-mcp-server>",
+      ].join("\n\n") + "\n"
+    );
+  });
+
+  it("names another page a relationship holds by its title, linked to its address", () => {
+    const copy = plainCopyOf({
+      title: "Hello",
+      fields: [
+        relationship({ name: "author", relationTo: "authors" }),
+        relationship({ name: "tags", relationTo: "tags", hasMany: true }),
+      ],
+      document: {
+        author: { id: "a1", name: "Sam", createdAt: "2026-01-01" },
+        tags: [
+          { id: "t1", title: "Rockets", createdAt: "2026-01-01" },
+          // Read by its id alone: the public may not read it.
+          "t2",
+        ],
+      },
+      related: new Map([
+        [relatedKey("authors", "a1"), { name: "Sam" }],
+        [
+          relatedKey("tags", "t1"),
+          { name: "Rockets", url: "https://acme.example/tags/rockets" },
+        ],
+      ]),
+    });
+    expect(copy).toBe(
+      "# Hello\n\nAuthor: Sam\n\nTags: [Rockets](https://acme.example/tags/rockets)\n"
+    );
+  });
+
+  it("leaves out the fields it is told to, such as a Single's name Nextly keeps", () => {
+    const copy = plainCopyOf({
+      title: "Thoughts & Insights",
+      fields: [text({ name: "title" }), textarea({ name: "intro" })],
+      document: { title: "Blog Page", intro: "What I think." },
+      skip: ["title"],
+    });
+    expect(copy).toBe("# Thoughts \\& Insights\n\nWhat I think.\n");
+  });
+
+  it("is the page's name and description where its words could not be read", () => {
+    expect(descriptionCopyOf("Docs", "Every guide.")).toBe(
+      "# Docs\n\nEvery guide.\n"
+    );
+    expect(descriptionCopyOf(undefined, "Every guide.")).toBe("Every guide.\n");
+    expect(plainTitle("  <b>Docs</b>\n home ")).toBe("Docs home");
+    expect(plainTitle("<svg></svg>")).toBeUndefined();
   });
 
   it("writes each value of a text field that holds several, in order", () => {

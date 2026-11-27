@@ -85,6 +85,7 @@ vi.mock("../utils/config-loader", () => ({
 vi.mock("../../domains/schema/migrate/unwritten-changes", () => ({
   unwrittenChangesOf: async () => ({
     tables: [],
+    beside: [],
     settings: [],
     permissions: [],
     noSnapshot: true,

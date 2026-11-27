@@ -44,6 +44,16 @@ export interface PluginProxyHandler {
   /** Names the handler in logs. Unique within the plugin. */
   name: string;
   /**
+   * Whether `request` is one only this handler can answer: an address no
+   * page of the site serves, such as a file the plugin makes. Asked before
+   * Nextly has started, with no context, so it reads the request alone and
+   * must be quick. Where it says yes, a Proxy still starting waits for the
+   * start, up to a limit, rather than send the request on to a page that
+   * would answer not found; every other request is never held. A handler
+   * without it is never waited for.
+   */
+  claims?(request: Request): boolean;
+  /**
    * Asked about `request` with the plugin's own context. Return what to do,
    * or nothing to leave the request alone.
    */

@@ -14,55 +14,18 @@
  */
 
 import { getColumns, sql } from "drizzle-orm";
-import {
-  mysqlTable,
-  text as mysqlText,
-  boolean as mysqlBoolean,
-  timestamp as mysqlTimestamp,
-  json as mysqlJson,
-  varchar as mysqlVarchar,
-  double as mysqlDouble,
-  decimal as mysqlDecimal,
-  int as mysqlInt,
-  bigint as mysqlBigint,
-  smallint as mysqlSmallint,
-  char as mysqlChar,
-  float as mysqlFloat,
-  longblob as mysqlLongblob,
-} from "drizzle-orm/mysql-core";
-import {
-  pgTable,
-  text as pgText,
-  boolean as pgBoolean,
-  timestamp as pgTimestamp,
-  jsonb as pgJsonb,
-  doublePrecision as pgDoublePrecision,
-  numeric as pgNumeric,
-  varchar as pgVarchar,
-  integer as pgInteger,
-  bigint as pgBigint,
-  smallint as pgSmallint,
-  char as pgChar,
-  uuid as pgUuid,
-  real as pgReal,
-  serial as pgSerial,
-  bytea as pgBytea,
-} from "drizzle-orm/pg-core";
-import {
+import type {
   check as sqliteCheck,
   foreignKey as sqliteForeignKey,
-  type SQLiteColumn,
-  sqliteTable,
+  SQLiteColumn,
   unique as sqliteUnique,
-  text as sqliteText,
-  integer as sqliteInteger,
-  real as sqliteReal,
-  numeric as sqliteNumeric,
-  blob as sqliteBlob,
 } from "drizzle-orm/sqlite-core";
 
+import {
+  loadedCore,
+  loadedSqliteTimestamp,
+} from "../../../database/dialect-tables";
 import { NextlyError } from "../../../errors/nextly-error";
-import { sqliteTimestamp } from "../../../schemas/_internal/sqlite-timestamp";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { LocalizedColumnSpec } from "../../i18n/migration/types";
@@ -94,6 +57,12 @@ import {
 } from "./field-column-descriptor";
 
 export type SupportedDialect = DescriptorDialect;
+
+// Each dialect's builders, from its loaded core. Asked at each use rather than
+// when this module loads, since the dialect is loaded with its adapter.
+const pg = () => loadedCore("postgresql");
+const mysql = () => loadedCore("mysql");
+const lite = () => loadedCore("sqlite");
 
 // Return type for generateRuntimeSchema - provides the Drizzle table object
 // and a schemaRecord keyed by table name for pushSchema() consumption.
@@ -253,13 +222,13 @@ export function generateCompanionRuntimeSchema(
   let table: unknown;
   switch (dialect) {
     case "postgresql":
-      table = pgTable(companionTableName, record);
+      table = pg().pgTable(companionTableName, record);
       break;
     case "mysql":
-      table = mysqlTable(companionTableName, record);
+      table = mysql().mysqlTable(companionTableName, record);
       break;
     case "sqlite":
-      table = sqliteTable(companionTableName, record);
+      table = lite().sqliteTable(companionTableName, record);
       break;
     default:
       throw new Error(`Unsupported dialect: ${String(dialect)}`);
@@ -279,26 +248,29 @@ function buildCompanionColumnRecord(
   // _parent — type matches the main table's `id` (pg/sqlite text, mysql varchar(36)).
   out._parent =
     dialect === "postgresql"
-      ? pgText("_parent").notNull()
+      ? pg().text("_parent").notNull()
       : dialect === "mysql"
-        ? mysqlVarchar("_parent", { length: 36 }).notNull()
-        : sqliteText("_parent").notNull();
+        ? mysql().varchar("_parent", { length: 36 }).notNull()
+        : lite().text("_parent").notNull();
 
   // _locale — varchar(20) (text on sqlite).
   out._locale =
     dialect === "postgresql"
-      ? pgVarchar("_locale", { length: 20 }).notNull()
+      ? pg().varchar("_locale", { length: 20 }).notNull()
       : dialect === "mysql"
-        ? mysqlVarchar("_locale", { length: 20 }).notNull()
-        : sqliteText("_locale").notNull();
+        ? mysql().varchar("_locale", { length: 20 }).notNull()
+        : lite().text("_locale").notNull();
 
   if (options.status === true) {
     out._status =
       dialect === "postgresql"
-        ? pgVarchar("_status", { length: 20 }).notNull().default("draft")
+        ? pg().varchar("_status", { length: 20 }).notNull().default("draft")
         : dialect === "mysql"
-          ? mysqlVarchar("_status", { length: 20 }).notNull().default("draft")
-          : sqliteText("_status").notNull().default("draft");
+          ? mysql()
+              .varchar("_status", { length: 20 })
+              .notNull()
+              .default("draft")
+          : lite().text("_status").notNull().default("draft");
   }
 
   // 🔴 `_updated_at` is deliberately NOT declared here, and the reason is an upgrade
@@ -446,7 +418,7 @@ export function contributedSqliteChecks(
   contributed: readonly ExtensionColumn[]
 ): ReturnType<typeof sqliteCheck>[] {
   return enumChecks(tableName, contributed, "sqlite").map(spec =>
-    sqliteCheck(spec.name, sql.raw(spec.sql))
+    lite().check(spec.name, sql.raw(spec.sql))
   );
 }
 
@@ -456,7 +428,7 @@ function generatePostgresSchema(
   options: RuntimeSchemaOptions
 ): unknown {
   const columns = buildDrizzleColumnRecord(fields, "postgresql", options);
-  return pgTable(tableName, columns);
+  return pg().pgTable(tableName, columns);
 }
 
 function generateMySQLSchema(
@@ -465,7 +437,7 @@ function generateMySQLSchema(
   options: RuntimeSchemaOptions
 ): unknown {
   const columns = buildDrizzleColumnRecord(fields, "mysql", options);
-  return mysqlTable(tableName, columns);
+  return mysql().mysqlTable(tableName, columns);
 }
 
 function generateSQLiteSchema(
@@ -482,7 +454,7 @@ function generateSQLiteSchema(
   const uniqueColumns = options.uniqueColumns ?? [];
   // The local side is read from the BUILT columns Drizzle hands this
   // callback: a builder has no name until its table is built.
-  return sqliteTable(tableName, columns, built => [
+  return lite().sqliteTable(tableName, columns, built => [
     ...checks,
     ...foreignKeys.map(fk => sqliteForeignKeyOf(fk, built)),
     ...sqliteUniquesOf(uniqueColumns, built),
@@ -528,7 +500,7 @@ function sqliteUniquesOf(
   const bySqlName = builtColumnsBySqlName(built);
   return columns.flatMap(name => {
     const column = bySqlName.get(name.toLowerCase());
-    return column === undefined ? [] : [sqliteUnique().on(column)];
+    return column === undefined ? [] : [lite().unique().on(column)];
   });
 }
 
@@ -543,10 +515,10 @@ function sqliteForeignKeyOf(
   fk: ForeignKeySpec,
   built: Record<string, unknown>
 ): ReturnType<typeof sqliteForeignKey> {
-  const referenced = sqliteTable(
+  const referenced = lite().sqliteTable(
     fk.referencesTable,
     Object.fromEntries(
-      fk.referencesColumns.map(name => [name, sqliteText(name)])
+      fk.referencesColumns.map(name => [name, lite().text(name)])
     )
   ) as unknown as Record<string, unknown>;
   // A key whose column is not on the table is refused rather than handed over
@@ -562,11 +534,12 @@ function sqliteForeignKeyOf(
       },
     });
   }
-  return sqliteForeignKey({
-    name: fk.name,
-    columns,
-    foreignColumns: fk.referencesColumns.map(name => referenced[name]),
-  } as never)
+  return lite()
+    .foreignKey({
+      name: fk.name,
+      columns,
+      foreignColumns: fk.referencesColumns.map(name => referenced[name]),
+    } as never)
     .onDelete(fk.onDelete)
     .onUpdate(fk.onUpdate);
 }
@@ -678,24 +651,24 @@ function buildSystemDrizzleColumn(
 
   if (dialect === "postgresql") {
     if (sys.kind === "integer") {
-      const col = pgInteger(sys.name);
+      const col = pg().integer(sys.name);
       return finishColumn(
         numeric === undefined ? col : col.default(numeric),
         sys
       );
     }
     if (sys.kind === "timestamp") {
-      const col = pgTimestamp(sys.name);
+      const col = pg().timestamp(sys.name);
       return finishColumn(clockDefault ? col.defaultNow() : col, sys);
     }
     if (sys.kind === "varchar") {
-      const col = pgVarchar(sys.name, { length: sys.length ?? 255 });
+      const col = pg().varchar(sys.name, { length: sys.length ?? 255 });
       return finishColumn(
         literal === undefined ? col : col.default(literal),
         sys
       );
     }
-    const col = pgText(sys.name);
+    const col = pg().text(sys.name);
     return finishColumn(
       literal === undefined ? col : col.default(literal),
       sys
@@ -704,24 +677,24 @@ function buildSystemDrizzleColumn(
 
   if (dialect === "mysql") {
     if (sys.kind === "integer") {
-      const col = mysqlInt(sys.name);
+      const col = mysql().int(sys.name);
       return finishColumn(
         numeric === undefined ? col : col.default(numeric),
         sys
       );
     }
     if (sys.kind === "timestamp") {
-      const col = mysqlTimestamp(sys.name);
+      const col = mysql().timestamp(sys.name);
       return finishColumn(clockDefault ? col.defaultNow() : col, sys);
     }
     if (sys.kind === "varchar") {
-      const col = mysqlVarchar(sys.name, { length: sys.length ?? 255 });
+      const col = mysql().varchar(sys.name, { length: sys.length ?? 255 });
       return finishColumn(
         literal === undefined ? col : col.default(literal),
         sys
       );
     }
-    const col = mysqlText(sys.name);
+    const col = mysql().text(sys.name);
     return finishColumn(
       literal === undefined ? col : col.default(literal),
       sys
@@ -729,7 +702,7 @@ function buildSystemDrizzleColumn(
   }
 
   if (sys.kind === "integer") {
-    const col = sqliteInteger(sys.name);
+    const col = lite().integer(sys.name);
     return finishColumn(
       numeric === undefined ? col : col.default(numeric),
       sys
@@ -737,13 +710,13 @@ function buildSystemDrizzleColumn(
   }
   // SQLite stores a timestamp as an epoch integer and has no distinct varchar.
   if (sys.kind === "timestamp") {
-    const col = sqliteInteger(sys.name, { mode: "timestamp" });
+    const col = lite().integer(sys.name, { mode: "timestamp" });
     return finishColumn(
       clockDefault ? col.default(sql`(strftime('%s', 'now'))`) : col,
       sys
     );
   }
-  const col = sqliteText(sys.name);
+  const col = lite().text(sys.name);
   return finishColumn(literal === undefined ? col : col.default(literal), sys);
 }
 
@@ -766,6 +739,30 @@ export function systemColumnDriverValue(
   name: string,
   value: unknown
 ): unknown {
+  return systemEncoderColumn(dialect, name).mapToDriverValue(value);
+}
+
+/**
+ * A value of system column `name` on `dialect` as the runtime table's own column reads it back
+ * from what the driver returned: the inverse of {@link systemColumnDriverValue}, from the same
+ * column, for a statement that selects the column itself rather than through that table.
+ */
+export function systemColumnFromDriverValue(
+  dialect: SupportedDialect,
+  name: string,
+  driverValue: unknown
+): unknown {
+  return systemEncoderColumn(dialect, name).mapFromDriverValue(driverValue);
+}
+
+/** The column system column `name` is on `dialect`, built from its descriptor, kept per process. */
+function systemEncoderColumn(
+  dialect: SupportedDialect,
+  name: string
+): {
+  mapToDriverValue(value: unknown): unknown;
+  mapFromDriverValue(value: unknown): unknown;
+} {
   const key = `${dialect}\u0000${name}`;
   let table = encoderTables.get(key);
   if (table === undefined) {
@@ -783,18 +780,21 @@ export function systemColumnDriverValue(
     const record = { column: buildSystemDrizzleColumn(descriptor, dialect) };
     table = (
       dialect === "postgresql"
-        ? pgTable("__nextly_encode", record as never)
+        ? pg().pgTable("__nextly_encode", record as never)
         : dialect === "mysql"
-          ? mysqlTable("__nextly_encode", record as never)
-          : sqliteTable("__nextly_encode", record as never)
+          ? mysql().mysqlTable("__nextly_encode", record as never)
+          : lite().sqliteTable("__nextly_encode", record as never)
     ) as Record<string, unknown>;
     encoderTables.set(key, table);
   }
   const columns = getColumns(table as never) as Record<
     string,
-    { mapToDriverValue(value: unknown): unknown }
+    {
+      mapToDriverValue(value: unknown): unknown;
+      mapFromDriverValue(value: unknown): unknown;
+    }
   >;
-  return columns.column.mapToDriverValue(value);
+  return columns.column;
 }
 
 /**
@@ -820,10 +820,10 @@ export function fieldColumnDriverValue(
     };
     table = (
       dialect === "postgresql"
-        ? pgTable("__nextly_encode", record as never)
+        ? pg().pgTable("__nextly_encode", record as never)
         : dialect === "mysql"
-          ? mysqlTable("__nextly_encode", record as never)
-          : sqliteTable("__nextly_encode", record as never)
+          ? mysql().mysqlTable("__nextly_encode", record as never)
+          : lite().sqliteTable("__nextly_encode", record as never)
     ) as Record<string, unknown>;
     encoderTables.set(key, table);
   }
@@ -861,20 +861,20 @@ export function languageRevisionTable(
   );
   const table = (
     dialect === "postgresql"
-      ? pgTable(tableName, {
-          _parent: pgText("_parent"),
-          _locale: pgText("_locale"),
+      ? pg().pgTable(tableName, {
+          _parent: pg().text("_parent"),
+          _locale: pg().text("_locale"),
           ...documentColumns,
         } as never)
       : dialect === "mysql"
-        ? mysqlTable(tableName, {
-            _parent: mysqlVarchar("_parent", { length: 255 }),
-            _locale: mysqlVarchar("_locale", { length: 255 }),
+        ? mysql().mysqlTable(tableName, {
+            _parent: mysql().varchar("_parent", { length: 255 }),
+            _locale: mysql().varchar("_locale", { length: 255 }),
             ...documentColumns,
           } as never)
-        : sqliteTable(tableName, {
-            _parent: sqliteText("_parent"),
-            _locale: sqliteText("_locale"),
+        : lite().sqliteTable(tableName, {
+            _parent: lite().text("_parent"),
+            _locale: lite().text("_locale"),
             ...documentColumns,
           } as never)
   ) as Record<string, unknown>;
@@ -907,9 +907,10 @@ export function sqliteTimestampColumns(): {
 } {
   // The one builder for an application-stamped SQLite timestamp, shared with
   // the core tables' own `created_at` / `updated_at`.
+  const stamp = loadedSqliteTimestamp();
   return {
-    created_at: sqliteTimestamp("created_at"),
-    updated_at: sqliteTimestamp("updated_at"),
+    created_at: stamp("created_at"),
+    updated_at: stamp("updated_at"),
   };
 }
 
@@ -963,62 +964,62 @@ export function buildPgColumnFromKind(
     case "text":
     case "longText":
     case "varchar":
-      return withNullability(pgText(name), nullable);
+      return withNullability(pg().text(name), nullable);
     case "shortText": {
       // The one string kind PostgreSQL bounds. The others render `text` there, so binding this as
       // text too would leave the ORM describing a column the DDL declared with a width.
-      const col = pgVarchar(name, { length: desc.length ?? 255 });
+      const col = pg().varchar(name, { length: desc.length ?? 255 });
       return withNullability(col, nullable);
     }
     case "boolean":
-      return withNullability(pgBoolean(name), nullable);
+      return withNullability(pg().boolean(name), nullable);
     case "integer":
-      return withNullability(pgInteger(name), nullable);
+      return withNullability(pg().integer(name), nullable);
     case "double":
-      return withNullability(pgDoublePrecision(name), nullable);
+      return withNullability(pg().doublePrecision(name), nullable);
     case "decimal": {
-      const col = pgNumeric(name, decimalConfig(desc));
+      const col = pg().numeric(name, decimalConfig(desc));
       return withNullability(col, nullable);
     }
     case "timestamp":
-      return withNullability(pgTimestamp(name), nullable);
+      return withNullability(pg().timestamp(name), nullable);
     case "json":
-      return withNullability(pgJsonb(name), nullable);
+      return withNullability(pg().jsonb(name), nullable);
     case "fkSingle":
-      return withNullability(pgText(name), nullable);
+      return withNullability(pg().text(name), nullable);
     // Extension-only kinds. Omitting them does NOT fail to compile — this
     // function returns `unknown`, so a missing case falls through to
     // `undefined` and the table receives a non-column. Every kind is listed
     // for that reason.
     case "bigint": {
-      const col = pgBigint(name, { mode: "number" });
+      const col = pg().bigint(name, { mode: "number" });
       return withNullability(col, nullable);
     }
     case "smallint":
-      return withNullability(pgSmallint(name), nullable);
+      return withNullability(pg().smallint(name), nullable);
     case "serial":
       // The database assigns it, so it is never nullable and never written:
       // `withNullability` is deliberately not applied, because a generated
       // key declared nullable would let an insert send an explicit NULL.
-      return pgSerial(name);
+      return pg().serial(name);
     case "char": {
-      const col = pgChar(name, { length: desc.length ?? 1 });
+      const col = pg().char(name, { length: desc.length ?? 1 });
       return withNullability(col, nullable);
     }
     case "uuid":
-      return withNullability(pgUuid(name), nullable);
+      return withNullability(pg().uuid(name), nullable);
     case "real":
-      return withNullability(pgReal(name), nullable);
+      return withNullability(pg().real(name), nullable);
     case "bytes":
       // `bytea`, the type the descriptor renders and the migration creates,
       // so a table pushed from this builder and one built by the migration
       // are the same physical column. Reads and writes are Buffers.
-      return withNullability(pgBytea(name), nullable);
+      return withNullability(pg().bytea(name), nullable);
     case "enum":
       // A native PostgreSQL enum needs its TYPE, which this builder has no
       // handle on. Text keeps reads and writes working; the constraint is
       // carried by the migration.
-      return withNullability(pgText(name), nullable);
+      return withNullability(pg().text(name), nullable);
     case "skip":
       return null;
   }
@@ -1035,60 +1036,60 @@ export function buildMysqlColumnFromKind(
     case "text":
     case "shortText":
     case "varchar": {
-      const col = mysqlVarchar(name, { length: length ?? 255 });
+      const col = mysql().varchar(name, { length: length ?? 255 });
       return withNullability(col, nullable);
     }
     case "longText":
-      return withNullability(mysqlText(name), nullable);
+      return withNullability(mysql().text(name), nullable);
     case "boolean":
-      return withNullability(mysqlBoolean(name), nullable);
+      return withNullability(mysql().boolean(name), nullable);
     case "integer":
-      return withNullability(mysqlInt(name), nullable);
+      return withNullability(mysql().int(name), nullable);
     case "double":
-      return withNullability(mysqlDouble(name), nullable);
+      return withNullability(mysql().double(name), nullable);
     case "decimal": {
-      const col = mysqlDecimal(name, decimalConfig(desc));
+      const col = mysql().decimal(name, decimalConfig(desc));
       return withNullability(col, nullable);
     }
     case "timestamp":
-      return withNullability(mysqlTimestamp(name), nullable);
+      return withNullability(mysql().timestamp(name), nullable);
     case "json":
-      return withNullability(mysqlJson(name), nullable);
+      return withNullability(mysql().json(name), nullable);
     case "fkSingle":
       return withNullability(
-        mysqlVarchar(name, { length: length ?? 36 }),
+        mysql().varchar(name, { length: length ?? 36 }),
         nullable
       );
     // See the PostgreSQL builder: a missing case falls through to `undefined`
     // rather than failing to compile, so every kind is listed.
     case "bigint": {
-      const col = mysqlBigint(name, { mode: "number" });
+      const col = mysql().bigint(name, { mode: "number" });
       return withNullability(col, nullable);
     }
     case "smallint":
-      return withNullability(mysqlSmallint(name), nullable);
+      return withNullability(mysql().smallint(name), nullable);
     case "serial":
       // `.autoincrement()` is what makes it AUTO_INCREMENT; MySQL requires
       // such a column to be a key, which the DDL declares.
-      return mysqlInt(name).autoincrement().notNull();
+      return mysql().int(name).autoincrement().notNull();
     case "char": {
-      const col = mysqlChar(name, { length: length ?? 1 });
+      const col = mysql().char(name, { length: length ?? 1 });
       return withNullability(col, nullable);
     }
     case "uuid": {
-      const col = mysqlChar(name, { length: 36 });
+      const col = mysql().char(name, { length: 36 });
       return withNullability(col, nullable);
     }
     case "real":
-      return withNullability(mysqlFloat(name), nullable);
+      return withNullability(mysql().float(name), nullable);
     case "bytes":
       // `longblob`, as the descriptor renders it: variable length and
       // unbounded, where a fixed `binary(n)` would pad every value to n bytes
       // and refuse a longer one. Buffer mode, so values round-trip as bytes.
-      return withNullability(mysqlLongblob(name), nullable);
+      return withNullability(mysql().longblob(name), nullable);
     case "enum": {
       // The width the descriptor renders, from the one constant both read.
-      const col = mysqlVarchar(name, { length: ENUM_STORAGE_LENGTH });
+      const col = mysql().varchar(name, { length: ENUM_STORAGE_LENGTH });
       return withNullability(col, nullable);
     }
     case "skip":
@@ -1106,32 +1107,32 @@ export function buildSqliteColumnFromKind(
     case "longText":
     case "shortText":
     case "varchar":
-      return withNullability(sqliteText(name), nullable);
+      return withNullability(lite().text(name), nullable);
     case "boolean":
       return withNullability(
-        sqliteInteger(name, { mode: "boolean" }),
+        lite().integer(name, { mode: "boolean" }),
         nullable
       );
     case "integer":
-      return withNullability(sqliteInteger(name), nullable);
+      return withNullability(lite().integer(name), nullable);
     case "double":
-      return withNullability(sqliteReal(name), nullable);
+      return withNullability(lite().real(name), nullable);
     case "decimal": {
       // SQLite has no fixed-precision decimal; NUMERIC affinity is the closest,
       // read back as a JS number to match the field's value contract.
-      const col = sqliteNumeric(name, { mode: "number" });
+      const col = lite().numeric(name, { mode: "number" });
       return withNullability(col, nullable);
     }
     case "timestamp":
       return withNullability(
-        sqliteInteger(name, { mode: "timestamp" }),
+        lite().integer(name, { mode: "timestamp" }),
         nullable
       );
     case "json":
       // SQLite stores JSON as text.
-      return withNullability(sqliteText(name), nullable);
+      return withNullability(lite().text(name), nullable);
     case "fkSingle":
-      return withNullability(sqliteText(name), nullable);
+      return withNullability(lite().text(name), nullable);
     case "skip":
       return null;
     default:
@@ -1159,23 +1160,23 @@ function buildSqliteExtensionColumn(
     // the value's shape, not the storage word.
     case "bigint":
     case "smallint":
-      return withNullability(sqliteInteger(name), nullable);
+      return withNullability(lite().integer(name), nullable);
     case "serial":
       // SQLite has no serial type: a plain INTEGER that is the table's
       // primary key IS the rowid alias and auto-assigns, which is the closest
       // faithful rendering and the one `renderDialectType` describes.
-      return sqliteInteger(name).notNull();
+      return lite().integer(name).notNull();
     case "char":
     case "uuid":
     case "enum":
-      return withNullability(sqliteText(name), nullable);
+      return withNullability(lite().text(name), nullable);
     case "real":
-      return withNullability(sqliteReal(name), nullable);
+      return withNullability(lite().real(name), nullable);
     case "bytes":
       // Buffer mode: without it Drizzle's SQLite blob is its JSON mode, which
       // stores `JSON.stringify(value)` and reads back a parsed object, so the
       // bytes written would not be the bytes read.
-      return withNullability(sqliteBlob(name, { mode: "buffer" }), nullable);
+      return withNullability(lite().blob(name, { mode: "buffer" }), nullable);
     default:
       return undefined;
   }

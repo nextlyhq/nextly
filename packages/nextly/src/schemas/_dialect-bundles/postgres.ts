@@ -52,6 +52,7 @@ export {
 } from "../plugin-events/postgres";
 export { nextlyLimitStore } from "../limit-store/postgres";
 export { nextlyCacheTagExpiries } from "../cache-tag-expiries/postgres";
+export { nextlyCliCredentialsPg as nextlyCliCredentials } from "../cli-credentials/postgres";
 export { nextlySpentChallenges } from "../spent-challenges/postgres";
 export { nextlySchemaOwners } from "../schema-owners/postgres";
 export { nextlyWidgetLayout } from "../widget-layout/postgres";
@@ -164,6 +165,7 @@ export { nextlyExternalIdentitiesPg as nextlyExternalIdentities } from "../exter
 export { nextlyVersionViewsPg as nextlyVersionViews } from "../version-views/postgres";
 export { nextlyReviewStatesPg as nextlyReviewStates } from "../review-states/postgres";
 export { nextlyTranslationProvenancePg as nextlyTranslationProvenance } from "../translation-provenance/postgres";
+export { nextlyTranslationSourcesPg as nextlyTranslationSources } from "../translation-sources/postgres";
 export { nextlyWorkflowSettingsPg as nextlyWorkflowSettings } from "../workflow-settings/postgres";
 export { nextlyScheduleWindowsPg as nextlyScheduleWindows } from "../schedule-windows/postgres";
 // The record of content events; in the bundle so freshPushSchema creates the

@@ -6,8 +6,9 @@
  * written whole (a group or repeater of a collection, a Single or a field
  * group, or a field group held inline in one), an update that leaves it out
  * or sends it empty keeps the stored hash; `null` clears it and a new value
- * replaces it. Repeater rows keep theirs by id, and a translated container
- * keeps the written language's.
+ * replaces it. Repeater rows keep theirs by id, and a group whose text is
+ * kept per language keeps its one password, in its structure, for every
+ * language.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -126,17 +127,17 @@ describe.each(getConfiguredTestDialects())(
             localized: true,
             fields: [
               text({ name: "title" }),
+              // Its text kept per language beside its one structure, the password in it.
               group({
                 name: "wrap",
-                localized: true,
                 fields: [text({ name: "a" }), password({ name: "pw" })],
               }),
             ],
           }),
         ],
         singles: [
-          // A translated Single whose translated group is named in camel case:
-          // its translations table keys the column by its snake-case name.
+          // A translated Single whose group is named in camel case: its
+          // translations table keys the group's overlay by its snake-case name.
           defineSingle({
             slug: "ksitel",
             localized: true,
@@ -144,7 +145,6 @@ describe.each(getConfiguredTestDialects())(
               text({ name: "title" }),
               group({
                 name: "accountSettings",
-                localized: true,
                 fields: [text({ name: "a" }), password({ name: "pw" })],
               }),
             ],
@@ -312,7 +312,7 @@ describe.each(getConfiguredTestDialects())(
         },
         _overwrite: true,
       });
-      const row = await rawRow("comp_kbox", { id: instanceId });
+      const row = await rawRow("fg_kbox", { id: instanceId });
 
       expect(row.heading).toBe("f2");
       expect(open(row.box).a).toBe("2");
@@ -347,8 +347,8 @@ describe.each(getConfiguredTestDialects())(
         ],
         _overwrite: true,
       });
-      const rep = await rawRow("comp_kbox", { id: fgsId });
-      const block = await rawRow("comp_kbox", { id: zoneId });
+      const rep = await rawRow("fg_kbox", { id: fgsId });
+      const block = await rawRow("fg_kbox", { id: zoneId });
 
       expect([rep.heading, open(rep.box).a]).toEqual(["f2", "2"]);
       expect(await hashes(open(rep.box).secret, "rep-1")).toBe(true);
@@ -372,7 +372,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await hashes(open(row?.own).pw, "site-1")).toBe(true);
     });
 
-    it("keeps a translated Single's group password, named in camel case", async () => {
+    it("keeps a translated Single's group password, its group named in camel case", async () => {
       await trusted.updateSingle({
         slug: "ksitel",
         data: {
@@ -386,14 +386,24 @@ describe.each(getConfiguredTestDialects())(
         slug: "ksitel",
         data: { accountSettings: { a: "2" }, _overwrite: true },
       } as never);
-      const [row] = await t.adapter.select<Doc>("single_ksitel_locales", {});
-      const stored = open(row?.accountSettings ?? row?.account_settings);
+      // The password in the group's one structure, its text in the overlay.
+      const [row] = await t.adapter.select<Doc>("single_ksitel", {});
+      const structure = open(row?.accountSettings ?? row?.account_settings);
+      const [translated] = await t.adapter.select<Doc>(
+        "single_ksitel_locales",
+        {}
+      );
+      const overlay = open(
+        translated?.accountSettings ?? translated?.account_settings
+      );
 
-      expect(stored.a).toBe("2");
-      expect(await hashes(stored.pw, "camel-1")).toBe(true);
+      expect(overlay.a).toBe("2");
+      expect(await hashes(structure.pw, "camel-1")).toBe(true);
     });
 
-    it("keeps only the written language's password in a translated group", async () => {
+    // One structure in every language: a group's password is one value for all of them, and a
+    // language's write replaces it for every language; each language keeps its own text.
+    it("keeps one password for every language in a group whose text is kept per language", async () => {
       const { item } = await trusted.create({
         collection: "klocal",
         data: { title: "l", wrap: { a: "1", pw: "en-1" } },
@@ -412,6 +422,7 @@ describe.each(getConfiguredTestDialects())(
         locale: "es",
         data: { wrap: { a: "2" }, _overwrite: true },
       } as never);
+      const structure = open((await rawRow("dc_klocal", { id })).wrap);
       const es = open(
         (await rawRow("dc_klocal_locales", { _parent: id, _locale: "es" })).wrap
       );
@@ -420,9 +431,9 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(es.a).toBe("2");
-      expect(await hashes(es.pw, "es-1")).toBe(true);
-      expect(await hashes(es.pw, "en-1")).toBe(false);
-      expect(await hashes(en.pw, "en-1")).toBe(true);
+      expect(en.a).toBe("1");
+      expect(await hashes(structure.pw, "es-1")).toBe(true);
+      expect(await hashes(structure.pw, "en-1")).toBe(false);
     });
 
     it("keeps, as before, a password column of the entry and a field group placed directly", async () => {
@@ -445,7 +456,7 @@ describe.each(getConfiguredTestDialects())(
         depth: 1,
       } as never)) as Doc;
       const directId = String((read.direct as Doc | undefined)?.id);
-      const direct = await rawRow("comp_kpin", { id: directId });
+      const direct = await rawRow("fg_kpin", { id: directId });
       expect(direct.heading).toBe("d2");
       expect(await hashes(direct.pin, "direct-1")).toBe(true);
     });

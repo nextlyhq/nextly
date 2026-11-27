@@ -81,13 +81,16 @@ import {
   ACCEPT_DATA_LOSS_ENV,
   resolveDataLossConsent,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import { configTheCodeOwns } from "../../domains/schema/pipeline/registered-collections";
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors";
+import { entitiesNotSynced } from "../errors/areas/sync";
 import { CliError } from "../errors/cli-error";
+import { formatCliError } from "../errors/render";
 import {
   createContext,
   type CommandContext,
@@ -116,9 +119,14 @@ import {
   judgeOrphanRemoval,
   performPermissionSeeding,
   syncUserFields,
+  newDatabaseNamingOf,
 } from "./dev-build";
 import { ensureCoreTables, productionSyncRefusal } from "./dev-server";
 import { createDebouncedSync } from "./dev-watcher";
+import {
+  collectEntitiesNotSynced,
+  type EntityNotSynced,
+} from "./entities-not-synced";
 import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { syncSchemaInOrder } from "./sync-schema";
 import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
@@ -369,6 +377,8 @@ export async function runDbSync(
   });
 
   const takesDataSteps = options.autoSync !== false;
+  /** The entities the sync could not bring up to date, for the run's closing error. */
+  let notSynced: EntityNotSynced[] = [];
 
   try {
     // Step 3.4: Work of that kind whose backup nobody confirmed is refused
@@ -382,12 +392,20 @@ export async function runDbSync(
       );
     }
 
+    // The schema as it stands before anything below changes it, so a refusal the data steps make
+    // after the sync names the schema changes only where the sync made some (`liveSchemaOf`).
+    const schemaBefore = takesDataSteps
+      ? await liveSchemaOf(adapter)
+      : undefined;
+
     // Step 3.5: Ensure core tables exist.
     // For fresh databases, the system tables (users, roles, permissions,
     // dynamic_collections, etc.) must exist before any sync or query.
     // Uses drizzle-kit pushSchema() to create ALL tables from the Drizzle
     // schema definitions, guaranteeing they match 100%.
-    await ensureCoreTables(adapter, options, context);
+    await ensureCoreTables(adapter, options, context, () =>
+      newDatabaseNamingOf(configResult.config, context.cwd)
+    );
 
     // Step 3.55: Refuse while a field group storage migration is in flight.
     //
@@ -485,8 +503,11 @@ export async function runDbSync(
           await judgeOrphanRemoval(configResult, adapter, options, context);
 
           // The registry read, the companion passes, the pushes and the move of fields a translated
-          // entity makes shared, in one order (`syncSchemaInOrder`).
-          await syncSchemaInOrder(configResult, adapter, options, context);
+          // entity makes shared, in one order (`syncSchemaInOrder`). An entity whose column or table
+          // the database refused is recorded failed and the rest goes on; the run ends naming it.
+          ({ notSynced } = await collectEntitiesNotSynced(() =>
+            syncSchemaInOrder(configResult, adapter, options, context)
+          ));
 
           if (collectionCount === 0) {
             logger.warn("No collections defined in config");
@@ -505,17 +526,17 @@ export async function runDbSync(
         })
     );
 
-    // Step 6: Data an earlier release stored, brought up to date under the
-    // schema lock, which the sync above has let go: once in a run, a watched
-    // one included. A backup refusal made only now, for work the check before
-    // the sync could not see, ends the run with the sync applied.
-    if (takesDataSteps) {
-      await runWithFieldTypes(configResult.fieldTypes, () =>
-        storedData.takeAfterSchemaChanges()
-      );
-    }
-    const storedDataRefused = storedData.refusal();
-    if (storedDataRefused !== null) throw storedDataRefused;
+    // Step 6, and the entities the sync could not bring up to date (`finishAfterSync`).
+    await finishAfterSync({
+      takesDataSteps,
+      notSynced,
+      storedData,
+      schemaBefore,
+      adapter,
+      fieldTypes: configResult.fieldTypes,
+      watch: options.watch === true,
+      logger,
+    });
 
     // Step 7: Watch mode. Gated on any entity kind this command syncs, not just
     // collections and singles: `loadConfig({ watch: true })` has already opened
@@ -557,6 +578,62 @@ export async function runDbSync(
       clearConfigCache();
     }
   }
+}
+
+/**
+ * What a sync run does once the sync itself is done.
+ *
+ * Step 6: data an earlier release stored, brought up to date under the schema lock, which the sync
+ * has let go: once in a run, a watched one included. A backup refusal made only now, for work the
+ * check before the sync could not see, ends the run with the sync applied. Not where an entity could
+ * not be synced: the steps read the tables as the configuration describes them, so they wait for a
+ * run that syncs every entity, and the run names the passwords still stored as given.
+ *
+ * Then the entities the sync could not sync: a run ends with them, and exit code 1; a watch reports
+ * them and goes on watching, as it does for a re-sync.
+ */
+async function finishAfterSync(args: {
+  takesDataSteps: boolean;
+  notSynced: readonly EntityNotSynced[];
+  storedData: ReturnType<typeof storedDataOfRun>;
+  schemaBefore: Awaited<ReturnType<typeof liveSchemaOf>> | undefined;
+  adapter: CLIDatabaseAdapter;
+  fieldTypes: Parameters<typeof runWithFieldTypes>[0];
+  watch: boolean;
+  logger: CommandContext["logger"];
+}): Promise<void> {
+  const { storedData, notSynced, logger } = args;
+  if (args.takesDataSteps) {
+    await takeStoredDataSteps(args);
+  }
+  const storedDataRefused = storedData.refusal();
+  if (storedDataRefused !== null) throw storedDataRefused;
+
+  if (notSynced.length === 0) return;
+  const failure = entitiesNotSynced([...notSynced]);
+  if (!args.watch) throw failure;
+  // In full, as a run ends with it: its next step and its page.
+  logger.error(formatCliError(failure));
+}
+
+/** Step 6 of `finishAfterSync`: the steps, or, with an entity not synced, why they wait. */
+async function takeStoredDataSteps(
+  args: Parameters<typeof finishAfterSync>[0]
+): Promise<void> {
+  if (args.notSynced.length > 0) {
+    args.logger.warn(
+      "The steps over data an earlier release stored were not taken: they wait for a `nextly db:sync` that syncs every entity."
+    );
+    await args.storedData.warnOfPasswordsLeft();
+    return;
+  }
+  const schemaChanged =
+    args.schemaBefore !== (await liveSchemaOf(args.adapter));
+  await runWithFieldTypes(args.fieldTypes, () =>
+    args.storedData.takeAfterSchemaChanges(
+      schemaChanged ? "the schema changes this sync applied" : undefined
+    )
+  );
 }
 
 /**
@@ -763,3 +840,35 @@ export async function dbSyncAction(
 }
 
 export { registerDbSyncCommand } from "./db-sync.command";
+
+/**
+ * The live schema of every table, as one comparable text: its tables, their columns, indexes,
+ * keys and checks (`introspectLiveSnapshot`). Read before and after a sync, the two say whether
+ * the sync changed the schema at all, which none of its steps reports. The catalogs return a
+ * table's keys, checks and indexes in no set order, so each is sorted before it is compared: an
+ * unchanged schema reads the same twice.
+ */
+async function liveSchemaOf(adapter: CLIDatabaseAdapter): Promise<string> {
+  const drizzle = adapter as unknown as DrizzleAdapter;
+  const tables = await drizzle.listTables();
+  const snapshot = await introspectLiveSnapshot(
+    drizzle.getDrizzle(),
+    drizzle.getCapabilities().dialect,
+    [...tables].sort()
+  );
+  const inOrder = <T>(items: readonly T[] | undefined) =>
+    items
+      ?.map(item => JSON.stringify(item))
+      .sort()
+      .join("\n");
+  return JSON.stringify(
+    [...snapshot.tables]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(table => ({
+        ...table,
+        foreignKeys: inOrder(table.foreignKeys),
+        checks: inOrder(table.checks),
+        indexes: inOrder(table.indexes),
+      }))
+  );
+}

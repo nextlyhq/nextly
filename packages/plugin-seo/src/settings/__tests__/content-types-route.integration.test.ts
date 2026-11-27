@@ -110,7 +110,10 @@ afterEach(async () => {
 describe.each(getConfiguredTestDialects())(
   "the content types the SEO settings list (%s)",
   (dialect: TestDialect) => {
-    async function boot(withNotes = false) {
+    async function boot(
+      withNotes = false,
+      titleFields?: Record<string, string>
+    ) {
       const notes = defineCollection({
         slug: NOTES,
         labels: { singular: "Note", plural: "Notes" },
@@ -148,6 +151,7 @@ describe.each(getConfiguredTestDialects())(
         plugins: [
           seoPlugin({
             collections: withNotes ? [NOTES] : [POSTS, CASES],
+            ...(titleFields === undefined ? {} : { titleFields }),
           }),
         ],
         // The boot's seeding, so the plugin's own `manage-seo` exists to grant.
@@ -336,6 +340,26 @@ describe.each(getConfiguredTestDialects())(
       ]);
 
       expect((await listFor(t, nobody)).status).toBe(403);
+    });
+
+    it("previews a type's pattern with the title its pages are published with, from the field the site chooses", async () => {
+      const t = await boot(false, { [POSTS]: "category" });
+      const owner = await personWith(t, "owner", []);
+      await t.nextly.create({
+        collection: POSTS,
+        data: {
+          title: "Surfer SEO vs Rext AI",
+          slug: "surfer-seo-vs-rext-ai",
+          category: "Comparisons",
+        },
+      });
+
+      const { items } = await listFor(t, owner);
+
+      const posts = items?.find(item => item.key === POSTS) as
+        | SeoContentType
+        | undefined;
+      expect(posts?.example?.title).toBe("Comparisons");
     });
 
     it("shows a reader only a page their own read rules let them see", async () => {

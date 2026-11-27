@@ -52,11 +52,9 @@ import {
 } from "@admin/components/features/entries/EntryForm/document-panel-mode";
 import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
 import {
+  HISTORY_COLUMN,
   HISTORY_FRAME,
-  HISTORY_HEAD,
-  HISTORY_RAIL,
-  HISTORY_SPLIT,
-  HISTORY_TITLES,
+  HISTORY_PICKER,
 } from "@admin/components/features/versions/history-layout";
 import {
   cardSpanClass,
@@ -846,37 +844,41 @@ export function EditorOutline({
 }
 
 /**
- * A document's version history: its header, with the way back, the title and
- * the document's name, over the rail of versions beside the comparison. Laid
- * out by the page's own frame, so the header stands where the page draws it.
+ * A document's comparison page: the trail, the title row, the card choosing
+ * the two versions, and the comparison. Laid out by the page's own frame, so
+ * each part stands where the page draws it.
  */
 export function HistoryOutline(): JSX.Element {
   return (
     <ScreenOutline className={HISTORY_FRAME}>
-      <div data-frame-part="history-head" className={HISTORY_HEAD}>
-        {/* The back button's own box, so the titles start where it ends. */}
-        <span className={buttonVariants({ variant: "ghost", size: "sm" })}>
-          <OutlineBar soft className="size-4" />
-        </span>
-        <div className={HISTORY_TITLES}>
-          <div className="flex h-6 items-center">
-            <OutlineBar className="h-3.5 w-[120px]" />
-          </div>
-          <div className="flex h-4 items-center">
-            <OutlineBar soft className="h-3 w-[160px]" />
+      <div className={HISTORY_COLUMN}>
+        {/* The trail, then the title row with its two actions. */}
+        <OutlineBar soft className="h-3 w-[220px]" />
+        <div data-frame-part="history-head" className="flex items-center gap-3">
+          <OutlineBar className="h-5 w-[180px]" />
+          <div className="ml-auto flex gap-2">
+            <OutlineBar soft className="h-8 w-24" />
+            <OutlineBar soft className="h-8 w-32" />
           </div>
         </div>
-      </div>
-      <div className={HISTORY_SPLIT}>
-        <div className={HISTORY_RAIL}>
-          <div className="flex flex-col gap-4 p-4">
-            {[0, 1, 2, 3].map(row => (
-              <div key={row} className="flex flex-col gap-1">
-                <OutlineBar className="h-4 w-28" />
-                <OutlineBar soft className="h-3 w-36" />
-              </div>
-            ))}
-          </div>
+        <div className={HISTORY_PICKER}>
+          {[0, 1].map(side => (
+            <div
+              key={side}
+              className="flex min-w-[14rem] flex-1 flex-col gap-1.5"
+            >
+              <OutlineBar soft className="h-3 w-16" />
+              <OutlineBar className="h-9 w-full" />
+            </div>
+          ))}
+        </div>
+        <div className="flex min-h-[16rem] flex-col gap-4 rounded-lg border border-border p-4">
+          {[0, 1, 2].map(row => (
+            <div key={row} className="flex flex-col gap-1.5">
+              <OutlineBar className="h-3 w-24" />
+              <OutlineBar soft className="h-4 w-full" />
+            </div>
+          ))}
         </div>
       </div>
     </ScreenOutline>

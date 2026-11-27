@@ -32,7 +32,7 @@ import {
 } from "../address-record/participant";
 import { codePages, heldByDocuments } from "../code-pages/answers";
 import { codePagesSlug } from "../code-pages/collection";
-import type { CodeRoute } from "../code-pages/routes";
+import type { CodeRoute, ReadCodeRoutes } from "../code-pages/routes";
 import { lastChangedOf } from "../content-dates/last-changed";
 import { readContentDates } from "../content-dates/store";
 import { languageLinks } from "../languages/links";
@@ -110,7 +110,7 @@ export interface ListingOptions {
    * from the same answer as its head; the others are not, since nothing
    * here would reach their head and the two could disagree.
    */
-  codeRoutes?: () => readonly CodeRoute[];
+  codeRoutes?: ReadCodeRoutes;
   /**
    * Stop once at least this many pages are listed, where given: a reader
    * that shows only the first pages reads no more of the site than that.
@@ -284,7 +284,7 @@ export async function listPages(
   if (options.codeRoutes !== undefined && room) {
     await listCodePages(
       ctx,
-      options.codeRoutes(),
+      await options.codeRoutes(ctx),
       { origin: options.origin, language, readRules },
       found
     );
@@ -294,10 +294,13 @@ export async function listPages(
 
 /**
  * Whether the route serving a page built in code calls the metadata
- * function: its call is recorded, or the page was declared for the build,
- * which counts before it renders, since the build may list it first.
+ * function: its call is recorded, or the page is declared to: by a route
+ * wrapped in `seoStaticParams`, which counts before it renders, since the
+ * build may list it first; by the build being served, which recorded it as
+ * it rendered; or by the plugin's `codeAddresses`. The one answer the
+ * sitemap and the Pages screen give.
  */
-function callsMetadata(
+export function callsMetadata(
   route: CodeRoute,
   row: { connected?: boolean } | undefined
 ): boolean {
@@ -481,7 +484,12 @@ function ownImages(
 ): string[] {
   const site =
     also.siteImage === undefined ? null : absolute(also.siteImage, origin);
-  const share = answer.image?.from === "site" ? undefined : answer.image?.value;
+  // A card the plugin cut from the page's picture is listed as the picture
+  // itself: the page's own image, at the address the page shows it at.
+  const share =
+    answer.image?.from === "site"
+      ? undefined
+      : (answer.image?.madeFrom ?? answer.image?.value);
   const urls = [share, also.mapped].map(image =>
     image === undefined ? null : absolute(image.url, origin)
   );
@@ -679,7 +687,9 @@ export async function listedPageAt(
   // A page built in code, found by the path its route serves, which keeps
   // any language prefix, and listed in the site's language as the listing
   // lists every such page: only that route is read.
-  const routes = options.codeRoutes?.().filter(route => route.path === served);
+  const routes = (await options.codeRoutes?.(ctx))?.filter(
+    route => route.path === served
+  );
   if (routes === undefined || routes.length === 0) return null;
   const found = { pages: [] as ListedPage[], problems: [] as ListingProblem[] };
   await listCodePages(

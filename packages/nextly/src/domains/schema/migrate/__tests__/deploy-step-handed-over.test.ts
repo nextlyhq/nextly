@@ -23,6 +23,22 @@ vi.mock("../../../i18n/runtime/companion-io", () => ({
   },
 }));
 
+// The field-group registry reads, as a database that holds no group: the check reads each group's
+// stored table before judging, and these cases are about which collections it is given.
+vi.mock(
+  "../../../field-groups/services/field-group-stored-tables",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../field-groups/services/field-group-stored-tables")
+    >()),
+    readStoredFieldGroupTables: async () => ({
+      tables: new Map<string, string>(),
+      usable: true,
+      naming: "current",
+    }),
+  })
+);
+
 import { DEMOTED_FROM_CODE } from "../../pipeline/demoted-from-code";
 import { deployStepDeps } from "../deploy-step-deps";
 

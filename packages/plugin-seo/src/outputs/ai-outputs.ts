@@ -15,30 +15,49 @@
 import {
   addressOfRequest,
   getCachedNextly,
+  languageAddressOf,
   NextlyError,
+  publicAddressOf,
   type PluginContext,
   type PublicAddressType,
   type PluginProxyHandler,
+  type ProxyAnswer,
 } from "@nextlyhq/plugin-sdk";
 
 import {
   addressRecordReady,
-  retryFailedCatchUp,
+  addressRecordReadyWithin,
 } from "../address-record/catch-up";
 import {
   addressHolders,
   withAddressHolders,
 } from "../address-record/participant";
+import { singleDeclaration } from "../bulk/singles";
 import { codePages } from "../code-pages/answers";
 import { codePagesSlug } from "../code-pages/collection";
-import type { CodeRoute } from "../code-pages/routes";
+import type { CodeRoute, ReadCodeRoutes } from "../code-pages/routes";
+import type { StatedMarkdown } from "../code-pages/stated";
+import { codePageDocument } from "../code-pages/store";
 import { onceEach, resolveIn, servedAt } from "../languages/versions";
 import { originOf } from "../origin";
 import { isRecord, textOf } from "../plain-values";
+import { NOT_NOTED, type ProxySeenNotes } from "../redirects/proxy-seen";
+import {
+  ownTitleIn,
+  pageNameOf,
+  titleSourcesOf,
+  type TitleFields,
+} from "../resolver/own-name";
 import type { SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
-import { TITLE_FIELDS } from "../settings/patterns";
+import {
+  readRouteRecords,
+  routeValuesKey,
+  type RouteRecord,
+  type RouteValuesPage,
+} from "../route-values/store";
 
+import { noteCopyResults, type CopyFailure } from "./copy-failures";
 import { listedPageAt, listPages, type ListedPage } from "./listing";
 import {
   llmsFullTxt,
@@ -49,13 +68,23 @@ import {
 import {
   copyAddressOf,
   copyPathsOf,
+  descriptionCopyOf,
   pagesOfCopy,
   plainCopyOf,
+  plainTitle,
+  relatedDocumentsIn,
+  relatedKey,
   withFrontMatter,
   type CopyAbout,
   type CopyField,
+  type RelatedPage,
+  type RelatedPages,
 } from "./plain-copy";
-import { renderedCopyAt, RENDERING_HEADER } from "./rendered-fetch";
+import {
+  renderedCopyAt,
+  RENDERING_HEADER,
+  type RenderedPage,
+} from "./rendered-fetch";
 import { siteOriginFor } from "./site-origin";
 
 /** What the AI outputs read: the site's rules, and what the sitemap lists. */
@@ -64,7 +93,17 @@ export interface AiOutputsConfig {
   /** The site's configured origin, where its settings name no address. */
   origin?: string;
   /** The pages built in code the sitemap lists, where any are known. */
-  codeRoutes?: () => readonly CodeRoute[];
+  codeRoutes?: ReadCodeRoutes;
+  /**
+   * The pages built in code the build's own files name, read with nothing
+   * started: what the Proxy claims a request by before it can read more.
+   */
+  builtRoutes?: () => readonly CodeRoute[];
+  /**
+   * The Markdown source the site states for the page built in code at a
+   * path, which its copy is made of rather than the rendered page.
+   */
+  codeMarkdown?: (path: string) => StatedMarkdown | undefined;
   /** The collections the sitemap is narrowed to, where it is. */
   collections?: readonly string[];
 }
@@ -136,10 +175,31 @@ async function linkedCopies(
   };
 }
 
-/** A listed page's head as the public may read it, and its published document. */
-interface ListedHead {
+/** What a page's head says, and the page's own name, as the outputs list it. */
+interface HeadNames {
   title?: string;
   description?: string;
+  /**
+   * The page's own name (`pageNameOf`): the title the outputs list it by,
+   * with no markup and without the site's name.
+   */
+  name?: string;
+  /** The top-level field its name was read from, said once in its copy. */
+  nameField?: string;
+  /** Its type is a Single whose `title` is Nextly's, left out of its copy. */
+  labelTitle?: boolean;
+}
+
+/**
+ * What the outputs list a page by: its own name, else its head's title read
+ * once as the words it shows. Read here, once, so no writer reads it as
+ * markup again.
+ */
+const listedName = (head: HeadNames): string | undefined =>
+  head.name ?? plainTitle(head.title);
+
+/** A listed page's head as the public may read it, and its published document. */
+interface ListedHead extends HeadNames {
   readable: boolean;
   /** The published document, as the public reads it, where it may. */
   document?: Record<string, unknown>;
@@ -180,13 +240,28 @@ async function listedHeads(
   );
   const heads = await publicHeads(ctx, pages, readable, readRules);
   const codeHeads = await codeHeadsOf(ctx, config, readRules);
+  // Each page built in code whose copy is served, decided as serving it is,
+  // whether pages may be rendered read once for them all.
   const renders = await rendersPages(ctx, config);
+  const codeCopies = new Set<string>();
+  for (const page of pages) {
+    if (
+      page.holder.collection === codeSlug &&
+      (await codeCopyServed(ctx, config, page.path, renders))
+    ) {
+      codeCopies.add(page.path);
+    }
+  }
   return at => {
     const page = pages[at];
     if (page === undefined) return { readable: false };
     if (page.holder.collection === codeSlug) {
-      // Its copy is made from the page as it renders, where it may be.
-      return { ...codeHeads.get(page.path), readable: renders };
+      // Its copy is made from the Markdown the options give for it, or from
+      // the page as it renders, where it may be.
+      return {
+        ...codeHeads.get(page.path),
+        readable: codeCopies.has(page.path),
+      };
     }
     const document = readable.get(readingKey(page));
     return {
@@ -243,7 +318,7 @@ export async function llmsTxtOf(
     const head = headOf(at);
     return {
       section: sections.get(page.holder.collection) ?? SINGLES_SECTION,
-      title: head.title ?? page.path,
+      title: listedName(head) ?? page.path,
       url: (head.readable ? linked(at) : undefined) ?? page.loc,
       ...(head.description === undefined
         ? {}
@@ -273,15 +348,54 @@ function fileHeadOf(
   };
 }
 
+/** How many pages llms-full.txt renders at once, at most. */
+const RENDERS_AT_ONCE = 4;
+
+/**
+ * How long llms-full.txt spends rendering pages, all told: a page whose
+ * render would start past it is given its description instead.
+ */
+const FULL_RENDER_BUDGET_MS = 20_000;
+
+/** Why a page past {@link FULL_RENDER_BUDGET_MS} was not rendered. */
+const OUT_OF_TIME = "llms-full.txt ran out of time before rendering it";
+
+/** What making copies found, kept once the file is written. */
+interface CopyResults {
+  failed: Omit<CopyFailure, "at">[];
+  /** The pages whose rendered copy was made. */
+  made: string[];
+}
+
+/** What llms-full.txt's pages are written with, read once for the file. */
+interface FullWriting {
+  ctx: PluginContext;
+  config: AiOutputsConfig;
+  headOf: (at: number) => ListedHead;
+  fields: ReadonlyMap<string, readonly CopyField[] | undefined>;
+  titleFields: TitleFields | undefined;
+  /** Whether the site's pages may be rendered (`rendersPages`). */
+  renders: boolean;
+  /** When rendering stops, as a time in milliseconds. */
+  deadline: number;
+  /** Where asking again makes a page's words again: this file. */
+  retry: string;
+  results: CopyResults;
+}
+
 /**
  * The llms-full.txt of the site at `origin`, or null unless both it and
  * llms.txt are switched on: llms.txt's head, then every page llms.txt lists,
- * in its order, with the words its plain-text copy holds. A page the public
- * may not read, or one built in code, is named by its address alone. Each
- * type's fields and every page's document are read once for the file, and a
- * page's words are built only as the file takes the page, so none past
- * where the file stops short is ever built. `maxBytes` is the file's size,
- * 5 MB unless given; only a test gives a smaller one.
+ * in its order, with the words its plain-text copy holds. A page built in
+ * code, or one whose stored fields hold no words (a Page Builder layout), is
+ * written from the Markdown the site's options give for it, else from the
+ * page as it renders, a few at a time and within a time budget. A page whose
+ * words cannot be had is written with its description, and noted for the
+ * problem list. A page the public may not read is named by its address
+ * alone. Each type's fields and every page's document are read once for the
+ * file, and a page's words are built only as the file takes the page, so
+ * none past where the file stops short is ever built. `maxBytes` is the
+ * file's size, 5 MB unless given; only a test gives a smaller one.
  */
 export async function llmsFullTxtOf(
   ctx: PluginContext,
@@ -303,48 +417,172 @@ export async function llmsFullTxtOf(
       fields.set(collection, await fieldsOf(ctx, collection));
     }
   }
-  return llmsFullTxt({
+  const fullAddress = new URL("/llms-full.txt", origin).href;
+  const writing: FullWriting = {
+    ctx,
+    config,
+    headOf,
+    fields,
+    titleFields: rules.titleFields,
+    renders: await rendersPages(ctx, config),
+    deadline: Date.now() + FULL_RENDER_BUDGET_MS,
+    // Asking for this file again renders the page again, whatever holds
+    // the address its copy would have.
+    retry: fullAddress,
+    results: { failed: [], made: [] },
+  };
+  const file = await llmsFullTxt({
     ...fileHeadOf(origin, rules),
-    pages: fullPagesOf(pages, headOf, fields),
+    pages: fullPagesOf(pages, writing),
     listUrl: new URL("/llms.txt", origin).href,
     ...(maxBytes === undefined ? {} : { maxBytes }),
   });
+  await noteCopyResults(ctx, writing.results.failed, writing.results.made);
+  return file;
+}
+
+/** Keep what rendering `page` gave in `results`. */
+function noteRendered(
+  results: CopyResults,
+  page: ListedPage,
+  rendered: RenderedPage,
+  retry: string
+): void {
+  if ("copy" in rendered) results.made.push(page.loc);
+  else results.failed.push({ url: page.loc, reason: rendered.failed, retry });
+}
+
+/**
+ * The words of `page` as it renders, where the site's pages may be rendered
+ * and the file's time for rendering has not run out; none otherwise, the
+ * reason noted where it is a failure.
+ */
+async function renderedBodyOf(
+  writing: FullWriting,
+  page: ListedPage
+): Promise<string | undefined> {
+  if (!writing.renders) return undefined;
+  const { retry } = writing;
+  if (Date.now() > writing.deadline) {
+    writing.results.failed.push({ url: page.loc, reason: OUT_OF_TIME, retry });
+    return undefined;
+  }
+  const rendered = await renderedCopyAt(writing.ctx, page.loc, page.loc);
+  noteRendered(writing.results, page, rendered, retry);
+  return "copy" in rendered ? rendered.copy.body : undefined;
+}
+
+/** The words of a page built in code: the Markdown the options give, else the page as it renders. */
+async function codeBodyOf(
+  writing: FullWriting,
+  page: ListedPage
+): Promise<string | undefined> {
+  const stated = await statedMarkdownAt(writing.ctx, writing.config, page.path);
+  if (stated === null) return renderedBodyOf(writing, page);
+  // Its words are had: a failure noted for it before is settled.
+  writing.results.made.push(page.loc);
+  return stated;
+}
+
+/**
+ * The words of a page with a published document: its stored copy, else,
+ * where its stored fields hold none beyond its name, the page as it renders.
+ */
+async function documentBodyOf(
+  writing: FullWriting,
+  page: ListedPage,
+  head: ListedHead & { document: Record<string, unknown> }
+): Promise<string | undefined> {
+  const stored = await documentCopyOf(writing.ctx, page, head.document, head, {
+    fields: writing.fields.get(page.holder.collection),
+    titleFields: writing.titleFields,
+  });
+  if (holdsWords(stored)) {
+    // Its words are had: a failure noted for it before is settled.
+    writing.results.made.push(page.loc);
+    return stored;
+  }
+  return renderedBodyOf(writing, page);
 }
 
 /**
  * The pages of llms-full.txt, in the listing's order, each built only when
  * the file asks for it: the file stops asking once a page will not fit, so
  * the words of the pages after it are never built or kept, however large
- * the site.
+ * the site. A page built in code is rendered a few pages ahead of the one
+ * written, {@link RENDERS_AT_ONCE} at most at once, so the file does not
+ * wait on each render in turn. Every page the public may read has words:
+ * its own, else its description.
  */
-function* fullPagesOf(
+async function* fullPagesOf(
   pages: readonly ListedPage[],
-  headOf: (at: number) => ListedHead,
-  fields: ReadonlyMap<string, readonly CopyField[] | undefined>
-): Generator<LlmsFullPage> {
+  writing: FullWriting
+): AsyncGenerator<LlmsFullPage> {
+  const codeSlug = codePagesSlug(writing.ctx);
+  const ahead = new Map<number, Promise<string | undefined>>();
+  try {
+    yield* pagesInOrder(pages, writing, codeSlug, ahead);
+  } finally {
+    // The file may stop before every page rendered ahead was taken: each is
+    // let finish, so what it found is kept with the rest and no render
+    // outlives the answer.
+    await Promise.allSettled(ahead.values());
+  }
+}
+
+/** The pages of {@link fullPagesOf}, rendering those built in code ahead into `ahead`. */
+async function* pagesInOrder(
+  pages: readonly ListedPage[],
+  writing: FullWriting,
+  codeSlug: string,
+  ahead: Map<number, Promise<string | undefined>>
+): AsyncGenerator<LlmsFullPage> {
   for (const [at, page] of pages.entries()) {
-    const head = headOf(at);
+    const last = Math.min(pages.length, at + RENDERS_AT_ONCE);
+    for (let next = at; next < last; next += 1) {
+      const coming = pages[next];
+      if (
+        coming !== undefined &&
+        !ahead.has(next) &&
+        coming.holder.collection === codeSlug &&
+        writing.headOf(next).readable
+      ) {
+        ahead.set(next, codeBodyOf(writing, coming));
+      }
+    }
+    const head = writing.headOf(at);
+    const { document } = head;
+    let body: string | undefined;
+    const started = ahead.get(at);
+    if (started !== undefined) {
+      ahead.delete(at);
+      body = await started;
+    } else if (document !== undefined) {
+      body = await documentBodyOf(writing, page, { ...head, document });
+    }
     yield {
-      title: head.title ?? page.path,
+      title: listedName(head) ?? page.path,
       url: page.loc,
-      ...(head.document === undefined
-        ? {}
-        : {
-            body: copyOfDocument(page, head.document, head.title, {
-              fields: fields.get(page.holder.collection),
-            }),
-          }),
+      ...(head.readable
+        ? { body: body ?? descriptionCopyOf(undefined, head.description) }
+        : {}),
     };
   }
 }
 
-/** The fields a page's type declares, where the site can say. */
+/**
+ * The fields a page's type declares, where the site can say: a Single's as
+ * its code declares them, with their labels and options, else as the
+ * registry keeps them.
+ */
 async function fieldsOf(
   ctx: PluginContext,
   collection: string
 ): Promise<readonly CopyField[] | undefined> {
   if (collection.startsWith("single:")) {
     const slug = collection.slice("single:".length);
+    const declared = singleDeclaration(ctx, slug)?.fields;
+    if (Array.isArray(declared)) return declared.filter(isCopyField);
     const { data } = await ctx.services.singles.list({ limit: 500 });
     const single = data.find(each => each.slug === slug);
     return single?.fields;
@@ -354,8 +592,13 @@ async function fieldsOf(
     {}
   );
   return isRecord(meta) && Array.isArray(meta.fields)
-    ? (meta.fields as CopyField[])
+    ? meta.fields.filter(isCopyField)
     : undefined;
+}
+
+/** Whether a declared field is one a copy can read: an object naming its type. */
+function isCopyField(field: unknown): field is CopyField {
+  return isRecord(field) && typeof field.type === "string";
 }
 
 /** A page refused to the public, or no longer found, has no public reading. */
@@ -456,18 +699,31 @@ async function publicDocuments(
   return found;
 }
 
+/** The page `page` is, as its route's values are kept. */
+const routePageOf = (page: ListedPage): RouteValuesPage => ({
+  type: page.holder.collection,
+  id: page.holder.id,
+  language: page.language,
+});
+
 /**
  * The head of each of `pages` the public may read, by its place in `pages`:
  * worked out language by language, inside one read of who holds every
- * page's address, as the listing works them out.
+ * page's address, as the listing works them out, with what each page's
+ * route last supplied, read once for them all, so each is named as the
+ * page is served.
  */
 async function publicHeads(
   ctx: PluginContext,
   pages: readonly ListedPage[],
   readable: ReadonlyMap<string, Record<string, unknown>>,
   readRules: ReadRules
-): Promise<Map<number, { title?: string; description?: string }>> {
-  const heads = new Map<number, { title?: string; description?: string }>();
+): Promise<Map<number, HeadNames>> {
+  const heads = new Map<number, HeadNames>();
+  const supplied = await readRouteRecords(
+    ctx,
+    pages.filter(page => readable.has(readingKey(page))).map(routePageOf)
+  );
   const byLanguage = new Map<string, number[]>();
   for (const [at, page] of pages.entries()) {
     const list = byLanguage.get(page.language) ?? [];
@@ -481,31 +737,57 @@ async function publicHeads(
         const page = pages[at];
         const document = page && readable.get(readingKey(page));
         if (page === undefined || document === undefined) continue;
-        heads.set(at, await publicHead(ctx, page, document, readRules));
+        const route = supplied.get(routeValuesKey(routePageOf(page)));
+        heads.set(at, await publicHead(ctx, page, document, readRules, route));
       }
     });
   }
   return heads;
 }
 
-/** The head of each page built in code, by its address. */
+/**
+ * The head of each page built in code, by its address; of the one at
+ * `only` alone, where given, so a single copy works out one head.
+ */
 async function codeHeadsOf(
   ctx: PluginContext,
   config: AiOutputsConfig,
-  readRules: ReadRules
-): Promise<Map<string, { title?: string; description?: string }>> {
-  const heads = new Map<string, { title?: string; description?: string }>();
+  readRules: ReadRules,
+  only?: string
+): Promise<Map<string, HeadNames>> {
+  const heads = new Map<string, HeadNames>();
   if (config.codeRoutes === undefined) return heads;
-  for (const { route, answer } of await codePages(
+  const routes = await config.codeRoutes(ctx);
+  const { siteName, titleFields } = await readRules(ctx, undefined);
+  const codeSlug = codePagesSlug(ctx);
+  const { fields } = titleSourcesOf(ctx, codeSlug, titleFields);
+  for (const { route, row, answer } of await codePages(
     ctx,
-    config.codeRoutes(),
+    only === undefined ? routes : routes.filter(route => route.path === only),
     readRules
   )) {
+    const title = answer.title?.value;
+    const codeTitle = row?.code.title;
+    // Named from what structured data names it by: the name its route gives
+    // it there, the page's record (the name its route gives it, else one
+    // from its address), its route's own title and its head's.
+    const hint = row?.structuredDataName;
+    const name = pageNameOf({
+      ...(hint === undefined ? {} : { hint }),
+      home: route.path === "/",
+      document: codePageDocument(route.path, row, undefined),
+      fields,
+      ...(codeTitle === undefined ? {} : { codeTitle }),
+      codePage: true,
+      ...(title === undefined ? {} : { title }),
+      ...(siteName === undefined ? {} : { siteName }),
+    });
     heads.set(route.path, {
-      ...(answer.title === undefined ? {} : { title: answer.title.value }),
+      ...(title === undefined ? {} : { title }),
       ...(answer.description === undefined
         ? {}
         : { description: answer.description.value }),
+      ...(name === undefined ? {} : { name }),
     });
   }
   return heads;
@@ -519,26 +801,56 @@ const typeOfPage = (page: ListedPage): PublicAddressType =>
 
 /**
  * The title and description a page's head carries, worked out from what
- * the public may read of it, so a value kept from the public is never told.
+ * the public may read of it, so a value kept from the public is never told,
+ * and what its route last supplied (`route`); and the page's own name, as
+ * structured data names it (`pageNameOf`).
  */
 async function publicHead(
   ctx: PluginContext,
   page: ListedPage,
   document: Record<string, unknown>,
-  readRules: ReadRules
-): Promise<{ title?: string; description?: string }> {
+  readRules: ReadRules,
+  route: RouteRecord | undefined
+): Promise<HeadNames> {
+  const code = route?.values ?? {};
   const answer = await resolveIn(
     ctx,
     typeOfPage(page),
     document,
     page.language,
-    readRules
+    readRules,
+    code
   );
+  const rules = await readRules(ctx, page.language);
+  const sources = titleSourcesOf(
+    ctx,
+    page.holder.collection,
+    rules.titleFields
+  );
+  const title = answer.title?.value;
+  const name = pageNameOf({
+    // The name the route gives the page in structured data comes first.
+    ...(route?.name === undefined ? {} : { hint: route.name }),
+    home: page.path === "/",
+    document,
+    fields: sources.fields,
+    ...(code.title === undefined ? {} : { codeTitle: code.title }),
+    codePage: false,
+    ...(title === undefined ? {} : { title }),
+    ...(rules.siteName === undefined ? {} : { siteName: rules.siteName }),
+  });
+  const own = ownTitleIn(document, sources.fields)?.field;
   return {
-    ...(answer.title === undefined ? {} : { title: answer.title.value }),
+    ...(title === undefined ? {} : { title }),
     ...(answer.description === undefined
       ? {}
       : { description: answer.description.value }),
+    ...(name === undefined ? {} : { name }),
+    // A dotted path names a field inside a group, which the copy writes
+    // where the group is: only a top-level field is left out below the
+    // heading.
+    ...(own === undefined || own.includes(".") ? {} : { nameField: own }),
+    ...(sources.labelTitle ? { labelTitle: true } : {}),
   };
 }
 
@@ -589,24 +901,119 @@ function aboutOf(
 /**
  * The copy of `page` made from the page as it is rendered, asked for at its
  * own listed address; its front matter from `head`, else the rendered
- * page's own head. None where the page does not render.
+ * page's own head. None where the page does not render, which is noted for
+ * the problem list, as a copy made is taken off it.
  */
 async function renderedCopyFor(
   ctx: PluginContext,
   page: ListedPage,
-  head: { title?: string; description?: string }
+  head: { title?: string; description?: string },
+  retryAt: () => Promise<string>
 ): Promise<string | null> {
   const rendered = await renderedCopyAt(ctx, page.loc, page.loc);
-  if (rendered === null) return null;
-  const title = head.title ?? rendered.title;
-  const description = head.description ?? rendered.description;
+  const results: CopyResults = { failed: [], made: [] };
+  noteRendered(
+    results,
+    page,
+    rendered,
+    "copy" in rendered ? page.loc : await retryAt()
+  );
+  await noteCopyResults(ctx, results.failed, results.made);
+  if (!("copy" in rendered)) return null;
+  const title = head.title ?? rendered.copy.title;
+  const description = head.description ?? rendered.copy.description;
   return withFrontMatter(
     aboutOf(page, {
       ...(title === undefined ? {} : { title }),
       ...(description === undefined ? {} : { description }),
     }),
-    rendered.body
+    rendered.copy.body
   );
+}
+
+/**
+ * `copy`, a page's copy made with its words, once a failure noted for the
+ * page before is settled: the copy is had now, whether stored, given in the
+ * options or rendered, so the problem list no longer names it.
+ */
+async function madeCopy(
+  ctx: PluginContext,
+  page: ListedPage,
+  copy: string
+): Promise<string> {
+  await noteCopyResults(ctx, [], [page.loc]);
+  return copy;
+}
+
+/**
+ * The copy of a page whose words could not be had: its front matter from
+ * `head`, its name as the heading and its description beneath.
+ */
+const descriptionCopyFor = (page: ListedPage, head: HeadNames): string =>
+  withFrontMatter(
+    aboutOf(page, head),
+    descriptionCopyOf(listedName(head), head.description)
+  );
+
+/**
+ * The Markdown the site's options give for the page built in code at
+ * `path`, made; none where they give none for its route, or theirs gives
+ * nothing. A source that fails is logged, and counts as none.
+ */
+async function statedMarkdownAt(
+  ctx: PluginContext,
+  config: AiOutputsConfig,
+  path: string
+): Promise<string | null> {
+  const source = config.codeMarkdown?.(path);
+  if (source === undefined) return null;
+  let markdown: string | undefined;
+  try {
+    markdown = await source.markdown(source.page);
+  } catch (error) {
+    ctx.logger.warn(
+      "The Markdown codeAddresses gives for a page could not be made",
+      { path, error }
+    );
+    return null;
+  }
+  return typeof markdown === "string" && markdown.trim() !== ""
+    ? markdown.trim()
+    : null;
+}
+
+/**
+ * Whether the copy of the page built in code at `path` is served: made from
+ * the page as it renders, where the site lets it be (`rendersPages`), else
+ * from the Markdown its options give, where that gives some. The one answer
+ * serving a copy, its head's link and llms.txt's link read; `renders`, where
+ * the caller has read whether pages may be rendered already.
+ */
+async function codeCopyServed(
+  ctx: PluginContext,
+  config: AiOutputsConfig,
+  path: string,
+  renders?: boolean
+): Promise<boolean> {
+  if (renders ?? (await rendersPages(ctx, config))) return true;
+  return (await statedMarkdownAt(ctx, config, path)) !== null;
+}
+
+/**
+ * The copy of the page built in code `page` made from the Markdown the
+ * site's options give for it, with its front matter from its head; none
+ * where they give none, or it gives nothing, and the copy is then made from
+ * the rendered page.
+ */
+async function statedCopyFor(
+  ctx: PluginContext,
+  page: ListedPage,
+  config: AiOutputsConfig
+): Promise<string | null> {
+  const markdown = await statedMarkdownAt(ctx, config, page.path);
+  if (markdown === null) return null;
+  const heads = await codeHeadsOf(ctx, config, config.readRules, page.path);
+  return withFrontMatter(aboutOf(page, heads.get(page.path) ?? {}), markdown);
 }
 
 /** Whether a copy says anything beyond its heading. */
@@ -615,66 +1022,154 @@ const holdsWords = (copy: string): boolean =>
 
 /**
  * A listed page's plain-text copy. A page built in code is copied from the
- * page as it renders, since it has no stored words; so is a page whose
- * stored fields hold none beyond its title, such as a Page Builder layout,
- * whose words only the rendered page shows. Every other page is copied from
- * its published document, read as the public reads it. The front matter is
+ * Markdown the site's options give for it, else from the page as it
+ * renders, since it has no stored words; so is a page whose stored fields
+ * hold none beyond its title, such as a Page Builder layout, whose words
+ * only the rendered page shows. Every other page is copied from its
+ * published document, read as the public reads it. A page whose words
+ * cannot be had is copied as its name and description. The front matter is
  * the head the public may read, and the sitemap's last change.
  *
  * A page is rendered only where `render` says it may be
- * ({@link rendersPages}).
+ * ({@link rendersPages}). `retryAt` says where the copy is asked for again,
+ * where its render fails and the problem list names it.
  */
 async function copyOf(
   ctx: PluginContext,
   page: ListedPage,
   config: AiOutputsConfig,
-  render: boolean
+  render: boolean,
+  retryAt: () => Promise<string>
 ): Promise<string | null> {
   const { readRules } = config;
   if (page.holder.collection === codePagesSlug(ctx)) {
+    const stated = await statedCopyFor(ctx, page, config);
+    if (stated !== null) return madeCopy(ctx, page, stated);
     if (!render) return null;
-    const heads = await codeHeadsOf(ctx, config, readRules);
-    return renderedCopyFor(ctx, page, heads.get(page.path) ?? {});
+    const heads = await codeHeadsOf(ctx, config, readRules, page.path);
+    const head = heads.get(page.path) ?? {};
+    return (
+      (await renderedCopyFor(ctx, page, head, retryAt)) ??
+      descriptionCopyFor(page, head)
+    );
   }
   const document = (await publicDocuments([page])).get(readingKey(page));
   if (document === undefined) return null;
-  const head = await publicHead(ctx, page, document, readRules);
+  const route = (await readRouteRecords(ctx, [routePageOf(page)])).get(
+    routeValuesKey(routePageOf(page))
+  );
+  const head = await publicHead(ctx, page, document, readRules, route);
   // The stored copy without front matter, so a page whose stored fields
   // hold no words can be copied from its rendered page instead.
-  const stored = copyOfDocument(page, document, head.title, {
+  const stored = await documentCopyOf(ctx, page, document, head, {
     fields: await fieldsOf(ctx, page.holder.collection),
+    titleFields: (await readRules(ctx, page.language)).titleFields,
   });
-  if (render && !holdsWords(stored)) {
-    const rendered = await renderedCopyFor(ctx, page, head);
+  if (holdsWords(stored)) {
+    return madeCopy(ctx, page, withFrontMatter(aboutOf(page, head), stored));
+  }
+  if (render) {
+    const rendered = await renderedCopyFor(ctx, page, head, retryAt);
     if (rendered !== null) return rendered;
   }
-  return withFrontMatter(aboutOf(page, head), stored);
+  return descriptionCopyFor(page, head);
 }
 
 /**
  * A page's plain-text copy from its published document: headed by the
- * page's own title, as the page shows it (and the field it is in, said
- * once), else `headTitle`, worked out from what the public may read;
+ * page's own name (`pageNameOf`), the field it was read from said once,
+ * and a Single's `title` that is Nextly's left out; each page a
+ * relationship field names written by its title, linked to its address;
  * without front matter, which each caller adds where it wants one.
  */
-function copyOfDocument(
+async function documentCopyOf(
+  ctx: PluginContext,
   page: ListedPage,
   document: Record<string, unknown>,
-  headTitle: string | undefined,
-  { fields }: { fields?: readonly CopyField[] | undefined }
-): string {
-  const titleField = TITLE_FIELDS.find(
-    name => textOf(document[name]) !== undefined
-  );
-  const title =
-    titleField === undefined ? headTitle : textOf(document[titleField]);
+  head: HeadNames,
+  {
+    fields,
+    titleFields,
+  }: {
+    fields: readonly CopyField[] | undefined;
+    titleFields: TitleFields | undefined;
+  }
+): Promise<string> {
+  const title = listedName(head);
+  const related =
+    fields === undefined
+      ? undefined
+      : await relatedPagesOf(ctx, fields, document, page, titleFields);
   return plainCopyOf({
     ...(title === undefined ? {} : { title }),
-    ...(titleField === undefined ? {} : { titleField }),
+    ...(head.nameField === undefined ? {} : { titleField: head.nameField }),
     document,
     ...(fields === undefined ? {} : { fields }),
     base: page.loc,
+    ...(head.labelTitle === true ? { skip: ["title"] } : {}),
+    ...(related === undefined ? {} : { related }),
   });
+}
+
+/**
+ * The address of `document`, a page of `collection` read with `page`, in
+ * `page`'s language, made whole against `page`'s; none where its type
+ * declares none, or it cannot be formed.
+ */
+async function relatedAddressOf(
+  collection: string,
+  document: Readonly<Record<string, unknown>>,
+  page: ListedPage
+): Promise<string | undefined> {
+  try {
+    const own = await publicAddressOf(
+      { kind: "collection", slug: collection },
+      document,
+      page.language
+    );
+    if (own.status !== "resolved") return undefined;
+    const inLanguage = await languageAddressOf(own.path, page.language);
+    const path = inLanguage.status === "resolved" ? inLanguage.path : own.path;
+    return new URL(path, page.loc).href;
+  } catch (error) {
+    // A type no longer declared names no address: the page is named alone.
+    if (NextlyError.isCode(error, "NOT_FOUND")) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Each page the relationship fields of `document` name and that was read
+ * with it, as its copy writes it: by its own name, from the fields its type
+ * names its pages by, and linked to its address where it has one. One
+ * address worked out a page, however often it is named.
+ */
+async function relatedPagesOf(
+  ctx: PluginContext,
+  fields: readonly CopyField[],
+  document: Readonly<Record<string, unknown>>,
+  page: ListedPage,
+  titleFields: TitleFields | undefined
+): Promise<RelatedPages> {
+  const found = new Map<string, RelatedPage>();
+  for (const target of relatedDocumentsIn(fields, document)) {
+    const key = relatedKey(target.collection, target.document.id);
+    if (target.document.id === undefined || found.has(key)) continue;
+    const { fields: named } = titleSourcesOf(
+      ctx,
+      target.collection,
+      titleFields
+    );
+    const name = ownTitleIn(target.document, named)?.value;
+    if (name === undefined) continue;
+    const url = await relatedAddressOf(
+      target.collection,
+      target.document,
+      page
+    );
+    found.set(key, { name, ...(url === undefined ? {} : { url }) });
+  }
+  return found;
 }
 
 /**
@@ -690,7 +1185,9 @@ async function copiesTaken(
   config: Pick<AiOutputsConfig, "codeRoutes">
 ): Promise<Set<string>> {
   const taken = new Set<string>();
-  const built = new Set(config.codeRoutes?.().map(route => route.path) ?? []);
+  const built = new Set(
+    ((await config.codeRoutes?.(ctx)) ?? []).map(route => route.path)
+  );
   const byLanguage = new Map<string, { copy: string; path: string }[]>();
   for (const copy of copies) {
     if (built.has(new URL(copy).pathname)) {
@@ -818,7 +1315,9 @@ export async function servedCopyAddress(
     const page = await copyServedAt(ctx, url, loc, config);
     if (page === null) continue;
     if (page.holder.collection === codePagesSlug(ctx)) {
-      return (await rendersPages(ctx, config)) ? url.href : undefined;
+      return (await codeCopyServed(ctx, config, page.path))
+        ? url.href
+        : undefined;
     }
     return (await publicDocuments([page])).has(readingKey(page))
       ? url.href
@@ -848,7 +1347,19 @@ async function plainCopyAt(
   const candidates = atPage ? [url.pathname] : pagesOfCopy(url.pathname);
   const page = await pageAsked(ctx, url, config, candidates, atPage);
   if (page === null) return null;
-  const body = await copyOf(ctx, page, config, await rendersPages(ctx, config));
+  // Asked again where it was asked: at its copy's address, or, asked at
+  // the page's own address, at the address its copy is served at.
+  const retryAt = async () =>
+    atPage
+      ? ((await servedCopyAddress(ctx, page.loc, config)) ?? page.loc)
+      : url.href;
+  const body = await copyOf(
+    ctx,
+    page,
+    config,
+    await rendersPages(ctx, config),
+    retryAt
+  );
   return body === null ? null : { body, page, llmsTxt: rules.llmsTxt === true };
 }
 
@@ -945,6 +1456,86 @@ function copyAskedFor(
 }
 
 /**
+ * Whether the site's code builds a page at `url`, as its build's own files
+ * name them: read with nothing started, so the Proxy can claim by it.
+ */
+function builtAt(
+  config: Pick<AiOutputsConfig, "builtRoutes">,
+  url: URL
+): boolean {
+  return (config.builtRoutes?.() ?? []).some(
+    route => route.path === url.pathname
+  );
+}
+
+/** Whether the site's code builds a page at `url`, as every source names them. */
+async function codeServesAt(
+  ctx: PluginContext,
+  config: Pick<AiOutputsConfig, "codeRoutes">,
+  url: URL
+): Promise<boolean> {
+  return ((await config.codeRoutes?.(ctx)) ?? []).some(
+    route => route.path === url.pathname
+  );
+}
+
+/**
+ * How long a request at a copy's own address waits for the address record
+ * to catch up. A catch-up with nothing to do takes a few reads; one still
+ * running past this is answered "try again" rather than held further.
+ */
+const COPY_RECORD_WAIT_MS = 5000;
+
+/**
+ * The answer at a copy's own address while the address record is not ready,
+ * as the sitemap's is: readers come back, and nothing between keeps it.
+ */
+function copyNotReady(): Response {
+  const unavailable = NextlyError.serviceUnavailable({
+    publicMessage: "The plain-text copy is being brought up to date.",
+  });
+  return new Response(unavailable.publicMessage, {
+    status: unavailable.statusCode,
+    headers: { "cache-control": "no-store", "retry-after": "120" },
+  });
+}
+
+/**
+ * What a request for a copy is answered with while the address record catches
+ * up, or `"ready"` once the record is ready to answer it. A page may not hold
+ * its address yet. A copy's own address waits for the record, up to a limit:
+ * on a server that has only just started, the catch-up is still running when
+ * the first request comes, and the site serves no page there; where the
+ * record is behind, the wait runs the catch-up itself, as a failed one is
+ * tried again (`addressRecordReadyWithin`). Past the limit it is asked to
+ * come back rather than answered not found, which a reader may keep. Never
+ * held: a page's own address asked for by `Accept`, which
+ * the page answers; a page the site's code builds; and a copy's address
+ * where copies are switched off.
+ */
+async function waitForRecord(
+  ctx: PluginContext,
+  url: URL,
+  atPage: boolean,
+  config: AiOutputsConfig
+): Promise<ProxyAnswer | undefined | "ready"> {
+  if (
+    atPage ||
+    builtAt(config, url) ||
+    (await codeServesAt(ctx, config, url))
+  ) {
+    return undefined;
+  }
+  const rules = await config.readRules(ctx, undefined);
+  if (rules.plainTextCopies !== true) return undefined;
+  if (await addressRecordReadyWithin(COPY_RECORD_WAIT_MS)) return "ready";
+  // A page of the site at this address, one built in code or one the record
+  // already holds, is served there as ever.
+  if ((await copiesTaken(ctx, [url.href], config)).size > 0) return undefined;
+  return { response: copyNotReady() };
+}
+
+/**
  * The Proxy handler that answers a request for a page's plain-text copy:
  * a GET or HEAD of an address ending in `.md`, or of a page's own address
  * whose `Accept` header asks for Markdown over HTML. Every other request
@@ -952,20 +1543,29 @@ function copyAskedFor(
  * names its page as canonical, so search engines keep the page.
  */
 export function plainCopyProxyHandler(
-  config: AiOutputsConfig
+  config: AiOutputsConfig,
+  seen: ProxySeenNotes = NOT_NOTED
 ): PluginProxyHandler {
   return {
     name: "plain-text-copies",
+    // A copy's own address is served by no page, so a Proxy still starting
+    // waits for the start rather than send it on to be answered not found.
+    // A page's own address, asked for by `Accept`, is the page's to answer,
+    // and so is a page the site's code builds at a copy's address, which the
+    // build names before anything has started.
+    claims: request => {
+      const asked = copyAskedFor(request);
+      return asked?.atPage === false && !builtAt(config, asked.url);
+    },
     async handle(request, ctx) {
+      // Noted in the background, so the admin can tell the Proxy runs.
+      void seen.note(ctx);
       const asked = copyAskedFor(request);
       if (asked === undefined) return;
       const { url, atPage } = asked;
-      // While the address record catches up, a page may not hold its address
-      // yet: the request passes to the site as if no copy were served, and a
-      // catch-up that failed is tried again.
       if (!addressRecordReady()) {
-        retryFailedCatchUp();
-        return;
+        const waited = await waitForRecord(ctx, url, atPage, config);
+        if (waited !== "ready") return waited;
       }
       const copy = await plainCopyAt(ctx, url, config, atPage);
       if (copy === null) return;

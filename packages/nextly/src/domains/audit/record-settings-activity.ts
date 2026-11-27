@@ -34,6 +34,8 @@ import type {
 } from "../../services/dashboard/activity-log-service";
 import { SYSTEM_CONTEXT } from "../../shared/types";
 
+import type { ActorAttribution } from "./attribution";
+
 /**
  * The actor a trail row records, or `null` when this actor produces no entry.
  *
@@ -54,9 +56,11 @@ import { SYSTEM_CONTEXT } from "../../shared/types";
  * — which it did: the content trail carried its own copy and the two had to be
  * widened together.
  */
-export function recordableActor(
-  actor?: RequestActor | null
-): { type: RequestActorType; id: string } | null {
+export function recordableActor(actor?: RequestActor | null): {
+  type: RequestActorType;
+  id: string;
+  attribution?: ActorAttribution;
+} | null {
   if (!actor?.id) return null;
 
   // A SYSTEM write is refused, and the reason is an ORDERING one rather than
@@ -80,7 +84,11 @@ export function recordableActor(
   // so it is refused for the reason above rather than filed as a person.
   // Compared against the sentinel itself so the two cannot drift apart.
   if (actor.id === SYSTEM_CONTEXT.user?.id) return null;
-  return { type: actor.type, id: actor.id };
+  // Who stands behind the actor travels with them, so every row the actor
+  // writes says it: the trail records the person and the agent together.
+  return actor.attribution
+    ? { type: actor.type, id: actor.id, attribution: actor.attribution }
+    : { type: actor.type, id: actor.id };
 }
 
 /** One recorded settings mutation. */
@@ -186,6 +194,7 @@ export async function recordSettingsActivity(
   await write({
     actorType: actor.type,
     userId: actor.id,
+    attribution: actor.attribution,
     action: input.action,
     collection: input.collection,
     entryId: input.entityId,

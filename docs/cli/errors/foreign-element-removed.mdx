@@ -1,0 +1,25 @@
+---
+title: FOREIGN_ELEMENT_REMOVED
+description: "A change would remove an element another owner, such as a plugin, built on one of the app's tables, so it was refused and changed nothing."
+---
+
+## Cause
+
+A change would remove an element another owner, such as a plugin, built on one of the app's tables, so it was refused and changed nothing.
+
+A plugin can add an index or a foreign key to a collection's, Single's or field group's table. Removing a field, moving it into a group, or turning translation on where that moves the field's column takes the column off that table. Where an index or foreign key of another owner stands on the column, or the change removes a whole table it is on, such as a many-to-many's join table, the change would take it too. `nextly migrate:create` refuses before it writes anything, and `nextly migrate` refuses before the run's first file, naming the field, the owner, and the element and its table. The same is refused by a Schema Builder save and a development push.
+
+## Fix
+
+- Remove the element first, as its owner: take the index or foreign key out of the plugin, or uninstall the plugin, and apply that. Then run the command again.
+- Or leave the field where it is.
+- If the file was written earlier and the plugin added the element since, remove the change from the config, or write the file again, so that the element keeps its column.
+
+## Example
+
+```text
+✗ Migration 20261021_100000_remove_code.sql: this change would remove what another owner built on its tables, so nothing was changed.
+  Why:  Removing "code" removes the column code, which plugin "@acme/search"'s index "posts_code_idx" on dc_posts stands on.
+  Next: Its owner removes it first, or the change keeps what it stands on.
+  Docs: https://nextlyhq.com/docs/cli/errors/foreign-element-removed  (FOREIGN_ELEMENT_REMOVED)
+```

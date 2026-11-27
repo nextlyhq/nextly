@@ -12,6 +12,9 @@
  * @module schemas/audit/sqlite
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
+// Each dialect declares the same columns with its own builders, so the
+// declarations repeat by design.
+// fallow-ignore-file code-duplication
 
 import type { BuildColumns } from "drizzle-orm";
 import { sqliteTable, integer, text } from "drizzle-orm/sqlite-core";
@@ -20,7 +23,7 @@ import {
   ACTIVITY_LOG_INDEXES,
   AUDIT_LOG_INDEXES,
   sqliteIndexes,
-} from "../_internal/core-indexes";
+} from "../_internal/core-indexes-sqlite";
 import { sqliteTimestamp } from "../_internal/sqlite-timestamp";
 
 // Append-only by application convention. SQLite has no GRANT, so the posture is
@@ -31,6 +34,31 @@ import { sqliteTimestamp } from "../_internal/sqlite-timestamp";
 // JSON column. NULL actor_user_id covers events with no authenticated
 // actor (failed login, failed CSRF). NULL target_user_id covers
 // non-target events (failed CSRF on a non-account-scoped path).
+/**
+ * Who stands behind the row's actor: the agent that acted for them, the door,
+ * the credential, the agent session, an approval, a standing grant, an undo,
+ * or a deployment. The same columns on both trails, written from one mapping
+ * (`domains/audit/attribution`). Every one is nullable, and NULL on a row
+ * nothing stood behind, which is every row written before they existed. The
+ * person an agent acted for is the row's own actor, so erasing that person
+ * erases them here as it does from their own rows, and the agent's name stays.
+ */
+function attributionColumnSet() {
+  return {
+    agentName: text("agent_name"),
+    agentSessionId: text("agent_session_id"),
+    door: text("door"),
+    credentialId: text("credential_id"),
+    approvalRequestId: text("approval_request_id"),
+    approvedByUserId: text("approved_by_user_id"),
+    approvedVia: text("approved_via"),
+    grantId: text("grant_id"),
+    undoesSessionId: text("undoes_session_id"),
+    deploymentHost: text("deployment_host"),
+    deploymentCommit: text("deployment_commit"),
+  };
+}
+
 /** `audit_log` columns, a fresh builder record per call (see `core-table-contributions`). */
 export function auditLogColumns() {
   return {
@@ -55,6 +83,7 @@ export function auditLogColumns() {
     actorPrincipalId: text("actor_principal_id"),
     targetPrincipalKind: text("target_principal_kind"),
     targetPrincipalId: text("target_principal_id"),
+    ...attributionColumnSet(),
   };
 }
 
@@ -94,6 +123,7 @@ export function activityLogColumns() {
     metadata: text("metadata"), // JSON string for additional context
     createdAt: sqliteTimestamp("created_at"),
     identityErasedAt: integer("identity_erased_at", { mode: "timestamp" }),
+    ...attributionColumnSet(),
   };
 }
 

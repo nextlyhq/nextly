@@ -5,7 +5,11 @@
  *
  * @module rich-text-content-model
  */
-import { isRichTextNode, type RichTextNode } from "@nextlyhq/blocks-engine";
+import {
+  isFollowedLink,
+  isRichTextNode,
+  type RichTextNode,
+} from "@nextlyhq/blocks-engine";
 
 import { url } from "./blocks/props";
 import { isRenderable } from "./rich-text-buttons";
@@ -88,9 +92,10 @@ export function drawsInteractive(
 ): boolean {
   return anyDescendant(nodes, node => {
     switch (node.type) {
+      // An address the author unlinked is drawn as words, so it is not.
       case "link":
       case "autolink":
-        return url(node.url) !== undefined;
+        return isFollowedLink(node) && url(node.url) !== undefined;
       case "button-link":
         return isRenderable(node);
       case "button-group":

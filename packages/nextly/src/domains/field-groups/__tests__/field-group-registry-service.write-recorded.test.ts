@@ -19,9 +19,15 @@ vi.mock("../../schema/schema-version", async importOriginal =>
   ).unversionedRegistryWrites(await importOriginal())
 );
 
+// What clears a `diverged` mark; each case that needs it says how it ends.
+vi.mock("../services/field-group-reconcile-service", () => ({
+  reconcileFieldGroup: vi.fn(async () => ({})),
+}));
+
 import { loadDialectTables } from "../../../database/dialect-tables";
 import type { FieldGroupConfig } from "../../../field-groups/config/types";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import { reconcileFieldGroup } from "../services/field-group-reconcile-service";
 import {
   FieldGroupRegistryService,
   toCodeFirstComponentConfig,
@@ -93,6 +99,7 @@ function declared(
 ): CodeFirstComponentConfig {
   return {
     slug: "seo",
+    source: "code",
     label: "SEO",
     fields,
     description: "Search metadata",
@@ -118,7 +125,8 @@ describe("toCodeFirstComponentConfig", () => {
       localized: true,
     } satisfies FieldGroupConfig;
 
-    expect(toCodeFirstComponentConfig(fieldGroup)).toEqual({
+    expect(toCodeFirstComponentConfig(fieldGroup, "code")).toEqual({
+      source: "code",
       slug: "seo",
       label: "SEO Metadata",
       fields: [{ name: "metaTitle", type: "text" }],
@@ -136,7 +144,8 @@ describe("toCodeFirstComponentConfig", () => {
       fields: [],
     } satisfies FieldGroupConfig;
 
-    expect(toCodeFirstComponentConfig(fieldGroup)).toEqual({
+    expect(toCodeFirstComponentConfig(fieldGroup, "code")).toEqual({
+      source: "code",
       slug: "hero-banner_v2",
       label: "Hero Banner V2",
       fields: [],
@@ -360,6 +369,160 @@ describe("FieldGroupRegistryService.writeRecordedComponent", () => {
         locked: true,
       })
     ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("who owns a field group's row", () => {
+  let ctx: Ctx;
+
+  beforeEach(() => {
+    ctx = createCtx();
+  });
+
+  const PLUGIN = "plugin:@acme/shop" as const;
+
+  it.each([
+    ["the app's own, now a plugin's", "code", PLUGIN],
+    ["a plugin's, now the app's own", PLUGIN, "code"],
+    ["a plugin's, now another plugin's", "plugin:@acme/old", PLUGIN],
+  ] as const)(
+    "moves with the declaration: %s, its owner alone",
+    async (_case, recorded, declares) => {
+      ctx.adapter.selectOne.mockResolvedValue(
+        dbRow({ source: recorded, locked: 0 })
+      );
+      ctx.adapter.update.mockResolvedValue([dbRow({ source: declares })]);
+
+      const result = await ctx.service.syncCodeFirstComponents([
+        declared({ source: declares }),
+      ]);
+
+      expect(result.updated).toEqual(["seo"]);
+      expect(updateData(ctx)).toMatchObject({ source: declares, locked: 1 });
+      // No column it stores changed, so nothing is left to migrate.
+      expect(updateData(ctx)).not.toHaveProperty("schema_version");
+      expect(updateData(ctx)).not.toHaveProperty("migration_status");
+    }
+  );
+
+  it("stays the Schema Builder's under any declaration", async () => {
+    ctx.adapter.selectOne.mockResolvedValue(dbRow({ source: "ui" }));
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      declared({ source: PLUGIN }),
+    ]);
+
+    expect(result.unchanged).toEqual(["seo"]);
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+
+  it("is not written where the declaration already owns it", async () => {
+    ctx.adapter.selectOne.mockResolvedValue(dbRow({ source: PLUGIN }));
+
+    const result = await ctx.service.syncCodeFirstComponents([
+      declared({ source: PLUGIN }),
+    ]);
+
+    expect(result.unchanged).toEqual(["seo"]);
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a table the sync does not repoint", { table_name: "comp_elsewhere" }],
+    [
+      "a mark it cannot clear",
+      { migration_status: "diverged", table_name: "comp_seo" },
+    ],
+  ])(
+    "moves with the declaration where the rest of the row stays as it is: %s",
+    async (_case, row) => {
+      ctx.adapter.selectOne.mockResolvedValue(
+        dbRow({ source: "code", ...row })
+      );
+      ctx.adapter.tableExists.mockResolvedValue(true);
+      ctx.adapter.update.mockResolvedValue([dbRow({ source: PLUGIN, ...row })]);
+      vi.mocked(reconcileFieldGroup).mockRejectedValueOnce(
+        new Error("ambiguous tables")
+      );
+
+      const result = await ctx.service.syncCodeFirstComponents([
+        declared({ source: PLUGIN }),
+      ]);
+
+      expect(result.errors).toHaveLength(1);
+      expect(ctx.adapter.update).toHaveBeenCalledTimes(1);
+      expect(updateData(ctx)).toMatchObject({ source: PLUGIN, locked: 1 });
+      expect(updateData(ctx)).not.toHaveProperty("table_name");
+      expect(updateData(ctx)).not.toHaveProperty("fields");
+    }
+  );
+
+  it("is registered as the plugin's, and locked", async () => {
+    ctx.adapter.selectOne.mockResolvedValue(null);
+    ctx.adapter.insert.mockResolvedValue(dbRow({ source: PLUGIN }));
+
+    await ctx.service.syncCodeFirstComponents([declared({ source: PLUGIN })]);
+
+    expect(ctx.adapter.insert.mock.calls[0][1]).toMatchObject({
+      source: PLUGIN,
+      locked: 1,
+    });
+  });
+
+  it.each([
+    ["code", 1],
+    [PLUGIN, 1],
+    ["ui", 0],
+  ] as const)(
+    "is locked by default where code or a plugin owns it: %s",
+    async (source, locked) => {
+      const row = {
+        slug: "seo",
+        label: "SEO",
+        tableName: "comp_seo",
+        fields,
+        schemaHash: "hash",
+        source,
+      };
+      ctx.adapter.selectOne.mockResolvedValue(null);
+      ctx.adapter.insert.mockResolvedValue(dbRow({ source }));
+      await ctx.service.registerComponent(row);
+
+      const tx = {
+        selectOne: vi.fn().mockResolvedValue(null),
+        insert: vi.fn().mockResolvedValue(dbRow({ source })),
+      };
+      await ctx.service.registerComponentInTransaction(tx as never, row);
+
+      for (const insert of [ctx.adapter.insert, tx.insert]) {
+        expect(insert.mock.calls[0][1]).toMatchObject({ source, locked });
+      }
+    }
+  );
+
+  it("is left as it is by migrate, which writes a plugin's locked row as the pipeline does", async () => {
+    ctx.adapter.selectOne.mockResolvedValue(dbRow({ source: PLUGIN }));
+    ctx.adapter.update.mockResolvedValue([dbRow({ source: PLUGIN })]);
+
+    const outcome = await ctx.service.writeRecordedComponent(
+      declared({ source: "code", description: "Another description" }),
+      { source: "code", locked: true }
+    );
+
+    expect(outcome).toBe("updated");
+    expect(updateData(ctx)).not.toHaveProperty("source");
+  });
+
+  it("keeps a plugin's field group from a change outside code", async () => {
+    ctx.adapter.selectOne.mockResolvedValue(dbRow({ source: PLUGIN }));
+
+    await expect(
+      ctx.service.updateComponent("seo", { label: "Other" }, { source: "ui" })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      publicMessage: expect.stringContaining("defined in code"),
+    });
     expect(ctx.adapter.update).not.toHaveBeenCalled();
   });
 });

@@ -4,10 +4,9 @@
  * useDiscardSingleWorkingDraft — throw away a Single's pending change for one
  * language and reset the editor to the live published document.
  *
- * The collection equivalent is `useDiscardWorkingDraft`. They stay separate for
- * the reason `usePublishAllSingleLocales` records: the two are addressed
- * differently — an entry by collection slug and id, a Single by its slug alone —
- * and each owns its own query keys. What they share is the server behaviour,
+ * The collection equivalent is `useDiscardWorkingDraft`. They stay separate
+ * because the two are addressed differently — an entry by collection slug and
+ * id, a Single by its slug alone — and each owns its own query keys. What they share is the server behaviour,
  * which lives in one place already.
  *
  * @see services/versionApi.ts - discardWorkingDraft fetcher

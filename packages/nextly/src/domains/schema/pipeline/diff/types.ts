@@ -206,6 +206,12 @@ export interface TableSpec {
     | string
     | { column: string; kind: LocalizedColumnKind }
   )[];
+  // The companion's overlay columns at the time this snapshot was written: one for each repeater
+  // or group keeping one structure in every language with text inside, its structure staying on
+  // the main table. Kept apart from `localizedColumns` on purpose: an overlay is never moved
+  // between the tables (a disable, a field leaving translation), only added empty when its
+  // container starts keeping text. Present only when there are some.
+  overlayColumns?: string[];
 }
 
 /**

@@ -104,6 +104,13 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select fg_*_locales",
+    witness:
+      "packages/nextly/src/domains/i18n/__tests__/archive-entity-kind.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    dialect: "mysql",
     key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select dc_*_locales",
     witness:
       "packages/nextly/src/domains/i18n/__tests__/archive-entity-kind.integration.test.ts",
@@ -134,6 +141,33 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select dc_*",
     witness:
       "packages/nextly/src/domains/schema/extension/removed-plugin-keeps-elements.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    // The same row count, on a field group's shared table: a removed plugin's
+    // column there, whose drop the push then leaves out.
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select comp_*",
+    witness:
+      "packages/nextly/src/domains/schema/ownership/__tests__/push-keeps-others-elements.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    // The same, under the table's current name.
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select fg_*",
+    witness:
+      "packages/nextly/src/domains/schema/ownership/__tests__/push-keeps-others-elements.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    // The same row count, for the table of a Single the app removed from its
+    // code, which the push leaves out and whose drop it withholds. Reached
+    // where a field group leaves in the same edit.
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select single_*",
+    witness:
+      "packages/nextly/src/cli/commands/__tests__/plugin-entities-keep-their-owner.integration.test.ts",
     reason: PIPELINE,
   },
   {

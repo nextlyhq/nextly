@@ -19,6 +19,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 import { canvasRoot } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
+import { chooseFromMainMenu } from "./support/document-bar";
 import { test } from "./support/test";
 
 test.describe.configure({ mode: "serial", timeout: 180_000 });
@@ -388,6 +389,6 @@ test("Back returns to the page it was opened from, asking first about unsaved ch
 test("its admin form offers Open in builder", async ({ page }) => {
   const { set } = await seed(page);
   await gotoAdmin(page, `/collections/layouts/${set}`);
-  await page.getByRole("link", { name: "Open in builder" }).click();
+  await chooseFromMainMenu(page, "Open in builder");
   await expectSetView(page);
 });

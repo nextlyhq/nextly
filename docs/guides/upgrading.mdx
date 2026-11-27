@@ -84,11 +84,37 @@ builder's record fields once for every language instead: a submission's spam rea
 address, user agent, page, editor and title, and the text fields of its notification sends,
 resend requests and uploads. They describe the record, not content written in a language.
 
-`nextly migrate:create` writes the move back, as for any field that
+It also keeps the SEO plugin's bookkeeping once for every language. Releases 0.0.2-alpha.79 to
+0.0.2-alpha.81 kept those fields per language. They are keys, ids, languages, paths, kinds, states
+and times the plugin writes for itself, never words to translate. A site that upgraded through
+any of those releases with the SEO plugin has these 37 columns in `_locales` tables, and this
+release moves them back to each collection's own table:
+
+| Translations table | Columns that move back |
+| --- | --- |
+| `dc_nx_seo_addresses_locales` | `claim_key`, `kind`, `locale`, `path`, `holder_collection`, `holder_id`, `holder_label` |
+| `dc_nx_seo_redirects_locales` | `source_key`, `source`, `locale`, `target`, `target_key`, `origin`, `added_by` |
+| `dc_nx_seo_not_found_locales` | `path_key`, `locale`, `path`, `asked`, `kind`, `came_from` |
+| `dc_nx_seo_problems_locales` | `row_key`, `kind`, `holder_collection`, `holder_id`, `locale`, `label`, `path`, `title`, `description`, `checked_at`, `marked_at` |
+| `dc_nx_seo_code_pages_locales` | `path_key`, `path` |
+| `dc_nx_seo_route_values_locales` | `page_key`, `type`, `page_id`, `language` |
+
+What a person writes stays per language: the SEO settings, the `seo` group on your content types,
+and the name, title, description and share image of a page with no entry (`nx_seo_code_pages`).
+
+`nextly migrate:create` writes the move back for both plugins, as for any field that
 [stops being translated](/docs/localization#when-a-field-stops-being-translated). Each field's
 default-language value becomes its value on the entity's own table. Any other language's value is
 copied to the localization archive. Then the field's column in `<table>_locales` is removed, so
-the same consent applies as below.
+the same backup and consent apply as in the steps below. Until the migration is written,
+`nextly migrate` and `nextly migrate:check` stop with
+[`SCHEMA_DRIFT`](/docs/cli/errors/schema-drift), because the configuration has changes that no
+migration records yet. Apply it before the new build serves (step 4).
+
+Several of the SEO plugin's keys are required and unique: `claim_key`, `source_key`, both
+`path_key` columns and `page_key`. `nextly migrate` checks that the default language's values
+can take the setting before it moves anything. On a site with one language they always can.
+Otherwise it refuses, names the field and how many entries are in the way, and changes nothing.
 
 ## 1. Back up the database
 
@@ -123,11 +149,12 @@ tables (`<timestamp>_upgrade.sql`), and, beside it, the files that move stored v
   file that only creates the translations table (`<timestamp>_create_localization_<slug>.sql`),
   and a unique translated field gets its per-language index
   (`<timestamp>_unique_localization_<slug>.sql`).
-- From 0.0.2-alpha.79: for each form builder collection, a file that runs before the main
-  migration and copies other languages' values to the archive
-  (`<timestamp>_archive_localization_<slug>.sql`), and one that runs after it, copies the default
-  language's value into the entity's own table, and removes the column from the translations
-  table (`<timestamp>_shared_localization_<slug>.sql`).
+- From 0.0.2-alpha.79: for each form builder collection, and each of the SEO plugin's
+  bookkeeping collections listed above, a file that runs before the main migration and copies
+  other languages' values to the archive (`<timestamp>_archive_localization_<slug>.sql`), and one
+  that runs after it, copies the default language's value into the entity's own table, and
+  removes the column from the translations table (`<timestamp>_shared_localization_<slug>.sql`).
+  For example, `<timestamp>_shared_localization_nx_seo_addresses.sql`.
 
 Because those files remove columns, `migrate:create` lists each column and asks before writing
 anything. The list says where each column's values go, for example
@@ -147,6 +174,19 @@ npx nextly migrate:create --name upgrade --non-interactive \
 
 Name exactly the columns the list shows, not a bare `--accept-data-loss`. That way, if a later
 change would remove a column you didn't expect, it is refused rather than covered.
+
+Upgrading from 0.0.2-alpha.79 to 0.0.2-alpha.81 with the SEO plugin, the list names each column
+in the table above by its translations table, for example
+`column dc_nx_seo_addresses_locales.claim_key: claim_key stops being translated in nx_seo_addresses; its other languages are kept in the archive`.
+The consent names all 37, beside any form builder columns the list shows:
+
+```bash
+npx nextly migrate:create --name upgrade --non-interactive \
+  --accept-data-loss=dc_nx_seo_addresses_locales.claim_key,dc_nx_seo_addresses_locales.kind,dc_nx_seo_addresses_locales.locale,dc_nx_seo_addresses_locales.path,dc_nx_seo_addresses_locales.holder_collection,dc_nx_seo_addresses_locales.holder_id,dc_nx_seo_addresses_locales.holder_label,dc_nx_seo_redirects_locales.source_key,dc_nx_seo_redirects_locales.source,dc_nx_seo_redirects_locales.locale,dc_nx_seo_redirects_locales.target,dc_nx_seo_redirects_locales.target_key,dc_nx_seo_redirects_locales.origin,dc_nx_seo_redirects_locales.added_by,dc_nx_seo_not_found_locales.path_key,dc_nx_seo_not_found_locales.locale,dc_nx_seo_not_found_locales.path,dc_nx_seo_not_found_locales.asked,dc_nx_seo_not_found_locales.kind,dc_nx_seo_not_found_locales.came_from,dc_nx_seo_problems_locales.row_key,dc_nx_seo_problems_locales.kind,dc_nx_seo_problems_locales.holder_collection,dc_nx_seo_problems_locales.holder_id,dc_nx_seo_problems_locales.locale,dc_nx_seo_problems_locales.label,dc_nx_seo_problems_locales.path,dc_nx_seo_problems_locales.title,dc_nx_seo_problems_locales.description,dc_nx_seo_problems_locales.checked_at,dc_nx_seo_problems_locales.marked_at,dc_nx_seo_code_pages_locales.path_key,dc_nx_seo_code_pages_locales.path,dc_nx_seo_route_values_locales.page_key,dc_nx_seo_route_values_locales.type,dc_nx_seo_route_values_locales.page_id,dc_nx_seo_route_values_locales.language
+```
+
+Pass the same `--accept-data-loss` list to `nextly migrate` in step 4. If your list differs from
+this one, use the refusal's `Next:` line, which names the columns your database holds.
 
 Commit the new files in your migrations folder, with their snapshots in `meta/`.
 
@@ -206,6 +246,10 @@ to fix. Then:
 - if your site serves more than one language, check that each language still shows its own
   values;
 - check that your site's pages still render the same content.
+
+If the site holds tables an earlier release made in the Schema Builder, or field groups, also
+run `npx nextly repair-columns`: it changes nothing, and reports the columns that release made
+with another type. See [Repair old columns](/docs/database/repair-columns).
 
 ## If a step refuses
 

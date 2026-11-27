@@ -177,6 +177,7 @@ describe("MySQL pool outside Vercel", () => {
     expect(lastPoolOptions()).toMatchObject({
       connectionLimit: 10,
       idleTimeout: 30000,
+      connectTimeout: 15000,
       // mysql2 never closes an idle connection by itself: the adapter does,
       // and keeps `min` of them.
       maxIdle: 10,
@@ -284,7 +285,7 @@ describe("MySQL pool on Vercel", () => {
     vi.stubEnv("VERCEL", "1");
   });
 
-  it("defaults to three connections, idle ones closed after 5 s", async () => {
+  it("defaults to three connections, idle ones closed after 5 s, a 5 s wait for one", async () => {
     vi.useFakeTimers();
     const idle = idleConnections(3);
 
@@ -294,6 +295,9 @@ describe("MySQL pool on Vercel", () => {
       connectionLimit: 3,
       idleTimeout: 5000,
       maxIdle: 3,
+      // The bound on a new connection and, through `boundPoolWait`, on the
+      // wait in the queue.
+      connectTimeout: 5000,
     });
     // None kept open: min is 0 on Vercel.
     await vi.advanceTimersByTimeAsync(4_500);
@@ -325,6 +329,13 @@ describe("MySQL pool on Vercel", () => {
       connectionLimit: 3,
       idleTimeout: 15000,
       maxIdle: 3,
+    });
+
+    await connected({ url, pool: { connectionTimeoutMs: 12000 } });
+    expect(lastPoolOptions()).toMatchObject({
+      connectionLimit: 3,
+      idleTimeout: 5000,
+      connectTimeout: 12000,
     });
   });
 

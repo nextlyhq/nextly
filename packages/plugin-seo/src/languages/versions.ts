@@ -17,6 +17,7 @@ import {
   getCachedNextly,
   languageAddressOf,
   NextlyError,
+  type PageMetadataValues,
   type PluginContext,
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
@@ -220,13 +221,17 @@ export function onceEach<T = Awaited<ReturnType<ReadRules>>>(
  * The answer of a page's version in `language`, from its `document` as that
  * language serves it: what its head says, with no route's code or design,
  * since neither decides whether a page is listed or where its canonical is.
+ * An output naming the page as its head does passes `code`, what the page's
+ * route last supplied (`route-values`), so its title is the one the page is
+ * served with.
  */
 export function resolveIn(
   ctx: PluginContext,
   type: PublicAddressType,
   document: Record<string, unknown>,
   language: string,
-  readRules: ReadRules | undefined
+  readRules: ReadRules | undefined,
+  code: PageMetadataValues = {}
 ): Promise<SeoAnswer> {
   return resolveSeo(
     ctx,
@@ -235,7 +240,7 @@ export function resolveIn(
         type.kind === "single"
           ? { kind: "single", slug: type.slug, document }
           : { kind: "entry", collection: type.slug, entry: document },
-      code: {},
+      code,
       derived: {},
       locale: language,
     },

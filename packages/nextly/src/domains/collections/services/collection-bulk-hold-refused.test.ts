@@ -25,6 +25,7 @@ import type { CollectionAccessService } from "./collection-access-service";
 import { CollectionBulkService } from "./collection-bulk-service";
 import type { CollectionMutationService } from "./collection-mutation-service";
 import type { CollectionQueryService } from "./collection-query-service";
+import { WriteTries } from "./write-tries";
 
 /** A bulk service whose entry transaction is refused before any item runs, as a held collection's is. */
 function refusedAtTheHold() {
@@ -36,9 +37,16 @@ function refusedAtTheHold() {
   const mutation = {
     resolveTransitionAuthorization: vi.fn(async () => undefined),
     warmLocalizedReadiness: vi.fn(async () => undefined),
+    // The registry row the batch is made for, read before its transaction opens.
+    loadedRegistryRowFor: vi.fn(async () => undefined),
     entryTransaction: vi.fn(async () => {
       throw refusal;
     }),
+    // Made once: a collection held past the wait is not one whose definition changed.
+    inWriteTries: vi.fn(
+      async (write: (tries: WriteTries) => Promise<unknown>) =>
+        write(new WriteTries())
+    ),
   };
   const access = { checkCollectionAccess: vi.fn(async () => null) };
   return new CollectionBulkService(

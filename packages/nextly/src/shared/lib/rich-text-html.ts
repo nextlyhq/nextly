@@ -10,6 +10,7 @@
 
 import {
   codeTokenClass,
+  isFollowedLink,
   isRichTextValue,
   formatsDrawnByStyle,
   TEXT_FORMAT,
@@ -42,6 +43,8 @@ interface LexicalSerializedNode {
   style?: string;
   tag?: string;
   url?: string;
+  /** On an `autolink`: the author took the link off, keeping the words. */
+  isUnlinked?: boolean;
   target?: string;
   rel?: string;
   title?: string;
@@ -914,7 +917,10 @@ function serializeNode(
 
     case "link":
     case "autolink":
-      return serializeLinkNode(node, ctx, serializeChildren);
+      // An address the author unlinked in the editor is its words alone.
+      return isFollowedLink(node)
+        ? serializeLinkNode(node, ctx, serializeChildren)
+        : serializeChildren(node.children || []);
 
     case "code":
       return serializeCodeNode(node, serializeChildren);

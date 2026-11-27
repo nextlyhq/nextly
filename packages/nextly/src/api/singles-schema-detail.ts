@@ -24,6 +24,7 @@ import type { FieldConfig } from "@nextly/collections";
 
 import { getService } from "../di";
 import { SCHEMA_CHANGE_PERMISSIONS } from "../domains/auth/system-write-policy";
+import { refuseFieldGroupFieldsChangedInHost } from "../domains/field-groups/field-group-fields-read-only";
 import { withSchemaChangeExcluded } from "../domains/schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import {
@@ -128,6 +129,9 @@ export const GET = withErrorHandler(
       ...single,
       fields: enrichedFields,
       ...draftSplitResponseFields(draftSplit),
+      // Which of `title` and `slug` are the author's own fields, as the
+      // dispatcher's read names them.
+      ownIdentityFields: registry.getOwnIdentityFields(slug),
       // The workflow that holds this Single's publishing, as the dispatcher's
       // read names it.
       workflow: await shownWorkflowSummary(
@@ -275,6 +279,13 @@ export const PATCH = withErrorHandler(
         issuesDdl: false,
       },
       async () => {
+        // A field group's fields are changed only in its own editor: compared with each field
+        // group as stored while the lock is held, before the Single's row is read below.
+        await refuseFieldGroupFieldsChangedInHost(
+          body.fields,
+          getService("fieldGroupRegistryService"),
+          async () => (await registry.getSingleForWrite(slug))?.fields
+        );
         const hasOverrides = Object.keys(adminOverrides).length > 0;
         if (hasOverrides || body.fields !== undefined) {
           // As stored, past the registry row cache: the overrides merge into it, so a cached row

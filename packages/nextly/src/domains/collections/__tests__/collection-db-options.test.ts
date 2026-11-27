@@ -99,16 +99,22 @@ describe("the registry sync", () => {
     ]);
 
     await registryWithoutStorage().syncCodeFirstCollections([
-      toCodeFirstCollectionConfig({
-        slug: "events",
-        fields: [],
-        db: { idType: "uuidv7" },
-      }),
-      toCodeFirstCollectionConfig({
-        slug: "notes",
-        fields: [],
-        db: { allowIdOnCreate: true },
-      }),
+      toCodeFirstCollectionConfig(
+        {
+          slug: "events",
+          fields: [],
+          db: { idType: "uuidv7" },
+        },
+        "code"
+      ),
+      toCodeFirstCollectionConfig(
+        {
+          slug: "notes",
+          fields: [],
+          db: { allowIdOnCreate: true },
+        },
+        "code"
+      ),
     ]);
 
     expect(collectionDbOptions("events")).toEqual({ allowIdOnCreate: true });
@@ -134,6 +140,9 @@ describe("a create", () => {
         fn({
           getDrizzle: () => mockDb,
           lockRow: vi.fn().mockResolvedValue(undefined),
+          // The collection's hold an entry write takes first: on PostgreSQL its advisory lock, got
+          // at once here, as no save holds it.
+          queryStatement: vi.fn().mockResolvedValue([{ held: true }]),
           execute: vi.fn().mockResolvedValue([]),
           selectOne: vi.fn().mockResolvedValue(null),
           select: revisionReadingSelect(),

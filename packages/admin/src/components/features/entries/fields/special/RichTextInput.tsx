@@ -15,6 +15,7 @@
  */
 
 import { TRANSFORMERS } from "@lexical/markdown";
+import { AutoLinkPlugin } from "@lexical/react/LexicalAutoLinkPlugin";
 import { CheckListPlugin } from "@lexical/react/LexicalCheckListPlugin";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
@@ -48,10 +49,12 @@ import { cn } from "@admin/lib/utils";
 // Custom nodes
 import { CodeHighlightPlugin } from "./CodeHighlightPlugin";
 import { DraggableBlockMenuPlugin } from "./DraggableBlockMenuPlugin";
+import { offersRichTextFeature } from "./rich-text-features";
 import {
   RICH_TEXT_NODES,
   RICH_TEXT_THEME as editorTheme,
 } from "./rich-text-kit";
+import { AUTO_LINK_MATCHERS, isLinkUrl } from "./rich-text-links";
 // Local plugins
 import { RichTextButtonGroupPlugin } from "./RichTextButtonGroupPlugin";
 import { RichTextButtonLinkPlugin } from "./RichTextButtonLinkPlugin";
@@ -240,6 +243,9 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
   );
 
   const isEditable = !disabled && !readOnly;
+  // The toolbar's own reading of `features`, so the links made by themselves
+  // are made only where the toolbar offers the way to remove one.
+  const offersLinks = offersRichTextFeature(field.features, "link");
   const placeholder = field.admin?.placeholder ?? "Start writing...";
   const [editorAnchor, setEditorAnchor] = useState<HTMLDivElement | null>(null);
 
@@ -296,7 +302,15 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
         />
         <ListPlugin />
         <CheckListPlugin />
-        <LinkPlugin />
+        {/* A link points only where a reader can be taken, and pasting an
+            address over selected text links it. Addresses typed or pasted
+            into the text become links by themselves. Both only on a field
+            that offers links: one whose toolbar leaves the link out gets no
+            link made for it either, which it would have no way to remove. */}
+        <LinkPlugin validateUrl={offersLinks ? isLinkUrl : undefined} />
+        {offersLinks ? (
+          <AutoLinkPlugin matchers={[...AUTO_LINK_MATCHERS]} />
+        ) : null}
         <MarkdownShortcutPlugin transformers={TRANSFORMERS} />
         <HorizontalRulePlugin />
         <CodeHighlightPlugin />

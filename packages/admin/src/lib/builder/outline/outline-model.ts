@@ -67,6 +67,21 @@ export function describeReadOnly(reason: ReadOnlyReason): string {
 }
 
 /**
+ * Whether a row is a field group's own field, shown beneath the field that uses the field group.
+ * The Builder does not hold it, and a move of it is refused for the field group's sake: the field
+ * group is changed only in its own editor. So every way of moving a field is offered on it and
+ * refused with that reason, rather than left out as a row defined in code is.
+ */
+export function isFieldGroupOwnRow(node: OutlineNode): boolean {
+  // An entry of a field accepting several field groups stands for one of them and is no field.
+  return (
+    !node.own &&
+    node.readOnly?.kind === "field-group" &&
+    node.container !== "field-group-entry"
+  );
+}
+
+/**
  * Whether a field may be changed here, given what its container says.
  *
  * The one read-only rule, for the outline and the settings panel alike. A

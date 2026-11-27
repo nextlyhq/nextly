@@ -52,6 +52,7 @@ import {
 // templates. Eliminates the byte-identical-SQL drift risk.
 import { referenceConversionStatements } from "../reference-list-conversion";
 import { conversionForRename } from "../rename-conversion";
+import { assertSaveHoldKept } from "../save-hold-check";
 import { assertSchemaLockHeld, markedForSchemaLock } from "../schema-lock";
 import { generateSQL } from "../sql-templates/index";
 
@@ -104,6 +105,7 @@ export async function executePreResolutionOps(
   // safe moment to discover that the data will not convert is before the first statement.
   await assertConversionsAreSafe(txOrDb, ordered, dialect);
   await assertNarrowingsFit(txOrDb, ordered, dialect);
+  await record.refusalsPassed?.();
 
   for (const statement of leadingStatements) {
     await runTold(txOrDb, statement, dialect, record);
@@ -163,6 +165,12 @@ async function runOrderedOp(
 export interface RanStatements {
   starting(statement: string): void;
   finished(statement: string): void;
+  /**
+   * Asked, and waited for, once every refusal has passed and before the first statement: what the
+   * caller records of an apply about to start. On MySQL, where a statement commits as it runs, it
+   * is the last moment a record can be made of an apply that a refusal would have undone.
+   */
+  refusalsPassed?(): Promise<void>;
 }
 
 const NO_RECORD: RanStatements = {
@@ -170,7 +178,10 @@ const NO_RECORD: RanStatements = {
   finished: () => undefined,
 };
 
-/** `runRaw`, telling `record` as the statement starts and once it has run. */
+/**
+ * `runRaw`, telling `record` as the statement starts and once it has run. A save that lost its hold
+ * starts none; a session's setting put back (`runRaw` alone) is no statement of the save's.
+ */
 async function runTold(
   txOrDb: unknown,
   statement: string,
@@ -178,7 +189,7 @@ async function runTold(
   record: RanStatements
 ): Promise<void> {
   record.starting(statement);
-  await runRaw(txOrDb, statement, dialect);
+  await runRaw(txOrDb, statement, dialect, assertSaveHoldKept);
   record.finished(statement);
 }
 
@@ -604,10 +615,13 @@ function statementsForOp(op: Operation, dialect: SupportedDialect): string[] {
 export async function runRaw(
   txOrDb: unknown,
   sqlString: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /** Asked last, just before the statement is sent. */
+  asked: () => Promise<void> = () => Promise.resolve()
 ): Promise<void> {
   // A run that lost the schema lock starts no further statement (`assertSchemaLockHeld`).
   await assertSchemaLockHeld();
+  await asked();
   if (dialect === "sqlite") {
     // better-sqlite3 / drizzle-orm/better-sqlite3 uses synchronous .run()
     // (and tx wrappers also expose .run()). The F3 pipeline runs SQLite

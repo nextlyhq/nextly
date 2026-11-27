@@ -175,6 +175,43 @@ describe("one answer for each kind of page", () => {
     expect(answer.canonical).toEqual({ value: "/", from: "address" });
   });
 
+  it("a Single whose title Nextly keeps: {Title} is its own heading, or the field the site chooses", async () => {
+    // A Single made in the Schema Builder, or declaring no title: its
+    // `title` is its label, which Nextly fills.
+    const single = (document: Record<string, unknown>): PageMetadataInput => ({
+      source: { kind: "single", slug: "blog", document },
+      code: {},
+      derived: {},
+    });
+    const rules: SiteRules = {
+      ...RULES,
+      patterns: { "single:blog": { title: "{Title} | {Site name}" } },
+    };
+    const own = await resolveSeo(
+      context(),
+      single({ title: "Blog Page", heading: "Thoughts & Insights" }),
+      async () => rules
+    );
+    expect(own.title?.value).toBe("Thoughts & Insights | Acme");
+    const chosen = await resolveSeo(
+      context(),
+      single({
+        title: "Blog Page",
+        heading: "Thoughts",
+        hero: { lead: "Field <em>notes</em>" },
+      }),
+      async () => ({ ...rules, titleFields: { "single:blog": "hero.lead" } })
+    );
+    expect(chosen.title?.value).toBe("Field notes | Acme");
+    // Nothing else names it: its label still does.
+    const alone = await resolveSeo(
+      context(),
+      single({ title: "Blog Page" }),
+      async () => rules
+    );
+    expect(alone.title?.value).toBe("Blog Page | Acme");
+  });
+
   it("a Page Builder page: its design's rule under what a person typed", async () => {
     const answer = await resolveSeo(
       context(),
@@ -387,6 +424,164 @@ describe("what the answer depends on", () => {
     expect(fromCode.image).toEqual({
       value: { url: "/code.jpg" },
       from: "code",
+    });
+  });
+
+  describe("a page's own picture of the wrong shape", () => {
+    /** A featured image networks would crop: 1212 × 758, focus on the left. */
+    const COVER = {
+      id: "f1",
+      url: "https://files.example.com/cover.jpg",
+      filename: "cover-ab12.jpg",
+      mimeType: "image/jpeg",
+      width: 1212,
+      height: 758,
+      focalX: 20,
+      focalY: 50,
+      altText: "A desk by a window",
+    };
+    const CARD =
+      /^\/admin\/api\/plugins\/@nextlyhq\/plugin-seo\/share-card\/f1\/[0-9a-f]{8}\.jpg$/;
+
+    async function answerFor(media: Record<string, unknown>) {
+      return resolveSeo(
+        context({ f1: media }),
+        entryInput("pages", { slug: "a", featuredImage: "f1" })
+      );
+    }
+
+    it("is served as a 1200 × 630 card cut from it, with its alt text", async () => {
+      const answer = await answerFor(COVER);
+      expect(answer.image).toMatchObject({
+        value: { width: 1200, height: 630, alt: "A desk by a window" },
+        from: "content",
+        field: "featuredImage",
+        // What the card was made from, for the SEO tab and the sitemap.
+        madeFrom: { url: COVER.url, width: 1212, height: 758 },
+      });
+      expect(answer.image?.value.url).toMatch(CARD);
+    });
+
+    it("is a new card once its file or focal point changes, and the same one for a new alt", async () => {
+      const first = (await answerFor(COVER)).image?.value.url;
+      const replaced = (
+        await answerFor({ ...COVER, filename: "cover-cd34.jpg" })
+      ).image?.value.url;
+      const refocused = (await answerFor({ ...COVER, focalX: 70 })).image?.value
+        .url;
+      const realt = await answerFor({ ...COVER, altText: "A new desk" });
+      expect(new Set([first, replaced, refocused]).size).toBe(3);
+      expect(realt.image?.value.url).toBe(first);
+      expect(realt.image?.value.alt).toBe("A new desk");
+    });
+
+    it("is served as it is where networks show it in full", async () => {
+      const answer = await answerFor({ ...COVER, width: 1200, height: 630 });
+      expect(answer.image?.value.url).toBe(COVER.url);
+      expect(answer.image).not.toHaveProperty("madeFrom");
+    });
+
+    it("is never put in place of a share image chosen for the page", async () => {
+      const answer = await resolveSeo(
+        context({ f1: COVER }),
+        entryInput("pages", { slug: "a", seo: { ogImage: "f1" } })
+      );
+      expect(answer.image?.value.url).toBe(COVER.url);
+      expect(answer.image?.from).toBe("page");
+    });
+  });
+
+  it("serves a route's image at its stored size where it is the page's own picture", async () => {
+    // The route states its picture as a share card's size; it isn't one.
+    const stored = {
+      url: "https://files.example.com/cover.jpg",
+      width: 1212,
+      height: 758,
+      altText: "A cover",
+    };
+    const answer = await resolveSeo(
+      context({ f1: stored }),
+      entryInput(
+        "pages",
+        { slug: "a", featuredImage: "f1" },
+        {
+          code: {
+            image: {
+              url: "https://files.example.com/cover.jpg",
+              width: 1200,
+              height: 630,
+              alt: "The post's title",
+            },
+          },
+        }
+      )
+    );
+    expect(answer.image).toEqual({
+      value: {
+        url: "https://files.example.com/cover.jpg",
+        width: 1212,
+        height: 758,
+        // The route's own words for it stay.
+        alt: "The post's title",
+      },
+      from: "code",
+    });
+  });
+
+  /** The site served at `https://example.com`, as its settings say. */
+  const onExample = () =>
+    Promise.resolve({
+      ...RULES,
+      productionAddresses: ["https://example.com"],
+    });
+  /** A page whose cover is stored by path, its route naming `url` at 1200 × 630. */
+  const coverStatedAt = (url: string) =>
+    resolveSeo(
+      context({
+        f1: { url: "/media/cover.jpg", width: 800, height: 600, alt: "Desk" },
+      }),
+      entryInput(
+        "pages",
+        { slug: "a", coverImage: "f1" },
+        { code: { image: { url, width: 1200, height: 630 } } }
+      ),
+      onExample
+    );
+
+  it("knows the page's picture by its path on the site, with the media item's alt where the route gives none", async () => {
+    const answer = await coverStatedAt("https://example.com/media/cover.jpg");
+    expect(answer.image?.value).toEqual({
+      url: "https://example.com/media/cover.jpg",
+      width: 800,
+      height: 600,
+      alt: "Desk",
+    });
+  });
+
+  it("takes a picture at the same path on another site as that site's own", async () => {
+    const answer = await coverStatedAt(
+      "https://elsewhere.example/media/cover.jpg"
+    );
+    expect(answer.image?.value).toEqual({
+      url: "https://elsewhere.example/media/cover.jpg",
+      width: 1200,
+      height: 630,
+    });
+  });
+
+  it("keeps the size a route states for a picture that is not the page's own", async () => {
+    const answer = await resolveSeo(
+      context({ f1: { url: "/media/cover.jpg", width: 800, height: 600 } }),
+      entryInput(
+        "pages",
+        { slug: "a", coverImage: "f1" },
+        { code: { image: { url: "/og?title=a", width: 1200, height: 630 } } }
+      )
+    );
+    expect(answer.image?.value).toEqual({
+      url: "/og?title=a",
+      width: 1200,
+      height: 630,
     });
   });
 

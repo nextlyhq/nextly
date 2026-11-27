@@ -11,6 +11,7 @@
  * @module problems/check
  */
 import {
+  addressOfRequest,
   publicAddressOf,
   typesWithoutAddress,
   type PageMetadataInput,
@@ -26,7 +27,7 @@ import {
   type KnownHolders,
 } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
-import type { CodeRoute } from "../code-pages/routes";
+import type { ReadCodeRoutes } from "../code-pages/routes";
 import { readConnections } from "../connections/store";
 import { refreshContentDates } from "../content-dates/record";
 import { pruneContentDates } from "../content-dates/store";
@@ -40,6 +41,12 @@ import {
 } from "../languages/versions";
 import { originOf } from "../origin";
 import {
+  copyFailures,
+  forgetCopyFailures,
+  type CopyFailure,
+} from "../outputs/copy-failures";
+import {
+  listedPageAt,
   listPages,
   type ListedPage,
   type ListingProblem,
@@ -85,6 +92,7 @@ import { canonicalIsOwn, pageProblems } from "./page-checks";
 import { pageTypeOf, singleKey } from "./page-types";
 import {
   connectionProblems,
+  plainCopyProblems,
   listingProblems,
   noAddressProblems,
   productionAddressProblems,
@@ -139,7 +147,7 @@ export interface ProblemChecks {
    * The pages the site's routes render from their own code, which the
    * sitemap lists beside the entries, where the site has any.
    */
-  codeRoutes?: () => readonly CodeRoute[];
+  codeRoutes?: ReadCodeRoutes;
   /**
    * What the sitemap lists, where the site serves one: its collections
    * where it names only some.
@@ -1180,22 +1188,90 @@ async function siteProblems(
     ...productionAddressProblems(addresses, standing),
     ...noAddressProblems(types),
     // Redirects are site-wide SEO's: their count is told no one else.
-    ...(reader.seesRedirects ? await unservedRedirects(ctx) : []),
+    ...(reader.seesRedirects ? await unservedRedirects(ctx, checks) : []),
     ...connectionProblems(await connectionsReport(ctx, checks)),
+    // Pages whose copy failed are public pages the sitemap lists, by address.
+    ...plainCopyProblems(await servedCopyFailures(ctx, checks)),
   ];
 }
 
 /**
- * The site's saved redirects going unserved for want of a running Proxy. A
- * status that cannot be read is reported as nothing, never as a failed list.
+ * The pages whose copy failed that still have one to make: while copies or
+ * llms-full.txt are on, and the page is still listed, as the outputs list
+ * it. The rest, whose copy will never be asked for again to settle them (a
+ * page deleted, unpublished or left out, or the outputs switched off), are
+ * forgotten. Nothing is read beyond the failures' own notes where there are
+ * none, so a site with none pays one read.
  */
-async function unservedRedirects(ctx: PluginContext): Promise<Problem[]> {
+async function servedCopyFailures(
+  ctx: PluginContext,
+  checks: ProblemChecks
+): Promise<CopyFailure[]> {
+  const failures = await copyFailures(ctx);
+  if (failures.length === 0) return [];
+  const rules = await checks.readers.readRules(ctx, undefined);
+  const served =
+    rules.plainTextCopies === true ||
+    (rules.llmsTxt === true && rules.llmsFullTxt === true);
+  const kept: CopyFailure[] = [];
+  const gone: string[] = [];
+  for (const failure of failures) {
+    if (served && (await stillListed(ctx, checks, failure.url))) {
+      kept.push(failure);
+    } else {
+      gone.push(failure.url);
+    }
+  }
+  await forgetCopyFailures(ctx, gone);
+  return kept;
+}
+
+/** Whether the page at `url` is still one the outputs list. */
+async function stillListed(
+  ctx: PluginContext,
+  checks: ProblemChecks,
+  url: string
+): Promise<boolean> {
+  const page = new URL(url);
+  const address = await addressOfRequest(page);
+  if (address === undefined) return false;
+  const { path, locale } = address;
+  // Kept without its trailing slash, as the record keys it.
+  const kept = path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+  const listed = await listedPageAt(
+    ctx,
+    { path: kept, language: locale, served: page.pathname },
+    {
+      origin: page.origin,
+      readRules: checks.readers.readRules,
+      ...(checks.codeRoutes === undefined
+        ? {}
+        : { codeRoutes: checks.codeRoutes }),
+      ...(checks.sitemap?.collections === undefined
+        ? {}
+        : { collections: checks.sitemap.collections }),
+    }
+  );
+  return listed !== null;
+}
+
+/**
+ * The site's saved redirects, and its plain-text copies where they are
+ * switched on, going unserved for want of a running Proxy. A status that
+ * cannot be read is reported as nothing, never as a failed list.
+ */
+async function unservedRedirects(
+  ctx: PluginContext,
+  checks: ProblemChecks
+): Promise<Problem[]> {
   try {
     const status = await readProxyStatus(ctx);
     if (status.state === "running") return [];
+    const rules = await checks.readers.readRules(ctx, undefined);
     return proxyProblems(
       status,
-      await ctx.services.ownCollections.count(redirectsSlug(ctx))
+      await ctx.services.ownCollections.count(redirectsSlug(ctx)),
+      rules.plainTextCopies === true
     );
   } catch (error) {
     ctx.logger.warn("Whether the Proxy runs could not be read", { error });

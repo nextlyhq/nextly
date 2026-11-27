@@ -15,7 +15,7 @@ import {
   type BuilderOp,
   type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
-import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
+import { Popover, PopoverTrigger } from "@nextlyhq/ui";
 import { Check, Database } from "lucide-react";
 import * as React from "react";
 
@@ -24,6 +24,7 @@ import {
   settingCandidates,
   type SettingCandidate,
 } from "../make-component-setting";
+import { BuilderPopoverContent } from "../popups/builder-popover";
 
 import type { ContentServices } from "./content/content-controls";
 
@@ -211,7 +212,7 @@ function CandidateRow({
             <Database aria-hidden="true" size={14} />
           </button>
         </PopoverTrigger>
-        <PopoverContent align="end" className="nx-binding-popover">
+        <BuilderPopoverContent align="end" className="nx-binding-popover">
           <BindingPicker
             prop={{
               name: `${candidate.nodeId}.${candidate.propPath}`,
@@ -233,7 +234,7 @@ function CandidateRow({
               void make(picked);
             }}
           />
-        </PopoverContent>
+        </BuilderPopoverContent>
       </Popover>
     </div>
   );

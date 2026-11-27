@@ -7,7 +7,7 @@
  */
 import { Button } from "@nextlyhq/plugin-sdk/admin";
 import { Check } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
 import type { SeoAnswer } from "../resolver/order";
 import { fileNameOf } from "../tab/display";
@@ -16,7 +16,14 @@ import { thingsToFix } from "../tab/problems";
 import type { AdvancedProps } from "./advanced";
 import { AutomaticSource, Chip, LinkAction, Note, SourceRow } from "./parts";
 import { Row, RowButton } from "./rows";
-import { imageIdOf, type ChosenImage } from "./values";
+import {
+  failureText,
+  makeLabel,
+  MAKING_TEXT,
+  type MadeFrom,
+  type ShareImageMaking,
+} from "./share-image-making";
+import type { ChosenImage } from "./values";
 
 /** A file's size as a person reads it: `212 KB`. */
 function bytesText(bytes: number): string {
@@ -82,10 +89,13 @@ export function copyFixes(
 function ImageProblems({
   problems,
   onMake,
+  busy,
   writable,
 }: {
   problems: readonly { message: string; fix: string }[];
   onMake: (() => void) | undefined;
+  /** Whether a copy is being made now, from here or the notice. */
+  busy: boolean;
   writable: boolean;
 }): ReactNode {
   if (problems.length === 0) return null;
@@ -104,10 +114,10 @@ function ImageProblems({
             type="button"
             size="sm"
             className="h-7 px-2.5 text-xs"
-            disabled={!writable}
+            disabled={!writable || busy}
             onClick={onMake}
           >
-            Make a share image
+            {makeLabel(busy)}
           </Button>
         </div>
       ) : null}
@@ -115,29 +125,20 @@ function ImageProblems({
   );
 }
 
-/** The picture a share image was made from, as the row names it. */
-interface MadeFrom {
-  /** Its name in a sentence, such as `cover image`. */
-  name: string;
-  /** Whether it is one of the page's own fields, shown on the page. */
-  onPage: boolean;
-}
-
-/** A share image made in this visit, and what it was made from. */
-interface Made {
-  id: string;
-  from: MadeFrom;
-}
-
 /**
  * What a share image made now is made from: the image chosen for the page,
- * or the page's own picture the automatic one is taken from.
+ * or the page's own picture the automatic one is taken from. Named as it is
+ * when the copy is asked for, before the copy replaces it.
  */
-function madeFromOf(props: AdvancedProps, chosen: boolean): MadeFrom {
+export function madeFromOf(
+  answer: SeoAnswer | undefined,
+  names: AdvancedProps["names"],
+  chosen: boolean
+): MadeFrom {
   if (chosen) return { name: "chosen image", onPage: false };
-  const field = props.answer?.image?.field;
+  const field = answer?.image?.field;
   const label =
-    field === undefined ? undefined : (props.names.fieldLabels[field] ?? field);
+    field === undefined ? undefined : (names.fieldLabels[field] ?? field);
   return { name: label?.toLowerCase() ?? "picture", onPage: true };
 }
 
@@ -182,57 +183,72 @@ function shownImage(
 ): ChosenImage | undefined {
   if (chosen) return props.chosenImage;
   const image = props.answer?.image;
+  // A card cut from the page's picture is what networks are given, so the
+  // row shows the card rather than the picture's own file.
+  if (image?.madeFrom !== undefined) {
+    return {
+      ...image.value,
+      filename: `share card of ${fileNameOf(image.madeFrom.url)}`,
+      mimeType: "image/jpeg",
+    };
+  }
   return (
     props.shownImageFile ??
     (image && { ...image.value, filename: fileNameOf(image.value.url) })
   );
 }
 
-/** Whether the last share image copy asked for could not be made. */
-export interface MakeFailure {
-  failed: boolean;
-  /** Follows a copy asked for: cleared as it starts, set if none comes back. */
-  track: (asked: Promise<string | undefined>) => void;
+/**
+ * What the row says of a card the plugin cut from the page's picture: what
+ * it was cut from, and that it follows that picture.
+ */
+function CardMade({
+  props,
+  madeFrom,
+}: {
+  props: AdvancedProps;
+  madeFrom: NonNullable<SeoAnswer["image"]>["madeFrom"];
+}): ReactNode {
+  if (madeFrom === undefined) return null;
+  const name = madeFromOf(props.answer, props.names, false).name;
+  const size =
+    madeFrom.width === undefined || madeFrom.height === undefined
+      ? ""
+      : ` (${madeFrom.width} × ${madeFrom.height})`;
+  return (
+    <Note>
+      <span data-testid="seo-share-card-made">
+        Networks show the {name}
+        {size} as this 1200 × 630 copy, cut around its focal point and made
+        automatically. It follows the {name}: a new picture or focal point makes
+        a new copy.
+      </span>
+    </Note>
+  );
 }
 
 /**
- * A copy that could not be made, said only while the page's image is still
- * the one it was asked for from: choosing another image, or asking again,
- * lets the warning go.
+ * What the row says of a copy asked for from it: a status kept in place, so
+ * a screen reader hears the copy being made and why one couldn't be, and the
+ * note that shows a failure.
  */
-export function useMakeFailure(ogImage: unknown): MakeFailure {
-  const image = imageIdOf(ogImage) ?? null;
-  const [failedFor, setFailedFor] = useState<
-    { image: string | null } | undefined
-  >(undefined);
-  return {
-    failed: failedFor !== undefined && failedFor.image === image,
-    track: asked => {
-      setFailedFor(undefined);
-      void asked.then(id =>
-        setFailedFor(id === undefined ? { image } : undefined)
-      );
-    },
-  };
-}
-
-/**
- * A copy that couldn't be made, said in the row: a status kept in place,
- * empty until a copy fails, so a screen reader announces the failure as it
- * happens, and the note that shows it.
- */
-function MakeFailed({ failed }: { failed: boolean }): ReactNode {
+function MakeStatus({ making }: { making: ShareImageMaking }): ReactNode {
+  const failure = making.failureAt("row");
   return (
     <>
+      {/* Said in short: the note below shows the rest. */}
       <p role="status" className="sr-only">
-        {failed ? "The share image couldn't be made." : ""}
+        {making.busy
+          ? MAKING_TEXT
+          : failure === undefined
+            ? ""
+            : failureText(failure, "").trim()}
       </p>
-      {failed ? (
+      {failure === undefined ? null : (
         <Note tone="warning">
-          The share image couldn&apos;t be made. Try again, or choose another
-          image.
+          {failureText(failure, "Try again, or choose another image.")}
         </Note>
-      ) : null}
+      )}
     </>
   );
 }
@@ -248,29 +264,15 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
     errors,
     onSet,
     onChooseImage,
-    onMakeShareImage,
+    making,
   } = props;
-  // The copy made in this visit; the row says so while it is the page's image.
-  const [copy, setCopy] = useState<Made | undefined>(undefined);
-  // Whether the last copy asked for could not be made, said in the row.
-  const failure = useMakeFailure(values.ogImage);
   const chosen = values.ogImage !== null && values.ogImage !== undefined;
-  const made =
-    copy !== undefined && copy.id === imageIdOf(values.ogImage)
-      ? copy.from
-      : undefined;
+  // The copy made in this visit, from here or the notice, while it is the
+  // page's image: the panel keeps one state for both.
+  const made = making?.made?.from;
   const shown = shownImage(props, chosen);
-  const make =
-    onMakeShareImage &&
-    (() => {
-      // Named as it was when the copy was asked for, before it replaces it.
-      const from = madeFromOf(props, chosen);
-      const asked = onMakeShareImage();
-      failure.track(asked);
-      void asked.then(id => {
-        setCopy(id === undefined ? undefined : { id, from });
-      });
-    });
+  const ask = making?.make;
+  const make = ask && (() => ask("row", madeFromOf(answer, names, chosen)));
   return (
     <Row
       error={errors.ogImage}
@@ -308,7 +310,10 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
           </SourceRow>
         </div>
       </div>
-      <MakeFailed failed={failure.failed} />
+      {making === undefined ? null : <MakeStatus making={making} />}
+      {chosen ? null : (
+        <CardMade props={props} madeFrom={answer?.image?.madeFrom} />
+      )}
       {made ? (
         <Note tone="success" icon={<Check className="size-4" />}>
           <span data-testid="seo-share-made">
@@ -320,6 +325,7 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
         <ImageProblems
           problems={context?.shareImage?.problems ?? []}
           onMake={make}
+          busy={making?.busy ?? false}
           writable={writable}
         />
       )}

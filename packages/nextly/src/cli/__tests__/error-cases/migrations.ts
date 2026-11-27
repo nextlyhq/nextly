@@ -5,6 +5,10 @@
  */
 import { tableBusyError } from "../../../domains/schema/busy-table/report";
 import { assertNoLegacyBookkeeping } from "../../../domains/schema/events/legacy-detection";
+import {
+  answerLanguageError,
+  answerLanguageRefusal,
+} from "../../../domains/i18n/migration/answer-language";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
 import {
   judgeDataLoss,
@@ -17,7 +21,17 @@ import {
 } from "../../../domains/schema/migrate/core-reconcile";
 import { coreDeletionOf } from "../../../domains/schema/migrate/core-retired-columns";
 import { migrationDriftError } from "../../../domains/schema/migrate/drift-error";
+import {
+  fieldGroupHistoryBehindStorageError,
+  fieldGroupStorageNotMigratedError,
+  fieldGroupTypeColumnNotRecordedError,
+} from "../../../domains/schema/migrate/field-group-history";
+import {
+  rollbackHistoryUnreadableError,
+  rollbackRefusedError,
+} from "../../../domains/schema/migrate/field-group-rollback";
 import { ownWriteLockError } from "../../../domains/schema/migrate/migration-transaction";
+import { fieldGroupHistoryNamesUnrecordedError } from "../../../domains/schema/migrate-create/snapshot-io";
 import {
   assertNotPartiallyApplied,
   concurrentRunError,
@@ -44,7 +58,15 @@ import {
   writerHeldError,
   writerLostError,
 } from "../../../domains/schema/migrate-create/writer-hold";
+import {
+  readingOthersElements,
+  refuseRemovingOthersElements,
+} from "../../../domains/schema/ownership/removed-elements";
 import { describeHolder } from "../../../domains/schema/pipeline/schema-lock";
+import {
+  snapshotFolderUnreadableError,
+  snapshotWithoutEntitiesError,
+} from "../../../domains/schema/repair-columns/stop-errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   appliedFilesMissing,
@@ -57,6 +79,7 @@ import {
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
   resolveModeRequired,
+  builderDefinitionIgnored,
   schemaChangeWithoutMigration,
   settingsChangeWithoutMigration,
   databaseBehindMigrations,
@@ -97,6 +120,9 @@ const FILE = "20261020_120000_add_posts.sql";
 /** The checksum `FILE`'s snapshot recorded, which it still matches. */
 const POSTS_CHECKSUM = "5f0c".repeat(16);
 const MIGRATIONS = `${PROJECT}/migrations`;
+
+/** An app migration's file that removes a field. */
+const REMOVE_FILE = "20261021_100000_remove_code.sql";
 
 /** A Schema Builder save's file, named as a save names it. */
 const BUILDER_FILE = "1761732000000_update_posts.sql";
@@ -216,6 +242,57 @@ export const MIGRATION_CASES = {
       ],
       new Set(["20261020_120000_add_posts", "20261021_090000_add_tags"])
     ) as NextlyError,
+  // As `nextly migrate` refuses a file that drops a column a plugin's index stands on.
+  FOREIGN_ELEMENT_REMOVED: () =>
+    thrown(() =>
+      refuseRemovingOthersElements({
+        deletions: [{ kind: "column", table: "dc_posts", column: "code" }],
+        dialect: "postgresql",
+        entity: `Migration ${REMOVE_FILE}`,
+        fieldOf: (_table, column) => column,
+        sources: {
+          extensionSchema: () => Promise.resolve(null),
+          recordedElements: () =>
+            Promise.resolve([
+              {
+                owner: { kind: "plugin", id: "@acme/search" },
+                kind: "index",
+                name: "posts_code_idx",
+                table: "dc_posts",
+              },
+            ]),
+          tableOwners: () => Promise.resolve(new Map()),
+          indexColumns: () =>
+            Promise.resolve(new Map([["posts_code_idx", ["code"]]])),
+          indexNames: () => Promise.resolve(new Set(["posts_code_idx"])),
+          foreignKeyColumns: () => Promise.resolve(new Map()),
+          keysInto: () => Promise.resolve([]),
+          liveNames: table => Promise.resolve([table]),
+        },
+      })
+    ),
+  // As `nextly migrate` refuses a run where the record of other owners' elements cannot be read.
+  OWNER_RECORD_UNREADABLE: () =>
+    thrown(() =>
+      readingOthersElements("The database", () =>
+        Promise.reject(new Error("no such table: nextly_schema_owners"))
+      )
+    ),
+  // As `nextly repair-columns` stops on a newest applied snapshot an earlier release wrote.
+  SNAPSHOT_WITHOUT_ENTITIES: () =>
+    snapshotWithoutEntitiesError(
+      "20261024_120000_make_author_required",
+      "20261020_120000_add_posts"
+    ),
+  // As `nextly repair-columns` stops on a snapshots folder its user may not list.
+  MIGRATION_SNAPSHOTS_UNREADABLE: () =>
+    snapshotFolderUnreadableError(
+      "/app/migrations/meta",
+      Object.assign(
+        new Error("EACCES: permission denied, scandir '/app/migrations/meta'"),
+        { code: "EACCES" }
+      )
+    ),
   // As `nextly migrate` refuses a blank migration whose base file and MySQL variant state
   // different places in the history.
   MIGRATION_PLACE_STATED_TWICE: () =>
@@ -229,6 +306,17 @@ export const MIGRATION_CASES = {
         file: "20261021_090000_seed.mysql.sql",
         placed: { parent: "20261019_080000_init", merges: [] },
       }
+    ),
+  // As `nextly migrate` refuses a file answered in English where the default language is Spanish.
+  MIGRATION_LANGUAGE_DIFFERS: () =>
+    answerLanguageError(
+      [
+        answerLanguageRefusal(
+          { name: "20261021_090000_require_body", answersIn: "en" },
+          "es"
+        ),
+      ],
+      "es"
     ),
   // As a command that waited its whole wait for the migration files is refused.
   MIGRATIONS_WRITER_BUSY: () =>
@@ -579,6 +667,29 @@ export const MIGRATION_CASES = {
     ]),
   SETTINGS_CHANGE_WITHOUT_MIGRATION: () =>
     settingsChangeWithoutMigration(1, ["~ posts: labels.singular"]),
+  BUILDER_DEFINITION_IGNORED: () => builderDefinitionIgnored("ui-schema.json"),
+  // The refusals `nextly migrate` makes of the field-group transition, built as it throws them.
+  FIELD_GROUP_STORAGE_NOT_MIGRATED: () =>
+    fieldGroupStorageNotMigratedError(
+      "20261119_120000_000_field_group_current_names.sql"
+    ),
+  FIELD_GROUP_HISTORY_BEHIND_STORAGE: () =>
+    fieldGroupHistoryBehindStorageError(),
+  FIELD_GROUP_HISTORY_NAMES_UNRECORDED: () =>
+    fieldGroupHistoryNamesUnrecordedError(
+      "20261101_120000_000_add_banner",
+      ["fg_banner"],
+      ["comp_card"]
+    ),
+  FIELD_GROUP_ROLLBACK_REFUSED: () =>
+    rollbackRefusedError("20261119_120000_000_field_group_current_names"),
+  FIELD_GROUP_ROLLBACK_HISTORY_UNREADABLE: () =>
+    rollbackHistoryUnreadableError(
+      "20261119_120000_000_field_group_current_names",
+      "its snapshot cannot be read"
+    ),
+  FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED: () =>
+    fieldGroupTypeColumnNotRecordedError(["fg_banner"]),
   DATABASE_BEHIND_MIGRATIONS: () =>
     databaseBehindMigrations(2, [
       "- table dc_posts (created by 20261116_120000_000_create_posts)",

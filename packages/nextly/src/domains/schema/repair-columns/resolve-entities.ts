@@ -34,7 +34,9 @@
 // @module domains/schema/repair-columns/resolve-entities
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { canonicalJson } from "../../../shared/lib/canonical-json";
 import type { ColumnOverride } from "../extension/draft";
+import type { RegistryBaseline } from "../migrate/registry-record";
 import { DEFINITION_APPLIED } from "../migrate/unique-column-guard";
 import { builtByFor, isCodeOwned } from "../pipeline/registered-collections";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
@@ -123,9 +125,43 @@ const NO_SOURCES: EntitySources = {
   recorded: undefined,
 };
 
-/** Whether a Builder manifest is checked out, which decides what a Builder registry row stands for. */
+/**
+ * Whether a Builder manifest is checked out, which decides what a Builder registry row stands for,
+ * and the registry record's baseline, where no applied snapshot records entities.
+ */
 interface ResolutionContext {
   hasManifest: boolean;
+  baseline?: RegistryBaseline;
+}
+
+/** Where a registry baseline keeps each kind's rows. */
+const BASELINE_ROWS = {
+  collection: "collections",
+  single: "singles",
+  fieldGroup: "fieldGroups",
+} as const satisfies Record<RecordedKind, keyof RegistryBaseline>;
+
+/** A stored switch as each driver hands it back: a boolean, or 0 and 1. */
+const isOn = (value: unknown) => value === true || Number(value) === 1;
+
+/**
+ * Whether a registry row still says what the baseline kept of its entity: its fields, its
+ * translation switch and its table. A start can rewrite a row without changing a table, and so can
+ * a development push with its table, and only the live table can tell the two apart; either way a
+ * row that differs is not evidence of what a migration applied. An entity the baseline does not
+ * hold was made since with no migration, which nothing records either.
+ */
+function rowMatchesBaseline(
+  row: RegistryEntity,
+  baseline: RegistryBaseline
+): boolean {
+  const kept = baseline[BASELINE_ROWS[row.kind]][row.slug];
+  if (kept === undefined) return false;
+  return (
+    canonicalJson(row.fields ?? []) === canonicalJson(kept.fields ?? []) &&
+    isOn(row.localized) === isOn(kept.localized) &&
+    row.tableName === kept.tableName
+  );
 }
 
 /** Whether the Builder owns a registry row, from the ownership the registry recorded. */
@@ -139,10 +175,10 @@ const isBuilderRow = (row: RegistryEntity) =>
  * Each names the builder that made the tables as it recorded the owner: the snapshot by who declared
  * the entity when it was written, the row by the registry's ownership.
  */
-function appliedDefinition({
-  row,
-  recorded,
-}: EntitySources): AppliedDefinition | null {
+function appliedDefinition(
+  { row, recorded }: EntitySources,
+  { baseline }: ResolutionContext
+): AppliedDefinition | null {
   if (recorded !== undefined) {
     return {
       fields: asFields(recorded.fields),
@@ -158,6 +194,8 @@ function appliedDefinition({
   // and never converted. `diverged` is none of these: the reader refuses that row first.
   if (row === undefined) return null;
   if (!DEFINITION_APPLIED.has(row.migrationStatus ?? "")) return null;
+  // Where the registry record keeps a baseline, a row that differs from it is not trusted.
+  if (baseline !== undefined && !rowMatchesBaseline(row, baseline)) return null;
   return {
     fields: asFields(row.fields),
     localized: row.localized === true,
@@ -312,7 +350,7 @@ function resolveEntity(
 ): RepairEntity | null {
   const identity = sources.fromConfig ?? sources.row ?? sources.recorded;
   if (identity === undefined) return null;
-  const appliedSide = appliedDefinition(sources);
+  const appliedSide = appliedDefinition(sources, context);
   const configuredSide = configuredDefinition(sources, context);
   // A row waiting for a migration that nothing declares any more: nothing says what was applied
   // or what will be, so there is nothing to compare its columns with.
@@ -394,6 +432,11 @@ export function resolveRepairEntities(args: {
   /** The app's column overrides; absent, none is declared. */
   overrides?: RepairOverrides;
   hasManifest?: boolean;
+  /**
+   * The registry rows as the registry record keeps them, given where no applied snapshot records
+   * entities: a row that differs from its baseline says nothing of what was applied.
+   */
+  baseline?: RegistryBaseline;
 }): RepairEntity[] {
   // One record per entity, in the order it is first seen, each source adding what it records.
   const byEntity = new Map<string, EntitySources>();
@@ -415,6 +458,7 @@ export function resolveRepairEntities(args: {
   for (const sources of byEntity.values()) {
     const entity = resolveEntity(sources, args.overrides, {
       hasManifest: args.hasManifest === true,
+      ...(args.baseline !== undefined ? { baseline: args.baseline } : {}),
     });
     if (entity !== null) entities.push(entity);
   }

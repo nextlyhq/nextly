@@ -8,10 +8,19 @@
  * @module cli/errors/areas/schema
  */
 
+import {
+  REGISTRY_ROW_DIVERGED_REASON,
+  REGISTRY_ROW_WITHOUT_TABLE_REASON,
+} from "../../../domains/schema/repair-columns/stop-reasons";
 import type { NextlyError } from "../../../errors/nextly-error";
 import type { CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-import { asSentence, contextString, sentences } from "../messages";
+import {
+  asSentence,
+  contextParts,
+  contextString,
+  sentences,
+} from "../messages";
 
 /**
  * The refusal of a start whose configured schema holds no installation while another schema of
@@ -189,6 +198,20 @@ function commandSubject(error: NextlyError): string {
   return command === "The command" ? command : `\`${command}\``;
 }
 
+/**
+ * The registry rows `nextly repair-columns` stopped on, as the parts the refusal was built from
+ * (`repair-columns/stop-errors`).
+ */
+function registryRowParts(error: NextlyError): CliErrorParts {
+  return (
+    contextParts(error) ?? {
+      what: "A registry row could not be used.",
+      why: "It does not say where its entity's columns are, or what was last applied to them.",
+      next: "Correct the row, then run it again.",
+    }
+  );
+}
+
 export const SCHEMA_CODES = defineCodes({
   POSTGRES_SCHEMA_UNSUPPORTED: {
     cause:
@@ -317,6 +340,23 @@ export const SCHEMA_CODES = defineCodes({
       },
     ],
   },
+  COLLECTION_BEING_CHANGED: {
+    cause:
+      "A change that deletes values lost its hold of the collection part way, so it stopped before its next statement.",
+    // As `assertSaveHoldKept` (`domains/schema/pipeline/save-hold-check.ts`) refuses a statement:
+    // the connection holding the collection was lost, so the change sends nothing more.
+    from: [
+      {
+        code: "COLLECTION_BEING_CHANGED",
+        reason: "save-hold-lost",
+        describe: () => ({
+          what: "The change stopped before its next statement.",
+          why: "It no longer held its collection, so other writes could go ahead, and what it would delete was counted under a hold that is gone.",
+          next: "Review the change and make it again.",
+        }),
+      },
+    ],
+  },
   SCHEMA_LOCK_UNAVAILABLE: {
     cause:
       "The schema lock's row could not be established, so the command refused to run without it.",
@@ -401,6 +441,29 @@ export const SCHEMA_CODES = defineCodes({
           why: "A save writes a migration into the folder, and the folder or its ledger is in a state `nextly migrate` refuses: an applied file was edited or removed, or an attempt is unfinished.",
           next: "Settle what the message names, with `nextly migrate:resolve` or by restoring the file, then save again.",
         }),
+      },
+    ],
+  },
+  // `nextly repair-columns` stopped by a registry row it cannot compare a table with.
+  REGISTRY_ROW_WITHOUT_TABLE: {
+    cause:
+      "A registry row names no table, so the command could not tell where its entity's columns are.",
+    from: [
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: REGISTRY_ROW_WITHOUT_TABLE_REASON,
+        describe: registryRowParts,
+      },
+    ],
+  },
+  REGISTRY_ROW_DIVERGED: {
+    cause:
+      "A registry row is marked as diverged: its tables were changed and its stored definition was not, so the command could not tell what was last applied.",
+    from: [
+      {
+        code: "CONFIGURATION_ERROR",
+        reason: REGISTRY_ROW_DIVERGED_REASON,
+        describe: registryRowParts,
       },
     ],
   },

@@ -22,7 +22,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   Popover,
-  PopoverContent,
   PopoverTrigger,
   Select,
   SelectContent,
@@ -34,6 +33,7 @@ import { GripVertical, MoreHorizontal, Plus } from "lucide-react";
 import * as React from "react";
 
 import { ChoiceList } from "../../choice-list";
+import { BuilderPopoverContent } from "../../popups/builder-popover";
 
 import { LoopPicker } from "./collection-loop-controls";
 import type { LoopListField } from "./content-controls";
@@ -189,6 +189,9 @@ function SortRowMenu({
           type="button"
           size="icon-sm"
           variant="ghost"
+          // Faded until its row is pointed at or focused, or its menu is
+          // open (field-rows.css).
+          className="nx-list-sort__more"
           aria-label={`More for sort by ${name}`}
           disabled={disabled}
         >
@@ -395,7 +398,7 @@ function AddSortButton({
           Add sort
         </Button>
       </PopoverTrigger>
-      <PopoverContent
+      <BuilderPopoverContent
         align="start"
         sideOffset={4}
         className="nx-font-pick__popover"
@@ -417,7 +420,7 @@ function AddSortButton({
           />
           {PUBLIC_ONLY}
         </div>
-      </PopoverContent>
+      </BuilderPopoverContent>
     </Popover>
   );
 }

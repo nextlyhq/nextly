@@ -60,6 +60,28 @@ describe("createAdapter — env-driven pool config", () => {
     expect(createPostgresAdapter.mock.calls[0][0].pool.max).toBe(99);
   });
 
+  it("gives the adapter made from the environment the pool a start asks for, over DB_POOL_*", async () => {
+    // The Proxy's start in a serverless function asks for one connection,
+    // whatever the app's functions are given.
+    process.env.DB_DIALECT = "postgresql";
+    process.env.DATABASE_URL = "postgres://u:p@localhost:5432/db";
+    process.env.DB_POOL_MAX = "17";
+    process.env.DB_POOL_IDLE_TIMEOUT = "12345";
+
+    const createPostgresAdapter = vi.fn().mockReturnValue({
+      connect: vi.fn().mockResolvedValue(undefined),
+    });
+    vi.doMock("@nextlyhq/adapter-postgres", () => ({ createPostgresAdapter }));
+
+    const { createAdapterFromEnv } = await import("../factory");
+    await createAdapterFromEnv({ pool: { max: 1, idleTimeoutMs: 1000 } });
+
+    expect(createPostgresAdapter.mock.calls[0][0].pool).toMatchObject({
+      max: 1,
+      idleTimeoutMs: 1000,
+    });
+  });
+
   it("falls through to undefined when env vars are unset, letting adapter defaults apply", async () => {
     process.env.DB_DIALECT = "postgresql";
     process.env.DATABASE_URL = "postgres://u:p@localhost:5432/db";

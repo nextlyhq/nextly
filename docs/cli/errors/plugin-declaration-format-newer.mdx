@@ -1,0 +1,25 @@
+---
+title: PLUGIN_DECLARATION_FORMAT_NEWER
+description: "A package declares itself in the `nextly` key of its package.json in a format newer than this Nextly reads."
+---
+
+## Cause
+
+A package declares itself in the `nextly` key of its package.json in a format newer than this Nextly reads.
+
+A plugin says what it needs in its package.json, under `nextly`, and the declaration carries a format number (`"format": 1`). A newer format can mean something different in the same fields, so a Nextly that does not know the format refuses it rather than reading it as if it were one it knows. The plugin's declaration usually says which Nextly versions it works with (`core`), and the message names them. The package itself may already be installed; your configuration was not changed.
+
+## Fix
+
+- Upgrade Nextly with `nextly upgrade` to a release the plugin works with, then add it again.
+- Or install an older version of the plugin, one declared in a format this Nextly reads, with your package manager, then run `nextly plugins add <package> --skip-install`.
+- The format is described in [The plugin declaration](/docs/plugins/declaration).
+
+## Example
+
+```text
+✗ "@acme/seo" declares itself in format 2, which this Nextly cannot read.
+  Why:  The declaration is in format 2, and this Nextly reads formats up to 1: this format needs a newer Nextly, and the plugin says it works with Nextly "^1.0.0". The package may already be installed; your configuration was not changed.
+  Next: Upgrade Nextly to a release in "^1.0.0" with `nextly upgrade`, or add a version of the plugin this Nextly reads.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-declaration-format-newer  (PLUGIN_DECLARATION_FORMAT_NEWER)
+```

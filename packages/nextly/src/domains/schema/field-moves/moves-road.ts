@@ -36,31 +36,47 @@ const MESSAGES = {
     "Moving a field keeps its values only through a migration file, and this app writes none for the Schema Builder.",
 } as const;
 
+/** A move the save refuses, and the words for it. */
+export interface RefusedMove {
+  path: string;
+  message: string;
+}
+
 /**
  * Refuses a save's moves when it would not take its migration file: `writes` is whether the app
  * writes one at all, and `pushReason` asked only when there are moves to keep.
+ *
+ * Where the save is refused for its road, `refusedFirst` is asked first: a move that can never be
+ * made as it is (a field kept unique, moved into a group) is told so rather than that it waits. A
+ * move `checkMove` allows is refused as the road says, with the words it always had.
  */
 export async function refuseMovesOffTheFile(args: {
   moves: readonly FieldMoveRequest[];
   writes: boolean;
   pushReason: () => Promise<PushReason>;
+  /** Asked of the moves that travel, before the road's own refusal. */
+  refusedFirst?: (
+    moves: readonly FieldMoveRequest[]
+  ) => Promise<RefusedMove | undefined>;
 }): Promise<void> {
   // A field moved into or out of a group with no name keeps its path and its column: nothing of
   // it travels, so it needs no file.
-  const [first] = args.moves.filter(
+  const travelling = args.moves.filter(
     move =>
       move.from.length !== move.to.length ||
       move.from.some((segment, at) => segment !== move.to[at])
   );
+  const [first] = travelling;
   if (first === undefined) return;
   const reason = args.writes ? await args.pushReason() : "no-writer";
   if (reason === null) return;
+  const refused = await args.refusedFirst?.(travelling);
   throw NextlyError.validation({
     errors: [
       {
-        path: first.to.join("."),
+        path: refused?.path ?? first.to.join("."),
         code: "FIELD_MOVE_REFUSED",
-        message: MESSAGES[reason],
+        message: refused?.message ?? MESSAGES[reason],
       },
     ],
     logContext: { reason, moves: args.moves.length },

@@ -8,6 +8,7 @@
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { IndexConfig } from "../../collections/config/define-collection";
 import type { SupportedDialect } from "../../database/schema-registry";
 import {
   toCodeFirstCollectionConfig,
@@ -18,6 +19,9 @@ import { mainTableFields } from "../../domains/i18n/per-language-storage";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { pluginCollectionSources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
 import { DEMOTED_FROM_CODE } from "../../domains/schema/pipeline/demoted-from-code";
+import { desiredCollectionTable } from "../../domains/schema/pipeline/desired-collection-table";
+import { keyedIndexes } from "../../domains/schema/pipeline/diff/index-util";
+import { isHandedToBuilder } from "../../domains/schema/pipeline/registered-collections";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
 import {
   fieldsStoredOnRow,
@@ -27,11 +31,13 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveCollectionTableName } from "../../domains/schema/utils/resolve-table-name";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { DynamicCollectionInsert } from "../../schemas/dynamic-collections/types";
+import type { UpdateCollectionOptions } from "../../services/collections";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import { reportDryRun, type DryRunPlan } from "../dry-run";
 import { CliError, exitWithError } from "../errors";
 import {
   demoteCollectionNotFound,
+  demoteLosesUniqueIndex,
   demotePluginCollection,
   syncConfirmationRequired,
 } from "../errors/areas/sync";
@@ -125,6 +131,7 @@ export async function demoteCollection(
   const fields = collection.fields ?? [];
 
   const confirmed = await registry.getCollectionBySlug(slug);
+  assertNoUniqueIndexLost(collection, confirmed, args.adapter.dialect);
   const note = droppedOnDemoteNote(collection, args.adapter.dialect);
   const preview = [
     serializeCollection({ slug, fields: fields as never[] }),
@@ -175,6 +182,8 @@ type DemotedWrite =
       kind: "update";
       slug: string;
       data: Parameters<CollectionRegistryService["updateCollection"]>[1];
+      /** How the update is written, and asked about (`handOverOf`). */
+      options: UpdateCollectionOptions;
     }
   | { kind: "register"; record: DynamicCollectionInsert };
 
@@ -182,9 +191,21 @@ type DemotedWrite =
  * How a demote updates a record the registry already holds: as the hand-over of the
  * configuration's own collection to the Schema Builder, which the registry takes for a record the
  * code-first sync made and locked, writing its source and lock together. A record that is the
- * Builder's already is updated as any other; a plugin's is refused.
+ * Builder's already is updated as any other. A plugin's is refused, but one of its legacy
+ * `collections` key, which the registry records as the plugin's and a demote may hand over.
  */
-const HAND_OVER = { handOver: "builder" } as const;
+function handOverOf(
+  current: Awaited<ReturnType<CollectionRegistryService["getCollectionBySlug"]>>
+): UpdateCollectionOptions {
+  return {
+    handOver: "builder",
+    // `demotedCollectionIn` refused a collection a plugin contributes, so a plugin's record here is
+    // its legacy `collections` key's.
+    ...(current?.source?.startsWith("plugin:") === true
+      ? { legacyPlugin: true }
+      : {}),
+  };
+}
 
 /** The write a demote of `collection` makes over `current`, the record the registry holds now. */
 function demotedWrite(
@@ -198,8 +219,9 @@ function demotedWrite(
     return {
       kind: "update",
       slug: collection.slug,
+      options: handOverOf(current),
       // Unlocked with it: a record the code-first sync made is locked, and the Schema Builder's
-      // is not (`HAND_OVER`). With the hash the registry compares fields by, so a collection
+      // is not (`handOverOf`). With the hash the registry compares fields by, so a collection
       // whose fields are as they were is not marked as waiting for a schema change, and the path
       // a newly registered demote records.
       data: {
@@ -240,10 +262,76 @@ async function assertDemotedWriteAllowed(
   write: DemotedWrite
 ): Promise<void> {
   if (write.kind === "update") {
-    await registry.assertUpdatable(write.slug, write.data, HAND_OVER);
+    await registry.assertUpdatable(write.slug, write.data, write.options);
     return;
   }
   await registry.assertRegistrable(write.record.slug);
+}
+
+/**
+ * Refuses a demote that would lose a unique index the collection declares in `indexes`: no registry
+ * record holds one, so the next schema sync drops it and accepts duplicates from then on. Asked
+ * before the confirmation, so no answer (nor `--yes`) goes ahead with it.
+ *
+ * Not asked of a collection already handed to the Schema Builder: its schema syncs leave the code
+ * entry out already, so this demote loses nothing more.
+ */
+function assertNoUniqueIndexLost(
+  collection: DemotedCollection,
+  current: Awaited<
+    ReturnType<CollectionRegistryService["getCollectionBySlug"]>
+  >,
+  dialect: SupportedDialect
+): void {
+  if (current && isHandedToBuilder(current)) return;
+  const lost = uniqueIndexesLost(collection, dialect);
+  if (lost.length > 0) throw demoteLosesUniqueIndex(collection.slug, lost);
+}
+
+/**
+ * Each unique index declared in `indexes` that the Schema Builder's table for the collection lacks,
+ * by its fields as declared. Both tables come from the builder the schema pipeline describes a
+ * collection's table with (`desiredCollectionTable`), matched by the key its diff pairs indexes on
+ * (`keyedIndexes`), so this names exactly what a sync would drop: one that `unique: true` on the
+ * field declares too is the Builder's to keep.
+ */
+function uniqueIndexesLost(
+  collection: DemotedCollection,
+  dialect: SupportedDialect
+): string[][] {
+  const declared = (
+    Array.isArray(collection.indexes)
+      ? (collection.indexes as IndexConfig[])
+      : []
+  ).filter(index => index.unique === true);
+  if (declared.length === 0) return [];
+  const keysWith = (indexes: IndexConfig[], builderOwned: boolean) => {
+    const table = desiredCollectionTable(
+      {
+        slug: collection.slug,
+        tableName: resolveCollectionTableName(
+          collection.slug,
+          collection.dbName
+        ),
+        fields: (collection.fields ?? []) as never,
+        status: collection.status === true,
+        localized: collection.localized === true,
+        builderOwned,
+        indexes,
+      },
+      dialect
+    );
+    return new Set(keyedIndexes(table.indexes ?? [], table.columns).keys());
+  };
+  const kept = keysWith([], true);
+  return declared
+    .filter(index => {
+      const without = keysWith([], false);
+      return [...keysWith([index], false)].some(
+        key => !without.has(key) && !kept.has(key)
+      );
+    })
+    .map(index => [...index.fields]);
 }
 
 /**
@@ -254,7 +342,9 @@ async function assertDemotedWriteAllowed(
  *   without them, so they stop applying once its code entry is removed.
  * - Its compound indexes: every schema sync ignores the code entry of a collection handed to the
  *   Builder (`withoutHandedToBuilder`), so the indexes it declares are dropped at the next sync,
- *   whether or not the entry is still there.
+ *   whether or not the entry is still there. So they are by a Schema Builder save of any
+ *   collection, which applies every collection the Builder owns. A unique one is refused instead
+ *   (`assertNoUniqueIndexLost`).
  * - Its columns the Builder's column rules describe differently (`builderRulesChangeColumns`),
  *   which the next sync changes, on the database's dialect when the run knows it.
  */
@@ -279,7 +369,7 @@ export function droppedOnDemoteNote(
     ...(!Array.isArray(collection.indexes) || collection.indexes.length === 0
       ? []
       : [
-          "Its compound indexes are dropped at the next schema sync (db:sync, or a reload under next dev): the Schema Builder cannot hold them.",
+          "Its compound indexes are dropped at the next schema sync (db:sync, a reload under next dev, or a Schema Builder save, of another collection too): the Schema Builder cannot hold them.",
         ]),
     ...(changed.length === 0
       ? []
@@ -342,7 +432,7 @@ async function writeDemotedRecord(
 ): Promise<void> {
   const write = demotedWrite(collection, current);
   if (write.kind === "update") {
-    await registry.updateCollection(write.slug, write.data, HAND_OVER);
+    await registry.updateCollection(write.slug, write.data, write.options);
     logger.info(
       current?.source === "ui"
         ? `Updated existing UI record for '${write.slug}'.`
@@ -355,11 +445,12 @@ async function writeDemotedRecord(
 
 /**
  * What `db:sync --demote <slug> --dry-run` reports: the registry write the real demote makes, from
- * the same record it reads, with the refusals it asks along the way, in its order (a field-group
- * storage migration in flight, then what the registry refuses the write on), and nothing asked,
+ * the same record it reads, with the refusals it asks along the way, in its order (a unique
+ * index it would lose, a field-group storage migration in flight, then what the registry refuses
+ * the write on), and nothing asked,
  * locked or written.
  */
-async function previewDemotion(args: {
+export async function previewDemotion(args: {
   collection: DemotedCollection;
   registry: CollectionRegistryService;
   adapter: DrizzleAdapter;
@@ -369,6 +460,7 @@ async function previewDemotion(args: {
     const current = await args.registry.getCollectionBySlug(
       args.collection.slug
     );
+    assertNoUniqueIndexLost(args.collection, current, args.adapter.dialect);
     await assertNoMigrationInFlight({
       adapter: args.adapter,
       logger: args.logger,
@@ -411,7 +503,9 @@ async function previewDemotion(args: {
  * hash of its fields, which the caller adds.
  */
 function demotedOptions(collection: DemotedCollection) {
-  const config = toCodeFirstCollectionConfig(collection);
+  // The app's own: a plugin's collection is never demoted (`demotedCollectionIn`). The record's
+  // owner is the caller's to write, and is not taken from this projection.
+  const config = toCodeFirstCollectionConfig(collection, "code");
   return {
     labels: {
       singular:

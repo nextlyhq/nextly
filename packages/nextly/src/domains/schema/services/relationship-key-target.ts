@@ -15,6 +15,11 @@ import {
   fieldProducesColumn,
   relationshipStoresJson,
 } from "./field-column-descriptor";
+import {
+  type RelationshipKeyField,
+  relationshipOptionsOf as optionsOf,
+  relationshipTargetSlug,
+} from "./relationship-target-slug";
 
 /** The collection a relationship points at, and the table its rows live in. */
 export interface RelationshipKeyTarget {
@@ -29,40 +34,10 @@ const KEYABLE_RELATION_TYPES: ReadonlySet<string> = new Set([
   "oneToMany",
 ]);
 
-/** A field as far as its key is concerned: the shapes the Builder, REST and code-first configs write. */
-export interface RelationshipKeyField {
-  type?: unknown;
-  hasMany?: unknown;
-  relationTo?: unknown;
-  options?: unknown;
-  virtual?: unknown;
-}
-
-function optionsOf(field: RelationshipKeyField): {
-  target?: unknown;
-  relationType?: unknown;
-} {
-  // Any object: both keys are optional and read as `unknown`.
-  return typeof field.options === "object" && field.options !== null
-    ? field.options
-    : {};
-}
-
-/**
- * The one collection a relationship points at: `relationTo` when it names one,
- * as reads take it, else `options.target`. Null for a field naming none, or
- * several (a `relationTo` list).
- */
-export function relationshipTargetSlug(
-  field: RelationshipKeyField
-): string | null {
-  if (typeof field.relationTo === "string" && field.relationTo !== "") {
-    return field.relationTo;
-  }
-  if (Array.isArray(field.relationTo)) return null;
-  const target = optionsOf(field).target;
-  return typeof target === "string" && target !== "" ? target : null;
-}
+// The target slug lives in a module of its own so client-safe code can read it; it stays answered
+// here too, beside the key it decides.
+export type { RelationshipKeyField } from "./relationship-target-slug";
+export { relationshipTargetSlug } from "./relationship-target-slug";
 
 /**
  * Whether two relationship definitions point at the same target under the same relation kind: the

@@ -19,6 +19,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import { addressOf, imageOf } from "../resolver/page-levels";
+import { valueAtPath } from "../value-path";
 
 import { DETAIL_GUESSES, type StructuredDataDetail } from "./catalog";
 import type { DetailSource } from "./rules";
@@ -34,8 +35,23 @@ export function textOf(value: unknown): string | undefined {
   return trimmed === "" ? undefined : trimmed;
 }
 
-/** A date or a date and time, as ISO 8601; nothing for anything else. */
-export function dateOf(value: unknown): string | undefined {
+/**
+ * A date or a date and time, as ISO 8601; nothing for anything else. A value
+ * from a field that keeps a day alone (`dayOnly`) is stated as that day,
+ * `2026-11-26`: the field stores it as midnight in UTC, a time nobody chose,
+ * which would otherwise be stated as the moment it was published.
+ */
+export function dateOf(
+  value: unknown,
+  { dayOnly = false }: { dayOnly?: boolean } = {}
+): string | undefined {
+  const stated = dateTextOf(value);
+  if (stated === undefined || !dayOnly) return stated;
+  return new Date(stated).toISOString().slice(0, 10);
+}
+
+/** A date or a date and time, as ISO 8601, as the value states it. */
+function dateTextOf(value: unknown): string | undefined {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? undefined : value.toISOString();
   }
@@ -47,6 +63,47 @@ export function dateOf(value: unknown): string | undefined {
     return undefined;
   }
   return Number.isNaN(Date.parse(text)) ? undefined : text.replace(" ", "T");
+}
+
+/**
+ * The pickers that keep a day with no time of day: the date field's default
+ * and its month picker. Its value is stored as midnight in UTC.
+ */
+const DAY_PICKERS: readonly unknown[] = ["dayOnly", "monthOnly", undefined];
+
+/**
+ * Whether the page's field at a dotted path is a date field keeping a day
+ * alone, among the fields its content type declares. A field it does not
+ * declare, such as an entry's own save stamp, keeps its time.
+ */
+export function keepsDayAlone(
+  fields: unknown,
+  path: string | undefined
+): boolean {
+  if (path === undefined) return false;
+  const field = fieldAt(fields, path);
+  if (field?.type !== "date") return false;
+  const admin = isRecord(field.admin) ? field.admin : {};
+  const picker = isRecord(admin.date) ? admin.date.pickerAppearance : undefined;
+  return DAY_PICKERS.includes(picker);
+}
+
+/** The field declared at a dotted path, groups' children included. */
+function fieldAt(
+  fields: unknown,
+  path: string
+): Record<string, unknown> | undefined {
+  let level: unknown = fields;
+  let found: Record<string, unknown> | undefined;
+  for (const part of path.split(".")) {
+    const field: unknown = addressableFields(level).find(
+      candidate => isRecord(candidate) && candidate.name === part
+    );
+    if (!isRecord(field)) return undefined;
+    found = field;
+    level = field.fields;
+  }
+  return found;
 }
 
 /** A finite number, from a number or a number written as text. */
@@ -61,19 +118,6 @@ export function numberOf(value: unknown): number | undefined {
 
 /** A field's name as matched: letters and digits only, any case. */
 const nameKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, "");
-
-/** The value at a dotted path, such as `event.venue`, in the document. */
-function atPath(
-  document: Readonly<Record<string, unknown>>,
-  path: string
-): unknown {
-  let value: unknown = document;
-  for (const part of path.split(".")) {
-    if (!isRecord(value)) return undefined;
-    value = value[part];
-  }
-  return value;
-}
 
 /** Whether a value holds anything: not absent, blank or an empty list. */
 function present(value: unknown): boolean {
@@ -101,7 +145,7 @@ export function readDetail(
 ): DetailRead {
   if (isRecord(source)) return { value: source.value };
   if (typeof source === "string") {
-    return { value: atPath(document, source), field: source };
+    return { value: valueAtPath(document, source), field: source };
   }
   const fields = new Map(
     Object.keys(document).map(name => [nameKey(name), name])
@@ -140,7 +184,7 @@ function nameIn(record: Record<string, unknown>): string | undefined {
 }
 
 /** The fields the page's content type declares, or none where it is gone. */
-async function declaredFields(
+export async function declaredFields(
   ctx: PluginContext,
   input: PageMetadataInput
 ): Promise<unknown> {
@@ -152,7 +196,7 @@ async function declaredFields(
         {}
       );
       return isRecord(collection)
-        ? atPath(collection, "schemaDefinition.fields")
+        ? valueAtPath(collection, "schemaDefinition.fields")
         : undefined;
     }
     const singles = await ctx.services.singles.list({
@@ -176,25 +220,13 @@ interface Relation {
  * read among the fields its level stores, groups' children included.
  */
 function relationAt(fields: unknown, path: string): Relation | undefined {
-  let level: unknown = fields;
-  const parts = path.split(".");
-  for (const [at, part] of parts.entries()) {
-    const field: unknown = addressableFields(level).find(
-      candidate => isRecord(candidate) && candidate.name === part
-    );
-    if (!isRecord(field)) return undefined;
-    if (at < parts.length - 1) {
-      level = field.fields;
-      continue;
-    }
-    if (field.type !== "relationship" && field.type !== "upload") {
-      return undefined;
-    }
-    return typeof field.relationTo === "string"
-      ? { target: field.relationTo }
-      : {};
+  const field = fieldAt(fields, path);
+  if (field?.type !== "relationship" && field?.type !== "upload") {
+    return undefined;
   }
-  return undefined;
+  return typeof field.relationTo === "string"
+    ? { target: field.relationTo }
+    : {};
 }
 
 /** The relationship the page's field holding a detail is, where it is one. */

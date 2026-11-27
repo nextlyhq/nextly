@@ -18,6 +18,7 @@ import { useForm, FormProvider } from "react-hook-form";
 import { afterEach, describe, it, expect, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
+import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
 
 import { DocumentTitleBlock } from "../DocumentTitleBlock";
 import type {
@@ -76,6 +77,7 @@ function Harness({
   error,
   address,
   status = "published",
+  slugAdmin,
 }: {
   live?: boolean;
   locked?: boolean;
@@ -84,6 +86,8 @@ function Harness({
   error?: string;
   address?: EntryAddress | null;
   status?: string;
+  /** The slug field's own admin options. */
+  slugAdmin?: Record<string, unknown>;
 }) {
   const methods = useForm({
     defaultValues: { title: "Home", slug: initialSlug },
@@ -103,7 +107,14 @@ function Harness({
         mode="edit"
         slug={
           withSlug
-            ? { field: slugField, locked, hasPublicAddress: live === true }
+            ? {
+                field:
+                  slugAdmin === undefined
+                    ? slugField
+                    : ({ ...slugField, admin: slugAdmin } as FieldConfig),
+                locked,
+                hasPublicAddress: live === true,
+              }
             : undefined
         }
         detailsOf={ENTRY}
@@ -229,6 +240,45 @@ describe("DocumentTitleBlock — the address chip", () => {
 
   it("shows the address read-only with no edit button when it is locked", () => {
     render(<Harness locked address={PAGE} />);
+    expect(screen.getByText("homepage")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Edit address" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("holds the address read-only while a past version is on screen", () => {
+    // The title is locked there; an edit to the slug would reach the live form
+    // and be saved after leaving the version.
+    render(
+      <DocumentHistoryContext.Provider
+        value={{
+          viewing: {
+            versionNo: 2,
+            snapshot: { title: "Home", slug: "homepage" },
+            locale: null,
+            withheld: [],
+            isLoading: false,
+            error: null,
+            scope: { kind: "collection", slug: "pages", entryId: "e1" },
+            comparedWith: { kind: "first" },
+            about: null,
+          },
+          setViewing: () => {},
+          restore: null,
+          setRestore: () => {},
+        }}
+      >
+        <Harness address={PAGE} />
+      </DocumentHistoryContext.Provider>
+    );
+    expect(screen.getByText("homepage")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Edit address" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("holds the address read-only where the slug field is declared read-only", () => {
+    render(<Harness address={PAGE} slugAdmin={{ readOnly: true }} />);
     expect(screen.getByText("homepage")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Edit address" })

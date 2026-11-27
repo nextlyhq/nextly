@@ -51,6 +51,7 @@ import {
   repairSqliteRegistryTimestamps,
 } from "../../../database/repair-sqlite-registry-timestamps";
 import { rearmRegistryTimestampRepair } from "../../../database/repair-sqlite-timestamps";
+import { NextlyError } from "../../../errors/nextly-error";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import type { Logger } from "../../../shared/types";
 import type { SupportedDialect } from "../../../types/database";
@@ -63,6 +64,7 @@ import {
   holdsUnresolvedArchiveRowsOf,
   labelLegacyArchiveRows,
 } from "../../i18n/migration/label-legacy-archive-rows";
+import { removeUntranslatedFieldSources } from "../../i18n/provenance/removed-field-sources";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type {
@@ -80,6 +82,8 @@ import {
 
 import { outstandingEntityChanges } from "./applied-entity-changes";
 import {
+  droppedRegistryRowStands,
+  droppedAndUnregistered,
   everyEntityRegistered,
   removeDroppedEntityLeftovers,
 } from "./dropped-entity-leftovers";
@@ -90,8 +94,20 @@ import {
   readPendingEntities,
   type PendingEntities,
 } from "./pending-entities";
+import {
+  leftoverOrphanScopeOf,
+  type MigrationOrphanScope,
+} from "./permission-orphans";
+import type { PluginEntitySources } from "./plugin/plugin-collection-sources";
+import { anySlugs, droppedEntities } from "./registry-history";
 import { readRegistrySource, type RegistrySource } from "./registry-source";
 import { writeRegistryFromSource } from "./registry-writer";
+import {
+  capturesWait,
+  recordRetiredDocumentEvents,
+  type RetiredDocumentEvents,
+  type RetirementRun,
+} from "./retired-documents";
 import { endsTheRun, reachStopPoint } from "./stop-points";
 
 /**
@@ -129,6 +145,11 @@ export function asServiceLogger(logger: ReconcileLogger): Logger {
 
 export interface ReconcileMetadataDeps {
   adapter: DrizzleAdapter;
+  /**
+   * The handle the run reads through, where it was given one of its own; the adapter's otherwise.
+   * Read by the settling of retired documents' events, which runs before any file.
+   */
+  db?: unknown;
   dialect: SupportedDialect;
   migrationsDir: string;
   /** What the run's declared schema names, which old Builder files are judged against. */
@@ -164,8 +185,8 @@ export interface ReconcileMetadataDeps {
    * consent covered, dropped as their entity's rows go; none otherwise.
    */
   dropLeftoverTranslations?: ReadonlySet<string>;
-  /** Each plugin-contributed collection's origin (`RegistryWriteDeps.collectionSources`). */
-  collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
+  /** Each plugin-contributed entity's origin (`RegistryWriteDeps.entitySources`). */
+  entitySources?: PluginEntitySources;
   /**
    * Seam for tests; defaults to reading the migration headers from disk.
    *
@@ -383,6 +404,9 @@ async function markApplied(
 export async function reconcileMigrationMetadata(
   deps: ReconcileMetadataDeps
 ): Promise<ReconcileMetadataResult> {
+  // Every file of the run is recorded applied, a file without a paired snapshot included
+  // (`stop-points.ts`).
+  await reachStopPoint("files recorded");
   const { adapter, dialect } = deps;
 
   /*
@@ -485,7 +509,9 @@ export async function reconcileMigrationMetadata(
   );
   // The registry write has committed (`stop-points.ts`).
   await reachStopPoint("registry written");
+  await deletionEventsOfRetiredDocuments(deps);
   const leftovers = await leftoversOfDroppedEntities(deps);
+  await removeSourcesOfRemovedFields(deps);
   return {
     ...swept.result,
     leftoversRemoved: leftovers.removed,
@@ -621,6 +647,186 @@ async function holdersInPlace(deps: ReconcileMetadataDeps): Promise<boolean> {
 }
 
 /**
+ * The deletion events the documents of entities an applied migration dropped still owe
+ * (`retired-documents.ts`), recorded once the registry write has committed, every run, so a run
+ * stopped part-way is finished by the next. A failure costs only this step, which the next run
+ * tries again; a lost lock or a test's stop ends the run. Nothing while a registry write is open:
+ * the first run's commit, which writes the registry instead, records them once it lands.
+ */
+export async function deletionEventsOfRetiredDocuments(
+  deps: RetirementDeps
+): Promise<void> {
+  if (registryWriteOpen()) return;
+  try {
+    reportRetiredDocumentEvents(
+      deps.logger,
+      await recordRetiredDocumentEvents(retirementRunOf(deps)),
+      undefined
+    );
+  } catch (error) {
+    if (endsTheRun(error)) throw error;
+    deps.logger.warn(
+      `Could not record the deletion of a retired entity's documents: ${
+        error instanceof Error ? error.message : String(error)
+      }. The next \`nextly migrate\` tries again.`
+    );
+  }
+}
+
+/**
+ * The deletion events captures still owe, recorded before something that would change what they
+ * are judged by: a DOWN rolling back the file an UP's capture waits on (`blocking` "up"), or files
+ * applying again over a DOWN's capture (`blocking` "down"). A capture of that direction that cannot
+ * be recorded refuses the change, so its events are not lost; any other failure is warned of, as
+ * every Phase 3 warns of it.
+ */
+export async function settleRetiredDocumentEvents(
+  deps: RetirementDeps,
+  blocking: "up" | "down"
+): Promise<void> {
+  const blocked = reportRetiredDocumentEvents(
+    deps.logger,
+    await recordRetiredDocumentEvents(retirementRunOf(deps)),
+    blocking
+  );
+  if (blocked.length === 0) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: `The deletion events of ${blocked.join("; ")} could not be recorded, and ${
+      blocking === "up"
+        ? "rolling back the migration that dropped it"
+        : "applying the migration a rollback dropped it in again"
+    } would lose them. Fix the cause, then run the command again.`,
+  });
+}
+
+/** What settling the captures of retired entities needs, and where it says what it did. */
+type RetirementDeps = Pick<
+  ReconcileMetadataDeps,
+  "adapter" | "dialect" | "db" | "logger"
+>;
+
+/** The run whose captures are settled, reading through the handle it was given. */
+function retirementRunOf(deps: RetirementDeps): RetirementRun {
+  return {
+    adapter: deps.adapter,
+    db: deps.db ?? deps.adapter.getDrizzle(),
+    dialect: deps.dialect,
+  };
+}
+
+/** What a run says of a retired entity whose table still stands: `name` as `<kind> <slug>`. */
+export function keptDespiteItsDrop(name: string): string {
+  return `The migration that retires ${name} ran, and its table is still there, so no deletion of its documents was recorded.`;
+}
+
+/** What a run says of a file whose tables it cannot hold while it drops them, and why. */
+export function unheldWhileDropped(source: string, reason: string): string {
+  return `${source}: another instance's save while its tables are dropped can be missing from the history, since ${reason}.`;
+}
+
+/**
+ * Says what a pass over the captures did: each entity whose events went, and each capture that
+ * could not be recorded, warned of unless its direction is `blocking`; answers those that are.
+ */
+function reportRetiredDocumentEvents(
+  logger: ReconcileLogger,
+  events: RetiredDocumentEvents,
+  blocking: "up" | "down" | undefined
+): string[] {
+  for (const name of events.recorded) {
+    logger.info(`Recorded the deletion of every document of ${name}.`);
+  }
+  for (const name of events.kept) logger.warn(keptDespiteItsDrop(name));
+  const blocked: string[] = [];
+  for (const failure of events.failed) {
+    const said = `${failure.name} (${failure.reason})`;
+    if (failure.direction === blocking) {
+      blocked.push(said);
+    } else {
+      logger.warn(
+        `The deletion events of ${said} were not recorded; the next \`nextly migrate\` tries again.`
+      );
+    }
+  }
+  return blocked;
+}
+
+/**
+ * Finishes the retirements the applied migrations still owe, for a run that then refuses: the whole
+ * registry pass (`reconcile`) where a retired entity's registry row stands or its documents' events
+ * wait, what retired entities left in shared tables where only that may remain, and nothing, with no
+ * lock taken (`underLock`), where no applied migration dropped an entity.
+ */
+export async function finishOwedRetirements(
+  deps: ReconcileMetadataDeps,
+  reconcile: typeof reconcileMigrationMetadata,
+  underLock: (work: () => Promise<void>) => Promise<unknown>
+): Promise<void> {
+  const { adapter, dialect, migrationsDir } = deps;
+  const { db } = retirementRunOf(deps);
+  const events = new SchemaEventsRepository(db, dialect);
+  const source = await readRegistrySource({
+    migrationsDir,
+    isApplied: filename => events.isFileApplied(filename),
+  });
+  const chain =
+    source.kind === "snapshot" ? (source.chain ?? [source.entities]) : [];
+  const registryOwed =
+    (await capturesWait(db, dialect)) ||
+    (await droppedRegistryRowStands({ adapter, chain }));
+  if (registryOwed) {
+    await underLock(async () => {
+      await reconcile(deps);
+    });
+  } else if (anySlugs(droppedEntities(chain))) {
+    await underLock(async () => {
+      await leftoversOfDroppedEntities(deps);
+    });
+  }
+}
+
+/**
+ * What a run marks orphaned of the permissions earlier removals left unmarked
+ * (`leftoverOrphanScopeOf`), and the newest applied migration, whose snapshot
+ * no longer declares them; undefined where no applied migration dropped an
+ * entity that is gone. One that cannot be read is said, and left to the next run.
+ */
+export async function leftoverPermissionsOf(
+  deps: RetirementDeps & Pick<ReconcileMetadataDeps, "migrationsDir">
+): Promise<{ scope: MigrationOrphanScope; migration: string } | undefined> {
+  try {
+    const events = new SchemaEventsRepository(
+      retirementRunOf(deps).db,
+      deps.dialect
+    );
+    const source = await readRegistrySource({
+      migrationsDir: deps.migrationsDir,
+      isApplied: filename => events.isFileApplied(filename),
+    });
+    if (source.kind !== "snapshot") return undefined;
+    const scope = leftoverOrphanScopeOf(
+      source.permissions ?? [],
+      await droppedAndUnregistered({
+        adapter: deps.adapter,
+        chain: source.chain ?? [source.entities],
+      })
+    );
+    return scope === undefined
+      ? undefined
+      : { scope, migration: source.file.replace(/\.snapshot\.json$/, "") };
+  } catch (error) {
+    if (endsTheRun(error)) throw error;
+    deps.logger.warn(
+      `Could not read which permissions deleted entities left: ${
+        error instanceof Error ? error.message : String(error)
+      }. The next \`nextly migrate\` tries again.`
+    );
+    return undefined;
+  }
+}
+
+/**
  * Removes what the entities the applied migrations dropped left in the tables
  * every entity shares, once the registry write above has committed their
  * rows' removal (`removeDroppedEntityLeftovers`). Not inside a registry write
@@ -664,6 +870,29 @@ async function leftoversOfDroppedEntities(
       }. The next \`nextly migrate\` tries again.`
     );
     return { removed: [], left: ["deleted entities"] };
+  }
+}
+
+/**
+ * Removes the source text kept for fields the applied migrations removed or
+ * stopped translating (`removeUntranslatedFieldSources`), once the registry
+ * write above has committed what the fields are now. Not inside a registry
+ * write a caller holds open, whose rows are not there to read yet. A failure
+ * costs only this removal, which the next run tries again.
+ */
+async function removeSourcesOfRemovedFields(
+  deps: ReconcileMetadataDeps
+): Promise<void> {
+  if (registryWriteOpen()) return;
+  try {
+    await removeUntranslatedFieldSources(deps.adapter);
+  } catch (error) {
+    if (endsTheRun(error)) throw error;
+    deps.logger.warn(
+      `Could not remove the source text kept for removed fields: ${
+        error instanceof Error ? error.message : String(error)
+      }. The next \`nextly migrate\` tries again.`
+    );
   }
 }
 
@@ -831,9 +1060,9 @@ async function registerRows(
       {
         adapter,
         logger: asServiceLogger(logger),
-        ...(deps.collectionSources === undefined
+        ...(deps.entitySources === undefined
           ? {}
-          : { collectionSources: deps.collectionSources }),
+          : { entitySources: deps.entitySources }),
         ...(rewrites === undefined ? {} : { rewrites }),
       }
     );

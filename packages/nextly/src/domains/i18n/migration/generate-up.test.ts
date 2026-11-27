@@ -4,6 +4,7 @@ import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-r
 
 import {
   buildCompanionCreateOnlySql,
+  buildOverlaySeedStatements,
   buildLocalizationUpSql,
   buildLocalizationUpStatements,
   companionUpdatedAtDdl,
@@ -282,5 +283,30 @@ describe("a translation table's _updated_at", () => {
     );
     expect(companionUpdatedAtDdl("mysql")).toBe("`_updated_at` DATETIME(3)");
     expect(companionUpdatedAtDdl("sqlite")).toBe(`"_updated_at" INTEGER`);
+  });
+});
+
+describe("seeding a container's overlay for the default language", () => {
+  // The companion's `_status` is NOT NULL, and a main row's `status` may be NULL: a row the seed
+  // adds takes the companion's own default then, as the refresh does, rather than a NULL that
+  // fails the migration.
+  it("defaults a status the main row does not hold", () => {
+    const [refresh, insert] = buildOverlaySeedStatements(
+      spec("sqlite"),
+      ["slides"],
+      { status: true }
+    );
+    // A row's overlay already written is kept; one not yet written takes the main row's value.
+    expect(refresh).toContain(
+      '"slides" = COALESCE("dc_pages_locales"."slides", (SELECT "slides" FROM "dc_pages"'
+    );
+    expect(insert).toContain(`COALESCE("dc_pages"."status", 'draft')`);
+    expect(insert).not.toMatch(/, "dc_pages"\."status" FROM/);
+  });
+
+  it("seeds nothing for no container", () => {
+    expect(
+      buildOverlaySeedStatements(spec("sqlite"), [], { status: true })
+    ).toEqual([]);
   });
 });

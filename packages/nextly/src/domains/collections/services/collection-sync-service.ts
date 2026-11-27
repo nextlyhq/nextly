@@ -70,6 +70,10 @@ import {
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { ZodGenerator, TypeGenerator } from "../../schema";
 import { busyTableBounds } from "../../schema/busy-table/bounds";
+import {
+  collectionOwner,
+  pluginEntitySources,
+} from "../../schema/migrate/plugin/plugin-collection-sources";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
 // (parity with the boot/HMR registry sync).
 import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
@@ -451,8 +455,18 @@ export interface CodeFirstCollectionSource<TField> {
  */
 export function toCodeFirstCollectionConfig<TField>(
   collection: CodeFirstCollectionSource<TField>,
-  /** Provenance; the registry defaults an absent one to `code`. */
-  source?: CodeFirstCollectionConfig["source"]
+  /**
+   * Who declares it: the app (`code`), or the plugin it belongs to (`plugin:<name>`, by
+   * `collectionOwner`). Required, so no route leaves it out: the sync takes a row for the
+   * owner its payload declares, so a plugin's collection sent without one would be recorded as the
+   * app's own.
+   */
+  owner:
+    | NonNullable<CodeFirstCollectionConfig["source"]>
+    | {
+        source: NonNullable<CodeFirstCollectionConfig["source"]>;
+        yieldsToBuilder?: true;
+      }
 ): Omit<CodeFirstCollectionConfig, "fields"> & { fields: TField[] } {
   return {
     slug: collection.slug,
@@ -476,7 +490,7 @@ export function toCodeFirstCollectionConfig<TField>(
     // collection reaches the registry; a function-valued option such as
     // `preview.url` never reaches the stored JSON.
     admin: toPersistedAdmin(asAdminOptions(collection.admin)),
-    ...(source !== undefined ? { source } : {}),
+    ...(typeof owner === "string" ? { source: owner } : owner),
     status: collection.status === true,
     localized: collection.localized === true,
     // `status: true` alone aliases to a versioned config, so both are read.
@@ -572,9 +586,7 @@ export class CollectionSyncService extends BaseService {
     };
 
     try {
-      const codeFirstConfigs = this.convertToCodeFirstConfigs(
-        config.collections
-      );
+      const codeFirstConfigs = this.convertToCodeFirstConfigs(config);
 
       result.sync =
         await this.registry.syncCodeFirstCollections(codeFirstConfigs);
@@ -703,7 +715,7 @@ export class CollectionSyncService extends BaseService {
     generatedFiles: string[];
   }> {
     const sync = await this.registry.planCodeFirstCollections(
-      this.convertToCodeFirstConfigs(config.collections),
+      this.convertToCodeFirstConfigs(config),
       { registryPresent: options.registryPresent }
     );
     const generated = await this.generateFiles(config, sync, {
@@ -958,10 +970,17 @@ export class CollectionSyncService extends BaseService {
   }
 
   private convertToCodeFirstConfigs(
-    collections: CollectionConfig[]
+    config: Pick<SanitizedNextlyConfig, "collections" | "plugins">
   ): CodeFirstCollectionConfig[] {
-    // The shared projection boot and HMR reload use too.
-    return collections.map(config => toCodeFirstCollectionConfig(config));
+    // The shared projection boot and HMR reload use too, with the origin they give each
+    // collection: a plugin's is the plugin's, any other the app's own.
+    const sources = pluginEntitySources(config.plugins ?? []);
+    return config.collections.map(collection =>
+      toCodeFirstCollectionConfig(
+        collection,
+        collectionOwner(sources, collection.slug)
+      )
+    );
   }
 
   private async handleRemovedCollections(

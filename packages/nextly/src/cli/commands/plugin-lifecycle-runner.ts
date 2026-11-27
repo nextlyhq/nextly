@@ -21,7 +21,7 @@ import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
 import type { BusyTableRun } from "../../domains/schema/busy-table/run-unit";
 import { pluginOfLedgerRow } from "../../domains/schema/events/ledger-scope";
 import {
-  appliedFilenames,
+  appliedPluginModules,
   newestEventsByFilename,
 } from "../../domains/schema/events/newest-event";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -101,6 +101,27 @@ interface RunnerOptions {
 
 /** How the command's schema changes wait for a busy table: its bounds, and where notices go. */
 type BusyTableWait = Omit<BusyTableRun, "appliedBefore">;
+
+/**
+ * Each field group's stored table and type column, as an extension compile takes them, so a
+ * contribution to a group is read against the table it is in: `fg_<slug>` on a site on the current
+ * names.
+ */
+async function storedFieldGroups(
+  adapter: DrizzleAdapter,
+  config: { fieldGroups?: readonly unknown[] }
+) {
+  const { declaredFieldGroupStorage } = await import(
+    "../../domains/field-groups/services/field-group-stored-tables"
+  );
+  const stored = await declaredFieldGroupStorage(adapter, config.fieldGroups);
+  return stored === undefined
+    ? {}
+    : {
+        fieldGroupTables: stored.tables,
+        fieldGroupTypeColumns: stored.typeColumns,
+      };
+}
 
 /**
  * The busy-table wait from the command's flags over the environment over the defaults. Throws
@@ -318,14 +339,14 @@ async function connect(
   //
   // Newest row per filename decides it, not the first: `migrate:down` records
   // a rollback by INSERTING a `rolled_back` event after the `applied` one, so
-  // the latest state is what "is this applied?" asks. `appliedFilenames` is
+  // the latest state is what "is this applied?" asks. `appliedPluginModules` is
   // that rule, shared with `migrate:down`, so the two cannot drift.
   const readAppliedModules = async (): Promise<Set<string>> => {
     const events = new SchemaEventsRepository(
       (adapter as unknown as DrizzleAdapter).getDrizzle(),
       dialect
     );
-    return appliedFilenames(
+    return appliedPluginModules(
       (await events.listFileApplies()).filter(row =>
         row.filename?.startsWith("plugin:")
       )
@@ -671,6 +692,7 @@ async function connect(
       "../../domains/schema/extension/publish"
     );
     const extensionSchema = await compileExtensionSchema({
+      ...(await storedFieldGroups(drizzleAdapter, config)),
       dialect,
       plugins: definitions,
       config,
@@ -989,6 +1011,7 @@ async function connect(
         "../../domains/schema/extension/publish"
       );
       const extensionSchema = await compileExtensionSchema({
+        ...(await storedFieldGroups(drizzleAdapter, config)),
         dialect,
         plugins: definitions,
         config,

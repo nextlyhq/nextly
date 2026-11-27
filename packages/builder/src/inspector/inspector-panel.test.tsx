@@ -160,8 +160,8 @@ describe("what InspectorPanel forwards to the style tab", () => {
   });
 
   it("names Content and Style for the inspector's own tab rules", () => {
-    // Named for the stylesheet's compact underlined tab rules, which apply
-    // to the inspector's tabs only.
+    // Named for the stylesheet's segmented tab bar rules, which apply to the
+    // inspector's tabs only.
     register();
     render(<InspectorPanel editor={editorFor(documentOf({}))} />);
     const style = screen.getByRole("tab", { name: "Style" });

@@ -20,8 +20,8 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import {
-  addressRecordReady,
-  retryFailedCatchUp,
+  RECORD_WAIT_MS,
+  addressRecordReadyWithin,
 } from "../address-record/catch-up";
 import { seoCan } from "../permissions";
 
@@ -93,10 +93,10 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
         const readable = await readableTypes(ctx, checks);
         // While the address record catches up, or after a catch-up that
         // failed, a page may not hold its address yet and would be checked
-        // as not public: the person is asked to try again, as the sitemap
-        // asks crawlers, and a failed catch-up is tried again.
-        if (!addressRecordReady()) {
-          retryFailedCatchUp();
+        // as not public. The request waits for the record a while, running
+        // the catch-up itself where it is behind, as the sitemap's does;
+        // past that, the person is asked to try again.
+        if (!(await addressRecordReadyWithin(RECORD_WAIT_MS))) {
           throw NextlyError.serviceUnavailable({
             publicMessage:
               "The site's addresses are being brought up to date. Check again in a minute.",

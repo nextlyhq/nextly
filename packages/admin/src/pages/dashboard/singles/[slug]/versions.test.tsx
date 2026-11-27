@@ -17,6 +17,8 @@ vi.mock("@admin/components/features/versions/useVersionDocumentTitle", () => ({
 }));
 vi.mock("@admin/hooks/queries/useSingles", () => ({
   useSingleDocument: () => ({ data: { id: "homepage" }, isError: false }),
+  // Translated, so the page is told so by the schema the editor reads too.
+  useSingleSchema: () => ({ data: { localized: true } }),
 }));
 vi.mock("@admin/components/features/versions/VersionComparePage", () => ({
   VersionComparePage: (props: Record<string, unknown>) => {
@@ -73,6 +75,18 @@ describe("a Single's comparison page", () => {
     expect(useVersionDocumentTitle).toHaveBeenCalledWith(
       { kind: "single", slug: "homepage" },
       undefined
+    );
+  });
+});
+
+describe("a Single's comparison page, its languages", () => {
+  it("is told whether the Single is translated by its schema", () => {
+    render(
+      <SingleVersionsPage params={{ slug: "homepage" }} searchParams={{}} />
+    );
+
+    expect(comparePageProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ entityLocalized: true })
     );
   });
 });

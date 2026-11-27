@@ -11,15 +11,19 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
 import {
   activePostgresSchema,
   assertInstallationInConfiguredSchema,
   DEFAULT_POSTGRES_SCHEMA,
 } from "../../domains/schema/services/postgres-schema";
 import { dialectFromUrl } from "../../shared/lib/env";
+import { DIALECTS } from "../../shared/lib/stated-dialect";
 import { reportDryRun } from "../dry-run";
 import { announceMode } from "../environment";
 import { connectionFailure, databaseEnvError } from "../errors/areas/database";
+import { endAtProbe } from "../startup-probe";
 
 import type { Logger } from "./logger";
 
@@ -96,6 +100,26 @@ export function detectDialectFromUrl(
 }
 
 /**
+ * The dialect the environment names, by the rules every command reads it by: `DB_DIALECT`, else
+ * the scheme of `DATABASE_URL`; or the first thing wrong with it. Read without connecting, so a
+ * command that reads no database judges the environment as one that connects does.
+ */
+export function environmentDialect(
+  env: Readonly<Record<string, string | undefined>>
+):
+  | { dialect: SupportedDialect }
+  | { problem: "dialect-undetected" | "dialect-invalid"; named?: string } {
+  const named =
+    env.DB_DIALECT ||
+    (env.DATABASE_URL ? detectDialectFromUrl(env.DATABASE_URL) : undefined);
+  if (!named) return { problem: "dialect-undetected" };
+  if (!(DIALECTS as readonly string[]).includes(named)) {
+    return { problem: "dialect-invalid", named };
+  }
+  return { dialect: named as SupportedDialect };
+}
+
+/**
  * Validate database environment variables
  *
  * @returns Validation result with errors if any
@@ -107,35 +131,29 @@ export function validateDatabaseEnv(): DatabaseEnvValidation {
   const errors: string[] = [];
   let problem: DatabaseEnvValidation["problem"];
   const databaseUrl = process.env.DATABASE_URL;
-  const dialectEnv = process.env.DB_DIALECT as SupportedDialect | undefined;
 
   if (!databaseUrl) {
     errors.push("DATABASE_URL environment variable is required");
     problem = "url-missing";
   }
 
-  let dialect: SupportedDialect | undefined = dialectEnv;
-  if (!dialect && databaseUrl) {
-    dialect = detectDialectFromUrl(databaseUrl);
-  }
-
-  if (!dialect) {
+  // The dialect by the one reading of the environment (`environmentDialect`).
+  const named = environmentDialect(process.env);
+  if ("problem" in named) {
     errors.push(
-      "Could not detect database dialect. Set DB_DIALECT to one of: postgresql, mysql, sqlite"
+      named.problem === "dialect-undetected"
+        ? "Could not detect database dialect. Set DB_DIALECT to one of: postgresql, mysql, sqlite"
+        : `Invalid DB_DIALECT: ${named.named ?? ""}. Must be one of: postgresql, mysql, sqlite`
     );
-    problem ??= "dialect-undetected";
-  } else if (!["postgresql", "mysql", "sqlite"].includes(dialect)) {
-    errors.push(
-      `Invalid DB_DIALECT: ${dialect}. Must be one of: postgresql, mysql, sqlite`
-    );
-    problem ??= "dialect-invalid";
+    problem ??= named.problem;
   }
 
   return {
     valid: errors.length === 0,
     errors,
     problem,
-    dialect: errors.length === 0 ? dialect : undefined,
+    dialect:
+      errors.length === 0 && "dialect" in named ? named.dialect : undefined,
     databaseUrl: errors.length === 0 ? databaseUrl : undefined,
   };
 }
@@ -290,9 +308,10 @@ function missingSqliteFile(
 
 /**
  * Creates the adapter for the dialect and URL given, leaving the environment
- * untouched, with the static system tables resolvable on it. A read-only open whose PostgreSQL schema is not there answers
- * `missing`; any other failure ends with the one code every command that
- * opens a database ends with.
+ * untouched, with the static system tables resolvable on it. A read-only open
+ * whose PostgreSQL schema is not there answers `missing`; any other failure to
+ * connect ends with the one code every command that opens a database ends
+ * with, and a failure of the tables' own code is thrown as it is.
  */
 async function createForTarget(
   options: CreateCliAdapterOptions,
@@ -305,17 +324,62 @@ async function createForTarget(
   // `public` while the application it is migrating runs in `cms` splits the
   // lock and the ledger and leaves the tables where nothing reads them.
   const schema = options.schema ?? activePostgresSchema();
+  const failed = (error: unknown) =>
+    openFailure(error, { dialect, schema, readOnly });
+  let adapter: Awaited<ReturnType<typeof createAdapter>>;
   try {
     // The target is handed to the factory rather than set in `process.env` for the open: an open
     // can outlive the command that started it (`migrate:create` stops waiting for the database it
     // counts in while a PostgreSQL connect is still retrying), and one that put the earlier
     // variables back when it settled put them back over whatever the process had set since.
-    const adapter = await createAdapter({
+    adapter = await createAdapter({
       type: dialect,
       url: databaseUrl,
       ...(schema === DEFAULT_POSTGRES_SCHEMA ? {} : { schema }),
       ...(readOnly ? { readOnly: true } : {}),
     });
+  } catch (error) {
+    return failed(error);
+  }
+  await installTables(adapter);
+  // Past the tables' code, which every command that connects loads, and before the command's own
+  // queries. Outside the handling above and below, which reports what it catches as a failed
+  // connection.
+  await endAtProbe("connected", () => adapter.disconnect());
+  // Before the command creates or migrates anything: with the setting moved
+  // on an existing site, `migrate` and `db:sync` would build a second, empty
+  // installation in the newly named schema.
+  if (dialect === "postgresql") {
+    try {
+      await assertInstallationInConfiguredSchema(adapter.getDrizzle(), schema);
+    } catch (error) {
+      await adapter.disconnect().catch(() => {});
+      return failed(error);
+    }
+  }
+  return adapter;
+}
+
+/** The failures that came after a database had opened, while its tables were loaded. */
+const TABLES_FAILURES = new WeakSet<object>();
+
+/**
+ * Whether `error` came after its database had opened, while its tables were loaded, so it is no
+ * failed connection whatever its kind.
+ */
+export function cameAfterConnecting(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && TABLES_FAILURES.has(error)
+  );
+}
+
+/**
+ * Gives an adapter that has connected the static system tables. Where their code fails, the
+ * connection is given up, and the error is thrown as it is: the database answered, so this is not
+ * a failed connection, and nothing about `DATABASE_URL` would mend it.
+ */
+async function installTables(adapter: DrizzleAdapter): Promise<void> {
+  try {
     // The static system tables, resolvable by name from the moment the adapter exists. The
     // adapter writes only to a table its resolver holds, and several commands install no resolver
     // of their own before they write one: the schema lock seeds its field-group row through a
@@ -324,33 +388,32 @@ async function createForTarget(
     // Loaded here, as the factory is, so the CLI's light entry points do not import the tables.
     const { installRegistryResolver } = await import("./registry-resolver");
     installRegistryResolver(adapter);
-    // Before the command creates or migrates anything: with the setting moved
-    // on an existing site, `migrate` and `db:sync` would build a second, empty
-    // installation in the newly named schema.
-    if (dialect === "postgresql") {
-      try {
-        await assertInstallationInConfiguredSchema(
-          adapter.getDrizzle(),
-          schema
-        );
-      } catch (error) {
-        await adapter.disconnect().catch(() => {});
-        throw error;
-      }
-    }
-    return adapter;
   } catch (error) {
-    if (
-      readOnly &&
-      (error as { code?: unknown }).code === INVALID_SCHEMA_NAME
-    ) {
-      return {
-        missing: `The database does not exist: PostgreSQL has no schema "${schema}".`,
-      };
-    }
-    // Read here, once, so every command that opens a database ends with the same code for it.
-    throw connectionFailure(dialect, error);
+    // A disconnect that fails says less than what was already wrong.
+    await adapter.disconnect().catch(() => {});
+    if (typeof error === "object" && error !== null) TABLES_FAILURES.add(error);
+    throw error;
   }
+}
+
+/**
+ * What an open that failed ends with: a read-only one whose PostgreSQL schema is not there answers
+ * `missing`, and any other is thrown as the one error every command that opens a database ends
+ * with.
+ */
+function openFailure(
+  error: unknown,
+  target: { dialect: SupportedDialect; schema: string; readOnly: boolean }
+): MissingDatabase {
+  if (
+    target.readOnly &&
+    (error as { code?: unknown }).code === INVALID_SCHEMA_NAME
+  ) {
+    return {
+      missing: `The database does not exist: PostgreSQL has no schema "${target.schema}".`,
+    };
+  }
+  throw connectionFailure(target.dialect, error);
 }
 
 /**

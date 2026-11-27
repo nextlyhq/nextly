@@ -38,13 +38,30 @@ function judge(names, jobs) {
 const ci = load(read(".github/workflows/ci.yml"));
 const scaffoldBuild = load(read(".github/workflows/scaffold-build.yml"));
 
-/** The scaffold legs as their runs on main name them: the caller's job, then the leg. */
-const scaffoldLegs = () => {
-  const job = Object.values(scaffoldBuild.jobs).find(entry => entry.strategy?.matrix?.include);
-  return job.strategy.matrix.include.map(
-    leg => `${ci.jobs["scaffold-build"].name} / ${String(job.name).replace("${{ matrix.name }}", leg.name)}`
+/**
+ * One job's legs: its `include` entries when it lists them, else every
+ * combination of its axes, each in the order the file gives.
+ */
+const legsOf = job => {
+  const { include, ...axes } = job.strategy?.matrix ?? {};
+  if (include) return include;
+  return Object.entries(axes).reduce(
+    (legs, [axis, values]) => legs.flatMap(leg => values.map(value => ({ ...leg, [axis]: value }))),
+    [{}]
   );
 };
+
+/**
+ * The scaffold legs as their runs on main name them: the caller's job, then
+ * the leg, for every job in scaffold-build.yml.
+ */
+const scaffoldLegs = () =>
+  Object.values(scaffoldBuild.jobs).flatMap(job =>
+    legsOf(job).map(
+      leg =>
+        `${ci.jobs["scaffold-build"].name} / ${String(job.name).replace(/\$\{\{ matrix\.(\w+) \}\}/g, (_, key) => leg[key])}`
+    )
+  );
 
 /** The names the scaffold scope job hands the action. */
 const scopeNames = () => {

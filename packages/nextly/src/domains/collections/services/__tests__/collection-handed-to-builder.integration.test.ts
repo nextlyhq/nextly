@@ -45,7 +45,8 @@ describe.each(getConfiguredTestDialects())(
       ]
     ) =>
       toCodeFirstCollectionConfig(
-        defineCollection({ slug, fields })
+        defineCollection({ slug, fields }),
+        "code"
       ) as Parameters<
         CollectionRegistryService["syncCodeFirstCollections"]
       >[0][number];
@@ -330,7 +331,12 @@ describe.each(getConfiguredTestDialects())(
         {
           adapter: handle.adapter as never,
           logger: logger as never,
-          collectionSources: plugins,
+          entitySources: {
+            collections: plugins,
+            singles: new Map(),
+            fieldGroups: new Map(),
+            legacyCollections: new Set(),
+          },
         }
       );
       return { said, written: result.written.collection };

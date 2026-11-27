@@ -39,9 +39,17 @@ import {
 } from "../../api/response-shapes";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { container } from "../../di/container";
+import type {
+  ConfirmedEntries,
+  ReviewedEntries,
+} from "../../domains/collections/services/collection-entry-counts";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { DynamicCollectionService } from "../../domains/dynamic-collections/services/dynamic-collection-service";
+import {
+  refuseFieldGroupFieldsChangedInHost,
+  withFieldGroupCopiesJudged,
+} from "../../domains/field-groups/field-group-fields-read-only";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
 import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
@@ -49,6 +57,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
+import type { TranslatedDocument } from "../../domains/i18n/pipeline/document-access";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import type {
   BuilderSaveSetup,
@@ -61,6 +70,7 @@ import {
 import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
+import type { SaveHoldScope } from "../../domains/schema/builder-save/save-hold";
 import {
   renamedFieldsOf,
   saveOfSchemaChange,
@@ -131,19 +141,28 @@ import {
 import {
   NOTHING_TO_REVIEW,
   reviewOf,
+  withMoves,
   type BuilderSaveReview,
 } from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import {
+  type ConfirmedDeletions,
+  confirmedDeletionsAnswer,
+  dialogConfirmations,
+  readConfirmedDeletions,
+} from "../helpers/confirmed-deletions";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
+  getComponentRegistryFromDI,
   getLoggerFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
 import { entryWithStored } from "../helpers/entry-with-stored";
+import { movesRefusedFirst } from "../helpers/readable-field-owners";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
 import {
@@ -151,6 +170,7 @@ import {
   toPaginationMeta,
   unwrapServiceResult,
 } from "../helpers/service-envelope";
+import { respondTypeChangeTargets } from "../helpers/type-change-targets";
 import {
   isTruthyParam,
   parseCountParam,
@@ -181,6 +201,10 @@ import { readAccessCallerForDispatch } from "./read-access-caller";
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
+  respondKeepCurrent,
+  respondSourceChange,
+} from "./source-review-handlers";
+import {
   discardWorkingDraftForDocument,
   takeLiveSharedValuesForDocument,
   getVersionDiffForDocument,
@@ -207,6 +231,15 @@ type CollectionsHandlerType = CollectionsHandler;
 function callerUser(): { userId?: string; user?: UserContext } {
   const user = readAuthenticatedUser();
   return user ? { userId: user.id, user } : {};
+}
+
+/** The entry a translation route names. */
+function entryOf(p: Params): TranslatedDocument {
+  return {
+    kind: "collection",
+    slug: requireParam(p, "collectionName"),
+    id: requireParam(p, "entryId"),
+  };
 }
 
 // Decides whether the apply payload carries actionable rename hints we
@@ -360,64 +393,45 @@ const TogetherParam = z
   );
 
 /**
- * The counts of removed fields' values the person confirmed in the review, as an apply's body
- * sends them: each field's name and a whole number of values. Absent where the body sends none,
- * and the save then deletes as it always has (`CollectionSave.confirmedDeletions`).
+ * The `confirmedEntries` query parameter of a collection delete: `slug:count` pairs separated by
+ * commas, each collection's entries as its delete review showed them. A count that is not a whole
+ * number of entries is refused, never read as none.
  */
-const ConfirmedDeletionsBody = z.object({
-  confirmedDeletions: z
-    .array(
-      z.object({
-        field: z.string().min(1),
-        count: z.number().int().min(0),
+const ConfirmedEntriesParam = z
+  .string()
+  .max(20_000)
+  .transform(value =>
+    value
+      .split(",")
+      .map(pair => pair.trim())
+      .filter(pair => pair !== "")
+      .map(pair => {
+        const at = pair.lastIndexOf(":");
+        const count = at === -1 ? "" : pair.slice(at + 1);
+        return {
+          collection: at === -1 ? pair : pair.slice(0, at),
+          count: /^\d{1,15}$/.test(count) ? Number(count) : Number.NaN,
+        };
       })
-    )
-    .max(500)
-    .optional(),
-});
-
-function readConfirmedDeletions(
-  body: unknown
-): z.infer<typeof ConfirmedDeletionsBody>["confirmedDeletions"] {
-  try {
-    return ConfirmedDeletionsBody.parse(body ?? {}).confirmedDeletions;
-  } catch (error) {
-    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
-    throw error;
-  }
-}
-
-/**
- * The dialog's confirmations by field name, as its questions read them
- * (`refuseUnansweredDialogQuestions`): each field's own resolution, and each removed field whose
- * count of values the person confirmed deleting (`confirmedDeletions`), a count being its drop
- * confirmed. Nothing where the body sends neither.
- */
-function dialogConfirmations(
-  tableName: string,
-  resolutions: Record<string, FieldResolution> | undefined,
-  confirmedDeletions: ReturnType<typeof readConfirmedDeletions>
-): { legacy?: LegacyResolutionsBundle } {
-  const confirmDrop: LegacyResolutionsBundle["byFieldName"][string] = {
-    action: "confirm_drop",
-  };
-  const counted = (confirmedDeletions ?? []).map(
-    deletion => [deletion.field, confirmDrop] as const
+  )
+  .pipe(
+    z
+      .array(
+        z.object({
+          collection: z
+            .string()
+            .regex(SLUG_PATTERN, "Each collection must be named by its slug."),
+          count: z.number().int().nonnegative(),
+        })
+      )
+      .max(500)
   );
-  if (resolutions === undefined && counted.length === 0) return {};
-  return {
-    legacy: {
-      tableName,
-      byFieldName: { ...Object.fromEntries(counted), ...resolutions },
-    },
-  };
-}
 
 /** The dialog's confirmations as the change's `confirmedBeside`, where it sent any. */
 function dialogConfirmationsBeside(
   tableName: string,
   resolutions: Record<string, FieldResolution> | undefined,
-  confirmedDeletions: ReturnType<typeof readConfirmedDeletions>
+  confirmedDeletions: ConfirmedDeletions
 ): { confirmedBeside?: LegacyResolutionsBundle } {
   const { legacy } = dialogConfirmations(
     tableName,
@@ -425,15 +439,6 @@ function dialogConfirmationsBeside(
     confirmedDeletions
   );
   return legacy === undefined ? {} : { confirmedBeside: legacy };
-}
-
-/** The save's answer of the counts confirmed, where the body sent them; nothing otherwise. */
-function confirmedDeletionsAnswer(
-  confirmedDeletions: z.infer<
-    typeof ConfirmedDeletionsBody
-  >["confirmedDeletions"]
-): { confirmedDeletions?: readonly ConfirmedDeletion[] } {
-  return confirmedDeletions === undefined ? {} : { confirmedDeletions };
 }
 
 /**
@@ -453,6 +458,8 @@ async function pipelinePushCounted<T>(args: {
   renames: readonly BrowserRenameResolution[] | undefined;
   confirmed: readonly ConfirmedDeletion[] | undefined;
   push: () => Promise<T>;
+  /** The request's hold of the collection, kept until its registry row is written. */
+  holdScope: SaveHoldScope;
 }): Promise<T> {
   const { countedThroughApply } = await import(
     "../../domains/schema/builder-save/collection-save"
@@ -468,21 +475,68 @@ async function pipelinePushCounted<T>(args: {
   });
   return countedThroughApply(
     args.adapter,
-    args.slug,
+    { kind: "collection", slug: args.slug },
     hold,
     args.push,
-    consoleLogger
+    consoleLogger,
+    args.holdScope
   );
 }
 
 function parseTogetherParam(value: string | undefined): string[] {
-  if (value === undefined) return [];
+  return value === undefined ? [] : parseQueryParam(TogetherParam, value);
+}
+
+/** The delete's `confirmedEntries`, or undefined where it sent none. */
+function parseConfirmedEntriesParam(
+  value: string | undefined
+): ConfirmedEntries[] | undefined {
+  return value === undefined
+    ? undefined
+    : parseQueryParam(ConfirmedEntriesParam, value);
+}
+
+/** A query parameter read by `schema`, refused as a validation error naming what is wrong. */
+function parseQueryParam<T>(schema: z.ZodType<T>, value: string): T {
   try {
-    return TogetherParam.parse(value);
+    return schema.parse(value);
   } catch (error) {
     if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
     throw error;
   }
+}
+
+/**
+ * Each collection's entries for its delete review, counted as the delete counts them again
+ * (`reviewedEntries`). A collection that is not registered, or an app with no database to count
+ * in, is shown with its count unknown rather than as empty.
+ */
+async function deleteReviewEntries(
+  slugs: readonly string[]
+): Promise<ReviewedEntries[]> {
+  const { reviewedEntries } = await import(
+    "../../domains/collections/services/collection-entry-counts"
+  );
+  const registry = getCollectionRegistryFromDI();
+  const adapter = getAdapterFromDI();
+  const unknown = (slug: string): ReviewedEntries => ({
+    collection: slug,
+    rowCount: 0,
+    rowCountUnknown: true,
+  });
+  if (!registry || !adapter) return slugs.map(unknown);
+  const entries: ReviewedEntries[] = [];
+  for (const slug of slugs) {
+    const collection = await registry.getCollectionBySlug(slug);
+    entries.push(
+      ...(collection
+        ? await reviewedEntries(adapter, [
+            { slug, tableName: collection.tableName },
+          ])
+        : [unknown(slug)])
+    );
+  }
+  return entries;
 }
 
 /**
@@ -742,7 +796,12 @@ const COLLECTIONS_METHODS: Record<
       if (createdFields !== undefined) {
         assertValidPluginFieldOptions(createdFields);
       }
-      const result = await svc.createCollection(created);
+      // A field group's fields are changed only in its own editor, a new collection's too: the
+      // service judges the save's copies under its schema lock.
+      const result = await withFieldGroupCopiesJudged(
+        getComponentRegistryFromDI(),
+        () => svc.createCollection(created)
+      );
       const collection = unwrapServiceResult(result);
       return respondMutation(
         result.message ?? "Collection created.",
@@ -888,14 +947,20 @@ const COLLECTIONS_METHODS: Record<
       const renames = parseFieldRenameAnswers(
         (body as { renames?: unknown }).renames
       );
-      const result = await withFieldRenameAnswers(renames, async () =>
-        svc.updateCollection(
-          { collectionName: p.collectionName },
-          await withFieldsAsStored(
-            p.collectionName,
-            withoutRenameAnswers(body as Record<string, unknown>)
+      // A field group's fields are changed only in its own editor: the service judges the save's
+      // copies under its schema lock.
+      const result = await withFieldGroupCopiesJudged(
+        getComponentRegistryFromDI(),
+        () =>
+          withFieldRenameAnswers(renames, async () =>
+            svc.updateCollection(
+              { collectionName: p.collectionName },
+              await withFieldsAsStored(
+                p.collectionName,
+                withoutRenameAnswers(body as Record<string, unknown>)
+              )
+            )
           )
-        )
       );
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
@@ -915,10 +980,19 @@ const COLLECTIONS_METHODS: Record<
       requireParam(p, "collectionName");
       // A variable rather than an inline literal: `CollectionsHandler` types
       // its parameter by the one key it reads and forwards the object, whole,
-      // to the metadata service, which reads `together` from it.
-      const request: { collectionName: string; together: string[] } = {
+      // to the metadata service, which reads `together` and `confirmedEntries`
+      // from it. `?confirmedEntries=` carries each collection's entries as the
+      // delete review showed them, for the delete to count again where it holds
+      // the collections; absent, it compares none.
+      const confirmedEntries = parseConfirmedEntriesParam(p.confirmedEntries);
+      const request: {
+        collectionName: string;
+        together: string[];
+        confirmedEntries?: ConfirmedEntries[];
+      } = {
         collectionName: p.collectionName,
         together: parseTogetherParam(p.together),
+        ...(confirmedEntries === undefined ? {} : { confirmedEntries }),
       };
       const result = await svc.deleteCollection(request);
       const collection = unwrapServiceResult(result, {
@@ -932,8 +1006,10 @@ const COLLECTIONS_METHODS: Record<
   },
   // What deleting a collection takes with it besides its own entries, by the
   // plugin that holds it (`ctx.hooks.onCollectionDelete`), for the delete
-  // dialog to list before the confirm. `?together=a,b` names the collections
-  // a bulk delete removes with this one, as on the delete. Reads only.
+  // dialog to list before the confirm, and each collection's entries
+  // (`entries`), which the dialog sends back with the delete to be counted
+  // again there. `?together=a,b` names the collections a bulk delete removes
+  // with this one, as on the delete. Reads only.
   previewCollectionDelete: {
     execute: async (_svc, p) => {
       const collectionName = requireParam(p, "collectionName");
@@ -951,8 +1027,33 @@ const COLLECTIONS_METHODS: Record<
         getActiveHookRegistry(),
         slugs
       );
+      const entries = await deleteReviewEntries(slugs);
       // Read for this caller's dialog only; no shared cache keeps it.
-      return withSessionCacheHeaders(respondData({ impact }));
+      return withSessionCacheHeaders(respondData({ impact, entries }));
+    },
+  },
+  // The type picker's answer for a saved field: what each other type would do to its values, read
+  // from the conversion rules (`respondTypeChangeTargets`).
+  typeChangeTargets: {
+    execute: async (_svc, p, body) => {
+      const slug = requireParam(p, "collectionName");
+      const collection =
+        await getCollectionRegistryFromDI()?.getCollectionBySlug(slug);
+      if (!collection) {
+        throw NextlyError.notFound({ message: "Collection not found" });
+      }
+      refuseChangeDefinedInCode(collection, "collection", slug);
+      return respondTypeChangeTargets({
+        fields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        body,
+        builtBy: "collection",
+        // A collection's save file retypes a translated field's translations column, where the save
+        // writes one; with no writer, its push does not, and refuses the change.
+        layout: {
+          perLanguage: storesPerLanguage(collection),
+          fileRetypes: container.has("builderSaveSetup"),
+        },
+      });
     },
   },
   // Preview schema changes (dry-run diff with row-count impact)
@@ -986,6 +1087,13 @@ const COLLECTIONS_METHODS: Record<
         lifecycleEnabled:
           collection.status === true || readRequestedLifecycle(body) === true,
       });
+      // A field group's fields are changed only in its own editor: the review refuses what the
+      // apply would.
+      await refuseFieldGroupFieldsChangedInHost(
+        sentFields,
+        getComponentRegistryFromDI(),
+        () => collection.fields
+      );
       // Planned as the apply will write them: an earlier-shaped relationship in its stored shape.
       // A collection's stored built-in fields stay: the admin never sends them (`keepBuiltIns`).
       const fields = fieldsAsStored(sentFields, collection, [], {
@@ -1166,6 +1274,14 @@ const COLLECTIONS_METHODS: Record<
       // and runs holding the schema lock, refused at once while a migration holds it. The shared
       // apply takes the lock too, re-entrantly; it is taken here so the registry read, the version
       // check and the registry write sit inside the same claim as the DDL.
+      //
+      // A save that deletes values holds the collection from its count until its registry row is
+      // written below, and lets it go once the request is answered, however it ended, so an entry
+      // write that waited for it meets the definition it recorded (`saveHoldScope`).
+      const { saveHoldScope } = await import(
+        "../../domains/schema/builder-save/save-hold"
+      );
+      const holdScope = saveHoldScope(getLoggerFromDI() ?? consoleLogger);
       return withSchemaChangeExcluded(
         {
           adapter: getAdapterFromDI(),
@@ -1189,6 +1305,14 @@ const COLLECTIONS_METHODS: Record<
           );
           if (!collection) throw new Error("Collection not found");
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
+          // A field group's fields are changed only in its own editor: a save that changes them
+          // here is refused, compared with each field group as stored under the lock, so an edit
+          // in its own editor cannot land between the comparison and this write.
+          await refuseFieldGroupFieldsChangedInHost(
+            sentFields,
+            getComponentRegistryFromDI(),
+            () => collection.fields
+          );
           // An earlier-shaped relationship the editor read is written back in its stored shape,
           // through a rename the save makes, against the row this save is checked and written
           // against.
@@ -1392,6 +1516,13 @@ const COLLECTIONS_METHODS: Record<
             moves,
             writes: container.has("builderSaveSetup"),
             pushReason,
+            refusedFirst: travelling =>
+              movesRefusedFirst(adapter, travelling, {
+                before: (collection.fields ??
+                  []) as unknown as FieldDefinition[],
+                after: fields as unknown as FieldDefinition[],
+                localized: wasLocalized || isLocalized,
+              }),
           });
           // After a schema apply (rename, add, drop) two independent in-memory
           // caches hold Drizzle table objects that are now stale:
@@ -1464,16 +1595,15 @@ const COLLECTIONS_METHODS: Record<
             }
           };
           const written = await saveThroughWriter({
+            holdScope,
             // Where the save runs its file, the row is written in the file's own transaction, so a
             // failed write leaves the save as it was and is answered as the failure it is. Not where
             // the translations table is brought in step after the file: the row would then record
             // the change before that step holds it, so it is written after it, as a Single's is.
-            ...(road.registryInFile
-              ? {
-                  registry: (stored: FieldDefinition[]) =>
-                    writeRow(stored, false),
-                }
-              : {}),
+            // Where the file's transaction does what that step would (`inFile`), the row follows it.
+            registry: (stored: FieldDefinition[]) => writeRow(stored, false),
+            registryInFile: road.registryInFile,
+            inFile: road.inFile,
             // A file stopped part way and settled to what applied: this process's tables and the
             // admin's schema version follow the fields it recorded, as after an apply. Asked only
             // where the registry write runs in the file's transaction.
@@ -1583,6 +1713,7 @@ const COLLECTIONS_METHODS: Record<
                   renames: renameResolutions,
                   confirmed: confirmedDeletions,
                   push: () => applyCollectionSchemaChange(change),
+                  holdScope,
                 });
 
           // pipeline.apply mutates the live DB (renamed/added/dropped
@@ -1673,6 +1804,13 @@ const COLLECTIONS_METHODS: Record<
               : {}),
           });
         }
+      ).then(
+        // Let go once the request is answered, however it ended.
+        result => holdScope.end().then(() => result),
+        (error: unknown) =>
+          holdScope.end().then(() => {
+            throw error;
+          })
       );
     },
   },
@@ -1982,6 +2120,15 @@ const COLLECTIONS_METHODS: Record<
   publishParts: partsLifecycle("publish", "Published."),
   unpublishParts: partsLifecycle("unpublish", "Unpublished."),
 
+  getEntrySourceChange: {
+    execute: async (_svc, p, _body, request) =>
+      respondSourceChange(entryOf(p), p, request),
+  },
+  keepEntryTranslation: {
+    execute: async (_svc, p, body, request) =>
+      respondKeepCurrent(entryOf(p), body, request),
+  },
+
   previewPublishAllLocales: {
     // What publishing every language would do, language by language, without
     // doing it. Asked as the publish is: the service judges the publish
@@ -2279,6 +2426,11 @@ function writerRowOf(collection: {
   };
 }
 
+/** What a save through the writer is given beside its change. */
+type CollectionSaveOptions = NonNullable<
+  Parameters<typeof writeCollectionSave>[2]
+>;
+
 /** What a field change gives the Builder save writer. */
 interface WriterChange {
   slug: string;
@@ -2345,10 +2497,7 @@ async function writerSaveOf(change: WriterChange): Promise<
       logger,
       applies: process.env.NODE_ENV === "development",
     },
-    save:
-      change.moves === undefined || change.moves.length === 0
-        ? save
-        : { ...save, moves: change.moves },
+    save: await withMoves(save, change.moves, adapter),
     fields,
   };
 }
@@ -2424,6 +2573,12 @@ async function reviewedMoves(args: {
       after: args.after,
       renames: args.renames,
     }),
+    refusedFirst: travelling =>
+      movesRefusedFirst(args.adapter, travelling, {
+        before: args.before,
+        after: args.after,
+        localized: args.wasLocalized || (args.requestedLocalized ?? false),
+      }),
   });
   return moves;
 }
@@ -2524,11 +2679,19 @@ async function saveThroughWriter(
     };
     /**
      * The caller's registry write for the save, given the fields as stored. Where the writer runs
-     * the save's file in development, it runs inside the last file's transaction, after its ledger
-     * row, so a failed write leaves the save as it was (`inLastTransaction`); elsewhere the caller
-     * writes it once this returns.
+     * the save's file in development, and `registryInFile` or `inFile` has it written there, it runs
+     * inside the last file's transaction, after its ledger row, so a failed write leaves the save as
+     * it was (`inLastTransaction`); elsewhere the caller writes it once this returns.
      */
-    registry?: (fields: FieldDefinition[]) => Promise<void>;
+    registry: (fields: FieldDefinition[]) => Promise<void>;
+    /** Whether the row is written in the last file's transaction (`CollectionFileRoad`). */
+    registryInFile: boolean;
+    /**
+     * What the last file's transaction does before `registry`, where what the file does not reach
+     * can be done there whole. Asked only where the writer runs the save's file. Such a save has no
+     * file stopped part way to settle: the databases it is for take every statement back.
+     */
+    inFile: () => Promise<(() => Promise<void>) | undefined>;
     /**
      * After `registry`, for a file that stopped part way and was settled to what applied: what the
      * caller does after an apply, given the fields the row recorded.
@@ -2546,6 +2709,11 @@ async function saveThroughWriter(
      * one unanswered is refused as the push refuses it (`refuseUnansweredDialogQuestions`).
      */
     questions?: (moved: readonly string[]) => Promise<void>;
+    /**
+     * The request's hold of the collection for a save that deletes values, kept until the caller
+     * has written the registry row (`writeCollectionSave`'s `holdScope`).
+     */
+    holdScope?: SaveHoldScope;
   }
 ): Promise<
   | {
@@ -2580,38 +2748,66 @@ async function saveThroughWriter(
     import("../../domains/schema/builder-save/collection-save"),
     import("../../domains/schema/builder-save/stopped-save"),
   ]);
-  const registry = change.registry;
-  const inFile = prepared.deps.applies && !viaPush && registry !== undefined;
-  const result = await writeCollectionSave(
-    prepared.deps,
-    prepared.save,
+  const inFile = runsFile
+    ? await registryInTheFile(change, prepared.fields, report =>
+        appliedFieldsOf(change.collection.fields ?? [], prepared.fields, report)
+      )
+    : undefined;
+  const roadOptions: CollectionSaveOptions =
     viaPush && change.appliedBy !== undefined
       ? { appliedBy: change.appliedBy }
-      : inFile
-        ? {
-            ...beforeWrite,
-            inLastTransaction: () => registry(prepared.fields),
-            // A file that stops part way is settled to what of it applied: the row then records
-            // the fields as far as the database holds them.
-            onSettled: async report => {
-              const applied = appliedFieldsOf(
-                change.collection.fields ?? [],
-                prepared.fields,
-                report
-              );
-              await registry(applied);
-              change.settled?.(applied);
-            },
-          }
-        : beforeWrite
-  );
+      : { ...beforeWrite, ...inFile };
+  const result = await writeCollectionSave(prepared.deps, prepared.save, {
+    ...roadOptions,
+    holdScope: change.holdScope,
+  });
   if (runsFile) await afterTheFile(change, prepared.fields);
   return {
     fields: prepared.fields,
     applied: result.applied,
     files: result.files,
     ...(result.checked === undefined ? {} : { checked: result.checked }),
-    registryWritten: inFile,
+    registryWritten: inFile !== undefined,
+  };
+}
+
+/**
+ * What a save whose file runs is given where its registry row is written in its last file's
+ * transaction: the row, given `fields` as stored, and before it what that transaction does of what
+ * the file does not reach (`inFile`). Undefined where the caller writes the row after the save.
+ *
+ * A file that stops part way is settled to what of it applied (`appliedOf`): the row then records
+ * the fields as far as the database holds them. Not with `inFile`, as `saveThroughWriter` says.
+ */
+async function registryInTheFile(
+  change: Pick<
+    Parameters<typeof saveThroughWriter>[0],
+    "registry" | "registryInFile" | "inFile" | "settled"
+  >,
+  fields: FieldDefinition[],
+  appliedOf: (
+    report: Parameters<NonNullable<CollectionSaveOptions["onSettled"]>>[0]
+  ) => FieldDefinition[]
+): Promise<
+  Pick<CollectionSaveOptions, "inLastTransaction" | "onSettled"> | undefined
+> {
+  const first = await change.inFile();
+  if (first !== undefined) {
+    return {
+      inLastTransaction: async () => {
+        await first();
+        await change.registry(fields);
+      },
+    };
+  }
+  if (!change.registryInFile) return undefined;
+  return {
+    inLastTransaction: () => change.registry(fields),
+    onSettled: async report => {
+      const applied = appliedOf(report);
+      await change.registry(applied);
+      change.settled?.(applied);
+    },
   };
 }
 
@@ -2619,17 +2815,20 @@ async function saveThroughWriter(
  * What a save's file does not reach, brought in step once the file ran (`fileRoad.after`). Where
  * that stops at a renamed field's provenance move (`isProvenanceNotMoved`), the file is recorded,
  * so the change it carried landed as the save prepared it: the caller is handed `fields`, the ones
- * the file and the definition hold, before the failure is passed on.
+ * the file and the definition hold, before the failure is passed on. Run under the save's hold, as
+ * the file was (`SaveHoldScope.during`).
  */
 async function afterTheFile(
   change: {
+    holdScope?: SaveHoldScope;
     fileRoad?: { after: () => Promise<void> };
     provenanceNotMoved?: (fields: FieldDefinition[]) => Promise<void>;
   },
   fields: FieldDefinition[]
 ): Promise<void> {
+  const after = async () => change.fileRoad?.after();
   try {
-    await change.fileRoad?.after();
+    await (change.holdScope?.during(after) ?? after());
   } catch (error) {
     if (isProvenanceNotMoved(error)) await change.provenanceNotMoved?.(fields);
     throw error;

@@ -22,6 +22,7 @@
  *
  * @module overview/contract
  */
+import { PAGES_PAGE_HREF } from "../code-pages/contract";
 import type {
   ConnectionAttempt,
   ConnectionsBody,
@@ -83,6 +84,8 @@ export const CHECKLIST_ITEMS = [
   "brand",
   "import",
   "searchConsole",
+  "proxy",
+  "codePages",
 ] as const;
 
 /** One of the checklist's items. */
@@ -94,6 +97,8 @@ export interface ChecklistItemState {
   done: boolean;
   /** For `patterns`: how many content types SEO is added to. */
   types?: number;
+  /** For `codePages`: how many pages built in code the site lists. */
+  pages?: number;
 }
 
 /** What the checklist route answers. */
@@ -162,6 +167,23 @@ export function checklistItemText(item: ChecklistItemState): ChecklistItemText {
         action: "Connect",
         href: `${SETTINGS_PAGE_HREF}?tab=connections`,
       };
+    case "proxy":
+      // The Redirects screen says how a developer wires `proxy.ts`.
+      return {
+        label: "Connect the site's Proxy, for redirects and plain-text copies",
+        action: "See how",
+        href: REDIRECTS_PAGE_HREF,
+      };
+    case "codePages": {
+      const pages = item.pages ?? 0;
+      return {
+        label: item.done
+          ? `Pages built in code are listed: ${pages} ${pages === 1 ? "page" : "pages"}`
+          : "List the pages your routes with a variable part build",
+        action: "See why",
+        href: PAGES_PAGE_HREF,
+      };
+    }
   }
 }
 
@@ -186,6 +208,7 @@ const INDEXNOW_FIX: Record<
   Exclude<ConnectionAttempt["result"], "sent">,
   string
 > = {
+  accepted: "check the key",
   "refused-key": "check the key",
   "rate-limited": "slowed down",
   "no-address": "set the address",
@@ -216,7 +239,8 @@ export function indexNowConnection(
     return { ...base, standing: "not-connected", text: "Not connected" };
   }
   const result = state.last?.result;
-  if (result === undefined || result === "sent") {
+  // Received, with the key read later: nothing needs doing.
+  if (result === undefined || result === "sent" || result === "accepted") {
     return { ...base, standing: "connected", text: "Connected" };
   }
   return {

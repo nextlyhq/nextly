@@ -59,12 +59,15 @@ export interface ProfileDraft {
 
 /**
  * The site's own robots.txt lines as the form holds them: the box's text,
- * and the confirmation of the sitemap pages its rules block, saved with the
- * text and the pages it confirmed.
+ * the confirmation of the sitemap pages its rules block, saved with the
+ * text and the pages it confirmed, and the Content-Signal tick, stored with
+ * them since it is a line of the same file.
  */
 export interface RobotsRulesDraft {
   text: string;
   confirmed?: { text: string; pages: string };
+  /** Whether robots.txt adds a Content-Signal line: only once ticked. */
+  contentSignal?: boolean;
 }
 
 /** One other service's tag, as the form holds it while a person types. */
@@ -181,6 +184,7 @@ export function robotsRulesDraftOf(value: unknown): RobotsRulesDraft {
   const confirmed = isRecord(value.confirmed) ? value.confirmed : undefined;
   return {
     text: text(value.text),
+    ...(value.contentSignal === true ? { contentSignal: true } : {}),
     ...(confirmed === undefined
       ? {}
       : {
@@ -194,18 +198,25 @@ export function robotsRulesDraftOf(value: unknown): RobotsRulesDraft {
 
 /**
  * The own lines as they are stored: the text without the blank lines at its
- * end, the confirmation only while it is for that text, and null for an
- * empty box, so clearing it clears the value.
+ * end, the confirmation only while it is for that text, the Content-Signal
+ * tick only while ticked, and null for an empty box with nothing ticked, so
+ * clearing both clears the value.
  */
 function storedRobotsRules(draft: RobotsRulesDraft): RobotsRulesDraft | null {
   const kept = draft.text.replace(/\s+$/, "");
-  if (kept.trim() === "") return null;
+  const signal = draft.contentSignal === true;
+  if (kept.trim() === "")
+    return signal ? { text: "", contentSignal: true } : null;
   const confirmed =
     draft.confirmed !== undefined &&
     draft.confirmed.text.replace(/\s+$/, "") === kept
       ? { text: kept, pages: draft.confirmed.pages }
       : undefined;
-  return confirmed === undefined ? { text: kept } : { text: kept, confirmed };
+  return {
+    text: kept,
+    ...(confirmed === undefined ? {} : { confirmed }),
+    ...(signal ? { contentSignal: true } : {}),
+  };
 }
 
 /**

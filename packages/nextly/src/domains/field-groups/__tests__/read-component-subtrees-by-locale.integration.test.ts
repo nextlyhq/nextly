@@ -118,7 +118,7 @@ function countComponentReads(tx: TransactionContext): string[] {
   const db = tx.getDrizzle<{ select: Select }>();
   const select = db.select.bind(db);
   const record = (table: unknown) => {
-    if (isTable(table) && getTableName(table).startsWith("comp_")) {
+    if (isTable(table) && getTableName(table).startsWith("fg_")) {
       read.push(getTableName(table));
     }
   };
@@ -243,9 +243,9 @@ describe.each(getConfiguredTestDialects())(
         // translations' included, and a read per language multiplies it.
         expect(one).toEqual(
           expect.arrayContaining([
-            "comp_subtreecard",
-            "comp_subtreehero",
-            "comp_subtreehero_locales",
+            "fg_subtreecard",
+            "fg_subtreehero",
+            "fg_subtreehero_locales",
           ])
         );
         expect(eachAlone).toHaveLength(one.length * 3);

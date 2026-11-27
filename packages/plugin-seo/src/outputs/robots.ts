@@ -1,7 +1,8 @@
 /**
  * The site's robots.txt: search engines may read every page but the admin,
- * the AI crawlers the site's choice names are asked to stay away, and the
- * sitemap is named by its absolute address.
+ * the AI crawlers the site's choice names are asked to stay away, the shared
+ * AI-training opt-out is written wherever the choice asks trainers away, and
+ * the sitemap is named by its absolute address.
  *
  * Every rule here is a request. Well-behaved crawlers follow it; some do not.
  *
@@ -13,8 +14,14 @@ import { FRAMEWORK_CRAWL_EXCLUSIONS } from "@nextlyhq/plugin-sdk";
 
 import type { AiCrawlerChoice } from "../settings/contract";
 import { readOwnRules } from "../settings/robots-rules";
+import { SHARE_CARD_PREFIX } from "../social/share-card";
 
-import { AI_SEARCH_CRAWLERS, AI_TRAINING_CRAWLERS } from "./ai-crawlers";
+import {
+  AI_TRAINING_OPT_OUT,
+  askedAway,
+  contentSignalOf,
+  shutOutBy,
+} from "./ai-crawlers";
 
 // The list itself lives where the settings screen can read it too.
 export {
@@ -22,6 +29,7 @@ export {
   AI_CRAWLERS_CHECKED,
   AI_SEARCH_CRAWLERS,
   AI_TRAINING_CRAWLERS,
+  AI_USER_TRIGGERED_FETCHERS,
 } from "./ai-crawlers";
 
 /**
@@ -31,13 +39,17 @@ export {
  */
 export type { AiCrawlerChoice } from "../settings/contract";
 
-/** The crawlers a choice asks to stay away, in the order the file names them. */
-function shutOut(choice: AiCrawlerChoice): readonly string[] {
-  if (choice === "search") return AI_TRAINING_CRAWLERS;
-  if (choice === "block") {
-    return [...AI_TRAINING_CRAWLERS, ...AI_SEARCH_CRAWLERS];
-  }
-  return [];
+/**
+ * The shared AI-training opt-out's group, for a choice that asks trainers to
+ * stay away: "search" and "block" both do, "all" asks nothing. It is a group
+ * of its own because a `User-agent: *` group never applies to the token, and
+ * its `Disallow: /` covers every page, the admin and the site's own
+ * disallowed paths among them.
+ */
+function trainingOptOut(choice: AiCrawlerChoice): string[][] {
+  return askedAway("training", choice)
+    ? [[`User-agent: ${AI_TRAINING_OPT_OUT}`, "Disallow: /"]]
+    : [];
 }
 
 /**
@@ -56,25 +68,38 @@ function ownLinesOf(ownRules: string | undefined): string[] {
 /**
  * The robots.txt for a site: `sitemap` is the sitemap's absolute address,
  * absent where the site serves none; `ownRules` are the lines the site adds
- * in the SEO settings, served after every line of the plugin's own.
+ * in the SEO settings, served after every line of the plugin's own; and
+ * `contentSignal` adds a Content-Signal line stating the AI tools choice to
+ * the group for every crawler. That line is not a standard: crawlers that
+ * don't know it skip it, and no rule of the file changes with it.
  */
 export function robotsTxt(options: {
   sitemap?: string;
   aiCrawlers: AiCrawlerChoice;
   ownRules?: string;
+  contentSignal?: boolean;
 }): string {
   const groups = [
     [
       "User-agent: *",
+      // Under the crawlers' names, where Cloudflare's own files put it.
+      ...(options.contentSignal === true
+        ? [`Content-Signal: ${contentSignalOf(options.aiCrawlers)}`]
+        : []),
       "Allow: /",
       ...FRAMEWORK_CRAWL_EXCLUSIONS.map(path => `Disallow: ${path}`),
+      // The share cards the plugin serves under the admin's API, which
+      // networks fetch as crawlers do: the longer rule wins over the
+      // admin's, so nothing else under it is opened.
+      `Allow: ${SHARE_CARD_PREFIX}`,
     ],
     // A group of its own for each crawler: a crawler that finds its own name
     // reads that group alone, and some read a group naming several poorly.
-    ...shutOut(options.aiCrawlers).map(agent => [
+    ...shutOutBy(options.aiCrawlers).map(agent => [
       `User-agent: ${agent}`,
       "Disallow: /",
     ]),
+    ...trainingOptOut(options.aiCrawlers),
   ];
   if (options.sitemap !== undefined) {
     groups.push([`Sitemap: ${options.sitemap}`]);

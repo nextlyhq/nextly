@@ -119,6 +119,7 @@ export type {
   DatabaseErrorKind,
   DatabaseError,
   DatabaseErrorOptions,
+  PoolWaitLog,
 } from "./error";
 
 export {
@@ -127,6 +128,7 @@ export {
   isApplicationError,
   POOL_WAIT_TIMEOUT_CODE,
   poolWaitTimeoutError,
+  poolWaitTimedOut,
   TABLE_NOT_REGISTERED_CODE,
   tableNotRegisteredError,
 } from "./error";

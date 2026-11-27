@@ -27,6 +27,11 @@
  * - **No published template yet**: the entry is not a page on the site, so
  *   there is nothing to preview; the template to open, or one to create
  *   where the author may.
+ * - **Shown by the site's own page**: no published template, but the site
+ *   declares where the collection's entries are shown and the page builder
+ *   has no address for them, so the site's own route shows the entry. The
+ *   card says so, with the entry's address linked, and still offers the
+ *   template, which is the way to design the entries here instead.
  *
  * Preview is the editor's own: beside the form where the editor offers that,
  * which folds this panel as the document bar's Preview does, and otherwise in
@@ -91,6 +96,7 @@ export type EntryDesignState =
   | { readonly kind: "uses-template" }
   | { readonly kind: "own"; readonly design: EntryDesignItem }
   | { readonly kind: "no-published-template" }
+  | { readonly kind: "served-by-site"; readonly address: string | null }
   | { readonly kind: "not-drawn" };
 
 /**
@@ -99,7 +105,8 @@ export type EntryDesignState =
  * reader, it says nothing: "no template" would be a claim about what is
  * stored. An own design stands whatever the template's state; without one,
  * a published template draws the entry, a draft one or none leaves it off
- * the site, and a collection that may not have a template gets no section.
+ * the site unless the site's own route shows it, and a collection that may
+ * not have a template gets no section.
  */
 export function entryDesignStateOf(
   answer: EntryDesignsResponse,
@@ -111,7 +118,10 @@ export function entryDesignStateOf(
   const { template, templateAllowed } = answer.meta;
   if (template?.status === "published") return { kind: "uses-template" };
   if (template !== null || templateAllowed) {
-    return { kind: "no-published-template" };
+    const site = answer.meta.servedBySite;
+    return site === null
+      ? { kind: "no-published-template" }
+      : { kind: "served-by-site", address: site.address };
   }
   return { kind: "not-drawn" };
 }
@@ -178,6 +188,15 @@ export function EntryDesignSection({
       return (
         <NoPublishedTemplate
           answer={answer}
+          collection={collectionSlug}
+          held={held}
+        />
+      );
+    case "served-by-site":
+      return (
+        <ServedBySite
+          answer={answer}
+          address={state.address}
           collection={collectionSlug}
           held={held}
         />
@@ -576,6 +595,86 @@ function NoPublishedTemplate({
   collection: string;
   held: boolean;
 }): JSX.Element {
+  const { meta } = answer;
+
+  return (
+    <DesignCard>
+      <CardHeading>{WORDS.noDesignHeading}</CardHeading>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {WORDS.noPublishedTemplate(
+          meta.names.singular,
+          meta.names.plural,
+          meta.template?.title ?? null
+        )}
+      </p>
+      <TemplateOffer answer={answer} collection={collection} held={held} />
+    </DesignCard>
+  );
+}
+
+/**
+ * The entry shown by the site's own page: where, linked, for an entry whose
+ * address is known, and the template that would let the collection's entries
+ * be designed here instead, where there is one to open or to create.
+ */
+function ServedBySite({
+  answer,
+  address,
+  collection,
+  held,
+}: {
+  answer: EntryDesignsResponse;
+  address: string | null;
+  collection: string;
+  held: boolean;
+}): JSX.Element {
+  const { meta } = answer;
+
+  return (
+    <DesignCard>
+      <CardHeading>{WORDS.servedBySiteHeading}</CardHeading>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {WORDS.servedBySite(meta.names.plural)}
+        {address === null ? null : (
+          <>
+            {" "}
+            {WORDS.servedAt(meta.names.singular)}{" "}
+            <a
+              href={address}
+              target="_blank"
+              rel="noreferrer"
+              className="break-words font-medium text-primary underline underline-offset-2"
+            >
+              {address}
+            </a>
+            .
+          </>
+        )}
+      </p>
+      <TemplateOffer answer={answer} collection={collection} held={held} />
+    </DesignCard>
+  );
+}
+
+/**
+ * The offer's button, the panel's width: a label naming a long collection
+ * wraps inside it rather than running past the card.
+ */
+const OFFER_BUTTON_CLASS = "h-auto w-full whitespace-normal py-1.5";
+
+/**
+ * The collection's template to open, or one to create where the author may,
+ * for an entry no published template draws; nothing where neither applies.
+ */
+function TemplateOffer({
+  answer,
+  collection,
+  held,
+}: {
+  answer: EntryDesignsResponse;
+  collection: string;
+  held: boolean;
+}): JSX.Element | null {
   const [busy, setBusy] = useState(false);
   const { meta } = answer;
   const template = meta.template;
@@ -596,45 +695,35 @@ function NoPublishedTemplate({
       .finally(() => setBusy(false));
   };
 
+  if (template !== null) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className={OFFER_BUTTON_CLASS}
+        onClick={() =>
+          openInAdmin(builderHref(meta.templatesCollection, template.id))
+        }
+      >
+        <LayoutTemplate className="h-4 w-4" aria-hidden="true" />
+        {WORDS.openTemplate(template.title)}
+      </Button>
+    );
+  }
+  if (!meta.mayCreateTemplate) return null;
   return (
-    <DesignCard>
-      <CardHeading>{WORDS.noDesignHeading}</CardHeading>
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        {WORDS.noPublishedTemplate(
-          meta.names.singular,
-          meta.names.plural,
-          template?.title ?? null
-        )}
-      </p>
-      {template !== null ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="w-full"
-          onClick={() =>
-            openInAdmin(builderHref(meta.templatesCollection, template.id))
-          }
-        >
-          <LayoutTemplate className="h-4 w-4" aria-hidden="true" />
-          {WORDS.openTemplate(template.title)}
-        </Button>
-      ) : meta.mayCreateTemplate ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="w-full"
-          disabled={busy || held}
-          {...(held ? { title: HELD_REASON } : {})}
-          onClick={create}
-        >
-          <Plus className="h-4 w-4" aria-hidden="true" />
-          {busy
-            ? WORDS.creatingTemplate
-            : WORDS.createTemplate(meta.names.plural)}
-        </Button>
-      ) : null}
-    </DesignCard>
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className={OFFER_BUTTON_CLASS}
+      disabled={busy || held}
+      {...(held ? { title: HELD_REASON } : {})}
+      onClick={create}
+    >
+      <Plus className="h-4 w-4" aria-hidden="true" />
+      {busy ? WORDS.creatingTemplate : WORDS.createTemplate(meta.names.plural)}
+    </Button>
   );
 }

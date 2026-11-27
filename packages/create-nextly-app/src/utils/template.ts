@@ -1447,9 +1447,17 @@ export async function generatePackageJson(
       // And `|| true` turned a failed index build into a successful one. The
       // search page then ships pointing at an index that was never written,
       // which fails in the browser rather than in CI.
+      //
+      // Every CLI step runs with `--mode production`. A deploy often builds
+      // with NODE_ENV unset, and without a mode the CLI picks its environment
+      // files from NODE_ENV, so it would read `.env.development` and migrate
+      // the development database while the `next build` after it reads
+      // `.env.production`. `nextly plugins add` copies the migrate step's
+      // mode onto each install step it adds.
       build: [
-        "nextly migrate",
-        ...pluginInstalls,
+        ...["nextly migrate", ...pluginInstalls].map(
+          step => `${step} --mode production`
+        ),
         "next build",
         ...(shipsSearchIndex ? ["node scripts/build-search-index.mjs"] : []),
       ].join(" && "),
@@ -1640,6 +1648,19 @@ async function generatePluginPackageJson(
     },
     peerDependencies,
     devDependencies,
+    // What the plugin needs, read by `nextly plugins add` before any of its
+    // code runs. It says what `src/plugin.ts` does: the same Nextly range
+    // (the `nextly` peer, which `{{nextlyRange}}` is resolved to as well),
+    // its `myPlugin()` factory and its one collection. The template's
+    // `declaration.test.ts` checks the two agree, so an author who changes
+    // one and not the other sees the suite fail.
+    nextly: {
+      format: 1,
+      core: peerDependencies.nextly,
+      databases: ["postgresql", "mysql", "sqlite"],
+      plugin: { export: "myPlugin", call: true },
+      collections: ["examples"],
+    },
     // Native build-script allowlist is NOT emitted here: pnpm 11 ignores the
     // package.json `pnpm` field. It lives in pnpm-workspace.yaml instead (written
     // by copyPluginTemplate via generatePnpmWorkspaceYaml).
