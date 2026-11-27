@@ -7,12 +7,10 @@ import {
   SheetClose,
   SheetTitle,
 } from "@nextlyhq/ui";
-import { useRef, type JSX } from "react";
+import type { JSX } from "react";
 
 import { Laptop, X } from "@admin/components/icons";
 import { SidebarContent, SidebarGroup } from "@admin/components/layout/sidebar";
-import { openCommandPalette } from "@admin/components/shared/command-palette/palette-store";
-import { DrawerSearchButton } from "@admin/components/shared/command-palette/PaletteSearchButton";
 import { Link } from "@admin/components/ui/link";
 import type { NavigationItem } from "@admin/constants/navigation";
 import { MOBILE_DRAWER_WIDTH } from "@admin/constants/sidebar";
@@ -111,32 +109,9 @@ export function MobileSidebarDrawer({
   isActive,
 }: MobileSidebarDrawerProps): JSX.Element {
   const branding = useBranding();
-  // Set by the Search row: the drawer closes first and opens the palette once
-  // it has, so the drawer's close can't take focus from the palette's field.
-  const searchOnClose = useRef(false);
-  // What had focus as the drawer opened: the header's menu button. It is not
-  // the drawer's own trigger, so the drawer's close leaves focus on the page;
-  // the palette is told to hand focus back to it instead.
-  const opener = useRef<HTMLElement | null>(null);
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
-        onOpenAutoFocus={() => {
-          const focused = document.activeElement;
-          opener.current =
-            focused instanceof HTMLElement && focused !== document.body
-              ? focused
-              : null;
-        }}
-        onCloseAutoFocus={event => {
-          if (!searchOnClose.current) return;
-          searchOnClose.current = false;
-          // Nothing for the drawer to focus: the palette takes it next.
-          event.preventDefault();
-          const back = opener.current;
-          // Once the drawer's close has finished with focus.
-          queueMicrotask(() => openCommandPalette(back));
-        }}
         side="left"
         className="p-0 bg-sidebar-background text-sidebar-foreground border-sidebar-border flex flex-col h-full"
         style={{ width: `${MOBILE_DRAWER_WIDTH}px` }}
@@ -180,15 +155,6 @@ export function MobileSidebarDrawer({
             [&::-webkit-scrollbar-thumb]:bg-primary/5
             hover:[&::-webkit-scrollbar-thumb]:bg-accent"
         >
-          {/* Search first, as the rail draws it under the logo. */}
-          <div className="mb-3">
-            <DrawerSearchButton
-              onPress={() => {
-                searchOnClose.current = true;
-                onOpenChange(false);
-              }}
-            />
-          </div>
           <SidebarGroup>
             <SidebarNavigation
               items={navigationItems}

@@ -101,27 +101,29 @@ test("on a phone, Search at the top of the menu drawer opens the palette", async
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await gotoAdmin(page, "/");
-  const menuButton = page.getByRole("button", {
-    name: "Open the navigation menu",
+  await page.getByRole("button", { name: "Open the navigation menu" }).click();
+  // The drawer draws the whole rail, so its Search is the rail's, under the
+  // logo and above the first menu entry.
+  const drawer = page.getByRole("dialog", {
+    name: "Navigation menu",
+    exact: true,
   });
-  await menuButton.click();
-  const drawer = page.getByRole("dialog", { name: "Navigation Menu" });
   await expect(drawer).toBeVisible();
-  const search = drawer.getByRole("button", { name: "Search or jump to…" });
-  // At the top of the drawer's list: above its first menu entry.
+  const search = drawer.getByRole("button", { name: "Search (⌘K)" });
   const searchBox = await search.boundingBox();
   const firstEntry = await drawer
     .getByRole("link", { name: "Dashboard", exact: true })
     .boundingBox();
   expect(searchBox && firstEntry && searchBox.y < firstEntry.y).toBe(true);
   await search.click();
-  await expect(drawer).toBeHidden();
   await expectInsideWindow(page, adminPalette(page));
   await expect(page.getByPlaceholder("Search or jump to…")).toBeFocused();
-  // Closing gives focus back to the menu button the drawer was opened from.
+  // Escape closes the palette alone: the drawer is still open under it, and
+  // focus is back on its Search.
   await page.keyboard.press("Escape");
   await expect(adminPalette(page)).toBeHidden();
-  await expect(menuButton).toBeFocused();
+  await expect(drawer).toBeVisible();
+  await expect(search).toBeFocused();
 });
 
 test("picking a collection, a Single or a Settings page opens it where the menus would", async ({

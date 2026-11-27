@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * The Search buttons that open the command palette: one at the top of the
- * rail, under the logo, and one at the top of the phone's menu drawer, for
- * the people who never press ⌘K.
+ * The Search button that opens the command palette, at the top of the rail
+ * under the logo, for the people who never press ⌘K. On a phone the menu
+ * drawer draws the whole rail, so the same button sits at the drawer's top.
  *
  * @module components/shared/command-palette/PaletteSearchButton
  */
@@ -42,37 +42,5 @@ export function RailSearchButton(): JSX.Element {
         }
       />
     </span>
-  );
-}
-
-/**
- * The drawer's Search row. It asks the drawer to close, and the drawer opens
- * the palette once it has closed (`openCommandPalette`, from the drawer's
- * close), so the drawer's focus return can't take focus from the palette.
- */
-export function DrawerSearchButton({
-  onPress,
-}: {
-  onPress: () => void;
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      onClick={onPress}
-      // Named by the words it shows (no aria-label over them), so a person
-      // using voice control can say what they see; the shortcut is announced
-      // as a shortcut, on either platform's modifier.
-      aria-keyshortcuts="Meta+K Control+K"
-      className="flex h-11 w-full items-center gap-3 rounded-md border border-border bg-background px-3 text-sm text-muted-foreground hover-unified focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-    >
-      <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
-      <span className="flex-1 text-left">Search or jump to…</span>
-      <kbd
-        aria-hidden="true"
-        className="rounded-sm border border-border px-1 font-mono text-xs text-muted-foreground"
-      >
-        ⌘K
-      </kbd>
-    </button>
   );
 }
