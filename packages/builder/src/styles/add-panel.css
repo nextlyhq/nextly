@@ -171,6 +171,12 @@
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
+  /*
+   * No sideways padding of its own: the groups' items carry the panel's
+   * gutter, and at the panel's narrowest the 16px this would add is what a
+   * tile needs to keep "Navigation" whole beside its mark.
+   */
+  padding-inline: 0;
 }
 
 /* A closed tab's panel holds nothing and takes no room. */
@@ -281,7 +287,7 @@
  */
 .nx-insert-panel [cmdk-group-items] {
   display: grid;
-  grid-template-columns: repeat(var(--nx-insert-columns, 3), minmax(0, 1fr));
+  grid-template-columns: repeat(var(--nx-insert-columns, 2), minmax(0, 1fr));
   gap: 0.375rem;
   padding: 0.125rem 0.5rem 0.5rem;
 }
@@ -289,6 +295,8 @@
 .nx-insert-panel__label {
   display: block;
   min-width: 0;
+  /* Never wider than its tile, so a word it must break breaks inside it. */
+  max-width: 100%;
   font-size: 0.71875rem;
   font-weight: 500;
   line-height: 1.2;
@@ -350,7 +358,8 @@
 }
 
 /*
- * A tile: the mark above the name, both centred.
+ * A tile: the mark above the name, both centred, for a saved section's
+ * picture; a block's tile lays the same out as a row (below).
  *
  * Every geometry the primitives set for a LIST ITEM is restated rather than
  * inherited — height, padding, the flex row, the 12px gap they put between an
@@ -420,7 +429,7 @@
  * through the tiles: an accent BORDER as well as the soft wash.
  *
  * The wash alone reads clearly across a full-width row and barely at all on
- * an 86px tile sitting in a grid of them; the border is what makes the tile
+ * a small tile sitting in a grid of them; the border is what makes the tile
  * findable at a glance, and it replaces an existing border rather than adding
  * one, so nothing reflows.
  */
@@ -447,9 +456,13 @@
   cursor: not-allowed;
 }
 
+/*
+ * A gray tint of the mark's own, not the muted surface a refused tile takes
+ * on hover, so the square stays drawn under the pointer.
+ */
 .nx-insert-panel [cmdk-item][data-refused="true"] > .nx-block-icon {
   color: var(--nx-muted-foreground);
-  background: var(--nx-muted);
+  background: color-mix(in oklch, var(--nx-muted-foreground) 16%, transparent);
 }
 
 .nx-insert-panel [cmdk-item][data-refused="true"]:hover,
@@ -471,9 +484,10 @@
 .nx-insert-panel [cmdk-item]:has(> .nx-block-icon) {
   flex-direction: row;
   align-items: center;
-  gap: 0.5rem;
+  /* Tight enough that the panel at its narrowest keeps every block's name whole. */
+  gap: 0.375rem;
   min-height: 2.5rem;
-  padding: 0.375rem 0.5rem;
+  padding: 0.375rem 0.25rem;
   text-align: start;
 }
 
@@ -684,8 +698,10 @@
  * The popover beside the panel: a preview, the tile's name, its sentence, and
  * how to add it — or why it cannot be added here.
  *
- * Portalled out of the panel, so it reads the admin's tokens rather than the
- * chrome's. Doubled class for weight over the shared popover's width and
+ * Portalled out of the panel to the shell's overlay host, which carries the
+ * editor's tokens, so it is drawn as every builder popup is: the panel
+ * surface, its border (stronger under a request for more contrast) and its
+ * text. Doubled class for weight over the shared popover's width and
  * padding utilities, whatever order the two stylesheets load in.
  */
 .nx-insert-popover.nx-insert-popover {
@@ -693,10 +709,10 @@
   gap: 0.375rem;
   width: 14.375rem;
   padding: 0.625rem;
-  border: 1px solid var(--nx-border);
+  border: 1px solid var(--nx-builder-border);
   border-radius: 0.5rem;
-  color: var(--nx-popover-foreground);
-  background: var(--nx-popover);
+  color: var(--nx-builder-text);
+  background: var(--nx-builder-panel);
   /* Never in the way of the pointer moving on to the next tile. */
   pointer-events: none;
 }
@@ -799,8 +815,8 @@
  * blocks the author adds most (a grid of three) or the search's results (a
  * list), and "Browse all blocks and sections →".
  *
- * Portalled to the shell's overlay host, inside the chrome, so it reads the
- * builder's tokens and is drawn on the panel surface. Doubled class for
+ * Portalled to the shell's overlay host, outside the chrome but carrying the
+ * editor's token scope, so it reads the builder's tokens and is drawn on the panel surface. Doubled class for
  * weight over the shared popover's width and padding utilities, whatever
  * order the two stylesheets load in. At most 420px tall, and never taller
  * than the room the popover found, so the choices scroll rather than the

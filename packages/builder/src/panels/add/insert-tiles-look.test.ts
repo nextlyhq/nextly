@@ -61,6 +61,10 @@ describe("the Add panel's tiles", () => {
     expect(label).not.toMatch(/overflow-wrap:\s*anywhere/);
     expect(label).not.toMatch(/word-break:\s*break-all/);
     expect(label).toMatch(/overflow-wrap:\s*break-word/);
+    // Capped at its tile, so a word broken there breaks inside the tile: a
+    // centred label in a picture tile would otherwise grow to its longest
+    // word and spill out on both sides.
+    expect(label).toMatch(/max-width:\s*100%/);
   });
 
   it("keep a refused tile's name at text contrast, greying its mark and border", () => {
@@ -70,7 +74,12 @@ describe("the Add panel's tiles", () => {
     const mark = rule(
       '.nx-insert-panel [cmdk-item][data-refused="true"] > .nx-block-icon'
     );
-    expect(mark).toMatch(/background:\s*var\(--nx-muted\)/);
+    // A gray tint of its own, apart from the muted surface the refused tile
+    // takes on hover, so the square stays drawn under the pointer.
+    expect(mark).toMatch(
+      /background:\s*color-mix\([^;]*var\(--nx-muted-foreground\)/
+    );
+    expect(mark).not.toMatch(/background:\s*var\(--nx-muted\)/);
     expect(mark).toMatch(/color:\s*var\(--nx-muted-foreground\)/);
   });
 });

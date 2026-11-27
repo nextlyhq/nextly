@@ -408,6 +408,19 @@ describe("the popups the Add surfaces open", () => {
     expect([...read].filter(name => !declared.has(name))).toEqual([]);
   });
 
+  it("draws a tile's card with the editor's own border, surface and text", () => {
+    // The admin's border stays quiet under a request for more contrast,
+    // where the editor's turns to the foreground; every builder popup takes
+    // the editor's.
+    const card = ruleBody(
+      CHROME,
+      /^\.nx-insert-popover\.nx-insert-popover\s*\{/m
+    );
+    expect(card).toMatch(/border:[^;]*var\(--nx-builder-border\)/);
+    expect(card).toMatch(/background:\s*var\(--nx-builder-panel\)/);
+    expect(card).toMatch(/color:\s*var\(--nx-builder-text\)/);
+  });
+
   it.each(["light", "dark"] as const)(
     "paints both on an opaque panel surface in the %s theme",
     theme => {
