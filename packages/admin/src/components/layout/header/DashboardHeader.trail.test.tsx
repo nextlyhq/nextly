@@ -37,7 +37,7 @@ vi.mock("@admin/hooks/useLogout", () => ({
   useLogout: () => () => {},
 }));
 vi.mock("@admin/components/features/notifications", () => ({
-  NotificationBell: () => null,
+  InboxButton: () => null,
 }));
 vi.mock("../sidebar/UserProfileDropdown", () => ({
   UserProfileDropdown: () => null,

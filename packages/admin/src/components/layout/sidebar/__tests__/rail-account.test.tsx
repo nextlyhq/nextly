@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 /**
- * The rail's foot holds the reader's Inbox (the notification bell) and their
- * account menu, which used to sit at the right end of the top bar.
+ * The rail's foot holds the reader's Inbox and their account menu, which
+ * used to sit at the right end of the top bar.
  *
  * A plugin's header powers carry over: `header.hide` and `hideDefaults` hide
- * the same items in their new places (the bell here, the help links in the
- * menu). A plugin's own header item stays in the top bar. The bell
- * shows the schema-change journal only where the builder runs. Nothing here
- * is drawn until the answers deciding it are in, so the foot never changes
- * after its first paint.
+ * the same items in their new places (the Inbox here, the help links in the
+ * menu). A plugin's own header item stays in the top bar. The Inbox is
+ * offered whether or not the builder runs. Nothing here is drawn until the
+ * answers deciding it are in, so the foot never changes after its first
+ * paint.
  */
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -36,19 +36,12 @@ vi.mock("@admin/hooks/useLogout", () => ({
   useLogout: () => () => {},
 }));
 vi.mock("@admin/components/features/notifications", () => ({
-  NotificationBell: ({
-    journalOffered,
-    side,
-  }: {
-    journalOffered?: boolean;
-    side?: string;
-  }) => (
+  InboxButton: ({ side }: { side?: string }) => (
     <button
       type="button"
-      data-testid="bell"
-      data-journal={String(journalOffered)}
+      data-testid="inbox"
       data-side={side}
-      aria-label="Notifications"
+      aria-label="Inbox"
     />
   ),
 }));
@@ -81,10 +74,10 @@ afterEach(() => {
 });
 
 describe("the rail's account foot", () => {
-  it("offers the bell and the menu, both opening to the right of the rail", () => {
+  it("offers the Inbox and the menu, both opening to the right of the rail", () => {
     mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
     render(<RailAccount />);
-    expect(screen.getByTestId("bell")).toHaveAttribute("data-side", "right");
+    expect(screen.getByTestId("inbox")).toHaveAttribute("data-side", "right");
     expect(screen.getByTestId("account-menu")).toHaveAttribute(
       "data-side",
       "right"
@@ -106,7 +99,7 @@ describe("the rail's account foot", () => {
       ],
     } as AdminBranding;
     render(<RailAccount />);
-    expect(screen.queryByTestId("bell")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("inbox")).not.toBeInTheDocument();
     expect(screen.getByTestId("account-menu")).toHaveAttribute(
       "data-hidden",
       "github,notifications"
@@ -120,21 +113,23 @@ describe("the rail's account foot", () => {
       ],
     } as AdminBranding;
     render(<RailAccount />);
-    expect(screen.queryByTestId("bell")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("inbox")).not.toBeInTheDocument();
     expect(screen.getByTestId("account-menu")).toHaveAttribute(
       "data-hidden",
       "discord,docs,github,notifications"
     );
   });
 
-  it("shows the bell's schema changes only where the builder runs", () => {
+  it("offers the Inbox whether or not the builder runs", () => {
+    // The schema-change journal it once showed has left it, so nothing about
+    // it depends on the builder any more.
     mockBranding = { plugins: [], showBuilder: false } as AdminBranding;
     const { unmount } = render(<RailAccount />);
-    expect(screen.getByTestId("bell")).toHaveAttribute("data-journal", "false");
+    expect(screen.getByTestId("inbox")).toBeInTheDocument();
     unmount();
     mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
     render(<RailAccount />);
-    expect(screen.getByTestId("bell")).toHaveAttribute("data-journal", "true");
+    expect(screen.getByTestId("inbox")).toBeInTheDocument();
   });
 });
 
@@ -150,7 +145,7 @@ describe("the account controls drawn in the top bar", () => {
     const foot = screen.getByTestId("bar-account");
     expect(foot.className).not.toContain("flex-col");
     expect(foot.className).not.toContain("pb-16");
-    expect(screen.getByTestId("bell")).toHaveAttribute("data-side", "bottom");
+    expect(screen.getByTestId("inbox")).toHaveAttribute("data-side", "bottom");
     expect(screen.getByTestId("account-menu")).toHaveAttribute(
       "data-side",
       "bottom"
@@ -163,11 +158,11 @@ describe("the rail's account foot while its answers arrive", () => {
     mockWorkspacePending = true;
     render(<RailAccount />);
     expect(screen.getByTestId("account-menu")).not.toBeVisible();
-    expect(screen.getByTestId("bell")).not.toBeVisible();
+    expect(screen.getByTestId("inbox")).not.toBeVisible();
     expect(marker()).toBe("pending");
   });
 
-  it("waits on the permissions that decide the bell", () => {
+  it("waits on the permissions the Inbox's place waits on", () => {
     mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
     mockPermissionsLoading = true;
     render(<RailAccount />);
@@ -175,7 +170,7 @@ describe("the rail's account foot while its answers arrive", () => {
     expect(marker()).toBe("pending");
   });
 
-  it("does not wait on permissions where no bell can be offered", () => {
+  it("does not wait on permissions where no Inbox can be offered", () => {
     mockBranding = {
       plugins: [
         {
@@ -191,10 +186,10 @@ describe("the rail's account foot while its answers arrive", () => {
     expect(marker()).toBe("settled");
   });
 
-  it("draws the bell and the menu once both answers are in", () => {
+  it("draws the Inbox and the menu once both answers are in", () => {
     mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
     render(<RailAccount />);
-    expect(screen.getByTestId("bell")).toBeVisible();
+    expect(screen.getByTestId("inbox")).toBeVisible();
     expect(screen.getByTestId("account-menu")).toBeVisible();
     expect(marker()).toBe("settled");
   });

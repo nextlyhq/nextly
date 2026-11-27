@@ -1,0 +1,511 @@
+/**
+ * The Inbox: its button and name, the popover's parts and the tab it opens
+ * on, its rows, and what marks an item read or unread.
+ *
+ * The admin's API client is replaced by a small server that holds each
+ * person's items and their read state, and records every request. So "opening
+ * the Inbox marks nothing read" is asked of the server's state, not of which
+ * function was called, and "one request" is counted where requests leave.
+ *
+ * @module components/features/notifications/__tests__/InboxButton.test
+ */
+import {
+  focusManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ReactElement, ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  drawnText,
+  nameHoldsDrawnText,
+} from "@admin/__tests__/helpers/label-in-name";
+
+import type { InboxTab, Notice } from "../notices-api";
+
+const server = vi.hoisted(() => ({
+  /** Each tab's items, newest first, as the server holds them. */
+  items: { "for-you": [], alerts: [] } as Record<
+    "for-you" | "alerts",
+    Array<{
+      id: string;
+      kind: string;
+      title: string;
+      body?: string;
+      subject: { type: string; id: string; link: string | null; gone: boolean };
+      createdAt: string;
+      readAt: string | null;
+    }>
+  >,
+  /** Every request, as `GET /path` or `POST /path`. */
+  asked: [] as string[],
+}));
+
+vi.mock("@admin/lib/api/protectedApi", () => {
+  const tabs = ["for-you", "alerts"] as const;
+  const all = () => tabs.flatMap(tab => server.items[tab]);
+  /** One tab's items, or both tabs' where none is named. */
+  const inTab = (tab: unknown) =>
+    tab === "for-you" || tab === "alerts" ? server.items[tab] : all();
+  const unread = (tab: string | null) =>
+    inTab(tab).filter(item => item.readAt === null).length;
+  const named = (body: Record<string, unknown>, id: string) =>
+    Array.isArray(body.ids) && body.ids.includes(id);
+  /** Read the named items, or every unread one in the tab, as the route does. */
+  const markRead = (body: Record<string, unknown>): number => {
+    const pool = body.all === true ? inTab(body.tab) : all();
+    const marked = pool.filter(
+      item =>
+        item.readAt === null && (body.all === true || named(body, item.id))
+    );
+    for (const item of marked) item.readAt = new Date().toISOString();
+    return marked.length;
+  };
+  /** Make the named read items unread again. */
+  const markUnread = (body: Record<string, unknown>): number => {
+    const marked = all().filter(
+      item => item.readAt !== null && named(body, item.id)
+    );
+    for (const item of marked) item.readAt = null;
+    return marked.length;
+  };
+  return {
+    protectedApi: {
+      get: vi.fn(async (path: string) => {
+        server.asked.push(`GET ${path}`);
+        const url = new URL(path, "https://admin.test");
+        if (url.pathname === "/notices/count") {
+          return { total: unread(url.searchParams.get("tab")) };
+        }
+        if (url.pathname === "/notices") {
+          const tab = url.searchParams.get("tab");
+          const items =
+            tab === "for-you" || tab === "alerts" ? server.items[tab] : all();
+          return {
+            items,
+            meta: { total: items.length, page: 1, limit: 20, hasNext: false },
+          };
+        }
+        if (url.pathname.startsWith("/schema/journal")) {
+          return { rows: [{ id: "j1" }], hasMore: false };
+        }
+        throw new Error(`no such route: ${path}`);
+      }),
+      post: vi.fn(async (path: string, body: Record<string, unknown>) => {
+        server.asked.push(`POST ${path}`);
+        if (path === "/notices/read") return { marked: markRead(body) };
+        if (path === "/notices/unread") return { marked: markUnread(body) };
+        throw new Error(`no such route: ${path}`);
+      }),
+    },
+  };
+});
+
+vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
+vi.mock("@admin/lib/route-preload", () => ({ preloadRoute: vi.fn() }));
+// A super admin where the builder runs: the person the schema journal was
+// once shown to, so its absence here is not an accident of permissions.
+vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
+  useCurrentUserPermissions: () => ({ isSuperAdmin: true, isLoading: false }),
+}));
+
+import { navigateTo } from "@admin/lib/navigation";
+
+import { InboxButton } from "../InboxButton";
+
+const HOUR = 60 * 60 * 1000;
+
+function item(
+  id: string,
+  title: string,
+  options: {
+    kind?: string;
+    read?: boolean;
+    link?: string | null;
+    hoursAgo?: number;
+  } = {}
+): Notice {
+  const link =
+    options.link === undefined ? `/admin/things/${id}` : options.link;
+  return {
+    id,
+    kind: options.kind ?? "workflows.assigned",
+    title,
+    subject: { type: "thing", id: `s-${id}`, link, gone: false },
+    createdAt: new Date(
+      Date.now() - (options.hoursAgo ?? 2) * HOUR
+    ).toISOString(),
+    readAt: options.read ? new Date().toISOString() : null,
+  };
+}
+
+function fill(tab: InboxTab, items: Notice[]): void {
+  server.items[tab] = items;
+}
+
+const unreadOnServer = (): number =>
+  [...server.items["for-you"], ...server.items.alerts].filter(
+    entry => entry.readAt === null
+  ).length;
+
+function wrapper(): (props: { children: ReactNode }) => ReactElement {
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
+    },
+  });
+  return ({ children }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+}
+
+function renderInbox(): void {
+  render(<InboxButton />, { wrapper: wrapper() });
+}
+
+/** The button, once the count is in. */
+async function button(name: string | RegExp): Promise<HTMLElement> {
+  return screen.findByRole("button", { name });
+}
+
+async function openInbox(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByTestId("inbox-button"));
+  return screen.findByRole("tablist", { name: "Inbox" });
+}
+
+beforeEach(() => {
+  server.items = { "for-you": [], alerts: [] };
+  server.asked = [];
+  vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  focusManager.setFocused(undefined);
+});
+
+describe("the Inbox button", () => {
+  it.each([
+    { unread: 0, name: "Inbox", drawn: "" },
+    { unread: 3, name: "Inbox, 3 unread", drawn: "3" },
+    { unread: 12, name: "Inbox, 9+ unread", drawn: "9+" },
+  ])(
+    "is named $name with $unread unread, holding the count it draws",
+    async ({ unread, name, drawn }) => {
+      fill(
+        "for-you",
+        Array.from({ length: unread }, (_, n) => item(`n${n}`, `Item ${n}`))
+      );
+      renderInbox();
+      await waitFor(() =>
+        expect(screen.getByTestId("inbox-button")).toHaveAttribute(
+          "aria-label",
+          name
+        )
+      );
+      const inbox = screen.getByTestId("inbox-button");
+      expect(drawnText(inbox)).toBe(drawn);
+      expect(nameHoldsDrawnText(name, drawnText(inbox))).toBe(true);
+      // A tray, not a bell.
+      expect(inbox.querySelector("svg.lucide-inbox")).not.toBeNull();
+    }
+  );
+
+  it("asks only for the count until it is opened, and never for the schema journal", async () => {
+    fill("for-you", [item("n1", "Spring launch was assigned to you")]);
+    renderInbox();
+    await button("Inbox, 1 unread");
+    expect(server.asked).toEqual(["GET /notices/count?unread=true"]);
+
+    await openInbox();
+    await screen.findByText("Spring launch was assigned to you");
+    expect(server.asked.some(request => request.includes("journal"))).toBe(
+      false
+    );
+    expect(screen.queryByText(/schema changes/i)).toBeNull();
+  });
+
+  it("asks for the count again, with one request, when the admin regains focus and every minute", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    fill("for-you", [item("n1", "One")]);
+    renderInbox();
+    await button("Inbox, 1 unread");
+    const counts = () =>
+      server.asked.filter(request => request.startsWith("GET /notices/count"))
+        .length;
+    expect(counts()).toBe(1);
+
+    // Read in another browser: this one learns it when it is looked at again.
+    server.items["for-you"][0]!.readAt = new Date().toISOString();
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await button("Inbox");
+    expect(counts()).toBe(2);
+
+    fill("for-you", [item("n2", "Two")]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await button("Inbox, 1 unread");
+    expect(counts()).toBe(3);
+    expect(
+      server.asked.every(request => request.startsWith("GET /notices/count"))
+    ).toBe(true);
+  });
+
+  it("keeps nothing in the browser's storage", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    fill("for-you", [
+      item("n1", "Opened"),
+      item("n2", "Read before", { read: true }),
+    ]);
+    renderInbox();
+    await openInbox();
+    fireEvent.click(await screen.findByRole("link", { name: /Opened/ }));
+    await waitFor(() => expect(unreadOnServer()).toBe(0));
+    expect(setItem).not.toHaveBeenCalled();
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
+    setItem.mockRestore();
+  });
+});
+
+describe("the Inbox popover", () => {
+  it("is headed Inbox, with Mark all read and two tabs, each with its unread count", async () => {
+    fill("for-you", [item("n1", "One"), item("n2", "Two")]);
+    fill("alerts", [
+      item("a1", "Email isn't sending", { kind: "email.not-sending" }),
+    ]);
+    renderInbox();
+    const tabs = await openInbox();
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mark all read" })).toBeEnabled();
+    expect(
+      within(tabs)
+        .getAllByRole("tab")
+        .map(tab => tab.textContent)
+    ).toEqual(["For you 2 unread", "Alerts 1 unread"]);
+  });
+
+  it.each([
+    { forYou: 1, alerts: 1, opens: "Alerts" },
+    { forYou: 0, alerts: 1, opens: "Alerts" },
+    { forYou: 1, alerts: 0, opens: "For you" },
+    { forYou: 0, alerts: 0, opens: "For you" },
+  ])(
+    "opens on $opens with $forYou unread for you and $alerts unread alerts",
+    async ({ forYou, alerts, opens }) => {
+      fill("for-you", [item("n1", "Assigned", { read: forYou === 0 })]);
+      fill("alerts", [
+        item("a1", "Job failed", { kind: "jobs.failed", read: alerts === 0 }),
+      ]);
+      renderInbox();
+      const tabs = await openInbox();
+      expect(
+        within(tabs).getByRole("tab", { selected: true })
+      ).toHaveTextContent(opens);
+    }
+  );
+
+  it("stays on the tab it opened on as its items are read", async () => {
+    // Opened on Alerts for its one unread alert; reading that alert where it
+    // is empties the Alerts count, and the person is still on Alerts.
+    fill("for-you", [item("n1", "Assigned")]);
+    fill("alerts", [
+      item("a1", "Job failed", { kind: "jobs.failed", link: null }),
+    ]);
+    renderInbox();
+    const tabs = await openInbox();
+    expect(within(tabs).getByRole("tab", { selected: true })).toHaveTextContent(
+      "Alerts"
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Job failed/ }));
+    await waitFor(() =>
+      expect(
+        within(tabs).getByRole("tab", { name: /Alerts/ })
+      ).toHaveTextContent(/^Alerts$/)
+    );
+    expect(within(tabs).getByRole("tab", { selected: true })).toHaveTextContent(
+      "Alerts"
+    );
+  });
+
+  it("shows each item's text, how long ago, and the area it came from, with an unread mark that is not colour alone", async () => {
+    fill("for-you", [
+      item("n1", "“Spring launch” was assigned to you for review", {
+        kind: "workflows.assigned",
+        hoursAgo: 2,
+      }),
+      item("n2", "“Autumn sale” stopped", {
+        kind: "releases.stopped",
+        read: true,
+        hoursAgo: 5,
+      }),
+    ]);
+    renderInbox();
+    await openInbox();
+    const unread = await screen.findByRole("link", {
+      name: /Spring launch/,
+    });
+    expect(unread).toHaveTextContent(
+      "Unread: “Spring launch” was assigned to you for review"
+    );
+    expect(unread).toHaveTextContent("2h ago · Workflows");
+    expect(within(unread).getByTestId("inbox-unread-dot")).toBeInTheDocument();
+    expect(within(unread).getByText("Unread:")).toHaveClass("sr-only");
+
+    const read = screen.getByRole("link", { name: /Autumn sale/ });
+    expect(read).toHaveTextContent("5h ago · Releases");
+    expect(read).not.toHaveTextContent("Unread");
+    expect(within(read).queryByTestId("inbox-unread-dot")).toBeNull();
+  });
+
+  it.each([
+    { tab: "For you", says: "Nothing for you right now." },
+    { tab: "Alerts", says: "No alerts. Everything on the site is working." },
+  ])("says so in words when $tab is empty", async ({ tab, says }) => {
+    renderInbox();
+    const tabs = await openInbox();
+    fireEvent.mouseDown(within(tabs).getByRole("tab", { name: tab }));
+    expect(await screen.findByText(says)).toBeInTheDocument();
+  });
+
+  it("marks nothing read when it opens over three unread items", async () => {
+    fill("for-you", [
+      item("n1", "One"),
+      item("n2", "Two"),
+      item("n3", "Three"),
+    ]);
+    renderInbox();
+    await openInbox();
+    await screen.findByText("Three");
+    // Long enough for any effect that would mark what it shows.
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    });
+    expect(unreadOnServer()).toBe(3);
+    expect(server.asked.some(request => request.startsWith("POST"))).toBe(
+      false
+    );
+    expect(await button("Inbox, 3 unread")).toBeInTheDocument();
+  });
+
+  it("marks an item read when it is opened, and follows its link", async () => {
+    fill("for-you", [
+      item("n1", "One"),
+      item("n2", "Two"),
+      item("n3", "Three"),
+    ]);
+    renderInbox();
+    await openInbox();
+    fireEvent.click(await screen.findByRole("link", { name: /Two/ }));
+    await waitFor(() => expect(unreadOnServer()).toBe(2));
+    expect(
+      server.items["for-you"].find(entry => entry.id === "n2")?.readAt
+    ).not.toBeNull();
+    expect(navigateTo).toHaveBeenCalledWith("/admin/things/n2");
+    expect(await button("Inbox, 2 unread")).toBeInTheDocument();
+  });
+
+  it("marks an item with no link read where it is", async () => {
+    fill("for-you", [item("n1", "Nowhere to go", { link: null })]);
+    renderInbox();
+    await openInbox();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Nowhere to go/ })
+    );
+    await waitFor(() => expect(unreadOnServer()).toBe(0));
+    expect(navigateTo).not.toHaveBeenCalled();
+    expect(screen.getByRole("tablist", { name: "Inbox" })).toBeInTheDocument();
+  });
+
+  it("offers Mark as unread in a read item's menu, and makes it unread on the server", async () => {
+    const user = userEvent.setup();
+    fill("for-you", [item("n1", "Read before", { read: true })]);
+    renderInbox();
+    await openInbox();
+    await user.click(
+      await screen.findByRole("button", {
+        name: "More actions for Read before",
+      })
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Mark as unread" })
+    );
+    await waitFor(() => expect(unreadOnServer()).toBe(1));
+    expect(server.asked).toContain("POST /notices/unread");
+    expect(await button("Inbox, 1 unread")).toBeInTheDocument();
+  });
+
+  it("marks every unread item in the tab shown read, and none in the other", async () => {
+    fill("for-you", [item("n1", "One"), item("n2", "Two")]);
+    fill("alerts", [item("a1", "Job failed", { kind: "jobs.failed" })]);
+    renderInbox();
+    const tabs = await openInbox();
+    fireEvent.mouseDown(within(tabs).getByRole("tab", { name: /For you/ }));
+    await screen.findByText("Two");
+    fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    await waitFor(() =>
+      expect(
+        server.items["for-you"].every(entry => entry.readAt !== null)
+      ).toBe(true)
+    );
+    expect(server.items.alerts[0]!.readAt).toBeNull();
+  });
+
+  it("works from the keyboard: a tab list, rows reached and opened with Enter, focus back on the button when it closes", async () => {
+    const user = userEvent.setup();
+    fill("for-you", [item("n1", "Assigned to you")]);
+    fill("alerts", [
+      item("a1", "Job failed", { kind: "jobs.failed", read: true }),
+    ]);
+    renderInbox();
+    const inbox = await button("Inbox, 1 unread");
+    inbox.focus();
+    await user.keyboard("{Enter}");
+    const tabs = await screen.findByRole("tablist", { name: "Inbox" });
+
+    // Into the tab list, across it with the arrows.
+    const selected = within(tabs).getByRole("tab", { selected: true });
+    expect(selected).toHaveTextContent("For you");
+    selected.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(within(tabs).getByRole("tab", { selected: true })).toHaveTextContent(
+      "Alerts"
+    );
+    await user.keyboard("{ArrowLeft}");
+    expect(within(tabs).getByRole("tab", { selected: true })).toHaveTextContent(
+      "For you"
+    );
+
+    // On to the row, and Enter opens it.
+    const row = await screen.findByRole("link", { name: /Assigned to you/ });
+    await user.tab();
+    if (document.activeElement !== row) await user.tab();
+    expect(row).toHaveFocus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(unreadOnServer()).toBe(0));
+    expect(navigateTo).toHaveBeenCalledWith("/admin/things/n1");
+
+    // Opened again and closed with Escape: focus is back on the button.
+    await user.click(screen.getByTestId("inbox-button"));
+    await screen.findByRole("tablist", { name: "Inbox" });
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(screen.queryByRole("tablist", { name: "Inbox" })).toBeNull()
+    );
+    expect(screen.getByTestId("inbox-button")).toHaveFocus();
+  });
+});

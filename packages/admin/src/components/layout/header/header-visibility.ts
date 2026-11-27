@@ -6,7 +6,8 @@ import type {
 /**
  * Built-in admin header buttons a plugin may hide. The user/account dropdown is
  * intentionally not controllable (logout must stay reachable). Mirrors the core
- * `HeaderButtonId` (contributes.admin.header).
+ * `HeaderButtonId` (contributes.admin.header). `notifications` is the Inbox
+ * button at the rail's foot; the id keeps the name plugins already use.
  */
 export type HeaderButtonId = "github" | "discord" | "docs" | "notifications";
 
@@ -121,7 +122,7 @@ export function pluginUserMenuItems(
 export interface HeaderAnswersPending {
   /** The workspace answer: the plugins (what they hide and add) and whether the builder runs. */
   workspace: boolean;
-  /** The reader's permissions, which decide whether the notification bell is theirs. */
+  /** The reader's permissions, which the Inbox's place at the foot waits on. */
   permissions: boolean;
 }
 
@@ -132,16 +133,16 @@ export interface HeaderAnswersPending {
  * to its LEFT sideways, while the account menu at the right end holds still whatever arrives
  * beside it. The menu is therefore drawn from the first paint, and the rest of the row once the
  * answers deciding it are in: the workspace answer for the links, the plugins' controls and the
- * bell, and the permissions for the bell where it may be offered. Nothing is drawn on a guess, as
+ * Inbox, and the permissions for the Inbox where it may be offered. Nothing is drawn on a guess, as
  * a control drawn and then taken back moves its neighbours just the same.
  *
- * `bellOffered` is read only once the workspace answer is in: whether the bell can show at all
- * (no plugin hides it, and the builder runs).
+ * `inboxOffered` is read only once the workspace answer is in: whether the Inbox can show at all
+ * (no plugin hides it).
  */
 export function headerControlsSettled(
   pending: HeaderAnswersPending,
-  bellOffered: boolean
+  inboxOffered: boolean
 ): boolean {
   if (pending.workspace) return false;
-  return !(bellOffered && pending.permissions);
+  return !(inboxOffered && pending.permissions);
 }
