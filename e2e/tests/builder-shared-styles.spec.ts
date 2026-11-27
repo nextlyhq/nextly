@@ -171,13 +171,13 @@ async function groundsOf(page: Page, dark: boolean): Promise<[string, string]> {
 }
 
 /**
- * The Text section's Colour field. Its name carries where its value
- * comes from ("Colour From Card"), so it is matched by its start.
+ * The Text section's Color field. Its name carries where its value
+ * comes from ("Color From Card"), so it is matched by its start.
  */
 const colourField = (page: Page) =>
   page
     .getByRole("region", { name: /^Text(\s?has changes)?$/ })
-    .getByRole("textbox", { name: /^Colour( |$)/ });
+    .getByRole("textbox", { name: /^Color( |$)/ });
 
 test.describe("shared styles on a block", () => {
   test.describe.configure({ timeout: 180_000 });
@@ -330,7 +330,7 @@ test.describe("shared styles on a block", () => {
 
     // Reset shows the style's value again.
     await field
-      .getByRole("button", { name: /^Reset Colour on this block/ })
+      .getByRole("button", { name: /^Reset Color on this block/ })
       .click();
     await expect(await block(page, A)).toHaveCSS("color", NAVY.rgb);
     await expect(field).not.toContainText("Set on this block");
@@ -344,7 +344,7 @@ test.describe("shared styles on a block", () => {
       field.locator('[data-shared-line="move"] [data-shared-line-text]')
     ).toHaveText("Set on this block");
     const moved = styleWrite(page);
-    await field.getByRole("button", { name: "Move Colour to Card" }).click();
+    await field.getByRole("button", { name: "Move Color to Card" }).click();
     await moved;
     expect((await storedClasses(page))?.[0]?.styles).toEqual(colour(BLACK.hex));
     await expect(field).not.toContainText("Set on this block");
