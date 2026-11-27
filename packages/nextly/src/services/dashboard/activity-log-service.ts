@@ -24,6 +24,10 @@ import { toDbError } from "../../database/errors";
 // NextlyError.fromDatabaseError. Public message stays generic per §13.8;
 // the underlying DbError is preserved as `cause` and rich DB context
 // (kind, dialect, code) flows into logContext automatically.
+import {
+  storedAttribution,
+  type ActorAttribution,
+} from "../../domains/audit/attribution";
 import { insertErasureAware } from "../../domains/audit/erasure-aware-insert";
 import { effectiveWidgetLimit } from "../../domains/widgets/query-limits";
 import { NextlyError } from "../../errors";
@@ -48,6 +52,7 @@ import {
 } from "./activity-changes";
 import {
   afterRun,
+  RUN_KEY_PARTS,
   runKeyOf,
   runsOf,
   type ActivityRun,
@@ -138,6 +143,23 @@ export interface ActivityLogEntry {
    * name" are different facts, and only this one answers when.
    */
   identityErasedAt: string | null;
+  /**
+   * The agent that acted for the actor, by name ("Claude Code"); NULL when
+   * the actor acted for themselves. The actor is the person it acted for.
+   */
+  agentName: string | null;
+  /**
+   * How the call arrived: `local` (the command line on the person's own
+   * machine), `command`, `chat-app`, `rest-key` or `deploy`; NULL from the
+   * admin and on every row written before it was recorded.
+   */
+  door: string | null;
+  /** Where the approval this row ran under was given: phone, browser or admin. */
+  approvedVia: string | null;
+  /** The deployment that ran this: its host, or the machine's name. */
+  deploymentHost: string | null;
+  /** The commit a pipeline deployment built; NULL when it gave none. */
+  deploymentCommit: string | null;
 }
 
 /** Input for recording a new activity. */
@@ -179,6 +201,12 @@ export interface LogActivityInput {
    */
   subjectKind?: ActivitySubjectKind | null;
   metadata?: Record<string, unknown>;
+  /**
+   * Who stands behind the actor: an agent acting for them, the door, the
+   * credential by id, an approval, a grant, an undo or a deployment. Stored
+   * in the row's attribution columns; the actor stays the person.
+   */
+  attribution?: ActorAttribution;
 }
 
 /**
@@ -245,6 +273,10 @@ export interface ActivityLogQueryOptions {
   before?: ActivityPosition;
   collection?: string;
   userId?: string;
+  /** Only rows an agent of this name acted on, as the rows store it. */
+  agentName?: string;
+  /** Only rows of this one agent session. */
+  agentSessionId?: string;
   /**
    * Which resources the caller may read. An omitted scope denies: this feed
    * exposes entry titles across every collection, so a caller that forgets to
@@ -929,13 +961,13 @@ const positionSchema = z.object({
     .optional(),
 });
 
-/** Whether `value` is a run key as `runKeyOf` writes one: a JSON array of five scalars. */
+/** Whether `value` is a run key as `runKeyOf` writes one: a JSON array of `RUN_KEY_PARTS` scalars. */
 function isRunKey(value: string): boolean {
   try {
     const parsed: unknown = JSON.parse(value);
     return (
       Array.isArray(parsed) &&
-      parsed.length === 5 &&
+      parsed.length === RUN_KEY_PARTS &&
       parsed.every(part => part === null || typeof part === "string")
     );
   } catch {
@@ -1007,6 +1039,14 @@ function firstRound(start: ActivityCursor | number): {
     : { after: start, offset: 0 };
 }
 
+/** The options that narrow the feed to rows holding exactly their value. */
+const EXACT_FILTERS = [
+  "collection",
+  "userId",
+  "agentName",
+  "agentSessionId",
+] as const satisfies readonly (keyof ActivityLogQueryOptions)[];
+
 /**
  * The feed's filter for these options and this scope, or `null` when the scope
  * admits nothing, so no query is built.
@@ -1019,17 +1059,12 @@ function feedWhere(
   options: ActivityLogQueryOptions | undefined,
   scope: ReadableResources
 ): WhereClause | undefined | null {
-  const filters: ActivityFilter[] = [];
-  if (options?.collection) {
-    filters.push({
-      property: "collection",
-      op: "=",
-      value: options.collection,
-    });
-  }
-  if (options?.userId) {
-    filters.push({ property: "userId", op: "=", value: options.userId });
-  }
+  // Each an exact match on its own column, and each backed by an index on
+  // itself and `createdAt`, in the feed's order.
+  const filters: ActivityFilter[] = EXACT_FILTERS.flatMap(property => {
+    const value = options?.[property];
+    return value ? [{ property, op: "=" as const, value }] : [];
+  });
   const starting = feedConditions(
     scope,
     options?.singles,
@@ -1201,6 +1236,11 @@ export class ActivityLogService extends BaseService {
       subjectKind: input.subjectKind ?? null,
       metadata: input.metadata ? JSON.stringify(input.metadata) : null,
       createdAt,
+      // Nothing here is personal: the person an agent acted for is the
+      // actor above, erased through the identity columns as ever.
+      ...storedAttribution(input.attribution, "activity", {
+        actorIsPerson: input.actorType === "user",
+      }),
     };
   }
 
@@ -1919,6 +1959,13 @@ export class ActivityLogService extends BaseService {
         identityErasedAt instanceof Date
           ? identityErasedAt.toISOString()
           : toNullableString(identityErasedAt),
+      // What the readers draw of who stood behind the actor. The trail's ids
+      // (session, credential, approval request, approver, grant) stay here.
+      agentName: toNullableString(row.agentName),
+      door: toNullableString(row.door),
+      approvedVia: toNullableString(row.approvedVia),
+      deploymentHost: toNullableString(row.deploymentHost),
+      deploymentCommit: toNullableString(row.deploymentCommit),
     };
   };
 }

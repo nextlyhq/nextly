@@ -741,5 +741,151 @@ describe.each(getConfiguredTestDialects())(
         expect(await accountExists(leaving.id)).toBe(false);
       });
     });
+
+    it("never stores a token passed as an agent's name, before or after erasing the person", async () => {
+      const token =
+        "nx_live_0123456789abcdef01234567_c2VjcmV0LXZhbHVlLXRoYXQtbXVzdC1uZXZlci1sYW5k";
+      const person = await users.createLocalUser({
+        email: "agent-token-name@test.local",
+        name: "Token Name",
+        password: "TestPassword123!",
+        isActive: true,
+      });
+      const personId = String(person.id);
+      await activity.logActivity({
+        actorType: "user",
+        userId: personId,
+        action: "update",
+        collection: "posts",
+        entryId: "p-token",
+        attribution: { door: "command", agent: { name: token } },
+      });
+      await auditWriter.write({
+        kind: "role-assigned",
+        actorUserId: personId,
+        attribution: { door: "command", agent: { name: token } },
+      });
+
+      const stored = async () => {
+        const { activityLog, auditLog } = tables;
+        const rows = [
+          ...(await db()
+            .select({ agentName: activityLog.agentName })
+            .from(activityLog)
+            .where(eq(activityLog.userId, personId))),
+          ...(await db()
+            .select({ agentName: auditLog.agentName })
+            .from(auditLog)
+            .where(eq(auditLog.actorUserId, personId))),
+        ];
+        expect(rows).toHaveLength(2);
+        return rows.map(row => row.agentName);
+      };
+      expect(await stored()).toEqual([null, null]);
+      await users.deleteUser(person.id);
+      expect(await stored()).toEqual([null, null]);
+    });
+
+    it("erases the person an agent acted for, and keeps the agent's name", async () => {
+      // An agent acting for a person records the PERSON as the actor, with the
+      // agent named beside them. Deleting the person must erase them from
+      // those rows exactly as from their own, and must keep the agent's name:
+      // it names software, and losing it would leave "someone, for nobody".
+      const person = await users.createLocalUser({
+        email: "agent-principal@test.local",
+        name: "Sara Malik",
+        password: "TestPassword123!",
+        isActive: true,
+      });
+      const personId = String(person.id);
+      const attribution = {
+        door: "command" as const,
+        agent: { name: "Claude Code", sessionId: "sess-erasure-1" },
+        credentialId: "pass-erasure-1",
+        approval: {
+          requestId: "req-erasure-1",
+          approvedBy: personId,
+          via: "phone" as const,
+        },
+      };
+      await activity.logActivity({
+        actorType: "user",
+        userId: personId,
+        action: "update",
+        collection: "posts",
+        entryId: "p-agent",
+        entryTitle: "Edited by an agent",
+        attribution,
+      });
+      await auditWriter.write({
+        kind: "role-assigned",
+        actorUserId: personId,
+        ipAddress: "203.0.113.20",
+        userAgent: "claude-code/1.0",
+        attribution,
+      });
+      const { nextlyContentEvents } = tables as unknown as {
+        nextlyContentEvents: { id: unknown; actorId: unknown };
+      };
+      await db().insert(nextlyContentEvents).values({
+        id: "event-agent-erasure",
+        subjectKind: "collection",
+        subjectSlug: "posts",
+        subjectId: "p-agent",
+        kind: "saved",
+        actorKind: "person",
+        actorId: personId,
+        actorName: "Sara Malik",
+        actorAgentName: "Claude Code",
+        occurredAt: new Date(),
+      });
+
+      await users.deleteUser(person.id);
+
+      const { activityLog, auditLog } = tables;
+      const [row] = await db()
+        .select({
+          userName: activityLog.userName,
+          userEmail: activityLog.userEmail,
+          identityErasedAt: activityLog.identityErasedAt,
+          agentName: activityLog.agentName,
+          door: activityLog.door,
+          approvedVia: activityLog.approvedVia,
+        })
+        .from(activityLog)
+        .where(eq(activityLog.userId, personId));
+      expect(row).toMatchObject({
+        userName: null,
+        userEmail: null,
+        agentName: "Claude Code",
+        door: "command",
+        approvedVia: "phone",
+      });
+      expect(row.identityErasedAt).not.toBeNull();
+
+      const [audit] = await db()
+        .select({
+          ipAddress: auditLog.ipAddress,
+          userAgent: auditLog.userAgent,
+          agentName: auditLog.agentName,
+        })
+        .from(auditLog)
+        .where(eq(auditLog.actorUserId, personId));
+      expect(audit).toEqual({
+        ipAddress: null,
+        userAgent: null,
+        agentName: "Claude Code",
+      });
+
+      const [event] = await db()
+        .select({
+          actorName: (nextlyContentEvents as Record<string, unknown>).actorName,
+          actorAgentName: (nextlyContentEvents as Record<string, unknown>)
+            .actorAgentName,
+        })
+        .from(nextlyContentEvents)
+        .where(eq(nextlyContentEvents.id as never, "event-agent-erasure"));
+      expect(event).toEqual({ actorName: null, actorAgentName: "Claude Code" });
+    });
   }
 );

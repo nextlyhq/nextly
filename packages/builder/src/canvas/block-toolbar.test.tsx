@@ -1478,6 +1478,183 @@ describe("BlockToolbar", () => {
     expect(bar.hasAttribute("data-faded")).toBe(false);
   });
 
+  describe("over a block it may cover, wherever it is drawn", () => {
+    // A small badge above a selected hero, or any block beside or below the
+    // bar: pointing at it must reach it through the faded bar. Pointing at the
+    // selection's own parent, which the bar always sits over, must not: there
+    // the faded buttons still catch the pointer, which is how they are reached.
+    function PointAt({ id }: { id: string | null }) {
+      const point = useHoveredBlockSetter();
+      React.useEffect(() => point(id), [id, point]);
+      return null;
+    }
+    const nested = () =>
+      documentOf([
+        {
+          id: "hero",
+          type: "acme/leaf",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              { id: "badge", type: "acme/leaf", version: 1, props: {} },
+              { id: "title", type: "acme/leaf", version: 1, props: {} },
+            ],
+          },
+        } as BlockNode,
+      ]);
+    const barPointingAt = (
+      doc: BlockDocument,
+      selected: string,
+      at: string
+    ) => {
+      render(
+        <HoveredBlockProvider>
+          <PointAt id={at} />
+          {tree(editorSpy(doc, selected), {})}
+        </HoveredBlockProvider>
+      );
+      // Found by its attributes, not its role: a block nested in an
+      // `acme/leaf` is not drawn here, so its bar is mounted unmeasured and
+      // out of sight, where no accessible name is computed. The fade markers
+      // are set all the same.
+      const bar = document.querySelector(
+        '[role="toolbar"][aria-label="Block actions"]'
+      );
+      if (bar === null) throw new Error("no block toolbar mounted");
+      return bar;
+    };
+
+    it("lets the pointer through its buttons over a block beside the selection", () => {
+      const bar = barPointingAt(nested(), "title", "badge");
+      expect(bar.hasAttribute("data-faded")).toBe(true);
+      expect(bar.hasAttribute("data-lets-through")).toBe(true);
+    });
+
+    it("lets the pointer through over a block on the page's top level too", () => {
+      const bar = barPointingAt(pair(), "a", "b");
+      expect(bar.hasAttribute("data-lets-through")).toBe(true);
+    });
+
+    it("fades over the selection's own parent but keeps its buttons pressable", () => {
+      const bar = barPointingAt(nested(), "title", "hero");
+      expect(bar.hasAttribute("data-faded")).toBe(true);
+      expect(bar.hasAttribute("data-lets-through")).toBe(false);
+    });
+
+    it("neither fades nor lets through over the selection itself", () => {
+      const bar = barPointingAt(nested(), "title", "title");
+      expect(bar.hasAttribute("data-faded")).toBe(false);
+      expect(bar.hasAttribute("data-lets-through")).toBe(false);
+    });
+
+    /*
+     * A block the bar covers whole is never hovered first: the pointer meets
+     * the bar before it. jsdom lays nothing out, so what lies under the bar is
+     * given as a browser's hit test would report it: the bar, then block b.
+     */
+    afterEach(() => {
+      Reflect.deleteProperty(document, "elementsFromPoint");
+    });
+
+    /**
+     * The bar over block b, with the pointer having moved along `path` first:
+     * over a block by its id, or over the canvas's empty ground for `null`.
+     */
+    function barOverB(path: readonly (string | null)[]) {
+      render(
+        <HoveredBlockProvider>
+          {tree(editorSpy(pair(), "a"), {})}
+        </HoveredBlockProvider>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      const covered = document.querySelector('[data-nx-node="b"]');
+      if (covered === null) throw new Error("block b is not drawn");
+      Object.defineProperty(document, "elementsFromPoint", {
+        configurable: true,
+        value: () => [bar, covered],
+      });
+      for (const step of path) {
+        const target =
+          step === null
+            ? document.querySelector(".nx-canvas")
+            : document.querySelector(`[data-nx-node="${step}"]`);
+        if (target === null) throw new Error(`nothing to move over: ${step}`);
+        fireEvent.pointerMove(target, { clientX: 5, clientY: 5 });
+      }
+      return bar;
+    }
+
+    it("steps aside for a block it covers whole, met from anywhere but the selection", () => {
+      const bar = barOverB([]);
+      fireEvent.pointerEnter(bar, { clientX: 10, clientY: 10 });
+      expect(bar.hasAttribute("data-lets-through")).toBe(true);
+    });
+
+    it("steps aside for it when the pointer left the selection for the empty canvas first", () => {
+      // From the selection over empty ground, then onto the bar: the last
+      // place the pointer was is no block, so it is not heading for a button.
+      const bar = barOverB(["a", null]);
+      fireEvent.pointerEnter(bar, { clientX: 10, clientY: 10 });
+      expect(bar.hasAttribute("data-lets-through")).toBe(true);
+    });
+
+    it("stays for a pen landing on it, which is aimed at the button there too", () => {
+      const bar = barOverB([]);
+      fireEvent.pointerEnter(bar, {
+        clientX: 10,
+        clientY: 10,
+        pointerType: "pen",
+      });
+      expect(bar.hasAttribute("data-lets-through")).toBe(false);
+    });
+
+    it("knows where the pointer came from when it was first drawn hidden", () => {
+      // Hidden first, then shown: the moves are watched from when it shows.
+      const editor = editorSpy(pair(), "a");
+      const view = render(
+        <HoveredBlockProvider>
+          {tree(editor, { hidden: true })}
+        </HoveredBlockProvider>
+      );
+      view.rerender(
+        <HoveredBlockProvider>
+          {tree(editor, { hidden: false })}
+        </HoveredBlockProvider>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      const covered = document.querySelector('[data-nx-node="b"]');
+      const own = document.querySelector('[data-nx-node="a"]');
+      if (covered === null || own === null) throw new Error("blocks not drawn");
+      Object.defineProperty(document, "elementsFromPoint", {
+        configurable: true,
+        value: () => [bar, covered],
+      });
+      fireEvent.pointerMove(own, { clientX: 5, clientY: 5 });
+      fireEvent.pointerEnter(bar, { clientX: 10, clientY: 10 });
+      expect(bar.hasAttribute("data-lets-through")).toBe(false);
+    });
+
+    it("stays for a tap, which is aimed at the button it lands on", () => {
+      // A finger lands without a move before it, so nothing says where it
+      // came from; what it lands on is what it means to press.
+      const bar = barOverB([]);
+      fireEvent.pointerEnter(bar, {
+        clientX: 10,
+        clientY: 10,
+        pointerType: "touch",
+      });
+      expect(bar.hasAttribute("data-lets-through")).toBe(false);
+    });
+
+    it("stays for a pointer coming up from the selection, which is heading for a button", () => {
+      const bar = barOverB(["a"]);
+      fireEvent.pointerEnter(bar, { clientX: 10, clientY: 10 });
+      expect(bar.hasAttribute("data-lets-through")).toBe(false);
+      expect(bar.hasAttribute("data-faded")).toBe(false);
+    });
+  });
+
   it("keeps its height clear at the top of the scroller while it is drawn", () => {
     // `scroll-padding-top`, so a block scrolled or focused into view is not
     // left under the bar (WCAG 2.4.11): the bar's 40px and its 6px gap.
