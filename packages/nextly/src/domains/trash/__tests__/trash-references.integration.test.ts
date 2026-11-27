@@ -110,6 +110,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "slug", localized: false }),
           fieldGroup({ name: "meta", component: META }),
           relationship({ name: "tag", relationTo: TAGS }),
+          // A relation to core's own people, not to a collection.
+          relationship({ name: "owner", relationTo: "users" }),
         ],
       }),
       defineCollection({
@@ -516,6 +518,27 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       restored: false,
       conflicts: [{ field: "slug", value: "same" }],
     });
+  });
+
+  it("keeps a relation to a person who is still there, and refuses a restore naming both an id and a trash record", async () => {
+    const t = await boot(dialect);
+    const owner = await superAdminUser(t, `owner-${randomUUID().slice(0, 8)}`);
+    const id = await make(t, PAGES, { title: "Owned", slug: "owned", owner });
+    await t.nextly.delete({ collection: PAGES, id });
+    const [record] = await t.adapter.select<{ id: string }>(TRASH_TABLE, {
+      where: { and: [{ column: "itemId", op: "=", value: id }] },
+    });
+
+    const both = await restoreOf(t, { id, trashId: record.id }).then(
+      () => "restored",
+      (error: unknown) => (NextlyError.is(error) ? error.statusCode : error)
+    );
+    expect(both).toBe(400);
+
+    const result = await restoreOf(t, { trashId: record.id });
+
+    expect(result).toEqual({ restored: true, collection: PAGES, id });
+    expect((await read(t, PAGES, id)).owner).toBe(owner);
   });
 
   it("puts a relation back empty where its target was deleted since, and says so", async () => {

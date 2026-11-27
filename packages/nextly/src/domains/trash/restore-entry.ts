@@ -544,7 +544,10 @@ function documentAsRestored(
 
 /**
  * The collections a restore reads before its transaction: the tables the
- * entry's links and relation fields point into, each read on the pool.
+ * entry's links and relation fields point into, each read on the pool. A
+ * target that is no collection is one of core's own entities (the people in
+ * `users`, the library in `media`), whose table is named as it is: a table
+ * the process does not hold reads as holding nothing.
  */
 async function targetTablesOf(
   deps: RestoreDeps,
@@ -558,7 +561,7 @@ async function targetTablesOf(
   ];
   for (const slug of slugs) {
     if (!tables.has(slug)) {
-      tables.set(slug, (await deps.collectionOf(slug))?.tableName);
+      tables.set(slug, (await deps.collectionOf(slug))?.tableName ?? slug);
     }
   }
   return tables;

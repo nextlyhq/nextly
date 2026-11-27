@@ -22,7 +22,10 @@ import { sql } from "drizzle-orm";
 
 import { missingSchemaObject } from "../../database/missing-column";
 import type { KeptIncoming } from "../../schemas/trash";
-import { usesJunctionTable } from "../schema/field-rules";
+import {
+  relationHoldsReferenceList,
+  usesJunctionTable,
+} from "../schema/field-rules";
 import {
   fieldsStoredOnRow,
   junctionLinkColumnsOf,
@@ -62,16 +65,29 @@ function optionOf(field: CapturedField, name: string): unknown {
  * or of several collections keeps a JSON value no foreign key reaches.
  */
 export function singleRelationTarget(field: CapturedField): string | undefined {
-  if (field.type !== "relationship" || usesJunctionTable(field))
+  if (field.type !== "relationship" && field.type !== "upload")
     return undefined;
   const own = field as CapturedField & {
     relationTo?: unknown;
     hasMany?: unknown;
   };
-  if (own.hasMany === true || optionOf(field, "hasMany") === true) {
+  // A list of references (`hasMany`, or a many-to-many's junction) holds no
+  // one id in a column, by the rule every road classifies relations by.
+  if (
+    relationHoldsReferenceList({
+      type: field.type,
+      hasMany: own.hasMany ?? optionOf(field, "hasMany"),
+      options: field.options,
+    })
+  ) {
     return undefined;
   }
-  const target = own.relationTo ?? optionOf(field, "target");
+  // An upload names the media library unless it says otherwise. A target
+  // that is a list (polymorphic) keeps a value no single table holds.
+  const target =
+    own.relationTo ??
+    optionOf(field, "target") ??
+    (field.type === "upload" ? "media" : undefined);
   return typeof target === "string" && target !== "" ? target : undefined;
 }
 
@@ -213,13 +229,24 @@ export async function captureIncoming(
 ): Promise<KeptIncoming[]> {
   const kept: KeptIncoming[] = [];
   for (const source of await collectionsOn(tx)) {
+    // Only the fields that can point at the entry are read, and only a
+    // collection with one is asked whether its table is there: a delete
+    // costs a query per relation to this collection, not one per collection.
+    const pointing = fieldsStoredOnRow(storedFields(source.fields)).flatMap(
+      field => {
+        const by =
+          typeof field.name === "string"
+            ? pointsBy(source, field, input)
+            : undefined;
+        return by === undefined
+          ? []
+          : [{ field, name: String(field.name), by }];
+      }
+    );
+    if (pointing.length === 0) continue;
     // A collection whose table is not there yet holds nothing.
     if (!(await input.tableExists(source.tableName))) continue;
-    for (const field of fieldsStoredOnRow(storedFields(source.fields))) {
-      const name = field.name;
-      if (typeof name !== "string") continue;
-      const by = pointsBy(source, field, input);
-      if (by === undefined) continue;
+    for (const { field, name, by } of pointing) {
       const found = await tolerantly(tx, () =>
         by === "links"
           ? incomingLinks(

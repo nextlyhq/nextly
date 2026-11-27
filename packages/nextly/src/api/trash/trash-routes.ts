@@ -30,6 +30,7 @@ import {
   emptyTrashFor,
   listTrashFor,
   restoreFor,
+  trashItemRefOf,
   type TrashCaller,
 } from "../../domains/trash/trash-service";
 import { NextlyError } from "../../errors";
@@ -54,22 +55,18 @@ const ListQuery = z.object({
   page: z.coerce.number().int().min(1).optional(),
 });
 
-const RestoreBody = z
-  .object({
-    id: z.string().min(1).optional(),
-    collection: z.string().min(1).optional(),
-    trashId: z.string().min(1).optional(),
-    // Plain values only: a new slug, title or number, never an object.
-    values: z
-      .record(
-        z.string().min(1),
-        z.union([z.string(), z.number(), z.boolean(), z.null()])
-      )
-      .optional(),
-  })
-  .refine(body => (body.id === undefined) !== (body.trashId === undefined), {
-    message: "Name the entry by `id`, or its trash record by `trashId`.",
-  });
+const RestoreBody = z.object({
+  id: z.string().min(1).optional(),
+  collection: z.string().min(1).optional(),
+  trashId: z.string().min(1).optional(),
+  // Plain values only: a new slug, title or number, never an object.
+  values: z
+    .record(
+      z.string().min(1),
+      z.union([z.string(), z.number(), z.boolean(), z.null()])
+    )
+    .optional(),
+});
 
 const EmptyBody = z.object({
   collection: z.string().min(1).optional(),
@@ -149,18 +146,7 @@ export const restoreFromTrashRoute = privateToSession(
   withErrorHandler(async (request: Request): Promise<Response> => {
     const caller = await callerOf(request, true);
     const body = parsed(RestoreBody, await bodyOf(request));
-    const result = await restoreFor(
-      caller,
-      body.trashId !== undefined
-        ? { trashId: body.trashId }
-        : {
-            itemId: String(body.id),
-            ...(body.collection === undefined
-              ? {}
-              : { collection: body.collection }),
-          },
-      body.values
-    );
+    const result = await restoreFor(caller, trashItemRefOf(body), body.values);
     if (!result.restored) {
       return respondAction(
         "A value this entry held has been taken by another entry since it was deleted. Choose a new one and restore it again.",

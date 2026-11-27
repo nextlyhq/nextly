@@ -18,6 +18,7 @@ import {
   emptyTrashFor,
   listTrashFor,
   restoreFor,
+  trashItemRefOf,
   type TrashCaller,
 } from "../../domains/trash/trash-service";
 import type {
@@ -29,6 +30,7 @@ import type {
 import type { NextlyContext } from "./context";
 import {
   accessOptions,
+  directApiActor,
   mergeConfig,
   runAsCaller,
   suppliedByCall,
@@ -83,10 +85,21 @@ export interface TrashNamespace {
   ): Promise<MutationResult<{ removed: TrashListItem[] }>>;
 }
 
-/** The caller as the trash takes it, from the merged config. */
-function callerOf(config: DirectAPIConfig): TrashCaller {
-  const access = accessOptions(config);
+/**
+ * The caller as the trash takes it: judged as every namespace judges a call
+ * (`suppliedByCall` over the instance's defaults), and recorded as whoever
+ * acts, an API key as itself rather than its owner (`directApiActor`).
+ */
+function callerOf(
+  defaultConfig: DirectAPIConfig,
+  args: DirectAPIConfig
+): TrashCaller {
+  const access = accessOptions(
+    mergeConfig(defaultConfig, suppliedByCall(args))
+  );
+  const actor = directApiActor(defaultConfig, args);
   return {
+    ...(actor === undefined ? {} : { actor }),
     // Trusted only when the merged config says so, as a collection call is.
     overrideAccess: access.overrideAccess === true,
     ...(access.user === undefined ? {} : { user: access.user }),
@@ -101,30 +114,20 @@ export function createTrashNamespace(ctx: NextlyContext): TrashNamespace {
     // Run as the caller each call names, as every collection operation is.
     list: async (args = {}) =>
       runAsCaller(ctx.defaultConfig, args, async callArgs => {
-        const page = await listTrashFor(
-          callerOf(mergeConfig(ctx.defaultConfig, suppliedByCall(callArgs))),
-          {
-            ...(callArgs.collection === undefined
-              ? {}
-              : { collection: callArgs.collection }),
-            ...(callArgs.limit === undefined ? {} : { limit: callArgs.limit }),
-            ...(callArgs.page === undefined ? {} : { page: callArgs.page }),
-          }
-        );
+        const page = await listTrashFor(callerOf(ctx.defaultConfig, callArgs), {
+          ...(callArgs.collection === undefined
+            ? {}
+            : { collection: callArgs.collection }),
+          ...(callArgs.limit === undefined ? {} : { limit: callArgs.limit }),
+          ...(callArgs.page === undefined ? {} : { page: callArgs.page }),
+        });
         return { items: page.items, meta: paginationMetaOf(page) };
       }),
     restore: async args =>
       runAsCaller(ctx.defaultConfig, args, async callArgs => {
         const item = await restoreFor(
-          callerOf(mergeConfig(ctx.defaultConfig, suppliedByCall(callArgs))),
-          callArgs.trashId !== undefined
-            ? { trashId: callArgs.trashId }
-            : {
-                itemId: String(callArgs.id ?? ""),
-                ...(callArgs.collection === undefined
-                  ? {}
-                  : { collection: callArgs.collection }),
-              },
+          callerOf(ctx.defaultConfig, callArgs),
+          trashItemRefOf(callArgs),
           callArgs.values
         );
         return {
@@ -137,7 +140,7 @@ export function createTrashNamespace(ctx: NextlyContext): TrashNamespace {
     empty: async (args = {}) =>
       runAsCaller(ctx.defaultConfig, args, async callArgs => {
         const removed = await emptyTrashFor(
-          callerOf(mergeConfig(ctx.defaultConfig, suppliedByCall(callArgs))),
+          callerOf(ctx.defaultConfig, callArgs),
           {
             ...(callArgs.collection === undefined
               ? {}

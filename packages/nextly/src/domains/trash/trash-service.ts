@@ -241,6 +241,37 @@ export type TrashItemRef =
   | { itemId: string; collection?: string };
 
 /**
+ * The record a restore call names: exactly one of the entry's own `id` and
+ * the trash record's `trashId`. Both, or neither, is refused rather than one
+ * picked; REST and the Direct API read a call through this one rule.
+ */
+export function trashItemRefOf(call: {
+  id?: string;
+  trashId?: string;
+  collection?: string;
+}): TrashItemRef {
+  const named = (value: string | undefined) =>
+    value !== undefined && value !== "";
+  if (named(call.id) === named(call.trashId)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "id",
+          code: "invalid",
+          message:
+            "Name the entry by `id`, or its trash record by `trashId`: one of them.",
+        },
+      ],
+    });
+  }
+  if (named(call.trashId)) return { trashId: String(call.trashId) };
+  return {
+    itemId: String(call.id),
+    ...(call.collection === undefined ? {} : { collection: call.collection }),
+  };
+}
+
+/**
  * The trash record `ref` names that the caller may see. An entry in the
  * trash more than once (deleted, recreated under its id, deleted again) is
  * its latest record.
