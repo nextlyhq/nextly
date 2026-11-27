@@ -16,6 +16,9 @@ import {
   RISK_LEVELS,
   SHARED_EXIT_CODES,
   type OperationDefinition,
+  type OperationEffects,
+  type OperationExitCode,
+  type OperationRaise,
   type OperationSource,
 } from "./definition";
 import { levelRank } from "./levels";
@@ -43,8 +46,17 @@ const DOORS_WITHOUT_PERMISSION: Readonly<
   maintenance: ["local", "deploy"],
 };
 
+/** The effects every declaration states, each a yes or a no. */
+const EFFECTS = ["destroys", "idempotent", "outside", "spendsAi"] as const;
+
+/** One rule a declaration must keep, answering the clauses it breaks. */
+type DefinitionCheck = (
+  op: OperationDefinition,
+  contributor: OperationSource
+) => string[];
+
 /** How a refusal names where an operation came from. */
-export function describeSource(source: OperationSource): string {
+function describeSource(source: OperationSource): string {
   return source.kind === "core" ? "core" : `plugin "${source.name}"`;
 }
 
@@ -52,10 +64,17 @@ function isNonEmptyText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function sameSource(a: OperationSource, b: unknown): boolean {
-  if (typeof b !== "object" || b === null || !("kind" in b)) return false;
-  if (a.kind === "core") return b.kind === "core";
-  return b.kind === "plugin" && "name" in b && b.name === a.name;
+function quoted(value: unknown): string {
+  return JSON.stringify(value) ?? String(value);
+}
+
+function isSource(value: unknown): value is OperationSource {
+  return typeof value === "object" && value !== null && "kind" in value;
+}
+
+function sameSource(a: OperationSource, b: OperationSource): boolean {
+  if (a.kind === "core" || b.kind === "core") return a.kind === b.kind;
+  return a.name === b.name;
 }
 
 function commandProblems(words: unknown, what: string): string[] {
@@ -66,214 +85,358 @@ function commandProblems(words: unknown, what: string): string[] {
     .filter(word => typeof word !== "string" || !WORD_PATTERN.test(word))
     .map(
       word =>
-        `its ${what} word ${JSON.stringify(word)} is not lower case letters, digits and inner hyphens`
+        `its ${what} word ${quoted(word)} is not lower case letters, digits and inner hyphens`
     );
 }
 
-/** What is wrong with one declaration on its own, each as a short clause. */
-function definitionProblems(
+/** It says it comes from whoever registered it. */
+const sourceProblems: DefinitionCheck = (op, contributor) => {
+  const declared: unknown = op.source;
+  if (isSource(declared) && sameSource(contributor, declared)) return [];
+  const claimed = isSource(declared) ? describeSource(declared) : "nowhere";
+  return [
+    `it says it comes from ${claimed}, but ${describeSource(contributor)} registered it`,
+  ];
+};
+
+/** Its command words, summary and description. */
+const textProblems: DefinitionCheck = op => {
+  const problems = commandProblems(op.command, "command");
+  if (!isNonEmptyText(op.summary)) problems.push("it has no summary");
+  else if (/[\r\n]/.test(op.summary)) {
+    problems.push("its summary is more than one line");
+  }
+  if (!isNonEmptyText(op.description)) {
+    problems.push("it has no description for agents");
+  }
+  return problems;
+};
+
+/** Its input and output are schemas the list can read. */
+const schemaProblems: DefinitionCheck = op =>
+  (["input", "output"] as const)
+    .filter(name => op[name]?.["~standard"]?.version !== 1)
+    .map(name => `its ${name} schema is not a Standard Schema`);
+
+/** Its level, and where it refuses "Always allow". */
+const levelProblems: DefinitionCheck = op => {
+  if (!RISK_LEVELS.includes(op.level)) {
+    return [
+      `its level ${quoted(op.level)} is not one of ${RISK_LEVELS.join(", ")}`,
+    ];
+  }
+  if (op.alwaysAllow === false && op.level !== "critical") {
+    return [
+      `it refuses "Always allow" but its level is ${op.level}, not critical`,
+    ];
+  }
+  return [];
+};
+
+function raiseRuleProblems(
   op: OperationDefinition,
-  contributor: OperationSource
+  rule: OperationRaise<unknown>
 ): string[] {
   const problems: string[] = [];
-
-  if (!sameSource(contributor, op.source)) {
+  if (!isNonEmptyText(rule.when)) {
+    problems.push("a raise rule does not say when it applies");
+  }
+  if (!RISK_LEVELS.includes(rule.level)) {
     problems.push(
-      `it says it comes from ${typeof op.source === "object" && op.source !== null ? describeSource(op.source) : "nowhere"}, but ${describeSource(contributor)} registered it`
+      `a raise rule's level ${quoted(rule.level)} is not one of ${RISK_LEVELS.join(", ")}`
+    );
+  } else if (
+    RISK_LEVELS.includes(op.level) &&
+    levelRank(rule.level) < levelRank(op.level)
+  ) {
+    problems.push(
+      `its raise rule "${rule.when}" would lower the level from ${op.level} to ${rule.level}; an input may only raise it`
     );
   }
-  problems.push(...commandProblems(op.command, "command"));
-  if (!isNonEmptyText(op.summary)) problems.push("it has no summary");
-  else if (/[\r\n]/.test(op.summary))
-    problems.push("its summary is more than one line");
-  if (!isNonEmptyText(op.description))
-    problems.push("it has no description for agents");
-  for (const [name, schema] of [
-    ["input", op.input],
-    ["output", op.output],
-  ] as const) {
-    if (schema?.["~standard"]?.version !== 1) {
-      problems.push(`its ${name} schema is not a Standard Schema`);
-    }
-  }
-
-  const levelKnown = RISK_LEVELS.includes(op.level);
-  if (!levelKnown)
+  if (rule.alwaysAllow === false && rule.level !== "critical") {
     problems.push(
-      `its level ${JSON.stringify(op.level)} is not one of ${RISK_LEVELS.join(", ")}`
-    );
-  if (op.alwaysAllow === false && op.level !== "critical") {
-    problems.push(
-      `it refuses "Always allow" but its level is ${op.level}, not critical`
+      `its raise rule "${rule.when}" refuses "Always allow" at ${rule.level}, not critical`
     );
   }
-  for (const rule of op.raise ?? []) {
-    if (!isNonEmptyText(rule.when))
-      problems.push("a raise rule does not say when it applies");
-    if (!RISK_LEVELS.includes(rule.level)) {
-      problems.push(
-        `a raise rule's level ${JSON.stringify(rule.level)} is not one of ${RISK_LEVELS.join(", ")}`
-      );
-    } else if (levelKnown && levelRank(rule.level) < levelRank(op.level)) {
-      problems.push(
-        `its raise rule "${rule.when}" would lower the level from ${op.level} to ${rule.level}; an input may only raise it`
-      );
-    }
-    if (rule.alwaysAllow === false && rule.level !== "critical") {
-      problems.push(
-        `its raise rule "${rule.when}" refuses "Always allow" at ${rule.level}, not critical`
-      );
-    }
-    if (typeof rule.applies !== "function")
-      problems.push(`its raise rule "${rule.when}" has no applies()`);
+  if (typeof rule.applies !== "function") {
+    problems.push(`its raise rule "${rule.when}" has no applies()`);
   }
+  return problems;
+}
 
-  const effects = op.effects;
-  for (const key of [
-    "destroys",
-    "idempotent",
-    "outside",
-    "spendsAi",
-  ] as const) {
-    if (typeof effects?.[key] !== "boolean")
-      problems.push(`its effects do not say whether it ${key}`);
-  }
-  if (op.level === "read" && effects?.destroys === true) {
+/** Every rule that raises its level only raises it. */
+const raiseProblems: DefinitionCheck = op =>
+  (op.raise ?? []).flatMap(rule => raiseRuleProblems(op, rule));
+
+/** Each effect stated, and none a read could not have. */
+const effectsProblems: DefinitionCheck = op => {
+  const effects: Partial<OperationEffects> = op.effects ?? {};
+  const problems = EFFECTS.filter(key => typeof effects[key] !== "boolean").map(
+    key => `its effects do not say whether it ${key}`
+  );
+  if (op.level === "read" && effects.destroys === true) {
     problems.push("its level is read but it destroys data");
   }
+  return problems;
+};
 
+/** Its doors, and the chat mark that needs the chat door. */
+const doorsProblems: DefinitionCheck = op => {
   if (!Array.isArray(op.doors) || op.doors.length === 0) {
-    problems.push("it names no doors");
-  } else {
-    for (const door of op.doors) {
-      if (!DOORS.includes(door))
-        problems.push(
-          `its door ${JSON.stringify(door)} is not one of ${DOORS.join(", ")}`
-        );
-    }
-    if (new Set(op.doors).size !== op.doors.length)
-      problems.push("it names a door twice");
-    if (op.doors.includes("deploy") && op.source?.kind !== "core") {
-      problems.push("a plugin's operation may not run on the deploy door");
-    }
+    return ["it names no doors"];
   }
-  if (op.chatExposed === true && !op.doors?.includes("chat")) {
+  const problems = op.doors
+    .filter(door => !DOORS.includes(door))
+    .map(door => `its door ${quoted(door)} is not one of ${DOORS.join(", ")}`);
+  if (new Set(op.doors).size !== op.doors.length) {
+    problems.push("it names a door twice");
+  }
+  if (op.doors.includes("deploy") && op.source?.kind !== "core") {
+    problems.push("a plugin's operation may not run on the deploy door");
+  }
+  if (op.chatExposed === true && !op.doors.includes("chat")) {
     problems.push(
       "it is marked as seen by chat apps but does not run on the chat door"
     );
   }
+  return problems;
+};
 
-  const permission = op.permission;
-  if (permission?.kind === "permission") {
-    if (!isNonEmptyText(permission.name))
-      problems.push("its permission has no name");
-  } else if (
-    permission?.kind === "project" ||
-    permission?.kind === "maintenance" ||
-    permission?.kind === "own-data"
-  ) {
-    if (!isNonEmptyText(permission.reason)) {
-      problems.push(
-        `it needs no permission (${permission.kind}) but gives no reason`
-      );
-    }
-    if (permission.kind === "own-data") {
-      if (op.source?.kind !== "plugin")
-        problems.push(
-          "only a plugin's operation may read its own data without a permission"
-        );
-      if (op.level !== "read" || (op.raise ?? []).length > 0) {
-        problems.push(
-          "an operation without a permission for its own data may only read"
-        );
-      }
-    } else {
-      const allowed = DOORS_WITHOUT_PERMISSION[permission.kind];
-      const outside = (op.doors ?? []).filter(door => !allowed.includes(door));
-      if (outside.length > 0) {
-        problems.push(
-          `a ${permission.kind} operation runs only on ${allowed.join(" and ")}, not ${outside.join(", ")}`
-        );
-      }
-    }
-  } else {
+/** An operation that reads only its plugin's own data, unchecked. */
+function ownDataProblems(op: OperationDefinition): string[] {
+  const problems: string[] = [];
+  if (op.source?.kind !== "plugin") {
     problems.push(
-      "it does not say which permission it needs, or why it needs none"
+      "only a plugin's operation may read its own data without a permission"
     );
   }
-
-  if (typeof op.dryRun !== "boolean")
-    problems.push("it does not say whether it supports a dry run");
-  const writes = op.level !== "read" || (op.raise ?? []).length > 0;
-  if (writes && permission?.kind !== "project" && op.dryRun !== true) {
-    problems.push("it writes but offers no dry run");
-  }
-  if (typeof op.long !== "boolean")
-    problems.push("it does not say whether it is long-running");
-
-  if (!Array.isArray(op.examples) || op.examples.length === 0) {
-    problems.push("it has no example");
-  } else {
-    for (const example of op.examples) {
-      if (!isNonEmptyText(example?.summary))
-        problems.push("an example has no summary");
-    }
-  }
-
-  if (!Array.isArray(op.exitCodes)) {
-    problems.push("it does not list the exit codes it adds");
-  } else {
-    const seen = new Set<number>();
-    for (const { code, meaning } of op.exitCodes) {
-      if (!Number.isInteger(code) || code < 0 || code > 255) {
-        problems.push(
-          `its exit code ${JSON.stringify(code)} is not a whole number from 0 to 255`
-        );
-      } else if (code !== 2 && code in SHARED_EXIT_CODES) {
-        problems.push(
-          `it gives exit code ${code} a meaning of its own; ${code} always means "${SHARED_EXIT_CODES[code]}"`
-        );
-      }
-      if (seen.has(code)) problems.push(`it lists exit code ${code} twice`);
-      seen.add(code);
-      if (!isNonEmptyText(meaning))
-        problems.push(`its exit code ${code} has no meaning`);
-    }
-  }
-
-  if (!Array.isArray(op.aliases)) {
-    problems.push("it does not list its old names");
-  } else {
-    for (const alias of op.aliases) {
-      problems.push(...commandProblems(alias?.command, "old name"));
-      if (
-        !isNonEmptyText(alias?.addedIn) ||
-        !isNonEmptyText(alias?.removableFrom)
-      ) {
-        problems.push(
-          "an old name does not say the release that added it and the earliest that may remove it"
-        );
-      }
-    }
-  }
-
-  if (op.stability !== "experimental" && op.stability !== "stable") {
+  if (op.level !== "read" || (op.raise ?? []).length > 0) {
     problems.push(
-      `its stability ${JSON.stringify(op.stability)} is neither experimental nor stable`
+      "an operation without a permission for its own data may only read"
     );
   }
   return problems;
 }
 
-/** Why `example` does not parse against `op`'s input schema, or nothing. */
-async function exampleProblem(
+/** A project or maintenance operation stays on the doors it is safe on. */
+function unpermittedDoorProblems(
   op: OperationDefinition,
-  example: { readonly summary: string; readonly input: unknown }
-): Promise<string | undefined> {
-  const result = await op.input["~standard"].validate(example.input);
-  if (!result.issues) return undefined;
-  const issues = result.issues.map(issue => issue.message).join("; ");
-  return `its example "${example.summary}" does not parse against its input schema: ${issues}`;
+  kind: "project" | "maintenance"
+): string[] {
+  const allowed = DOORS_WITHOUT_PERMISSION[kind];
+  const outside = (op.doors ?? []).filter(door => !allowed.includes(door));
+  if (outside.length === 0) return [];
+  return [
+    `a ${kind} operation runs only on ${allowed.join(" and ")}, not ${outside.join(", ")}`,
+  ];
+}
+
+/** The permission it needs, or why it needs none and where that is safe. */
+const permissionProblems: DefinitionCheck = op => {
+  const permission: Partial<{ kind: unknown; name: unknown; reason: unknown }> =
+    op.permission ?? {};
+  if (permission.kind === "permission") {
+    return isNonEmptyText(permission.name)
+      ? []
+      : ["its permission has no name"];
+  }
+  if (
+    permission.kind !== "project" &&
+    permission.kind !== "maintenance" &&
+    permission.kind !== "own-data"
+  ) {
+    return ["it does not say which permission it needs, or why it needs none"];
+  }
+  const problems = isNonEmptyText(permission.reason)
+    ? []
+    : [`it needs no permission (${permission.kind}) but gives no reason`];
+  return problems.concat(
+    permission.kind === "own-data"
+      ? ownDataProblems(op)
+      : unpermittedDoorProblems(op, permission.kind)
+  );
+};
+
+/**
+ * Whether it offers a dry run, which every writer must, except one that only
+ * changes project files on the person's machine.
+ */
+const dryRunProblems: DefinitionCheck = op => {
+  if (typeof op.dryRun !== "boolean") {
+    return ["it does not say whether it supports a dry run"];
+  }
+  const writes = op.level !== "read" || (op.raise ?? []).length > 0;
+  if (writes && op.permission?.kind !== "project" && !op.dryRun) {
+    return ["it writes but offers no dry run"];
+  }
+  return [];
+};
+
+/** Whether it runs in the background. */
+const longProblems: DefinitionCheck = op =>
+  typeof op.long === "boolean"
+    ? []
+    : ["it does not say whether it is long-running"];
+
+/** At least one example, each with a summary; parsing them comes later. */
+const exampleShapeProblems: DefinitionCheck = op => {
+  if (!Array.isArray(op.examples) || op.examples.length === 0) {
+    return ["it has no example"];
+  }
+  return op.examples
+    .filter(example => !isNonEmptyText(example?.summary))
+    .map(() => "an example has no summary");
+};
+
+function exitCodeProblems({ code, meaning }: OperationExitCode): string[] {
+  const problems: string[] = [];
+  if (!Number.isInteger(code) || code < 0 || code > 255) {
+    problems.push(
+      `its exit code ${quoted(code)} is not a whole number from 0 to 255`
+    );
+  } else if (code !== 2 && code in SHARED_EXIT_CODES) {
+    problems.push(
+      `it gives exit code ${code} a meaning of its own; ${code} always means "${SHARED_EXIT_CODES[code]}"`
+    );
+  }
+  if (!isNonEmptyText(meaning)) {
+    problems.push(`its exit code ${code} has no meaning`);
+  }
+  return problems;
+}
+
+/** The exit codes it adds, none redefining a shared one or listed twice. */
+const exitCodesProblems: DefinitionCheck = op => {
+  if (!Array.isArray(op.exitCodes)) {
+    return ["it does not list the exit codes it adds"];
+  }
+  const problems = op.exitCodes.flatMap(exitCodeProblems);
+  const codes = op.exitCodes.map(entry => entry.code);
+  for (const code of new Set(codes)) {
+    if (codes.indexOf(code) !== codes.lastIndexOf(code)) {
+      problems.push(`it lists exit code ${code} twice`);
+    }
+  }
+  return problems;
+};
+
+/** Its old names, each with the releases that bound it. */
+const aliasesProblems: DefinitionCheck = op => {
+  if (!Array.isArray(op.aliases)) return ["it does not list its old names"];
+  return op.aliases.flatMap(alias => {
+    const problems = commandProblems(alias?.command, "old name");
+    if (
+      !isNonEmptyText(alias?.addedIn) ||
+      !isNonEmptyText(alias?.removableFrom)
+    ) {
+      problems.push(
+        "an old name does not say the release that added it and the earliest that may remove it"
+      );
+    }
+    return problems;
+  });
+};
+
+/** Whether it is experimental or stable. */
+const stabilityProblems: DefinitionCheck = op =>
+  op.stability === "experimental" || op.stability === "stable"
+    ? []
+    : [
+        `its stability ${quoted(op.stability)} is neither experimental nor stable`,
+      ];
+
+/** Every rule a declaration keeps on its own, in the order a refusal lists them. */
+const DEFINITION_CHECKS: readonly DefinitionCheck[] = [
+  sourceProblems,
+  textProblems,
+  schemaProblems,
+  levelProblems,
+  raiseProblems,
+  effectsProblems,
+  doorsProblems,
+  permissionProblems,
+  dryRunProblems,
+  longProblems,
+  exampleShapeProblems,
+  exitCodesProblems,
+  aliasesProblems,
+  stabilityProblems,
+];
+
+/** Why each of `op`'s examples does not parse against its input schema. */
+async function examplesProblems(op: OperationDefinition): Promise<string[]> {
+  const problems: string[] = [];
+  for (const example of op.examples) {
+    const result = await op.input["~standard"].validate(example.input);
+    if (!result.issues) continue;
+    const issues = result.issues.map(issue => issue.message).join("; ");
+    problems.push(
+      `its example "${example.summary}" does not parse against its input schema: ${issues}`
+    );
+  }
+  return problems;
+}
+
+/** Who first claimed an ID or a set of command words. */
+interface Claim {
+  readonly id: string;
+  readonly from: string;
+}
+
+/** The words `op` answers to: its command and each old name. */
+function claimedWords(op: OperationDefinition): string[][] {
+  const aliases = Array.isArray(op.aliases) ? op.aliases : [];
+  return [op.command, ...aliases.map(alias => alias?.command)].filter(
+    (words): words is string[] => Array.isArray(words) && words.length > 0
+  );
+}
+
+/**
+ * The command words `op` claims that an earlier operation, or `op` itself,
+ * already claimed. Records `op`'s new claims in `byWords`.
+ */
+function wordClaimProblems(
+  op: OperationDefinition,
+  claim: Claim,
+  byWords: Map<string, Claim>
+): string[] {
+  const problems: string[] = [];
+  const claimedHere = new Set<string>();
+  for (const words of claimedWords(op)) {
+    const key = words.join(" ");
+    const holder = byWords.get(key);
+    if (holder && !claimedHere.has(key)) {
+      problems.push(
+        `Two operations claim the command words "nextly ${key}": "${holder.id}" from ${holder.from} and "${claim.id}" from ${claim.from}`
+      );
+    } else if (claimedHere.has(key)) {
+      problems.push(
+        `Operation "${claim.id}" from ${claim.from}: it claims the command words "nextly ${key}" twice`
+      );
+    } else {
+      byWords.set(key, claim);
+    }
+    claimedHere.add(key);
+  }
+  return problems;
+}
+
+/** Everything wrong with `op` on its own, each sentence naming it. */
+async function operationProblems(
+  op: OperationDefinition,
+  contributor: OperationSource,
+  claim: Claim
+): Promise<string[]> {
+  const own = DEFINITION_CHECKS.flatMap(check => check(op, contributor));
+  if (!ID_PATTERN.test(claim.id)) {
+    own.unshift("its ID is not dotted lower-case words (noun.verb)");
+  }
+  // Only a declaration whose own shape is sound has examples and a schema
+  // worth parsing them with.
+  if (own.length === 0) own.push(...(await examplesProblems(op)));
+  return own.map(
+    problem => `Operation "${claim.id}" from ${claim.from}: ${problem}`
+  );
 }
 
 /**
@@ -284,65 +447,27 @@ export async function operationListProblems(
   contributions: readonly OperationContribution[]
 ): Promise<string[]> {
   const problems: string[] = [];
-  const byId = new Map<string, { id: string; from: string }>();
-  const byWords = new Map<string, { id: string; from: string }>();
+  const byId = new Map<string, Claim>();
+  const byWords = new Map<string, Claim>();
 
   for (const { source, operations } of contributions) {
     const from = describeSource(source);
     for (const op of operations) {
-      const id = isNonEmptyText(op.id) ? op.id : "(no ID)";
-      const name = `Operation "${id}" from ${from}`;
-      if (!ID_PATTERN.test(id)) {
-        problems.push(
-          `${name}: its ID is not dotted lower-case words (noun.verb)`
-        );
-      }
-      const own = definitionProblems(op, source);
-      problems.push(...own.map(problem => `${name}: ${problem}`));
+      const claim: Claim = {
+        id: isNonEmptyText(op.id) ? op.id : "(no ID)",
+        from,
+      };
+      problems.push(...(await operationProblems(op, source, claim)));
 
-      // Only a declaration whose own shape is sound has examples and a
-      // schema worth parsing them with.
-      if (own.length === 0) {
-        for (const example of op.examples) {
-          const problem = await exampleProblem(op, example);
-          if (problem) problems.push(`${name}: ${problem}`);
-        }
-      }
-
-      const earlier = byId.get(id);
+      const earlier = byId.get(claim.id);
       if (earlier) {
         problems.push(
-          `Two operations claim the ID "${id}": one from ${earlier.from} and one from ${from}`
+          `Two operations claim the ID "${claim.id}": one from ${earlier.from} and one from ${from}`
         );
       } else {
-        byId.set(id, { id, from });
+        byId.set(claim.id, claim);
       }
-
-      const claims = [
-        op.command,
-        ...(Array.isArray(op.aliases)
-          ? op.aliases.map(alias => alias?.command)
-          : []),
-      ];
-      const claimedHere = new Set<string>();
-      for (const words of claims) {
-        if (!Array.isArray(words) || words.length === 0) continue;
-        const key = words.join(" ");
-        const holder = byWords.get(key);
-        if (holder) {
-          problems.push(
-            `Two operations claim the command words "nextly ${key}": "${holder.id}" from ${holder.from} and "${id}" from ${from}`
-          );
-        } else if (claimedHere.has(key)) {
-          problems.push(
-            `${name}: it claims the command words "nextly ${key}" twice`
-          );
-        }
-        claimedHere.add(key);
-      }
-      for (const key of claimedHere) {
-        if (!byWords.has(key)) byWords.set(key, { id, from });
-      }
+      problems.push(...wordClaimProblems(op, claim, byWords));
     }
   }
   return problems;
