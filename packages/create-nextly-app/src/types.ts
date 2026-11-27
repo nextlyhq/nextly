@@ -40,9 +40,9 @@ export interface TemplateManifest {
 export type DatabaseType = "postgresql" | "mysql" | "sqlite";
 
 /**
- * Supported package managers
+ * Supported package managers: the setup plan's list.
  */
-export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
+export type { PackageManager } from "./plan";
 
 /**
  * Database configuration for scaffolding
