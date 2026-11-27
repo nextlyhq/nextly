@@ -24,6 +24,7 @@ import { ReleaseCalendar } from "@admin/components/features/releases/ReleaseCale
 import {
   ReleaseBodyOutline,
   ReleaseList,
+  releaseKindShown,
 } from "@admin/components/features/releases/ReleaseList";
 import { Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
@@ -55,6 +56,11 @@ export default function ReleasesPage(): JSX.Element {
   // The Board is the third: the list's tabs side by side, read-only (see
   // `ReleaseBoard`). Remembered as the other two are, for the page's life.
   const [view, setView] = useState<(typeof RELEASE_VIEWS)[number]>("list");
+  // "Hide single documents" is turned on in the List's toolbar and holds for
+  // every view, so it is kept here: the List is swapped out while the
+  // Calendar or the Board is shown, and a switch it held would reset.
+  const [hideSingles, setHideSingles] = useState(false);
+  const kind = releaseKindShown(hideSingles);
   // From the Board, a full column's rest is its tab in the List.
   const showTab = (tab: ReleaseListTab) => {
     setSearchParams({ tab: tab === "upcoming" ? null : tab, reason: null });
@@ -134,14 +140,16 @@ export default function ReleasesPage(): JSX.Element {
           <ReleaseAttentionStrip onShowAll={() => setView("list")} />
 
           {view === "calendar" ? (
-            <ReleaseCalendar />
+            <ReleaseCalendar kind={kind} />
           ) : view === "board" ? (
-            // The Board reads every tab whole: the search and kind filters
-            // belong to the List's own toolbar, not to the page.
-            <ReleaseBoard onShowTab={showTab} />
+            // The Board reads every tab whole, under the single-document
+            // filter only: the search belongs to the List's own toolbar.
+            <ReleaseBoard onShowTab={showTab} kind={kind} />
           ) : (
             <ReleaseList
               onCreate={canAssemble ? () => setCreating(true) : undefined}
+              hideSingles={hideSingles}
+              onHideSinglesChange={setHideSingles}
             />
           )}
         </div>

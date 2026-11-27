@@ -9,7 +9,13 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fireEvent, render, screen, waitFor } from "@admin/__tests__/utils";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@admin/__tests__/utils";
 import type { Release } from "@admin/types/releases";
 
 const { dayListMock } = vi.hoisted(() => ({ dayListMock: vi.fn() }));
@@ -155,5 +161,41 @@ describe("the day's list", () => {
       )
     );
     expect(await screen.findByText("Nothing runs on this day.")).toBeTruthy();
+  });
+});
+
+describe("single-document releases in the day's list", () => {
+  it("marks a single-document release as the list does, and no other", () => {
+    held = [
+      { ...release(1), title: "Opening hours", kind: "single" },
+      release(2),
+    ];
+    renderSheet();
+    const rows = screen.getAllByRole("listitem");
+    const single = rows.find(row => row.textContent?.includes("Opening hours"));
+    const ordinary = rows.find(row => row.textContent?.includes("Launch 02"));
+    const mark = within(single as HTMLElement).getByText("Single document");
+    expect(mark.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    expect(
+      within(ordinary as HTMLElement).queryByText("Single document")
+    ).toBeNull();
+  });
+
+  it("asks for ordinary releases only while single documents are hidden", () => {
+    render(
+      <ReleaseCalendarDaySheet
+        day="2026-10-23"
+        zone="UTC"
+        isToday={false}
+        overdue={new Set()}
+        now={Date.parse("2026-10-21T12:00:00.000Z")}
+        kind="release"
+        onClose={() => undefined}
+        onReturnFocus={() => undefined}
+      />
+    );
+    expect(dayListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "release" })
+    );
   });
 });

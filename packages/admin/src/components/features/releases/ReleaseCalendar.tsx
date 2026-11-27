@@ -58,6 +58,7 @@ import type {
   Release,
   ReleaseCalendarDay,
   ReleaseCalendarRead,
+  ReleaseKind,
 } from "@admin/types/releases";
 
 import {
@@ -79,7 +80,11 @@ import { releaseTimeOfDay } from "./release-time";
 import { dayKeyIn, readerZone } from "./release-timezone";
 import { ReleaseCalendarDaySheet } from "./ReleaseCalendarDaySheet";
 import { ReleaseCalendarZoneControl } from "./ReleaseCalendarZoneControl";
-import { RELEASE_STATUS_TONE, ReleaseStatusMark } from "./ReleaseListCells";
+import {
+  RELEASE_STATUS_TONE,
+  ReleaseStatusMark,
+  SingleDocumentMark,
+} from "./ReleaseListCells";
 import { useMinuteClock } from "./useMinuteClock";
 
 /** The grid's columns, Monday first, as `monthGrid` lays the days out. */
@@ -282,7 +287,18 @@ function CalendarReadFailures({
   );
 }
 
-export function ReleaseCalendar(): JSX.Element {
+export interface ReleaseCalendarProps {
+  /**
+   * Only releases of this kind, as the list is filtered: `release` while
+   * "Hide single documents" is on. Asked of the server, so a day's chips,
+   * its count and its "+N more" all leave the same releases out.
+   */
+  kind?: ReleaseKind;
+}
+
+export function ReleaseCalendar({
+  kind,
+}: ReleaseCalendarProps = {}): JSX.Element {
   const reader = useMemo(() => readerZone(), []);
   const [zone, setZone] = useState(reader);
   const now = useMinuteClock();
@@ -303,7 +319,11 @@ export function ReleaseCalendar(): JSX.Element {
   const dayList = useDayListOpener();
 
   const gridDays = useMemo(() => calendarWindow(month), [month]);
-  const calendar = useReleaseCalendar({ ...gridDays, timezone: zone });
+  const calendar = useReleaseCalendar({
+    ...gridDays,
+    timezone: zone,
+    ...(kind ? { kind } : {}),
+  });
   const overdueRead = useOverdueIds(gridDays, now);
   const overdue = overdueRead.ids;
 
@@ -390,6 +410,7 @@ export function ReleaseCalendar(): JSX.Element {
         isToday={dayList.day === today}
         overdue={overdue}
         now={now}
+        kind={kind}
         onClose={dayList.close}
         onReturnFocus={() => dayList.returnFocus(focused)}
       />
@@ -718,8 +739,9 @@ function CompactCount({ day }: { day: ReleaseCalendarDay }) {
 }
 
 /**
- * One release on its day: its title, then its time and its state, as an icon
- * and a word. A link to the release, so Enter on it opens it.
+ * One release on its day: its title, its single-document mark when it holds
+ * one document, then its time and its state, as an icon and a word. A link
+ * to the release, so Enter on it opens it.
  */
 function ReleaseChip({
   release,
@@ -757,6 +779,11 @@ function ReleaseChip({
       </span>{" "}
       {/* The spaces between the parts are for the link's name: without them
           a screen reader reads the title, time and state as one word. */}
+      {release.kind === "single" ? (
+        <>
+          <SingleDocumentMark className="self-start" />{" "}
+        </>
+      ) : null}
       {status ? (
         <ReleaseStatusMark status={status} className="text-[11px] leading-4">
           {time ? <span className="shrink-0 tabular-nums">{time}</span> : null}{" "}

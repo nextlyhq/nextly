@@ -319,3 +319,60 @@ describe("the calendar screen", () => {
     expect(document.querySelectorAll("[data-day]")).toHaveLength(0);
   });
 });
+
+describe("single-document releases on the calendar", () => {
+  /** A day holding one single-document release and one ordinary one. */
+  const MIXED: ReleaseCalendarDay = {
+    date: "2026-10-23",
+    total: 2,
+    counts: { draft: 0, scheduled: 2, published: 0, cancelled: 0, blocked: 0 },
+    releases: [
+      release("hours", { title: "Opening hours", kind: "single" }),
+      release("autumn", { title: "Autumn launch" }),
+    ],
+  };
+
+  it("marks a single-document release's chip as the list marks its row, and no other", () => {
+    calendarMock.mockReturnValue(calendarAnswer([MIXED]));
+    render(<ReleaseCalendar />);
+    const cell = dayButton("2026-10-23").closest("td") as HTMLElement;
+
+    // The mark's words are in the chip's name, so they are heard as well as
+    // seen, as they are on the list's row.
+    const single = within(cell).getByRole("link", {
+      name: /^Opening hours Single document\b/,
+    });
+    expect(
+      within(single).getByText("Single document").querySelector("svg")
+    ).toHaveAttribute("aria-hidden", "true");
+    const ordinary = within(cell).getByRole("link", { name: /Autumn launch/ });
+    expect(within(ordinary).queryByText("Single document")).toBeNull();
+  });
+
+  it("asks for ordinary releases only while single documents are hidden, the day's full list too", () => {
+    render(<ReleaseCalendar kind="release" />);
+    // The server leaves them out of each day's chips, its count and its
+    // "+N more" together, so all three agree with what is shown.
+    expect(calendarMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "release" })
+    );
+    fireEvent.click(dayButton("2026-10-23"));
+    expect(dayListMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        day: { date: "2026-10-23", timezone: readerZone() },
+        kind: "release",
+      })
+    );
+  });
+
+  it("asks for every release while nothing is hidden", () => {
+    render(<ReleaseCalendar />);
+    fireEvent.click(dayButton("2026-10-23"));
+    expect(
+      calendarMock.mock.calls.every(([params]) => !("kind" in params))
+    ).toBe(true);
+    expect(
+      dayListMock.mock.calls.every(([params]) => !("kind" in params))
+    ).toBe(true);
+  });
+});

@@ -34,7 +34,7 @@ import {
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useReleaseListPage } from "@admin/hooks/queries/useReleases";
-import type { Release } from "@admin/types/releases";
+import type { Release, ReleaseKind } from "@admin/types/releases";
 
 import {
   compareByPlacement,
@@ -45,7 +45,7 @@ import {
 } from "./release-calendar";
 import { zoneDisplayName } from "./release-calendar-zones";
 import { releaseTimeOfDay, releaseTimeText } from "./release-time";
-import { ReleaseStatusMark } from "./ReleaseListCells";
+import { ReleaseStatusMark, SingleDocumentMark } from "./ReleaseListCells";
 import {
   ReleaseRowDialogs,
   ReleaseRowMenuButton,
@@ -62,6 +62,7 @@ export function ReleaseCalendarDaySheet({
   isToday,
   overdue,
   now,
+  kind,
   onClose,
   onReturnFocus,
 }: {
@@ -72,6 +73,8 @@ export function ReleaseCalendarDaySheet({
   /** The ids the server calls overdue, or `null` while not known. */
   overdue: ReadonlySet<string> | null;
   now: number;
+  /** Only releases of this kind, as the calendar it opened from is read. */
+  kind?: ReleaseKind;
   onClose: () => void;
   /**
    * Put focus back where the list was opened from. The sheet is opened
@@ -100,6 +103,7 @@ export function ReleaseCalendarDaySheet({
             isToday={isToday}
             overdue={overdue}
             now={now}
+            kind={kind}
           />
         ) : null}
       </SheetContent>
@@ -113,18 +117,22 @@ function DayList({
   isToday,
   overdue,
   now,
+  kind,
 }: {
   day: DayKey;
   zone: string;
   isToday: boolean;
   overdue: ReadonlySet<string> | null;
   now: number;
+  kind: ReleaseKind | undefined;
 }) {
   const [page, setPage] = useState(0);
+  // The day's full list leaves out what its chips and count leave out.
   const list = useReleaseListPage({
     day: { date: day, timezone: zone },
     page: page + 1,
     limit: DAY_PAGE_SIZE,
+    ...(kind ? { kind } : {}),
   });
   const total = list.data?.meta.total;
   // In the order of the times shown, as the grid draws them: the server
@@ -326,6 +334,7 @@ function DayListRow({
           {release.title}
         </Link>
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          {release.kind === "single" ? <SingleDocumentMark /> : null}
           {status ? <ReleaseStatusMark status={status} /> : null}
           {scheduled ? (
             <span className="flex items-center gap-1 text-muted-foreground">

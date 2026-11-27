@@ -145,6 +145,31 @@ export function ReleaseStatusMark({
 }
 
 /**
+ * The mark of a release that holds one document, drawn the same wherever a
+ * release is listed: the list's row, a calendar chip, a day's list and a
+ * board tile. Its words are read out as part of what holds it, so a screen
+ * reader hears the same mark a sighted reader sees. Where it sits (its
+ * margin) is left to the caller.
+ */
+export function SingleDocumentMark({
+  className,
+}: {
+  className?: string;
+}): JSX.Element {
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-sm border border-border px-1.5 py-px align-[1px] text-[11px] font-normal leading-4 text-muted-foreground",
+        className
+      )}
+    >
+      <FileText className="size-3" aria-hidden />
+      Single document
+    </span>
+  );
+}
+
+/**
  * The release's title, its description, and the single-document mark.
  *
  * The table wraps this cell in the row's link, and a link underlines what it
@@ -162,10 +187,7 @@ export function ReleaseTitleCell({
         {release.title}
       </span>
       {release.kind === "single" ? (
-        <span className="ml-2 inline-flex items-center gap-1 rounded-sm border border-border px-1.5 py-px align-[1px] text-[11px] font-normal leading-4 text-muted-foreground">
-          <FileText className="size-3" aria-hidden />
-          Single document
-        </span>
+        <SingleDocumentMark className="ml-2" />
       ) : null}
       {release.description ? (
         <span className="mt-0.5 inline-block w-full truncate text-xs font-normal text-muted-foreground">

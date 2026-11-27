@@ -9,18 +9,25 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 import type {
   Release,
   ReleaseListParams,
   ReleaseListTab,
 } from "@admin/types/releases";
 
-const { fetchReleases } = vi.hoisted(() => ({ fetchReleases: vi.fn() }));
+const { fetchReleases, navigateTo } = vi.hoisted(() => ({
+  fetchReleases: vi.fn(),
+  navigateTo: vi.fn(),
+}));
 
 vi.mock("@admin/services/releaseApi", async importOriginal => ({
   ...(await importOriginal<object>()),
   fetchReleases,
+}));
+vi.mock("@admin/lib/navigation", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  navigateTo,
 }));
 vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => ({ user: { id: "me", name: "Ana Ruiz" } }),
@@ -31,6 +38,7 @@ vi.mock("../release-timezone", async importOriginal => ({
 }));
 
 import { ReleaseBoard } from "../ReleaseBoard";
+import { ReleaseTitleCell } from "../ReleaseListCells";
 
 function release(over: Partial<Release> & { id: string }): Release {
   return {
@@ -74,8 +82,16 @@ beforeEach(() => {
         scheduledAt: "2026-11-28T09:00:00.000Z",
         memberCounts: { total: 14, goLive: 14, comeDown: 0 },
       }),
+      release({
+        id: "r-hours",
+        title: "Opening hours",
+        kind: "single",
+        state: "scheduled",
+        scheduledAt: "2026-11-29T09:00:00.000Z",
+        memberCounts: { total: 1, goLive: 1, comeDown: 0 },
+      }),
     ],
-    total: 1,
+    total: 2,
   };
   answers.attention = {
     items: [
@@ -102,12 +118,16 @@ beforeEach(() => {
   };
   fetchReleases.mockImplementation(async (params: ReleaseListParams) => {
     const answer = answers[params.tab as ReleaseListTab];
+    // The server's kind filter: `release` leaves single-document releases
+    // out of the page and out of the total alike.
+    const left = answer.items.filter(
+      each =>
+        params.kind === undefined || (each.kind ?? "release") === params.kind
+    );
+    const total = answer.total - (answer.items.length - left.length);
     return {
-      items: answer.items.slice(0, params.limit ?? 20),
-      meta: {
-        total: answer.total,
-        hasNext: answer.total > answer.items.length,
-      },
+      items: left.slice(0, params.limit ?? 20),
+      meta: { total, hasNext: total > left.length },
     };
   });
 });
@@ -194,6 +214,60 @@ describe("the Releases Board", () => {
     const tile = await screen.findByRole("link", { name: /Autumn launch/ });
     expect(tile).not.toHaveAttribute("draggable", "true");
     expect(tile.closest("[draggable='true']")).toBeNull();
+    // Nothing on the board answers a drag: dropped on Done, the tile stays
+    // in Scheduled and nothing is asked of the server.
+    const asked = fetchReleases.mock.calls.length;
+    const done = column(/^Done$/);
+    fireEvent.dragStart(tile);
+    fireEvent.dragEnter(done);
+    fireEvent.dragOver(done);
+    fireEvent.drop(done);
+    fireEvent.dragEnd(tile);
+    expect(
+      within(column(/^Scheduled$/)).getByRole("link", { name: /Autumn launch/ })
+    ).toBe(tile);
+    expect(
+      within(done).queryByRole("link", { name: /Autumn launch/ })
+    ).toBeNull();
+    expect(fetchReleases.mock.calls.length).toBe(asked);
+    expect(navigateTo).not.toHaveBeenCalled();
+  });
+
+  it("opens a release from its tile by click or by Enter", async () => {
+    render(<ReleaseBoard onShowTab={vi.fn()} />);
+
+    const tile = await screen.findByRole("link", { name: /Autumn launch/ });
+    tile.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(navigateTo).toHaveBeenLastCalledWith("/admin/releases/r-autumn");
+    navigateTo.mockClear();
+    await userEvent.click(screen.getByRole("link", { name: /Pricing update/ }));
+    expect(navigateTo).toHaveBeenLastCalledWith("/admin/releases/r-pricing");
+  });
+
+  it("marks a single-document release as the list does, and no other", async () => {
+    render(<ReleaseBoard onShowTab={vi.fn()} />);
+
+    // The mark's words are part of the tile's name, so a screen reader hears
+    // it as the list's row is heard.
+    const single = await screen.findByRole("link", {
+      name: /^Opening hours Single document\b/,
+    });
+    const mark = within(single).getByText("Single document");
+    // The list's mark: the same words after the same icon, which no one
+    // hears. Where each sits (its margin) is the surface's own.
+    render(<ReleaseTitleCell release={release({ id: "x", kind: "single" })} />);
+    const listMark = screen
+      .getAllByText("Single document")
+      .find(each => !single.contains(each));
+    expect(mark.textContent).toBe(listMark?.textContent);
+    expect(mark.querySelector("svg")?.outerHTML).toBe(
+      listMark?.querySelector("svg")?.outerHTML
+    );
+    expect(mark.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+
+    const ordinary = screen.getByRole("link", { name: /Autumn launch/ });
+    expect(within(ordinary).queryByText("Single document")).toBeNull();
   });
 
   it("says when a column could not be read, and reads it again", async () => {
@@ -242,5 +316,37 @@ describe("the Releases Board, kept current", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("the Releases Board with single documents hidden", () => {
+  it("leaves them out of every column, and out of the column's count", async () => {
+    render(<ReleaseBoard onShowTab={vi.fn()} kind="release" />);
+
+    await screen.findByText("Autumn launch");
+    // Every column asks the server for ordinary releases only, so its count
+    // is the count of what it shows and its "+N more" is true.
+    const kinds = fetchReleases.mock.calls.map(
+      ([params]) => (params as ReleaseListParams).kind
+    );
+    expect(kinds).toHaveLength(4);
+    expect(new Set(kinds)).toEqual(new Set(["release"]));
+    expect(screen.queryByText("Opening hours")).toBeNull();
+    expect(screen.queryByText("Single document")).toBeNull();
+    const scheduled = column(/^Scheduled$/);
+    expect(within(scheduled).getAllByRole("link")).toHaveLength(1);
+    expect(within(scheduled).getByText("1")).toBeInTheDocument();
+  });
+
+  it("shows them, marked, when nothing is hidden", async () => {
+    render(<ReleaseBoard onShowTab={vi.fn()} />);
+
+    await screen.findByText("Opening hours");
+    expect(
+      fetchReleases.mock.calls.every(
+        ([params]) => (params as ReleaseListParams).kind === undefined
+      )
+    ).toBe(true);
+    expect(within(column(/^Scheduled$/)).getByText("2")).toBeInTheDocument();
   });
 });

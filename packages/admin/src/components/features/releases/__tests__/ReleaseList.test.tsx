@@ -10,6 +10,7 @@
  * @module components/features/releases/__tests__/ReleaseList.test
  */
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, waitFor, within } from "@admin/__tests__/utils";
@@ -74,6 +75,21 @@ vi.mock("../release-timezone", async importOriginal => ({
 }));
 
 import { ReleaseList } from "../ReleaseList";
+
+/**
+ * The list as the Releases page holds it: the page keeps "Hide single
+ * documents", so the switch outlives the list while another view is shown.
+ */
+function ListOnPage(props: { onCreate?: () => void }) {
+  const [hideSingles, setHideSingles] = useState(false);
+  return (
+    <ReleaseList
+      {...props}
+      hideSingles={hideSingles}
+      onHideSinglesChange={setHideSingles}
+    />
+  );
+}
 
 const NO_CAPABILITIES = {
   schedule: false,
@@ -161,7 +177,7 @@ beforeEach(() => {
 
 describe("the release list's tabs", () => {
   it("shows the four tabs, each with its count", () => {
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(screen.getByRole("tab", { name: "Upcoming (3)" })).toBeTruthy();
     expect(
       screen.getByRole("tab", { name: "Needs attention (1)" })
@@ -171,7 +187,7 @@ describe("the release list's tabs", () => {
   });
 
   it("opens on Upcoming and asks for its first page of twenty", () => {
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(
       screen
         .getByRole("tab", { name: "Upcoming (3)" })
@@ -186,7 +202,7 @@ describe("the release list's tabs", () => {
 
   it("opens the tab the address names, narrowed to the part it names", () => {
     mocks.searchParams = { tab: "attention", reason: "overdue" };
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(mocks.listPage).toHaveBeenLastCalledWith({
       tab: "attention",
       page: 1,
@@ -198,7 +214,7 @@ describe("the release list's tabs", () => {
 
   it("ignores a reason carried onto a tab that has no parts", () => {
     mocks.searchParams = { tab: "drafts", reason: "overdue" };
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(mocks.listPage).toHaveBeenLastCalledWith({
       tab: "drafts",
       page: 1,
@@ -208,7 +224,7 @@ describe("the release list's tabs", () => {
 
   it("moves to another tab through the address, dropping the narrowing", async () => {
     const user = userEvent.setup();
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     await user.click(screen.getByRole("tab", { name: "Drafts (2)" }));
     expect(mocks.setSearchParams).toHaveBeenCalledWith({
       tab: "drafts",
@@ -219,7 +235,7 @@ describe("the release list's tabs", () => {
 
 describe("a release's row", () => {
   it("says when it runs in the reader's zone, and as scheduled where that differs", () => {
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     const row = table();
     expect(row.getByText(/Fri, Oct 16, 2026 10:00\sPM/)).toBeTruthy();
     expect(row.getByText(/your time/)).toBeTruthy();
@@ -229,7 +245,7 @@ describe("a release's row", () => {
   });
 
   it("says what it does, how many documents are ready, its state and its owner", () => {
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     const row = table();
     expect(row.getByText(/6 documents/)).toBeTruthy();
     expect(row.getByText(/5 go live, 1 comes down/)).toBeTruthy();
@@ -248,7 +264,7 @@ describe("a release's row", () => {
         release({ id: "b", title: "Stuck one", state: "blocked" }),
       ])
     );
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(table().getByText("Overdue")).toBeTruthy();
     expect(table().getByText("Stopped")).toBeTruthy();
   });
@@ -265,7 +281,7 @@ describe("a release's row", () => {
         soft: [],
       }))
     );
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(table().getByText(/come down/)).toBeTruthy();
     expect(table().getByText(/2 documents/)).toBeTruthy();
     expect(table().queryByText(/go live/)).toBeNull();
@@ -276,7 +292,7 @@ describe("a release's row", () => {
     mocks.listPage.mockReturnValue(
       page([release({ kind: "single", title: "Pricing page" })])
     );
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(table().getByText("Single document")).toBeTruthy();
   });
 
@@ -288,7 +304,7 @@ describe("a release's row", () => {
         reason: "over-member-limit",
       }))
     );
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(table().getByText("Open to check")).toBeTruthy();
   });
 
@@ -304,7 +320,7 @@ describe("a release's row", () => {
         release({ id: "r3", title: "Third" }),
       ])
     );
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     // Every render asks the same one question; never one per row.
     for (const [ids] of mocks.readiness.mock.calls) {
       expect(ids).toEqual(["r1", "r3"]);
@@ -323,7 +339,7 @@ describe("a release's row", () => {
         }),
       ])
     );
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(table().getByText(/5 went live, 1 came down/)).toBeTruthy();
     expect(mocks.readiness).toHaveBeenLastCalledWith([], expect.any(Number));
   });
@@ -344,7 +360,7 @@ describe("a release's row", () => {
         }),
       ])
     );
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(table().getByText("Aqib Qureshi")).toBeTruthy();
     expect(table().getByText("Sara Malik")).toBeTruthy();
     expect(mocks.usersRead).not.toHaveBeenCalled();
@@ -354,7 +370,7 @@ describe("a release's row", () => {
     mocks.listPage.mockReturnValue(
       page([release({ createdBy: "u-gone", owner: null })])
     );
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(table().getByText("Owner unavailable")).toBeTruthy();
     expect(mocks.usersRead).not.toHaveBeenCalled();
   });
@@ -377,7 +393,7 @@ describe("the row menu", () => {
         }),
       ])
     );
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     await user.click(table().getByRole("button", { name: "Row actions" }));
     expect(await screen.findByText("Schedule…")).toBeTruthy();
     expect(screen.getByText("Delete…")).toBeTruthy();
@@ -399,7 +415,7 @@ describe("the row menu", () => {
         }),
       ])
     );
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     await user.click(table().getByRole("button", { name: "Row actions" }));
     expect(await screen.findByText("Reschedule…")).toBeTruthy();
     expect(screen.getByText("Publish now…")).toBeTruthy();
@@ -418,7 +434,7 @@ describe("the row menu", () => {
         }),
       ])
     );
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     await user.click(table().getByRole("button", { name: "Row actions" }));
     expect(await screen.findByText("Discard…")).toBeTruthy();
     expect(screen.getByText("Open")).toBeTruthy();
@@ -434,7 +450,7 @@ describe("the list's empty states", () => {
   ])("says what the %s tab holds when it is empty", (tab, title) => {
     mocks.searchParams = { tab };
     mocks.listPage.mockReturnValue(page([]));
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(screen.getByRole("heading", { name: title })).toBeTruthy();
     expect(screen.queryByRole("table")).toBeNull();
   });
@@ -442,7 +458,7 @@ describe("the list's empty states", () => {
   it("offers the drafts from an empty Upcoming when there are some to schedule", async () => {
     const user = userEvent.setup();
     mocks.listPage.mockReturnValue(page([]));
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     await user.click(screen.getByRole("button", { name: "View drafts" }));
     expect(mocks.setSearchParams).toHaveBeenCalledWith({
       tab: "drafts",
@@ -454,7 +470,7 @@ describe("the list's empty states", () => {
     const onCreate = vi.fn();
     mocks.listPage.mockReturnValue(page([]));
     mocks.tabCounts.mockReturnValue(counts({}));
-    render(<ReleaseList onCreate={onCreate} />);
+    render(<ListOnPage onCreate={onCreate} />);
     expect(
       screen.getByRole("heading", { name: "Plan your first release" })
     ).toBeTruthy();
@@ -483,7 +499,7 @@ describe("a read that failed", () => {
     mocks.searchParams = { tab: "attention" };
     mocks.tabCounts.mockReturnValue(failedCounts());
     mocks.listPage.mockReturnValue({ ...page([]), refetch: mocks.refetchList });
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(
       screen.queryByRole("heading", { name: "Nothing needs attention" })
     ).toBeNull();
@@ -499,7 +515,7 @@ describe("a read that failed", () => {
     mocks.searchParams = { tab: "attention" };
     mocks.tabCounts.mockReturnValue(failedCounts());
     mocks.listPage.mockReturnValue(page([release({ title: "Late one" })]));
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(table().getByText("Late one")).toBeTruthy();
     expect(
       screen.getByPlaceholderText("Search by title or description")
@@ -518,7 +534,7 @@ describe("a read that failed", () => {
       isFetching: false,
       refetch: mocks.refetchList,
     });
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(screen.getByRole("button", { name: /Try Again/ })).toBeTruthy();
     expect(
       screen.queryByRole("heading", { name: "Nothing is scheduled" })
@@ -537,14 +553,14 @@ describe("readiness while the page stays open", () => {
       }))
     );
     mocks.listPage.mockReturnValue(page([release()], 1, 1000));
-    const { rerender } = render(<ReleaseList />);
+    const { rerender } = render(<ListOnPage />);
     expect(table().getByText("All 6 ready")).toBeTruthy();
 
     // The list polls and comes back with the same release; meanwhile one of
     // its documents lost a required field.
     mocks.readiness.mockImplementation(readinessAnswering(ONE_DOCUMENT_TO_FIX));
     mocks.listPage.mockReturnValue(page([release()], 1, 2000));
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
     expect(mocks.readiness).toHaveBeenLastCalledWith(["r1"], 2000);
     expect(table().getByText("1 needs a fix")).toBeTruthy();
   });
@@ -557,7 +573,7 @@ describe("the open tab and its count", () => {
       counts({ upcoming: 3, attention: 0, drafts: 2, done: 12 })
     );
     mocks.listPage.mockReturnValue({ ...page([]), refetch: mocks.refetchList });
-    const { rerender } = render(<ReleaseList />);
+    const { rerender } = render(<ListOnPage />);
     expect(
       screen.getByRole("heading", { name: "Nothing needs attention" })
     ).toBeTruthy();
@@ -567,7 +583,7 @@ describe("the open tab and its count", () => {
     mocks.tabCounts.mockReturnValue(
       counts({ upcoming: 2, attention: 1, drafts: 2, done: 12 })
     );
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
     expect(mocks.refetchList).toHaveBeenCalledTimes(1);
 
     // The page's own read then lists it.
@@ -575,7 +591,7 @@ describe("the open tab and its count", () => {
       ...page([release({ title: "Late one" })]),
       refetch: mocks.refetchList,
     });
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
     expect(table().getByText("Late one")).toBeTruthy();
   });
 
@@ -584,12 +600,12 @@ describe("the open tab and its count", () => {
       ...page([release()]),
       refetch: mocks.refetchList,
     });
-    const { rerender } = render(<ReleaseList />);
+    const { rerender } = render(<ListOnPage />);
     mocks.tabCounts.mockReturnValue(
       counts({ upcoming: 3, attention: 5, drafts: 2, done: 13 })
     );
-    rerender(<ReleaseList />);
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
+    rerender(<ListOnPage />);
     expect(mocks.refetchList).not.toHaveBeenCalled();
   });
 });
@@ -605,7 +621,7 @@ describe("paging when a tab shrinks", () => {
     mocks.listPage.mockImplementation(({ page: number }: { page: number }) =>
       number === 1 ? page(rows, total) : page([], total)
     );
-    const { rerender } = render(<ReleaseList />);
+    const { rerender } = render(<ListOnPage />);
     await user.click(screen.getByRole("button", { name: "Go to next page" }));
     expect(mocks.listPage).toHaveBeenLastCalledWith(
       expect.objectContaining({ page: 2 })
@@ -614,7 +630,7 @@ describe("paging when a tab shrinks", () => {
     // The only release on page 2 is published: the next answer (a poll, or
     // the refresh after the action) has one release fewer and no page 2.
     total = 25;
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
     await waitFor(() =>
       expect(mocks.listPage).toHaveBeenLastCalledWith(
         expect.objectContaining({ page: 1 })
@@ -641,7 +657,7 @@ describe("the search while the counts read again", () => {
     mocks.tabCounts.mockImplementation(({ search }: { search: string }) =>
       search ? recounting : answered
     );
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     const box = screen.getByPlaceholderText("Search by title or description");
     await user.click(box);
     await user.type(box, "spring");
@@ -671,14 +687,14 @@ describe("the counts' first read", () => {
       isPending: true,
       isError: false,
     });
-    const { rerender } = render(<ReleaseList />);
+    const { rerender } = render(<ListOnPage />);
     expect(
       screen.queryByPlaceholderText("Search by title or description")
     ).toBeNull();
     mocks.tabCounts.mockReturnValue(
       counts({ upcoming: 3, attention: 1, drafts: 2, done: 12 })
     );
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
     expect(
       screen.getByPlaceholderText("Search by title or description")
     ).toBeTruthy();
@@ -707,13 +723,13 @@ describe("the list's outline while its reads answer", () => {
   it("keeps the toolbar's outline it drew when the counts answer before the page", () => {
     mocks.tabCounts.mockReturnValue(unanswered);
     mocks.listPage.mockReturnValue(pendingPage);
-    const { rerender } = render(<ReleaseList />);
+    const { rerender } = render(<ListOnPage />);
     expect(toolbarOutlines()).toBe(1);
     // The counts say no release exists while the page is still on its way:
     // the outline the reader sees stays as it was until the list replaces
     // it whole.
     mocks.tabCounts.mockReturnValue(counts({}));
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
     expect(toolbarOutlines()).toBe(1);
   });
 
@@ -724,17 +740,17 @@ describe("the list's outline while its reads answer", () => {
   it("draws no toolbar over the outline while the page is still on its way", () => {
     mocks.tabCounts.mockReturnValue(unanswered);
     mocks.listPage.mockReturnValue(pendingPage);
-    const { rerender } = render(<ReleaseList />);
+    const { rerender } = render(<ListOnPage />);
     mocks.tabCounts.mockReturnValue(
       counts({ upcoming: 12, attention: 1, drafts: 2, done: 3 })
     );
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
     expect(
       screen.queryByPlaceholderText("Search by title or description")
     ).toBeNull();
     expect(toolbarOutlines()).toBe(1);
     mocks.listPage.mockReturnValue(page([release()]));
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
     expect(
       screen.getByPlaceholderText("Search by title or description")
     ).toBeTruthy();
@@ -750,7 +766,7 @@ describe("the list's outline while its reads answer", () => {
       counts({ upcoming: 0, attention: 2, drafts: 0, done: 0 })
     );
     mocks.listPage.mockReturnValue(pendingPage);
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(toolbarOutlines()).toBe(1);
   });
 
@@ -762,13 +778,13 @@ describe("the list's outline while its reads answer", () => {
       counts({ upcoming: 3, attention: 2, drafts: 1, done: 4 })
     );
     mocks.listPage.mockReturnValue(page([release()]));
-    const { rerender } = render(<ReleaseList />);
+    const { rerender } = render(<ListOnPage />);
     expect(
       screen.getByPlaceholderText("Search by title or description")
     ).toBeTruthy();
     mocks.listPage.mockReturnValue(pendingPage);
     mocks.searchParams = { tab: "drafts" };
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
     expect(
       screen.getByPlaceholderText("Search by title or description")
     ).toBeTruthy();
@@ -778,7 +794,7 @@ describe("the list's outline while its reads answer", () => {
   it("draws no toolbar's place when kept counts say no release exists", () => {
     mocks.tabCounts.mockReturnValue(counts({}));
     mocks.listPage.mockReturnValue(pendingPage);
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     expect(toolbarOutlines()).toBe(0);
   });
 
@@ -787,7 +803,7 @@ describe("the list's outline while its reads answer", () => {
       document.querySelectorAll('[data-slot="list-toolbar"]').length;
     mocks.tabCounts.mockReturnValue(unanswered);
     mocks.listPage.mockReturnValue(pendingPage);
-    const { rerender } = render(<ReleaseList />);
+    const { rerender } = render(<ListOnPage />);
     // The counts fail before the page answers, and the page then answers
     // empty: the failure stands in the list's place, with no toolbar.
     mocks.tabCounts.mockReturnValue({
@@ -795,16 +811,16 @@ describe("the list's outline while its reads answer", () => {
       isPending: false,
       isError: true,
     });
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
     mocks.listPage.mockReturnValue(page([]));
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
     expect(
       screen.getByText(/The number of releases in each tab is unknown/)
     ).toBeTruthy();
     expect(toolbars()).toBe(0);
     // The retry answers that no release exists: still no toolbar.
     mocks.tabCounts.mockReturnValue(counts({}));
-    rerender(<ReleaseList />);
+    rerender(<ListOnPage />);
     expect(toolbars()).toBe(0);
     expect(toolbarOutlines()).toBe(0);
   });
@@ -813,7 +829,7 @@ describe("the list's outline while its reads answer", () => {
 describe("the single-document filter", () => {
   it("hides single-document releases from the list and from the counts", async () => {
     const user = userEvent.setup();
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     await user.click(
       screen.getByRole("switch", { name: "Hide single documents" })
     );
@@ -831,7 +847,7 @@ describe("the single-document filter", () => {
 
   it("says the filter, not the tab, is why nothing shows", async () => {
     const user = userEvent.setup();
-    render(<ReleaseList />);
+    render(<ListOnPage />);
     mocks.listPage.mockReturnValue(page([]));
     await user.click(
       screen.getByRole("switch", { name: "Hide single documents" })

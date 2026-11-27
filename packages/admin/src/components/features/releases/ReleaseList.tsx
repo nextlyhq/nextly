@@ -73,6 +73,7 @@ import {
   type Release,
   type ReleaseListParams,
   type ReleaseAttentionReason,
+  type ReleaseKind,
   type ReleaseListTab,
 } from "@admin/types/releases";
 
@@ -435,15 +436,32 @@ function pagerFor({
 }
 
 /**
+ * Which releases the Releases page shows while "Hide single documents" is on
+ * or off: ordinary ones only (`release`), or every kind (`undefined`). The
+ * one rule the List, the Calendar and the Board all read the switch by.
+ */
+export function releaseKindShown(
+  hideSingles: boolean
+): ReleaseKind | undefined {
+  return hideSingles ? "release" : undefined;
+}
+
+/**
  * What the list is being asked, held in one place: the tab and its narrowing
  * from the address, the search, the single-document filter, and the page.
+ *
+ * The filter is the page's, handed in: it holds for the Calendar and the
+ * Board too, and outlives the list while one of them is shown.
  *
  * The page belongs to one question. Held with the question it was chosen for,
  * so a new tab, search, filter or page size starts on its first page in the
  * same render, rather than fetching the old page number of a different list
  * first and resetting after.
  */
-function useReleaseListQuestion() {
+function useReleaseListQuestion({
+  hideSingles,
+  onHideSinglesChange: setHideSingles,
+}: Pick<ReleaseListProps, "hideSingles" | "onHideSinglesChange">) {
   const params = useSearchParams();
   const linkedTab = getSearchParam(params, "tab");
   const linkedReason = getSearchParam(params, "reason");
@@ -456,9 +474,8 @@ function useReleaseListQuestion() {
       : undefined;
 
   const [search, setSearch] = useState("");
-  const [hideSingles, setHideSingles] = useState(false);
   const [pageSize, setPageSize] = useState(RELEASE_PAGE_SIZE);
-  const kind = hideSingles ? ("release" as const) : undefined;
+  const kind = releaseKindShown(hideSingles);
 
   const question = [tab, reason, search, kind, pageSize].join("|");
   const [paging, setPaging] = useState({ question, page: 0 });
@@ -558,6 +575,10 @@ function usePageReadiness(
 export interface ReleaseListProps {
   /** Offered only to a caller who may assemble a release. */
   onCreate?: () => void;
+  /** Whether "Hide single documents" is on: the page's, for every view. */
+  hideSingles: boolean;
+  /** Turns "Hide single documents" on or off, for every view. */
+  onHideSinglesChange: (hideSingles: boolean) => void;
 }
 
 /** The list read one tab's question makes. */
@@ -802,8 +823,12 @@ function ReleaseTabStrip({
   );
 }
 
-export function ReleaseList({ onCreate }: ReleaseListProps): JSX.Element {
-  const q = useReleaseListQuestion();
+export function ReleaseList({
+  onCreate,
+  hideSingles,
+  onHideSinglesChange,
+}: ReleaseListProps): JSX.Element {
+  const q = useReleaseListQuestion({ hideSingles, onHideSinglesChange });
   const data = useReleaseListData(q);
   const { counts, list, rows, total, anyRelease, failure } = data;
   const zone = useMemo(() => readerZone(), []);

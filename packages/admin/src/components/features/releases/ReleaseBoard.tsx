@@ -21,7 +21,11 @@ import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useReleaseBoardColumn } from "@admin/hooks/queries/useReleases";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
-import type { Release, ReleaseListTab } from "@admin/types/releases";
+import type {
+  Release,
+  ReleaseKind,
+  ReleaseListTab,
+} from "@admin/types/releases";
 
 import {
   RELEASE_BOARD_COLUMNS,
@@ -35,15 +39,24 @@ import {
   releaseRowStatus,
 } from "./release-list";
 import { readerZone } from "./release-timezone";
-import { ReleaseStatusBadge } from "./ReleaseListCells";
+import { ReleaseStatusBadge, SingleDocumentMark } from "./ReleaseListCells";
 import { useMinuteClock } from "./useMinuteClock";
 
 export interface ReleaseBoardProps {
   /** Turns the page to the List view, on `tab`: where a column's rest is. */
   onShowTab: (tab: ReleaseListTab) => void;
+  /**
+   * Only releases of this kind, as the list is filtered: `release` while
+   * "Hide single documents" is on. Asked of the server, so each column
+   * count and its "+N more" count only what the column can show.
+   */
+  kind?: ReleaseKind;
 }
 
-export function ReleaseBoard({ onShowTab }: ReleaseBoardProps): JSX.Element {
+export function ReleaseBoard({
+  onShowTab,
+  kind,
+}: ReleaseBoardProps): JSX.Element {
   const zone = useMemo(() => readerZone(), []);
   const now = useMinuteClock();
   return (
@@ -55,6 +68,7 @@ export function ReleaseBoard({ onShowTab }: ReleaseBoardProps): JSX.Element {
           key={column.tab}
           tab={column.tab}
           label={column.label}
+          kind={kind}
           zone={zone}
           now={now}
           onShowTab={onShowTab}
@@ -67,19 +81,21 @@ export function ReleaseBoard({ onShowTab }: ReleaseBoardProps): JSX.Element {
 function BoardColumn({
   tab,
   label,
+  kind,
   zone,
   now,
   onShowTab,
 }: {
   tab: ReleaseListTab;
   label: string;
+  kind: ReleaseKind | undefined;
   zone: string;
   now: number;
   onShowTab: (tab: ReleaseListTab) => void;
 }) {
   // The list's own read of this tab, every column on the fast cadence, so a
   // release moves column on the board as soon as it moves tab in the list.
-  const read = useReleaseBoardColumn(tab, RELEASE_BOARD_LIMIT);
+  const read = useReleaseBoardColumn(tab, RELEASE_BOARD_LIMIT, kind);
   const releases = read.data?.items ?? [];
   const total = read.data?.meta.total;
   const more =
@@ -143,7 +159,8 @@ function BoardColumn({
 }
 
 /**
- * One release: its title, when it moves, its documents and its owner. Where
+ * One release: its title (marked when it holds one document, as its row in
+ * the list is), when it moves, its documents and its owner. Where
  * the column alone does not say how it stands (stopped or overdue, published
  * or cancelled), its status as the list draws it.
  */
@@ -175,7 +192,13 @@ function BoardTile({
       href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
       className="flex flex-col gap-1 rounded-md border border-border bg-background p-2.5 text-sm outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <span className="font-medium text-foreground">{release.title}</span>
+      {/* The title and the mark on one line where they fit. The space
+          between them is for the link name: without it a screen reader
+          runs the title and the mark together as one word. */}
+      <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-medium text-foreground">{release.title}</span>{" "}
+        {release.kind === "single" ? <SingleDocumentMark /> : null}
+      </span>{" "}
       {showsStatus ? (
         <span className="self-start">
           <ReleaseStatusBadge status={status} />

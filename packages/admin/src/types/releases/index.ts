@@ -406,6 +406,11 @@ export interface ReleaseCalendarParams {
   to: string;
   /** The IANA zone the days are read in. */
   timezone: string;
+  /**
+   * Only releases of this kind: `release` leaves out single-document ones,
+   * from each day's releases and its counts alike.
+   */
+  kind?: ReleaseKind;
 }
 
 /** How many documents a release holds, and what it does with them. */
