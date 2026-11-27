@@ -398,7 +398,13 @@ export function createAIService(deps: AIServiceDeps): AIService {
     // One end, claimed synchronously by whichever read or stop gets there
     // first; every later one waits for it and emits nothing.
     let ending: Promise<void> | undefined;
-    const end = (result: AIRunResult, used: () => Promise<AIRunUsage>) => {
+    // Read through a call, since a read or a stop may claim it while another
+    // read waits on the provider.
+    const claimed = (): Promise<void> | undefined => ending;
+    const end = (
+      result: AIRunResult,
+      used: () => AIRunUsage | Promise<AIRunUsage>
+    ) => {
       ending ??= (async () => {
         await emitEnd(
           "stream",
@@ -414,8 +420,9 @@ export function createAIService(deps: AIServiceDeps): AIService {
     const finished = { done: true as const, value: undefined };
     const iterator: AsyncIterator<string> = {
       async next() {
-        if (ending) {
-          await ending;
+        const before = claimed();
+        if (before) {
+          await before;
           return finished;
         }
         let step: IteratorResult<string>;
@@ -425,22 +432,24 @@ export function createAIService(deps: AIServiceDeps): AIService {
           await end("failed", () => usageWithin(usageOrNone));
           throw error;
         }
-        if (ending) {
-          await ending;
+        const meanwhile = claimed();
+        if (meanwhile) {
+          await meanwhile;
           return finished;
         }
         if (!step.done) return { done: false, value: step.value };
         const reported = await usage;
         if (!reported.ok) {
-          await end("failed", async () => NO_USAGE);
+          await end("failed", () => NO_USAGE);
           throw reported.error;
         }
-        await end("succeeded", async () => reported.usage);
+        await end("succeeded", () => reported.usage);
         return finished;
       },
       async return() {
-        if (ending) {
-          await ending;
+        const before = claimed();
+        if (before) {
+          await before;
           return finished;
         }
         const stopped = end("cancelled", async () => {
