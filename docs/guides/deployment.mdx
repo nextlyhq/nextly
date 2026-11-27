@@ -115,7 +115,7 @@ Use a managed PostgreSQL service that's reachable from Vercel's IP ranges:
 - [Supabase](https://supabase.com)
 - [PlanetScale](https://planetscale.com) (MySQL)
 
-SQLite is **not** suitable for Vercel deployments -- the file would be wiped on every cold start. See [Database](/docs/database) for adapter-specific guidance.
+SQLite is great on your own machine and on a single server; on Vercel, choose PostgreSQL, because a function's file would be wiped on every cold start. See [Database](/docs/database) for adapter-specific guidance.
 
 #### Database connections on Vercel
 

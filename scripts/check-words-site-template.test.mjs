@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -21,16 +25,35 @@ describe("the words 'site template'", () => {
     expect(siteTemplateWordsInRepository()).toEqual([]);
   });
 
-  it("scan the docs, the admin, the installer, core and the form builder", () => {
+  it("scan the docs, release notes, the admin, the installer, core and the form builder", () => {
     expect(SCANNED).toEqual(
       expect.arrayContaining([
         "docs",
+        ".changeset",
         "packages/admin/src",
         "packages/create-nextly-app/src",
         "packages/nextly/src",
         "packages/plugin-form-builder/src",
       ])
     );
+  });
+
+  it("are found by the repository walk, in every scanned folder", () => {
+    // A repository of its own, so the walk itself is shown to read each
+    // folder: a clean result from the real one says nothing on its own.
+    const root = mkdtempSync(join(tmpdir(), "site-template-words-"));
+    try {
+      for (const folder of SCANNED) {
+        mkdirSync(join(root, folder), { recursive: true });
+        writeFileSync(join(root, folder, "page.md"), "Pick a site template.\n");
+        writeFileSync(join(root, folder, "clean.ts"), 'const slug = "site-templates";\n');
+      }
+      expect(siteTemplateWordsInRepository(root)).toEqual(
+        SCANNED.map(folder => `${folder}/page.md:1: Pick a site template.`)
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("are found in a comment, a test name and shown text", () => {

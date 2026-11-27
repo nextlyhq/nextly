@@ -32,6 +32,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /** The folders read, by repository-relative path. */
 export const SCANNED = [
   "docs",
+  // Pending release notes, which become the published changelog.
+  ".changeset",
   "packages/admin/src",
   "packages/create-nextly-app/src",
   // The whole core, whose email domain held the second meaning, and the form

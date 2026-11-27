@@ -25,8 +25,10 @@ const PAGES = [
   "docs/index.mdx",
   "docs/database/index.mdx",
   "docs/database/sqlite.mdx",
+  "docs/getting-started/index.mdx",
   "docs/getting-started/installation.mdx",
   "docs/getting-started/quick-start.mdx",
+  "docs/guides/deployment.mdx",
 ];
 
 /** Wordings that describe SQLite as unfit for real sites, in each spelling seen. */
