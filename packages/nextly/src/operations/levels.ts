@@ -19,6 +19,16 @@ export function levelRank(level: RiskLevel): number {
   return RISK_LEVELS.indexOf(level);
 }
 
+/** Whether `value` has a `then` method, as every promise does. */
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    (typeof value === "object" || typeof value === "function") &&
+    value !== null &&
+    "then" in value &&
+    typeof value.then === "function"
+  );
+}
+
 /** What one run is: its level, and whether "Always allow" may cover it. */
 export interface RunLevel {
   readonly level: RiskLevel;
@@ -55,7 +65,9 @@ export function levelForRun<Input>(
     // the run, since a level computed too low is the harm to avoid.
     const answer: unknown = rule.applies(run);
     if (answer === false) continue;
-    if (answer instanceof Promise) answer.catch(() => undefined);
+    // A promise made anywhere (another realm's fails `instanceof`) gets a
+    // handler, so a rejection it carries is never left unhandled.
+    if (isThenable(answer)) Promise.resolve(answer).catch(() => undefined);
     if (levelRank(rule.level) > levelRank(level)) level = rule.level;
     if (rule.alwaysAllow === false) alwaysAllow = false;
   }

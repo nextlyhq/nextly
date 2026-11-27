@@ -2,6 +2,8 @@
  * A run's level comes from its input and target: the declared level, raised by
  * every rule that applies, never lowered.
  */
+import { runInNewContext } from "node:vm";
+
 import { describe, expect, it } from "vitest";
 
 import { levelForRun } from "../levels";
@@ -182,5 +184,30 @@ describe("a rule whose answer is not a plain yes or no", () => {
       ],
     };
     expect(levelForRun(no, { input: {} }).level).toBe("draft");
+  });
+});
+
+describe("a rule that answers with a promise from another realm", () => {
+  // A promise made in another realm (here a `node:vm` context) is not an
+  // instance of this one's Promise; it is still raised on, and its rejection
+  // still handled. Vitest fails the run on an unhandled rejection.
+  it("raises the run and leaves no rejection unhandled", async () => {
+    const foreign: unknown = runInNewContext(
+      'Promise.reject(new Error("looked up elsewhere"))'
+    );
+    expect(foreign instanceof Promise).toBe(false);
+    const odd = {
+      level: "draft" as const,
+      raise: [
+        {
+          when: "elsewhere",
+          level: "change" as const,
+          applies: (() => foreign) as unknown as () => boolean,
+        },
+      ],
+    };
+    expect(levelForRun(odd, { input: {} }).level).toBe("change");
+    // Give an unhandled rejection the turn it would need to be reported.
+    await new Promise(resolve => setTimeout(resolve, 20));
   });
 });

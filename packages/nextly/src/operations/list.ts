@@ -51,36 +51,18 @@ export interface OperationListSources {
   }[];
 }
 
-/** Whether `value` carries a Standard Schema's marker with its validate function. */
-function isSchema(value: object): boolean {
-  if (!("~standard" in value)) return false;
-  const standard: unknown = value["~standard"];
-  return (
-    typeof standard === "object" &&
-    standard !== null &&
-    "validate" in standard &&
-    typeof standard.validate === "function"
-  );
-}
-
 /** Whether `value` is an array or an object literal, the data a declaration holds. */
 function isPlainData(value: unknown): value is object {
   if (Array.isArray(value)) return true;
   if (typeof value !== "object" || value === null) return false;
-  // A schema is kept as given, whatever it is made of: its marker may not be
-  // a property a copy would carry over. Only a real one, with a validate
-  // function under its marker, is spared; other data is copied.
-  if (isSchema(value)) return false;
   const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
 /**
- * A frozen deep copy of a declaration's plain data: its arrays and object
- * literals, at every depth. Schemas (class instances) and functions are kept
- * as they are, since the list calls them rather than reading them. The list
- * checks and serves this copy, so a declarer that keeps its own object and
- * changes it later (pushing a door, say) changes nothing the checks passed.
+ * A frozen deep copy of plain data: arrays and object literals, at every
+ * depth. Anything else (a function, a class instance) is kept as it is, since
+ * the list calls such values rather than reading them.
  */
 function frozenCopy<T>(value: T, copies = new Map<object, object>()): T {
   if (!isPlainData(value)) return value;
@@ -98,10 +80,82 @@ function frozenCopy<T>(value: T, copies = new Map<object, object>()): T {
     }
   } else {
     for (const [key, entry] of Object.entries(value)) {
-      (copy as Record<string, unknown>)[key] = frozenCopy(entry, copies);
+      // Defined rather than assigned, so a key such as `__proto__` stays a
+      // key of its own instead of reaching the object's prototype.
+      Object.defineProperty(copy, key, {
+        value: frozenCopy(entry, copies),
+        enumerable: true,
+      });
     }
   }
   return Object.freeze(copy) as T;
+}
+
+/** The two fields that hold schemas, kept as given whatever they are made of. */
+const SCHEMA_FIELDS: ReadonlySet<string> = new Set(["input", "output"]);
+
+/**
+ * A declaration as the list checks and serves it: a frozen copy of its own
+ * fields, made whatever kind of object it was declared as, with its schemas
+ * kept as given (their marker may not be a property a copy would carry over)
+ * and every other field deep-copied. A declarer that keeps its object and
+ * changes it later (pushing a door, say) changes nothing the checks passed.
+ */
+function copyDeclaration(op: unknown): unknown {
+  if (typeof op !== "object" || op === null) return op;
+  const copy: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(op)) {
+    Object.defineProperty(copy, key, {
+      value: SCHEMA_FIELDS.has(key) ? entry : frozenCopy<unknown>(entry),
+      enumerable: true,
+    });
+  }
+  return Object.freeze(copy);
+}
+
+/** Each declaration in `operations` copied, or `operations` as given when it is not a list. */
+function copyOperations(operations: unknown): OperationDefinition[] {
+  const copied: unknown = Array.isArray(operations)
+    ? Object.freeze(Array.from(operations, copyDeclaration))
+    : operations;
+  // The checks refuse a value that is not a list, and each entry that is not
+  // a declaration, by name.
+  return copied as OperationDefinition[];
+}
+
+/**
+ * Who registered operations, as plain JavaScript may have given them: a
+ * contribution for each plugin entry that is an object, and the problems with
+ * the rest.
+ */
+function pluginContributions(plugins: unknown): {
+  contributions: OperationContribution[];
+  problems: string[];
+} {
+  if (plugins === undefined) return { contributions: [], problems: [] };
+  if (!Array.isArray(plugins)) {
+    return {
+      contributions: [],
+      problems: ["The plugins given are not a list"],
+    };
+  }
+  const contributions: OperationContribution[] = [];
+  const problems: string[] = [];
+  Array.from(plugins).forEach((plugin: unknown, index) => {
+    if (typeof plugin !== "object" || plugin === null) {
+      problems.push(`Plugin entry ${index + 1} is not an object`);
+      return;
+    }
+    const name: unknown = "name" in plugin ? plugin.name : undefined;
+    const operations: unknown =
+      "operations" in plugin ? plugin.operations : undefined;
+    contributions.push({
+      // A name that is not text is refused by the checks, by name.
+      source: { kind: "plugin", name: name as string },
+      operations: copyOperations(operations),
+    });
+  });
+  return { contributions, problems };
 }
 
 /**
@@ -129,18 +183,15 @@ function listed(op: OperationDefinition): ListedOperation {
 export async function assembleOperationList(
   sources: OperationListSources
 ): Promise<OperationList> {
+  const plugins = pluginContributions(sources.plugins);
   const contributions: OperationContribution[] = [
-    {
-      source: { kind: "core" },
-      operations: frozenCopy(sources.core),
-    },
-    ...(sources.plugins ?? []).map(plugin => ({
-      source: { kind: "plugin" as const, name: plugin.name },
-      // Copied whole, list and all; one that is not a list is refused by name.
-      operations: frozenCopy(plugin.operations),
-    })),
+    { source: { kind: "core" }, operations: copyOperations(sources.core) },
+    ...plugins.contributions,
   ];
-  const problems = await operationListProblems(contributions);
+  const problems = [
+    ...plugins.problems,
+    ...(await operationListProblems(contributions)),
+  ];
   if (problems.length > 0) {
     throw NextlyError.invalidInput({
       message: [

@@ -424,12 +424,28 @@ describe("the deploy door", () => {
           id: "migrations.status",
           command: ["migrations", "status"],
           doors: ["local", "deploy"],
+          permission: maintenance,
         }),
       ],
     });
     expect(list.operations.map(op => op.id)).toEqual([
       "migrate",
       "migrations.status",
+    ]);
+  });
+
+  it("is refused to an operation in the set that needs a person's permission", async () => {
+    const problems = await refusal({
+      core: [
+        readOperation({
+          id: "migrations.status",
+          command: ["migrations", "status"],
+          doors: ["local", "deploy"],
+        }),
+      ],
+    });
+    expect(problems).toEqual([
+      'Operation "migrations.status" from core: it runs on the deploy door but is not a maintenance operation; the deployment holds no stored permission',
     ]);
   });
 });
@@ -751,5 +767,137 @@ describe('a raise rule that refuses "Always allow"', () => {
     expect(problems).toEqual([
       'Operation "posts.publish" from core: its raise rule "many" refuses "Always allow" at change, not critical',
     ]);
+  });
+});
+
+describe("more plain JavaScript a check could stumble on", () => {
+  it("refuses plugins that are not a list", async () => {
+    const problems = await refusal({
+      core: [],
+      plugins: {} as unknown as OperationListSources["plugins"],
+    });
+    expect(problems).toEqual(["The plugins given are not a list"]);
+  });
+
+  it("refuses a plugin entry that is not an object", async () => {
+    const problems = await refusal({
+      core: [],
+      plugins: [null] as unknown as OperationListSources["plugins"],
+    });
+    expect(problems).toEqual(["Plugin entry 1 is not an object"]);
+  });
+
+  it("refuses an exit code that is a symbol, with no meaning, by name", async () => {
+    const odd = [
+      { code: Symbol("two") },
+    ] as unknown as OperationDefinition["exitCodes"];
+    const problems = await refusal({
+      core: [readOperation({ exitCodes: odd })],
+    });
+    expect(problems).toEqual([
+      'Operation "posts.list" from core: its exit code Symbol(two) is not a whole number from 0 to 255',
+      'Operation "posts.list" from core: its exit code Symbol(two) has no meaning',
+    ]);
+  });
+
+  it("refuses a schema with no vendor", async () => {
+    const noVendor = {
+      "~standard": { version: 1, validate: (value: unknown) => ({ value }) },
+    } as unknown as OperationDefinition["input"];
+    const problems = await refusal({
+      core: [readOperation({ input: noVendor })],
+    });
+    expect(problems).toEqual([
+      'Operation "posts.list" from core: its input schema is not a Standard Schema',
+    ]);
+  });
+
+  it.each([
+    [
+      "throws a value with no prototype",
+      () => {
+        throw Object.create(null);
+      },
+      'its example "The first ten posts" could not be checked: {}',
+    ],
+    [
+      "gives an issue whose message has no prototype",
+      () => ({ issues: [{ message: Object.create(null) }] }),
+      'its example "The first ten posts" does not parse against its input schema: {}',
+    ],
+  ])(
+    "names the operation when its schema %s",
+    async (_what, validate, refusalText) => {
+      const odd = {
+        "~standard": { version: 1, vendor: "handmade", validate },
+      } as unknown as OperationDefinition["input"];
+      const problems = await refusal({ core: [readOperation({ input: odd })] });
+      expect(problems).toEqual([
+        `Operation "posts.list" from core: ${refusalText}`,
+      ]);
+    }
+  );
+
+  it("refuses a permission with nothing after its action", async () => {
+    const problems = await refusal({
+      core: [
+        readOperation({ permission: { kind: "permission", name: "read-" } }),
+      ],
+    });
+    expect(problems).toEqual([
+      'Operation "posts.list" from core: its permission "read-" is not spelled as permissions are stored (<action>-<slug>, as read-posts)',
+    ]);
+  });
+
+  it.each([
+    ["toolName", 42, "its toolName is 42, not text"],
+    ["docs", [], "its docs is [], not text"],
+  ])("refuses a %s that is not text", async (key, value, refusalText) => {
+    const problems = await refusal({
+      core: [
+        { ...readOperation(), [key]: value } as unknown as OperationDefinition,
+      ],
+    });
+    expect(problems).toEqual([
+      `Operation "posts.list" from core: ${refusalText}`,
+    ]);
+  });
+});
+
+describe("what the list copies", () => {
+  it("copies a declaration made as a class instance", async () => {
+    class Declared {
+      readonly doors: string[] = ["local", "site"];
+    }
+    const declared = Object.assign(new Declared(), readOperation(), {
+      doors: ["local", "site"],
+    }) as unknown as OperationDefinition;
+    const list = await assembleOperationList({ core: [declared] });
+    (declared.doors as Door[]).push("deploy");
+    expect(list.byId("posts.list")?.doors).toEqual(["local", "site"]);
+  });
+
+  it("copies data that carries a schema-like marker, outside the schemas", async () => {
+    const effects = {
+      destroys: false,
+      idempotent: true,
+      outside: false,
+      spendsAi: false,
+      "~standard": { version: 1, vendor: "x", validate: () => ({ value: 1 }) },
+    };
+    const list = await assembleOperationList({
+      core: [readOperation({ effects })],
+    });
+    effects.destroys = true;
+    expect(list.byId("posts.list")?.effects.destroys).toBe(false);
+  });
+
+  it("keeps an own __proto__ key in an example as a key", async () => {
+    const input: unknown = JSON.parse('{"limit": 10, "__proto__": {"x": 1}}');
+    const list = await assembleOperationList({
+      core: [readOperation({ examples: [{ summary: "From JSON", input }] })],
+    });
+    const copied = list.byId("posts.list")?.examples[0].input;
+    expect(Object.hasOwn(copied as object, "__proto__")).toBe(true);
   });
 });

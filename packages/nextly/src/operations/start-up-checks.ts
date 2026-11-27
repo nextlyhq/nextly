@@ -118,7 +118,8 @@ function isAbsentOrFalse(value: unknown): boolean {
 function isStoredPermission(name: string): boolean {
   return (
     SLUG_PATTERN.test(name) &&
-    name.includes("-") &&
+    name.indexOf("-") > 0 &&
+    !name.endsWith("-") &&
     name.length <= MAX_PERMISSION_NAME_LENGTH
   );
 }
@@ -200,7 +201,11 @@ const schemaProblems: DefinitionCheck = op =>
   (["input", "output"] as const)
     .filter(name => {
       const standard = op[name]?.["~standard"];
-      return standard?.version !== 1 || typeof standard.validate !== "function";
+      return (
+        standard?.version !== 1 ||
+        typeof standard.vendor !== "string" ||
+        typeof standard.validate !== "function"
+      );
     })
     .map(name => `its ${name} schema is not a Standard Schema`);
 
@@ -355,11 +360,24 @@ const deployDoorProblems: DefinitionCheck = op => {
   if (op.source?.kind !== "core") {
     return ["a plugin's operation may not run on the deploy door"];
   }
-  if (DEPLOY_DOOR_OPERATIONS.has(op.id)) return [];
+  if (!DEPLOY_DOOR_OPERATIONS.has(op.id)) {
+    return [
+      `it runs on the deploy door, which only ${[...DEPLOY_DOOR_OPERATIONS].join(", ")} may`,
+    ];
+  }
+  // The deployment acts as itself, holding no person's stored permissions,
+  // so what runs there is declared as schema upkeep.
+  if (op.permission?.kind === "maintenance") return [];
   return [
-    `it runs on the deploy door, which only ${[...DEPLOY_DOOR_OPERATIONS].join(", ")} may`,
+    "it runs on the deploy door but is not a maintenance operation; the deployment holds no stored permission",
   ];
 };
+
+/** Its tool name and docs link, each text when given. */
+const optionalTextProblems: DefinitionCheck = op =>
+  (["toolName", "docs"] as const)
+    .filter(key => op[key] !== undefined && !isNonEmptyText(op[key]))
+    .map(key => `its ${key} is ${quoted(op[key])}, not text`);
 
 /** An operation that reads only its plugin's own data, unchecked. */
 function ownDataProblems(op: OperationDefinition): string[] {
@@ -465,11 +483,11 @@ function exitCodeProblems({ code, meaning }: OperationExitCode): string[] {
     );
   } else if (code !== 2 && code in SHARED_EXIT_CODES) {
     problems.push(
-      `it gives exit code ${code} a meaning of its own; ${code} always means "${SHARED_EXIT_CODES[code]}"`
+      `it gives exit code ${quoted(code)} a meaning of its own; ${quoted(code)} always means "${SHARED_EXIT_CODES[code]}"`
     );
   }
   if (!isNonEmptyText(meaning)) {
-    problems.push(`its exit code ${code} has no meaning`);
+    problems.push(`its exit code ${quoted(code)} has no meaning`);
   }
   return problems;
 }
@@ -488,7 +506,7 @@ const exitCodesProblems: DefinitionCheck = op => {
   const codes = listed.map(entry => entry.code);
   for (const code of new Set(codes)) {
     if (codes.indexOf(code) !== codes.lastIndexOf(code)) {
-      problems.push(`it lists exit code ${code} twice`);
+      problems.push(`it lists exit code ${quoted(code)} twice`);
     }
   }
   return problems;
@@ -537,6 +555,7 @@ const DEFINITION_CHECKS: readonly DefinitionCheck[] = [
   exitCodesProblems,
   aliasesProblems,
   stabilityProblems,
+  optionalTextProblems,
 ];
 
 /** Why each of `op`'s examples does not parse against its input schema. */
@@ -549,7 +568,7 @@ async function examplesProblems(op: OperationDefinition): Promise<string[]> {
     } catch (error) {
       // A hand-made schema may throw rather than answer; the refusal still
       // names the operation it belongs to.
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = error instanceof Error ? error.message : quoted(error);
       problems.push(
         `its example "${example.summary}" could not be checked: ${reason}`
       );
@@ -577,7 +596,7 @@ function exampleResultProblem(
     const issues = result.issues
       .map((issue: unknown) =>
         isObject(issue) && "message" in issue
-          ? String(issue.message)
+          ? quoted(issue.message)
           : quoted(issue)
       )
       .join("; ");
