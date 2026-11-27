@@ -37,7 +37,7 @@ describe("the templates' admin pages", () => {
       expect(source).toMatch(
         /import\s*\{[^}]*\bRootLayout\b[^}]*\}\s*from\s*"@nextlyhq\/admin"/
       );
-      expect(source).toMatch(/<RootLayout\s*\/>/);
+      expect(source).toMatch(/<RootLayout\b[^>]*\/>/);
       expect(source).not.toMatch(/CommandPalette/);
     });
   }

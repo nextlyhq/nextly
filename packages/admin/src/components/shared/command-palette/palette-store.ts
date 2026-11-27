@@ -58,9 +58,17 @@ export function takeReturnFocus(): HTMLElement | null {
   return element?.isConnected ? element : null;
 }
 
-/** Opens the palette, from anywhere: the rail's Search button, the drawer's. */
-export function openCommandPalette(): void {
+/**
+ * Opens the palette, from anywhere: the rail's Search button, the drawer's.
+ * `returnTo` names where focus goes back on close, for an opener that can't
+ * rely on holding focus as it opens: Safari and Firefox on macOS leave focus
+ * on the page when a button is clicked, and the drawer's close leaves it on
+ * the page too. Without one, what had focus at opening gets it back.
+ */
+export function openCommandPalette(returnTo?: HTMLElement | null): void {
+  if (open) return;
   setPaletteOpen(true);
+  if (returnTo) returnFocusTo = returnTo;
 }
 
 export function adminPaletteMounted(): boolean {
@@ -77,8 +85,12 @@ export function registerAdminPalette(): () => void {
   emit();
   return () => {
     adminMounts -= 1;
-    // A palette left open by an unmounted host would reopen on the next mount.
-    if (adminMounts === 0) open = false;
+    // A palette left open by an unmounted host would reopen on the next mount,
+    // handing focus to an element of the old one.
+    if (adminMounts === 0) {
+      open = false;
+      returnFocusTo = null;
+    }
     emit();
   };
 }

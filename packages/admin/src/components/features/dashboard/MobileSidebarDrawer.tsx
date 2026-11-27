@@ -112,17 +112,30 @@ export function MobileSidebarDrawer({
 }: MobileSidebarDrawerProps): JSX.Element {
   const branding = useBranding();
   // Set by the Search row: the drawer closes first and opens the palette once
-  // it has, so its focus return to the menu button can't take focus from the
-  // palette's field, and the palette hands focus back to that button.
+  // it has, so the drawer's close can't take focus from the palette's field.
   const searchOnClose = useRef(false);
+  // What had focus as the drawer opened: the header's menu button. It is not
+  // the drawer's own trigger, so the drawer's close leaves focus on the page;
+  // the palette is told to hand focus back to it instead.
+  const opener = useRef<HTMLElement | null>(null);
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
-        onCloseAutoFocus={() => {
+        onOpenAutoFocus={() => {
+          const focused = document.activeElement;
+          opener.current =
+            focused instanceof HTMLElement && focused !== document.body
+              ? focused
+              : null;
+        }}
+        onCloseAutoFocus={event => {
           if (!searchOnClose.current) return;
           searchOnClose.current = false;
-          // After the drawer has put focus back on its menu button.
-          queueMicrotask(openCommandPalette);
+          // Nothing for the drawer to focus: the palette takes it next.
+          event.preventDefault();
+          const back = opener.current;
+          // Once the drawer's close has finished with focus.
+          queueMicrotask(() => openCommandPalette(back));
         }}
         side="left"
         className="p-0 bg-sidebar-background text-sidebar-foreground border-sidebar-border flex flex-col h-full"

@@ -8,7 +8,7 @@
  * @module components/shared/command-palette/PaletteSearchButton
  */
 
-import type { JSX } from "react";
+import { useRef, type JSX } from "react";
 
 import { Search } from "@admin/components/icons";
 import { RailEntry } from "@admin/components/layout/sidebar/RailColumn";
@@ -20,19 +20,28 @@ export const SEARCH_BUTTON_LABEL = "Search (⌘K)";
 
 /**
  * The rail's Search entry, drawn as every rail entry is. Focus returns to it
- * when the palette closes, since it held focus when the palette opened.
+ * when the palette closes, named outright rather than read from what had
+ * focus: a click on Safari or Firefox on macOS leaves focus on the page.
  */
 export function RailSearchButton(): JSX.Element {
+  // The entry gives its select no element, so a layout-free wrapper finds it.
+  const wrapper = useRef<HTMLSpanElement>(null);
   return (
-    <RailEntry
-      label={SEARCH_BUTTON_LABEL}
-      icon={Search}
-      // A button, not a link: it opens the palette and goes nowhere.
-      href=""
-      asLink={false}
-      selected={false}
-      onSelect={openCommandPalette}
-    />
+    <span ref={wrapper} className="contents">
+      <RailEntry
+        label={SEARCH_BUTTON_LABEL}
+        icon={Search}
+        // A button, not a link: it opens the palette and goes nowhere.
+        href=""
+        asLink={false}
+        selected={false}
+        onSelect={() =>
+          openCommandPalette(
+            wrapper.current?.querySelector<HTMLElement>("button") ?? null
+          )
+        }
+      />
+    </span>
   );
 }
 

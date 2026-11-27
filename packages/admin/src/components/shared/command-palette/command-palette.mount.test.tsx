@@ -119,6 +119,29 @@ describe("the admin's own palette", () => {
   });
 });
 
+describe("focus back from the rail's Search button", () => {
+  // Safari and Firefox on macOS leave focus on the page when a button is
+  // clicked, so what was focused at opening is not the button.
+  it("goes to the button even when the click left focus on the page", async () => {
+    render(
+      <ShortcutProvider>
+        <TooltipProvider>
+          <RailSearchButton />
+        </TooltipProvider>
+        <AdminCommandPalette />
+      </ShortcutProvider>
+    );
+    const button = screen.getByRole("button", { name: "Search (⌘K)" });
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.click(button);
+    expect(dialogs()).toHaveLength(1);
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await waitFor(() => expect(document.activeElement).toBe(button));
+  });
+});
+
 describe("the phone drawer's Search row", () => {
   // Named by the words it shows, so a person using voice control can say
   // what they see; the shortcut is announced as the shortcut it is.
