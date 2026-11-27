@@ -348,6 +348,10 @@ import {
   sharedComparison,
   type SharedComparison,
 } from "../../singles/services/live-shared-single";
+import {
+  moveEntryToTrash,
+  noteTrashedEntryDeletion,
+} from "../../trash/move-to-trash";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
@@ -2662,6 +2666,78 @@ export class CollectionMutationService extends BaseService {
       // per-item failure.
       throw markWriteIntegrityFailure(err);
     }
+  }
+
+  /**
+   * Record an entry's deletion in its history, on the delete's transaction,
+   * and where the entry went to the trash, name that event on its trash
+   * record: the life a restore goes on with.
+   */
+  private async recordDeletion(
+    tx: TransactionContext,
+    collectionName: string,
+    entryId: string,
+    args: {
+      actor?: RequestActor;
+      user?: UserContext;
+      /** The entry's trash record; undefined where the delete is permanent. */
+      trashId: string | undefined;
+    }
+  ): Promise<void> {
+    const deleted = await this.recordHistoryEvent(tx, collectionName, entryId, {
+      kind: "deleted",
+      actor: actorForWrite(args.actor, args.user),
+      personName: args.user?.name ?? null,
+    });
+    if (args.trashId !== undefined) {
+      await noteTrashedEntryDeletion(tx, args.trashId, deleted.id);
+    }
+  }
+
+  /**
+   * Move an entry being deleted to the trash, on the delete's transaction and
+   * before anything of it is removed: every row it stores is copied into one
+   * trash record (`moveEntryToTrash`), and the delete then removes them as it
+   * always has. Answers the trash record's id; undefined on a database the
+   * trash table has not reached yet, where the delete stays permanent.
+   */
+  private async moveDeletedEntryToTrash(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      tableName: string;
+      entryId: string;
+      fields: readonly FieldConfig[];
+      /** The schema with field groups expanded, as the deleted event reads it. */
+      eventFields: readonly SensitiveFieldSource[];
+      document: Record<string, unknown>;
+      actor: RequestActor;
+      actorName: string | null;
+      /** The collection's registry row, whose id the trash record keeps. */
+      collection: unknown;
+    }
+  ): Promise<string | undefined> {
+    const registryId =
+      typeof args.collection === "object" && args.collection !== null
+        ? (args.collection as { id?: unknown }).id
+        : undefined;
+    const moved = await moveEntryToTrash(
+      tx,
+      this.adapter,
+      {
+        collection: args.collectionName,
+        tableName: args.tableName,
+        entryId: args.entryId,
+        fields: args.fields,
+        sensitiveFields: args.eventFields,
+        document: args.document,
+        actor: args.actor,
+        actorName: args.actorName,
+        ...(typeof registryId === "string" ? { collectionId: registryId } : {}),
+      },
+      this.logger
+    );
+    return moved.trashed ? moved.trashId : undefined;
   }
 
   /**
@@ -22931,6 +23007,20 @@ export class CollectionMutationService extends BaseService {
           // main row) still busts the correct tag.
           deletedSlugForRevalidation = readStringField(deletedDocument, "slug");
 
+          // Every row the entry stores is copied to the trash before the
+          // removal below, which then goes on as before.
+          const trashed = await this.moveDeletedEntryToTrash(tx, {
+            collectionName: params.collectionName,
+            tableName,
+            entryId: params.entryId,
+            fields: collectionFields,
+            eventFields: webhookFields,
+            document: deletedDocument,
+            actor: actorForWrite(params.actor, params.user),
+            actorName: params.user?.name ?? null,
+            collection,
+          });
+
           if (this.fieldGroupDataService) {
             await this.fieldGroupDataService.deleteComponentDataInTransaction(
               tx,
@@ -23001,17 +23091,13 @@ export class CollectionMutationService extends BaseService {
 
           // The document's last history event: the whole document, every
           // language, is gone. Its history is kept for the activity log's window
-          // from here.
-          await this.recordHistoryEvent(
-            tx,
-            params.collectionName,
-            params.entryId,
-            {
-              kind: "deleted",
-              actor: actorForWrite(params.actor, params.user),
-              personName: params.user?.name ?? null,
-            }
-          );
+          // from here, and at least as long as the trash keeps the document; a
+          // restore goes on from this event.
+          await this.recordDeletion(tx, params.collectionName, params.entryId, {
+            actor: params.actor,
+            user: params.user,
+            trashId: trashed,
+          });
 
           // The removed document's final state ships as `data`; there is no
           // post-delete state, so `previous` is null (mirroring create, which
@@ -26337,6 +26423,29 @@ export class CollectionMutationService extends BaseService {
       // locale's page (reads are id-tagged), so localized slug tags are omitted
       // on this path; the pool-owned deleteEntry path collects them pre-tx.
 
+      // The schema with its field groups expanded, on this transaction's
+      // connection: what the deleted event strips sensitive values by, and the
+      // trash copy of the document too. Expanded whatever the webhook opt-out,
+      // for the in-process event announced either way.
+      const deleteEventFields = await this.webhookFieldTree(
+        snapshotFields,
+        tx.getDrizzle()
+      );
+
+      // Every row the entry stores is copied to the trash before the removal
+      // below, which then goes on as before.
+      const trashed = await this.moveDeletedEntryToTrash(tx, {
+        collectionName: params.collectionName,
+        tableName,
+        entryId,
+        fields: collectionFields,
+        eventFields: deleteEventFields,
+        document: deletedDocument,
+        actor: actorForWrite(params.actor, params.user),
+        actorName: params.user?.name ?? null,
+        collection,
+      });
+
       // Cascade delete component data before deleting the main entry
       if (this.fieldGroupDataService) {
         await this.fieldGroupDataService.deleteComponentDataInTransaction(tx, {
@@ -26410,22 +26519,16 @@ export class CollectionMutationService extends BaseService {
       await this.forgetTranslationRecords(tx, params.collectionName, entryId);
 
       // The document's last history event; see the single-delete path.
-      await this.recordHistoryEvent(tx, params.collectionName, entryId, {
-        kind: "deleted",
-        actor: actorForWrite(params.actor, params.user),
-        personName: params.user?.name ?? null,
+      await this.recordDeletion(tx, params.collectionName, entryId, {
+        actor: params.actor,
+        user: params.user,
+        trashId: trashed,
       });
 
       // Append the outbox event in the same transaction so a batch delete
       // through this helper is observable too, in the same shape as the
-      // single-delete path. Resolve component schemas on this transaction's
-      // connection to avoid taking a second pooled connection. `locale` is set
-      // only for a localized collection. Expanded whatever the webhook
-      // opt-out, for the in-process event announced either way.
-      const deleteEventFields = await this.webhookFieldTree(
-        snapshotFields,
-        tx.getDrizzle()
-      );
+      // single-delete path, its fields expanded above. `locale` is set only for
+      // a localized collection.
       const deleteRecorded = await recordMutationEvent(tx, {
         type: "entry.deleted",
         resource: {

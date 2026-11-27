@@ -284,6 +284,7 @@ describe("init - Nextly API", () => {
       "storage",
       "timeseries",
       "translations",
+      "trash",
       "unpublish",
       "update",
       "updateMe",

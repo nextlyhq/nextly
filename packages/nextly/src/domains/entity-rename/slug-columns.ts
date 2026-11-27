@@ -489,6 +489,15 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     onRename: "follow",
   },
   {
+    // The entity's deleted entries, in the trash: a record follows its
+    // collection, so the trash lists it under the new slug. Only a
+    // collection's entries are trashed, and a slug names one entity of
+    // either kind, so the slug alone finds them.
+    table: "nextly_trash",
+    slugColumn: "scope_slug",
+    onRename: "follow",
+  },
+  {
     // Which media items the entity's documents use. A row follows its
     // document, so the item's "Used in" names the entity by its new slug.
     // An email template's rows carry kind "email-template" and are not moved.

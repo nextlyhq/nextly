@@ -26,6 +26,7 @@ import type {
 } from "../direct-api/namespaces/rbac";
 import type { ReleasesNamespace } from "../direct-api/namespaces/releases";
 import type { TranslationsNamespace } from "../direct-api/namespaces/translations";
+import type { TrashNamespace } from "../direct-api/namespaces/trash";
 import type { WorkflowsNamespace } from "../direct-api/namespaces/workflows";
 import type {
   AuthResult,
@@ -1136,6 +1137,19 @@ export interface Nextly {
    * ```
    */
   contentEvents: ContentEventsNamespace;
+
+  /**
+   * @experimental Deleted entries: a page of those the caller may see, a
+   * restore that answers a unique value taken since rather than failing, and
+   * removing entries for good.
+   *
+   * @example
+   * ```typescript
+   * const { items } = await nextly.trash.list({ collection: "posts" });
+   * const result = await nextly.trash.restore({ id: items[0].itemId });
+   * ```
+   */
+  trash: TrashNamespace;
 
   /**
    * @experimental A collection's private files: the checked download, for

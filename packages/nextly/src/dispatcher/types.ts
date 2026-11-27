@@ -46,7 +46,10 @@ export type ServiceType =
   | "identities"
   // What the roles screen shows for each collection and Single; its handler
   // owns its auth.
-  | "rolesScreen";
+  | "rolesScreen"
+  // Deleted entries: list, restore, empty (@experimental); its handler
+  // authenticates and the trash service decides access.
+  | "trash";
 
 export type OperationType =
   | "single"

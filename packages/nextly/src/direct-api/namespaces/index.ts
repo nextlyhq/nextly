@@ -58,6 +58,7 @@ export {
   createContentEventsNamespace,
   type ContentEventsNamespace,
 } from "./content-events";
+export { createTrashNamespace, type TrashNamespace } from "./trash";
 export {
   createWorkflowsNamespace,
   type WorkflowAssignmentInput,

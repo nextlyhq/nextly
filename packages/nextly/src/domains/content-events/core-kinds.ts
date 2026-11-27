@@ -81,6 +81,12 @@ export const CORE_CONTENT_EVENT_KINDS = {
       .strict(),
   },
   deleted: { name: "deleted", label: "Deleted by {actor}", endsSubject: true },
+  // Brought back from the trash: the life its deletion ended goes on, its
+  // events no longer stamped as ended (`reopenEndedLife`).
+  restoredFromTrash: {
+    name: "restored-from-trash",
+    label: "Restored from the trash by {actor}",
+  },
   versionsRemoved: {
     name: "versions-removed",
     label: "{count} older versions removed",

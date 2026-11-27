@@ -39,6 +39,12 @@ export const COLLECTION_SEEDED_ACTIONS = [
   "delete",
   "publish",
   "unpublish",
+  // The trash's own two: bringing a deleted entry back, and removing deleted
+  // entries for good. Apart from `delete`, so a role may restore without
+  // emptying, and granted by the presets as `delete` is. Each one word: a
+  // permission slug is read as `<action>-<resource>` at its first hyphen.
+  "restore",
+  "empty",
 ] as const;
 
 export const SINGLE_SEEDED_ACTIONS = [
@@ -96,12 +102,39 @@ function slugToLabel(slug: string): string {
     .join(" ");
 }
 
+/**
+ * The trash's two actions, named as a person reads them: "Restore Posts from
+ * trash" and "Empty trash for Posts", where the general form would say only
+ * "Restore Posts" and "Empty Posts".
+ */
+const TRASH_ACTION_SPELLING: Readonly<
+  Record<string, (label: string) => { name: string; description: string }>
+> = {
+  restore: label => ({
+    name: `Restore ${label} from trash`,
+    description: `Permission to restore ${label.toLowerCase()} from the trash`,
+  }),
+  empty: label => ({
+    name: `Empty trash for ${label}`,
+    description: `Permission to remove deleted ${label.toLowerCase()} from the trash for good`,
+  }),
+};
+
 /** The slug, name and description of `action` on the entity `resource`. */
 export function entityPermissionSpelling(
   action: string,
   resource: string
 ): EntityPermissionSpelling {
   const label = slugToLabel(resource);
+  const trash = Object.prototype.hasOwnProperty.call(
+    TRASH_ACTION_SPELLING,
+    action
+  )
+    ? TRASH_ACTION_SPELLING[action]
+    : undefined;
+  if (trash !== undefined) {
+    return { slug: permissionSlug(action, resource), ...trash(label) };
+  }
   // Read as words, so an action of several (`publish-without-review`) is named like one of one.
   const actionLabel = slugToLabel(action);
   return {

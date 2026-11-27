@@ -50,6 +50,7 @@ import { registerPruneCommand } from "./commands/prune.command";
 import { registerRepairColumnsCommand } from "./commands/repair-columns.command";
 import { registerSetupTokenCommand } from "./commands/setup-token.command";
 import { registerTelemetryCommand } from "./commands/telemetry.command";
+import { registerTrashCommand } from "./commands/trash.command";
 import { registerUpgradeCommand } from "./commands/upgrade.command";
 import { registerWebhooksPruneCommand } from "./commands/webhooks-prune.command";
 import { registerWorkflowStrandedCommands } from "./commands/workflow-stranded.command";
@@ -277,6 +278,7 @@ function registerCommands(program: Command): void {
   registerRepairColumnsCommand(program, createContext); // report columns whose type or nullability differs from their field
   registerWebhooksPruneCommand(program); // manual webhook-queue retention pass
   registerEventsCommand(program); // report and abandon plugins' durable event deliveries
+  registerTrashCommand(program); // list, restore and empty deleted entries (experimental)
   // Lists and moves documents in a workflow stage that no longer exists.
   registerWorkflowStrandedCommands(program);
   registerSetupTokenCommand(program, createContext); // replace or generate the production setup token

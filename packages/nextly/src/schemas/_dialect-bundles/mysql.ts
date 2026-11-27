@@ -152,3 +152,5 @@ export {
 // a fresh database, for the reason the release tables above give.
 export { nextlyPreviewLinksMysql as nextlyPreviewLinks } from "../preview-links/mysql";
 export { nextlyLanguagesMysql as nextlyLanguages } from "../languages/mysql";
+// Deleted items, kept until restored or removed for good.
+export { nextlyTrashMysql as nextlyTrash } from "../trash/mysql";

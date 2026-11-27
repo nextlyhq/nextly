@@ -207,6 +207,15 @@ export interface WebhookEvent {
    */
   statusChange?: { from: string | null; to: string };
   /**
+   * Where a created entry came back from: `"trash"` on the `entry.created`
+   * event of an entry restored from the trash, with its id, languages and
+   * history as they were. Absent on every other event, a plain create's
+   * included, so existing subscribers see nothing new.
+   *
+   * @experimental
+   */
+  restoredFrom?: "trash";
+  /**
    * Whether the action this event describes succeeded.
    *
    * Absent means `success`, which is what every event recorded today is: the

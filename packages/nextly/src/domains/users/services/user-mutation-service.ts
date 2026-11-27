@@ -81,6 +81,7 @@ import {
 } from "../../../schemas/external-identities";
 import { NOTICES_TABLE, noticesTables } from "../../../schemas/notices";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
+import { TRASH_TABLE } from "../../../schemas/trash";
 import {
   VERSION_VIEWS_TABLE,
   versionViewsTables,
@@ -131,6 +132,7 @@ import { revalidateMedia } from "../../media/revalidate-media";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import { eraseTrashActor } from "../../trash/erase-trash-actor";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 import { assertNoInterfaceLanguage } from "../interface-language";
@@ -3072,6 +3074,10 @@ export class UserMutationService extends BaseService {
     // reason notices are.
     const versionViewsExist = await this.tablePresent(VERSION_VIEWS_TABLE);
 
+    // Who trashed each deleted entry names the account by id and name; both
+    // go with it. Probed for the reason notices are.
+    const trashExists = await this.tablePresent(TRASH_TABLE);
+
     // The person's external identities: theirs alone, so they go with the
     // account rather than waiting for a provider to hand the next account the
     // same subject. Probed out here for the reason notices are: an
@@ -3258,6 +3264,9 @@ export class UserMutationService extends BaseService {
           String(userId),
           versionViewsExist
         );
+        if (trashExists) {
+          await eraseTrashActor(txDb, this.dialect, String(userId));
+        }
         // Their external identities, in the same transaction: the foreign key
         // on `user_id` would take them with the row, but the delete says so
         // where the deletion is read rather than leaving it to a cascade a
