@@ -264,3 +264,123 @@ test("a phone and a desktop draw copies, never the upload", async ({
     }
   }
 });
+
+/**
+ * A header row as the starter header lays one out: a flex row that wraps,
+ * its blocks centred on their line, the site's name and then the logo.
+ */
+function headerRow(mediaId: string): Record<string, unknown> {
+  return {
+    id: "logo-header",
+    type: "core/section",
+    version: 1,
+    props: { as: "header", contained: true },
+    slots: {
+      children: [
+        {
+          id: "logo-row",
+          type: "core/box",
+          version: 1,
+          props: { as: "div", contained: false },
+          styles: {
+            base: {
+              base: {
+                display: "flex",
+                flexDirection: "row",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: { $token: "space.columns" },
+              },
+            },
+          },
+          slots: {
+            children: [
+              {
+                id: "logo-name",
+                type: "core/button",
+                version: 1,
+                props: { label: "Site name", href: "/" },
+              },
+              {
+                id: "logo",
+                type: "core/image",
+                version: 1,
+                props: { mediaId, alt: "Site logo" },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  };
+}
+
+test("a 160×40 logo in a header row draws at its own size, on a desktop and a phone", async ({
+  page,
+  browser,
+}) => {
+  await signIn(page);
+  const cookies = await page.context().cookies();
+  const cookie = cookies.map(c => `${c.name}=${c.value}`).join("; ");
+  const run = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+  const uploaded = await page.request.post("/admin/api/media", {
+    headers: { cookie },
+    multipart: {
+      file: {
+        name: `logo-${run}.png`,
+        mimeType: "image/png",
+        buffer: photoPng({ width: 160, height: 40 }),
+      },
+    },
+  });
+  expect(uploaded.ok(), `uploading: ${uploaded.status()}`).toBe(true);
+  const body = (await uploaded.json()) as {
+    item?: { id: string };
+    id?: string;
+  };
+  const slug = `logo-row-${run}`;
+  const created = await page.request.post(ENTRIES, {
+    headers: { cookie, "content-type": "application/json" },
+    data: {
+      title: "Logo in a header row",
+      slug,
+      status: "published",
+      content: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [headerRow(String(body.item?.id ?? body.id))],
+      },
+    },
+  });
+  expect(created.ok(), `seeding: ${created.status()}`).toBe(true);
+  for (const width of [1280, 360]) {
+    const context = await browser.newContext({
+      viewport: { width, height: 800 },
+    });
+    const visitor = await context.newPage();
+    try {
+      const response = await visitor.goto(`/blocks/${slug}`);
+      expect(response?.status()).toBe(200);
+      const logo = visitor.getByRole("img", { name: "Site logo" });
+      await expect(logo).toBeVisible();
+      await expect
+        .poll(() => logo.evaluate(img => (img as HTMLImageElement).complete))
+        .toBe(true);
+      const drawn = await logo.boundingBox();
+      expect(drawn).not.toBeNull();
+      // Its own 160×40 wherever the row has room, never stretched past it,
+      // and shrunk in proportion only where the row is narrower.
+      expect(drawn!.width).toBeLessThanOrEqual(160);
+      expect(drawn!.width).toBe(Math.min(160, width));
+      expect(Math.abs(drawn!.height - drawn!.width / 4)).toBeLessThanOrEqual(1);
+      // Nothing runs off the side of the screen.
+      expect(
+        await visitor.evaluate(
+          () => document.documentElement.scrollWidth - window.innerWidth
+        )
+      ).toBeLessThanOrEqual(0);
+    } finally {
+      await context.close();
+    }
+  }
+});

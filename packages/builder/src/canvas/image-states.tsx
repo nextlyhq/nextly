@@ -52,7 +52,15 @@ import {
   type RemotePatternInput,
 } from "@nextlyhq/blocks-react";
 import { Button } from "@nextlyhq/ui";
-import { ImageOff, ImagePlus } from "lucide-react";
+import {
+  ImageOff,
+  ImagePlus,
+  Images,
+  Link2,
+  RefreshCw,
+  Upload,
+  type LucideIcon,
+} from "lucide-react";
 import * as React from "react";
 
 import type { EditorState } from "../editor-state";
@@ -93,9 +101,11 @@ import {
   failureWords,
   IMAGE_STATE_WORDS as WORDS,
   imageNodeOf,
+  asideOpening,
   linkAddress,
   loadsAsImage,
   pictureOp,
+  plateSize,
   takesPicture,
   type ImageEmptyReason,
 } from "./image-states-model";
@@ -751,18 +761,50 @@ interface ImagePlateProps {
   readonly onCancel: () => void;
 }
 
+/**
+ * Which way what drops out of a small plate opens (`asideOpening`), read
+ * from the plate, the aside it holds and the canvas layer that clips them.
+ */
+function asideFit(plate: HTMLElement): { up: boolean; end: boolean } {
+  const aside = plate.querySelector(".nx-image-state__aside");
+  const layer = plate.closest(".nx-canvas-layer") ?? plate.offsetParent;
+  if (aside === null || layer === null) return { up: false, end: false };
+  return asideOpening(
+    plate.getBoundingClientRect(),
+    aside.getBoundingClientRect(),
+    layer.getBoundingClientRect()
+  );
+}
+
 /** One Image's plate: its box, in the editor's colours, and what it offers. */
 function ImagePlate(props: ImagePlateProps): React.JSX.Element {
   const { plate, activity, held, writable, dragging, canUpload, onSelect } =
     props;
   const takesFiles = canUpload && writable && !dragging;
   const { x, y, width, height } = plate.rect;
+  // On a box too small for its words, an Image's choices are icons, and a
+  // link being typed or a note drops out of the box (`image-states.css`). A
+  // gallery keeps its words: its choices wrap as they always have.
+  const small = plate.reason !== "gallery" && plateSize(plate.rect) === "small";
+  const element = React.useRef<HTMLDivElement | null>(null);
+  const [fit, setFit] = React.useState({ up: false, end: false });
+  // Measured again whenever the box moves or resizes, or what it shows
+  // changes, which is when an aside opens or closes.
+  React.useLayoutEffect(() => {
+    if (!small || element.current === null) return;
+    const next = asideFit(element.current);
+    setFit(now => (now.up === next.up && now.end === next.end ? now : next));
+  }, [small, x, y, width, height, activity]);
   return (
     <div
+      ref={element}
       className="nx-image-state"
       data-image-state={plate.reason}
       data-image-activity={activity?.kind}
       data-held={held ? "" : undefined}
+      data-plate-size={small ? "small" : "full"}
+      data-aside-up={small && fit.up ? "" : undefined}
+      data-aside-end={small && fit.end ? "" : undefined}
       role="group"
       aria-label={
         plate.reason === "missing"
@@ -798,14 +840,17 @@ function ImagePlate(props: ImagePlateProps): React.JSX.Element {
         props.onFiles(event.dataTransfer.files);
       }}
     >
-      <PlateBody {...props} takesFiles={takesFiles} />
+      <PlateBody {...props} takesFiles={takesFiles} small={small} />
     </div>
   );
 }
 
 /** What the plate says and offers, for what its Image is doing. */
 function PlateBody(
-  props: ImagePlateProps & { readonly takesFiles: boolean }
+  props: ImagePlateProps & {
+    readonly takesFiles: boolean;
+    readonly small: boolean;
+  }
 ): React.JSX.Element | null {
   const { plate, activity } = props;
   switch (activity?.kind) {
@@ -844,7 +889,7 @@ function Progress({
 }): React.JSX.Element {
   return (
     <div className="nx-image-state__progress" role="status">
-      <span className="nx-image-state__words">
+      <span className="nx-image-state__words nx-image-state__progress-words">
         {WORDS.uploading}
         {name === "" ? "" : ` ${name}`}
       </span>
@@ -869,7 +914,7 @@ function BadLink({
   onCancel,
 }: ImagePlateProps & { readonly typed: string }): React.JSX.Element {
   return (
-    <div className="nx-image-state__stack">
+    <div className="nx-image-state__stack nx-image-state__aside">
       <p className="nx-image-state__problem" role="alert">
         {WORDS.badLink}
       </p>
@@ -897,7 +942,7 @@ function OverPicture({
 }): React.JSX.Element | null {
   if (note !== undefined) {
     return (
-      <p className="nx-image-state__problem" role="alert">
+      <p className="nx-image-state__problem nx-image-state__aside" role="alert">
         {note}
       </p>
     );
@@ -911,6 +956,7 @@ function Choices(
     readonly missing: boolean;
     readonly note: string | undefined;
     readonly takesFiles: boolean;
+    readonly small: boolean;
   }
 ): React.JSX.Element {
   const { missing, note, writable, canUpload, takesFiles, onFiles } = props;
@@ -927,7 +973,10 @@ function Choices(
         <ChoiceButtons {...props} upload={() => chooser.current?.click()} />
       ) : null}
       {note === undefined ? null : (
-        <p className="nx-image-state__problem" role="alert">
+        <p
+          className="nx-image-state__problem nx-image-state__aside"
+          role="alert"
+        >
           {note}
         </p>
       )}
@@ -1023,9 +1072,49 @@ function GalleryChoices(
   );
 }
 
+/**
+ * One of an Image's choices: its words on a box with room for them; on a
+ * small box its icon, named by the same words for whoever cannot see it,
+ * which a pointer resting on it also shows.
+ */
+function Choice({
+  icon: Icon,
+  words,
+  small,
+  variant,
+  onClick,
+}: {
+  readonly icon: LucideIcon;
+  readonly words: string;
+  readonly small: boolean;
+  readonly variant?: "outline";
+  readonly onClick: () => void;
+}): React.JSX.Element {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      {...(variant === undefined ? {} : { variant })}
+      className="nx-image-state__choice"
+      title={small ? words : undefined}
+      onClick={onClick}
+    >
+      {small ? (
+        <>
+          <Icon aria-hidden="true" size={12} />
+          <span className="nx-sr-only">{words}</span>
+        </>
+      ) : (
+        words
+      )}
+    </Button>
+  );
+}
+
 /** The buttons: Upload, Media library and Link, or a missing file's Replace. */
 function ChoiceButtons({
   missing,
+  small,
   canUpload,
   canPick,
   upload,
@@ -1033,15 +1122,19 @@ function ChoiceButtons({
   onLink,
 }: ImagePlateProps & {
   readonly missing: boolean;
+  readonly small: boolean;
   readonly upload: () => void;
 }): React.JSX.Element {
   if (missing) {
     return (
       <div className="nx-image-state__actions">
         {canPick ? (
-          <Button type="button" size="sm" onClick={onLibrary}>
-            {WORDS.replace}
-          </Button>
+          <Choice
+            icon={RefreshCw}
+            words={WORDS.replace}
+            small={small}
+            onClick={onLibrary}
+          />
         ) : null}
       </div>
     );
@@ -1049,23 +1142,29 @@ function ChoiceButtons({
   return (
     <div className="nx-image-state__actions">
       {canUpload ? (
-        <Button type="button" size="sm" onClick={upload}>
-          {WORDS.upload}
-        </Button>
+        <Choice
+          icon={Upload}
+          words={WORDS.upload}
+          small={small}
+          onClick={upload}
+        />
       ) : null}
       {canPick ? (
-        <Button type="button" size="sm" variant="outline" onClick={onLibrary}>
-          {WORDS.library}
-        </Button>
+        <Choice
+          icon={Images}
+          words={WORDS.library}
+          small={small}
+          variant="outline"
+          onClick={onLibrary}
+        />
       ) : null}
-      <Button
-        type="button"
-        size="sm"
+      <Choice
+        icon={Link2}
+        words={WORDS.link}
+        small={small}
         variant="outline"
         onClick={() => onLink("")}
-      >
-        {WORDS.link}
-      </Button>
+      />
     </div>
   );
 }
@@ -1090,7 +1189,7 @@ function LinkForm({
   }, []);
   return (
     <form
-      className="nx-image-state__link"
+      className="nx-image-state__link nx-image-state__aside"
       onSubmit={event => {
         event.preventDefault();
         if (!activity.checking) onSubmitLink(activity.typed);

@@ -202,3 +202,76 @@
     display: none;
   }
 }
+
+/* A box too small for the choices' words (`plateSize`), such as a logo's
+   place in a header row, a line of text tall: the choices as small icons
+   (the plate draws them so, each named by its words), clear of the box's
+   dashed edge. Nothing that only explains them is shown. */
+.nx-image-state[data-plate-size="small"] {
+  padding: 0 0.375rem;
+  overflow: visible;
+}
+
+.nx-image-state[data-plate-size="small"] .nx-image-state__icon,
+.nx-image-state[data-plate-size="small"] .nx-image-state__title,
+.nx-image-state[data-plate-size="small"] .nx-image-state__hint,
+.nx-image-state[data-plate-size="small"] .nx-image-state__progress-words {
+  display: none;
+}
+
+.nx-image-state[data-plate-size="small"] .nx-image-state__stack,
+.nx-image-state[data-plate-size="small"] .nx-image-state__progress {
+  gap: 0;
+}
+
+.nx-image-state[data-plate-size="small"] .nx-image-state__actions {
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+}
+
+/* Each choice is drawn 16px, and pressed anywhere in the 24px square around
+   it, which the 8px between them leaves to it alone: the target an author
+   can hit without the box growing past the line it sits on. */
+.nx-image-state[data-plate-size="small"] .nx-image-state__choice {
+  position: relative;
+  width: 1rem;
+  min-width: 0;
+  height: 1rem;
+  padding: 0;
+  gap: 0;
+  border-radius: var(--radius-sm);
+}
+
+.nx-image-state[data-plate-size="small"] .nx-image-state__choice::after {
+  content: "";
+  position: absolute;
+  inset: -0.25rem;
+}
+
+/* What needs more room than the box has, a link being typed, a link that
+   did not load, a note, opens just below the box on the editor's surface;
+   above it, or from its right edge, where below or rightward would run off
+   the canvas (`asideFit`), so it is never cut off. */
+.nx-image-state[data-plate-size="small"] .nx-image-state__aside {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  width: max(100%, 18rem);
+  max-width: none;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-builder-surface-raised);
+}
+
+.nx-image-state[data-aside-up] .nx-image-state__aside {
+  top: auto;
+  bottom: calc(100% + 0.25rem);
+}
+
+.nx-image-state[data-aside-end] .nx-image-state__aside {
+  right: 0;
+  left: auto;
+}

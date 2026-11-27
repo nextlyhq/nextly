@@ -187,6 +187,19 @@ describe("an empty Gallery on the canvas", () => {
     expect(chooser?.hasAttribute("multiple")).toBe(true);
   });
 
+  it("keeps its words on a box too small for them: a Gallery's choices wrap", () => {
+    // An empty Gallery is drawn as short as an empty container.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(0, 0, 200, 44)
+    );
+    mount(page(gallery()), EMPTY_GALLERY);
+    const plate = screen.getByRole("group", { name: "Gallery" });
+    expect(plate.getAttribute("data-plate-size")).toBe("full");
+    const upload = screen.getByRole("button", { name: "Upload" });
+    expect(upload.textContent).toBe("Upload");
+    expect(upload.querySelector("svg")).toBeNull();
+  });
+
   it("draws no empty-container + for a gallery, while an empty box keeps its own", () => {
     render(
       <div className={BUILDER_CHROME_CLASS}>

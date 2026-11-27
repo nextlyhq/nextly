@@ -410,18 +410,58 @@ interface SizedNode {
   readonly classes?: unknown;
 }
 
+/** The displays that line a container's children up along one line. */
+const FLEX_DISPLAYS: ReadonlySet<unknown> = new Set(["flex", "inline-flex"]);
+
+/** The flex directions that run along a row; unset, a flex box runs so. */
+const ROW_DIRECTIONS: ReadonlySet<unknown> = new Set([
+  undefined,
+  "row",
+  "row-reverse",
+]);
+
+/**
+ * The ids of the children a container lines up side by side, as Layout ›
+ * Row does: a flex row set on the node itself, at its base, in its resting
+ * state. That is the layout every device starts from, so a row that stacks
+ * on a phone still counts. `undefined` for a stack, a grid, a plain box, or a
+ * row set only on another device or state; a row a class, a site default or
+ * custom CSS draws is not read, and its children draw as anywhere else.
+ */
+function rowItemsOf(node: SizedNode): readonly string[] | undefined {
+  const base = recordOf(recordOf(recordOf(node.styles)?.base)?.base);
+  if (base === undefined || !FLEX_DISPLAYS.has(base.display)) return undefined;
+  if (!ROW_DIRECTIONS.has(base.flexDirection)) return undefined;
+  const children = recordOf(node.slots)?.children;
+  if (!Array.isArray(children)) return undefined;
+  return children.flatMap(child => {
+    const id = recordOf(child)?.id;
+    return typeof id === "string" ? [id] : [];
+  });
+}
+
 /**
  * The context a container hands its children: the slot narrowed by its own
- * size and, for a row of columns, divided among them; and marked eager inside
- * the page's first top-level block. `undefined` where the page sizes no
- * images, so the children are handed nothing new.
+ * size and, for a row of columns, divided among them; marked eager inside
+ * the page's first top-level block; and, for a container laid out as a row,
+ * the ids of the children it lines up (`rowItems`), so an Image among them
+ * draws as one in a row does. By id, so the list never reaches what those
+ * children hold in turn. `undefined` where the page sizes no images and the
+ * container is no row, so the children are handed nothing new.
  */
 export function childImageContext<
-  C extends { imageSlot?: ImageSlot; firstBlockId?: string },
+  C extends {
+    imageSlot?: ImageSlot;
+    firstBlockId?: string;
+    rowItems?: readonly string[];
+  },
 >(ctx: C | undefined, node: SizedNode | undefined): C | undefined {
-  const slot = ctx?.imageSlot;
-  if (ctx === undefined || node === undefined || slot === undefined) {
-    return undefined;
+  if (ctx === undefined || node === undefined) return undefined;
+  const rowItems = rowItemsOf(node);
+  const row = rowItems === undefined ? {} : { rowItems };
+  const slot = ctx.imageSlot;
+  if (slot === undefined) {
+    return rowItems === undefined ? undefined : { ...ctx, ...row };
   }
   let next = narrowForOwnSize(slot, node.styles);
   if (
@@ -438,5 +478,9 @@ export function childImageContext<
   const eager =
     slot.eager === true ||
     (node.id !== undefined && node.id === ctx.firstBlockId);
-  return { ...ctx, imageSlot: eager ? { ...next, eager: true } : next };
+  return {
+    ...ctx,
+    ...row,
+    imageSlot: eager ? { ...next, eager: true } : next,
+  };
 }

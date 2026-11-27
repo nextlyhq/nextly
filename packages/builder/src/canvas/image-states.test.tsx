@@ -22,6 +22,10 @@
  *
  * @module canvas/image-states.test
  */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import {
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
@@ -386,6 +390,67 @@ describe("Link", () => {
       key: "Escape",
     });
     expect(screen.getByText("Add an image")).toBeTruthy();
+  });
+});
+
+/** The boxes an Image draws a line of text tall, as in a header row. */
+const SMALL_EMPTY =
+  '<div data-nx-node="img" data-nx-image-empty="empty" data-test-rect="0,0,200,24"></div>';
+const SMALL_MISSING =
+  '<div data-nx-node="img" data-nx-image-empty="missing" data-test-rect="0,0,200,24"></div>';
+
+describe("an Image on a box a line of text tall", () => {
+  it("offers Upload, Media library and Link as icons named by their words", () => {
+    mount(page(imageNode("img")), SMALL_EMPTY);
+    const plate = screen.getByRole("group", { name: "Image" });
+    expect(plate.getAttribute("data-plate-size")).toBe("small");
+    for (const name of ["Upload", "Media library", "Link"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button.querySelector("svg")).not.toBeNull();
+      // The words name it, for a screen reader and on hover, and are not
+      // drawn beside the icon.
+      expect(button.querySelector(".nx-sr-only")?.textContent).toBe(name);
+      expect(button.getAttribute("title")).toBe(name);
+    }
+  });
+
+  it("offers a missing file's Replace as an icon too", () => {
+    mount(page(imageNode("img", { mediaId: "deleted" })), SMALL_MISSING);
+    const replace = screen.getByRole("button", { name: "Replace" });
+    expect(replace.querySelector("svg")).not.toBeNull();
+    expect(replace.classList.contains("nx-image-state__choice")).toBe(true);
+  });
+
+  it("lifts only the panel out of a small box, never a note inside it", () => {
+    // Where it is drawn is the stylesheet's to say, which jsdom does not
+    // apply, so the rules are read: on a small box only the aside is taken
+    // out of the box, so a link that did not load drops out whole, its note
+    // above its buttons, rather than its note a second time on its own.
+    const css = readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "../styles/image-states.css"
+      ),
+      "utf8"
+    );
+    const lifted = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, , body]) => /position:\s*absolute/.test(body ?? ""))
+      .flatMap(([, selectors]) => (selectors ?? "").split(","))
+      .map(selector => selector.trim())
+      .filter(selector => selector.includes('[data-plate-size="small"]'));
+    expect(lifted.length).toBeGreaterThan(0);
+    for (const selector of lifted) {
+      expect(selector).toMatch(
+        /(\.nx-image-state__aside|\.nx-image-state__choice::after)$/
+      );
+    }
+  });
+
+  it("keeps its words on a box with room for them", () => {
+    mount(page(imageNode("img")), EMPTY_BOX);
+    const upload = screen.getByRole("button", { name: "Upload" });
+    expect(upload.textContent).toBe("Upload");
+    expect(upload.querySelector("svg")).toBeNull();
   });
 });
 

@@ -310,6 +310,8 @@ type ImageEmptyReason = "empty" | "missing";
  * a new Image is a place on the canvas rather than a line nothing can land
  * on; the editor draws its choices over it. The box carries the block's own
  * classes, so a size, a proportion or a corner set on the block shapes it.
+ * In a row (a header's, a footer's, any Layout › Row), where a picture is
+ * most often a logo, the box is logo-sized instead (the `in-row` part).
  *
  * A bound Image, by its media or its address, is left out: its picture is
  * its binding's, and what it shows without one is the binding's Fallback,
@@ -335,9 +337,12 @@ function emptyPicture({
   )
     return null;
   const reason: ImageEmptyReason = missing ? "missing" : "empty";
+  const inRow = node?.id !== undefined && ctx.rowItems?.includes(node.id);
   return (
     <div
-      className={[className, partClass("empty")].filter(Boolean).join(" ")}
+      className={[className, partClass(inRow === true ? "in-row" : "empty")]
+        .filter(Boolean)
+        .join(" ")}
       {...{ [IMAGE_EMPTY_ATTRIBUTE]: reason }}
     />
   );
@@ -826,6 +831,28 @@ const IMAGE_PARTS = {
           display: "block",
           width: "100%",
           aspectRatio: "16 / 9",
+        },
+      },
+    },
+  },
+  // The same box in a row, where a picture is most often a logo: no wider
+  // than 200px, nor than the row, and as tall as the row's line, which its
+  // other blocks set, so it stands beside them rather than as a 16:9 band
+  // across the header. A line of text tall where it sits alone on a line.
+  // In a row that does not wrap it gives up width with the blocks beside it,
+  // down to the room the editor's three choices need, so the row never runs
+  // past its edge for it. A size or a proportion set on the block still
+  // outweighs these.
+  "in-row": {
+    baseStyles: {
+      base: {
+        base: {
+          display: "block",
+          width: "200px",
+          minWidth: "5rem",
+          maxWidth: "100%",
+          minHeight: "1.5rem",
+          alignSelf: "stretch",
         },
       },
     },
