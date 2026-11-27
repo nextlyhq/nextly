@@ -51,18 +51,20 @@ export interface OperationListSources {
   }[];
 }
 
-/** Whether `value` is an array or an object literal, the data a declaration holds. */
+/**
+ * Whether `value` is data a declaration holds and the list copies: any array
+ * or object, a class instance included, so a fact declared as one is
+ * snapshotted like a literal. Functions are not objects here and stay as given.
+ */
 function isPlainData(value: unknown): value is object {
-  if (Array.isArray(value)) return true;
-  if (typeof value !== "object" || value === null) return false;
-  const prototype: unknown = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+  return typeof value === "object" && value !== null;
 }
 
 /**
- * A frozen deep copy of plain data: arrays and object literals, at every
- * depth. Anything else (a function, a class instance) is kept as it is, since
- * the list calls such values rather than reading them.
+ * A frozen deep copy of data: arrays and objects, at every depth. A copy keeps
+ * its original's prototype, so a class instance's methods still answer while
+ * its own fields are fixed. Functions are kept as they are, since the list
+ * calls them rather than reading them.
  */
 function frozenCopy<T>(value: T, copies = new Map<object, object>()): T {
   if (!isPlainData(value)) return value;

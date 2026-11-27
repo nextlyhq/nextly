@@ -406,7 +406,7 @@ function unpermittedDoorProblems(
   const outside = doors.filter(door => !allowed.includes(door));
   if (outside.length === 0) return [];
   return [
-    `a ${kind} operation runs only on ${allowed.join(" and ")}, not ${outside.join(", ")}`,
+    `a ${kind} operation runs only on ${allowed.join(" and ")}, not ${outside.map(door => (typeof door === "string" ? door : quoted(door))).join(", ")}`,
   ];
 }
 

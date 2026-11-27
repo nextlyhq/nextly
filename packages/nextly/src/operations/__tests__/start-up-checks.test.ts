@@ -901,3 +901,40 @@ describe("what the list copies", () => {
     expect(Object.hasOwn(copied as object, "__proto__")).toBe(true);
   });
 });
+
+describe("values plain JavaScript can still slip past a message", () => {
+  it("quotes a door that is a symbol on a project operation", async () => {
+    const problems = await refusal({
+      core: [
+        readOperation({
+          doors: ["local", Symbol("site") as unknown as Door],
+          permission: {
+            kind: "project",
+            reason: "Writes a file in the project.",
+          },
+        }),
+      ],
+    });
+    expect(problems).toEqual([
+      'Operation "posts.list" from core: its door Symbol(site) is not one of local, deploy, site, chat',
+      'Operation "posts.list" from core: a project operation runs only on local, not Symbol(site)',
+    ]);
+  });
+});
+
+describe("a nested fact declared as a class instance", () => {
+  it("is copied, so changing it afterwards changes nothing listed", async () => {
+    class Effects {
+      destroys = false;
+      idempotent = true;
+      outside = false;
+      spendsAi = false;
+    }
+    const effects = new Effects();
+    const list = await assembleOperationList({
+      core: [readOperation({ effects })],
+    });
+    effects.destroys = true;
+    expect(list.byId("posts.list")?.effects.destroys).toBe(false);
+  });
+});
