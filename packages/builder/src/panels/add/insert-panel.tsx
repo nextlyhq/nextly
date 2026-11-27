@@ -382,7 +382,13 @@ export function InsertPanel({
         {groups.map(group => (
           <CommandGroup
             key={group.category}
-            heading={groupHeading(group.category, tab)}
+            // The saved sections as one list under no heading when they
+            // are one group: a heading over the only list says nothing.
+            heading={
+              tab === "sections" && groups.length === 1
+                ? undefined
+                : groupHeading(group.category, tab)
+            }
           >
             {group.entries.map(entry => {
               const offer = offers.get(entry.id);

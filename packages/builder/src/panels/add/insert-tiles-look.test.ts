@@ -103,4 +103,14 @@ describe("the Add panel's tiles", () => {
     expect(focused).toMatch(/border-color:\s*var\(--nx-ring\)/);
     expect(focused).toMatch(/box-shadow:/);
   });
+
+  it("draw a saved section as a preview card, roomier than a block's tile", () => {
+    const card = rule(".nx-insert-panel [cmdk-item]:has(> .nx-picture)");
+    expect(card).toMatch(/padding:\s*0\.5rem/);
+    expect(card).toMatch(/align-items:\s*stretch/);
+    const name = rule(
+      ".nx-insert-panel [cmdk-item]:has(> .nx-picture) .nx-insert-panel__label"
+    );
+    expect(name).toMatch(/font-size:\s*0\.75rem/);
+  });
 });
