@@ -2,8 +2,8 @@ import { detectArch, detectOs, detectPackageManager } from "../environment.js";
 
 import { detectAgent, type DetectAgentOptions } from "./agent.js";
 import { nodeMajor } from "./builders.js";
-import type { SITE_ROLES } from "./catalog.js";
 import {
+  type SITE_ROLES,
   CATALOG_VERSION,
   DISTINCT_ID_PATTERN,
   type ToolsSource,

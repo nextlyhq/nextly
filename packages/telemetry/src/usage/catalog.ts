@@ -13,10 +13,6 @@
 // string. A string property is therefore either one of a fixed list or a
 // tight pattern (a version, a random id, a command's generic name, a stable
 // error code), never free text.
-//
-// Shared value lists are referenced as `X as typeof X` because the package's
-// declarations are written without a type checker (`isolatedDeclarations`),
-// which cannot see the type of a bare reference inside an object literal.
 
 /** The catalog's own version. Version 1 is the earlier CLI-only catalog. */
 export const CATALOG_VERSION = 2;
@@ -238,80 +234,200 @@ export interface EventSpec {
 }
 
 // ---------------------------------------------------------------------------
+// The catalog's shape
+//
+// Written out as types so the constants below can name the shared lists
+// directly: the declarations are made without a type checker
+// (`isolatedDeclarations`), which cannot infer a reference inside an object
+// literal, while an annotated constant needs no inference. The compiler holds
+// each constant to its type, so the two cannot disagree.
+// ---------------------------------------------------------------------------
+
+type Enum<L extends readonly (string | number)[]> = {
+  readonly type: "enum";
+  readonly values: L;
+};
+type List<L extends readonly string[]> = {
+  readonly type: "list";
+  readonly values: L;
+};
+type Sources<S extends UsageSource> = readonly [S];
+
+type Answers = {
+  readonly start: Enum<typeof STARTS>;
+  readonly host: Enum<typeof HOSTS>;
+  readonly database: Enum<typeof DATABASES>;
+  readonly features: List<typeof FEATURES>;
+  readonly coding_tools: List<typeof CODING_TOOLS>;
+  readonly install_id: PatternProperty;
+};
+
+type ToolsBase = {
+  readonly required: {
+    readonly source: Enum<readonly ["installer", "cli"]>;
+    readonly catalog_version: Enum<readonly [typeof CATALOG_VERSION]>;
+    readonly nextly_version: PatternProperty;
+    readonly run_by: Enum<typeof RUN_BY>;
+    readonly os: Enum<typeof OS_NAMES>;
+    readonly arch: Enum<typeof ARCH_NAMES>;
+    readonly package_manager: Enum<typeof PACKAGE_MANAGERS>;
+    readonly node_major: IntegerProperty;
+  };
+  readonly optional: { readonly agent: Enum<typeof AGENT_NAMES> };
+};
+
+type SiteBase = {
+  readonly required: {
+    readonly source: Enum<readonly ["site"]>;
+    readonly catalog_version: Enum<readonly [typeof CATALOG_VERSION]>;
+    readonly nextly_version: PatternProperty;
+    readonly role: Enum<typeof SITE_ROLES>;
+  };
+  readonly optional: Record<never, never>;
+};
+
+type Events = {
+  readonly install_started: {
+    readonly sources: Sources<"installer">;
+    readonly required: {
+      readonly from: Enum<typeof PAGE_LABELS>;
+      readonly terminal: BooleanProperty;
+    };
+    readonly optional: { readonly install_id: PatternProperty };
+  };
+  readonly install_step: {
+    readonly sources: Sources<"installer">;
+    readonly required: { readonly section: Enum<typeof INSTALL_SECTIONS> };
+    readonly optional: Answers;
+  };
+  readonly install_completed: {
+    readonly sources: Sources<"installer">;
+    readonly required: { readonly duration_ms: IntegerProperty };
+    readonly optional: Answers;
+  };
+  readonly install_failed: {
+    readonly sources: Sources<"installer">;
+    readonly required: {
+      readonly step: Enum<typeof INSTALL_STEPS>;
+      readonly error_code: Enum<typeof INSTALL_ERROR_CODES>;
+      readonly duration_ms: IntegerProperty;
+    };
+    readonly optional: { readonly install_id: PatternProperty };
+  };
+  readonly command_run: {
+    readonly sources: Sources<"cli">;
+    readonly required: {
+      readonly command: PatternProperty;
+      readonly alias: BooleanProperty;
+      readonly role: Enum<typeof COMMAND_ROLES>;
+    };
+    readonly optional: {
+      readonly duration_ms: IntegerProperty;
+      readonly exit_code: Enum<typeof EXIT_CODES>;
+      readonly error_code: PatternProperty;
+    };
+  };
+  readonly admin_first_opened: {
+    readonly sources: Sources<"site">;
+    readonly required: {
+      readonly heard_from: Enum<typeof HEARD_FROM>;
+      readonly run_by: Enum<typeof RUN_BY>;
+    };
+    readonly optional: {
+      readonly agent: Enum<typeof AGENT_NAMES>;
+      readonly install_id: PatternProperty;
+    };
+  };
+  readonly first_collection_created: {
+    readonly sources: Sources<"site">;
+    readonly required: Record<never, never>;
+    readonly optional: { readonly install_id: PatternProperty };
+  };
+  readonly first_page_published: {
+    readonly sources: Sources<"site">;
+    readonly required: Record<never, never>;
+    readonly optional: { readonly install_id: PatternProperty };
+  };
+  readonly daily_summary: {
+    readonly sources: Sources<"site">;
+    readonly required: {
+      readonly database: Enum<typeof DATABASES>;
+      readonly collections: Enum<typeof COUNT_RANGES>;
+      readonly singles: Enum<typeof COUNT_RANGES>;
+      readonly published_documents: Enum<typeof COUNT_RANGES>;
+      readonly plugins_official: PatternListProperty;
+      readonly plugins_other: IntegerProperty;
+    };
+    readonly optional: Record<never, never>;
+  };
+};
+
+// ---------------------------------------------------------------------------
 // Shared property specs
 // ---------------------------------------------------------------------------
 
-const BOOLEAN = { type: "boolean" } as const;
-const DURATION_MS = { type: "integer", min: 0, max: 2_147_483_647 } as const;
+const BOOLEAN: BooleanProperty = { type: "boolean" };
+const DURATION_MS: IntegerProperty = {
+  type: "integer",
+  min: 0,
+  max: 2_147_483_647,
+};
 /** A random 128-bit id written as 32 lowercase hex characters. */
-const RANDOM_ID = {
+const RANDOM_ID: PatternProperty = {
   type: "pattern",
   pattern: "^[0-9a-f]{32}$",
   maxLength: 32,
-} as const;
-const VERSION = {
+};
+const VERSION: PatternProperty = {
   type: "pattern",
   pattern:
     "^\\d{1,4}\\.\\d{1,4}\\.\\d{1,6}(?:-[0-9A-Za-z]+(?:\\.[0-9A-Za-z]+)*)?$",
   maxLength: 40,
-} as const;
-const RANGE = {
-  type: "enum",
-  values: COUNT_RANGES,
-} as const;
-const ANSWERS = {
+};
+const RANGE: Enum<typeof COUNT_RANGES> = { type: "enum", values: COUNT_RANGES };
+const ANSWERS: Answers = {
   start: { type: "enum", values: STARTS },
   host: { type: "enum", values: HOSTS },
   database: { type: "enum", values: DATABASES },
   features: { type: "list", values: FEATURES },
   coding_tools: { type: "list", values: CODING_TOOLS },
-} as const;
+  install_id: RANDOM_ID,
+};
 
 /**
  * Every installer and CLI event carries these, added by the session, never
  * by the caller.
  */
-export const TOOLS_BASE_PROPERTIES = {
+export const TOOLS_BASE_PROPERTIES: ToolsBase = {
   required: {
     source: { type: "enum", values: ["installer", "cli"] },
-    catalog_version: {
-      type: "enum",
-      values: [CATALOG_VERSION as typeof CATALOG_VERSION],
-    },
+    catalog_version: { type: "enum", values: [CATALOG_VERSION] },
     nextly_version: VERSION,
     run_by: { type: "enum", values: RUN_BY },
     os: { type: "enum", values: OS_NAMES },
     arch: { type: "enum", values: ARCH_NAMES },
-    package_manager: {
-      type: "enum",
-      values: PACKAGE_MANAGERS,
-    },
+    package_manager: { type: "enum", values: PACKAGE_MANAGERS },
     node_major: { type: "integer", min: 0, max: 999 },
   },
-  optional: {
-    agent: { type: "enum", values: AGENT_NAMES },
-  },
-} as const;
+  optional: { agent: { type: "enum", values: AGENT_NAMES } },
+};
 
 /** Every site event carries these, added by the session. */
-export const SITE_BASE_PROPERTIES = {
+export const SITE_BASE_PROPERTIES: SiteBase = {
   required: {
     source: { type: "enum", values: ["site"] },
-    catalog_version: {
-      type: "enum",
-      values: [CATALOG_VERSION as typeof CATALOG_VERSION],
-    },
+    catalog_version: { type: "enum", values: [CATALOG_VERSION] },
     nextly_version: VERSION,
     role: { type: "enum", values: SITE_ROLES },
   },
   optional: {},
-} as const;
+};
 
 // ---------------------------------------------------------------------------
 // The events
 // ---------------------------------------------------------------------------
 
-export const USAGE_EVENTS = {
+export const USAGE_EVENTS: Events = {
   install_started: {
     sources: ["installer"],
     required: {
@@ -322,41 +438,19 @@ export const USAGE_EVENTS = {
   },
   install_step: {
     sources: ["installer"],
-    required: {
-      section: {
-        type: "enum",
-        values: INSTALL_SECTIONS,
-      },
-    },
-    optional: {
-      start: ANSWERS.start,
-      host: ANSWERS.host,
-      database: ANSWERS.database,
-      features: ANSWERS.features,
-      coding_tools: ANSWERS.coding_tools,
-      install_id: RANDOM_ID,
-    },
+    required: { section: { type: "enum", values: INSTALL_SECTIONS } },
+    optional: ANSWERS,
   },
   install_completed: {
     sources: ["installer"],
     required: { duration_ms: DURATION_MS },
-    optional: {
-      start: ANSWERS.start,
-      host: ANSWERS.host,
-      database: ANSWERS.database,
-      features: ANSWERS.features,
-      coding_tools: ANSWERS.coding_tools,
-      install_id: RANDOM_ID,
-    },
+    optional: ANSWERS,
   },
   install_failed: {
     sources: ["installer"],
     required: {
       step: { type: "enum", values: INSTALL_STEPS },
-      error_code: {
-        type: "enum",
-        values: INSTALL_ERROR_CODES,
-      },
+      error_code: { type: "enum", values: INSTALL_ERROR_CODES },
       duration_ms: DURATION_MS,
     },
     optional: { install_id: RANDOM_ID },
@@ -428,7 +522,7 @@ export const USAGE_EVENTS = {
     },
     optional: {},
   },
-} as const;
+};
 
 /**
  * The id every event is sent under: a machine's random id (64 hex
