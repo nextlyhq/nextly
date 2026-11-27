@@ -1062,6 +1062,18 @@ describe("Inside its parent: Fit and Fixed are placed by the parent, or by Align
     expect(readChildPlace(block.tiers(), "base", "column")).toBe("left");
   });
 
+  it("offers no Align for an inline-level block in a Stack's flow, which auto margins don't move", () => {
+    const button = new Block({ display: "inline-flex" });
+    button.apply(
+      planChildWidth(button.tiers(), "base", "flow", "fixed", "200px")
+    );
+    expect(button.own.base).toEqual({ display: "inline-flex", width: "200px" });
+    expect(readChildPlace(button.tiers(), "base", "flow")).toBeUndefined();
+    expect(planChildPlace(button.tiers(), "base", "flow", "center")).toEqual(
+      []
+    );
+  });
+
   it("offers Align only where the parent places the block across the screen", () => {
     expect(offersChildPlace("flow")).toBe(true);
     expect(offersChildPlace("column")).toBe(true);

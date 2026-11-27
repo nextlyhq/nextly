@@ -250,7 +250,7 @@ export function planChildSize(
     role === "flow" && choice === "fill" && contentSized(tiers, editing)
       ? { [SIZE_OF[axis].size]: "100%" }
       : roleWrites(role, axis)[choice];
-  if (axis !== "width" || !placeable(role, tiers.flow)) {
+  if (axis !== "width" || !placedHere(tiers, editing, role)) {
     return childWrites(tiers, editing, writes, size);
   }
   // Fit and Fixed keep the place a Fit or Fixed block had (a block coming
@@ -291,6 +291,20 @@ function placeable(role: AxisRole | null, flow: PlainFlow = LTR): boolean {
     (role === "flow" || role === "cross" || role === "inline") &&
     !vertical(flow)
   );
+}
+
+/**
+ * Whether Align places this block at the edited device: its parent offers
+ * it, and in a Stack's flow the block is block-level, since auto margins
+ * don't move an inline-level box (a Button) along its line.
+ */
+function placedHere(
+  tiers: LayoutTiers,
+  editing: string,
+  role: AxisRole | null
+): boolean {
+  if (!placeable(role, tiers.flow)) return false;
+  return role !== "flow" || !inlineLevel(tiers, editing);
 }
 
 /** Whether the parent offers Align for a Fit or Fixed width. */
@@ -385,7 +399,7 @@ export function readChildPlace(
   items?: ParentItems
 ): ChildPlace | undefined {
   const role = roleOf(parent, "width", tiers.flow);
-  if (!placeable(role, tiers.flow)) return undefined;
+  if (!placedHere(tiers, editing, role)) return undefined;
   const width = readChildSize(tiers, editing, parent, "width", items);
   if (width.choice !== "fit" && width.choice !== "fixed") return undefined;
   const values = tiers.inForce(editing);
@@ -432,7 +446,7 @@ export function planChildPlace(
   place: ChildPlace
 ): LayoutWrite[] {
   const role = roleOf(parent, "width", tiers.flow);
-  if (role === null || !placeable(role, tiers.flow)) return [];
+  if (role === null || !placedHere(tiers, editing, role)) return [];
   return childWrites(
     tiers,
     editing,
