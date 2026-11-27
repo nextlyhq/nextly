@@ -1549,6 +1549,13 @@ exports[`each code, as a command ends with it > PLUGIN_CONFIG_NOT_EDITABLE 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-config-not-editable  (PLUGIN_CONFIG_NOT_EDITABLE)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_DECLARATION_FORMAT_NEWER 1`] = `
+"✗ "@acme/seo" declares itself in format 2, which this Nextly cannot read.
+  Why:  The declaration is in format 2, and this Nextly reads formats up to 1: this format needs a newer Nextly, and the plugin says it works with Nextly "^1.0.0". The package may already be installed; your configuration was not changed.
+  Next: Upgrade Nextly to a release in "^1.0.0" with \`nextly upgrade\`, or add a version of the plugin this Nextly reads.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-declaration-format-newer  (PLUGIN_DECLARATION_FORMAT_NEWER)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_DECLARATION_INVALID 1`] = `
 "✗ The \`nextly.plugin\` declaration of "@acme/seo" cannot be used.
   Why:  It names the export seoPlugin, which its entry does not have. The package's package.json declares how it is registered, and that is the plugin's to fix.

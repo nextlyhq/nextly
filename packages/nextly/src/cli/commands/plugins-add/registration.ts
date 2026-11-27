@@ -108,9 +108,17 @@ export function readDeclaration(manifest: {
     case "newer-format":
       throw pluginDeclarationFormatNewer(name, reading.format, reading.core);
     case "invalid":
+      // Today's block alone is refused in the words it always was, each
+      // problem named within the block; a declaration with a format names
+      // each problem from its `nextly` key.
       return {
         kind: "invalid",
-        problem: `Its \`nextly\` declaration does not parse: ${reading.problems.join("; ")}`,
+        problem:
+          reading.of === "registration"
+            ? `Its \`nextly.plugin\` does not parse: ${reading.problems
+                .map(problem => problem.replace(/^nextly\.plugin(?:\.|: )/, ""))
+                .join("; ")}`
+            : `Its \`nextly\` declaration does not parse: ${reading.problems.join("; ")}`,
       };
     case "registration":
     case "declared": {

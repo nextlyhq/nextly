@@ -29,6 +29,7 @@ describe("reading a package's nextly key", () => {
       readPluginPackageDeclaration({ nextly: { plugin: { export: "a-b" } } })
     ).toEqual({
       kind: "invalid",
+      of: "registration",
       problems: [
         "nextly.plugin.export: `export` must be a JavaScript name, or `default`",
       ],

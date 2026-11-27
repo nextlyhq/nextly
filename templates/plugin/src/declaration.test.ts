@@ -6,8 +6,8 @@ import { expect, it } from "vitest";
 
 import { myPlugin } from "./index";
 
-// package.json's `nextly` key says what this plugin needs, so `nextly plugins
-// add` can read it before installing anything. This keeps it in step with
+// package.json's `nextly` key says what this plugin needs, read as data
+// without running its code. This test keeps it in step with
 // what the plugin's code does: change a collection, a capability or the
 // Nextly range in `plugin.ts` and the declaration must change with it.
 const manifest: unknown = JSON.parse(

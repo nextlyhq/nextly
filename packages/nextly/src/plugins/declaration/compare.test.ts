@@ -264,6 +264,43 @@ describe("comparing a declaration with the plugin's definition", () => {
     ]);
   });
 
+  it("names a range for a plugin it works with that differs", () => {
+    expect(
+      comparePluginPackageDeclaration(
+        declaration(),
+        definition({ optionalDependsOn: { "@acme/media-tools": "^2.0.0" } })
+      )
+    ).toEqual([
+      {
+        kind: "works-with",
+        message:
+          'The declaration\'s plugins.worksWith gives "@acme/media-tools" the range ">=1.0.0", and the definition\'s optionalDependsOn gives it "^2.0.0".',
+      },
+    ]);
+  });
+
+  it("names a range a plugin written in JavaScript left out or gave as something else", () => {
+    // Types do not hold a JavaScript plugin: the comparison names what it
+    // finds instead of throwing on it.
+    const untyped = {
+      ...definition(),
+      nextly: undefined,
+      dependsOn: { "@acme/forms": 2 },
+    } as unknown as PluginDefinition;
+    expect(comparePluginPackageDeclaration(declaration(), untyped)).toEqual([
+      {
+        kind: "core",
+        message:
+          'The declaration says the plugin works with Nextly "^0.0.2-alpha.81", and its definition says no range.',
+      },
+      {
+        kind: "requires",
+        message:
+          'The declaration\'s plugins.requires gives "@acme/forms" the range "^2.0.0", and the definition\'s dependsOn gives it no range.',
+      },
+    ]);
+  });
+
   it("names a collection the definition adds the older way", () => {
     // `collections` beside `contributes` is still read at start, so it is a
     // collection the plugin adds.

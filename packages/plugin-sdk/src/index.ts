@@ -275,18 +275,11 @@ export { PLUGIN_CATEGORIES, isPluginCategory, pluginAdminSlug } from "nextly";
  * `pluginPackageDeclarationJsonSchema()` its JSON Schema.
  * `checkPluginPackageDeclaration(manifest, plugin)` compares it with the
  * plugin's own definition and returns each difference in plain words, so a
- * plugin's suite asserts it is empty and cannot be published with a
- * declaration that disagrees with its code:
- *
- * ```ts
- * import { readFileSync } from "node:fs";
- * import { checkPluginPackageDeclaration } from "@nextlyhq/plugin-sdk";
- *
- * const manifest = JSON.parse(
- *   readFileSync(new URL("../package.json", import.meta.url), "utf8")
- * );
- * expect(checkPluginPackageDeclaration(manifest, myPlugin())).toEqual([]);
- * ```
+ * plugin's suite reads its package.json, parses it, and asserts
+ * `checkPluginPackageDeclaration(manifest, myPlugin())` is empty: it cannot
+ * then be published with a declaration that disagrees with its code. The
+ * Plugin start's `src/declaration.test.ts` is a complete example. (No import
+ * lines here: the root entry's import guard reads them in comments too.)
  *
  * @experimental Intended to be stable once Nextly's own plugins are added
  *   through the declaration in a release; until then the format may change,

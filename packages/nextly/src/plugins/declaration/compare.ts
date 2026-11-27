@@ -3,8 +3,8 @@
  *
  * The same facts live in both: the declaration so they can be read before any
  * code runs, the definition because it is what a site enforces at start. Two
- * copies drift, so they are compared when a plugin is added or updated and in
- * the plugin's own tests, and each difference is named.
+ * copies drift, so they are compared, in the plugin's own tests through
+ * `checkPluginPackageDeclaration`, and each difference is named.
  *
  * Only what the definition can say is compared. The databases, companion
  * packages, env vars, files, the live switch, the content a plugin reads and
@@ -92,6 +92,22 @@ function compareNames(
 }
 
 /**
+ * A version range as a definition holds it, trimmed, or nothing when it is
+ * not text. A plugin written in JavaScript is not held to its types, so a
+ * range it left out or gave as something else is named as a difference
+ * rather than thrown on.
+ */
+function rangeText(value: unknown): string | undefined {
+  return typeof value === "string" ? value.trim() : undefined;
+}
+
+/** A range as a sentence quotes it, or what stands for one that is missing. */
+function quotedRange(value: unknown): string {
+  const range = rangeText(value);
+  return range === undefined ? "no range" : `"${range}"`;
+}
+
+/**
  * The differences between two maps of plugin name to version range: names
  * only one side has, and names whose ranges differ.
  */
@@ -101,7 +117,7 @@ function compareRanges(
   declaredUnder: string,
   definedUnder: string,
   declared: Readonly<Record<string, string>>,
-  defined: Readonly<Record<string, string>>
+  defined: Readonly<Record<string, unknown>>
 ): PluginDeclarationDifference[] {
   const differences = compareNames(
     kind,
@@ -111,10 +127,10 @@ function compareRanges(
   );
   for (const [name, range] of Object.entries(defined)) {
     const said = declared[name];
-    if (said !== undefined && said.trim() !== range.trim()) {
+    if (said !== undefined && said.trim() !== rangeText(range)) {
       differences.push({
         kind,
-        message: `The declaration's ${declaredUnder} gives "${name}" the range "${said}", and the definition's ${definedUnder} gives it "${range}".`,
+        message: `The declaration's ${declaredUnder} gives "${name}" the range "${said}", and the definition's ${definedUnder} gives it ${quotedRange(range)}.`,
       });
     }
   }
@@ -254,10 +270,10 @@ export function comparePluginPackageDeclaration(
 ): PluginDeclarationDifference[] {
   const differences: PluginDeclarationDifference[] = [];
 
-  if (declaration.core.trim() !== definition.nextly.trim()) {
+  if (declaration.core.trim() !== rangeText(definition.nextly)) {
     differences.push({
       kind: "core",
-      message: `The declaration says the plugin works with Nextly "${declaration.core}", and its definition says "${definition.nextly}".`,
+      message: `The declaration says the plugin works with Nextly "${declaration.core}", and its definition says ${quotedRange(definition.nextly)}.`,
     });
   }
 

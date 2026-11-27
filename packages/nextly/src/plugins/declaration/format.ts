@@ -22,8 +22,8 @@
  *
  * The declaration is a promise, not a grant. A site enforces the plugin's own
  * definition (`definePlugin`); the declaration is compared with it
- * (`comparePluginPackageDeclaration`) when the plugin is added and in the
- * plugin's own tests, so the two cannot drift silently.
+ * (`comparePluginPackageDeclaration`), and a plugin's own tests run that
+ * comparison, so the two cannot drift silently.
  *
  * @experimental The format is new and may change before it is stable; a
  *   change is a new format number.
@@ -34,8 +34,9 @@ import { z } from "zod";
 
 import { isValidRange } from "../semver-range";
 
-/** @experimental The newest declaration format this Nextly reads. */
-export const PLUGIN_PACKAGE_DECLARATION_FORMAT = 1 as const;
+import { PLUGIN_PACKAGE_DECLARATION_FORMAT } from "./format-version";
+
+export { PLUGIN_PACKAGE_DECLARATION_FORMAT };
 
 /** A JavaScript name an import can bind and an object literal can key. */
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;

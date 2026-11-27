@@ -567,6 +567,14 @@ describe("a plugin scaffold runs as created", () => {
     afterEach(async () => {
       await writeFile(path.join(project, "package.json"), manifest);
     });
+    // The links point into this checkout. Each is removed on its own, as a
+    // link, before the scaffold's folder is deleted, so that deletion never
+    // walks through one into the packages it points at.
+    afterAll(async () => {
+      for (const [name] of linked) {
+        await rm(path.join(project, "node_modules", name), { force: true });
+      }
+    });
 
     /** The project's declaration test, run by vitest in the project: its status and output. */
     function runDeclarationTest(): { status: number | null; output: string } {

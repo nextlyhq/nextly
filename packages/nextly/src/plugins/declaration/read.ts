@@ -24,14 +24,20 @@ import {
  * - `declared`: a declaration in a format this Nextly reads.
  * - `newer-format`: a declaration in a format this Nextly does not read yet,
  *   with the Nextly versions it says it works with when that much can be read.
- * - `invalid`: a declaration that does not parse, with each problem.
+ * - `invalid`: a declaration that does not parse, with each problem, and
+ *   whether it was today's registration block alone (`registration`) or a
+ *   declaration with a format (`declaration`).
  */
 export type PluginPackageDeclarationReading =
   | { kind: "none" }
   | { kind: "registration"; registration: PluginPackageRegistration }
   | { kind: "declared"; declaration: PluginPackageDeclaration }
   | { kind: "newer-format"; format: number; core?: string }
-  | { kind: "invalid"; problems: string[] };
+  | {
+      kind: "invalid";
+      of: "registration" | "declaration";
+      problems: string[];
+    };
 
 /** Each issue of a failed parse as `path: message`, the path from the `nextly` key. */
 function problemsOf(error: z.ZodError, under: string): string[] {
@@ -68,6 +74,7 @@ export function readPluginPackageDeclaration(
       ? { kind: "registration", registration: parsed.data }
       : {
           kind: "invalid",
+          of: "registration",
           problems: problemsOf(parsed.error, "nextly.plugin"),
         };
   }
@@ -93,5 +100,9 @@ export function readPluginPackageDeclaration(
   const parsed = PLUGIN_PACKAGE_DECLARATION_SCHEMA.safeParse(nextly);
   return parsed.success
     ? { kind: "declared", declaration: parsed.data }
-    : { kind: "invalid", problems: problemsOf(parsed.error, "nextly") };
+    : {
+        kind: "invalid",
+        of: "declaration",
+        problems: problemsOf(parsed.error, "nextly"),
+      };
 }

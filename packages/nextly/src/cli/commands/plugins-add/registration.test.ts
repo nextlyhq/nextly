@@ -147,6 +147,30 @@ describe("a package's nextly.plugin declaration", () => {
     ).toEqual({ kind: "none" });
   });
 
+  it("refuses a malformed registration block alone in the words it always used", () => {
+    // A package with only today's block is refused as it was before the
+    // declaration had a format, naming the field within the block.
+    expect(
+      readDeclaration({ name: PKG, nextly: { plugin: { export: "a-b" } } })
+    ).toEqual({
+      kind: "invalid",
+      problem:
+        "Its `nextly.plugin` does not parse: export: `export` must be a JavaScript name, or `default`",
+    });
+    expect(
+      readDeclaration({
+        name: PKG,
+        nextly: {
+          plugin: { export: "a", options: { x: { description: "X" } } },
+        },
+      })
+    ).toEqual({
+      kind: "invalid",
+      problem:
+        "Its `nextly.plugin` does not parse: `options` are given to a call, so they need `call: true`",
+    });
+  });
+
   it("is invalid when a full declaration does not parse, naming the field", () => {
     expect(
       readDeclaration({
