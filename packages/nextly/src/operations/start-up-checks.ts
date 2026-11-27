@@ -68,6 +68,15 @@ function quoted(value: unknown): string {
   return JSON.stringify(value) ?? String(value);
 }
 
+function isObject(value: unknown): value is object {
+  return typeof value === "object" && value !== null;
+}
+
+/** Whether `op` declares any rule that raises its level. */
+function raises(op: OperationDefinition): boolean {
+  return Array.isArray(op.raise) && op.raise.some(isObject);
+}
+
 function isSource(value: unknown): value is OperationSource {
   return typeof value === "object" && value !== null && "kind" in value;
 }
@@ -115,7 +124,10 @@ const textProblems: DefinitionCheck = op => {
 /** Its input and output are schemas the list can read. */
 const schemaProblems: DefinitionCheck = op =>
   (["input", "output"] as const)
-    .filter(name => op[name]?.["~standard"]?.version !== 1)
+    .filter(name => {
+      const standard = op[name]?.["~standard"];
+      return standard?.version !== 1 || typeof standard.validate !== "function";
+    })
     .map(name => `its ${name} schema is not a Standard Schema`);
 
 /** Its level, and where it refuses "Always allow". */
@@ -164,9 +176,19 @@ function raiseRuleProblems(
   return problems;
 }
 
-/** Every rule that raises its level only raises it. */
-const raiseProblems: DefinitionCheck = op =>
-  (op.raise ?? []).flatMap(rule => raiseRuleProblems(op, rule));
+/**
+ * Every rule that raises its level only raises it. Declared as a list of
+ * objects, since a plain JavaScript declaration may hold anything there.
+ */
+const raiseProblems: DefinitionCheck = op => {
+  const rules: unknown = op.raise ?? [];
+  if (!Array.isArray(rules)) return ["its raise rules are not a list"];
+  return rules.flatMap((rule: unknown) =>
+    isObject(rule)
+      ? raiseRuleProblems(op, rule as OperationRaise<unknown>)
+      : ["a raise rule is not an object"]
+  );
+};
 
 /** Each effect stated, and none a read could not have. */
 const effectsProblems: DefinitionCheck = op => {
@@ -210,7 +232,7 @@ function ownDataProblems(op: OperationDefinition): string[] {
       "only a plugin's operation may read its own data without a permission"
     );
   }
-  if (op.level !== "read" || (op.raise ?? []).length > 0) {
+  if (op.level !== "read" || raises(op)) {
     problems.push(
       "an operation without a permission for its own data may only read"
     );
@@ -265,7 +287,9 @@ const dryRunProblems: DefinitionCheck = op => {
   if (typeof op.dryRun !== "boolean") {
     return ["it does not say whether it supports a dry run"];
   }
-  const writes = op.level !== "read" || (op.raise ?? []).length > 0;
+  // An unknown level is refused on its own; whether it writes is not known.
+  if (!RISK_LEVELS.includes(op.level)) return [];
+  const writes = op.level !== "read" || raises(op);
   if (writes && op.permission?.kind !== "project" && !op.dryRun) {
     return ["it writes but offers no dry run"];
   }
@@ -310,8 +334,13 @@ const exitCodesProblems: DefinitionCheck = op => {
   if (!Array.isArray(op.exitCodes)) {
     return ["it does not list the exit codes it adds"];
   }
-  const problems = op.exitCodes.flatMap(exitCodeProblems);
-  const codes = op.exitCodes.map(entry => entry.code);
+  const entries: unknown[] = op.exitCodes;
+  const listed = entries.filter(isObject) as OperationExitCode[];
+  const problems = listed.flatMap(exitCodeProblems);
+  if (listed.length < entries.length) {
+    problems.push("an exit code entry is not an object");
+  }
+  const codes = listed.map(entry => entry.code);
   for (const code of new Set(codes)) {
     if (codes.indexOf(code) !== codes.lastIndexOf(code)) {
       problems.push(`it lists exit code ${code} twice`);
@@ -381,6 +410,8 @@ async function examplesProblems(op: OperationDefinition): Promise<string[]> {
 interface Claim {
   readonly id: string;
   readonly from: string;
+  /** Its command words, as a refusal quotes them. */
+  readonly command: string;
 }
 
 /** The words `op` answers to: its command and each old name. */
@@ -439,6 +470,49 @@ async function operationProblems(
   );
 }
 
+/** What earlier operations in the list have claimed. */
+interface Claims {
+  readonly byId: Map<string, Claim>;
+  readonly byWords: Map<string, Claim>;
+}
+
+/** How a refusal tells apart two operations that share an ID. */
+function describeCommand(op: OperationDefinition): string {
+  return Array.isArray(op.command)
+    ? `"nextly ${op.command.join(" ")}"`
+    : "no command";
+}
+
+/**
+ * Everything wrong with `op`: its own declaration, and the ID and command
+ * words it claims that an earlier operation holds. Records its claims.
+ */
+async function declarationProblems(
+  op: OperationDefinition,
+  source: OperationSource,
+  from: string,
+  claims: Claims
+): Promise<string[]> {
+  const hasId = isNonEmptyText(op.id);
+  const claim: Claim = {
+    id: hasId ? op.id : "(no ID)",
+    from,
+    command: describeCommand(op),
+  };
+  const problems = await operationProblems(op, source, claim);
+  // An operation without an ID is already refused; it claims no ID to clash.
+  const earlier = hasId ? claims.byId.get(op.id) : undefined;
+  if (earlier) {
+    problems.push(
+      `Two operations claim the ID "${op.id}": one from ${earlier.from} (${earlier.command}) and one from ${from} (${claim.command})`
+    );
+  } else if (hasId) {
+    claims.byId.set(op.id, claim);
+  }
+  problems.push(...wordClaimProblems(op, claim, claims.byWords));
+  return problems;
+}
+
 /**
  * Every problem with the list `contributions` would make, as sentences that
  * name the operation and where it came from. Empty when the list may be used.
@@ -452,22 +526,19 @@ export async function operationListProblems(
 
   for (const { source, operations } of contributions) {
     const from = describeSource(source);
-    for (const op of operations) {
-      const claim: Claim = {
-        id: isNonEmptyText(op.id) ? op.id : "(no ID)",
-        from,
-      };
-      problems.push(...(await operationProblems(op, source, claim)));
-
-      const earlier = byId.get(claim.id);
-      if (earlier) {
+    for (const op of operations as readonly unknown[]) {
+      if (!isObject(op)) {
         problems.push(
-          `Two operations claim the ID "${claim.id}": one from ${earlier.from} and one from ${from}`
+          `An entry from ${from} is not an operation: ${quoted(op)}`
         );
-      } else {
-        byId.set(claim.id, claim);
+        continue;
       }
-      problems.push(...wordClaimProblems(op, claim, byWords));
+      problems.push(
+        ...(await declarationProblems(op as OperationDefinition, source, from, {
+          byId,
+          byWords,
+        }))
+      );
     }
   }
   return problems;

@@ -162,3 +162,35 @@ export const settingsSetLike = defineOperation({
   source: { kind: "core" },
   stability: "experimental",
 });
+
+/**
+ * Shaped like deleting the activity log: `critical` whatever its input, and
+ * never covered by "Always allow".
+ */
+export const activityDeleteLike = defineOperation({
+  id: "activity.delete",
+  command: ["activity", "delete"],
+  aliases: [],
+  summary: "Delete the activity log",
+  description: "Deletes the activity log for good. Nothing can bring it back.",
+  input: z.object({ before: z.string() }),
+  output: z.object({ deleted: z.number() }),
+  level: "critical",
+  alwaysAllow: false,
+  effects: {
+    destroys: true,
+    idempotent: true,
+    outside: false,
+    spendsAi: false,
+  },
+  doors: ["local", "site"],
+  permission: { kind: "permission", name: "delete-activity" },
+  dryRun: true,
+  long: false,
+  examples: [
+    { summary: "Everything before 2026", input: { before: "2026-01-01" } },
+  ],
+  exitCodes: [],
+  source: { kind: "core" },
+  stability: "experimental",
+});

@@ -6,7 +6,14 @@ import { describe, expect, it } from "vitest";
 
 import { levelForRun } from "../levels";
 
-import { BULK_THRESHOLD, contentUpdateLike, settingsSetLike } from "./fixtures";
+import { assembleOperationList } from "../list";
+
+import {
+  activityDeleteLike,
+  BULK_THRESHOLD,
+  contentUpdateLike,
+  settingsSetLike,
+} from "./fixtures";
 
 function ids(count: number): string[] {
   return Array.from({ length: count }, (_, index) => String(index + 1));
@@ -101,5 +108,46 @@ describe("the target the plan found", () => {
         target: { status: "published" },
       }).level
     ).toBe("change");
+  });
+});
+
+describe('an operation that refuses "Always allow" itself', () => {
+  it("keeps that refusal on every run, with no rule applying", () => {
+    expect(
+      levelForRun(activityDeleteLike, { input: { before: "2026-01-01" } })
+    ).toEqual({
+      level: "critical",
+      alwaysAllow: false,
+    });
+  });
+
+  it("keeps it in the list's view of the operation", async () => {
+    const list = await assembleOperationList({
+      core: [activityDeleteLike, settingsSetLike],
+    });
+    expect(list.byId("activity.delete")?.alwaysAllow).toBe(false);
+    // The control: an operation that refuses it only on some inputs is
+    // listed as allowing it at its declared level.
+    expect(list.byId("settings.set")?.alwaysAllow).toBe(true);
+  });
+});
+
+describe("two rules that both apply", () => {
+  it("give the higher of their levels, whichever comes first", () => {
+    const applies = () => true;
+    for (const raise of [
+      [
+        { when: "critical case", level: "critical" as const, applies },
+        { when: "change case", level: "change" as const, applies },
+      ],
+      [
+        { when: "change case", level: "change" as const, applies },
+        { when: "critical case", level: "critical" as const, applies },
+      ],
+    ]) {
+      expect(levelForRun({ level: "draft", raise }, { input: {} }).level).toBe(
+        "critical"
+      );
+    }
   });
 });

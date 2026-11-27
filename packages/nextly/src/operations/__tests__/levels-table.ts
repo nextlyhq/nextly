@@ -1,5 +1,6 @@
 /**
- * The expected level, effects, doors and chat mark of every core operation,
+ * The expected level, the levels its inputs raise it to, effects, doors and
+ * chat mark of every core operation,
  * one row each. A test holds the list to this table, so a level changed by
  * accident, an operation added without a row, or a row left behind for one
  * removed fails it.
@@ -8,12 +9,22 @@
  * what the operation does rather than copied from its declaration: the table
  * is the second, independent statement of each risk.
  */
+import { isDeepStrictEqual } from "node:util";
+
 import type { Door, OperationEffects, RiskLevel } from "../definition";
 import type { ListedOperation } from "../list";
 
 export interface LevelsRow {
   readonly level: RiskLevel;
   readonly alwaysAllow: boolean;
+  /**
+   * Each rule that raises the level, in declared order: the level it raises
+   * to, and whether "Always allow" may still cover such a run.
+   */
+  readonly raises: readonly {
+    readonly level: RiskLevel;
+    readonly alwaysAllow: boolean;
+  }[];
   readonly effects: OperationEffects;
   readonly doors: readonly Door[];
   readonly chatExposed: boolean;
@@ -60,6 +71,10 @@ export function levelsTableProblems(
     const actual: LevelsRow = {
       level: op.level,
       alwaysAllow: op.alwaysAllow,
+      raises: (op.raise ?? []).map(rule => ({
+        level: rule.level,
+        alwaysAllow: rule.alwaysAllow !== false,
+      })),
       effects: { ...op.effects },
       doors: [...op.doors].sort(),
       chatExposed: op.chatExposed,
@@ -69,7 +84,9 @@ export function levelsTableProblems(
       effects: { ...row.effects },
       doors: [...row.doors].sort(),
     };
-    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    // Compared by value: the order of keys in a declaration or a row means
+    // nothing.
+    if (!isDeepStrictEqual(actual, expected)) {
       problems.push(
         `"${op.id}" differs from its row: declared ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`
       );

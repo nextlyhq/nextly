@@ -7,8 +7,7 @@
  * `../__tests__/levels-table.ts` holds a row for every operation listed here,
  * so adding one without stating its level, effects and doors fails the tests.
  *
- * Empty until today's commands move onto the list: nothing people run is
- * built from it yet.
+ * No core operation is declared yet, so the list is empty.
  *
  * @module operations/core
  * @experimental

@@ -40,7 +40,7 @@ describe("two operations claiming one name", () => {
       core: [readOperation(), readOperation({ command: ["posts", "find"] })],
     });
     expect(problems).toEqual([
-      'Two operations claim the ID "posts.list": one from core and one from core',
+      'Two operations claim the ID "posts.list": one from core ("nextly posts list") and one from core ("nextly posts find")',
     ]);
   });
 
@@ -64,7 +64,7 @@ describe("two operations claiming one name", () => {
       ],
     });
     expect(problems).toEqual([
-      `Two operations claim the ID "posts.list": one from core and one from plugin "${SEO_PLUGIN}"`,
+      `Two operations claim the ID "posts.list": one from core ("nextly posts list") and one from plugin "${SEO_PLUGIN}" ("nextly seo list")`,
     ]);
   });
 

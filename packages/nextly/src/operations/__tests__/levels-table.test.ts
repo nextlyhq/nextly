@@ -8,7 +8,12 @@ import { describe, expect, it } from "vitest";
 import { CORE_OPERATIONS } from "../core";
 import { assembleOperationList } from "../list";
 
-import { readOperation, writeOperation } from "./fixtures";
+import {
+  activityDeleteLike,
+  readOperation,
+  settingsSetLike,
+  writeOperation,
+} from "./fixtures";
 import {
   CORE_LEVELS_TABLE,
   levelsTableProblems,
@@ -19,6 +24,7 @@ import {
 const READ_ROW: LevelsRow = {
   level: "read",
   alwaysAllow: true,
+  raises: [],
   effects: {
     destroys: false,
     idempotent: true,
@@ -62,6 +68,7 @@ describe("the levels table", () => {
     ["spendsAi", { effects: { ...READ_ROW.effects, spendsAi: true } }],
     ["doors", { doors: ["local"] }],
     ["chat mark", { chatExposed: true }],
+    ["raise rules", { raises: [{ level: "change", alwaysAllow: true }] }],
   ] satisfies [string, Partial<LevelsRow>][])(
     "reports a declaration whose %s differs from its row",
     async (_fact, change) => {
@@ -139,5 +146,101 @@ describe("the chat mark", () => {
       ["posts.list", true],
       ["posts.publish", false],
     ]);
+  });
+});
+
+describe("the levels table on operations whose risk depends on the run", () => {
+  const settingsRow: LevelsRow = {
+    level: "change",
+    alwaysAllow: true,
+    raises: [{ level: "critical", alwaysAllow: false }],
+    effects: {
+      destroys: true,
+      idempotent: true,
+      outside: false,
+      spendsAi: false,
+    },
+    doors: ["local", "site"],
+    chatExposed: false,
+  };
+  const activityRow: LevelsRow = {
+    level: "critical",
+    alwaysAllow: false,
+    raises: [],
+    effects: {
+      destroys: true,
+      idempotent: true,
+      outside: false,
+      spendsAi: false,
+    },
+    doors: ["site", "local"],
+    chatExposed: false,
+  };
+
+  it('matches a raise rule\'s level and its "Always allow" refusal (control)', async () => {
+    const list = await assembleOperationList({
+      core: [settingsSetLike, activityDeleteLike],
+    });
+    expect(
+      levelsTableProblems(list.operations, {
+        "settings.set": settingsRow,
+        "activity.delete": activityRow,
+      })
+    ).toEqual([]);
+  });
+
+  it('reports a security setting whose rule lost its refusal of "Always allow"', async () => {
+    const [rule] = settingsSetLike.raise;
+    const list = await assembleOperationList({
+      core: [
+        { ...settingsSetLike, raise: [{ ...rule, alwaysAllow: undefined }] },
+      ],
+    });
+    expect(
+      levelsTableProblems(list.operations, { "settings.set": settingsRow })
+    ).toEqual([expect.stringMatching(/^"settings\.set" differs from its row/)]);
+  });
+
+  it('reports an operation that lost its own refusal of "Always allow"', async () => {
+    const list = await assembleOperationList({
+      core: [{ ...activityDeleteLike, alwaysAllow: undefined }],
+    });
+    expect(
+      levelsTableProblems(list.operations, { "activity.delete": activityRow })
+    ).toEqual([
+      expect.stringMatching(/^"activity\.delete" differs from its row/),
+    ]);
+  });
+
+  it("does not depend on the order of keys", async () => {
+    const list = await assembleOperationList({
+      core: [
+        readOperation({
+          effects: {
+            spendsAi: false,
+            outside: false,
+            idempotent: true,
+            destroys: false,
+          },
+        }),
+      ],
+    });
+    expect(
+      levelsTableProblems(list.operations, {
+        "posts.list": {
+          chatExposed: false,
+          doors: ["site", "local"],
+          effects: {
+            idempotent: true,
+            destroys: false,
+            spendsAi: false,
+            outside: false,
+          },
+          raises: [],
+          alwaysAllow: true,
+          level: "read",
+        },
+      })
+    ).toEqual([]);
   });
 });
