@@ -32,7 +32,10 @@
 
 import { isDeepStrictEqual } from "node:util";
 
-import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
+import {
+  fieldGroupTypeKeys,
+  readFieldGroupType,
+} from "../../domains/field-groups/storage/field-group-type-key";
 import { NextlyError } from "../../errors";
 
 import { detachData } from "./detach";
@@ -418,7 +421,23 @@ function hiddenPart(value: unknown, readable: unknown): unknown {
     const part = hiddenPart(value[key], valueIn(readable, key));
     if (part !== undefined) assign(hidden, key, part);
   }
-  return Object.keys(hidden).length > 0 ? hidden : undefined;
+  if (Object.keys(hidden).length === 0) return undefined;
+  return { ...identityOf(value), ...hidden };
+}
+
+/**
+ * What names a field-group instance: its id and the type it announces, where it holds them. A
+ * hidden part kept of one is that instance's, so it keeps both, or a field group of either type
+ * would be kept with no type, and one of a single type under an id of its own.
+ */
+function identityOf(value: Record<string, unknown>): Record<string, unknown> {
+  const identity: Record<string, unknown> = {};
+  for (const key of ["id", ...fieldGroupTypeKeys]) {
+    if (value[key] !== undefined && hasOwn(value, key)) {
+      assign(identity, key, value[key]);
+    }
+  }
+  return identity;
 }
 
 /**

@@ -67,6 +67,10 @@ import {
   COMPANION_LOCALE_COLUMN,
   COMPANION_PARENT_COLUMN,
 } from "../../i18n/companion-columns";
+import {
+  fillCompanionFields,
+  type LocalizedFieldRef,
+} from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
   type LocalizationSource,
@@ -355,9 +359,8 @@ function storedContainers(
 }
 
 /**
- * Every value `row` holds of `fields`, by field name: a container opened from its JSON column, any
- * other value as stored. A column holding nothing is left out, so a companion row's untranslated
- * value does not stand over the instance's own.
+ * Every value an instance's own row holds of `fields`, by field name: a container opened from its
+ * JSON column, any other value as stored, a null as null, as a read of it serves them.
  */
 function storedFieldValues(
   row: Record<string, unknown> | undefined,
@@ -370,8 +373,10 @@ function storedFieldValues(
     if (typeof name !== "string") continue;
     const column = row[toSnakeCase(name)];
     const value =
-      containerName(field) === undefined ? column : parsedColumn(column);
-    if (value !== undefined && value !== null) found[name] = value;
+      column === null || containerName(field) === undefined
+        ? column
+        : parsedColumn(column);
+    if (value !== undefined) found[name] = value;
   }
   return found;
 }
@@ -2800,24 +2805,37 @@ export class FieldGroupMutationService extends BaseService {
 
   /**
    * Every value a stored instance holds, by field name, as a read of it in the
-   * write's language is judged: its own row, with a translated field's value
-   * from its companion row in that language.
+   * write's language serves it: its own row, with each translated field put
+   * together from its companion row in that language as a read puts it
+   * (`fillCompanionFields`), a container's structure with that language's text
+   * laid over it.
    */
   private async storedInstance(
     slug: string,
     instanceId: string,
     componentFields: readonly FieldConfig[]
   ): Promise<Record<string, unknown>> {
-    const own = writeScope.getStore()?.stored.get(instanceId);
+    const instance = {
+      ...storedFieldValues(
+        writeScope.getStore()?.stored.get(instanceId),
+        componentFields
+      ),
+      id: instanceId,
+    };
     const translated = await this.translatedRow(
       slug,
       instanceId,
       componentFields
     );
-    return {
-      ...storedFieldValues(own, componentFields),
-      ...storedFieldValues(translated, componentFields),
-    };
+    if (translated) {
+      fillCompanionFields({
+        rows: [instance],
+        companionRows: translated.row ? [translated.row] : [],
+        localizedFields: translated.localizedFields,
+        localeChain: [translated.locale],
+      });
+    }
+    return instance;
   }
 
   /**
@@ -2831,22 +2849,30 @@ export class FieldGroupMutationService extends BaseService {
     componentFields: readonly FieldConfig[]
   ): Promise<Record<string, unknown> | undefined> {
     return storedContainers(
-      await this.translatedRow(slug, instanceId, componentFields),
+      (await this.translatedRow(slug, instanceId, componentFields))?.row,
       componentFields
     );
   }
 
   /**
    * A localized field group's stored instance's companion row in the write's
-   * language, where its containers are translated and it has one. Read on the
-   * write's own connection; a failed read fails the write rather than leaving
-   * a denied child unrestored.
+   * language (`row`, absent where it has none), where its containers are
+   * translated, with the fields that row translates and the language. Read on
+   * the write's own connection; a failed read fails the write rather than
+   * leaving a denied child unrestored.
    */
   private async translatedRow(
     slug: string,
     instanceId: string,
     componentFields: readonly FieldConfig[]
-  ): Promise<Record<string, unknown> | undefined> {
+  ): Promise<
+    | {
+        row: Record<string, unknown> | undefined;
+        localizedFields: LocalizedFieldRef[];
+        locale: string;
+      }
+    | undefined
+  > {
     const scope = writeScope.getStore();
     if (!scope || !this.localization) return undefined;
     if (
@@ -2880,16 +2906,22 @@ export class FieldGroupMutationService extends BaseService {
           })
         : cachedCompanionReadiness(this.adapter, schema.companionTableName);
     if (readiness !== "ready") return undefined;
+    const locale = resolveRequestedLocale(this.localization, scope.locale);
     const rows = await scope.select(schema.companionTableName, {
       where: this.whereAnd({
         [COMPANION_PARENT_COLUMN]: instanceId,
-        [COMPANION_LOCALE_COLUMN]: resolveRequestedLocale(
-          this.localization,
-          scope.locale
-        ),
+        [COMPANION_LOCALE_COLUMN]: locale,
       }),
     });
-    return rows[0];
+    return {
+      row: rows[0],
+      // With the shapes of the field groups its containers hold, as a read lays text over them.
+      localizedFields: await withComponentShapes(
+        schema.localizedFields,
+        scope.executor
+      ),
+      locale,
+    };
   }
 
   /** Where the fields of a field group placed in an instance are read from. */

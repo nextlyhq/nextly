@@ -804,6 +804,21 @@ describe("keepDeniedAtStored keeps what the writer may not read", () => {
     ).toEqual({ meta: { note: "m", inner: { secret: "s" } } });
   });
 
+  it("keeps the hidden part of a field group left out of a group with its id and type", async () => {
+    const type = currentFieldGroupTypeKey;
+    const stored = {
+      meta: {
+        note: "n",
+        zone: { id: "z", [type]: "card", seen: "a", secret: "s" },
+      },
+    };
+    expect(
+      await saved({ meta: { note: "m" } }, stored, denies("meta.zone.secret"))
+    ).toEqual({
+      meta: { note: "m", zone: { id: "z", [type]: "card", secret: "s" } },
+    });
+  });
+
   it("clears a whole container the update clears", async () => {
     expect(
       await saved(

@@ -34,6 +34,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
+import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 import { VersionsRepository } from "../../versions/versions-repository";
 
 perLanguageStorageSuite();
@@ -108,6 +109,50 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           }),
         ],
       }),
+      // A translated group, one of its texts shown by a value inside it that isn't translated.
+      defineFieldGroup({
+        slug: "sheet",
+        fields: [
+          group({
+            name: "info",
+            fields: [
+              text({ name: "kind", localized: false }),
+              text({ name: "note" }),
+              text({
+                name: "extra",
+                access: {
+                  read: ({ data }: { data?: Record<string, unknown> }) =>
+                    data?.kind !== "private",
+                },
+              }),
+              repeater({
+                name: "items",
+                access: hidden,
+                fields: [text({ name: "label" })],
+              }),
+            ],
+          }),
+        ],
+      }),
+      // A group its readers are shown unless the value beside it is null, which isn't its absence.
+      defineFieldGroup({
+        slug: "panel",
+        fields: [
+          text({ name: "mode" }),
+          group({
+            name: "info",
+            access: {
+              read: ({ data }: { data?: Record<string, unknown> }) =>
+                data?.mode !== null,
+            },
+            fields: [text({ name: "note" }), text({ name: "extra" })],
+          }),
+          group({
+            name: "vault",
+            fields: [text({ name: "secret", access: hidden })],
+          }),
+        ],
+      }),
     ],
     collections: [
       defineCollection({ slug: "notices", access: open, fields: containers() }),
@@ -138,6 +183,16 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
             ],
           }),
           fieldGroup({ name: "badge", component: "card" }),
+          fieldGroup({ name: "pane", component: "panel" }),
+          fieldGroup({ name: "sheet", component: "sheet" }),
+          // A field group of either type, held in a group.
+          group({
+            name: "holder",
+            fields: [
+              text({ name: "label" }),
+              fieldGroup({ name: "zone", components: ["badge", "card"] }),
+            ],
+          }),
         ],
       }),
       // Keeps drafts but can't hold one: a password field takes it out of them.
@@ -631,6 +686,81 @@ describe.each(getConfiguredTestDialects())(
         });
       }
     );
+
+    // Broken by laying a translated field group's text over its container in place of its structure.
+    it("judges and keeps a translated field group's container with its structure and its text", async () => {
+      await boot(dialect);
+      const door = await entryDoor("gated", {
+        sheet: {
+          info: {
+            kind: "private",
+            note: "n",
+            extra: "e",
+            items: [{ label: "x" }],
+          },
+        },
+      });
+      const read = await door.read(undefined, ANN);
+      expect((read.sheet as Doc).info).toEqual({ kind: "private", note: "n" });
+
+      // A form that sends what it changed: the value beside the hidden one goes, which she saw.
+      await door.save(
+        { sheet: { id: (read.sheet as Doc).id, info: { note: "Ann" } } },
+        undefined,
+        ANN
+      );
+
+      const info = ((await door.read(undefined)).sheet as Doc).info as Doc;
+      expect(info).toMatchObject({ note: "Ann", extra: "e" });
+      expect(info.kind ?? null).toBeNull();
+      expect((info.items as Row[]).map(row => row.label)).toEqual(["x"]);
+    });
+
+    // Broken by reading a field group's null value as no value.
+    it("judges a field group's read rule on its null values as null", async () => {
+      await boot(dialect);
+      const door = await entryDoor("gated", {
+        pane: { mode: null, info: { note: "n", extra: "e" } },
+      });
+      const read = await door.read(undefined, ANN);
+      expect((read.pane as Doc).info).toBeUndefined();
+
+      // A form that sends the group it did not show.
+      await door.save(
+        { pane: { id: (read.pane as Doc).id, info: { note: "Ann" } } },
+        undefined,
+        ANN
+      );
+
+      expect(((await door.read(undefined)).pane as Doc).info).toEqual({
+        note: "Ann",
+        extra: "e",
+      });
+    });
+
+    // Broken by keeping a field group's hidden fields without the instance they belong to.
+    it("keeps the hidden fields of a field group left out of a group as that instance's", async () => {
+      await boot(dialect);
+      const door = await entryDoor("gated", {
+        holder: {
+          label: "h",
+          zone: { [currentFieldGroupTypeKey]: "badge", name: "n", secret: "s" },
+        },
+      });
+      const before = (await door.read(undefined)).holder as Doc;
+      const read = await door.read(undefined, ANN);
+      expect(JSON.stringify(read.holder)).not.toContain('"s"');
+
+      await door.save({ holder: { label: "Ann" } }, undefined, ANN);
+
+      const holder = (await door.read(undefined)).holder as Doc;
+      expect(holder.label).toBe("Ann");
+      expect(holder.zone).toMatchObject({
+        [currentFieldGroupTypeKey]: "badge",
+        secret: "s",
+      });
+      expect((holder.zone as Doc).id).toBe((before.zone as Doc).id);
+    });
 
     // Broken by judging a field group's read rules on its containers alone.
     it("judges what Ann may read of a field group on the whole instance", async () => {
