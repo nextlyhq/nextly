@@ -117,6 +117,10 @@ The endpoint serves three revisions of the protocol at the one address:
   says.
 - A request that names a revision the endpoint does not serve is refused with
   the protocol's unsupported-version error, which lists the ones it does.
+- Every request after `initialize` must carry the `MCP-Protocol-Version`
+  header, as clients from `2025-06-18` on send it. One without it comes from an
+  older client, which the protocol says to take as `2025-03-26`, so it is
+  refused `400` with the revisions the endpoint serves.
 
 Every revision is served statelessly: the endpoint keeps no session between
 requests. `GET` and `DELETE` answer `405`: they were the session operations, and

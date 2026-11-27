@@ -273,6 +273,48 @@ describe.each(getConfiguredTestDialects())(
       expect(body.result?.protocolVersion).toBe("2025-11-25");
     });
 
+    it("opens a client that sends no revision header, as every 2025 client's initialize does", async () => {
+      // The control for the refusal below: a client cannot know a revision before it opens, so
+      // `initialize` without the header must still be served.
+      const response = await handlers.POST(
+        post(
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              clientInfo: { name: "conformance-client", version: "0.0.0" },
+            },
+          },
+          bearer(key)
+        ),
+        params("mcp")
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await payloadOf(response)) as {
+        result?: { protocolVersion?: string };
+      };
+      expect(body.result?.protocolVersion).toBe("2025-11-25");
+    });
+
+    it("refuses any other request that sends no revision header, naming the ones it serves", async () => {
+      // A request without the header is from a client older than 2025-06-18, which the
+      // protocol says to treat as 2025-03-26: a revision this door does not serve.
+      const response = await handlers.POST(
+        post({ jsonrpc: "2.0", id: 2, method: "tools/list" }, bearer(key)),
+        params("mcp")
+      );
+
+      expect(response.status).toBe(400);
+      const message = (await payloadOf(response)).error?.message ?? "";
+      for (const revision of SERVED_REVISIONS) {
+        expect(message).toContain(revision);
+      }
+    });
+
     it("refuses a revision it does not serve, naming all three it does", async () => {
       const response = await handlers.POST(
         post(

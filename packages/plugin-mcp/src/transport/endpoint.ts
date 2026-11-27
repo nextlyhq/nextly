@@ -11,6 +11,7 @@
  * @module transport/endpoint
  */
 import {
+  DEFAULT_NEGOTIATED_PROTOCOL_VERSION,
   McpServer,
   createMcpHandler,
   type McpHttpHandler,
@@ -113,6 +114,34 @@ export function buildServer(options: EndpointOptions): McpServer {
 const ENDPOINT_METHODS: readonly RouteMethod[] = ["POST", "GET", "DELETE"];
 
 /**
+ * `request`, carrying the revision a client that names none is taken to speak.
+ *
+ * Clients from `2025-06-18` on send `MCP-Protocol-Version` on every request
+ * after `initialize`; older ones never do, and the transport specification
+ * says to take a request without it as `2025-03-26`. That is a revision this
+ * door does not serve, and a server that does not serve such clients must
+ * refuse their requests. The library instead serves a request without the
+ * header, since it keeps no record of what `initialize` agreed. So the header
+ * is supplied here, and the library's own check answers it: `initialize` is
+ * exempt from that check and still opens, and every other request is refused
+ * `400` with the revisions the door serves.
+ *
+ * Only an absent header is filled in; one the client sent is never replaced,
+ * and the body is neither read nor copied.
+ */
+function withRevisionHeader(request: Request): Request {
+  if (
+    request.method !== "POST" ||
+    request.headers.has("mcp-protocol-version")
+  ) {
+    return request;
+  }
+  const headers = new Headers(request.headers);
+  headers.set("mcp-protocol-version", DEFAULT_NEGOTIATED_PROTOCOL_VERSION);
+  return new Request(request, { headers });
+}
+
+/**
  * The endpoint, as routes a plugin contributes.
  *
  * One handler backs all three methods and it is built once, not per request.
@@ -166,7 +195,7 @@ export function mcpEndpointRoutes(options: EndpointOptions): PluginRoute[] {
     // The context reaches the protocol layer as itself. Declaring only
     // `request` was enough while the endpoint exposed nothing, and it discards
     // the services facade and the user that every tool will read.
-    return whileServing(ctx, () => serving.fetch(request));
+    return whileServing(ctx, () => serving.fetch(withRevisionHeader(request)));
   };
 
   return ENDPOINT_METHODS.map(method => ({
