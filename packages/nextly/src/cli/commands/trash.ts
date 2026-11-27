@@ -76,12 +76,23 @@ async function withNextly<T>(
   context: CommandContext,
   work: (nextly: Nextly) => Promise<T>
 ): Promise<T> {
-  const { config } = await loadConfig({
+  // Started from the config as the app wrote it (`appConfig`): the boot runs
+  // every plugin transformer and fold itself, so the loaded `config`, which
+  // already holds their result, would fold each a second time. Migrations
+  // stay off at this boot, as every command that starts the runtime keeps
+  // them: a trash command changes no schema.
+  const { appConfig, pluginConsent } = await loadConfig({
     configPath: context.options.config,
     cwd: context.options.cwd,
   });
   const { getNextly } = await import("../../init");
-  const nextly = await getNextly({ config });
+  const nextly = await getNextly({
+    config: {
+      ...appConfig,
+      db: { ...appConfig.db, runMigrationsOnBoot: false },
+    },
+    pluginConsent,
+  });
   try {
     return await work(nextly as unknown as Nextly);
   } finally {

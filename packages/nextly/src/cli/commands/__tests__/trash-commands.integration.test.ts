@@ -21,12 +21,22 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-/** What the config file says: what `loadConfig` returns for it. */
-const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
+/**
+ * What the config file says, as `loadConfig` returns it: `appConfig` as the
+ * app wrote it, and `config` with the plugins' collections already folded in.
+ */
+const loaded = vi.hoisted(() => ({
+  config: undefined as unknown,
+  appConfig: undefined as unknown,
+}));
 vi.mock("../../utils/config-loader", async importOriginal => ({
   ...(await importOriginal<typeof import("../../utils/config-loader")>()),
+  // As the loader answers: `appConfig` as the app wrote it, which a command
+  // starting the runtime boots from, and the folded `config`.
   loadConfig: async () => ({
     config: loaded.config,
+    appConfig: loaded.appConfig,
+    pluginConsent: NO_PLUGIN_CONSENT,
     configPath: "/virtual/nextly.config.ts",
     dependencies: [],
   }),
@@ -35,6 +45,8 @@ vi.mock("../../utils/config-loader", async importOriginal => ({
 import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database";
 import { defineCollection, defineConfig, text } from "../../../config";
 import { getNextly } from "../../../init";
+import { NO_PLUGIN_CONSENT } from "../../../plugins/plugin-consent";
+import { definePlugin } from "../../../plugins/plugin-context";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../context";
@@ -48,8 +60,26 @@ import {
 } from "../trash";
 
 const POSTS = "clitrash_posts";
+const NOTES = "clitrash_plugin_notes";
+
+const notesCollection = defineCollection({
+  slug: NOTES,
+  fields: [text({ name: "title" })],
+});
+
+/**
+ * A plugin contributing a collection: booting from a config that already
+ * holds it would fold it a second time and refuse the slug as a duplicate.
+ */
+const notesPlugin = definePlugin({
+  name: "clitrash-notes",
+  version: "1.0.0",
+  nextly: ">=0.0.1",
+  contributes: { collections: [notesCollection] },
+});
 
 const config = defineConfig({
+  plugins: [notesPlugin],
   collections: [
     defineCollection({
       slug: POSTS,
@@ -115,7 +145,13 @@ describeEachDialect("nextly trash list, restore and empty", dialect => {
     vi.stubEnv("DATABASE_URL", url);
     _resetEnvCache();
     vi.spyOn(process, "cwd").mockReturnValue(dir);
-    loaded.config = config;
+    loaded.appConfig = config;
+    // As the loader folds it: the plugin's collection already among the
+    // collections, which a boot must not fold a second time.
+    loaded.config = {
+      ...config,
+      collections: [...(config.collections ?? []), notesCollection],
+    };
     // The collection's table, as `nextly db:sync` makes it on a development
     // database, before the application starts on it.
     await runDbSync(
