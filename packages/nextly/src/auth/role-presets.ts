@@ -8,13 +8,16 @@
  * it would grant, and importing the seeder to reach `ROLE_PRESETS` would pull
  * the container into an access-policy module that takes no I/O of its own.
  *
- * So the predicates live here, importing nothing but the system-resource list,
- * and the seeder imports them. The declaration is the shared thing; applying it
- * to a database is one use of it, not its definition.
+ * So the predicates live here, importing nothing but the system-resource list
+ * and the AI permissions' names, and the seeder imports them. The declaration
+ * is the shared thing; applying it to a database is one use of it, not its
+ * definition.
  *
  * @module auth/role-presets
  */
 
+// A leaf that imports nothing, so the presets stay free of I/O.
+import { AI_PERMISSIONS } from "../domains/ai/ai-contract";
 import { isSystemResource } from "../schemas/_zod/rbac";
 
 /**
@@ -105,6 +108,24 @@ export interface PresetReach {
 }
 
 /**
+ * "Use AI", which the Editor and Author presets hold although it sits on a
+ * system resource: the people who write content are the ones AI helps, one
+ * item at a time and within the site's budgets. Bulk jobs and the AI settings
+ * spend or steer the site's money, so they stay with Admin.
+ */
+function isUseAI(
+  { action, resource }: Pick<PresetPermission, "action" | "resource">,
+  { isPlugin }: Pick<PresetContext, "isPlugin">
+): boolean {
+  // Core's own, never a plugin's that happens to share the spelling.
+  return (
+    !isPlugin &&
+    action === AI_PERMISSIONS.use.action &&
+    resource === AI_PERMISSIONS.use.resource
+  );
+}
+
+/**
  * The presets every project starts with.
  *
  * Deliberately few. These are starting points, not an attempt to name every
@@ -139,8 +160,9 @@ export const ROLE_PRESETS: RolePreset[] = [
     // Content, whatever the project's content turns out to be. A system
     // resource is the framework's own furniture and not an editor's business,
     // with media the exception because content needs images.
-    grants: ({ resource }, { isSystem, isPlugin, isWorkflow }) =>
-      !isWorkflow && ((!isSystem && !isPlugin) || resource === "media"),
+    grants: ({ action, resource }, { isSystem, isPlugin, isWorkflow }) =>
+      isUseAI({ action, resource }, { isPlugin }) ||
+      (!isWorkflow && ((!isSystem && !isPlugin) || resource === "media")),
   },
   {
     slug: "author",
@@ -154,6 +176,7 @@ export const ROLE_PRESETS: RolePreset[] = [
     // excluded because it is a superset we cannot see inside, which is exactly
     // what an author should not hold.
     grants: ({ action, resource }, { isSystem, isPlugin, isWorkflow }) => {
+      if (isUseAI({ action, resource }, { isPlugin })) return true;
       if (isPlugin || isWorkflow) return false;
       if (isSystem && resource !== "media") return false;
       return !["delete", "publish", "unpublish", "manage"].includes(action);

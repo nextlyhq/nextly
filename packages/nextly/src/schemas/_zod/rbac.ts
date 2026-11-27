@@ -44,6 +44,12 @@ export const SYSTEM_RESOURCES = [
   // one reads as a system concept and cannot be mistaken for content, which is
   // the whole test.
   "background-jobs",
+  // The three AI permissions' resources: using AI, running bulk AI jobs, and
+  // the AI settings. Each reads as a system concept, not content, so
+  // reserving it costs a site nothing it would name a collection.
+  "ai",
+  "bulk-ai-jobs",
+  "ai-settings",
 ] as const;
 
 export type SystemResource = (typeof SYSTEM_RESOURCES)[number];
@@ -90,6 +96,30 @@ export const NEWLY_RESERVED_SLUG_NOTES: ReadonlyMap<string, string> = new Map([
     "This name became a reserved system resource when queued email could be managed. " +
       "An installation that already has a collection or Single with this slug must rename it: " +
       "the read- and manage-email-deliveries permissions are seeded under this name, so a content entity " +
+      "sharing it would have its own permissions treated as system-owned and preset roles " +
+      "would silently lose access to it.",
+  ],
+  [
+    "ai",
+    "This name became a reserved system resource when AI was added. " +
+      "An installation that already has a collection or Single with this slug must rename it: " +
+      "the use-ai permission is seeded under this name, so a content entity " +
+      "sharing it would have its own permissions treated as system-owned and preset roles " +
+      "would silently lose access to it.",
+  ],
+  [
+    "bulk-ai-jobs",
+    "This name became a reserved system resource when AI was added. " +
+      "An installation that already has a collection or Single with this slug must rename it: " +
+      "the run-bulk-ai-jobs permission is seeded under this name, so a content entity " +
+      "sharing it would have its own permissions treated as system-owned and preset roles " +
+      "would silently lose access to it.",
+  ],
+  [
+    "ai-settings",
+    "This name became a reserved system resource when AI was added. " +
+      "An installation that already has a collection or Single with this slug must rename it: " +
+      "the manage-ai-settings permission is seeded under this name, so a content entity " +
       "sharing it would have its own permissions treated as system-owned and preset roles " +
       "would silently lose access to it.",
   ],
