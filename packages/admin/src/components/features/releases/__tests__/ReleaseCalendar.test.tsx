@@ -368,6 +368,9 @@ describe("single-document releases on the calendar", () => {
   it("asks for every release while nothing is hidden", () => {
     render(<ReleaseCalendar />);
     fireEvent.click(dayButton("2026-10-23"));
+    // Both were asked, so "none narrowed" is about real reads, not none.
+    expect(calendarMock).toHaveBeenCalled();
+    expect(dayListMock).toHaveBeenCalled();
     expect(
       calendarMock.mock.calls.every(([params]) => !("kind" in params))
     ).toBe(true);

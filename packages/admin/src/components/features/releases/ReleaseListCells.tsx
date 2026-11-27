@@ -145,6 +145,15 @@ export function ReleaseStatusMark({
 }
 
 /**
+ * What a view of releases says when it holds nothing while "Hide single
+ * documents" is on: the List's tab, a Board column or a calendar day's list.
+ * True whether or not a single-document release was left out, so it needs no
+ * second read to know.
+ */
+export const SINGLES_HIDDEN_EMPTY =
+  "Single-document releases are hidden, and there is nothing else here.";
+
+/**
  * The mark of a release that holds one document, drawn the same wherever a
  * release is listed: the list's row, a calendar chip, a day's list and a
  * board tile. Its words are read out as part of what holds it, so a screen

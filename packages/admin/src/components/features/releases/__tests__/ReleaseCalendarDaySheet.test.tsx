@@ -26,6 +26,7 @@ vi.mock("@admin/hooks/queries/useReleases", async importOriginal => ({
 }));
 
 import { ReleaseCalendarDaySheet } from "../ReleaseCalendarDaySheet";
+import { SINGLES_HIDDEN_EMPTY } from "../ReleaseListCells";
 
 const release = (n: number): Release => ({
   id: `r${n}`,
@@ -197,5 +198,30 @@ describe("single-document releases in the day's list", () => {
     expect(dayListMock).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "release" })
     );
+  });
+
+  it("says the day is empty because single documents are hidden, as the list says it", () => {
+    held = [];
+    render(
+      <ReleaseCalendarDaySheet
+        day="2026-10-23"
+        zone="UTC"
+        isToday={false}
+        overdue={new Set()}
+        now={Date.parse("2026-10-21T12:00:00.000Z")}
+        kind="release"
+        onClose={() => undefined}
+        onReturnFocus={() => undefined}
+      />
+    );
+    expect(screen.getByText(SINGLES_HIDDEN_EMPTY)).toBeInTheDocument();
+    expect(screen.queryByText("Nothing runs on this day.")).toBeNull();
+  });
+
+  it("says nothing runs on the day when nothing is hidden", () => {
+    held = [];
+    renderSheet();
+    expect(screen.getByText("Nothing runs on this day.")).toBeInTheDocument();
+    expect(screen.queryByText(SINGLES_HIDDEN_EMPTY)).toBeNull();
   });
 });

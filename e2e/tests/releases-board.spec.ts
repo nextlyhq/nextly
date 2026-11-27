@@ -6,11 +6,17 @@
  * The Board has no search, so it shows whatever the suite's database holds.
  * Each column is therefore held to what the server's list answers for its
  * tab: the same first releases, in the same order, and the same count. The
- * tabs never share a release, so neither do the columns. This run's own
- * releases are written so each leads its column (the newest draft and the
- * most recently finished lead theirs, and the scheduled ones are due before
- * anything else the suite schedules), and each is found in its own column
- * and in no other.
+ * tabs never share a release, so neither do the columns. Other release specs
+ * write without this file's lock, so the server is read again on every try,
+ * for longer than the Board takes to read its columns again.
+ *
+ * This run's draft, finished and scheduled releases are written to lead
+ * their columns (the newest draft and the most recently finished lead
+ * theirs, and the scheduled ones are due before anything else the suite
+ * schedules), and each is found in its own column and in no other. Its
+ * stopped and overdue releases cannot be made to lead Needs attention, which
+ * lists every stopped release first and then the longest waiting: they are
+ * found there where the column shows them, and in its tab where it does not.
  *
  * @module e2e/tests/releases-board.spec
  */
@@ -37,7 +43,7 @@ import {
 import { LOCK } from "./support/locks";
 
 // Reads every release as a whole (each column and its count), so it takes
-// the lock the other release specs write under.
+// the lock the specs that read releases as a whole take.
 test.describe.configure({ lock: [LOCK.releases] });
 
 /** The zone the browser reads in, so a day on the calendar is a UTC day. */
@@ -90,24 +96,36 @@ async function tileIds(column: Locator): Promise<string[]> {
 
 /**
  * Hold every column to the list's read of its tab: the same first releases
- * in the same order, and the same count beside its name.
+ * in the same order, and the same count beside its name. Both sides are read
+ * again on each try, since another spec may write a release between them;
+ * the Board reads its columns again every minute, so the two meet within it.
  */
 async function expectColumnsAsTheList(
   page: Page,
   kind?: "release"
-): Promise<Record<Tab, string[]>> {
-  const shown = {} as Record<Tab, string[]>;
+): Promise<Record<Tab, { ids: string[]; total: number }>> {
+  const shown = {} as Record<Tab, { ids: string[]; total: number }>;
   for (const { tab, label } of COLUMNS) {
-    const read = await tabRead(page, tab, kind);
     const region = column(page, label);
-    // The heading is the column's name and then its count.
-    await expect(region.getByRole("heading")).toHaveText(
-      new RegExp(`^${label}\\s*${read.total}$`)
-    );
     await expect
-      .poll(() => tileIds(region), { message: `the ${label} column` })
-      .toEqual(read.ids);
-    shown[tab] = read.ids;
+      .poll(
+        async () => {
+          const read = await tabRead(page, tab, kind);
+          shown[tab] = read;
+          // The heading is the column's name and then its count, read as
+          // text rather than as drawn (the name is drawn in capitals).
+          const heading = (
+            (await region.getByRole("heading").textContent()) ?? ""
+          ).replace(/\s+/g, "");
+          const ids = await tileIds(region);
+          return heading === `${label}${read.total}`.replace(/\s+/g, "") &&
+            JSON.stringify(ids) === JSON.stringify(read.ids)
+            ? "as the list"
+            : `board "${heading}" ${ids.join(",")} / list ${read.total} ${read.ids.join(",")}`;
+        },
+        { message: `the ${label} column`, timeout: 90_000 }
+      )
+      .toBe("as the list");
   }
   return shown;
 }
@@ -164,59 +182,67 @@ test.describe("the Releases page's views", () => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     const stamp = `${Date.now()}`;
     const name = (what: string) => `${what} ${stamp}`;
-    const postId = await post(page, stamp);
-
-    // One release in every state. The scheduled ones are due before
-    // anything else the suite schedules, so they lead Scheduled, and are
-    // cancelled once read, well before they would run.
-    const soon = new Date(Date.now() + 20 * MINUTE);
-    const scheduled = await release(page, name("Scheduled"), postId);
-    await schedule(page, scheduled, soon, "UTC");
-    const single = await scheduleDocument(
-      page,
-      await post(page, `${stamp}-single`),
-      "publish",
-      {
-        into: "own",
-        title: name("Single"),
-        at: new Date(soon.getTime() + MINUTE).toISOString(),
-        timezone: "UTC",
-      }
-    );
-    // On a calendar day of their own: one ordinary release beside one that
-    // holds a single document.
-    const day = await freeDay(page);
-    const onDay = new Date(Date.parse(`${day}T12:00:00.000Z`));
-    const dayOrdinary = await release(page, name("Day ordinary"), postId);
-    await schedule(page, dayOrdinary, onDay, "UTC");
-    const daySingle = await scheduleDocument(
-      page,
-      await post(page, `${stamp}-day-single`),
-      "publish",
-      {
-        into: "own",
-        title: name("Day single"),
-        at: new Date(onDay.getTime() + 60 * MINUTE).toISOString(),
-        timezone: "UTC",
-      }
-    );
-    const needAttention: Array<{ id: string; outcome: RunnerOutcome }> = [];
-    for (const outcome of ["stopped", "overdue"] as const) {
-      const id = await release(page, name(outcome), postId);
-      await schedule(page, id, new Date(Date.now() + 40 * DAY), "UTC");
-      needAttention.push({ id, outcome });
-    }
-    const published = await release(page, name("Published"), postId);
-    await publishNow(page, published);
-    const cancelled = await release(page, name("Cancelled"), postId);
-    await cancel(page, cancelled);
-    const draft = await release(page, name("Draft"), postId);
-    // Left as the runner leaves them only after every other write: Publish
-    // now runs a pass of the runner, which would run an overdue release.
-    await leaveReleasesAsTheRunnerWould(page, needAttention);
-    const [stopped, overdue] = needAttention.map(each => each.id);
+    // Every release this run leaves scheduled, stopped or overdue, cancelled
+    // at the end whatever fails first: none is left to run, or to stand in a
+    // later spec's attention strip.
+    const toCancel: string[] = [];
 
     try {
+      const postId = await post(page, stamp);
+      // One release in every state. The scheduled ones are due before
+      // anything else the suite schedules, so they lead Scheduled, and are
+      // cancelled once read, well before they would run.
+      const soon = new Date(Date.now() + 20 * MINUTE);
+      const scheduled = await release(page, name("Scheduled"), postId);
+      toCancel.push(scheduled);
+      await schedule(page, scheduled, soon, "UTC");
+      const single = await scheduleDocument(
+        page,
+        await post(page, `${stamp}-single`),
+        "publish",
+        {
+          into: "own",
+          title: name("Single"),
+          at: new Date(soon.getTime() + MINUTE).toISOString(),
+          timezone: "UTC",
+        }
+      );
+      toCancel.push(single);
+      // On a calendar day of their own: one ordinary release beside one
+      // that holds a single document.
+      const day = await freeDay(page);
+      const onDay = new Date(Date.parse(`${day}T12:00:00.000Z`));
+      const dayOrdinary = await release(page, name("Day ordinary"), postId);
+      toCancel.push(dayOrdinary);
+      await schedule(page, dayOrdinary, onDay, "UTC");
+      const daySingle = await scheduleDocument(
+        page,
+        await post(page, `${stamp}-day-single`),
+        "publish",
+        {
+          into: "own",
+          title: name("Day single"),
+          at: new Date(onDay.getTime() + 60 * MINUTE).toISOString(),
+          timezone: "UTC",
+        }
+      );
+      toCancel.push(daySingle);
+      const needAttention: Array<{ id: string; outcome: RunnerOutcome }> = [];
+      for (const outcome of ["stopped", "overdue"] as const) {
+        const id = await release(page, name(outcome), postId);
+        toCancel.push(id);
+        await schedule(page, id, new Date(Date.now() + 40 * DAY), "UTC");
+        needAttention.push({ id, outcome });
+      }
+      const published = await release(page, name("Published"), postId);
+      await publishNow(page, published);
+      const cancelled = await release(page, name("Cancelled"), postId);
+      await cancel(page, cancelled);
+      const draft = await release(page, name("Draft"), postId);
+      // Left as the runner leaves them only after every other write: Publish
+      // now runs a pass of the runner, which would run an overdue release.
+      await leaveReleasesAsTheRunnerWould(page, needAttention);
+
       await gotoAdmin(page, "/releases");
       await expect(
         page
@@ -229,16 +255,28 @@ test.describe("the Releases page's views", () => {
       await showView(page, "board");
       const shown = await expectColumnsAsTheList(page);
       const where = (id: string) =>
-        COLUMNS.filter(({ tab }) => shown[tab].includes(id)).map(
+        COLUMNS.filter(({ tab }) => shown[tab].ids.includes(id)).map(
           each => each.label
         );
       expect(where(draft)).toEqual(["Draft"]);
       expect(where(scheduled)).toEqual(["Scheduled"]);
       expect(where(single)).toEqual(["Scheduled"]);
-      expect(where(stopped)).toEqual(["Needs attention"]);
-      expect(where(overdue)).toEqual(["Needs attention"]);
       expect(where(published)).toEqual(["Done"]);
       expect(where(cancelled)).toEqual(["Done"]);
+      // Needs attention lists every stopped release before any overdue one,
+      // the longest waiting first, so this run's pair is on the Board only
+      // where the column has room for it; it is in no other column either way.
+      const attention = await ok<{ items: Array<{ id: string }> }>(
+        await page.request.get(
+          `/admin/api/releases?${new URLSearchParams({ tab: "attention", search: stamp })}`
+        )
+      );
+      for (const { id } of needAttention) {
+        expect(attention.items.map(each => each.id)).toContain(id);
+        expect(where(id)).toEqual(
+          shown.attention.ids.includes(id) ? ["Needs attention"] : []
+        );
+      }
 
       // The single-document release carries the list's mark, in words a
       // screen reader hears with its title; the ordinary one does not.
@@ -251,10 +289,12 @@ test.describe("the Releases page's views", () => {
         scheduledColumn.getByRole("link", { name: name("Scheduled") })
       ).not.toContainText("Single document");
 
-      // Read-only: dragged onto Done, a tile stays where it was.
+      // Read-only: dragged onto Done with the mouse, a tile stays where it
+      // was and nothing is opened.
       await singleTile.dragTo(column(page, "Done"));
       await expect(page).toHaveURL(/\/admin\/releases$/);
       await expectColumnsAsTheList(page);
+      await expect(singleTile).toBeVisible();
       await expectNoAxeViolations(page);
 
       // The Calendar: the chip carries the same mark, and the day's count
@@ -262,9 +302,9 @@ test.describe("the Releases page's views", () => {
       await showView(page, "calendar");
       await showMonth(page, day);
       // The day's cell: its chips sit beside its button, not inside it.
-      const cell = page
-        .getByRole("gridcell")
-        .filter({ has: page.locator(`[data-day="${day}"]`) });
+      const dayButton = page.locator(`[data-day="${day}"]`);
+      const cell = page.getByRole("gridcell").filter({ has: dayButton });
+      await expect(dayButton).toHaveAttribute("aria-label", /2 releases$/);
       await expect(
         cell.getByRole("link", {
           name: new RegExp(`^${name("Day single")} Single document\\b`),
@@ -273,10 +313,6 @@ test.describe("the Releases page's views", () => {
       await expect(
         cell.getByRole("link", { name: new RegExp(name("Day ordinary")) })
       ).not.toContainText("Single document");
-      await expect(page.locator(`[data-day="${day}"]`)).toHaveAttribute(
-        "aria-label",
-        /2 releases/
-      );
       await expectNoAxeViolations(page);
 
       // The List: its mark is the one the other views copy. Hide single
@@ -288,41 +324,32 @@ test.describe("the Releases page's views", () => {
       ).toContainText("Single document");
       await page.getByRole("switch", { name: "Hide single documents" }).click();
       await expect(
+        page.getByRole("row", { name: new RegExp(name("Scheduled")) })
+      ).toBeVisible();
+      await expect(
         page.getByRole("row", { name: new RegExp(name("Single")) })
       ).toHaveCount(0);
       await expectNoAxeViolations(page);
 
       await showView(page, "board");
       const filtered = await expectColumnsAsTheList(page, "release");
-      expect(filtered.upcoming).not.toContain(single);
-      expect(filtered.upcoming).toContain(scheduled);
+      expect(filtered.upcoming.ids).not.toContain(single);
+      expect(filtered.upcoming.ids).toContain(scheduled);
       await expect(page.getByText("Single document")).toHaveCount(0);
 
+      // Counted without it first, so its absence is read from the filtered
+      // calendar rather than from one not drawn yet.
       await showView(page, "calendar");
       await showMonth(page, day);
-      await expect(
-        cell.getByRole("link", { name: new RegExp(name("Day single")) })
-      ).toHaveCount(0);
+      await expect(dayButton).toHaveAttribute("aria-label", /1 release$/);
       await expect(
         cell.getByRole("link", { name: new RegExp(name("Day ordinary")) })
       ).toBeVisible();
-      await expect(page.locator(`[data-day="${day}"]`)).toHaveAttribute(
-        "aria-label",
-        /1 release\b/
-      );
+      await expect(
+        cell.getByRole("link", { name: new RegExp(name("Day single")) })
+      ).toHaveCount(0);
     } finally {
-      // Nothing of this run is left to run, or to stand in a later spec's
-      // attention strip.
-      for (const id of [
-        scheduled,
-        single,
-        dayOrdinary,
-        daySingle,
-        stopped,
-        overdue,
-      ]) {
-        if (id) await cancel(page, id);
-      }
+      for (const id of toCancel) await cancel(page, id);
     }
   });
 });

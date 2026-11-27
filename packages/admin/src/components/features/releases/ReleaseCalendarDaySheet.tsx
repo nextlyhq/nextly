@@ -45,7 +45,11 @@ import {
 } from "./release-calendar";
 import { zoneDisplayName } from "./release-calendar-zones";
 import { releaseTimeOfDay, releaseTimeText } from "./release-time";
-import { ReleaseStatusMark, SingleDocumentMark } from "./ReleaseListCells";
+import {
+  ReleaseStatusMark,
+  SINGLES_HIDDEN_EMPTY,
+  SingleDocumentMark,
+} from "./ReleaseListCells";
 import {
   ReleaseRowDialogs,
   ReleaseRowMenuButton,
@@ -200,6 +204,7 @@ function DayList({
           zone={zone}
           overdue={overdue}
           now={now}
+          kind={kind}
           onOpen={openDialog}
         />
       </div>
@@ -242,6 +247,7 @@ function DayListBody({
   zone,
   overdue,
   now,
+  kind,
   onOpen,
 }: {
   list: ReturnType<typeof useReleaseListPage>;
@@ -249,6 +255,7 @@ function DayListBody({
   zone: string;
   overdue: ReadonlySet<string> | null;
   now: number;
+  kind: ReleaseKind | undefined;
   onOpen: (dialog: OpenDialog) => void;
 }) {
   if (list.isError) {
@@ -274,7 +281,11 @@ function DayListBody({
       <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
         <CalendarClock className="size-5 text-muted-foreground" aria-hidden />
         <p className="text-sm text-muted-foreground">
-          Nothing runs on this day.
+          {/* With single documents hidden, the List's words, so an empty
+              day is not taken for one with nothing on it. */}
+          {kind === "release"
+            ? SINGLES_HIDDEN_EMPTY
+            : "Nothing runs on this day."}
         </p>
       </div>
     );

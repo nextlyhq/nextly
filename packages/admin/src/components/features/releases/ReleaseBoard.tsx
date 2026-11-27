@@ -39,7 +39,11 @@ import {
   releaseRowStatus,
 } from "./release-list";
 import { readerZone } from "./release-timezone";
-import { ReleaseStatusBadge, SingleDocumentMark } from "./ReleaseListCells";
+import {
+  ReleaseStatusBadge,
+  SINGLES_HIDDEN_EMPTY,
+  SingleDocumentMark,
+} from "./ReleaseListCells";
 import { useMinuteClock } from "./useMinuteClock";
 
 export interface ReleaseBoardProps {
@@ -133,7 +137,11 @@ function BoardColumn({
           </Button>
         </div>
       ) : releases.length === 0 ? (
-        <p className="px-1 py-2 text-sm text-muted-foreground">Nothing here</p>
+        <p className="px-1 py-2 text-sm text-muted-foreground">
+          {/* With single documents hidden, the List's words: the column is
+              not empty for want of releases, and says what left them out. */}
+          {kind === "release" ? SINGLES_HIDDEN_EMPTY : "Nothing here"}
+        </p>
       ) : (
         <ul className="flex flex-col gap-2">
           {releases.map(release => (
@@ -190,7 +198,10 @@ function BoardTile({
   return (
     <Link
       href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
-      className="flex flex-col gap-1 rounded-md border border-border bg-background p-2.5 text-sm outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+      // Hovered in the muted surface the calendar's chips use: the accent
+      // surface takes a site's brand colour, which the tile's muted text
+      // does not hold its contrast on.
+      className="flex flex-col gap-1 rounded-md border border-border bg-background p-2.5 text-sm outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
     >
       {/* The title and the mark on one line where they fit. The space
           between them is for the link name: without it a screen reader

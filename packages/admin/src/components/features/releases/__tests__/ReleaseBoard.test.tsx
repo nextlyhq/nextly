@@ -38,7 +38,7 @@ vi.mock("../release-timezone", async importOriginal => ({
 }));
 
 import { ReleaseBoard } from "../ReleaseBoard";
-import { ReleaseTitleCell } from "../ReleaseListCells";
+import { ReleaseTitleCell, SINGLES_HIDDEN_EMPTY } from "../ReleaseListCells";
 
 function release(over: Partial<Release> & { id: string }): Release {
   return {
@@ -348,5 +348,45 @@ describe("the Releases Board with single documents hidden", () => {
       )
     ).toBe(true);
     expect(within(column(/^Scheduled$/)).getByText("2")).toBeInTheDocument();
+  });
+
+  it("says a column is empty because single documents are hidden, as the list says it", async () => {
+    // Needs attention holds only a single-document release, so with them
+    // hidden it is empty for that reason; Draft is empty either way.
+    answers.attention = {
+      items: [
+        release({
+          id: "r-lone",
+          title: "Lone single",
+          kind: "single",
+          state: "blocked",
+          scheduledAt: "2026-11-22T09:00:00.000Z",
+          memberCounts: { total: 1, goLive: 1, comeDown: 0 },
+        }),
+      ],
+      total: 1,
+    };
+    render(<ReleaseBoard onShowTab={vi.fn()} kind="release" />);
+
+    // The list's own sentence, word for word.
+    expect(SINGLES_HIDDEN_EMPTY).toBe(
+      "Single-document releases are hidden, and there is nothing else here."
+    );
+    const attention = column(/^Needs attention$/);
+    expect(
+      await within(attention).findByText(SINGLES_HIDDEN_EMPTY)
+    ).toBeInTheDocument();
+    expect(within(attention).queryByText("Nothing here")).toBeNull();
+  });
+
+  it("says a column holds nothing when nothing is hidden", async () => {
+    answers.attention = { items: [], total: 0 };
+    render(<ReleaseBoard onShowTab={vi.fn()} />);
+
+    const attention = column(/^Needs attention$/);
+    expect(
+      await within(attention).findByText("Nothing here")
+    ).toBeInTheDocument();
+    expect(within(attention).queryByText(SINGLES_HIDDEN_EMPTY)).toBeNull();
   });
 });

@@ -90,6 +90,7 @@ import {
   ReleaseStatusBadge,
   ReleaseTitleCell,
   ReleaseWhenCell,
+  SINGLES_HIDDEN_EMPTY,
 } from "./ReleaseListCells";
 import {
   ReleaseRowDialogs,
@@ -277,8 +278,7 @@ function filteredEmptyFor(
     description = `No release in ${label} is ${reason} right now.`;
     clear = "Show everything that needs attention";
   } else {
-    description =
-      "Single-document releases are hidden, and there is nothing else here.";
+    description = SINGLES_HIDDEN_EMPTY;
     clear = "Show single documents";
   }
   return {
