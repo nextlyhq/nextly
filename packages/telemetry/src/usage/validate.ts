@@ -35,7 +35,13 @@ function matchesPattern(value: unknown, pattern: string, maxLength: number) {
 }
 
 function isDistinctList(value: unknown): value is readonly unknown[] {
-  return Array.isArray(value) && new Set(value).size === value.length;
+  if (!Array.isArray(value)) return false;
+  // `every` skips the holes of a sparse list, which would then be sent as
+  // `null`, so a list must have a value at every index.
+  for (let i = 0; i < value.length; i++) {
+    if (!(i in value)) return false;
+  }
+  return new Set(value).size === value.length;
 }
 
 type SpecOf<T extends PropertySpec["type"]> = Extract<
@@ -115,5 +121,8 @@ export function checkEvent(
     const value = properties[key];
     if (value !== undefined && allows(propertySpec, value)) out[key] = value;
   }
+  // An agent's name only ever stands beside `run_by: "agent"`; with a
+  // person's run it would contradict the run it describes.
+  if (out.run_by !== "agent") delete out.agent;
   return out;
 }

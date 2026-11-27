@@ -1,6 +1,6 @@
 import {
   CATALOG_VERSION,
-  DISTINCT_ID_PATTERN,
+  DISTINCT_ID_PATTERNS,
   SITE_BASE_PROPERTIES,
   SITE_NOTICE_VERSION,
   TOOLS_BASE_PROPERTIES,
@@ -24,8 +24,8 @@ export interface BasePropertiesData {
 export interface UsageCatalogData {
   catalog_version: number;
   notice_versions: { tools: number; site: number };
-  /** The id every event is sent under: a machine's or a site's random id. */
-  distinct_id: { pattern: string };
+  /** The id each source's events are sent under: a machine's or a site's. */
+  distinct_id: { tools: { pattern: string }; site: { pattern: string } };
   /** Added to every event by the sender; PostHog reads them as flags. */
   transport_properties: Record<string, boolean>;
   base_properties: { tools: BasePropertiesData; site: BasePropertiesData };
@@ -41,7 +41,10 @@ export function usageCatalogData(): UsageCatalogData {
   return plain({
     catalog_version: CATALOG_VERSION,
     notice_versions: { tools: TOOLS_NOTICE_VERSION, site: SITE_NOTICE_VERSION },
-    distinct_id: { pattern: DISTINCT_ID_PATTERN },
+    distinct_id: {
+      tools: { pattern: DISTINCT_ID_PATTERNS.tools },
+      site: { pattern: DISTINCT_ID_PATTERNS.site },
+    },
     transport_properties: { ...TRANSPORT_PROPERTIES },
     base_properties: {
       tools: TOOLS_BASE_PROPERTIES,

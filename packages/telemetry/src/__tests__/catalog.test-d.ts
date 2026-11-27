@@ -162,3 +162,8 @@ site.capture("daily_summary", {
   plugins_official: [],
   plugins_other: 0,
 });
+
+// An event with no properties of its own takes only an empty object.
+site.capture("first_page_published", {});
+// @ts-expect-error TS2353
+site.capture("first_page_published", { project_id: "abc" });

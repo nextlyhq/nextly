@@ -5,7 +5,7 @@ import { nodeMajor } from "./builders.js";
 import {
   type SITE_ROLES,
   CATALOG_VERSION,
-  DISTINCT_ID_PATTERN,
+  DISTINCT_ID_PATTERNS,
   type ToolsSource,
   type UsageEventFor,
   type UsageEventProperties,
@@ -29,8 +29,6 @@ import { basePropertiesFor, checkEvent } from "./validate.js";
 // nothing: to standard error from the installer and the CLI, to the server
 // log from a site. `NEXTLY_TELEMETRY_PROJECT=test` marks the run's events for
 // the test project.
-
-const DISTINCT_ID = new RegExp(DISTINCT_ID_PATTERN);
 
 export interface UsageSession<E extends string, D> {
   /** Whether usage data is on for this run, and if not, which rule said so. */
@@ -128,7 +126,10 @@ function liveSession<E extends string, D>(
         ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       });
   const now = opts.now ?? (() => new Date());
-  const validId = DISTINCT_ID.test(distinctId);
+  // A machine's id from the tools, a site's from a site: never the other.
+  const validId = new RegExp(
+    DISTINCT_ID_PATTERNS[source === "site" ? "site" : "tools"]
+  ).test(distinctId);
   // Every base property is the session's alone: a caller's value for one, even
   // an optional one the session left out (`agent` on a person's run), is
   // dropped rather than merged.

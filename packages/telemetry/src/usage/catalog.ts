@@ -525,10 +525,17 @@ export const USAGE_EVENTS: Events = {
 };
 
 /**
- * The id every event is sent under: a machine's random id (64 hex
- * characters) from the installer and the CLI, a site's (32) from a site.
+ * The id each source's events are sent under: the machine's random id (64
+ * hex characters) from the installer and the CLI, the site's random id (32)
+ * from a site. Kept apart so one kind of id cannot be sent as the other.
  */
-export const DISTINCT_ID_PATTERN = "^[0-9a-f]{32}(?:[0-9a-f]{32})?$";
+export const DISTINCT_ID_PATTERNS: {
+  readonly tools: string;
+  readonly site: string;
+} = {
+  tools: "^[0-9a-f]{64}$",
+  site: "^[0-9a-f]{32}$",
+};
 
 /**
  * Properties PostHog reads as instructions rather than data, added to every
@@ -574,7 +581,14 @@ export type ValueOf<P> = P extends {
  * What a caller passes for an event: its required properties, and any of its
  * optional ones. The base properties are the session's to add.
  */
-export type UsageEventProperties<E extends UsageEventName> = {
+export type UsageEventProperties<E extends UsageEventName> = [
+  keyof Catalog[E]["required"] | keyof Catalog[E]["optional"],
+] extends [never]
+  ? // An event with no properties of its own takes an empty object only.
+    Record<string, never>
+  : OwnProperties<E>;
+
+type OwnProperties<E extends UsageEventName> = {
   -readonly [K in keyof Catalog[E]["required"]]: ValueOf<
     Catalog[E]["required"][K]
   >;

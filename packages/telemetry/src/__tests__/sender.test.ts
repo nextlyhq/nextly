@@ -3,10 +3,15 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { openToolsUsage, type ToolsUsageOptions } from "../index.js";
+import {
+  openSiteUsage,
+  openToolsUsage,
+  type ToolsUsageOptions,
+} from "../index.js";
 
 import {
   MACHINE_ID,
+  SITE_ID,
   recordingFetch,
   startReceiver,
   type Receiver,
@@ -147,6 +152,75 @@ describe("what the sender sends", () => {
     session.capture("command_run", { ...run, role: "prod" as "local" });
     await session.flush();
     expect(recorder.calls).toHaveLength(0);
+  });
+
+  it("sends the tools' events only under a machine id, and a site's only under a site id", async () => {
+    const recorder = recordingFetch();
+    // Each session given the other kind of random id.
+    const cli = cliSession({ fetch: recorder.fetch, distinctId: SITE_ID });
+    cli.capture("command_run", run);
+    await cli.flush();
+    const site = openSiteUsage({
+      nextlyVersion: "1.2.3",
+      siteId: MACHINE_ID,
+      role: "local",
+      switchOn: true,
+      env: {},
+      fetch: recorder.fetch,
+    });
+    site.capture("first_collection_created", {});
+    await site.flush();
+    expect(recorder.calls).toHaveLength(0);
+  });
+
+  it("refuses a list with a hole in it", async () => {
+    const recorder = recordingFetch();
+    const session = openToolsUsage({
+      source: "installer",
+      nextlyVersion: "1.2.3",
+      distinctId: MACHINE_ID,
+      machineEnabled: true,
+      env: {},
+      fetch: recorder.fetch,
+    });
+    // ["seo", <hole>]: `every` would skip the hole, which JSON sends as null.
+    const sparse: ("seo" | "forms")[] = ["seo"];
+    sparse.length = 2;
+    session.capture("install_step", { section: "features", features: sparse });
+    await session.flush();
+    const sent = (recorder.calls[0]?.body as Batch).batch[0]?.properties;
+    expect(sent).toMatchObject({ section: "features" });
+    expect(sent).not.toHaveProperty("features");
+  });
+
+  it("drops an agent's name beside a person's run", async () => {
+    const recorder = recordingFetch();
+    const site = openSiteUsage({
+      nextlyVersion: "1.2.3",
+      siteId: SITE_ID,
+      role: "local",
+      switchOn: true,
+      env: {},
+      fetch: recorder.fetch,
+    });
+    site.capture("admin_first_opened", {
+      heard_from: "friend",
+      run_by: "person",
+      agent: "codex",
+    });
+    site.capture("admin_first_opened", {
+      heard_from: "not_asked",
+      run_by: "agent",
+      agent: "codex",
+    });
+    await site.flush();
+    const [person, agent] = (recorder.calls[0]?.body as Batch).batch;
+    expect(person?.properties).toMatchObject({ run_by: "person" });
+    expect(person?.properties).not.toHaveProperty("agent");
+    expect(agent?.properties).toMatchObject({
+      run_by: "agent",
+      agent: "codex",
+    });
   });
 
   it("sends nothing under an id that is not a random id", async () => {
