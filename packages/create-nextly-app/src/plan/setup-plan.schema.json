@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "create-nextly-app setup plan",
+  "description": "Every answer for a new Nextly project, with each default filled. It never holds the project name or a connection string. Experimental: the shape may change until the guided installer is finished; \"version\" says which shape a plan has.",
+  "oneOf": [
+    {
+      "title": "Website or Blank project",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "start",
+        "host",
+        "db",
+        "features",
+        "languages",
+        "images",
+        "agents",
+        "packageManager",
+        "git"
+      ],
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "start": { "enum": ["website", "blank"] },
+        "host": { "enum": ["unsure", "vercel", "server"] },
+        "db": { "enum": ["sqlite", "postgres", "mysql"] },
+        "features": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/feature" },
+          "uniqueItems": true
+        },
+        "languages": {
+          "description": "English first, always, then the other languages in the order chosen.",
+          "type": "array",
+          "minItems": 1,
+          "prefixItems": [{ "const": "en" }],
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$"
+          },
+          "uniqueItems": true
+        },
+        "images": {
+          "enum": ["local", "vercel-blob", "s3", "uploadthing", "later"]
+        },
+        "agents": { "$ref": "#/$defs/agents" },
+        "agentRules": { "$ref": "#/$defs/agentRules" },
+        "packageManager": { "$ref": "#/$defs/packageManager" },
+        "git": { "$ref": "#/$defs/git" }
+      }
+    },
+    {
+      "title": "Plugin project",
+      "description": "A plugin's development app always uses SQLite, and a Plugin is asked nothing about hosting, features, languages or images.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "start", "db", "agents", "packageManager", "git"],
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "start": { "const": "plugin" },
+        "db": { "const": "sqlite" },
+        "agents": { "$ref": "#/$defs/agents" },
+        "agentRules": { "$ref": "#/$defs/agentRules" },
+        "packageManager": { "$ref": "#/$defs/packageManager" },
+        "git": { "$ref": "#/$defs/git" }
+      }
+    }
+  ],
+  "$defs": {
+    "version": { "const": 1 },
+    "feature": { "enum": ["page-builder", "seo", "forms", "languages"] },
+    "codingTool": { "enum": ["claude-code", "cursor", "codex"] },
+    "agents": {
+      "description": "The coding tools to set up; empty for none.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/codingTool" },
+      "uniqueItems": true
+    },
+    "agentRules": {
+      "description": "Whether the coding tools get their permission rules. Present only when at least one coding tool is set up.",
+      "enum": ["yes", "no"]
+    },
+    "packageManager": { "enum": ["npm", "pnpm", "yarn", "bun"] },
+    "git": {
+      "description": "Whether to make a git repository with a first commit.",
+      "type": "boolean"
+    }
+  }
+}
