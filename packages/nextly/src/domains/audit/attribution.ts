@@ -16,7 +16,10 @@
  * @module domains/audit/attribution
  */
 
-import { looksLikeSecret } from "../../observability/credential-shapes";
+import {
+  looksLikeSecret,
+  redactCredentialTokens,
+} from "../../observability/credential-shapes";
 import { getNextlyLogger } from "../../observability/logger";
 import { ATTRIBUTION_NAME_LENGTH } from "../../schemas/audit/widths";
 
@@ -179,19 +182,42 @@ export function storedName(value: unknown): string | undefined {
   return trimmed !== "" &&
     trimmed.length <= ATTRIBUTION_NAME_LENGTH &&
     !holdsControlCharacter(trimmed) &&
-    // A name has no shape of its own to check, so two tests keep a token
-    // passed as a name off the row: the catalogue of credential shapes, and
-    // that a name is words. A run of 32 or more characters with no space is
-    // what every token, whole key, hex secret and signed value is, and no
-    // agent's or machine's name needs one.
-    !looksLikeSecret(trimmed) &&
-    !UNBROKEN_RUN.test(trimmed)
+    // A name has no shape of its own to check, so it is checked for holding
+    // a credential anywhere in it.
+    !holdsCredential(trimmed)
     ? trimmed
     : undefined;
 }
 
-/** A run of 32 or more characters with no whitespace in it. */
-const UNBROKEN_RUN = /\S{32,}/;
+/**
+ * Whether `name` holds a credential anywhere in it: a whole value or a token
+ * inside a label (`runner glpat-…`) that the repository's catalogue of
+ * credential shapes recognises, a Nextly API key (`nx_live_…`, which the
+ * catalogue does not list), or a run of 64 or more characters with no space,
+ * as a hex reset token or a signed value is. A long host name
+ * (`long-production-project.vercel.app`) is shorter than that and is kept.
+ */
+function holdsCredential(name: string): boolean {
+  return (
+    looksLikeSecret(name) ||
+    redactCredentialTokens(name, CREDENTIAL_MARK) !== name ||
+    NEXTLY_KEY.test(name) ||
+    LONG_UNBROKEN_RUN.test(name)
+  );
+}
+
+/**
+ * What the scanner puts in place of a credential it finds. A name never holds
+ * it, since a name holding a control character is refused first, so any
+ * change the scanner makes is a credential found.
+ */
+const CREDENTIAL_MARK = "\u0000";
+
+/** A Nextly API key's documented prefix, followed by its id. */
+const NEXTLY_KEY = /nx_live_[0-9a-f]/i;
+
+/** A run of 64 or more characters with no whitespace in it. */
+const LONG_UNBROKEN_RUN = /\S{64,}/;
 
 /**
  * Whether `value` holds a control character, NUL among them: PostgreSQL

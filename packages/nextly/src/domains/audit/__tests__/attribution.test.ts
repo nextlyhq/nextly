@@ -209,6 +209,10 @@ describe("attribution columns", () => {
       // one long run with no space, which no name is.
       "nx_live_0123456789abcdef01234567_Zm9vYmFyYmF6cXV4cXV1eHF1dXhxdXV4cXV1eA",
       "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      // A known short credential inside an otherwise ordinary label.
+      "runner glpat-AbCdEfGhIjKlMnOpQrSt",
+      // A whole Nextly key inside a label.
+      "ci nx_live_0123456789abcdef01234567_x",
     ]) {
       const { columns, refused } = attributionColumns({
         agent: { name: secret },
@@ -224,6 +228,17 @@ describe("attribution columns", () => {
         deployment: { machine: "Sara-Maliks-MacBook-Pro.local" },
       }).refused
     ).toEqual([]);
+    // A long host name with no space is a host, not a token.
+    const host = attributionColumns({
+      deployment: {
+        pipeline: "long-production-project-preview.vercel.app",
+        commit: null,
+      },
+    });
+    expect(host.refused).toEqual([]);
+    expect(host.columns.deploymentHost).toBe(
+      "long-production-project-preview.vercel.app"
+    );
   });
 
   it("refuses a name holding a NUL or another control character", () => {
