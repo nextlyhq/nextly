@@ -29,6 +29,7 @@ import {
   colourVariablesMatching,
   variableLabel,
   type SiteVariable,
+  type TypedColourMatch,
 } from "../../styles/style-colour";
 
 /** What the list is called for assistive technology. */
@@ -88,6 +89,63 @@ function useComboboxAttributes(
 }
 
 /**
+ * What a key does to the list, decided apart from carrying it out so each
+ * branch reads on its own: `move` highlights another entry, `take` connects
+ * the highlighted entry's variable, `dismiss` closes the list for this text, `forget` ends
+ * the typing a closed list was shown for, and `pass` leaves the key to the box.
+ */
+type ListKeyAction =
+  | { kind: "move"; index: number }
+  | { kind: "take"; variable: SiteVariable }
+  | { kind: "dismiss" }
+  | { kind: "forget" }
+  | { kind: "pass" };
+
+/** The entry an arrow lands on: from none, the first or the last; then round. */
+function steppedHighlight(index: number, step: 1 | -1, count: number): number {
+  if (index >= 0) return (index + step + count) % count;
+  return step > 0 ? 0 : count - 1;
+}
+
+/**
+ * The list's answer to a key. While it is open the arrows move the highlight
+ * rather than step the value, Enter takes the highlighted entry, and Escape
+ * closes the list before it puts the old text back. While it is closed, the
+ * field's own Escape puts the stored text back, which is no typing: the list
+ * stays closed until the author types again.
+ */
+function listKeyAction(
+  key: string,
+  open: boolean,
+  index: number,
+  matches: readonly TypedColourMatch[]
+): ListKeyAction {
+  if (!open) return key === "Escape" ? { kind: "forget" } : { kind: "pass" };
+  if (key === "ArrowDown" || key === "ArrowUp") {
+    const step = key === "ArrowDown" ? 1 : -1;
+    return {
+      kind: "move",
+      index: steppedHighlight(index, step, matches.length),
+    };
+  }
+  if (key === "Escape") return { kind: "dismiss" };
+  // Enter with nothing highlighted is the box's own: it writes the colour.
+  const highlighted = key === "Enter" ? matches[index] : undefined;
+  return highlighted === undefined
+    ? { kind: "pass" }
+    : { kind: "take", variable: highlighted.variable };
+}
+
+/**
+ * Whether a key belongs to an input method composing characters. Its Enter
+ * confirms them, and Safari reports it as key 229 rather than marking it
+ * composing.
+ */
+function composing(event: React.KeyboardEvent): boolean {
+  return event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+}
+
+/**
  * The colour box with its suggestions: `children` is the box itself, the
  * shared text field drawn with `fieldId`.
  */
@@ -139,48 +197,20 @@ export function TypedColourSuggestions({
     onChoose(variable);
   };
 
-  // Caught before the box's own keys: while the list is open the arrows move
-  // the highlight rather than step the value, Enter takes the highlighted
-  // entry, and Escape closes the list before it puts the old text back.
+  // Caught before the box's own keys, which the list's own keys replace.
   const onKeyDownCapture = (event: React.KeyboardEvent): void => {
-    // The Enter that confirms an input method's characters is its own: Safari
-    // reports it as key 229 rather than marking it composing.
-    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) {
+    if (composing(event)) return;
+    const action = listKeyAction(event.key, open, index, matches);
+    if (action.kind === "pass") return;
+    if (action.kind === "forget") {
+      setTyped(false);
       return;
     }
-    if (!open) {
-      // The field's own Escape puts the stored text back, which is no typing:
-      // the list stays closed until the author types again.
-      if (event.key === "Escape") setTyped(false);
-      return;
-    }
-    const step =
-      event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
-    if (step !== 0) {
-      event.preventDefault();
-      event.stopPropagation();
-      const next =
-        index < 0
-          ? step > 0
-            ? 0
-            : matches.length - 1
-          : (index + step + matches.length) % matches.length;
-      setMoved({ draft, index: next });
-      return;
-    }
-    if (event.key === "Enter" && index >= 0) {
-      const match = matches[index];
-      if (match === undefined) return;
-      event.preventDefault();
-      event.stopPropagation();
-      choose(match.variable);
-      return;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      setDismissedAt(draft);
-    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (action.kind === "move") setMoved({ draft, index: action.index });
+    else if (action.kind === "take") choose(action.variable);
+    else setDismissedAt(draft);
   };
 
   return (

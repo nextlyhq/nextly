@@ -8,7 +8,6 @@
  * @module style-colour-field
  */
 import {
-  checkColorValue,
   isRawColour,
   isTokenRef,
   type ContrastResult,
@@ -43,7 +42,6 @@ import type { PreferenceStore } from "../../shell-state";
 import {
   activeTokenMode,
   colourHexOf,
-  colourVariablesMatching,
   variableFor,
   variableLabel,
   shownVariables,
@@ -60,6 +58,12 @@ import { useFieldDescription } from "../css-hint";
 import { InheritedValue } from "./inherited-value";
 import type { CommitOutcome } from "./style-field-surroundings";
 import { useDraft, TextField, useTypesLive } from "./style-text-field";
+import {
+  connectSuggestion,
+  TypedRefusalLine,
+  useTypedColourCommit,
+  useTypedRefusal,
+} from "./typed-colour-commit";
 import { TypedColourSuggestions } from "./typed-colour-suggestions";
 
 /**
@@ -317,10 +321,10 @@ export function ColourField({
   onType?: ((value: StyleValue | null) => CommitOutcome) | undefined;
 }): React.JSX.Element {
   const noteId = React.useId();
-  const refusalId = React.useId();
-  // Text the box was left holding that is neither a colour nor a variable's
-  // name, said in the box's own words until the box is written another way.
-  const [refused, setRefused] = React.useState<TypedRefusal>();
+  const { refused, setRefused, refusalId } = useTypedRefusal();
+  // Whether the box writes as it is typed: the text field's own answer, which
+  // is no for a shared style, written once when the edit ends.
+  const typesLive = useTypesLive();
   // Lifted out of the text field because two controls edit one value: a draft
   // private to the field would leave the swatch painting a superseded one.
   const { draft, setDraft, edited, reset, live } = useDraft(stored);
@@ -343,7 +347,7 @@ export function ColourField({
     choices,
     stored,
     draft,
-    typesLive: live !== undefined,
+    typesLive,
     onCommit,
     commitColour,
     setRefused,
@@ -393,10 +397,7 @@ export function ColourField({
     tokens,
     mode,
     obscuredBy,
-    describedBy: describedByAll(
-      refused === undefined ? undefined : refusalId,
-      describedBy
-    ),
+    describedBy: describedByAll(refusalId, describedBy),
     noteId,
   });
   // Refused by the box itself or by the write: either way the text was not
@@ -455,27 +456,16 @@ export function ColourField({
             fieldId={id}
             draft={draft}
             offered={choices}
-            onChoose={variable => {
-              const row = document
-                .getElementById(id)
-                ?.closest<HTMLElement>(".nx-style-inspector__colour");
-              const token = { $token: variable.identity };
-              if (live === undefined) commitInstead(token);
-              else {
-                // In the edit's own run of typing, so a hex written as it was
-                // typed and the variable chosen for it are one step of undo.
-                setRefused(undefined);
-                live.join(() => commitColour(token));
-                live.end();
-              }
-              // The box gives way to the trigger naming the variable: focus
-              // goes there, rather than falling to the page with the box.
-              focusAfterUnlink(() =>
-                row?.querySelector<HTMLElement>(
-                  ".nx-style-inspector__colour-pick"
-                )
-              );
-            }}
+            onChoose={variable =>
+              connectSuggestion(variable, {
+                fieldId: id,
+                typesLive,
+                live,
+                commitColour,
+                commitInstead,
+                clearRefusal: () => setRefused(undefined),
+              })
+            }
           >
             <TextField
               id={id}
@@ -511,100 +501,16 @@ export function ColourField({
           />
         )}
       </div>
-      {refused === undefined || reference !== null ? null : (
-        <p className="nx-inspector__error" id={refusalId} role="alert">
-          {refusalWords(refused)}
-        </p>
-      )}
+      <TypedRefusalLine
+        id={refusalId}
+        refused={refused}
+        connected={reference !== null}
+      />
       <ContrastNote id={noteId} contrast={contrast} />
       {/* Advice about the stored colour, not about text that was refused. */}
       {invalid ? null : <RawColourNote stored={stored} />}
     </>
   );
-}
-
-/** Text the colour box was left holding and did not take. */
-interface TypedRefusal {
-  readonly text: string;
-  /** Whether it is the whole name of more than one variable. */
-  readonly shared: boolean;
-}
-
-/** What the box says about text it did not take. */
-function refusalWords(refused: TypedRefusal): string {
-  return refused.shared
-    ? `More than one variable is called "${refused.text}". Choose one from the list.`
-    : `No color or variable is called "${refused.text}".`;
-}
-
-/**
- * The colour box's end-of-edit write.
- *
- * Text the engine's colour check takes is written as typed, even where a
- * variable has the same name ("red" and a variable "Red"): only a choice from
- * the list connects that variable. Otherwise a variable's whole name connects
- * it, ignoring case, spaces and hyphens, as the list under the box matches it.
- * A refusal of the write itself (a locked design, a page at its size limit)
- * is the write's to say. Text that is neither a
- * colour nor a variable's name is refused here, in the box's own words, and
- * nothing is written: the document keeps the value from before the edit.
- */
-function useTypedColourCommit({
-  choices,
-  stored,
-  draft,
-  typesLive,
-  onCommit,
-  commitColour,
-  setRefused,
-}: {
-  choices: readonly SiteVariable[];
-  stored: StyleValue | undefined;
-  /** The text the box holds, which the field may have read as a variable. */
-  draft: string;
-  /** Whether the box writes as it is typed, so a keystroke's refusal may show. */
-  typesLive: boolean;
-  onCommit: (value: StyleValue | null) => CommitOutcome;
-  commitColour: (value: StyleValue | null) => CommitOutcome;
-  setRefused: (refused: TypedRefusal | undefined) => void;
-}): (value: StyleValue | null) => CommitOutcome {
-  return value => {
-    setRefused(undefined);
-    const typed = draft.trim();
-    // The field reads a variable's typed name before the text: a colour the
-    // text already is wins here.
-    if (isTokenRef(value) && typed !== "" && checkColorValue(typed) === null) {
-      return commitColour(typed);
-    }
-    // A variable the field read the name of is checked against the names the
-    // list matches too: one another variable shares, spaced or hyphenated
-    // differently, is refused as shared rather than picked between.
-    if (isTokenRef(value) && typed !== "") {
-      const whole = colourVariablesMatching(typed, choices).filter(
-        match => match.whole
-      );
-      if (whole.length > 1) {
-        setRefused({ text: typed, shared: true });
-        return "refused";
-      }
-    }
-    if (typeof value !== "string") return commitColour(value);
-    if (checkColorValue(value.trim()) === null) return commitColour(value);
-    const matches = colourVariablesMatching(value, choices);
-    const named = matches.find(match => match.exact);
-    if (named !== undefined) {
-      return commitColour({ $token: named.variable.identity });
-    }
-    // A keystroke's write may have left its own refusal beside the box ("half
-    // a hex colour"). Asking for the stored value clears it and moves nothing
-    // on a block, the only target written as it is typed.
-    if (typesLive) onCommit(stored ?? null);
-    setRefused({
-      text: value.trim(),
-      shared: matches.filter(match => match.whole).length > 1,
-    });
-    return "refused";
-  };
 }
 
 /**
