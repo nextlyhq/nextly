@@ -234,4 +234,71 @@ describe("nextly plugins add in sites made from the templates", () => {
     },
     NEXTLY_RUN_TIMEOUT * 4
   );
+
+  it(
+    "adds a package whose nextly key is only its registration block, and refuses one in a newer format",
+    async () => {
+      const root = join(base, "block-only");
+      await site(
+        root,
+        join(TEMPLATES, "blank/nextly.config.ts"),
+        "nextly migrate && next build"
+      );
+      // Two local packages: one that says nothing but how it is registered,
+      // as packages did before the declaration had a format, and one
+      // declared in a format this Nextly does not read.
+      const packages = [
+        ["tags", { plugin: { export: "tagsPlugin" } }],
+        [
+          "future",
+          { format: 2, core: "^9.0.0", plugin: { export: "tagsPlugin" } },
+        ],
+      ] as const;
+      for (const [name, nextlyKey] of packages) {
+        const at = join(root, "node_modules", "@acme", name);
+        await mkdir(at, { recursive: true });
+        await writeFile(
+          join(at, "package.json"),
+          JSON.stringify({
+            name: `@acme/${name}`,
+            version: "1.0.0",
+            type: "module",
+            exports: "./index.js",
+            nextly: nextlyKey,
+          })
+        );
+        await writeFile(
+          join(at, "index.js"),
+          `export const tagsPlugin = { name: "@acme/${name}", version: "1.0.0", nextly: "*" };\n`
+        );
+      }
+      const migrated = await nextly(["migrate"], root);
+      expect(migrated.status, migrated.stderr).toBe(0);
+      const before = await readFile(join(root, "nextly.config.ts"), "utf8");
+
+      const refused = await nextly(
+        ["plugins", "add", "@acme/future", "--skip-install"],
+        root
+      );
+      expect(refused.status).toBe(1);
+      expect(refused.stdout + refused.stderr).toContain(
+        "(PLUGIN_DECLARATION_FORMAT_NEWER)"
+      );
+      expect(refused.stdout + refused.stderr).toContain('"^9.0.0"');
+      expect(await readFile(join(root, "nextly.config.ts"), "utf8")).toBe(
+        before
+      );
+
+      const added = await nextly(
+        ["plugins", "add", "@acme/tags", "--skip-install"],
+        root
+      );
+      expect(added.status, added.stdout + added.stderr).toBe(0);
+      const config = await readFile(join(root, "nextly.config.ts"), "utf8");
+      expect(config).toContain(`import { tagsPlugin } from "@acme/tags";`);
+      expect(config).toContain("plugins: [tagsPlugin],");
+      expect(recordedInstalls(root).join("\n")).toContain("@acme/tags");
+    },
+    NEXTLY_RUN_TIMEOUT * 3
+  );
 });

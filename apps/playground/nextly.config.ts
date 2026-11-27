@@ -24,6 +24,7 @@
  */
 
 import { formBuilder } from "@nextlyhq/plugin-form-builder";
+import { mcpPlugin } from "@nextlyhq/plugin-mcp";
 import { blocks, pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { seoPlugin } from "@nextlyhq/plugin-seo";
 import {
@@ -465,6 +466,11 @@ export default definePlaygroundConfig({
     // not offered, because choosing it could only produce a form with nowhere
     // to send anyone.
     formBuilder({ redirectRelationships: { pages: "/{slug}" } }).plugin,
+    // The MCP endpoint, on, so an agent client can be pointed at a local
+    // install at `/admin/api/mcp` with a key from Settings › API keys. It
+    // answers on the hostname of NEXT_PUBLIC_APP_URL, or on localhost when that
+    // is unset, which is how the dev server and the e2e run are reached.
+    mcpPlugin({ enabled: true }),
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
       : []),

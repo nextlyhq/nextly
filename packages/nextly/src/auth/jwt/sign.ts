@@ -13,8 +13,22 @@ export const ALGORITHM = "HS256";
 export const TOKEN_TYP = {
   session: "nextly-session+jwt",
   pending: "nextly-pending+jwt",
+  // The access tokens of the credentials the command line and agents hold,
+  // one purpose each, so none is accepted as an admin session or at a door
+  // meant for another (`auth/cli-credentials`).
+  /** @experimental A CLI sign-in's access token. */
+  cliSignIn: "nextly-cli+jwt",
+  /** @experimental An agent pass. */
+  agentPass: "nextly-agent+jwt",
+  /** @experimental A chat-app pass. */
+  chatAppPass: "nextly-chat-app+jwt",
 } as const;
 
+/**
+ * What a signed token is for. `session` and `pending` are stable;
+ * `cliSignIn`, `agentPass` and `chatAppPass` are `@experimental` until the
+ * command line's sign-in and the doors that accept them are.
+ */
 export type TokenPurpose = keyof typeof TOKEN_TYP;
 
 /**

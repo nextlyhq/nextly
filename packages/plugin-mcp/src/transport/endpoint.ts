@@ -11,6 +11,7 @@
  * @module transport/endpoint
  */
 import {
+  DEFAULT_NEGOTIATED_PROTOCOL_VERSION,
   McpServer,
   createMcpHandler,
   type McpHttpHandler,
@@ -26,6 +27,12 @@ import { registerWorkflowTools } from "../tools/workflows";
 
 import { callerNow, whileServing } from "./caller";
 import { refuseUnlessAddressedHere } from "./guard";
+import {
+  MAX_REQUEST_BYTES,
+  MAX_TOOL_INPUT_ELEMENTS,
+  PRIVATE_ANSWER,
+  SERVED_REVISIONS,
+} from "./limits";
 
 /**
  * What the endpoint needs to know about itself.
@@ -69,7 +76,21 @@ const SERVER_NAME = "nextly";
  */
 export function buildServer(options: EndpointOptions): McpServer {
   const ctx = callerNow();
-  const server = new McpServer({ name: SERVER_NAME, version: options.version });
+  const server = new McpServer(
+    { name: SERVER_NAME, version: options.version },
+    {
+      // Each stated here rather than left to the library's defaults, which a
+      // library release could change under an unchanged door: the revisions
+      // served, the most a call's arguments may hold, and that discovery and
+      // the tool list are private to this caller and never reused.
+      supportedProtocolVersions: [...SERVED_REVISIONS],
+      maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS,
+      cacheHints: {
+        "server/discover": PRIVATE_ANSWER,
+        "tools/list": PRIVATE_ANSWER,
+      },
+    }
+  );
   // Registered per request, with THIS caller closed over. A tool reading the
   // ambient scope instead would run when the callback fires rather than when
   // the server was built, and the two are not the same request.
@@ -91,6 +112,34 @@ export function buildServer(options: EndpointOptions): McpServer {
  * not-found instead, which is indistinguishable from a wrong URL.
  */
 const ENDPOINT_METHODS: readonly RouteMethod[] = ["POST", "GET", "DELETE"];
+
+/**
+ * `request`, carrying the revision a client that names none is taken to speak.
+ *
+ * Clients from `2025-06-18` on send `MCP-Protocol-Version` on every request
+ * after `initialize`; older ones never do, and the transport specification
+ * says to take a request without it as `2025-03-26`. That is a revision this
+ * door does not serve, and a server that does not serve such clients must
+ * refuse their requests. The library instead serves a request without the
+ * header, since it keeps no record of what `initialize` agreed. So the header
+ * is supplied here, and the library's own check answers it: `initialize` is
+ * exempt from that check and still opens, and every other request is refused
+ * `400` with the revisions the door serves.
+ *
+ * Only an absent header is filled in; one the client sent is never replaced,
+ * and the body is neither read nor copied.
+ */
+function withRevisionHeader(request: Request): Request {
+  if (
+    request.method !== "POST" ||
+    request.headers.has("mcp-protocol-version")
+  ) {
+    return request;
+  }
+  const headers = new Headers(request.headers);
+  headers.set("mcp-protocol-version", DEFAULT_NEGOTIATED_PROTOCOL_VERSION);
+  return new Request(request, { headers });
+}
 
 /**
  * The endpoint, as routes a plugin contributes.
@@ -138,11 +187,15 @@ export function mcpEndpointRoutes(options: EndpointOptions): PluginRoute[] {
     const refused = refuseUnlessAddressedHere(request, options.allowedHosts);
     if (refused) return refused;
 
-    const serving = (handler ??= createMcpHandler(() => buildServer(options)));
+    // The body bound is the library's to apply, since it reads the body; it is
+    // stated here so a larger request is refused at a size this door chose.
+    const serving = (handler ??= createMcpHandler(() => buildServer(options), {
+      maxRequestBodySize: MAX_REQUEST_BYTES,
+    }));
     // The context reaches the protocol layer as itself. Declaring only
     // `request` was enough while the endpoint exposed nothing, and it discards
     // the services facade and the user that every tool will read.
-    return whileServing(ctx, () => serving.fetch(request));
+    return whileServing(ctx, () => serving.fetch(withRevisionHeader(request)));
   };
 
   return ENDPOINT_METHODS.map(method => ({
