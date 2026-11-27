@@ -153,7 +153,7 @@ export function InboxPopover({
 /**
  * A tab's unread count, drawn beside its name and part of it, so the tab is
  * named, say, "Alerts 1 unread". Alerts draws its count in the danger status's
- * colours, as the Inbox button's own count is drawn.
+ * colors, as the Inbox button's own count is drawn.
  */
 function TabCount({
   tab,

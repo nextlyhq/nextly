@@ -356,7 +356,7 @@ describe("the Inbox popover", () => {
     );
   });
 
-  it("shows each item's text, how long ago, and the area it came from, with an unread mark that is not colour alone", async () => {
+  it("shows each item's text, how long ago, and the area it came from, with an unread mark that is not color alone", async () => {
     fill("for-you", [
       item("n1", "“Spring launch” was assigned to you for review", {
         kind: "workflows.assigned",

@@ -60,7 +60,7 @@ export function InboxButton({
             aria-hidden="true"
             className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors"
           />
-          {/* The count is text, so the badge draws the danger status's text and surface colours swapped: the pair the contrast suite already holds to 4.5:1 in both modes. White on the solid red would be 3.84:1. */}
+          {/* The count is text, so the badge draws the danger status's text and surface colors swapped: the pair the contrast suite already holds to 4.5:1 in both modes. White on the solid red would be 3.84:1. */}
           {unread > 0 && (
             <span
               data-testid="inbox-badge"

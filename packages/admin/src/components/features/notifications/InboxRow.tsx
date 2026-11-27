@@ -3,7 +3,7 @@
 /**
  * One Inbox item: its text, how long ago it happened and the area it came
  * from, marked when unread by a dot and a heavier weight, and named "Unread"
- * to screen readers, so the mark never rests on colour alone.
+ * to screen readers, so the mark never rests on color alone.
  *
  * Opening it (a click, or Enter) marks it read and follows its link; an item
  * with no link is marked read where it is. Being shown never marks it read.
@@ -114,7 +114,7 @@ function InboxRowContent({
   const source = noticeSource(notice.kind);
   return (
     <>
-      {/* The dot is a shape, present or absent, not a colour change; the
+      {/* The dot is a shape, present or absent, not a color change; the
           heavier title and the spoken "Unread" carry the same mark. */}
       <span
         aria-hidden="true"

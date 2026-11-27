@@ -103,7 +103,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
     await expect(page.getByRole("tablist", { name: "Inbox" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Item 12/ })).toBeVisible();
 
-    // Settled first: a colour mid-animation is one the page never rests at.
+    // Settled first: a color mid-animation is one the page never rests at.
     await page.waitForFunction(() =>
       document
         .getAnimations()
