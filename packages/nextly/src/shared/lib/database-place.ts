@@ -173,20 +173,52 @@ function driverDefaults(
 }
 
 /**
+ * Whether the parser read credentials as something else: a `#` or `?` in a
+ * password ends the address early, and the user name is read as the host
+ * (`postgres://admin:2024#x@db/shop` is host `admin`, port `2024`).
+ */
+function credentialsMisread(parsed: URL): boolean {
+  if (parsed.hash !== "") return true;
+  return (
+    parsed.href.includes("@") &&
+    parsed.username === "" &&
+    parsed.password === "" &&
+    !/^[a-z]+:\/\/[^/?#]*@/i.test(parsed.href)
+  );
+}
+
+/**
+ * Whether each part is what it should be: a host or a socket's path, a port,
+ * a database name, and a MySQL socket parameter that is a path.
+ */
+function partsReadable(parts: ServerParts, socket: string | null): boolean {
+  return (
+    (HOST.test(parts.host) || SOCKET.test(parts.host)) &&
+    PORT.test(parts.port) &&
+    DATABASE.test(parts.database) &&
+    // A socket parameter that is not a path is not MySQL's socket.
+    (socket === null || socket === "" || SOCKET.test(socket))
+  );
+}
+
+/**
  * The host, port and database the driver connects with: the URL's own, a
  * PostgreSQL `host` or `port` parameter over them, MySQL's `socketPath`
  * over the host, and the driver's defaults for what is left out. Undefined
  * where a part is not what it should be, so nothing is decided on a guess: a
- * credential that held a slash, or a parameter holding another address.
+ * credential that held a slash or a `#`, or a parameter holding another
+ * address.
  */
 function serverParts(
   parsed: URL,
   dialect: keyof typeof DEFAULT_PORTS,
   env: Readonly<Record<string, string | undefined>>
 ): ServerParts | undefined {
-  const defaults = driverDefaults(dialect, env);
   const named = decoded(parsed.hostname);
   const database = decoded(parsed.pathname.replace(/^\//, ""));
+  if (named === undefined || database === undefined) return undefined;
+  if (credentialsMisread(parsed)) return undefined;
+  const defaults = driverDefaults(dialect, env);
   const parameter = (name: string) =>
     dialect === "postgresql" ? parsed.searchParams.get(name) : null;
   const socket =
@@ -200,25 +232,7 @@ function serverParts(
     port: parameter("port") || parsed.port || defaults.port,
     database: database || defaults.database,
   };
-  // Credentials the parser did not read as credentials: a `#` or `?` in a
-  // password ends the address early, and the user name is read as the host
-  // (`postgres://admin:2024#x@db/shop` is host `admin`, port `2024`).
-  const misread =
-    parsed.hash !== "" ||
-    (parsed.href.includes("@") &&
-      parsed.username === "" &&
-      parsed.password === "" &&
-      !/^[a-z]+:\/\/[^/?#]*@/i.test(parsed.href));
-  const readable =
-    !misread &&
-    named !== undefined &&
-    database !== undefined &&
-    (HOST.test(parts.host) || SOCKET.test(parts.host)) &&
-    PORT.test(parts.port) &&
-    DATABASE.test(parts.database) &&
-    // A socket parameter that is not a path is not MySQL's socket.
-    (socket === null || socket === "" || SOCKET.test(socket));
-  return readable ? parts : undefined;
+  return partsReadable(parts, socket) ? parts : undefined;
 }
 
 /**
