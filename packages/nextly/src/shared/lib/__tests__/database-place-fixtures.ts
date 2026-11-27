@@ -55,6 +55,12 @@ export const DATABASE_PLACE_FIXTURES: readonly DatabasePlaceFixture[] = [
     place: "local",
   },
   {
+    name: "node-postgres's socket: form",
+    url: "socket:/var/run/postgresql?db=shop",
+    dialect: "postgresql",
+    place: "local",
+  },
+  {
     name: "localhost",
     url: "postgresql://app:pw@localhost:5432/shop",
     place: "local",
@@ -194,5 +200,10 @@ export const DATABASE_PLACE_FIXTURES: readonly DatabasePlaceFixture[] = [
     url: `mysql://app:pw@db.prod.example.com:3306/shop?socketPath=${value}`,
     place: "live" as const,
   })),
+  {
+    name: "a SQLite file on a Windows file share",
+    url: "\\\\fileserver\\share\\prod.db",
+    place: "live",
+  },
   { name: "no URL", url: undefined, place: "live" },
 ];

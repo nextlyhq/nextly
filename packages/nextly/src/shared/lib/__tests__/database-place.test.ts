@@ -22,6 +22,26 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+/** Every form the rule names, on this machine or not, and its answer. */
+const REQUIRED_PLACE: Record<string, "local" | "live"> = {
+  "a SQLite file": "local",
+  "an in-memory SQLite database": "local",
+  "a PostgreSQL Unix socket (host parameter)": "local",
+  "a PostgreSQL Unix socket (PGHOST)": "local",
+  "a MySQL Unix socket": "local",
+  localhost: "local",
+  "127.0.0.1": "local",
+  "::1": "local",
+  "host.docker.internal": "local",
+  "a remote host": "live",
+  "a private network address (10.0.0.5)": "live",
+  "a private network address (172.17.0.2)": "live",
+  "a Docker Compose service name": "live",
+  "an address that cannot be read": "live",
+  "no URL": "live",
+};
+const REQUIRED = Object.keys(REQUIRED_PLACE);
+
 describe("where a database is", () => {
   it.each(DATABASE_PLACE_FIXTURES.map(fixture => [fixture.name, fixture]))(
     "%s",
@@ -30,11 +50,17 @@ describe("where a database is", () => {
     }
   );
 
-  it("covers every local form and every live one the rule names", () => {
-    // A fixture list that lost a side would pass the loop above with fewer cases.
-    const places = DATABASE_PLACE_FIXTURES.map(fixture => fixture.place);
-    expect(places.filter(place => place === "local").length).toBeGreaterThan(9);
-    expect(places.filter(place => place === "live").length).toBeGreaterThan(9);
+  it("covers every form the rule names, each with its answer", () => {
+    // Named one by one, so a list that lost any form fails here rather than
+    // passing the loop above with one case fewer.
+    const named = new Map(
+      DATABASE_PLACE_FIXTURES.map(fixture => [fixture.name, fixture.place])
+    );
+    expect(
+      Object.fromEntries(REQUIRED.map(name => [name, named.get(name)]))
+    ).toEqual(
+      Object.fromEntries(REQUIRED.map(name => [name, REQUIRED_PLACE[name]]))
+    );
   });
 
   it.each(["development", "test", "production"])(

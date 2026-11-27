@@ -61,7 +61,13 @@ export interface ServerParts {
 export type DatabaseAddress =
   | { kind: "none" }
   | { kind: "unrecognised" }
-  | { kind: "sqlite"; file: string | undefined; disagrees: boolean }
+  | {
+      kind: "sqlite";
+      file: string | undefined;
+      disagrees: boolean;
+      /** A Windows network path (`\\\\server\\share\\app.db`): a file on another machine. */
+      onShare: boolean;
+    }
   | {
       kind: "server";
       dialect: Exclude<Dialect, "sqlite">;
@@ -276,6 +282,33 @@ function pgSocketString(
 }
 
 /**
+ * node-postgres's `socket:` form, `socket:/run/postgresql?db=shop`: the
+ * socket's path, the database its `db` parameter names, and the port and
+ * database its defaults give where those are left out.
+ */
+function pgSocketUrl(
+  url: string,
+  env: Readonly<Record<string, string | undefined>>
+): ServerParts | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  const host = decoded(parsed.pathname);
+  const database = oneParameter(parsed, "db");
+  if (host === undefined || database === AMBIGUOUS) return undefined;
+  const defaults = driverDefaults("postgresql", env);
+  const parts = {
+    host,
+    port: defaults.port,
+    database: database ?? defaults.database,
+  };
+  return partsReadable(parts, null) ? parts : undefined;
+}
+
+/**
  * The host, port and database the driver connects with: the URL's own, a
  * PostgreSQL `host` or `port` parameter over them, MySQL's `socketPath`
  * over the host, and the driver's defaults for what is left out. Undefined
@@ -327,13 +360,17 @@ export function readDatabaseAddress(
       kind: "sqlite",
       file: sqliteFile(url, input.folder ?? process.cwd()),
       disagrees,
+      // A UNC path names a file server, before any resolving of it.
+      onShare: /^(\\\\|\/\/)/.test(url.replace(/^file:/, "")),
     };
   }
-  if (dialect === "postgresql" && url.startsWith("/")) {
+  if (dialect === "postgresql" && /^(\/|socket:)/i.test(url)) {
     return {
       kind: "server",
       dialect,
-      parts: pgSocketString(url, input.env ?? {}),
+      parts: url.startsWith("/")
+        ? pgSocketString(url, input.env ?? {})
+        : pgSocketUrl(url, input.env ?? {}),
       disagrees,
     };
   }
@@ -391,7 +428,9 @@ function hostIsThisMachine(host: string): boolean {
 export function placeOf(address: DatabaseAddress): DatabasePlace {
   switch (address.kind) {
     case "sqlite":
-      return address.file !== undefined && !address.disagrees
+      return address.file !== undefined &&
+        !address.disagrees &&
+        !address.onShare
         ? "local"
         : "live";
     case "server":
