@@ -43,7 +43,7 @@ import type { BlockRenderArgs, ListPageContext, PageContext } from "../context";
 import { LIST_ACTION_ATTRIBUTE, LIST_REF_ATTRIBUTE } from "../editor-markers";
 import { registeredBlocks } from "../resolver";
 
-import { CONTENT } from "./categories";
+import { COLLECTIONS } from "./categories";
 import {
   CONTAINER_CHILD_GAP,
   CONTAINER_SUPPORTS,
@@ -931,7 +931,7 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
     editor: {
       label: "Collection list",
       icon: "loop",
-      category: CONTENT,
+      category: COLLECTIONS,
       keywords: ["repeat", "query", "entries", "dynamic", "loop"],
     },
     props: {

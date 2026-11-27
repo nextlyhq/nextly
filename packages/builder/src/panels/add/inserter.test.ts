@@ -557,7 +557,8 @@ describe("paletteGroups and categoryHeading", () => {
 
   it("names the library's categories as an author reads them, and leaves a plugin's as written", () => {
     expect(categoryHeading("layout")).toBe("Layout");
-    expect(categoryHeading("content")).toBe("Text");
+    expect(categoryHeading("content")).toBe("Text & lists");
+    expect(categoryHeading("collections")).toBe("Collections");
     expect(categoryHeading("media")).toBe("Media");
     expect(categoryHeading("interactive")).toBe("Interactive");
     expect(categoryHeading(COMPONENT_CATEGORY)).toBe("Your components");

@@ -250,17 +250,25 @@
 }
 
 /*
- * A category heading: small, uppercase and muted, so the tiles are what the
- * eye lands on. Restated rather than left to the primitives' own heading
- * style, which is spaced for a full-width list.
+ * A category heading: small, in sentence case as it is written ("Text &
+ * lists"), and muted, so the tiles are what the eye lands on. Restated rather
+ * than left to the primitives' own heading style, which is spaced for a
+ * full-width list.
  */
 .nx-insert-panel [cmdk-group] [cmdk-group-heading] {
+  /*
+   * Pinned at the top of the list while its group's tiles scroll under it,
+   * so an author part-way down still reads which group they are in. On the
+   * panel's own surface, above the tiles, so nothing shows through it.
+   */
+  position: sticky;
+  top: 0;
+  z-index: 1;
   padding: 0.5rem 0.5rem 0.375rem;
-  font-size: 0.65625rem;
+  font-size: 0.71875rem;
   font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
   color: var(--nx-muted-foreground);
+  background: var(--nx-builder-panel);
 }
 
 /*

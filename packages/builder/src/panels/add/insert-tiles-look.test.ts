@@ -82,4 +82,14 @@ describe("the Add panel's tiles", () => {
     expect(mark).not.toMatch(/background:\s*var\(--nx-muted\)/);
     expect(mark).toMatch(/color:\s*var\(--nx-muted-foreground\)/);
   });
+
+  it("keep a group's heading pinned over its tiles while they scroll", () => {
+    const heading = rule(".nx-insert-panel [cmdk-group] [cmdk-group-heading]");
+    expect(heading).toMatch(/position:\s*sticky/);
+    expect(heading).toMatch(/top:\s*0/);
+    // Opaque, on the panel's own surface, so the tiles pass under it unseen.
+    expect(heading).toMatch(/background:\s*var\(--nx-builder-panel\)/);
+    // Written as it is ("Text & lists"), not shouted.
+    expect(heading).not.toMatch(/text-transform:\s*uppercase/);
+  });
 });

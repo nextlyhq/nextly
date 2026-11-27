@@ -26,14 +26,14 @@
  */
 export const LAYOUT = "layout";
 
-/**
- * What the page says.
- *
- * Includes `core/collection-loop`, which lives here until there are enough
- * data-driven blocks to earn a heading of their own: one item under a heading
- * of its own reads as a mistake rather than as a category.
- */
+/** What the page says: its words, lists and quotes. */
 export const CONTENT = "content";
+
+/**
+ * What draws a site's collections: entries listed from one of them. Apart
+ * from the words an author writes, since what it shows comes from the data.
+ */
+export const COLLECTIONS = "collections";
 
 /**
  * What a collection's template draws of the entry itself: its own blocks
@@ -65,10 +65,11 @@ export const INTERACTIVE = "interactive";
 export const CORE_CATEGORIES: readonly [
   typeof LAYOUT,
   typeof CONTENT,
+  typeof COLLECTIONS,
   typeof ENTRY,
   typeof MEDIA,
   typeof INTERACTIVE,
-] = [LAYOUT, CONTENT, ENTRY, MEDIA, INTERACTIVE] as const;
+] = [LAYOUT, CONTENT, COLLECTIONS, ENTRY, MEDIA, INTERACTIVE] as const;
 
 export type CoreCategory = (typeof CORE_CATEGORIES)[number];
 
@@ -96,6 +97,7 @@ export const CORE_PALETTE_ORDER: readonly string[] = [
   "core/quote",
   "core/rich-text",
   "core/table-of-contents",
+  // Collections
   "core/collection-loop",
   // Entry
   "core/entry-content",

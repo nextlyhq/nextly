@@ -1030,7 +1030,7 @@ describe("the panel's frame", () => {
       [...document.querySelectorAll("[cmdk-group-heading]")].map(
         heading => heading.textContent
       )
-    ).toEqual(["Layout", "Text", "Acme data", "More blocks"]);
+    ).toEqual(["Layout", "Text & lists", "Acme data", "More blocks"]);
   });
 });
 

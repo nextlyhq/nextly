@@ -15,6 +15,16 @@ import { image } from "./image";
 import { coreBlocks } from "./index";
 
 describe("core/gallery", () => {
+  it("is not found by a search for a slider, which it is not", () => {
+    // A grid with no slider mode: a search for "carousel" or "slider" finds
+    // no block rather than one that is something else.
+    const words = gallery.editor?.keywords ?? [];
+    expect(words).not.toContain("carousel");
+    expect(words).not.toContain("slider");
+    // The control: it is still found by the words for what it is.
+    expect(words).toContain("grid");
+  });
+
   it("lays out pictures and refuses anything else", () => {
     // A paragraph in a gallery is laid out as though it were a photograph,
     // which reads as a broken gallery rather than a misplaced block.

@@ -24,9 +24,17 @@ describe("the Add panel's order of the core blocks", () => {
     expect(runs).toEqual([
       "layout",
       "content",
+      "collections",
       "entry",
       "media",
       "interactive",
     ]);
+  });
+
+  it("puts Collection list under Collections, apart from the text blocks", () => {
+    const loop = coreBlocks.find(
+      block => block.name === "core/collection-loop"
+    );
+    expect(loop?.editor?.category).toBe("collections");
   });
 });
