@@ -23,13 +23,13 @@ import type { RequestActor } from "../../auth/request-actor";
 import { missingSchemaObject } from "../../database/missing-column";
 import { NextlyError } from "../../errors";
 import { MEDIA_USAGE_TABLE } from "../../schemas/media-usage/table-name";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import {
   TRASH_TABLE,
   type KeptLinks,
   type KeptRow,
   type TrashedEntry,
 } from "../../schemas/trash";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { reopenEndedLife } from "../content-events/reopen-life";
 import { recordWriteEvent } from "../content-events/write-event";
 import { COMPANION_PARENT_COLUMN } from "../i18n/companion-columns";
@@ -226,7 +226,10 @@ function rowToPutBack(
   table: string,
   kept: KeptRow,
   collection: RestoreCollection,
-  asked: { conflicts: readonly TrashConflict[]; values: Readonly<Record<string, unknown>> }
+  asked: {
+    conflicts: readonly TrashConflict[];
+    values: Readonly<Record<string, unknown>>;
+  }
 ): Record<string, unknown> {
   const row = rowGivenBack(kept);
   const companion = `${collection.tableName}${STORAGE_FORMAT.companionSuffix}`;
@@ -343,9 +346,7 @@ async function putBackLinks(
 }
 
 /** The entry as its created event carries it: as it was, now a draft. */
-function documentAsRestored(
-  record: TrashRecord
-): Record<string, unknown> {
+function documentAsRestored(record: TrashRecord): Record<string, unknown> {
   const document = { ...record.stored.document };
   if (document.status === PUBLISHED) document.status = DRAFT;
   return document;
@@ -415,7 +416,10 @@ export async function restoreTrashedEntry(
         deps,
         kept.table,
         kept.rows.map(row =>
-          rowToPutBack(kept.table, row, collection, { conflicts: taken, values })
+          rowToPutBack(kept.table, row, collection, {
+            conflicts: taken,
+            values,
+          })
         )
       );
     }

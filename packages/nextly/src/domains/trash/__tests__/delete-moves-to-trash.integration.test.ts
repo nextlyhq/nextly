@@ -140,9 +140,7 @@ async function trashOf(t: TestNextly, id: string) {
 /** The languages a kept table's rows are in (`_locale`), sorted. */
 function languagesKept(stored: TrashedEntry, table: string): string[] {
   const kept = stored.tables.find(t => t.table === table);
-  return (kept?.rows ?? [])
-    .map(row => String(row._locale?.v))
-    .sort();
+  return (kept?.rows ?? []).map(row => String(row._locale?.v)).sort();
 }
 
 /** Whether any read still finds `id`: by id, in a list, or in a count. */
@@ -206,7 +204,10 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     ]);
     // Its field-group row, and that row in each language.
     const groupTable = tables.find(
-      name => name !== `dc_${POSTS}` && !name.endsWith("_locales") && !name.startsWith("nextly_")
+      name =>
+        name !== `dc_${POSTS}` &&
+        !name.endsWith("_locales") &&
+        !name.startsWith("nextly_")
     );
     expect(groupTable).toBeDefined();
     expect(languagesKept(record.stored, `${groupTable}_locales`)).toEqual([

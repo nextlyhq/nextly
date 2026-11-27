@@ -128,12 +128,15 @@ async function createdEvents(
 ): Promise<WebhookEvent[]> {
   const rows = await t.adapter.select<EventRow>("nextly_events");
   return rows
-    .map(row =>
-      (typeof row.payload === "string"
-        ? JSON.parse(row.payload)
-        : row.payload) as WebhookEvent
+    .map(
+      row =>
+        (typeof row.payload === "string"
+          ? JSON.parse(row.payload)
+          : row.payload) as WebhookEvent
     )
-    .filter(event => event.type === "entry.created" && event.resource.id === id);
+    .filter(
+      event => event.type === "entry.created" && event.resource.id === id
+    );
 }
 
 interface StoredEvent {
@@ -279,9 +282,10 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     const events = await createdEvents(t, id);
     expect(events).toHaveLength(2);
     expect(events.filter(e => e.restoredFrom === "trash")).toHaveLength(1);
-    expect(events.find(e => e.restoredFrom === "trash")?.data).toMatchObject(
-      { id, title: "Hello" }
-    );
+    expect(events.find(e => e.restoredFrom === "trash")?.data).toMatchObject({
+      id,
+      title: "Hello",
+    });
   });
 
   it("emptying removes the entry for good and ends its history", async () => {
@@ -349,7 +353,11 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
 
     expect(
       await outcome(() =>
-        t.nextly.trash.restore({ id, user: { id: author }, overrideAccess: false })
+        t.nextly.trash.restore({
+          id,
+          user: { id: author },
+          overrideAccess: false,
+        })
       )
     ).toBe(403);
     expect(

@@ -26,7 +26,10 @@ export function createTrashPurgeJob(deps: {
     slug: TRASH_PURGE_JOB,
     sweep: true,
     handler: async () => {
-      await purgeExpiredTrash(deps.adapter(), (deps.now ?? (() => new Date()))());
+      await purgeExpiredTrash(
+        deps.adapter(),
+        (deps.now ?? (() => new Date()))()
+      );
     },
   });
 }

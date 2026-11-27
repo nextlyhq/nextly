@@ -51,10 +51,7 @@ const config = defineConfig({
   collections: [
     defineCollection({
       slug: POSTS,
-      fields: [
-        text({ name: "title" }),
-        text({ name: "slug", unique: true }),
-      ],
+      fields: [text({ name: "title" }), text({ name: "slug", unique: true })],
     }),
   ],
 });
@@ -157,9 +154,7 @@ describeEachDialect("nextly trash list, restore and empty", dialect => {
     const refused: string[] = [];
     await runTrashRestoreCommand(id, {}, contextKeeping(refused));
     expect(process.exitCode).toBe(1);
-    expect(refused).toContain(
-      'warn: slug: "cli" is taken by another entry'
-    );
+    expect(refused).toContain('warn: slug: "cli" is taken by another entry');
     expect(refused.join("\n")).toContain(`--set slug=<new value>`);
     process.exitCode = undefined;
 

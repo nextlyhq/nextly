@@ -25,11 +25,15 @@ export function registerTrashCommand(program: Command): void {
   declareFirstLine(
     trash
       .command("list")
-      .description("List deleted entries, newest first, with who deleted each and when")
+      .description(
+        "List deleted entries, newest first, with who deleted each and when"
+      )
       .option("--collection <slug>", "Only this collection's entries")
       .option("--limit <n>", "At most this many (1 to 100)", "25")
       .option("--page <n>", "This page of the list", "1")
-      .action(lazyAction(async () => (await import("./trash")).trashListAction)),
+      .action(
+        lazyAction(async () => (await import("./trash")).trashListAction)
+      ),
     DATABASE_LINE
   );
 
@@ -59,7 +63,9 @@ export function registerTrashCommand(program: Command): void {
       .command("empty")
       .description("Remove deleted entries for good")
       .option("--collection <slug>", "Only this collection's entries")
-      .action(lazyAction(async () => (await import("./trash")).trashEmptyAction)),
+      .action(
+        lazyAction(async () => (await import("./trash")).trashEmptyAction)
+      ),
     DATABASE_LINE
   );
 }

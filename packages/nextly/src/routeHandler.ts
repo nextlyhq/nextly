@@ -49,11 +49,6 @@ import {
 import { readAccessCaller, readCaller } from "./api/authenticated-read";
 import { handleContentEventsRequest } from "./api/content-events";
 import {
-  emptyTrashRoute,
-  listTrashRoute,
-  restoreFromTrashRoute,
-} from "./api/trash/trash-routes";
-import {
   getDashboardStats,
   getDashboardContent,
   getDashboardRecentEntries,
@@ -111,6 +106,11 @@ import {
 import { getRolesScreen, setClosedToSuperAdmin } from "./api/roles-screen";
 import { getSchemaJournal } from "./api/schema-journal";
 import { getTranslationWorklist } from "./api/translations";
+import {
+  emptyTrashRoute,
+  listTrashRoute,
+  restoreFromTrashRoute,
+} from "./api/trash/trash-routes";
 import {
   deleteWidgetLayout,
   getWidgetLayout,

@@ -15,21 +15,21 @@
  *
  * @module domains/trash/trash-service
  */
-import { actorForWrite, type RequestActor } from "../../auth/request-actor";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import {
   callerHoldsPermission,
   readAccessCaller,
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
+import { actorForWrite, type RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di/service-access";
 import { NextlyError } from "../../errors";
-import { TRASH_TABLE } from "../../schemas/trash";
 import { permissionSlug } from "../../schemas/_zod/rbac";
+import { TRASH_TABLE } from "../../schemas/trash";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
-import { mayReadDeletedDocument } from "../content-events/deleted-document-access";
 import type { UserContext } from "../collections/services/collection-types";
 import { collectionTableName } from "../collections/services/collection-utils";
+import { mayReadDeletedDocument } from "../content-events/deleted-document-access";
 
 import {
   restoreTrashedEntry,
@@ -103,7 +103,8 @@ async function visibleCollections(
   }
   const reader = readerOf(caller);
   const readable = (await readableSlugAllowlist(reader, "collection")) ?? [];
-  const asked = named === undefined ? readable : readable.filter(s => s === named);
+  const asked =
+    named === undefined ? readable : readable.filter(s => s === named);
   const visible: string[] = [];
   for (const slug of asked) {
     if (await mayReadDeletedDocument({ kind: "collection", slug }, reader)) {
@@ -177,7 +178,7 @@ async function collectionOf(
   if (record === null) return undefined;
   return {
     tableName: collectionTableName(record, slug),
-    fields: (record.fields ?? []) as RestoreCollection["fields"],
+    fields: record.fields ?? [],
   };
 }
 

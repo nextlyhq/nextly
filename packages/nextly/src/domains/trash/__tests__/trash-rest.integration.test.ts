@@ -164,11 +164,13 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     await t.nextly.delete({ collection: POSTS, id: postId });
 
     const read = async () =>
-      ((await t.nextly.findByID({
-        collection: NOTES,
-        id: noteId,
-        depth: 1,
-      })) as unknown as Record<string, unknown>).post;
+      (
+        (await t.nextly.findByID({
+          collection: NOTES,
+          id: noteId,
+          depth: 1,
+        })) as unknown as Record<string, unknown>
+      ).post;
 
     // Not populated: the note keeps only the id it held, as it would after
     // any delete, and none of the trashed entry's content reaches it.

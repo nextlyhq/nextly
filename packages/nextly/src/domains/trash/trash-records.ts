@@ -113,7 +113,11 @@ export interface TrashSelection {
 function whereOf(selection: TrashSelection): WhereClause | undefined {
   const and: NonNullable<WhereClause["and"]> = [];
   if (selection.collections !== undefined) {
-    and.push({ column: "scopeSlug", op: "IN", value: [...selection.collections] });
+    and.push({
+      column: "scopeSlug",
+      op: "IN",
+      value: [...selection.collections],
+    });
   }
   if (selection.itemIds !== undefined) {
     and.push({ column: "itemId", op: "IN", value: [...selection.itemIds] });

@@ -27,11 +27,11 @@ import type {
 import { sql } from "drizzle-orm";
 
 import { missingSchemaObject } from "../../database/missing-column";
-import type { KeptLinks, KeptTableRows } from "../../schemas/trash";
 import { MEDIA_USAGE_TABLE } from "../../schemas/media-usage/table-name";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { TRANSLATION_PROVENANCE_TABLE } from "../../schemas/translation-provenance/table-name";
 import { TRANSLATION_SOURCES_TABLE } from "../../schemas/translation-sources/table-name";
+import type { KeptLinks, KeptTableRows } from "../../schemas/trash";
 import { COMPANION_PARENT_COLUMN } from "../i18n/companion-columns";
 import { usesJunctionTable } from "../schema/field-rules";
 import {

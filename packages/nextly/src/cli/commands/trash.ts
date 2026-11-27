@@ -26,8 +26,8 @@ import * as p from "@clack/prompts";
 import type { Command } from "commander";
 
 import type { Nextly } from "../../direct-api/nextly";
-import type { TrashConflict } from "../../domains/trash/restore-entry";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import type { TrashConflict } from "../../domains/trash/restore-entry";
 import { NextlyError } from "../../errors/nextly-error";
 import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
@@ -43,7 +43,7 @@ const MAX_SHOWN = 120;
  * operator's terminal.
  */
 function printable(value: unknown): string {
-  const text = value === null || value === undefined ? "" : String(value);
+  const text = asText(value);
   const line = Array.from(text, char => {
     const code = char.codePointAt(0) ?? 0;
     return code <= 0x1f || (code >= 0x7f && code <= 0x9f) ? " " : char;
@@ -52,6 +52,20 @@ function printable(value: unknown): string {
     .replace(/ {2,}/g, " ")
     .trim();
   return line.length > MAX_SHOWN ? `${line.slice(0, MAX_SHOWN - 1)}…` : line;
+}
+
+/** A stored value as text: a scalar as itself, anything else as JSON. */
+function asText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return `${value}`;
+  }
+  return JSON.stringify(value) ?? "";
 }
 
 /** Start the application from its configuration, run `work`, then stop it. */
@@ -68,7 +82,9 @@ async function withNextly<T>(
   try {
     return await work(nextly as unknown as Nextly);
   } finally {
-    await (nextly as unknown as { shutdown?: () => Promise<void> }).shutdown?.();
+    await (
+      nextly as unknown as { shutdown?: () => Promise<void> }
+    ).shutdown?.();
   }
 }
 
@@ -79,18 +95,29 @@ function deletedBy(item: {
   trashedById: string | null;
 }): string {
   if (item.trashedByName) return printable(item.trashedByName);
-  if (item.trashedByKind === "apiKey") return `API key ${printable(item.trashedById)}`;
+  if (item.trashedByKind === "apiKey")
+    return `API key ${printable(item.trashedById)}`;
   if (item.trashedByKind === "user") return printable(item.trashedById);
   return item.trashedByKind === "principal" ? "a site member" : "the system";
 }
 
 /** A positive whole number from an option, or the refusal naming it. */
-function wholeNumber(option: string, value: string | undefined, fallback: number): number {
+function wholeNumber(
+  option: string,
+  value: string | undefined,
+  fallback: number
+): number {
   if (value === undefined) return fallback;
   const number = Number(value);
   if (!Number.isInteger(number) || number < 1) {
     throw NextlyError.validation({
-      errors: [{ path: option, code: "invalid", message: `--${option} takes a whole number from 1.` }],
+      errors: [
+        {
+          path: option,
+          code: "invalid",
+          message: `--${option} takes a whole number from 1.`,
+        },
+      ],
     });
   }
   return number;
@@ -106,7 +133,9 @@ export async function runTrashListCommand(
   await withNextly(context, async nextly => {
     const page = await nextly.trash.list({
       overrideAccess: true,
-      ...(options.collection === undefined ? {} : { collection: options.collection }),
+      ...(options.collection === undefined
+        ? {}
+        : { collection: options.collection }),
       limit: wholeNumber("limit", options.limit, 25),
       page: wholeNumber("page", options.page, 1),
     });
@@ -115,7 +144,14 @@ export async function runTrashListCommand(
       return;
     }
     logger.table(
-      ["Id", "Collection", "Entry", "Deleted by", "Deleted", "Removed for good"],
+      [
+        "Id",
+        "Collection",
+        "Entry",
+        "Deleted by",
+        "Deleted",
+        "Removed for good",
+      ],
       page.items.map(item => [
         printable(item.itemId),
         printable(item.scopeSlug),
@@ -138,7 +174,13 @@ function valuesOf(sets: readonly string[] = []): Record<string, string> {
     const at = set.indexOf("=");
     if (at <= 0) {
       throw NextlyError.validation({
-        errors: [{ path: "set", code: "invalid", message: `--set takes field=value, such as --set slug=hello-2; got "${set}".` }],
+        errors: [
+          {
+            path: "set",
+            code: "invalid",
+            message: `--set takes field=value, such as --set slug=hello-2; got "${set}".`,
+          },
+        ],
       });
     }
     values[set.slice(0, at)] = set.slice(at + 1);
@@ -148,7 +190,8 @@ function valuesOf(sets: readonly string[] = []): Record<string, string> {
 
 /** A conflict as a line names it. */
 function conflictLine(conflict: TrashConflict): string {
-  const where = conflict.locale === undefined ? "" : ` (${printable(conflict.locale)})`;
+  const where =
+    conflict.locale === undefined ? "" : ` (${printable(conflict.locale)})`;
   return `${printable(conflict.field)}${where}: "${printable(conflict.value)}" is taken by another entry`;
 }
 
@@ -159,13 +202,11 @@ async function askNewValues(
 ): Promise<Record<string, string>> {
   const asked = { ...values };
   for (const conflict of conflicts) {
-    asked[conflict.field] = String(
-      answered(
-        await p.text({
-          message: `${conflictLine(conflict)}. New ${conflict.field}:`,
-          validate: value => (value?.trim() ? undefined : "A value is needed."),
-        })
-      )
+    asked[conflict.field] = await answered(
+      await p.text({
+        message: `${conflictLine(conflict)}. New ${conflict.field}:`,
+        validate: value => (value?.trim() ? undefined : "A value is needed."),
+      })
     );
   }
   return asked;
@@ -185,7 +226,9 @@ export async function runTrashRestoreCommand(
       const result = await nextly.trash.restore({
         overrideAccess: true,
         id,
-        ...(options.collection === undefined ? {} : { collection: options.collection }),
+        ...(options.collection === undefined
+          ? {}
+          : { collection: options.collection }),
         ...(Object.keys(values).length === 0 ? {} : { values }),
       });
       if (result.restored) {
@@ -194,7 +237,8 @@ export async function runTrashRestoreCommand(
         );
         return;
       }
-      for (const conflict of result.conflicts) logger.warn(conflictLine(conflict));
+      for (const conflict of result.conflicts)
+        logger.warn(conflictLine(conflict));
       if (!canPrompt()) {
         logger.info(
           `Nothing was restored. Give each a new value, such as \`nextly trash restore ${printable(id)} --set ${printable(result.conflicts[0]?.field ?? "slug")}=<new value>\`.`
@@ -217,7 +261,9 @@ export async function runTrashEmptyCommand(
   await withNextly(context, async nextly => {
     const { removed } = await nextly.trash.empty({
       overrideAccess: true,
-      ...(options.collection === undefined ? {} : { collection: options.collection }),
+      ...(options.collection === undefined
+        ? {}
+        : { collection: options.collection }),
     });
     logger.success(
       removed.length === 1

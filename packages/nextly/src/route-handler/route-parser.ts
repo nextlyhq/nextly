@@ -3791,13 +3791,28 @@ export function parseRestRoute(
   // authenticates; the trash service decides access.
   if (resource === "trash" && !subresource) {
     if (!id && httpMethod === "GET") {
-      return { service: "trash", operation: "list", method: "listTrash", routeParams };
+      return {
+        service: "trash",
+        operation: "list",
+        method: "listTrash",
+        routeParams,
+      };
     }
     if (id === "restore" && httpMethod === "POST") {
-      return { service: "trash", operation: "update", method: "restoreFromTrash", routeParams };
+      return {
+        service: "trash",
+        operation: "update",
+        method: "restoreFromTrash",
+        routeParams,
+      };
     }
     if (id === "empty" && httpMethod === "POST") {
-      return { service: "trash", operation: "delete", method: "emptyTrash", routeParams };
+      return {
+        service: "trash",
+        operation: "delete",
+        method: "emptyTrash",
+        routeParams,
+      };
     }
   }
 

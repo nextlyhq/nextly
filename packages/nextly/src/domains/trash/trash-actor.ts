@@ -36,6 +36,10 @@ export function trashActorColumns(
         trashedByName: null,
       };
     default:
-      return { trashedByKind: "system", trashedById: null, trashedByName: null };
+      return {
+        trashedByKind: "system",
+        trashedById: null,
+        trashedByName: null,
+      };
   }
 }

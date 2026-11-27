@@ -346,6 +346,10 @@ import {
   sharedComparison,
   type SharedComparison,
 } from "../../singles/services/live-shared-single";
+import {
+  moveEntryToTrash,
+  noteTrashedEntryDeletion,
+} from "../../trash/move-to-trash";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
@@ -539,10 +543,6 @@ import {
   closeReviewOnDiscard,
   removeDeletedDocumentReviewStates,
 } from "../../workflows/review-state-cleanup";
-import {
-  moveEntryToTrash,
-  noteTrashedEntryDeletion,
-} from "../../trash/move-to-trash";
 import {
   localizedFilterContext,
   type FilterConditionSources,

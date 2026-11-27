@@ -15,7 +15,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { ServiceMap } from "../di/register";
 import type { ContentEventsNamespace } from "../direct-api/namespaces/content-events";
-import type { TrashNamespace } from "../direct-api/namespaces/trash";
 import type { EmailDeliveriesNamespace } from "../direct-api/namespaces/email";
 import type { FilesNamespace } from "../direct-api/namespaces/files";
 import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
@@ -27,6 +26,7 @@ import type {
 } from "../direct-api/namespaces/rbac";
 import type { ReleasesNamespace } from "../direct-api/namespaces/releases";
 import type { TranslationsNamespace } from "../direct-api/namespaces/translations";
+import type { TrashNamespace } from "../direct-api/namespaces/trash";
 import type { WorkflowsNamespace } from "../direct-api/namespaces/workflows";
 import type {
   AuthResult,

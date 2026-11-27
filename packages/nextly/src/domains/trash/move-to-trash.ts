@@ -70,9 +70,7 @@ export function resetTrashNoticeForTests(): void {
  * What a list names the item by: its title, else its slug, as text, cut to
  * the column's length.
  */
-export function trashLabelOf(
-  document: Record<string, unknown>
-): string | null {
+export function trashLabelOf(document: Record<string, unknown>): string | null {
   for (const key of ["title", "name", "slug"]) {
     const value = document[key];
     if (typeof value === "string" && value.trim() !== "") {

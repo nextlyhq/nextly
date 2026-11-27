@@ -147,11 +147,14 @@ export const restoreFromTrashRoute = privateToSession(
         { restored: false, conflicts: result.conflicts }
       );
     }
-    return respondAction("Restored from the trash, as a draft where it had been published.", {
-      restored: true,
-      collection: result.collection,
-      id: result.id,
-    });
+    return respondAction(
+      "Restored from the trash, as a draft where it had been published.",
+      {
+        restored: true,
+        collection: result.collection,
+        id: result.id,
+      }
+    );
   })
 );
 

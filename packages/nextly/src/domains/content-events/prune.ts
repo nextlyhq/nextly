@@ -60,13 +60,10 @@ async function heldByTrash(
 ): Promise<Set<string>> {
   if (ids.length === 0) return new Set();
   if (db.tableExists && !(await db.tableExists(TRASH_TABLE))) return new Set();
-  const rows = await db.select<{ deletedEventId: string | null }>(
-    TRASH_TABLE,
-    {
-      columns: ["deletedEventId"],
-      where: { and: [{ column: "deletedEventId", op: "IN", value: ids }] },
-    }
-  );
+  const rows = await db.select<{ deletedEventId: string | null }>(TRASH_TABLE, {
+    columns: ["deletedEventId"],
+    where: { and: [{ column: "deletedEventId", op: "IN", value: ids }] },
+  });
   return new Set(rows.map(row => String(row.deletedEventId)));
 }
 
