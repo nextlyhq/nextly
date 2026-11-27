@@ -205,11 +205,18 @@ function isSettledOnCurrentNames(adapter: DrizzleAdapter): boolean {
  */
 const registryNames = new WeakMap<DrizzleAdapter, FieldGroupRegistryName>();
 
+/**
+ * The names each process refused a failure on that it could not ask about (`unaskedFailure`),
+ * forgotten when it follows a move.
+ */
+const unaskedRefusals = new WeakMap<DrizzleAdapter, Set<string>>();
+
 /** Remember the name `adapter`'s registry was found under. */
 export function noteRegistryName(
   adapter: DrizzleAdapter,
   name: FieldGroupRegistryName
 ): void {
+  if (registryNames.get(adapter) !== name) unaskedRefusals.delete(adapter);
   registryNames.set(adapter, name);
 }
 
@@ -376,7 +383,7 @@ export async function lookingUpRegistry<T>(args: {
     if (candidate === undefined || !isRegistry(candidate)) throw error;
     if (!(await canAsk(adapter, executor, savepoint))) {
       await adapter.afterRollback(() => resolveAgain(adapter));
-      throw unaskedFailure(error, candidate, savepoint, settled);
+      throw unaskedFailure(adapter, error, candidate, savepoint, settled);
     }
     const moved = await isMovedStorage(
       adapter,
@@ -527,14 +534,20 @@ async function takeSavepoint(
  * is. Any other failure that cannot be asked about is raised as it was.
  */
 function unaskedFailure(
+  adapter: DrizzleAdapter,
   error: unknown,
   candidate: MoveCandidate,
   savepoint: TransactionSavepoint | undefined,
   settled: boolean
 ): unknown {
-  return savepoint === undefined && settled
-    ? storageMovingRefusal(candidate.missing)
-    : error;
+  if (savepoint !== undefined || !settled) return error;
+  // Once for each name until a move is followed: a table gone for another reason has no other name
+  // to follow, and its next failure is the database's own.
+  const refused = unaskedRefusals.get(adapter) ?? new Set<string>();
+  if (refused.has(candidate.missing)) return error;
+  refused.add(candidate.missing);
+  unaskedRefusals.set(adapter, refused);
+  return storageMovingRefusal(candidate.missing);
 }
 
 /** Whether a transaction can be asked anything after a statement failed on it. */
@@ -607,7 +620,7 @@ export async function refusingMovedStorage<T>(args: {
     if (ran && !(await canAsk(adapter, executor, savepoint))) {
       // They are followed once the transaction has rolled back, so a retry finds them.
       await adapter.afterRollback(follow);
-      throw unaskedFailure(error, candidate, savepoint, settled);
+      throw unaskedFailure(adapter, error, candidate, savepoint, settled);
     }
     const moved = await isMovedStorage(
       adapter,
@@ -763,6 +776,8 @@ async function follow(args: {
       held.columns
     );
     if (!registered.registered) return undefined;
+    // Found under another name: a move followed, and what was refused once may be refused again.
+    if (current !== tableName) unaskedRefusals.delete(adapter);
     // The names it was registered under before stay registered otherwise, and still carry the
     // legacy column: a process that followed every move would never read as settled.
     retractOtherNames(
