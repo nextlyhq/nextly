@@ -24,13 +24,13 @@ import { NextlyError } from "../../errors";
 import { DASHBOARD_PINS_TABLE } from "../../schemas/dashboard-pins/table-name";
 import { MEDIA_USAGE_TABLE } from "../../schemas/media-usage/table-name";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
-import { VERSION_VIEWS_TABLE } from "../../schemas/version-views";
-import { VERSIONS_TABLE } from "../../schemas/versions/types";
 import {
   TRASH_TABLE,
   type KeptRow,
   type TrashedEntry,
 } from "../../schemas/trash";
+import { VERSION_VIEWS_TABLE } from "../../schemas/version-views";
+import { VERSIONS_TABLE } from "../../schemas/versions/types";
 import { reopenEndedLife } from "../content-events/reopen-life";
 import { recordWriteEvent } from "../content-events/write-event";
 import { COMPANION_PARENT_COLUMN } from "../i18n/companion-columns";
