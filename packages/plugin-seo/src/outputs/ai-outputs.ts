@@ -369,8 +369,8 @@ interface FullWriting {
   renders: boolean;
   /** When rendering stops, as a time in milliseconds. */
   deadline: number;
-  /** Where asking again makes a page's copy again. */
-  retry: (page: ListedPage) => string;
+  /** Where asking again makes a page's words again: this file. */
+  retry: string;
   results: CopyResults;
 }
 
@@ -417,9 +417,9 @@ export async function llmsFullTxtOf(
     titleFields: rules.titleFields,
     renders: await rendersPages(ctx, config),
     deadline: Date.now() + FULL_RENDER_BUDGET_MS,
-    // A page's copy makes it again where copies are served; else this file.
-    retry: page =>
-      rules.plainTextCopies === true ? copyAddressOf(page.loc) : fullAddress,
+    // Asking for this file again renders the page again, whatever holds
+    // the address its copy would have.
+    retry: fullAddress,
     results: { failed: [], made: [] },
   };
   const file = await llmsFullTxt({
@@ -453,7 +453,7 @@ async function renderedBodyOf(
   page: ListedPage
 ): Promise<string | undefined> {
   if (!writing.renders) return undefined;
-  const retry = writing.retry(page);
+  const { retry } = writing;
   if (Date.now() > writing.deadline) {
     writing.results.failed.push({ url: page.loc, reason: OUT_OF_TIME, retry });
     return undefined;
@@ -893,11 +893,17 @@ function aboutOf(
 async function renderedCopyFor(
   ctx: PluginContext,
   page: ListedPage,
-  head: { title?: string; description?: string }
+  head: { title?: string; description?: string },
+  retryAt: () => Promise<string>
 ): Promise<string | null> {
   const rendered = await renderedCopyAt(ctx, page.loc, page.loc);
   const results: CopyResults = { failed: [], made: [] };
-  noteRendered(results, page, rendered, copyAddressOf(page.loc));
+  noteRendered(
+    results,
+    page,
+    rendered,
+    "copy" in rendered ? page.loc : await retryAt()
+  );
   await noteCopyResults(ctx, results.failed, results.made);
   if (!("copy" in rendered)) return null;
   const title = head.title ?? rendered.copy.title;
@@ -1011,13 +1017,15 @@ const holdsWords = (copy: string): boolean =>
  * the head the public may read, and the sitemap's last change.
  *
  * A page is rendered only where `render` says it may be
- * ({@link rendersPages}).
+ * ({@link rendersPages}). `retryAt` says where the copy is asked for again,
+ * where its render fails and the problem list names it.
  */
 async function copyOf(
   ctx: PluginContext,
   page: ListedPage,
   config: AiOutputsConfig,
-  render: boolean
+  render: boolean,
+  retryAt: () => Promise<string>
 ): Promise<string | null> {
   const { readRules } = config;
   if (page.holder.collection === codePagesSlug(ctx)) {
@@ -1027,7 +1035,8 @@ async function copyOf(
     const heads = await codeHeadsOf(ctx, config, readRules, page.path);
     const head = heads.get(page.path) ?? {};
     return (
-      (await renderedCopyFor(ctx, page, head)) ?? descriptionCopyFor(page, head)
+      (await renderedCopyFor(ctx, page, head, retryAt)) ??
+      descriptionCopyFor(page, head)
     );
   }
   const document = (await publicDocuments([page])).get(readingKey(page));
@@ -1046,7 +1055,7 @@ async function copyOf(
     return madeCopy(ctx, page, withFrontMatter(aboutOf(page, head), stored));
   }
   if (render) {
-    const rendered = await renderedCopyFor(ctx, page, head);
+    const rendered = await renderedCopyFor(ctx, page, head, retryAt);
     if (rendered !== null) return rendered;
   }
   return descriptionCopyFor(page, head);
@@ -1324,7 +1333,19 @@ async function plainCopyAt(
   const candidates = atPage ? [url.pathname] : pagesOfCopy(url.pathname);
   const page = await pageAsked(ctx, url, config, candidates, atPage);
   if (page === null) return null;
-  const body = await copyOf(ctx, page, config, await rendersPages(ctx, config));
+  // Asked again where it was asked: at its copy's address, or, asked at
+  // the page's own address, at the address its copy is served at.
+  const retryAt = async () =>
+    atPage
+      ? ((await servedCopyAddress(ctx, page.loc, config)) ?? page.loc)
+      : url.href;
+  const body = await copyOf(
+    ctx,
+    page,
+    config,
+    await rendersPages(ctx, config),
+    retryAt
+  );
   return body === null ? null : { body, page, llmsTxt: rules.llmsTxt === true };
 }
 

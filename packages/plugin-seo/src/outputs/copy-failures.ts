@@ -35,8 +35,14 @@ export interface CopyFailure {
  */
 const MOST_KEPT = 40;
 
-/** The longest address kept; a longer one is cut, as no page needs more to be found. */
-const MOST_URL_CHARS = 500;
+/**
+ * The most the note holds, in bytes: well inside a MySQL `TEXT` column
+ * (65,535 bytes). Addresses are kept whole, since a cut one names another
+ * page; past this, the oldest failures are let go instead.
+ */
+const MOST_NOTE_BYTES = 60_000;
+
+const bytes = (text: string): number => new TextEncoder().encode(text).length;
 
 /** The note the failures are kept in. */
 const FAILURES_KEY = noteKey("plain-copy-failures");
@@ -98,17 +104,15 @@ export async function noteCopyResults(
     const stored = notes.get(FAILURES_KEY);
     const before = failuresIn(stored);
     const at = new Date().toISOString();
-    const fresh = failed.map(failure => ({
-      ...failure,
-      url: failure.url.slice(0, MOST_URL_CHARS),
-      retry: failure.retry.slice(0, MOST_URL_CHARS),
-      at,
-    }));
+    const fresh = failed.map(failure => ({ ...failure, at }));
     const settled = new Set([...made, ...fresh.map(failure => failure.url)]);
     const after = [
       ...fresh,
       ...before.filter(failure => !settled.has(failure.url)),
     ].slice(0, MOST_KEPT);
+    while (after.length > 0 && bytes(JSON.stringify(after)) > MOST_NOTE_BYTES) {
+      after.pop();
+    }
     // Unchanged but for the times of failures already noted: nothing to write.
     const same = (list: readonly CopyFailure[]) =>
       JSON.stringify(

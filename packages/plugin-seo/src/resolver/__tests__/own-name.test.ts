@@ -112,6 +112,17 @@ describe("a page's own name", () => {
     ).toBe("Things I've Built");
   });
 
+  it("reads a number as a name, as core reads a title field", () => {
+    expect(
+      pageNameOf({
+        home: false,
+        document: { number: 5286, title: "Issue" },
+        fields: ["number", "title"],
+        codePage: false,
+      })
+    ).toBe("5286");
+  });
+
   it("is the home page's whole title", () => {
     expect(
       pageNameOf({

@@ -16,6 +16,7 @@
  */
 import {
   ownIdentityFieldNames,
+  readableTitleText,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
@@ -109,7 +110,8 @@ export function ownTitleIn(
   fields: readonly string[]
 ): { value: string; field: string } | undefined {
   for (const field of fields) {
-    const value = plainTitle(textOf(valueAtPath(document, field)));
+    // Read as core reads a title field's value: a number names an entry too.
+    const value = plainTitle(readableTitleText(valueAtPath(document, field)));
     if (value !== undefined) return { value, field };
   }
   return undefined;

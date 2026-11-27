@@ -461,13 +461,16 @@ const deeper = (at: Collecting): Collecting => ({
 const WORDLESS_ELEMENTS =
   /<(svg|script|style|template)\b[^>]*\/>|<(svg|script|style|template)\b[\s\S]*?<\/\2\s*>/gi;
 
-/** A tag, or a comment: what markup is made of. */
+/**
+ * A tag, or a comment: what markup is made of. An attribute's quoted value
+ * may hold `>` (`title="a > b"`), which does not end the tag.
+ */
 const MARKUP_TAG =
-  /<!--[\s\S]*?-->|<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*)?\/?>/g;
+  /<!--[\s\S]*?-->|<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s(?:[^<>"']|"[^"]*"|'[^']*')*)?\/?>/g;
 
 /** Where markup breaks a line: a line break, or the end of a block. */
 const MARKUP_BREAK =
-  /<br\s*\/?>|<\/(?:p|div|li|h[1-6]|tr|blockquote|section|article)\s*>/gi;
+  /<br\b[^>]*>|<\/(?:p|div|li|h[1-6]|tr|blockquote|section|article)\s*>/gi;
 
 /** The character references a page's text commonly carries, by name. */
 const NAMED: Readonly<Record<string, string>> = {
@@ -525,16 +528,15 @@ function wordsOfMarkup(text: string): string {
   return decodedEntities(stripped);
 }
 
-/** Whether a value is a drawing in SVG, which holds no words. */
-const isSvgMarkup = (text: string): boolean => /^\s*<svg[\s>]/i.test(text);
-
 /**
  * The title `text` names a page by: the words its markup shows, on one
  * line; none where nothing is left. The one reading of a title for the
  * outputs that name pages, so each names a page alike.
  */
 export function plainTitle(text: string | undefined): string | undefined {
-  if (text === undefined || isSvgMarkup(text)) return undefined;
+  // A drawing in SVG is taken out with the markup: a value that is only
+  // one names nothing.
+  if (text === undefined) return undefined;
   const words = wordsOfMarkup(text).replace(/\s+/g, " ").trim();
   return words === "" ? undefined : words;
 }
@@ -562,7 +564,7 @@ const ADDRESS =
 const wordsField: FieldReader = (field, value, at) => {
   for (const each of Array.isArray(value) ? value : [value]) {
     const raw = textOf(each);
-    if (raw === undefined || isSvgMarkup(raw)) continue;
+    if (raw === undefined) continue;
     const words = wordsOfMarkup(raw).trim();
     if (words === "") continue;
     at.parts.push(

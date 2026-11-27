@@ -457,12 +457,20 @@ describe.each(getConfiguredTestDialects())(
       expect(await rootFile("llms-full.txt")).toContain(
         `# Pricing\n\nSource: ${SITE}/pricing\n\nPlans and prices.\n`
       );
+      // Asked for again where it was found: llms-full.txt itself.
       expect(
-        (await copyFailures(seoCtx())).map(({ url, reason }) => ({
+        (await copyFailures(seoCtx())).map(({ url, reason, retry }) => ({
           url,
           reason,
+          retry,
         }))
-      ).toEqual([{ url: `${SITE}/pricing`, reason: "status 404" }]);
+      ).toEqual([
+        {
+          url: `${SITE}/pricing`,
+          reason: "status 404",
+          retry: `${SITE}/llms-full.txt`,
+        },
+      ]);
     });
 
     it("names a page built in code as structured data does: the name its route gives it over its title", async () => {

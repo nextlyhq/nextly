@@ -439,6 +439,18 @@ describe("a page's plain-text copy", () => {
     expect(copy).not.toMatch(/span|strong|script|track/);
   });
 
+  it("reads a tag whole, a quoted > in it and all, breaks a line at any <br>, and keeps words beside a drawing", () => {
+    const copy = plainCopyOf({
+      title: '<span title="a > b">Hello</span>',
+      fields: [textarea({ name: "intro" }), text({ name: "label" })],
+      document: {
+        intro: 'One<br class="gap">Two',
+        label: '<svg viewBox="0 0 8 8"></svg>Docs',
+      },
+    });
+    expect(copy).toBe("# Hello\n\nOne\nTwo\n\nDocs\n");
+  });
+
   it("reads the characters markup spells by name, as the rendered page does", () => {
     const copy = plainCopyOf({
       title: "Don&rsquo;t <em>stop</em>",
