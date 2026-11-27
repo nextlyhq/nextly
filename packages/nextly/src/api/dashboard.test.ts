@@ -339,6 +339,16 @@ describe("getDashboardActivity", () => {
       })
     );
 
+    // A session is matched in the one spelling it is stored in, so every
+    // database answers the same rows.
+    getRecentActivity.mockClear();
+    await getDashboardActivity(
+      makeReq("http://x/api/dashboard/activity?session=Run-A")
+    );
+    expect(getRecentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSessionId: "run-a" })
+    );
+
     // Neither asked: the feed is not narrowed by an empty filter.
     getRecentActivity.mockClear();
     await getDashboardActivity(makeReq("http://x/api/dashboard/activity"));
@@ -353,6 +363,8 @@ describe("getDashboardActivity", () => {
     ["an empty agent", "agent="],
     ["an agent name too long to be stored", `agent=${"x".repeat(192)}`],
     ["a session that is not an id", "session=nx_live_abc_def"],
+    ["a session shaped like a short credential", "session=glpat-AbCdEfGhIjKlMnOpQrSt"],
+    ["an agent name holding a NUL", "agent=%00"],
   ])("refuses %s rather than answering everything", async (_, query) => {
     const getRecentActivity = vi.fn();
     serviceStub = { getRecentActivity };

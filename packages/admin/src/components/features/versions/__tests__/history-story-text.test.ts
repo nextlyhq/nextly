@@ -10,6 +10,7 @@ import {
   changeSummary,
   dayHeading,
   eventActor,
+  versionActor,
   eventSentence,
   fieldLabels,
   partsText,
@@ -161,6 +162,46 @@ describe("eventActor", () => {
     expect(eventActor(event({ actorName: "Sara Malik" }))).toEqual({
       kind: "person",
       name: "Sara Malik",
+    });
+  });
+});
+
+describe("versionActor", () => {
+  it("names a person's own version by the person alone", () => {
+    expect(
+      versionActor({
+        createdBy: "u1",
+        author: { kind: "person", id: "u1", name: "Sara Malik" },
+      })
+    ).toEqual({ kind: "person", name: "Sara Malik" });
+  });
+
+  it("names the agent that wrote a version for the person", () => {
+    expect(
+      versionActor({
+        createdBy: "u1",
+        author: {
+          kind: "person",
+          id: "u1",
+          name: "Sara Malik",
+          agentName: "Claude Code",
+        },
+      })
+    ).toEqual({ kind: "person", name: "Claude Code, for Sara Malik" });
+    // The agent's name outlives the person's.
+    expect(
+      versionActor({
+        createdBy: "u1",
+        author: {
+          kind: "person",
+          id: "u1",
+          name: null,
+          agentName: "Claude Code",
+        },
+      })
+    ).toEqual({
+      kind: "person",
+      name: "Claude Code, for someone not recorded",
     });
   });
 });

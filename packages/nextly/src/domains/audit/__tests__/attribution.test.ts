@@ -151,6 +151,9 @@ describe("attribution columns", () => {
       // A key's secret part, 32 random bytes as base64url, here without an
       // underscore, as about half of them are.
       "q3Rk9Xv0bLmN2pQe7sTuVw1yZaB4cD6fG8hJ0kLm2nP",
+      // A short credential that fits an id's length and alphabet: only its
+      // known shape tells it apart.
+      "glpat-AbCdEfGhIjKlMnOpQrSt",
     ];
 
     it.each(SECRETS)(
@@ -193,6 +196,32 @@ describe("attribution columns", () => {
         grantId: "grant-7",
       });
       expect(refused).toEqual([]);
+    });
+  });
+
+  it("refuses a name holding a NUL or another control character", () => {
+    // PostgreSQL cannot store a NUL: the write being recorded would fail.
+    expect(
+      attributionColumns({ agent: { name: "Claude\u0000Code" } }).refused
+    ).toEqual(["agent.name"]);
+    expect(
+      attributionColumns({ deployment: { machine: "studio\nmac" } }).refused
+    ).toEqual(["deployment.host"]);
+  });
+
+  it("stores ids in lower case, so every database matches them alike", () => {
+    // MySQL compares these columns without regard to case; PostgreSQL and
+    // SQLite do not. One spelling makes a filter answer the same everywhere.
+    expect(
+      attributionColumns({
+        agent: { name: "Claude Code", sessionId: "Run-A" },
+        credentialId: "5F0C2A8E-3D41-4B7A-9C55-1E2F3A4B5C6D",
+      }).columns
+    ).toMatchObject({
+      agentSessionId: "run-a",
+      credentialId: "5f0c2a8e-3d41-4b7a-9c55-1e2f3a4b5c6d",
+      // A name is shown as written.
+      agentName: "Claude Code",
     });
   });
 

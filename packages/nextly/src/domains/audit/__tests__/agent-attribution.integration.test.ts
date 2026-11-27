@@ -36,6 +36,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ActivityLogService } from "../../../services/dashboard/activity-log-service";
 import { allResources } from "../../../services/dashboard/readable-resources";
+import { attachVersionAuthors } from "../../versions/author-hydration";
 import type { ActorAttribution } from "../attribution";
 import { buildAuditLogWriter } from "../audit-log-writer";
 
@@ -102,6 +103,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     dialect,
     collections: [
       defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
+      // Kept in versions, so its history lists each save as a version row.
+      defineCollection({
+        slug: "notes",
+        versions: true,
+        fields: [text({ name: "title" })],
+      }),
     ],
   });
   await current.adapter.insert("users", {
@@ -113,16 +120,17 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   return current;
 }
 
-/** Create a post as the person, with what stands behind them. */
+/** Create an entry as the person, with what stands behind them. */
 async function createAs(
   t: TestNextly,
   attribution: ActorAttribution | undefined,
-  title = "hello"
-): Promise<void> {
+  title = "hello",
+  collectionName = "posts"
+): Promise<string> {
   const actor: RequestActor = { type: "user", id: PERSON.id, attribution };
-  await t.getService("collectionsHandler").createEntry(
+  const created = await t.getService("collectionsHandler").createEntry(
     {
-      collectionName: "posts",
+      collectionName,
       overrideAccess: true,
       // The event takes the person's name from the signed-in user, as a
       // request's session carries it.
@@ -131,6 +139,7 @@ async function createAs(
     },
     { title }
   );
+  return (created.data as { id: string }).id;
 }
 
 async function activityRows(t: TestNextly): Promise<ActivityRow[]> {
@@ -232,6 +241,37 @@ describe.each(getConfiguredTestDialects())(
       });
       // The person's own edit names no agent.
       expect(events.some(e => e.actorAgentName === null)).toBe(true);
+    });
+
+    it("names the agent beside the person on the entry's version row", async () => {
+      // A save's event is folded into its version row in the history, which
+      // names the version's author: the agent must reach that author too.
+      const t = await boot(dialect);
+      const byAgent = await createAs(
+        t,
+        { door: "command", agent: { name: "Claude Code" }, credentialId: PASS_ID },
+        "by an agent",
+        "notes"
+      );
+      const byHand = await createAs(t, undefined, "by hand", "notes");
+
+      const authorOf = async (entryId: string) => {
+        const rows = await t
+          .getService("versionsService")
+          .list({ scopeKind: "collection", scopeSlug: "notes", entryId }, { limit: 5 });
+        const [row] = await attachVersionAuthors(rows);
+        return row?.author;
+      };
+      expect(await authorOf(byAgent)).toMatchObject({
+        kind: "person",
+        id: PERSON.id,
+        name: PERSON.name,
+        agentName: "Claude Code",
+      });
+      // The person's own save names them alone.
+      const own = await authorOf(byHand);
+      expect(own).toMatchObject({ kind: "person", name: PERSON.name });
+      expect(own?.agentName ?? null).toBeNull();
     });
 
     it("records the approval on the row it let run", async () => {

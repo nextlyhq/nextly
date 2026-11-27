@@ -16,6 +16,7 @@
  * @module domains/audit/attribution
  */
 
+import { looksLikeSecret } from "../../observability/credential-shapes";
 import { getNextlyLogger } from "../../observability/logger";
 import { ATTRIBUTION_NAME_LENGTH } from "../../schemas/audit/widths";
 
@@ -149,7 +150,21 @@ type Refused = string[];
  * would never have stored.
  */
 export function isAttributionId(value: unknown): value is string {
-  return typeof value === "string" && ID_PATTERN.test(value);
+  // The shape first, then the repository's own catalogue of credential
+  // shapes: a short token (`glpat-` and twenty characters) fits an id's
+  // length and alphabet, and only its known shape tells it apart.
+  return (
+    typeof value === "string" && ID_PATTERN.test(value) && !looksLikeSecret(value)
+  );
+}
+
+/**
+ * An id as it is stored and matched: in lower case. MySQL compares these
+ * columns without regard to case and PostgreSQL and SQLite do not, so one
+ * spelling makes a filter answer the same rows on every database.
+ */
+export function storedId(value: string): string {
+  return value.toLowerCase();
 }
 
 /**
@@ -159,15 +174,30 @@ export function isAttributionId(value: unknown): value is string {
  */
 export function storedName(value: unknown): string | undefined {
   const trimmed = typeof value === "string" ? value.trim() : "";
-  return trimmed !== "" && trimmed.length <= ATTRIBUTION_NAME_LENGTH
+  return trimmed !== "" &&
+    trimmed.length <= ATTRIBUTION_NAME_LENGTH &&
+    !holdsControlCharacter(trimmed)
     ? trimmed
     : undefined;
+}
+
+/**
+ * Whether `value` holds a control character, NUL among them: PostgreSQL
+ * cannot store a NUL, so a name holding one would fail the write being
+ * recorded, and no name a person reads holds one.
+ */
+function holdsControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
 }
 
 /** An id-valued part: stored when it is an id, refused when given and not. */
 function idOf(refused: Refused, field: string, value: unknown): string | null {
   if (value === undefined) return null;
-  if (isAttributionId(value)) return value;
+  if (isAttributionId(value)) return storedId(value);
   refused.push(field);
   return null;
 }

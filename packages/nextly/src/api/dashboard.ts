@@ -25,7 +25,11 @@ import { z } from "zod";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { isAttributionId, storedName } from "../domains/audit/attribution";
+import {
+  isAttributionId,
+  storedId,
+  storedName,
+} from "../domains/audit/attribution";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
@@ -200,7 +204,9 @@ function askedAgentFilters(req: Request): {
   const { agent, session } = parsed.data;
   return {
     ...(agent === undefined ? {} : { agentName: agent }),
-    ...(session === undefined ? {} : { agentSessionId: session }),
+    // In the one spelling the rows store it in, so every database answers
+    // the same rows.
+    ...(session === undefined ? {} : { agentSessionId: storedId(session) }),
   };
 }
 
