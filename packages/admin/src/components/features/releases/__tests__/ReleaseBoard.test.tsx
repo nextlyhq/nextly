@@ -253,18 +253,20 @@ describe("the Releases Board", () => {
     const single = await screen.findByRole("link", {
       name: /^Opening hours Single document\b/,
     });
-    const mark = within(single).getByText("Single document");
+    // The words sit in their own span inside the mark, so it can end them
+    // in an ellipsis where it is narrow; the mark is that span's parent.
+    const mark = within(single).getByText("Single document").parentElement;
     // The list's mark: the same words after the same icon, which no one
     // hears. Where each sits (its margin) is the surface's own.
     render(<ReleaseTitleCell release={release({ id: "x", kind: "single" })} />);
     const listMark = screen
       .getAllByText("Single document")
-      .find(each => !single.contains(each));
-    expect(mark.textContent).toBe(listMark?.textContent);
-    expect(mark.querySelector("svg")?.outerHTML).toBe(
+      .find(each => !single.contains(each))?.parentElement;
+    expect(mark?.textContent).toBe(listMark?.textContent);
+    expect(mark?.querySelector("svg")?.outerHTML).toBe(
       listMark?.querySelector("svg")?.outerHTML
     );
-    expect(mark.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    expect(mark?.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
 
     const ordinary = screen.getByRole("link", { name: /Autumn launch/ });
     expect(within(ordinary).queryByText("Single document")).toBeNull();

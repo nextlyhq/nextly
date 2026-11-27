@@ -343,7 +343,10 @@ describe("single-document releases on the calendar", () => {
       name: /^Opening hours Single document\b/,
     });
     expect(
-      within(single).getByText("Single document").querySelector("svg")
+      // The mark is the parent of its words' own span.
+      within(single)
+        .getByText("Single document")
+        .parentElement?.querySelector("svg")
     ).toHaveAttribute("aria-hidden", "true");
     const ordinary = within(cell).getByRole("link", { name: /Autumn launch/ });
     expect(within(ordinary).queryByText("Single document")).toBeNull();

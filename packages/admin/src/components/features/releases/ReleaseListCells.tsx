@@ -158,7 +158,10 @@ export const SINGLES_HIDDEN_EMPTY =
  * release is listed: the list's row, a calendar chip, a day's list and a
  * board tile. Its words are read out as part of what holds it, so a screen
  * reader hears the same mark a sighted reader sees. Where it sits (its
- * margin) is left to the caller.
+ * margin) is left to the caller, and so is a width cap: where the mark may
+ * not fit (a narrow calendar day), the caller caps it with `max-w-full` and
+ * its words end in an ellipsis rather than being cut off mid-word. A screen
+ * reader still hears them whole.
  */
 export function SingleDocumentMark({
   className,
@@ -172,8 +175,8 @@ export function SingleDocumentMark({
         className
       )}
     >
-      <FileText className="size-3" aria-hidden />
-      Single document
+      <FileText className="size-3 shrink-0" aria-hidden />
+      <span className="min-w-0 truncate">Single document</span>
     </span>
   );
 }

@@ -175,8 +175,11 @@ describe("single-document releases in the day's list", () => {
     const rows = screen.getAllByRole("listitem");
     const single = rows.find(row => row.textContent?.includes("Opening hours"));
     const ordinary = rows.find(row => row.textContent?.includes("Launch 02"));
-    const mark = within(single as HTMLElement).getByText("Single document");
-    expect(mark.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    // The mark is the parent of its words' own span.
+    const mark = within(single as HTMLElement).getByText(
+      "Single document"
+    ).parentElement;
+    expect(mark?.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
     expect(
       within(ordinary as HTMLElement).queryByText("Single document")
     ).toBeNull();

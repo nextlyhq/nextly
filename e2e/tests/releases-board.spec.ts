@@ -97,8 +97,11 @@ async function tileIds(column: Locator): Promise<string[]> {
 /**
  * Hold every column to the list's read of its tab: the same first releases
  * in the same order, and the same count beside its name. Both sides are read
- * again on each try, since another spec may write a release between them;
- * the Board reads its columns again every minute, so the two meet within it.
+ * again on each try, since another spec may write a release between them.
+ * The Board reads its columns again only once a minute, so a column that
+ * still disagrees after a few seconds is read afresh by reloading the page
+ * and opening the Board again, with the filter on when `kind` asks for it;
+ * the test then never waits on the minute, however often the others write.
  */
 async function expectColumnsAsTheList(
   page: Page,
@@ -107,9 +110,14 @@ async function expectColumnsAsTheList(
   const shown = {} as Record<Tab, { ids: string[]; total: number }>;
   for (const { tab, label } of COLUMNS) {
     const region = column(page, label);
+    let disagreedAt: number | undefined;
     await expect
       .poll(
         async () => {
+          if (disagreedAt !== undefined && Date.now() - disagreedAt > 5_000) {
+            await reopenBoard(page, kind);
+            disagreedAt = undefined;
+          }
           const read = await tabRead(page, tab, kind);
           shown[tab] = read;
           // The heading is the column's name and then its count, read as
@@ -118,16 +126,42 @@ async function expectColumnsAsTheList(
             (await region.getByRole("heading").textContent()) ?? ""
           ).replace(/\s+/g, "");
           const ids = await tileIds(region);
-          return heading === `${label}${read.total}`.replace(/\s+/g, "") &&
+          if (
+            heading === `${label}${read.total}`.replace(/\s+/g, "") &&
             JSON.stringify(ids) === JSON.stringify(read.ids)
-            ? "as the list"
-            : `board "${heading}" ${ids.join(",")} / list ${read.total} ${read.ids.join(",")}`;
+          ) {
+            return "as the list";
+          }
+          disagreedAt ??= Date.now();
+          return `board "${heading}" ${ids.join(",")} / list ${read.total} ${read.ids.join(",")}`;
         },
-        { message: `the ${label} column`, timeout: 90_000 }
+        {
+          message: `the ${label} column`,
+          timeout: 90_000,
+          intervals: [500, 1_000, 2_000],
+        }
       )
       .toBe("as the list");
   }
   return shown;
+}
+
+/**
+ * Reload the page, which opens on the List, and open the Board again, with
+ * "Hide single documents" turned on first when `kind` is `release`. A reload
+ * is the one way to make the Board read its columns now rather than at its
+ * next minute.
+ */
+async function reopenBoard(page: Page, kind?: "release"): Promise<void> {
+  await page.reload();
+  if (kind === "release") {
+    await showView(page, "list");
+    const hide = page.getByRole("switch", { name: "Hide single documents" });
+    if ((await hide.getAttribute("aria-checked")) !== "true")
+      await hide.click();
+    await expect(hide).toHaveAttribute("aria-checked", "true");
+  }
+  await showView(page, "board");
 }
 
 /** Switch the page to one of its views. */
@@ -293,8 +327,10 @@ test.describe("the Releases page's views", () => {
       // was and nothing is opened.
       await singleTile.dragTo(column(page, "Done"));
       await expect(page).toHaveURL(/\/admin\/releases$/);
-      await expectColumnsAsTheList(page);
+      // Still in Scheduled on the page as drawn, read before the columns are
+      // checked, since that check may reload the page.
       await expect(singleTile).toBeVisible();
+      await expectColumnsAsTheList(page);
       await expectNoAxeViolations(page);
 
       // The Calendar: the chip carries the same mark, and the day's count

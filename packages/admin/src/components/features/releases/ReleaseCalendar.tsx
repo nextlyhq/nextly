@@ -781,7 +781,9 @@ function ReleaseChip({
           a screen reader reads the title, time and state as one word. */}
       {release.kind === "single" ? (
         <>
-          <SingleDocumentMark className="self-start" />{" "}
+          {/* Capped at the chip's width: a day is narrow below about
+              900 px, and the chip hides what overflows it. */}
+          <SingleDocumentMark className="max-w-full self-start" />{" "}
         </>
       ) : null}
       {status ? (
