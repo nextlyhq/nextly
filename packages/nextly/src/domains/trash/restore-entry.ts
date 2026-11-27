@@ -245,9 +245,9 @@ async function idsPresent(
 }
 
 /**
- * Put one kept table's rows back. A field group's table this instance no
- * longer registers held a field the collection has since dropped, and is
- * skipped; a core table not in the database yet is skipped too. A media
+ * Put one kept table's rows back. A table no longer in the database held a
+ * field the collection has since dropped, and is skipped; a core table not in
+ * the database yet is skipped too. A media
  * item's use is put back only where the item is still in the library.
  */
 async function putBackTable(
@@ -272,8 +272,19 @@ async function putBackTable(
     try {
       await tx.insert(table, row);
     } catch (error) {
-      if (isUnregisteredTable(error)) return;
-      throw error;
+      if (!isUnregisteredTable(error)) throw error;
+      // The refusal comes before any statement, so the transaction is still
+      // usable to ask. A table gone from the database held a field dropped
+      // since; one still there but not loaded by this process would lose
+      // its rows if skipped, so the restore stops and nothing is written.
+      if (!(await deps.adapter.tableExistsThrough(tx, table))) return;
+      throw NextlyError.internal({
+        logContext: {
+          reason: "restore-table-not-loaded",
+          table,
+        },
+        cause: error instanceof Error ? error : undefined,
+      });
     }
   }
 }

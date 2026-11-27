@@ -53,6 +53,7 @@ import {
 } from "../../domains/webhooks/drain-runner";
 import type { WebhookEndpointRegistry } from "../../domains/webhooks/endpoint-registry";
 import type { RunDrainResult } from "../../domains/webhooks/run-drain";
+import { createTrashPurgeJob } from "../../domains/trash/trash-purge-job";
 import { createWebhookDrainJob } from "../../domains/webhooks/webhook-drain-job";
 import { createWorkflowNoticeEmailJob } from "../../domains/workflows/workflow-notices";
 import { env } from "../../lib/env";
@@ -256,6 +257,9 @@ export function registerJobServices(ctx: RegistrationContext): void {
 
     // A deleted private file's bytes storage refused at first, retried.
     registry.register(createDeleteObjectsJob());
+
+    // Trashed entries past their thirty days, removed for good.
+    registry.register(createTrashPurgeJob({ adapter: () => container.get("adapter") }));
 
     // Uploads of private files never confirmed: kept queued like the lock
     // sweep, so every pass of the job runner rejects those past their wait.
