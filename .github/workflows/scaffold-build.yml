@@ -1023,3 +1023,329 @@ jobs:
             if (!deps["is-odd"]) { console.error("pnpm add exited 0 but added nothing"); process.exit(1); }
             console.log("added is-odd", deps["is-odd"]);
           '
+
+  # A project's FIRST DEPLOY: which database does its build script migrate?
+  #
+  # A host often builds with NODE_ENV unset. The CLI steps of a scaffold's build script run
+  # before `next build`, and a CLI step given no mode takes it from NODE_ENV, so with it unset
+  # it reads the DEVELOPMENT environment files, while the `next build` after it reads the
+  # production ones. The deploy would then migrate the development database and ship a site
+  # whose production database was never set up. Every CLI step in the generated script
+  # therefore carries `--mode production`, and these legs check what that buys on a real
+  # build rather than in the script's text.
+  #
+  # Each leg scaffolds a project, points `.env.development` and `.env.production` at two
+  # different, empty databases, runs the build script with NODE_ENV unset, and then looks in
+  # both: the template's tables, and the plugin's where the config registers one, must be in
+  # the production database and none may be in the development one. The `.env` the scaffold
+  # wrote names a third database, so a step that read neither mode's file fails too.
+  #
+  # Two starts: `blank`, whose script runs `nextly migrate` alone, and the code-first blog,
+  # whose config registers the form builder, so its script also runs that plugin's install
+  # step. Crossed with all three dialects, since each reads its connection differently.
+  #
+  # A job of its own rather than more legs above: PostgreSQL and MySQL legs need live servers,
+  # and the legs above should not pay for containers they never use. Not run by the nightly
+  # newest-minor call, which varies Next.js and React rather than the database a build
+  # migrates.
+  first-deploy:
+    name: First deploy (${{ matrix.start }}, ${{ matrix.database }})
+    if: ${{ !inputs.versions }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        start: [blank, blog-code-first]
+        database: [postgresql, mysql, sqlite]
+
+    # Only the leg's own server starts: an image that evaluates to an empty string starts no
+    # container. In memory, as the integration legs keep theirs: the job throws them away.
+    services:
+      postgres:
+        image: ${{ matrix.database == 'postgresql' && 'postgres:17' || '' }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --tmpfs /var/lib/postgresql/data
+      mysql:
+        image: ${{ matrix.database == 'mysql' && 'mysql:8.4' || '' }}
+        env:
+          MYSQL_ROOT_PASSWORD: nextly
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pnextly"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --tmpfs /var/lib/mysql
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the CLI and core
+        run: pnpm turbo build --filter=create-nextly-app --filter=nextly
+
+      # The same packed CLI and local registry as the legs above, for the same reasons: the
+      # build script under test is the one this change's CLI writes, run by this change's
+      # `nextly`.
+      - name: Pack the CLI
+        run: |
+          mkdir -p /tmp/nextly-pack
+          (cd packages/create-nextly-app && pnpm pack --pack-destination /tmp/nextly-pack)
+
+      - name: Pack the workspace packages and serve them from a registry
+        uses: ./.github/actions/serve-workspace-packages
+
+      # Three databases on the leg's server: the one the scaffold's `.env` names, and the two
+      # the mode files name. Each exists and is empty, so a step that migrated the wrong one
+      # would succeed there and leave tables to find, rather than fail on a missing database.
+      - name: Make the databases
+        if: matrix.database != 'sqlite'
+        shell: bash
+        run: |
+          for name in nextly_scaffold nextly_dev nextly_prod; do
+            if [ "${{ matrix.database }}" = postgresql ]; then
+              docker exec "${{ job.services.postgres.id }}" \
+                psql -U postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $name"
+            else
+              docker exec -e MYSQL_PWD=nextly "${{ job.services.mysql.id }}" \
+                mysql -uroot -e "CREATE DATABASE $name"
+            fi
+          done
+
+      - name: Scaffold the project
+        shell: bash
+        run: |
+          mkdir -p /tmp/first-deploy
+          cd /tmp/first-deploy
+          tarball=$(ls /tmp/nextly-pack/*.tgz | head -1)
+          case "${{ matrix.start }}" in
+            blank) args="--template blank" ;;
+            blog-code-first) args="--template blog --approach code-first" ;;
+            *) echo "unknown start '${{ matrix.start }}'"; exit 1 ;;
+          esac
+          case "${{ matrix.database }}" in
+            postgresql) args="$args --database-url postgresql://postgres:postgres@127.0.0.1:5432/nextly_scaffold" ;;
+            mysql) args="$args --database-url mysql://root:nextly@127.0.0.1:3306/nextly_scaffold" ;;
+          esac
+          npm exec --yes --package="$tarball" -- create-nextly-app scaffolded-app $args \
+            --database ${{ matrix.database }} --yes --local-template "$GITHUB_WORKSPACE/templates"
+
+      - name: Point development and production at different databases
+        shell: bash
+        run: |
+          cd /tmp/first-deploy/scaffolded-app
+          case "${{ matrix.database }}" in
+            postgresql) base="postgresql://postgres:postgres@127.0.0.1:5432/" ;;
+            mysql) base="mysql://root:nextly@127.0.0.1:3306/" ;;
+            sqlite) base="file:./data/" suffix=".db" ;;
+          esac
+          echo "DATABASE_URL=${base}nextly_dev${suffix:-}" > .env.development
+          echo "DATABASE_URL=${base}nextly_prod${suffix:-}" > .env.production
+          # A `.env.local` outranks `.env.production`, so a scaffold that wrote one would make
+          # this leg test that file instead.
+          [ ! -e .env.local ] || { echo "the scaffold wrote a .env.local; this leg cannot tell the modes apart"; exit 1; }
+          echo "build script: $(node -p "require('./package.json').scripts.build")"
+
+      # NODE_ENV removed rather than trusted to be absent, since the leg is about a build
+      # without one.
+      - name: Run the build script with NODE_ENV unset
+        shell: bash
+        run: |
+          cd /tmp/first-deploy/scaffolded-app
+          NEXTLY_TELEMETRY_DISABLED=1 env -u NODE_ENV npm run build
+
+      - name: Check the tables are in the production database and none in the development one
+        shell: bash
+        run: |
+          cd /tmp/first-deploy/scaffolded-app
+          tables() {
+            case "${{ matrix.database }}" in
+              postgresql)
+                docker exec "${{ job.services.postgres.id }}" psql -U postgres -d "$1" -v ON_ERROR_STOP=1 -tA \
+                  -c "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY 1"
+                ;;
+              mysql)
+                docker exec -e MYSQL_PWD=nextly "${{ job.services.mysql.id }}" mysql -uroot -N \
+                  -e "SELECT table_name FROM information_schema.tables WHERE table_schema = '$1' ORDER BY 1"
+                ;;
+              sqlite)
+                # A file the build never opened has no tables, and is not created by asking.
+                [ -e "data/$1.db" ] || return 0
+                node --no-warnings -e '
+                  const { DatabaseSync } = require("node:sqlite");
+                  const db = new DatabaseSync(process.argv[1], { readOnly: true });
+                  const rows = db.prepare(
+                    "SELECT name FROM sqlite_master WHERE type = '"'table'"' AND name NOT LIKE '"'sqlite_%'"' ORDER BY name"
+                  ).all();
+                  for (const row of rows) console.log(row.name);
+                ' "data/$1.db"
+                ;;
+            esac
+          }
+          prod=$(tables nextly_prod) || { echo "could not read the production database"; exit 1; }
+          dev=$(tables nextly_dev) || { echo "could not read the development database"; exit 1; }
+          echo "production database: $(echo "$prod" | grep -c . || true) tables"
+          echo "$prod" | sed 's/^/  /'
+          echo "development database: $(echo "$dev" | grep -c . || true) tables"
+          echo "$dev" | sed 's/^/  /'
+
+          if [ -n "$dev" ]; then
+            echo "the build created tables in the DEVELOPMENT database"
+            exit 1
+          fi
+          expect() {
+            echo "$prod" | grep -qE "$1" || {
+              echo "no table matching $1 in the production database: $2"
+              exit 1
+            }
+          }
+          expect '^nextly_schema_events$' "nextly migrate recorded nothing there"
+          if [ "${{ matrix.start }}" = blog-code-first ]; then
+            expect '(^|_)posts$' "the template's collections are missing"
+            expect '(^|_)forms$' "the form builder's forms are missing"
+            expect '(^|_)form_submissions$' "the form builder's submissions are missing"
+          fi
+
+  # The same first deploy on Windows, where npm runs a package's scripts through cmd.exe, so
+  # the build script's `&&` chain and each step's `--mode production` are read by cmd rather
+  # than a POSIX shell. SQLite only: Windows runners have no service containers, and the
+  # dialects are the job above's question.
+  first-deploy-windows:
+    name: First deploy on Windows (${{ matrix.start }}, sqlite)
+    if: ${{ !inputs.versions }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        start: [blank, blog-code-first]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the CLI and core
+        run: pnpm turbo build --filter=create-nextly-app --filter=nextly
+
+      # The tarball's Windows path goes to the environment for the cmd steps below.
+      - name: Pack the CLI
+        shell: bash
+        run: |
+          mkdir -p /tmp/nextly-pack
+          (cd packages/create-nextly-app && pnpm pack --pack-destination /tmp/nextly-pack)
+          tarball=$(ls /tmp/nextly-pack/*.tgz | head -1)
+          echo "CLI_TARBALL=$(cygpath -w "$tarball")" >> "$GITHUB_ENV"
+
+      - name: Pack the workspace packages and serve them from a registry
+        uses: ./.github/actions/serve-workspace-packages
+
+      # cmd does not stop at a failed line, so every line that matters ends the step itself.
+      - name: Scaffold the project
+        shell: cmd
+        run: |
+          mkdir "%RUNNER_TEMP%\first-deploy" || exit /b 1
+          cd /d "%RUNNER_TEMP%\first-deploy" || exit /b 1
+          if "${{ matrix.start }}"=="blank" set "START_ARGS=--template blank"
+          if "${{ matrix.start }}"=="blog-code-first" set "START_ARGS=--template blog --approach code-first"
+          if not defined START_ARGS (echo unknown start ${{ matrix.start }}& exit /b 1)
+          npm exec --yes --package="%CLI_TARBALL%" -- create-nextly-app scaffolded-app %START_ARGS% --database sqlite --yes --local-template "%GITHUB_WORKSPACE%\templates" || exit /b 1
+
+      - name: Point development and production at different databases
+        shell: cmd
+        run: |
+          cd /d "%RUNNER_TEMP%\first-deploy\scaffolded-app" || exit /b 1
+          (echo DATABASE_URL=file:./data/nextly_dev.db)> .env.development
+          (echo DATABASE_URL=file:./data/nextly_prod.db)> .env.production
+          if exist .env.local (echo the scaffold wrote a .env.local; this leg cannot tell the modes apart& exit /b 1)
+          node -p "'build script: ' + require('./package.json').scripts.build" || exit /b 1
+
+      # npm runs the script through cmd.exe here, which is the point of the job.
+      - name: Run the build script with NODE_ENV unset
+        shell: cmd
+        run: |
+          cd /d "%RUNNER_TEMP%\first-deploy\scaffolded-app" || exit /b 1
+          set NODE_ENV=
+          set NEXTLY_TELEMETRY_DISABLED=1
+          npm run build || exit /b 1
+
+      - name: Check the tables are in the production database and none in the development one
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/first-deploy/scaffolded-app"
+          tables() {
+            [ -e "data/$1.db" ] || return 0
+            node --no-warnings -e '
+              const { DatabaseSync } = require("node:sqlite");
+              const db = new DatabaseSync(process.argv[1], { readOnly: true });
+              const rows = db.prepare(
+                "SELECT name FROM sqlite_master WHERE type = '"'table'"' AND name NOT LIKE '"'sqlite_%'"' ORDER BY name"
+              ).all();
+              for (const row of rows) console.log(row.name);
+            ' "data/$1.db"
+          }
+          prod=$(tables nextly_prod) || { echo "could not read the production database"; exit 1; }
+          dev=$(tables nextly_dev) || { echo "could not read the development database"; exit 1; }
+          echo "production database: $(echo "$prod" | grep -c . || true) tables"
+          echo "$prod" | sed 's/^/  /'
+          echo "development database: $(echo "$dev" | grep -c . || true) tables"
+          echo "$dev" | sed 's/^/  /'
+
+          if [ -n "$dev" ]; then
+            echo "the build created tables in the DEVELOPMENT database"
+            exit 1
+          fi
+          expect() {
+            echo "$prod" | grep -qE "$1" || {
+              echo "no table matching $1 in the production database: $2"
+              exit 1
+            }
+          }
+          expect '^nextly_schema_events$' "nextly migrate recorded nothing there"
+          if [ "${{ matrix.start }}" = blog-code-first ]; then
+            expect '(^|_)posts$' "the template's collections are missing"
+            expect '(^|_)forms$' "the form builder's forms are missing"
+            expect '(^|_)form_submissions$' "the form builder's submissions are missing"
+          fi
