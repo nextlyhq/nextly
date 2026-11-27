@@ -145,6 +145,8 @@ export const fetchReleaseCalendar = (
     to: params.to,
     timezone: params.timezone,
   });
+  // Sent only when narrowing: without it the calendar reads every kind.
+  if (params.kind !== undefined) search.set("kind", params.kind);
   return fetcher<ReleaseCalendarRead>(
     `/releases/calendar?${search.toString()}`,
     {},
