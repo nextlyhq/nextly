@@ -44,6 +44,7 @@ import {
 import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
 import { useScheduleDocumentAction } from "@admin/components/features/releases/ScheduleDocumentAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
+import { useLanguageAddressRedirect } from "@admin/components/features/translations/page/useLanguageAddressRedirect";
 import { autosaveEnabledFor } from "@admin/components/features/versions/autosave-interval";
 import {
   CONTENT_PAGE_MEASURE,
@@ -235,6 +236,17 @@ export default function EditEntryPage({
     isLoading: isLoadingCollection,
     error: collectionError,
   } = useCollectionSchema(slug);
+
+  // Every language but the default is written on its translation page.
+  useLanguageAddressRedirect({
+    document: slug && id ? { kind: "collection", slug, id } : undefined,
+    localized:
+      collection !== undefined &&
+      "localized" in collection &&
+      collection.localized === true,
+    view: params?.view,
+    copyingFrom: seedFromLocale,
+  });
 
   // Fetch entry data with relationship expansion
   // depth: 2 ensures relationship fields include display labels (title, name, etc.)

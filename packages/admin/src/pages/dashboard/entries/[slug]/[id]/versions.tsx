@@ -10,8 +10,10 @@
  * @module pages/dashboard/entries/[slug]/[id]/versions
  */
 
-import type { JSX } from "react";
+import { useMemo, type JSX } from "react";
 
+import { fieldsWrittenPerLanguage } from "@admin/components/features/translations/page/translation-fields";
+import { fieldsOf } from "@admin/components/features/translations/page/useTranslationDocument";
 import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
 import {
   readLocaleParam,
@@ -24,6 +26,7 @@ import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import type { PageProps } from "@admin/lib/routing";
+import { getCollectionFields } from "@admin/types/collection";
 
 export default function EntryVersionsPage({
   params,
@@ -56,6 +59,13 @@ export default function EntryVersionsPage({
     collection !== undefined &&
     "localized" in collection &&
     collection.localized === true;
+  const writtenPerLanguage = useMemo(
+    () =>
+      collection === undefined
+        ? undefined
+        : fieldsWrittenPerLanguage(fieldsOf(getCollectionFields(collection))),
+    [collection]
+  );
 
   return (
     <VersionComparePage
@@ -65,6 +75,7 @@ export default function EntryVersionsPage({
       // The entry list needs only `read-${slug}`, which reaching this page
       // already took, so it is a crumb every reader of the page may follow.
       entityLocalized={entityLocalized}
+      writtenPerLanguage={writtenPerLanguage}
       listCrumb={{
         label: listLabel,
         href: buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }),

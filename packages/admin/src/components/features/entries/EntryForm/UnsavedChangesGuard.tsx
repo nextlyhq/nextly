@@ -117,6 +117,12 @@ export interface UnsavedChangesGuardProps {
   fields?: readonly object[] | undefined;
 
   /**
+   * The language the changes are in, by name, where the form writes one
+   * language: the prompt says whose changes would be lost.
+   */
+  language?: string | undefined;
+
+  /**
    * The form content to render.
    */
   children: ReactNode;
@@ -228,8 +234,10 @@ export function UnsavedChangesGuard({
   disabled = false,
   busy = false,
   fields,
+  language,
   children,
 }: UnsavedChangesGuardProps): JSX.Element {
+  const lost = `You have unsaved changes${language === undefined ? "" : ` in ${language}`} that will be lost if you leave this page.`;
   /*
    * Set only while a save chosen from the prompt lets the held navigation go
    * ahead. The hook reports every confirmed leave to `onConfirmLeave`, and a
@@ -342,10 +350,7 @@ export function UnsavedChangesGuard({
                 {/* The editors' first sentence alone: their closing question
                     asks whether to discard, which reads wrong above a choice
                     that also offers to save. */}
-                <AlertDialogDescription>
-                  You have unsaved changes that will be lost if you leave this
-                  page.
-                </AlertDialogDescription>
+                <AlertDialogDescription>{lost}</AlertDialogDescription>
               </AlertDialogHeader>
               <SaveableChoices
                 saving={saving || busy}
@@ -358,8 +363,7 @@ export function UnsavedChangesGuard({
               <AlertDialogHeader>
                 <AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
                 <AlertDialogDescription>
-                  You have unsaved changes that will be lost if you leave this
-                  page. Are you sure you want to discard your changes?
+                  {`${lost} Are you sure you want to discard your changes?`}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
