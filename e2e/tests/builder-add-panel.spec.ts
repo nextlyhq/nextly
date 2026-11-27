@@ -300,13 +300,23 @@ test.describe("the Add panel", () => {
       return [...element.querySelectorAll("[cmdk-group-heading]")]
         .filter(heading => {
           const box = heading.getBoundingClientRect();
-          return Math.abs(box.top - top) <= 2;
+          return Math.abs(box.top - top) <= 1;
         })
-        .map(heading => heading.textContent);
+        .map(heading => ({
+          text: heading.textContent,
+          // Where its group starts: above the list's edge if the heading
+          // has been held at the edge while the group scrolled under it.
+          groupTop:
+            (heading.closest("[cmdk-group]")?.getBoundingClientRect().top ??
+              top) - top,
+          transform: getComputedStyle(heading).textTransform,
+        }));
     });
-    // One heading sits right at the list's top edge, though its group
-    // started above it.
+    // One heading sits right at the list's top edge, its group begun above.
     expect(pinned).toHaveLength(1);
+    expect(pinned[0]?.groupTop ?? 0).toBeLessThan(0);
+    // Written as it is, not in capitals.
+    expect(pinned[0]?.transform).toBe("none");
     // The control: the list did scroll.
     expect(await list.evaluate(element => element.scrollTop)).toBeGreaterThan(
       0

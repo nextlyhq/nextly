@@ -781,6 +781,65 @@ describe("InsertPanel", () => {
     }
   );
 
+  it("clears the search with Enter on its ×, inserting nothing", () => {
+    registerBlocks(
+      [{ ...base, name: "acme/box", editor: { label: "Box" } }] as never,
+      { source: "acme" }
+    );
+    const editor = editorSpy(documentOf());
+    render(<InsertPanel editor={editor} />);
+    const search = screen.getByPlaceholderText("Search blocks and components");
+    fireEvent.change(search, { target: { value: "Box" } });
+    const clear = screen.getByRole("button", { name: "Clear search" });
+    clear.focus();
+    // The palette takes Enter for its highlighted tile; on the × it clears.
+    fireEvent.keyDown(clear, { key: "Enter" });
+    expect((search as HTMLInputElement).value).toBe("");
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(search);
+  });
+
+  it("says nothing about a slider where no Gallery can be offered", () => {
+    // A library without Gallery: the line would point at a tile not there.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    fireEvent.change(
+      screen.getByPlaceholderText("Search blocks and components"),
+      { target: { value: "slider" } }
+    );
+    expect(screen.queryByText(/No slider block yet/)).toBeNull();
+    expect(
+      within(screen.getByRole("listbox")).getByText(/No blocks match/)
+    ).toBeTruthy();
+  });
+
+  it("offers Gallery alone for a slider, not its variations", () => {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "core/gallery",
+          editor: {
+            label: "Gallery",
+            keywords: ["images", "grid"],
+            variations: [{ name: "masonry", label: "Masonry gallery" }],
+          },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    fireEvent.change(
+      screen.getByPlaceholderText("Search blocks and components"),
+      { target: { value: "carousel" } }
+    );
+    expect(screen.queryAllByRole("option")).toHaveLength(1);
+    expect(tile("Gallery")).toBeTruthy();
+  });
+
   it("says nothing matched, and offers no Gallery, for a search that is not for a slider", () => {
     registerBlocks(
       [

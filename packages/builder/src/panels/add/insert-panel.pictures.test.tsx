@@ -296,4 +296,27 @@ describe("the Saved sections tab's pictures", () => {
     openTab("Saved sections");
     expect(headings().length).toBe(2);
   });
+
+  it("keeps the saved sections' headings while a search leaves one group", () => {
+    // "One group" is the library's, not what a search happens to leave.
+    registerBlocks([TEXT], { source: "acme" });
+    render(
+      <InsertPanel
+        editor={editor()}
+        patterns={[
+          ...SECTIONS,
+          { ...section("a3", "Footer band"), category: "Footers" },
+        ]}
+      />
+    );
+    openTab("Saved sections");
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "Footer" },
+    });
+    expect(
+      [...document.querySelectorAll("[cmdk-group-heading]")].map(
+        heading => heading.textContent
+      )
+    ).toEqual(["Footers"]);
+  });
 });

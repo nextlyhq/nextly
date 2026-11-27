@@ -57,15 +57,13 @@ export function LibraryNotices({
  * gallery offered below it is a grid. Without it the gallery would answer as
  * if it were the slider asked for.
  */
-export function SliderNotice({
-  shown,
-}: {
-  shown: boolean;
-}): React.JSX.Element | null {
-  if (!shown) return null;
+export function SliderNotice({ shown }: { shown: boolean }): React.JSX.Element {
+  // Always in the page and only its words change, so a screen reader
+  // announces the line when a search brings it, as it may not for a live
+  // region that arrives already holding its text.
   return (
-    <p role="status" className="nx-insert-panel__note">
-      No slider block yet. Gallery shows pictures in a grid.
+    <p role="status" className="nx-insert-panel__note" hidden={!shown}>
+      {shown ? "No slider block yet. Gallery shows pictures in a grid." : ""}
     </p>
   );
 }

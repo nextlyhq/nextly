@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { chromeStylesheetSource } from "../../styles/chrome-stylesheet";
 
-import { GRID_COLUMNS, PICTURE_COLUMNS } from "./insert-panel-tiles";
+import { GRID_COLUMNS } from "./insert-panel-tiles";
 
 /**
  * How the Add panel's tiles look, asserted against the sheet that draws them.
@@ -33,9 +33,8 @@ function rule(selector: string): string {
 }
 
 describe("the Add panel's tiles", () => {
-  it("sit two across, with pictures or without", () => {
+  it("sit two across", () => {
     expect(GRID_COLUMNS).toBe(2);
-    expect(PICTURE_COLUMNS).toBe(2);
   });
 
   it("draw a block's mark to the left of its name", () => {
@@ -89,8 +88,10 @@ describe("the Add panel's tiles", () => {
     expect(heading).toMatch(/top:\s*0/);
     // Opaque, on the panel's own surface, so the tiles pass under it unseen.
     expect(heading).toMatch(/background:\s*var\(--nx-builder-panel\)/);
-    // Written as it is ("Text & lists"), not shouted.
-    expect(heading).not.toMatch(/text-transform:\s*uppercase/);
+    // Written as it is ("Text & lists"): the shared command group shouts its
+    // headings, so the panel's says so outright.
+    expect(heading).toMatch(/text-transform:\s*none/);
+    expect(heading).toMatch(/letter-spacing:\s*normal/);
   });
 
   it("set the search in a bordered box with a focus ring", () => {
@@ -104,13 +105,16 @@ describe("the Add panel's tiles", () => {
     expect(focused).toMatch(/box-shadow:/);
   });
 
-  it("draw a saved section as a preview card, roomier than a block's tile", () => {
-    const card = rule(".nx-insert-panel [cmdk-item]:has(> .nx-picture)");
-    expect(card).toMatch(/padding:\s*0\.5rem/);
-    expect(card).toMatch(/align-items:\s*stretch/);
-    const name = rule(
-      ".nx-insert-panel [cmdk-item]:has(> .nx-picture) .nx-insert-panel__label"
+  it("draw saved sections as preview cards, one across in a narrow panel and two in a wider one", () => {
+    const cards = rule(
+      ".nx-insert-panel [cmdk-group-items]:has(> [cmdk-item] > .nx-picture)"
     );
-    expect(name).toMatch(/font-size:\s*0\.75rem/);
+    // As many as fit at a card's least width: one in the narrowest panel,
+    // two at its default, each wider than a block's tile can be.
+    expect(cards).toMatch(
+      /grid-template-columns:\s*repeat\(auto-fill, minmax\(8\.5rem, 1fr\)\)/
+    );
+    const card = rule(".nx-insert-panel [cmdk-item]:has(> .nx-picture)");
+    expect(card).toMatch(/align-items:\s*stretch/);
   });
 });

@@ -240,6 +240,13 @@
    * tile needs to keep "Navigation" whole beside its mark.
    */
   padding-inline: 0;
+  /*
+   * None above the first group either: a pinned heading sits below its
+   * scroller's padding, and tiles would show through that strip above it.
+   * A tile the arrows reach is kept clear of the pinned heading.
+   */
+  padding-block-start: 0;
+  scroll-padding-top: 2rem;
 }
 
 /* A closed tab's panel holds nothing and takes no room. */
@@ -330,6 +337,9 @@
   padding: 0.5rem 0.5rem 0.375rem;
   font-size: 0.71875rem;
   font-weight: 600;
+  /* The shared command group draws its headings in capitals; these are written. */
+  text-transform: none;
+  letter-spacing: normal;
   color: var(--nx-muted-foreground);
   background: var(--nx-builder-panel);
 }
@@ -552,10 +562,15 @@
  * name under it, roomier than a block's tile because the picture is what an
  * author reads it by.
  */
+.nx-insert-panel [cmdk-group-items]:has(> [cmdk-item] > .nx-picture) {
+  /* As many cards as fit at a card's least width: one in a narrow panel. */
+  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+}
+
 .nx-insert-panel [cmdk-item]:has(> .nx-picture) {
   align-items: stretch;
   gap: 0.375rem;
-  padding: 0.5rem;
+  padding: 0.375rem;
   text-align: start;
 }
 

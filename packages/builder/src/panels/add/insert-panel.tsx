@@ -99,7 +99,6 @@ import {
   GRID_COLUMNS,
   InsertAnnouncement,
   movesTheHighlight,
-  PICTURE_COLUMNS,
   PlacementLine,
   tileWhere,
   TilePopover,
@@ -227,18 +226,26 @@ export function InsertPanel({
   // an empty list means the query matched nothing, or the tab holds nothing.
   const tabEntries = catalog.filter(entry => tabOf(entry) === tab);
   const matched = filterEntries(tabEntries, query);
-  // A search for a slider that finds nothing is offered the gallery, under a
-  // line that says it is not one (`SliderNotice`).
-  const sliderAsked = matched.length === 0 && asksForSlider(query);
+  // A search for a slider that finds nothing is offered the gallery itself
+  // (not its variations), under a line that says it is not one
+  // (`SliderNotice`); only where the gallery is there to offer.
+  const standIn = tabEntries.filter(
+    entry =>
+      entry.kind === "block" &&
+      entry.blockName === SLIDER_STAND_IN &&
+      entry.variationName === undefined
+  );
+  const sliderAsked =
+    matched.length === 0 && standIn.length > 0 && asksForSlider(query);
   const groups = paletteGroups(
-    sliderAsked
-      ? tabEntries.filter(
-          entry => entry.kind === "block" && entry.blockName === SLIDER_STAND_IN
-        )
-      : matched,
+    sliderAsked ? standIn : matched,
     categoryOrder,
     blockOrder
   );
+  // Whether the tab's whole library is one group, before a search leaves
+  // fewer: the Saved sections tab then draws its list under no heading.
+  const oneGroup =
+    paletteGroups(tabEntries, categoryOrder, blockOrder).length === 1;
 
   /*
    * One opaque TOKEN per catalog entry, standing in for it everywhere the DOM
@@ -354,6 +361,20 @@ export function InsertPanel({
               setQuery("");
               searchField.current?.focus();
             }}
+            // The palette around it takes Enter for its highlighted tile and
+            // the arrows for the highlight; on the button they are its own.
+            onKeyDown={event => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                event.stopPropagation();
+                setQuery("");
+                searchField.current?.focus();
+                return;
+              }
+              if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+                event.stopPropagation();
+              }
+            }}
           >
             <X aria-hidden="true" size={14} />
           </button>
@@ -385,7 +406,7 @@ export function InsertPanel({
             // The saved sections as one list under no heading when they
             // are one group: a heading over the only list says nothing.
             heading={
-              tab === "sections" && groups.length === 1
+              tab === "sections" && oneGroup
                 ? undefined
                 : groupHeading(group.category, tab)
             }
@@ -546,9 +567,7 @@ export function InsertPanel({
          instead of read by the grid. */
       style={
         {
-          "--nx-insert-columns": picturesIn(tab, renderPicture)
-            ? PICTURE_COLUMNS
-            : GRID_COLUMNS,
+          "--nx-insert-columns": GRID_COLUMNS,
         } as React.CSSProperties
       }
       // The current tile is painted once the author has moved through the
@@ -614,14 +633,6 @@ function usePanelTab(
     }
   }
   return [tab, setTab];
-}
-
-/** Whether a tab's tiles draw pictures: the saved sections, given a host's. */
-function picturesIn(
-  tab: PanelTab,
-  renderPicture: InsertPanelProps["renderPicture"]
-): boolean {
-  return tab === "sections" && renderPicture !== undefined;
 }
 
 /**
