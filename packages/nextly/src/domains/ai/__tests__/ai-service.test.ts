@@ -97,14 +97,24 @@ function setup(options: Setup = {}) {
       }
     }
   );
+  const held = (permission: { action: string; resource: string }) =>
+    (options.held ?? ALL_AI).includes(
+      `${permission.action}-${permission.resource}`
+    );
   const deps: AIServiceDeps = {
     provider: () => options.provider,
     turnedOff: () => env.off,
     tasks: () => options.tasks ?? [ALT_TEXT, SUMMARY],
-    holds: async (_caller, permission) =>
-      (options.held ?? ALL_AI).includes(
-        `${permission.action}-${permission.resource}`
-      ),
+    holds: async (_caller, permission) => held(permission),
+    // Names the permission it refused, so a test sees which one was asked.
+    requirePermission: async (_caller, permission) => {
+      if (!held(permission)) {
+        throw new NextlyError({
+          code: "FORBIDDEN",
+          publicMessage: `refused ${permission.action}-${permission.resource}`,
+        });
+      }
+    },
     authorizeTarget,
     emit: async event => {
       events.push(event);
@@ -308,10 +318,7 @@ describe("a task not available to the caller", () => {
       })
     );
     expect(error.code).toBe("FORBIDDEN");
-    expect(error.publicData).toEqual({
-      reason: "no-permission",
-      permission: "use-ai",
-    });
+    expect(error.publicMessage).toBe("refused use-ai");
     expect(provider.run).not.toHaveBeenCalled();
   });
 
@@ -414,10 +421,7 @@ describe("bulk jobs", () => {
       held: [AI_PERMISSIONS.use.slug],
     });
     const error = await refusal(service.checkBulkJob(person()));
-    expect(error.publicData).toEqual({
-      reason: "no-permission",
-      permission: "run-bulk-ai-jobs",
-    });
+    expect(error.publicMessage).toBe("refused run-bulk-ai-jobs");
   });
 
   it("lets a caller holding both through", async () => {
@@ -519,6 +523,7 @@ describe("the usage-event hook", () => {
       turnedOff: () => false,
       tasks: () => [SUMMARY],
       holds: async () => true,
+      requirePermission: async () => undefined,
       authorizeTarget: async () => undefined,
       emit: emitAIUsage,
       now: () => new Date(),

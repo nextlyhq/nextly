@@ -65,6 +65,12 @@ export function aiService(): AIService {
     // on system resources, which no entity's access rule speaks for.
     holds: async (caller, permission) =>
       !isErrorResponse(await authorizeCallerForAny(caller, [permission])),
+    // The same question, answered with the refusal REST gives: named for the
+    // permission's one resource, so it reads "You can't use AI.".
+    requirePermission: async (caller, permission) => {
+      const decision = await authorizeCallerForAny(caller, [permission]);
+      if (isErrorResponse(decision)) throw toNextlyAuthError(decision);
+    },
     // The content routes' own decision, so a caller naming one entry it may
     // not read is answered as if it were missing, exactly as REST answers.
     authorizeTarget: async (caller, action, target) => {

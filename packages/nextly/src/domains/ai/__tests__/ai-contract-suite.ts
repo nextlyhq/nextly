@@ -372,6 +372,18 @@ export function describeAIContract(dialect: TestDialect): void {
           expect(ai.asked.map(r => r.personId)).toEqual([writer]);
         });
 
+        it("refuses a Viewer's run, saying they can't use AI", async () => {
+          const viewer = await personInRole(
+            t,
+            "ai-viewer",
+            await roleId(t, "viewer")
+          );
+          const error = await refusal(t.nextly.ai.run(altText(viewer)));
+          expect(error.code).toBe("FORBIDDEN");
+          expect(error.publicMessage).toBe("You can't use AI.");
+          expect(ai.asked).toEqual([]);
+        });
+
         it("refuses an agent acting for an Author that starts a bulk job, and lets one acting for an Admin", async () => {
           const author = await personInRole(
             t,
@@ -385,10 +397,7 @@ export function describeAIContract(dialect: TestDialect): void {
             })
           );
           expect(error.code).toBe("FORBIDDEN");
-          expect(error.publicData).toEqual({
-            reason: "no-permission",
-            permission: "run-bulk-ai-jobs",
-          });
+          expect(error.publicMessage).toBe("You can't run bulk AI jobs.");
 
           const admin = await personInRole(
             t,

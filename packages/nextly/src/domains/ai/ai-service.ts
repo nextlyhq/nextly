@@ -55,6 +55,15 @@ export interface AIServiceDeps {
     permission: { action: string; resource: string }
   ): Promise<boolean>;
   /**
+   * Refuse a caller who lacks one permission, judged as {@link holds} judges
+   * it, with core's own refusal: worded for a person ("You can't use AI.")
+   * and recorded as every refusal is. Resolves when they hold it.
+   */
+  requirePermission(
+    caller: AuthContext,
+    permission: { action: string; resource: string }
+  ): Promise<void>;
+  /**
    * Refuse, as the content routes refuse, a caller who may not `action` the
    * target; resolves when they may.
    */
@@ -138,17 +147,6 @@ function notConfiguredError(reason: AINotConfiguredReason): NextlyError {
   });
 }
 
-/** The refusal for a caller who lacks one of the three permissions. */
-function missingPermissionError(key: AIPermissionKey): NextlyError {
-  return NextlyError.forbidden({
-    publicData: {
-      reason: "no-permission",
-      permission: AI_PERMISSIONS[key].slug,
-    },
-    logContext: { reason: `ai-missing-${AI_PERMISSIONS[key].slug}` },
-  });
-}
-
 /** The refusal for a task whose role has no model. */
 function noModelError(task: AITaskRef): NextlyError {
   return NextlyError.serviceUnavailable({
@@ -200,7 +198,9 @@ export function createAIService(deps: AIServiceDeps): AIService {
     caller: AICaller,
     key: AIPermissionKey
   ): Promise<void> {
-    if (!(await holds(caller, key))) throw missingPermissionError(key);
+    if (caller !== null) {
+      await deps.requirePermission(caller, AI_PERMISSIONS[key]);
+    }
   }
 
   async function rolesWithModels(

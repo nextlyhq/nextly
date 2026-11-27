@@ -14,7 +14,7 @@ import type { AIStatus } from "nextly/runtime";
 import { fetcher } from "../lib/api/fetcher";
 
 /** The AI status, as the server judges it for the signed-in person. */
-export function getAIStatus(): Promise<AIStatus> {
+function getAIStatus(): Promise<AIStatus> {
   return fetcher<AIStatus>("/ai/status", {}, true);
 }
 

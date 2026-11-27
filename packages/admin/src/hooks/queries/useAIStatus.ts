@@ -17,9 +17,9 @@ import type { AIStatus } from "nextly/runtime";
 import { aiApi } from "@admin/services/aiApi";
 
 /** How long a status is taken as current. */
-export const AI_STATUS_STALE_MS = 60_000;
+const AI_STATUS_STALE_MS = 60_000;
 
-export const aiKeys = {
+const aiKeys = {
   all: () => ["ai"] as const,
   status: (): readonly ["ai", "status"] => [...aiKeys.all(), "status"] as const,
 };

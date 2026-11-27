@@ -22,7 +22,6 @@ import { useAIStatus } from "@admin/hooks/queries/useAIStatus";
 import { aiControlShown, type AIControlNeeds } from "./ai-control-shown";
 
 export type { AIControlNeeds } from "./ai-control-shown";
-export { aiControlShown } from "./ai-control-shown";
 
 export interface AIGateProps extends AIControlNeeds {
   children: ReactNode;
