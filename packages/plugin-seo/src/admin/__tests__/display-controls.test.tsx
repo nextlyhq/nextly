@@ -373,12 +373,12 @@ describe("controls for other search engines", () => {
     await user.click(other);
     expect(
       screen.getByText(
-        "Asks search engines not to keep a stored copy of this page. Google doesn't use it."
+        "Asks search engines not to keep a stored copy of this page. Google doesn't use it, but Bing also keeps the page out of Copilot's answers and AI training."
       )
     ).toBeVisible();
     expect(
       screen.getByText(
-        "A similar request some search engines read. Google doesn't use it."
+        "A similar request some search engines read. Google doesn't use it; with it, Bing's Copilot uses only the page's address, title and snippet."
       )
     ).toBeVisible();
     await user.click(screen.getByRole("switch", { name: "noarchive" }));
@@ -390,12 +390,18 @@ describe("controls for other search engines", () => {
     );
   });
 
-  it("say nothing about Bing or Copilot", async () => {
+  it("warn what each costs a page in Bing's Copilot", async () => {
+    // Bing reads both for Copilot, so a switch that reads as harmless for
+    // Google says what it does there. Open already, as one is on.
     render(<Harness initial={{ noarchive: true, nocache: true }} />);
-    const user = await openAdvanced();
-    await user.click(
-      screen.getByRole("button", { name: /Controls for other search engines/ })
-    );
-    expect(document.body.textContent).not.toMatch(/Bing|Copilot/);
+    await openAdvanced();
+    expect(
+      screen.getByText(/keeps the page out of Copilot's answers/)
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        /Copilot uses only the page's address, title and snippet/
+      )
+    ).toBeVisible();
   });
 });

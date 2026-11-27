@@ -46,7 +46,43 @@ describe("nextlyHtmlLimitedBots", () => {
     expect(nextlyHtmlLimitedBots.flags).toContain("i");
   });
 
+  it("adds exactly the pinned crawlers after Next.js's own list", () => {
+    // Pinned whole, so a crawler dropped or added is a decision this test
+    // records rather than a drift no one sees.
+    const added = nextlyHtmlLimitedBots.source
+      .slice(nextDefault.source.length + 1)
+      .split("|");
+    expect(added).toEqual([
+      "Googlebot",
+      "GPTBot",
+      "OAI-SearchBot",
+      "ChatGPT-User",
+      "ClaudeBot",
+      "Claude-User",
+      "Claude-SearchBot",
+      "PerplexityBot",
+      "Perplexity-User",
+      "CCBot",
+      "Amazonbot",
+      "Bytespider",
+      "meta-externalagent",
+      "meta-webindexer",
+      "meta-externalfetcher",
+      "Amzn-SearchBot",
+      "Amzn-User",
+      "DuckAssistBot",
+      "MistralAI-User",
+      "cohere-ai",
+    ]);
+  });
+
   it.each([
+    // Meta's and Amazon's AI search crawlers and user fetchers, as their
+    // providers' pages spell their user agents.
+    "meta-webindexer/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler)",
+    "meta-externalfetcher/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler)",
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Amzn-SearchBot/0.1) Chrome/119.0.6045.214 Safari/537.36",
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Amzn-User/0.1) Chrome/119.0.6045.214 Safari/537.36",
     "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
     "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)",
     "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ClaudeBot/1.0; +claudebot@anthropic.com)",

@@ -7,8 +7,10 @@
  * about and a non-standard line kept with a note; a rule blocking pages the
  * sitemap lists names them and saves only once "Block these N pages anyway"
  * is ticked, the tick saved with the text and pages it confirmed; a site
- * serving its own robots.txt is told so. The AI Overviews row says what
- * robots.txt can't do. What each save sends is read from the save itself.
+ * serving its own robots.txt is told so. The Outside robots.txt row says
+ * what robots.txt can't do and names the settings that can; the
+ * Content-Signal tick is saved with the own rules. What each save sends is
+ * read from the save itself.
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -196,10 +198,102 @@ describe("the Search engines and AI tab", () => {
 
   it("says robots.txt can't take a site out of Google's AI Overviews and AI Mode", () => {
     openCrawlers();
-    expect(screen.getByText("Google's AI Overviews and AI Mode")).toBeTruthy();
+    expect(screen.getByText("Google's AI Overviews and AI Mode:")).toBeTruthy();
     expect(
       screen.getByText(/robots\.txt can't take your site out of them/)
     ).toBeTruthy();
+  });
+
+  it("names the settings outside robots.txt: Search Console's and Bing's", () => {
+    openCrawlers();
+    expect(screen.getByText("Outside robots.txt")).toBeTruthy();
+    const google = screen.getByRole("link", { name: "Search generative AI" });
+    expect(google.getAttribute("href")).toBe(
+      "https://support.google.com/webmasters/answer/16908024"
+    );
+    expect(google.getAttribute("target")).toBe("_blank");
+    const bing = screen.getByRole("link", { name: "Bing Webmaster Tools" });
+    expect(bing.getAttribute("href")).toBe("https://www.bing.com/webmasters");
+    expect(
+      screen.getByText(/for AI training and for grounding Copilot's answers/)
+    ).toBeTruthy();
+  });
+
+  it("says the choices that ask trainers away also write the shared opt-out", () => {
+    openCrawlers();
+    const optOut =
+      /Also adds the shared AI-training opt-out \(__usage_ai-training\), which Anthropic honours now and Google and Microsoft plan to in 2027\./;
+    for (const choice of [
+      /Allow AI search, not training/,
+      /Block all AI tools/,
+    ]) {
+      const card = screen.getByRole("radio", { name: choice }).closest("label");
+      expect(card?.textContent).toMatch(optOut);
+    }
+    const all = screen
+      .getByRole("radio", { name: /Allow all AI tools/ })
+      .closest("label");
+    expect(all?.textContent).not.toMatch(optOut);
+  });
+});
+
+describe("the Content-Signal tick", () => {
+  const tick = () =>
+    screen.getByRole("checkbox", { name: "Add a Content-Signal line" });
+
+  it("is off until ticked, and shows the line the choice writes", () => {
+    openCrawlers({ aiCrawlers: "search" });
+    expect(tick().getAttribute("aria-checked")).toBe("false");
+    expect(
+      screen.getByText("Content-Signal: search=yes, ai-input=yes, ai-train=no")
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: /Allow all AI tools/ }));
+    expect(
+      screen.getByText("Content-Signal: search=yes, ai-input=yes, ai-train=yes")
+    ).toBeTruthy();
+  });
+
+  it("saves the tick with the own rules, even with the box empty", async () => {
+    openCrawlers();
+    fireEvent.click(tick());
+    fireEvent.click(saveButton());
+    await settle();
+    expect(sent).toEqual([
+      {
+        robotsRules: { text: "", contentSignal: true },
+        _rev: String(version),
+      },
+    ]);
+  });
+
+  it("keeps the own rules' text when ticked, and the tick when the text changes", async () => {
+    openCrawlers({
+      robotsRules: { text: "User-agent: *\nDisallow: /search" },
+    });
+    await pause();
+    fireEvent.click(tick());
+    type("User-agent: *\nDisallow: /find");
+    await pause();
+    fireEvent.click(saveButton());
+    await settle();
+    expect(sent).toEqual([
+      {
+        robotsRules: {
+          text: "User-agent: *\nDisallow: /find",
+          contentSignal: true,
+        },
+        _rev: String(version),
+      },
+    ]);
+  });
+
+  it("opens ticked where stored, and clears the value once unticked with the box empty", async () => {
+    openCrawlers({ robotsRules: { text: "", contentSignal: true } });
+    expect(tick().getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(tick());
+    fireEvent.click(saveButton());
+    await settle();
+    expect(sent).toEqual([{ robotsRules: null, _rev: String(version) }]);
   });
 });
 
@@ -251,7 +345,7 @@ describe("your own rules", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "Line 4 isn't a standard robots.txt rule. It's kept; crawlers may ignore it."
+        "Line 4 is a Content-Signal line. It isn't a standard robots.txt rule; it's kept, and crawlers may ignore it. The Content-Signal tick under AI tools writes one from your choice, so use one or the other."
       )
     ).toBeTruthy();
     expect(saveButton().disabled).toBe(false);
@@ -412,7 +506,19 @@ describe("which tools the AI choice covers", () => {
     const own = rowOf("Visit only what the site asked for");
     expect(own?.textContent).toContain("OAI-AdsBot");
     expect(own?.textContent).toContain("Never asked to stay away");
-    expect(screen.getByText(/Last checked 13 Nov 2026\./)).toBeTruthy();
+    const fetchers = rowOf("User-triggered: robots.txt may not apply");
+    for (const name of [
+      "Google-Agent",
+      "Google-GeminiNotebook",
+      "ChatGPT-User",
+      "Perplexity-User",
+      "meta-externalfetcher",
+    ]) {
+      expect(fetchers?.textContent).toContain(name);
+      expect(answers?.textContent).not.toContain(name);
+    }
+    expect(fetchers?.textContent).toContain("Allowed");
+    expect(screen.getByText(/Last checked 27 Nov 2026\./)).toBeTruthy();
   });
 
   it("follows the choice as it changes", () => {
@@ -424,9 +530,14 @@ describe("which tools the AI choice covers", () => {
       screen
         .getByRole("rowheader", { name: /Read pages to answer questions/ })
         .closest("tr")?.textContent;
+    const fetchers = () =>
+      screen.getByRole("rowheader", { name: /User-triggered/ }).closest("tr")
+        ?.textContent;
     expect(answers()).toContain("Allowed");
+    expect(fetchers()).toContain("Allowed");
     fireEvent.click(screen.getByRole("radio", { name: /Block all AI tools/ }));
     expect(answers()).toContain("Asked to stay away");
+    expect(fetchers()).toContain("Asked to stay away");
   });
 });
 
