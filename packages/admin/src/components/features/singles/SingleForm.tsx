@@ -1489,8 +1489,9 @@ export function SingleForm({
   const slugFieldName =
     slugField && "name" in slugField ? (slugField.name as string) : "slug";
   // Singles never auto-generate the slug — it's fixed by the single's config
-  // and rendered read-only. Keep the hook mounted (stable hook order) but
-  // disabled so it never writes to the slug field.
+  // and rendered read-only, and an author's own slug is edited by hand under
+  // the title. Keep the hook mounted (stable hook order) but disabled so it
+  // never writes to the slug field.
   useAutoSlug({
     form,
     titleFieldName,
@@ -2090,9 +2091,12 @@ export function SingleForm({
                                   >
                                     {/* The title: read-only where the Single's config
                                   fixes it, editable where it is the author's
-                                  own field. No slug line: a Single's slug is
-                                  fixed by its config too, and is not part of
-                                  its address on most sites. */}
+                                  own field. No slug line where the config fixes
+                                  the slug too, as it is not part of the
+                                  Single's address on most sites; an author's
+                                  own slug is content, drawn under the title to
+                                  be edited as an entry's is, since the body
+                                  never draws a field named slug. */}
                                     <DocumentTitleBlock
                                       mode="edit"
                                       titleField={titleField}
@@ -2103,6 +2107,14 @@ export function SingleForm({
                                       // holds the title read-only through the lock
                                       // instead.
                                       isSubmitting={writePending}
+                                      slug={
+                                        slugField && !fixedIdentity.has("slug")
+                                          ? {
+                                              field: slugField,
+                                              locked: lock.readOnly,
+                                            }
+                                          : undefined
+                                      }
                                     />
                                     <ReviewStatusLine
                                       status={editedStatus.status}

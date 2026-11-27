@@ -144,6 +144,35 @@ describe("SingleForm, a Single with its own title and slug", () => {
     });
     expect(onSubmit).not.toHaveBeenCalled();
   });
+
+  it("draws its own slug to be edited, so a required one can be filled in and saved", async () => {
+    // A required slug of the author's starts empty: nothing fills it with the
+    // Single's slug any more. Unless the editor draws it, every save is
+    // refused by its required rule with no way to supply a value.
+    const requiredSlug = {
+      ...ownSchema,
+      fields: [
+        { type: "text", name: "title", label: "Heading", required: true },
+        { type: "text", name: "slug", label: "Path", required: true },
+      ],
+    } as unknown as SingleSchema;
+    const onSubmit = vi.fn(() => Promise.resolve());
+    const user = userEvent.setup();
+    render(
+      <SingleForm
+        schema={requiredSlug}
+        document={{ ...stored, slug: "" } as unknown as SingleDocumentData}
+        onSubmit={onSubmit}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit address" }));
+    await user.type(screen.getByRole("textbox", { name: "Address" }), "notes");
+    await user.keyboard("{Enter}");
+    const sent = await save(onSubmit);
+
+    expect(sent).toMatchObject({ title: HEADING, slug: "notes" });
+  });
 });
 
 describe("SingleForm, a Single with Nextly's own title and slug", () => {
