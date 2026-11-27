@@ -56,7 +56,7 @@ export function AuthRefusalNotice({
   if (refusal.kind === "unlisted") {
     return (
       <Alert variant="destructive" role="alert" className="mb-6">
-        <AlertTitle>This app doesn&apos;t recognise its own address</AlertTitle>
+        <AlertTitle>This app doesn&apos;t recognize its own address</AlertTitle>
         <AlertDescription>
           <p>
             The server sees itself at{" "}

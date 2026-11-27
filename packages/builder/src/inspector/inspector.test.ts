@@ -796,9 +796,9 @@ describe("a key as an author reads it", () => {
   it("spells colour the one way the editor does", () => {
     // "Color" beside "Colour for Color" and the Colour form: one word,
     // spelled two ways in one panel.
-    expect(fieldLabel("color")).toBe("Colour");
-    expect(fieldLabel("backgroundColor")).toBe("Background colour");
-    expect(fieldLabel("linkColorHover")).toBe("Link colour hover");
+    expect(fieldLabel("color")).toBe("Color");
+    expect(fieldLabel("backgroundColor")).toBe("Background color");
+    expect(fieldLabel("linkColorHover")).toBe("Link color hover");
     // A word only containing the letters is left alone.
     expect(fieldLabel("colorful")).toBe("Colorful");
   });

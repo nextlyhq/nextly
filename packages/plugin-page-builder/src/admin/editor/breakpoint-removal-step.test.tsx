@@ -211,11 +211,11 @@ function show(): void {
 /** Open the Site tab and remove Mobile in the editor, then Save. */
 async function removeMobile(): Promise<void> {
   await userEvent.click(
-    screen.getByRole("button", { name: "Edit breakpoints" })
+    screen.getByRole("button", { name: "Edit screen sizes" })
   );
   await userEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
   await userEvent.click(
-    screen.getByRole("button", { name: "Save breakpoints" })
+    screen.getByRole("button", { name: "Save screen sizes" })
   );
 }
 
@@ -275,7 +275,7 @@ describe("removing a breakpoint in Settings", () => {
       await screen.findByText("Checking what uses Mobile before saving…")
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Save breakpoints", hidden: false })
+      screen.getByRole("button", { name: "Save screen sizes", hidden: false })
     ).toHaveProperty("disabled", true);
     expect(sent("dryRun")[0]?.body).toEqual({
       breakpoints: WITHOUT_MOBILE,
@@ -301,7 +301,7 @@ describe("removing a breakpoint in Settings", () => {
     await userEvent.click(screen.getByRole("button", { name: "Back" }));
     // The editor again, Mobile still removed in the draft, nothing saved.
     expect(
-      screen.getByRole("button", { name: "Save breakpoints" })
+      screen.getByRole("button", { name: "Save screen sizes" })
     ).toHaveProperty("disabled", false);
     expect(screen.queryByRole("button", { name: "Remove Mobile" })).toBeNull();
     expect(sent("confirmRemoval")).toEqual([]);
@@ -331,7 +331,7 @@ describe("removing a breakpoint in Settings", () => {
     expect(refetch).toHaveBeenCalled();
     // The list and the rest of the tab are back.
     expect(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     ).toBeTruthy();
     expect(
       screen.getByRole("region", { name: "Site default header & footer" })
@@ -428,7 +428,7 @@ describe("removing a breakpoint in Settings", () => {
   it("shows a refusal in the server's words; Reload starts again from the stored set", async () => {
     confirmAnswer = async () => {
       throw new Error(
-        "The site's breakpoints changed after you checked what removing them drops. Check again before removing them."
+        "The site's screen sizes changed after you checked what removing them drops. Check again before removing them."
       );
     };
     show();
@@ -445,14 +445,14 @@ describe("removing a breakpoint in Settings", () => {
     expect(refusal.textContent).toContain("Check again before removing them.");
     refetch.mockClear();
     await userEvent.click(
-      screen.getByRole("button", { name: "Reload breakpoints" })
+      screen.getByRole("button", { name: "Reload screen sizes" })
     );
     // The list, read again; no draft left to save.
     expect(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Save breakpoints" })
+      screen.queryByRole("button", { name: "Save screen sizes" })
     ).toBeNull();
     expect(refetch).toHaveBeenCalled();
     expect(refresh).toHaveBeenCalled();
@@ -472,7 +472,7 @@ describe("removing a breakpoint in Settings", () => {
       screen.getByText("Another breakpoint removal is still running.")
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Save breakpoints" })
+      screen.getByRole("button", { name: "Save screen sizes" })
     ).toBeTruthy();
   });
 
@@ -497,10 +497,10 @@ describe("removing a breakpoint in Settings", () => {
     expect(
       screen.getByText("Mobile's styles are still being removed")
     ).toBeTruthy();
-    const edit = screen.getByRole("button", { name: "Edit breakpoints" });
+    const edit = screen.getByRole("button", { name: "Edit screen sizes" });
     expect(edit).toHaveProperty("disabled", true);
     expect(edit.getAttribute("title")).toBe(
-      "Breakpoints can be changed again once it has finished."
+      "Screen sizes can be changed again once it has finished."
     );
     await waitFor(() =>
       expect(writes).toEqual([
@@ -514,7 +514,7 @@ describe("removing a breakpoint in Settings", () => {
     expect(await screen.findByText("Mobile was removed")).toBeTruthy();
     expect(screen.getByText("Its styles are gone from the site.")).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     ).toHaveProperty("disabled", false);
   });
 
@@ -538,7 +538,7 @@ describe("removing a breakpoint in Settings", () => {
       )
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     ).toHaveProperty("disabled", false);
     expect(writes).toEqual([]);
   });
@@ -549,7 +549,7 @@ describe("removing a breakpoint in Settings", () => {
     await screen.findByRole("button", { name: "Remove Mobile and its styles" });
     await userEvent.keyboard("{Escape}");
     const ask = await screen.findByRole("alertdialog");
-    expect(ask.textContent).toContain("Discard your breakpoint changes?");
+    expect(ask.textContent).toContain("Discard your screen size changes?");
     await userEvent.click(screen.getByRole("button", { name: "Discard" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(sent("confirmRemoval")).toEqual([]);
@@ -558,10 +558,10 @@ describe("removing a breakpoint in Settings", () => {
   it("saves a set that drops nothing as it always has, with no dry run", async () => {
     show();
     await userEvent.click(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     );
     await userEvent.click(
-      screen.getByRole("button", { name: "Save breakpoints" })
+      screen.getByRole("button", { name: "Save screen sizes" })
     );
     await waitFor(() => expect(writer).toHaveBeenCalledWith(SET));
     expect(writes).toEqual([]);
@@ -748,7 +748,7 @@ describe("removing a breakpoint in Settings", () => {
       screen.getByText("Phone's styles are still being removed")
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     ).toHaveProperty("disabled", true);
   });
 
@@ -788,7 +788,7 @@ describe("removing a breakpoint in Settings", () => {
     reshow();
     expect(screen.getByText("Mobile was removed")).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     ).toHaveProperty("disabled", false);
     // A newer read reports it open again: a write brought values back.
     siteRead = { ...siteRead, removals: ownOpen() };
@@ -797,7 +797,7 @@ describe("removing a breakpoint in Settings", () => {
       screen.getByText("Mobile's styles are still being removed")
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     ).toHaveProperty("disabled", true);
   });
 
@@ -980,7 +980,7 @@ describe("undoing a breakpoint removal in Settings", () => {
     ).toBeTruthy(); // Not the breakpoints: reading Settings again is the way on.
     expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Edit breakpoints" })
+      screen.queryByRole("button", { name: "Edit screen sizes" })
     ).toBeNull();
   });
 
@@ -997,11 +997,11 @@ describe("undoing a breakpoint removal in Settings", () => {
     show();
     await undoMobile();
     await userEvent.click(
-      await screen.findByRole("button", { name: "Edit breakpoints" })
+      await screen.findByRole("button", { name: "Edit screen sizes" })
     );
     // The editor is open on the set, in one click.
     expect(
-      await screen.findByRole("button", { name: "Save breakpoints" })
+      await screen.findByRole("button", { name: "Save screen sizes" })
     ).toBeTruthy();
   });
 
@@ -1201,7 +1201,7 @@ describe("undoing a breakpoint removal in Settings", () => {
     expect(
       (
         screen.getByRole("button", {
-          name: "Edit breakpoints",
+          name: "Edit screen sizes",
         }) as HTMLButtonElement
       ).disabled
     ).toBe(true);

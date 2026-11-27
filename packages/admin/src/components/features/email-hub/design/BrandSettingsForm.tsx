@@ -249,7 +249,7 @@ function ColourField({
       <div className="flex items-center gap-2">
         <input
           type="color"
-          aria-label={`${label}: pick a colour`}
+          aria-label={`${label}: pick a color`}
           className="h-9 w-10 shrink-0 cursor-pointer rounded-md border border-input bg-transparent p-1 disabled:cursor-not-allowed"
           value={value}
           disabled={disabled}
@@ -274,7 +274,7 @@ function ColourField({
       </div>
       {bad ? (
         <p role="alert" className="text-xs text-destructive">
-          Use a hex colour, like #2f6b4f.
+          Use a hex color, like #2f6b4f.
         </p>
       ) : (
         <Hint>{hint}</Hint>

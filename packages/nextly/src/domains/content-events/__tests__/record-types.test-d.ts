@@ -7,10 +7,7 @@
  */
 import { expectTypeOf } from "vitest";
 
-import type {
-  ContentEventProducer,
-  ContentEventRecord,
-} from "../repository";
+import type { ContentEventProducer, ContentEventRecord } from "../repository";
 
 type Assignable<A, B> = [A] extends [B] ? true : false;
 

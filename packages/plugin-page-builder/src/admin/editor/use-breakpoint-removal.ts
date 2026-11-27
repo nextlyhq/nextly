@@ -134,7 +134,7 @@ const FOLLOW_AFTER_TROUBLE_MS = 5000;
 function reasonOf(error: unknown): string {
   return error instanceof Error && error.message !== ""
     ? error.message
-    : "The breakpoints could not be saved.";
+    : "The screen sizes could not be saved.";
 }
 
 /**

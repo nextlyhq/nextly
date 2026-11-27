@@ -513,7 +513,7 @@ describe("where focus goes as a field changes shape", () => {
   it("lands on the colour field, holding the colour, once Unlink keeps it", async () => {
     register({ color: { text: true } });
     render(<LivePanel values={{ color: { $token: "color.ink" } }} />);
-    fireEvent.click(screen.getByRole("button", { name: "Unlink Colour" }));
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Color" }));
     const field = (await waitFor(() =>
       fieldsOf("color").getByRole("textbox")
     )) as HTMLInputElement;

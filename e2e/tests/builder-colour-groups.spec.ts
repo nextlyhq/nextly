@@ -60,7 +60,7 @@ async function openColours(page: Page): Promise<Locator> {
       .getByRole("button", { name: "Design", exact: true })
       .click();
   }
-  await panel.getByRole("tab", { name: /^Colours/ }).click();
+  await panel.getByRole("tab", { name: /^Colors/ }).click();
   return panel;
 }
 

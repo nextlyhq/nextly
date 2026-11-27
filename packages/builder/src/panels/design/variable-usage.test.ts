@@ -172,7 +172,7 @@ describe("the editor's status line", () => {
 describe("what the places would lose", () => {
   it("names the loss by the variable's kind", () => {
     expect(variableLossSentence(reach(14), VARIABLE_LOSS_WORDS.color)).toBe(
-      "It's used in 14 places, and they would lose this colour:"
+      "It's used in 14 places, and they would lose this color:"
     );
     expect(variableLossSentence(reach(1), VARIABLE_LOSS_WORDS.dimension)).toBe(
       "It's used in 1 place, and they would lose this size:"
@@ -184,7 +184,7 @@ describe("what the places would lose", () => {
 
   it("has a word for every kind", () => {
     expect(VARIABLE_LOSS_WORDS).toEqual({
-      color: "colour",
+      color: "color",
       dimension: "size",
       fontFamily: "font",
       fontWeight: "font weight",
@@ -219,10 +219,10 @@ describe("what a shared style sets with a variable", () => {
 
   it("names the property that names the variable, in plain words", () => {
     expect(sharedStyleSets([CARD], "c-card", "color.brand")).toBe(
-      "sets text colour"
+      "sets text color"
     );
     expect(sharedStyleSets([CARD], "c-card", "color.surface")).toBe(
-      "sets background colour"
+      "sets background color"
     );
   });
 
@@ -242,10 +242,10 @@ describe("what a shared style sets with a variable", () => {
     ];
     expect(
       sharedStyleSets(looks, "look-default", "color.brand", "core/button")
-    ).toBe("sets background colour");
+    ).toBe("sets background color");
     expect(
       sharedStyleSets(looks, "look-default", "color.brand", "core/heading")
-    ).toBe("sets text colour");
+    ).toBe("sets text color");
   });
 
   it("reads every state and a structured value's parts", () => {
@@ -267,7 +267,7 @@ describe("what a shared style sets with a variable", () => {
       },
     };
     expect(sharedStyleSets([both], "c-both", "color.brand")).toBe(
-      "sets text colour and background colour"
+      "sets text color and background color"
     );
   });
 

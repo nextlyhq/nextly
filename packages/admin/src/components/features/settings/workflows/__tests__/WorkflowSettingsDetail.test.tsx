@@ -405,7 +405,7 @@ describe("a workflow in Settings", () => {
     await user.type(row, "Parked");
     await user.click(
       within(
-        screen.getByRole("group", { name: "Colour for On hold" })
+        screen.getByRole("group", { name: "Color for On hold" })
       ).getByRole("radio", { name: "Amber" })
     );
     await user.click(screen.getByRole("button", { name: "Save On hold" }));
@@ -418,7 +418,7 @@ describe("a workflow in Settings", () => {
 
     await user.click(
       within(
-        screen.getByRole("group", { name: "Colour for Writing" })
+        screen.getByRole("group", { name: "Color for Writing" })
       ).getByRole("radio", { name: "Blue" })
     );
     await user.click(screen.getByRole("button", { name: "Save Writing" }));

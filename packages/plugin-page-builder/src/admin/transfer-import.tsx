@@ -426,10 +426,10 @@ function PreviewBody({
           aria-labelledby="nx-pb-transfer-breakpoints"
         >
           <h3 id="nx-pb-transfer-breakpoints">
-            Breakpoints this site does not have
+            Screen sizes this site does not have
           </h3>
           <p className="nx-pb-transfer__note">
-            Only a breakpoint with exactly the same width is matched. Choose
+            Only a screen size with exactly the same width is matched. Choose
             what to do with each of these.
           </p>
           <ul className="nx-pb-transfer__rows">
@@ -447,7 +447,7 @@ function PreviewBody({
       )}
       {preview.breakpoints.matched.length === 0 ? null : (
         <section className="nx-pb-transfer__section">
-          <h3>Breakpoints matched</h3>
+          <h3>Screen sizes matched</h3>
           <p className="nx-pb-transfer__names">
             {preview.breakpoints.matched
               .map(
@@ -650,7 +650,7 @@ function summary(preview: ImportPreview): string {
     counted(preview.added.length, "new", "new"),
     counted(preview.reused.length, "already here", "already here"),
     counted(preview.conflicts.length, "same name", "same names"),
-    counted(undecided, "breakpoint to decide", "breakpoints to decide"),
+    counted(undecided, "screen size to decide", "screen sizes to decide"),
   ].filter(part => part !== "");
   return parts.length === 0 ? "Nothing new to add." : parts.join(" · ");
 }

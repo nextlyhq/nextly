@@ -50,7 +50,7 @@ const REFUSED = {
       expect.objectContaining({
         code: "removed-breakpoint",
         message: expect.stringContaining(
-          "That breakpoint was removed from the site. Reload to keep editing."
+          "That screen size was removed from the site. Reload to keep editing."
         ),
       }),
     ],

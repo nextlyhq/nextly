@@ -899,7 +899,7 @@ describe("an import carrying the site's own design data", () => {
       },
     ]);
     expect(plan.skipped).toContain(
-      "“Eyebrow”'s values for the “wide” breakpoint were left out: this site has no such breakpoint."
+      "“Eyebrow”'s values for the “wide” screen size were left out: this site has no such screen size."
     );
   });
 });

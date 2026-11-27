@@ -42,8 +42,8 @@ const SETTING_LABELS: Readonly<Record<string, string>> = {
   darkMode: "the dark mode setting",
   fluidRange: "the fluid range",
   siteText: "Site text",
-  order: "the colour order",
-  builtInColoursShown: "the built-in colours setting",
+  order: "the color order",
+  builtInColoursShown: "the built-in colors setting",
 };
 
 /**

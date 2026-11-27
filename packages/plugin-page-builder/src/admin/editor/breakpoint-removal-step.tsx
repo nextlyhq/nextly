@@ -12,6 +12,7 @@
  * @experimental
  */
 import type { BreakpointSet } from "@nextlyhq/blocks-engine";
+import { SCREEN_SIZE_WORDS } from "@nextlyhq/builder";
 import { Button } from "@nextlyhq/ui";
 import { Check, Loader2, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, type JSX, type Ref } from "react";
@@ -175,7 +176,7 @@ function StepBody({
             Cancel
           </Button>
           <Button type="button" disabled>
-            Save breakpoints
+            {SCREEN_SIZE_WORDS.save}
           </Button>
         </Actions>
       </div>
@@ -274,7 +275,7 @@ function StepBody({
           Cancel
         </Button>
         <Button type="button" onClick={removal.reload}>
-          Reload breakpoints
+          Reload screen sizes
         </Button>
       </RefusedStep>
     );

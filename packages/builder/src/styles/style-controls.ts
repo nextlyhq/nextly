@@ -482,7 +482,7 @@ const FORM_NAME: Partial<Record<StyleShape["kind"], string>> = {
   dimension: "Length",
   number: "Number",
   keyword: "Keyword",
-  color: "Colour",
+  color: "Color",
   cssValue: "Custom",
   url: "URL",
   logicalSides: "Sides",

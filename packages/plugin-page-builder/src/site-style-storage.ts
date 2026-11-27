@@ -98,7 +98,7 @@ export const SITE_SETTINGS_WRITE_CONTEXT: Readonly<Record<string, unknown>> = {
 
 /** What any other write that changes the site's breakpoints is told. */
 export const BREAKPOINTS_OUTSIDE_SETTINGS =
-  "The site's breakpoints are changed in the page builder's Settings.";
+  "The site's screen sizes are changed in the page builder's Settings.";
 
 /**
  * Refuse a write to this Single that changes its breakpoints, unless the
@@ -895,7 +895,7 @@ export function siteStyleSingle(
       }),
       json({
         name: "breakpoints",
-        label: "Breakpoints",
+        label: "Screen sizes",
         validate: refusing(checkStoredBreakpoints),
         admin: {
           description:

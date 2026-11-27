@@ -363,7 +363,10 @@ describe("getDashboardActivity", () => {
     ["an empty agent", "agent="],
     ["an agent name too long to be stored", `agent=${"x".repeat(192)}`],
     ["a session that is not an id", "session=nx_live_abc_def"],
-    ["a session shaped like a short credential", "session=glpat-AbCdEfGhIjKlMnOpQrSt"],
+    [
+      "a session shaped like a short credential",
+      "session=glpat-AbCdEfGhIjKlMnOpQrSt",
+    ],
     ["an agent name holding a NUL", "agent=%00"],
   ])("refuses %s rather than answering everything", async (_, query) => {
     const getRecentActivity = vi.fn();

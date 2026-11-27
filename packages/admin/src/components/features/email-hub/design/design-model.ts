@@ -51,7 +51,7 @@ export function normalizeHex(value: string): string | null {
 export const COLOUR_ROLES = [
   {
     key: "accentColor",
-    label: "Accent colour",
+    label: "Accent color",
     hint: "Buttons and links",
   },
   {

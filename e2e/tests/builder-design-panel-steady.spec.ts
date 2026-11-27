@@ -135,7 +135,7 @@ test("switching Design tabs leaves the rows' columns where they were", async ({
     const scrolling = await room();
     await switchTo(page, "Type");
     expect(await room()).toBe(scrolling);
-    for (const tab of ["Styles", "Colours", "Type", "Spacing", "Colours"]) {
+    for (const tab of ["Styles", "Colors", "Type", "Spacing", "Colors"]) {
       await switchTo(page, tab);
     }
     // And once the counts are in, which each row says in its name.
@@ -165,7 +165,7 @@ test("a colour added to a long list opens its editor fully on screen", async ({
     await page.locator(".nx-vars__body").evaluate(body => {
       body.scrollTop = 0;
     });
-    await page.getByRole("button", { name: "Add colour" }).click();
+    await page.getByRole("button", { name: "Add color" }).click();
     const editor = page.getByRole("dialog", { name: "Edit New colour" });
     await expect(editor).toBeVisible();
     const box = await editor.boundingBox();

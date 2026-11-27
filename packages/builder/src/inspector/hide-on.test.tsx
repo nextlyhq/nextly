@@ -160,14 +160,14 @@ describe("HideOn", () => {
   it("is held until the site's breakpoints are read", () => {
     render(<Host document={withDevices(undefined)} status="loading" />);
     expect(toggle("Desktop").hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText("Reading the site's breakpoints…")).toBeTruthy();
+    expect(screen.getByText("Reading the site's screen sizes…")).toBeTruthy();
   });
 
   it("says so when the site's breakpoints could not be read, rather than that they are loading", () => {
     render(<Host document={withDevices(undefined)} status="unavailable" />);
     expect(toggle("Desktop").hasAttribute("disabled")).toBe(true);
     expect(screen.getByText(/could not be read/)).toBeTruthy();
-    expect(screen.queryByText("Reading the site's breakpoints…")).toBeNull();
+    expect(screen.queryByText("Reading the site's screen sizes…")).toBeNull();
   });
 
   it("is held on a locked block", () => {

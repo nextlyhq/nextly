@@ -61,7 +61,7 @@ afterEach(cleanup);
  */
 const saveButton = (): HTMLButtonElement =>
   screen.getByRole("button", {
-    name: /save breakpoints|saving/i,
+    name: /save screen sizes|saving/i,
   }) as HTMLButtonElement;
 
 describe("saving", () => {
@@ -403,7 +403,7 @@ describe("a saved breakpoint's id", () => {
   it("names a new breakpoint's id after it, and says a clash in plain words", () => {
     const onSave = open(stored());
     fireEvent.click(
-      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+      screen.getAllByRole("button", { name: "Add screen size" })[0]
     );
     const names = screen.getAllByLabelText("Name");
     fireEvent.change(names[names.length - 1] as HTMLElement, {
@@ -422,10 +422,10 @@ describe("a saved breakpoint's id", () => {
     cleanup();
     const again = open(stored());
     fireEvent.click(
-      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+      screen.getAllByRole("button", { name: "Add screen size" })[0]
     );
     fireEvent.click(
-      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+      screen.getAllByRole("button", { name: "Add screen size" })[0]
     );
     const moreNames = screen.getAllByLabelText("Name");
     const moreWidths = screen.getAllByLabelText("Up to");
@@ -452,7 +452,7 @@ describe("a saved breakpoint's id", () => {
     cleanup();
     open(stored());
     fireEvent.click(
-      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+      screen.getAllByRole("button", { name: "Add screen size" })[0]
     );
     const twice = screen.getAllByLabelText("Name");
     const last = twice[twice.length - 1] as HTMLElement;
@@ -460,7 +460,7 @@ describe("a saved breakpoint's id", () => {
     expect(saveButton().disabled).toBe(true);
     expect(last.getAttribute("aria-invalid")).toBe("true");
     expect(
-      screen.getByText('Another breakpoint is already called "tablet".')
+      screen.getByText('Another screen size is already called "tablet".')
     ).toBeTruthy();
   });
 
@@ -489,7 +489,7 @@ describe("a saved breakpoint's id", () => {
     // name a NEW breakpoint, so the test must distinguish the two.
     open(stored());
     fireEvent.click(
-      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+      screen.getAllByRole("button", { name: "Add screen size" })[0]
     );
 
     const blank = screen

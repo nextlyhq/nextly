@@ -14,6 +14,7 @@
  * @module admin/editor/settings-site
  */
 import type { BreakpointSet } from "@nextlyhq/blocks-engine";
+import { SCREEN_SIZE_WORDS } from "@nextlyhq/builder";
 import { BASE_DEVICE_LABEL, BreakpointManager } from "@nextlyhq/builder/shell";
 import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import {
@@ -153,7 +154,7 @@ export function SiteSettingsDialog({
             <DialogTitle>Site settings</DialogTitle>
             <DialogDescription className="sr-only">
               {
-                "The site's breakpoints and code, which apply to the live site at once."
+                "The site's screen sizes and code, which apply to the live site at once."
               }
             </DialogDescription>
           </DialogHeader>
@@ -221,18 +222,18 @@ function useLeaveToSets(request: (leave: Leave) => void): (() => void) | null {
 /** What leaving would discard, and how the question says so. */
 const DISCARD_WORDS = {
   breakpoints: {
-    title: "Discard your breakpoint changes?",
+    title: "Discard your screen size changes?",
     description:
-      "They have not been saved. The site keeps the breakpoints it has.",
+      "They have not been saved. The site keeps the screen sizes it has.",
   },
   code: {
     title: "Discard your code changes?",
     description: "They have not been saved. The site keeps the code it has.",
   },
   both: {
-    title: "Discard your breakpoint and code changes?",
+    title: "Discard your screen size and code changes?",
     description:
-      "Neither has been saved. The site keeps the breakpoints and the code it has.",
+      "Neither has been saved. The site keeps the screen sizes and the code it has.",
   },
 } as const;
 
@@ -440,7 +441,7 @@ function SiteSettings({
         hidden={codeOpen}
       >
         <h3 id="settings-breakpoints-title" className="text-sm font-semibold">
-          Breakpoints
+          {SCREEN_SIZE_WORDS.screenSizes}
         </h3>
         <p className="text-sm text-muted-foreground">
           Widths your styles can change at. Each applies at that width and

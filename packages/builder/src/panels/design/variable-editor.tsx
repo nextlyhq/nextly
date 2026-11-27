@@ -940,7 +940,7 @@ export function ColourValue({
             type="button"
             className="nx-vars__swatch nx-vars-editor__swatch"
             data-invalid={invalid ? "" : undefined}
-            aria-label={`Pick the ${label.toLowerCase()} colour${said}`}
+            aria-label={`Pick the ${label.toLowerCase()} color${said}`}
             aria-expanded={picking}
             style={swatchStyle(paint)}
             onClick={() => {
@@ -1031,7 +1031,7 @@ function colourFieldState(
     hex,
     paint: hex,
     invalid,
-    said: invalid ? " (not a valid colour)" : "",
+    said: invalid ? " (not a valid color)" : "",
   };
 }
 

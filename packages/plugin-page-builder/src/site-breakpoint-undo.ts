@@ -96,7 +96,7 @@ async function readUndo(req: Request): Promise<string> {
         {
           path: "runId",
           code: "INVALID_VALUE",
-          message: "The request does not name a breakpoint removal.",
+          message: "The request does not name a screen size removal.",
         },
       ],
     });
@@ -159,7 +159,7 @@ function refusalToPutBack(
 ): NextlyError | undefined {
   if (defined.has(def.id)) {
     return doesNotFit(
-      `“${def.label}” is one of the site's breakpoints again, so this removal can't be undone.`,
+      `“${def.label}” is one of the site's screen sizes again, so this removal can't be undone.`,
       "defined-again"
     );
   }
@@ -172,7 +172,7 @@ function refusalToPutBack(
   }
   if (axis.length >= MAX_BREAKPOINTS_PER_AXIS) {
     return doesNotFit(
-      `There's no room to put “${def.label}” back: the site already has ${MAX_BREAKPOINTS_PER_AXIS} breakpoints of that kind. Remove one first.`,
+      `There's no room to put “${def.label}” back: the site already has ${MAX_BREAKPOINTS_PER_AXIS} screen sizes of that kind. Remove one first.`,
       "axis-full"
     );
   }

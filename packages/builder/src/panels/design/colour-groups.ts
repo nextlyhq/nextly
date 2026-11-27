@@ -19,7 +19,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 /** What a group is called where no colour before it names one. */
-const DEFAULT_COLOUR_GROUP = "Colours";
+const DEFAULT_COLOUR_GROUP = "Colors";
 
 /** One named group and its colours, by identity, in order. */
 export interface ColourGroup {

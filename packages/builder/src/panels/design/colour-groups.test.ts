@@ -103,9 +103,9 @@ describe("the colours' groups and order", () => {
     ]);
   });
 
-  it("calls the group of a colour with none before it Colours", () => {
+  it("calls the group of a colour with none before it Colors", () => {
     expect(shape({ tokens: [colour("color.a"), colour("color.b")] })).toEqual([
-      "Colours: color.a color.b",
+      "Colors: color.a color.b",
     ]);
   });
 });

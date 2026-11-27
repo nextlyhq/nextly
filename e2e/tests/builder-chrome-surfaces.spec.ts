@@ -288,7 +288,7 @@ test.describe("the editor's dividers", () => {
     expect(await dividers(page)).toEqual([foreground, foreground, foreground]);
   });
 
-  test("take the system's text colour in forced colours", async ({ page }) => {
+  test("take the system's text color in forced colours", async ({ page }) => {
     await page.emulateMedia({ forcedColors: "active" });
     await openBuilder(page, "light");
     const text = await resolvedInChrome(page, "CanvasText");

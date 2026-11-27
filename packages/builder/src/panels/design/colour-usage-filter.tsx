@@ -147,7 +147,7 @@ function ColourUsageFilter({
       <div
         className="nx-usage-filter__choices"
         role="radiogroup"
-        aria-label="Show colours"
+        aria-label="Show colors"
         onKeyDown={event => {
           const by = arrowStep(event.key);
           if (by === undefined) return;

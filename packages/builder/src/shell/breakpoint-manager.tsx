@@ -19,6 +19,7 @@ import { Button } from "@nextlyhq/ui";
 import { Check } from "lucide-react";
 import * as React from "react";
 
+import { SCREEN_SIZE_WORDS } from "../glossary";
 import {
   authoredBreakpoints,
   BASE_BREAKPOINT,
@@ -306,7 +307,7 @@ export function BreakpointManager({
           // breakpoints with a set it never chose.
           title={editUnavailable(status, blocked)}
         >
-          Edit breakpoints
+          {SCREEN_SIZE_WORDS.edit}
         </Button>
         {/* After a save, in the save chip's word, beside what made it; a
             refused save stays in the editor with its reason. */}

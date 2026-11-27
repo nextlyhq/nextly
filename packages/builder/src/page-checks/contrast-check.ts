@@ -271,7 +271,7 @@ function contrastFinding(
       nodeId: node.id,
       part: "skipped",
       what: "Contrast not checked: text over an image or gradient",
-      why: "The colours behind the text can change across the picture, so no one ratio can be measured.",
+      why: "The colors behind the text can change across the picture, so no one ratio can be measured.",
       todo: "Check the text reads well over the whole picture, or give it a solid background.",
     };
   }
@@ -289,7 +289,7 @@ function contrastFinding(
     nodeId: node.id,
     what,
     why: WHY,
-    todo: `Use a darker text colour or a lighter background, for at least ${String(needs)}:1.`,
+    todo: `Use a darker text color or a lighter background, for at least ${String(needs)}:1.`,
     fix: { tab: "style", id: "color" },
   };
 }

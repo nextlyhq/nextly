@@ -418,14 +418,14 @@ describe("a group's name", () => {
   });
 });
 
-describe("a new group's Add colour", () => {
+describe("a new group's Add color", () => {
   it("adds the colour to that group", async () => {
     render(<Host />);
     fireEvent.click(screen.getByRole("button", { name: "New group" }));
     const field = await screen.findByRole("textbox", { name: "Group name" });
     fireEvent.change(field, { target: { value: "Accents" } });
     fireEvent.keyDown(field, { key: "Enter" });
-    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add color" }));
     await screen.findByRole("dialog", { name: "Edit New colour" });
     expect(listed()).toEqual([
       "Brand: Brand, Accent",

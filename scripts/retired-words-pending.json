@@ -1,31 +1,4 @@
 {
-  "packages/admin/src/components/features/email-hub/design/BrandDesign.tsx": [
-    "Your site's colours and font are in the draft. Save to use them."
-  ],
-  "packages/admin/src/components/features/email-hub/design/BrandSettingsForm.tsx": [
-    "{…}: pick a colour",
-    "Use a hex colour, like #2f6b4f."
-  ],
-  "packages/admin/src/components/features/email-hub/design/LayoutsList.tsx": [
-    "Customised",
-    "Customised",
-    "{…} changed since you customised it. Open it to review the change."
-  ],
-  "packages/admin/src/components/features/email-hub/design/MatchMySite.tsx": [
-    "Your site's colours",
-    "Pick one of your site&apos;s colours for each part of the email. These are the light-theme values of your site&apos;s design variables."
-  ],
-  "packages/admin/src/components/features/email-hub/design/design-model.ts": [
-    "Accent colour"
-  ],
-  "packages/admin/src/components/features/email-hub/messages/MessagesList.tsx": [
-    "{…} changed since you customised it."
-  ],
-  "packages/admin/src/components/features/email-hub/messages/messages-model.ts": [
-    "Customised",
-    "Customised",
-    "The owner changed this email since you customised it."
-  ],
   "packages/admin/src/components/features/entries/PreviewMode/PreviewViewportControl.tsx": [
     "Preview viewport"
   ],
@@ -57,23 +30,8 @@
     "Insert column to the left",
     "Insert column to the right"
   ],
-  "packages/admin/src/components/features/media-library/MediaFocalPoint/index.tsx": [
-    "Centre"
-  ],
-  "packages/admin/src/components/features/releases/CreateReleaseDialog.tsx": [
-    "Give it a name you will recognise on the day. You will add documents and choose the moment next."
-  ],
-  "packages/admin/src/components/features/releases/ScheduleReleaseDialog.tsx": [
-    "Not a timezone this browser recognises. Use an IANA name such as Europe/Berlin."
-  ],
   "packages/admin/src/components/features/settings/EmailTemplateForm/EmailTemplateForm.tsx": [
     "Click into a heading, text, button label or alt text, then insert the variable."
-  ],
-  "packages/admin/src/components/features/settings/EmailTemplateForm/OwnerUpdateReview.tsx": [
-    "{…} changed {…} since your site customised it. Choose, for each change, whether to keep your lines or use theirs."
-  ],
-  "packages/admin/src/components/features/settings/EmailTemplateForm/OwnershipNotices.tsx": [
-    "{…} updated this email since your site customised it."
   ],
   "packages/admin/src/components/features/settings/EmailTemplateForm/VariablesRail.tsx": [
     "Insert {{{…}}}",
@@ -84,21 +42,7 @@
     "Insert an item field: {…}",
     "Click into a block inside this list, then insert the item field."
   ],
-  "packages/admin/src/components/features/settings/workflows/StageLabelsSection.tsx": [
-    "In code: &ldquo;{…}&rdquo;, no colour",
-    "Colour for {…}"
-  ],
-  "packages/admin/src/components/features/settings/workflows/WorkflowSettingsDetail.tsx": [
-    "Labels and colours"
-  ],
-  "packages/admin/src/components/features/settings/workflows/stage-colours.ts": [
-    "No colour"
-  ],
-  "packages/admin/src/components/shared/auth/AuthRefusalNotice.tsx": [
-    "This app doesn&apos;t recognise its own address"
-  ],
   "packages/blocks-engine/src/style/site-tokens.ts": [
-    "How wide a centred container may grow.",
     "Space between blocks",
     "Space between columns",
     "\"{…}\" is nested too deeply, so it was not written. A token name holds at most {…} dot-separated parts.",
@@ -133,8 +77,6 @@
     "Its bound field is removed"
   ],
   "packages/builder/src/editor-words.ts": [
-    "Colours",
-    "colour",
     "Import design tokens…",
     "Export design tokens (.json)"
   ],
@@ -167,10 +109,6 @@
     "The image comes from a bound library file, so its own alt text is used. Where the field is empty, visitors see {…}. Type alt text to describe it here instead.",
     "The image comes from a bound field. A library file it holds is described by its own alt text; an image address has none, so type alt text to describe it."
   ],
-  "packages/builder/src/inspector/hide-on.tsx": [
-    "Reading the site's breakpoints…",
-    "The site's breakpoints could not be read, so where this block shows can't be changed here. Reload to try again."
-  ],
   "packages/builder/src/inspector/inspector-sections.ts": ["Layer order"],
   "packages/builder/src/inspector/instance-inspector-panel.tsx": [
     "Fields",
@@ -193,14 +131,6 @@
     "Make {…} a setting, bound to a field",
     "Make {…} a setting, bound to a field"
   ],
-  "packages/builder/src/inspector/style-inspector/block-style-words.ts": [
-    "Line colour"
-  ],
-  "packages/builder/src/inspector/style-inspector/decoration-field.tsx": [
-    "Colour",
-    "Line colour",
-    "Text colour"
-  ],
   "packages/builder/src/inspector/style-inspector/editing-bar.tsx": [
     "You are editing the {…} look. Normal stays as it is."
   ],
@@ -208,9 +138,6 @@
     "Keep the look on this block only"
   ],
   "packages/builder/src/inspector/style-inspector/plain-layout-controls.tsx": [
-    "Top centre",
-    "Centre",
-    "Bottom centre",
     "Space between"
   ],
   "packages/builder/src/inspector/style-inspector/shadow-control.tsx": [
@@ -234,10 +161,6 @@
   ],
   "packages/builder/src/inspector/style-inspector/style-keyword-labels.ts": [
     "Normal flow"
-  ],
-  "packages/builder/src/page-checks/contrast-check.ts": [
-    "The colours behind the text can change across the picture, so no one ratio can be measured.",
-    "Use a darker text colour or a lighter background, for at least {…}:1."
   ],
   "packages/builder/src/page-checks/fact-checks.ts": [
     "Binding no longer fits: {…}",
@@ -271,47 +194,10 @@
   "packages/builder/src/panels/design/block-look-rows.ts": [
     "Default · every {…} starts from this look; other looks are laid on top"
   ],
-  "packages/builder/src/panels/design/built-in-colours.tsx": [
-    "Show built-in colours",
-    "Hidden colours still work where core blocks use them"
-  ],
-  "packages/builder/src/panels/design/colour-cleanup.tsx": [
-    "colour",
-    "colours",
-    "Clean up unused colours",
-    "Colours you made that nothing on the site uses. Untick any you want to keep.",
-    "Every colour you made is in use.",
-    "No colour was removed."
-  ],
-  "packages/builder/src/panels/design/colour-groups.ts": ["Colours"],
-  "packages/builder/src/panels/design/colour-usage-filter.tsx": [
-    "Show colours"
-  ],
-  "packages/builder/src/panels/design/site-text-panel.tsx": [
-    "Colour",
-    "Colour",
-    "Colour on hover"
-  ],
-  "packages/builder/src/panels/design/text-style-parts.ts": ["Capitalised"],
-  "packages/builder/src/panels/design/tokens-panel.tsx": [
-    "Drag a colour here, or use Move to group…"
-  ],
   "packages/builder/src/panels/design/tokens-studio.ts": [
-    "Colour",
     "A token needs a name.",
     "A name is at most {…} characters when it is what the token is written under.",
-    "Another token is already called \"{…}\".",
-    "Colours"
-  ],
-  "packages/builder/src/panels/design/tokens-transfer-extras.ts": [
-    "“{…}”'s values for the “{…}” breakpoint were left out: this site has no such breakpoint.",
-    "The order of your colours",
-    "Built-in colours are shown",
-    "Built-in colours are hidden"
-  ],
-  "packages/builder/src/panels/design/tokens-transfer-gaps.ts": [
-    "Figma takes colours written as hex or rgb().",
-    "Design tools can't read this colour as it is written."
+    "Another token is already called \"{…}\"."
   ],
   "packages/builder/src/panels/design/tokens-transfer.ts": [
     "That file is not valid JSON, so nothing in it could be read. It may be truncated or may not be a token file at all.",
@@ -326,34 +212,11 @@
     "This site's tokens carry vendor data that cannot be written to a file — a value JSON has no form for, such as a very large number or a structure that refers to itself. Nothing was exported.",
     "\"{…}\" carries vendor data that a file cannot hold, so the exported token is missing it. Importing this file back would give that token a different identity."
   ],
-  "packages/builder/src/panels/design/variable-adds.tsx": [
-    "Add colour",
-    "Colour",
-    "No colours yet."
-  ],
-  "packages/builder/src/panels/design/variable-choice.tsx": ["Colour"],
-  "packages/builder/src/panels/design/variable-editor.tsx": [
-    "Pick the {…} colour{…}",
-    "(not a valid colour)"
-  ],
   "packages/builder/src/panels/design/variable-usage-view.tsx": ["{…} look"],
-  "packages/builder/src/panels/design/variable-usage.ts": [
-    "text colour",
-    "link colour",
-    "hovered link colour",
-    "background colour"
-  ],
   "packages/builder/src/panels/design/variables-transfer.tsx": [
     "Design tokens exported",
     "From the design token files. A value kept for Nextly only is in the file as Nextly data: Nextly reads it back, and other design tools skip it."
   ],
-  "packages/builder/src/shell/breakpoint-editor.tsx": [
-    "These breakpoints could not be saved.",
-    "breakpoint",
-    "Add breakpoint",
-    "Save breakpoints"
-  ],
-  "packages/builder/src/shell/breakpoint-manager.tsx": ["Edit breakpoints"],
   "packages/builder/src/shell/exposure-picker.tsx": ["Give the field a name."],
   "packages/builder/src/shell/read-budget-meter.tsx": [
     "Page data",
@@ -377,15 +240,7 @@
     "Saved looks for one kind of block. ★ is the look a block has until you pick another."
   ],
   "packages/builder/src/styles/breakpoints.ts": [
-    "Give this breakpoint a label.",
-    "Another breakpoint is already called \"{…}\".",
-    "Give this breakpoint an id.",
-    "\"{…}\" is the built-in unconditional breakpoint. Choose another id.",
-    "Another breakpoint already uses the id \"{…}\". Ids must be unique across both axes.",
-    "A viewport breakpoint needs a maximum width. Without one it would apply at every width and override the base.",
-    "Another container breakpoint is already unbounded. Two cover the same range and one would silently win.",
-    "Another {…} breakpoint already ends at {…}px. Both would produce the same query and one would silently win.",
-    "An axis holds at most {…} breakpoints, widest kept. This one would be dropped."
+    "A viewport breakpoint needs a maximum width. Without one it would apply at every width and override the base."
   ],
   "packages/builder/src/styles/shared-style-library.ts": [
     "header & footer set",
@@ -394,7 +249,6 @@
   "packages/builder/src/styles/shared-style-target.ts": [
     "This look depends on screen and container width together, so it can't be detached yet."
   ],
-  "packages/builder/src/styles/style-controls.ts": ["Colour"],
   "packages/plugin-page-builder/src/admin/ComponentActionPrompt.tsx": [
     "{…} replaces the saved section's content. Pages that inserted it earlier keep their own copies."
   ],
@@ -471,30 +325,12 @@
     "Removed fields aren’t recorded for where this component is stored (per language, or outside the Components collection), so a new field can’t be added here. Rename or remove the fields it has.",
     "This component’s published fields could not be read, so a new field can’t be added yet. Reload to try again."
   ],
-  "packages/plugin-page-builder/src/admin/conflict-words.ts": [
-    "the colour order",
-    "the built-in colours setting"
-  ],
   "packages/plugin-page-builder/src/admin/editor/breakpoint-removal-flow.ts": [
     "header & footer set",
-    "header & footer sets",
-    "Everything set for {…} is deleted from the whole site, so the pages show their {…} styles at that width. If you add a {…} breakpoint again later, it starts empty.",
-    "Everything set for {…} is deleted from the whole site, so the pages show the styles of the next wider breakpoint at those widths. If you add them again later, they start empty.",
-    "{…} {…} gone from the site's breakpoints. {…} styles are being removed from each page, component and saved section.",
-    "Breakpoints can be changed again once it has finished."
-  ],
-  "packages/plugin-page-builder/src/admin/editor/breakpoint-removal-step.tsx": [
-    "Save breakpoints",
-    "Reload breakpoints"
+    "header & footer sets"
   ],
   "packages/plugin-page-builder/src/admin/editor/breakpoint-undo-flow.ts": [
-    "{…} {…} added back to the site's breakpoints as {…}, and the styles the removal took out go back on every page, component, saved section and shared style. Anything set for {…} since the removal stays as it is.",
-    "{…} {…} back in the site's breakpoints. {…} styles are being put back on each page, component and saved section.",
-    "Breakpoints can be changed again once it has finished.",
     "header & footer set"
-  ],
-  "packages/plugin-page-builder/src/admin/editor/breakpoint-undo-step.tsx": [
-    "Edit breakpoints"
   ],
   "packages/plugin-page-builder/src/admin/editor/component-setting-hold.ts": [
     "binding to it",
@@ -546,31 +382,8 @@
   "packages/plugin-page-builder/src/admin/editor/settings-dialog.tsx": [
     "Fields"
   ],
-  "packages/plugin-page-builder/src/admin/editor/settings-site.tsx": [
-    "The site's breakpoints and code, which apply to the live site at once.",
-    "Discard your breakpoint changes?",
-    "They have not been saved. The site keeps the breakpoints it has.",
-    "Discard your breakpoint and code changes?",
-    "Neither has been saved. The site keeps the breakpoints and the code it has.",
-    "Breakpoints"
-  ],
-  "packages/plugin-page-builder/src/admin/editor/site-css-prefix-setting.tsx": [
-    "shadow uses a colour variable",
-    "shadows use a colour variable",
-    "{…} {…} through the old prefix. They lose that colour until you pick it again."
-  ],
-  "packages/plugin-page-builder/src/admin/editor/site-style-breakpoints.ts": [
-    "Your site's configuration defines these breakpoints, so removing them all here would restore them. Remove them from the config instead.",
-    "These breakpoints could not be saved."
-  ],
-  "packages/plugin-page-builder/src/admin/editor/site-style-tokens-studio.tsx": [
-    "The colours could not be removed. Try again."
-  ],
   "packages/plugin-page-builder/src/admin/editor/template-preview-strip.tsx": [
     "{…}. Bound text shows its fallback until there is one."
-  ],
-  "packages/plugin-page-builder/src/admin/editor/use-breakpoint-removal.ts": [
-    "The breakpoints could not be saved."
   ],
   "packages/plugin-page-builder/src/admin/header-footer-menu.tsx": [
     "No header & footer sets match."
@@ -625,22 +438,13 @@
   "packages/plugin-page-builder/src/admin/shown-on/words.ts": [
     "Every builder page, header & footer set and component that shows this Single's values."
   ],
-  "packages/plugin-page-builder/src/admin/site-style-client.ts": [
-    "A change to the site's breakpoints"
-  ],
   "packages/plugin-page-builder/src/admin/transfer-import.tsx": [
     "header & footer set",
     "header & footer sets",
-    "Bring in a saved section, component or header & footer set exported from another site.",
-    "Breakpoints this site does not have",
-    "Only a breakpoint with exactly the same width is matched. Choose what to do with each of these.",
-    "Breakpoints matched",
-    "breakpoint to decide",
-    "breakpoints to decide"
+    "Bring in a saved section, component or header & footer set exported from another site."
   ],
   "packages/plugin-page-builder/src/admin/variables-client.ts": [
-    "by {…}'s built-in look",
-    "The colours could not be removed."
+    "by {…}'s built-in look"
   ],
   "packages/plugin-page-builder/src/binding-fields-route.ts": [
     "binding fields"
@@ -653,22 +457,6 @@
     "Bindings whose field or block changed after they were saved",
     "Bindings to fix",
     "Bindings whose field or block changed after they were saved, each showing its fallback until it is fixed."
-  ],
-  "packages/plugin-page-builder/src/breakpoint-removal/run-store.ts": [
-    "Another breakpoint removal is still running. Try again when it has finished.",
-    "The site's breakpoints are being changed by someone else right now. Try saving again."
-  ],
-  "packages/plugin-page-builder/src/breakpoint-removal/service.ts": [
-    "This removal can't be undone: it isn't a finished breakpoint removal.",
-    "This removal can't be undone: only the newest removal can be, and a breakpoint was removed after it."
-  ],
-  "packages/plugin-page-builder/src/breakpoint-removal/strip.ts": [
-    "This content was saved by a different version of the page builder, so the styles under the removed breakpoints were left in it. Open it in the editor and save it again."
-  ],
-  "packages/plugin-page-builder/src/breakpoint-removal/undo-report.ts": [
-    "The removal was undone: its breakpoints and their styles are back.",
-    "The removal was undone: its breakpoints are back with their styles, except {…} {…} changed since the removal.",
-    "The removal was undone: its breakpoints are back. Their styles are still being put back."
   ],
   "packages/plugin-page-builder/src/canvas-bindings-route.ts": [
     "canvas bindings"
@@ -721,9 +509,6 @@
   "packages/plugin-page-builder/src/fields/binding-judgement.ts": [
     "This document binds more than {…} collections and Singles, more than one save can check. Bind fewer sources, or split the page.",
     "{…}, as this page places it, holds a binding this page can't fill. {…}"
-  ],
-  "packages/plugin-page-builder/src/fields/breakpoint-reference-judgement.ts": [
-    "That breakpoint was removed from the site. Reload to keep editing."
   ],
   "packages/plugin-page-builder/src/host-rewrite/component-delete-step.ts": [
     "This component exposes a field or slot inside the copy, which turning it into plain blocks would remove."
@@ -820,40 +605,11 @@
     "This content could not be read as blocks, so the values of the component's removed fields could not be taken out of it.",
     "This content is too large to read to the end, so the values of the component's removed fields could not all be taken out of it."
   ],
-  "packages/plugin-page-builder/src/site-breakpoint-undo.ts": [
-    "The request does not name a breakpoint removal.",
-    "“{…}” is one of the site's breakpoints again, so this removal can't be undone.",
-    "There's no room to put “{…}” back: the site already has {…} breakpoints of that kind. Remove one first."
-  ],
-  "packages/plugin-page-builder/src/site-settings.ts": [
-    "The request is not a set of breakpoints.",
-    "Nothing was saved: this is what saving these breakpoints would drop.",
-    "A breakpoint in this set is still being removed. Try again when its removal has finished.",
-    "Some pages still hold styles for that breakpoint (a draft is waiting to be published). Publish or discard those drafts, then add it again.",
-    "Some content still holds styles for that breakpoint that could not be removed yet. Once that content can be saved, finish the breakpoint's removal, then add it again.",
-    "The site's breakpoints were changed while this was being saved. Reload to see them, then save again.",
-    "Check what removing these breakpoints drops before confirming it.",
-    "The site's breakpoints changed after you checked what removing them drops. Check again before removing them.",
-    "The site's breakpoints were saved.",
-    "The site's breakpoints were saved. The styles under the removed breakpoints are still being removed.",
-    "The styles under the removed breakpoints were removed.",
-    "The styles under the removed breakpoints are still being removed.",
-    "The request does not name a breakpoint removal.",
-    "The request does not name a breakpoint removal."
-  ],
   "packages/plugin-page-builder/src/site-style-storage.ts": [
-    "The site's breakpoints are changed in the page builder's Settings.",
     "Site-wide design tokens, fonts, classes and breakpoints for pages built from blocks.",
     "Design tokens",
     "A token set: { tokens: [{ id?, name, label?, kind, values: { light, dark? }, fluid?: { small, large }, group? }], prefix?, darkMode?, fluidRange?: { min, max }, order?: [identity], builtInColoursShown?: boolean, siteText?: { body?, h1?…h6?, link?, button?, caption? } }. Values are per mode; \"light\" is what a reader with no mode set resolves. `id` is the token's stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity. `fluid` is the two sizes in px a fluid size was made from, and `fluidRange` the screen widths in px it grows between (360 to 1280 when absent). `group` is the named group a colour is listed under and `order` the identities of the colours in the order they are listed, both display-only. `builtInColoursShown: false` leaves the built-in colours the site does not use out of the Design panel and the colour pickers; they are still written on every page. `siteText` sets the text of every page: each row holds `fontFamily`, `fontSize` and `lineHeight` (a variable reference such as { $token: \"font-size.h2\" } or a value; the Body font is `body.fontFamily` set to { $token: \"font.body\" } and the Headings font is `fontFamily` set to { $token: \"font.heading\" } on every heading row), and the `link` row `color`, `hoverColor` and `underline` (\"always\", \"hover\" or \"never\") instead; a row left out keeps its built-in value.",
-    "Breakpoints",
     "The site's breakpoints: { viewport: [{ id, label, maxWidth? }], container: [...] }. Ids must be unique across both axes; the base breakpoint has no maxWidth."
-  ],
-  "packages/plugin-page-builder/src/transfer/import-plan.ts": [
-    "Adding a breakpoint needs the right to manage site settings.",
-    "This site already has {…} {…} breakpoints, the most it can hold.",
-    "Choose whether to add the \"{…}\" breakpoint ({…}px) or drop its styles.",
-    "The \"{…}\" breakpoint cannot be added: {…}"
   ],
   "packages/plugin-page-builder/src/transfer/import-route.ts": [
     "add header & footer sets",

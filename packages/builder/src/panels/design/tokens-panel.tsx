@@ -769,7 +769,7 @@ function sectionsOf(
 }
 
 /** What a named group with no colour in it says. */
-const NEW_GROUP_EMPTY = "Drag a colour here, or use Move to group…";
+const NEW_GROUP_EMPTY = "Drag a color here, or use Move to group…";
 
 /** A named group's heading with its name field and ⋯; any other as it is. */
 function ColourGroupHeadIf({

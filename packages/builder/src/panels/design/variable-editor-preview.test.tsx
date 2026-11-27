@@ -181,7 +181,7 @@ describe("a variable's value previews as it is edited", () => {
     render(<Hosted heard={heard} valueOf={brandOf} />);
     const editor = await open(/^Brand/);
     const swatch = within(editor).getByRole("button", {
-      name: "Pick the light colour",
+      name: "Pick the light color",
     });
     fireEvent.click(swatch);
     // The surface's arrow keys move it as a drag does, one report a move.

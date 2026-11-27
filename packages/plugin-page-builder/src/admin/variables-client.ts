@@ -266,7 +266,7 @@ async function sendCleanUp(ids: readonly string[]): Promise<Sent> {
       : { answer: answer.item };
   } catch (refused) {
     return {
-      refused: apiErrorMessage(refused, "The colours could not be removed."),
+      refused: apiErrorMessage(refused, "The colors could not be removed."),
     };
   }
 }

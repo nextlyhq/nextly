@@ -2077,7 +2077,7 @@ describe("what an export says it did not write", () => {
         kind: "color",
         values: { light: "color-mix(in srgb, red, blue)" },
       })
-    ).toBe("Figma takes colours written as hex or rgb().");
+    ).toBe("Figma takes colors written as hex or rgb().");
     expect(
       why({ name: "time.slow", kind: "duration", values: { light: "slow" } })
     ).toBe("Figma takes durations in ms or s.");

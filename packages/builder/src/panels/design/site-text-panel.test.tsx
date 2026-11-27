@@ -262,7 +262,7 @@ describe("a row's popup", () => {
       <Hosted tokens={SITE} groups={["type", "fonts"]} onChange={onChange} />
     );
     const popup = await openRow(/^Links/);
-    const colour = within(popup).getByLabelText("Colour");
+    const colour = within(popup).getByLabelText("Color");
     colour.focus();
     fireEvent.change(colour, { target: { value: "#0044cc" } });
     // Closed from outside, with no Enter and no Tab first.
@@ -282,8 +282,8 @@ describe("a row's popup", () => {
     expect(
       within(popup).queryByRole("radio", { name: "Custom size" })
     ).toBeNull();
-    enter(within(popup).getByLabelText("Colour"), "#0044cc");
-    enter(within(popup).getByLabelText("Colour on hover"), "#002266");
+    enter(within(popup).getByLabelText("Color"), "#0044cc");
+    enter(within(popup).getByLabelText("Color on hover"), "#002266");
     const underline = within(popup).getByRole("group", { name: "Underline" });
     expect(
       within(underline)

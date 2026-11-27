@@ -174,7 +174,7 @@ async function readBreakpoints(req: Request): Promise<{
   }
   const parsed = BreakpointsBody.safeParse(raw);
   if (!parsed.success || parsed.data.breakpoints === undefined) {
-    throw invalidBreakpoints(["The request is not a set of breakpoints."]);
+    throw invalidBreakpoints(["The request is not a set of screen sizes."]);
   }
   // The Single's own check, so the route stores nothing the Single's field
   // would refuse. `null` is a set too: it clears the stored one, and the
@@ -339,7 +339,7 @@ async function dryRunBreakpoints(
   );
   const counted = await removal.count(removed, current.classes ?? [], ctx);
   return respondMutation<SiteBreakpointsDryRun>(
-    "Nothing was saved: this is what saving these breakpoints would drop.",
+    "Nothing was saved: this is what saving these screen sizes would drop.",
     {
       dryRun: true,
       breakpoints,
@@ -373,15 +373,15 @@ export async function writeSiteStyle(
 
 /** What a save that removes a breakpoint while its removal is open is told. */
 const READDED_WHILE_REMOVING =
-  "A breakpoint in this set is still being removed. Try again when its removal has finished.";
+  "A screen size in this set is still being removed. Try again when its removal has finished.";
 
 /** What a save defining a breakpoint a draft still holds values under is told. */
 const READDED_UNDER_A_DRAFT =
-  "Some pages still hold styles for that breakpoint (a draft is waiting to be published). Publish or discard those drafts, then add it again.";
+  "Some pages still hold styles for that screen size (a draft is waiting to be published). Publish or discard those drafts, then add it again.";
 
 /** What a save defining a breakpoint other left content still holds is told. */
 const READDED_UNDER_LEFT_CONTENT =
-  "Some content still holds styles for that breakpoint that could not be removed yet. Once that content can be saved, finish the breakpoint's removal, then add it again.";
+  "Some content still holds styles for that screen size that could not be removed yet. Once that content can be saved, finish the screen size's removal, then add it again.";
 
 /** What a run still holding `readded` tells the person saving. */
 function readdedMessage(held: HoldingRun): string {
@@ -617,7 +617,7 @@ export function removalAnswer<T>(
 
 /** What a save is told when the breakpoints changed while it was made. */
 const BREAKPOINTS_CHANGED =
-  "The site's breakpoints were changed while this was being saved. Reload to see them, then save again.";
+  "The site's screen sizes were changed while this was being saved. Reload to see them, then save again.";
 
 /** What a removal's write of its set is handed. */
 interface RemovalSetWrite {
@@ -799,11 +799,11 @@ export async function setLanded(
 
 /** What a confirmed removal not made from a dry run is told. */
 const CONFIRMED_WITHOUT_DRY_RUN =
-  "Check what removing these breakpoints drops before confirming it.";
+  "Check what removing these screen sizes drops before confirming it.";
 
 /** What a confirmed removal made from an earlier set is told. */
 const CHANGED_SINCE_SHOWN =
-  "The site's breakpoints changed after you checked what removing them drops. Check again before removing them.";
+  "The site's screen sizes changed after you checked what removing them drops. Check again before removing them.";
 
 /**
  * Refuse a confirmed removal that is not of exactly what its dry run showed:
@@ -838,9 +838,9 @@ function refuseUnshownRemoval(
 
 /** What a save answers once its set is stored. */
 const SAVED = {
-  finished: "The site's breakpoints were saved.",
+  finished: "The site's screen sizes were saved.",
   going:
-    "The site's breakpoints were saved. The styles under the removed breakpoints are still being removed.",
+    "The site's screen sizes were saved. The styles under the removed screen sizes are still being removed.",
 };
 
 /**
@@ -1022,8 +1022,8 @@ const RemovalBody = z.strictObject({ runId: z.string().min(1).max(64) });
 
 /** What carrying a removal on answers. */
 const CARRIED = {
-  finished: "The styles under the removed breakpoints were removed.",
-  going: "The styles under the removed breakpoints are still being removed.",
+  finished: "The styles under the removed screen sizes were removed.",
+  going: "The styles under the removed screen sizes are still being removed.",
 };
 
 /**
@@ -1054,7 +1054,7 @@ async function carryOnRemoval(
         {
           path: "runId",
           code: "INVALID_VALUE",
-          message: "The request does not name a breakpoint removal.",
+          message: "The request does not name a screen size removal.",
         },
       ],
     });
@@ -1328,7 +1328,7 @@ export function siteBreakpointRemovalStatusRoute(
             {
               path: SITE_BREAKPOINT_REMOVAL_RUN_PARAM,
               code: "INVALID_VALUE",
-              message: "The request does not name a breakpoint removal.",
+              message: "The request does not name a screen size removal.",
             },
           ],
         });

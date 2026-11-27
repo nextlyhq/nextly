@@ -152,14 +152,14 @@ describe("the Variables studio", () => {
     expect(
       screen.getByText("You can view the site’s variables but not change them.")
     ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Add colour" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add color" })).toBeNull();
   });
 
   it("can be changed by a role that may", () => {
     can.update = true;
     renderStudio();
     expect(screen.queryByText(/can view the site/)).toBeNull();
-    expect(screen.getByRole("button", { name: "Add colour" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add color" })).toBeTruthy();
   });
 
   it("draws its More design actions menu into the Design panel's header, and no light/dark switch or Preview label", async () => {
@@ -180,7 +180,7 @@ describe("the space between blocks", () => {
     renderStudio();
     // The Variables tab is drawn, so a choice above its spacing variables
     // would be on screen if one were offered.
-    expect(screen.getByRole("tab", { name: "Colours" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Colors" })).toBeTruthy();
     expect(
       screen.queryByRole("radiogroup", { name: "Space between blocks" })
     ).toBeNull();

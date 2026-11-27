@@ -138,7 +138,7 @@ describe("the media viewer", () => {
     fireEvent.click(
       within(viewer).getByRole("button", { name: "Set focus point" })
     );
-    const centre = within(viewer).getByRole("button", { name: "Centre" });
+    const centre = within(viewer).getByRole("button", { name: "Center" });
     centre.focus();
 
     fireEvent.keyDown(centre, { key: "Escape" });

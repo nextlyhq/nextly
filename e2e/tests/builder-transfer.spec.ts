@@ -288,7 +288,7 @@ test.describe("moving items between sites as files", () => {
       name: `Import "Handmade ${tag}"`,
     });
     await expect(
-      dialog.getByText("Breakpoints this site does not have")
+      dialog.getByText("Screen sizes this site does not have")
     ).toBeVisible();
     await expect(dialog.getByText("Odd (333px)")).toBeVisible();
     await expect(dialog.getByText("Used by 1 style")).toBeVisible();

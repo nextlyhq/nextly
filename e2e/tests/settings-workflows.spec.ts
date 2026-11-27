@@ -128,7 +128,7 @@ test("a stage's label and colour, then Reset back to the code's", async ({
   const label = page.getByRole("textbox", { name: "Label for In review" });
   await label.fill("Waiting for review");
   await page
-    .getByRole("group", { name: "Colour for In review" })
+    .getByRole("group", { name: "Color for In review" })
     .getByText("Amber", { exact: true })
     .click();
   await page.getByRole("button", { name: "Save In review" }).click();

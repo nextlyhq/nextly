@@ -101,7 +101,7 @@ describe("the add rows", () => {
   it("ends each list with its own add row, and the headings have none", () => {
     render(<Host />);
     // The colours end with "+ New group" too, under the last group.
-    expect(addRows("colours")).toEqual(["Add colour", "New group"]);
+    expect(addRows("colours")).toEqual(["Add color", "New group"]);
     expect(addRows("type")).toEqual(["Add type size"]);
     expect(addRows("spacing")).toEqual(["Add spacing"]);
     expect(addRows("radius")).toEqual(["Add radius"]);
@@ -130,12 +130,12 @@ describe("the add rows", () => {
     }
   });
 
-  it('shows a plus and the words "Add colour"', () => {
+  it('shows a plus and the words "Add color"', () => {
     render(<Host />);
     const add = within(group("colours")).getByRole("button", {
-      name: "Add colour",
+      name: "Add color",
     });
-    expect(add.textContent).toBe("Add colour");
+    expect(add.textContent).toBe("Add color");
     expect(add.querySelector("svg")).not.toBeNull();
   });
 
@@ -156,8 +156,8 @@ describe("the add rows", () => {
   it("keeps an empty group's line, with its add row under it", () => {
     render(<Host tokens={{ tokens: SITE.tokens.slice(2) }} />);
     const colours = group("colours");
-    expect(colours.textContent).toContain("No colours yet.");
-    expect(addRows("colours")).toEqual(["Add colour"]);
+    expect(colours.textContent).toContain("No colors yet.");
+    expect(addRows("colours")).toEqual(["Add color"]);
   });
 
   it("adds a radius from its own row", async () => {
@@ -200,7 +200,7 @@ describe("pressing an add row", () => {
   it("adds the colour as the last row of its group and opens it with the name focused", async () => {
     render(<Host />);
     fireEvent.click(
-      within(group("colours")).getByRole("button", { name: "Add colour" })
+      within(group("colours")).getByRole("button", { name: "Add color" })
     );
     const editor = await screen.findByRole("dialog", {
       name: "Edit New colour",
@@ -216,7 +216,7 @@ describe("pressing an add row", () => {
   it("keeps the search, and shows the new row marked New while it does not match", async () => {
     render(<Host initialSearch="brand" />);
     fireEvent.click(
-      within(group("colours")).getByRole("button", { name: "Add colour" })
+      within(group("colours")).getByRole("button", { name: "Add color" })
     );
     await screen.findByRole("dialog", { name: "Edit New colour" });
     const rows = [...group("colours").querySelectorAll("li")];
@@ -231,7 +231,7 @@ describe("pressing an add row", () => {
   it("lets the new row go once its editor closes, where the search does not match it", async () => {
     render(<Host initialSearch="brand" />);
     fireEvent.click(
-      within(group("colours")).getByRole("button", { name: "Add colour" })
+      within(group("colours")).getByRole("button", { name: "Add color" })
     );
     const editor = await screen.findByRole("dialog", {
       name: "Edit New colour",
@@ -271,7 +271,7 @@ describe("pressing an add row", () => {
   it("hands focus back to a one-kind add row the same way", async () => {
     render(<Host initialSearch="brand" />);
     const addColour = (): HTMLElement =>
-      within(group("colours")).getByRole("button", { name: "Add colour" });
+      within(group("colours")).getByRole("button", { name: "Add color" });
     fireEvent.click(addColour());
     const editor = await screen.findByRole("dialog", {
       name: "Edit New colour",
@@ -284,7 +284,7 @@ describe("pressing an add row", () => {
   it("marks nothing New where the new row matches the search", async () => {
     // "e" matches "Text", so the colours are listed, and "New colour" too.
     render(<Host initialSearch="e" />);
-    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add color" }));
     await screen.findByRole("dialog", { name: "Edit New colour" });
     expect(document.querySelector(".nx-vars__new")).toBeNull();
   });
@@ -294,7 +294,7 @@ describe("pressing an add row", () => {
     // Spacing matches nothing, so its list and add row are gone with it;
     // the colour group's add still adds where it is.
     expect(document.querySelector('[data-group="spacing"]')).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add color" }));
     expect(
       await screen.findByRole("dialog", { name: "Edit New colour" })
     ).toBeDefined();

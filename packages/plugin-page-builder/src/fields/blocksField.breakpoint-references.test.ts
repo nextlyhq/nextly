@@ -105,7 +105,7 @@ const codes = (result: unknown) =>
     : result;
 
 const MOBILE_GONE =
-  "Content: That breakpoint was removed from the site. Reload to keep editing.";
+  "Content: That screen size was removed from the site. Reload to keep editing.";
 
 describe("a page update's styles and hides under the site's breakpoints", () => {
   it("refuses a style brought under a breakpoint the site does not define", async () => {

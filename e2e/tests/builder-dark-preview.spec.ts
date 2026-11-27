@@ -346,7 +346,7 @@ test("is offered once the site has its first dark value, and goes with the last 
   await setTokens(page.request, { tokens: NO_DARK });
   await page.setViewportSize({ width: 1440, height: 900 });
   await openBuilder(page, first.id);
-  const panel = await designTab(page, "Colours");
+  const panel = await designTab(page, "Colors");
   const primaryRow = panel.getByRole("button", { name: /^Primary, light / });
   // CONTROL: the variables have arrived, so an absent switch is an answer.
   await expect(primaryRow).toBeVisible();

@@ -183,7 +183,7 @@ function listed(): string[] {
 }
 
 const setting = (): HTMLElement =>
-  screen.getByRole("checkbox", { name: "Show built-in colours" });
+  screen.getByRole("checkbox", { name: "Show built-in colors" });
 
 const BUILT_INS = [
   "Primary",
@@ -195,7 +195,7 @@ const BUILT_INS = [
   "Muted text",
 ];
 
-describe('the "Show built-in colours" checkbox', () => {
+describe('the "Show built-in colors" checkbox', () => {
   it("ends the Colours tab, on by default, with its hint", () => {
     render(<Panel usage={access()} />);
     expect(setting().getAttribute("aria-checked")).toBe("true");
@@ -203,10 +203,10 @@ describe('the "Show built-in colours" checkbox', () => {
       setting().getAttribute("aria-describedby") ?? ""
     );
     expect(hint?.textContent).toBe(
-      "Hidden colours still work where core blocks use them"
+      "Hidden colors still work where core blocks use them"
     );
     // After every row and the add row: the last thing in the tab.
-    const add = screen.getByRole("button", { name: "Add colour" });
+    const add = screen.getByRole("button", { name: "Add color" });
     expect(
       add.compareDocumentPosition(setting()) & Node.DOCUMENT_POSITION_FOLLOWING
     ).not.toBe(0);
@@ -238,7 +238,7 @@ describe('the "Show built-in colours" checkbox', () => {
   it("is only on the Colours tab", () => {
     render(<Panel usage={access()} groups={["spacing"]} />);
     expect(
-      screen.queryByRole("checkbox", { name: "Show built-in colours" })
+      screen.queryByRole("checkbox", { name: "Show built-in colors" })
     ).toBeNull();
   });
 });
@@ -399,7 +399,7 @@ describe("a block's colour picker while built-in colours are hidden", () => {
         <StyleInspectorPanel editor={editor} tokens={site(false)} />
       </HiddenColours.Provider>
     );
-    fireEvent.click(screen.getByRole("button", { name: /^Colour for Colour/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Colour for Color/ }));
   }
 
   const offered = (): string[] =>

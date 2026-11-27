@@ -438,12 +438,12 @@ function DecorationStyle({
         />
       </label>
       <label className="nx-style-inspector__decoration-part">
-        <span>Colour</span>
+        <span>Color</span>
         <Input
-          aria-label="Line colour"
+          aria-label="Line color"
           {...refusal}
           disabled={disabled}
-          placeholder="Text colour"
+          placeholder="Text color"
           value={color}
           onChange={event => setColor(event.target.value)}
           onBlur={commitColor}

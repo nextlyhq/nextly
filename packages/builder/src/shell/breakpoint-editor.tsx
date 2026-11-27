@@ -5,6 +5,7 @@ import { cn } from "@nextlyhq/ui/utils";
 import { Plus, Trash2, TriangleAlert } from "lucide-react";
 import * as React from "react";
 
+import { SCREEN_SIZE_WORDS } from "../glossary";
 import {
   BASE_BREAKPOINT,
   BREAKPOINT_AXES,
@@ -395,7 +396,7 @@ export function BreakpointEditor({
         setRefusal(
           reason instanceof Error
             ? reason.message
-            : "These breakpoints could not be saved."
+            : "These screen sizes could not be saved."
         );
       })
       .finally(() => {
@@ -477,7 +478,7 @@ export function BreakpointEditor({
                         type="button"
                         variant="ghost"
                         size="icon"
-                        aria-label={`Remove ${row.label.trim() || "breakpoint"}`}
+                        aria-label={`Remove ${row.label.trim() || "screen size"}`}
                         disabled={saving}
                         onClick={() => removeRow(axis, row.key)}
                       >
@@ -496,7 +497,7 @@ export function BreakpointEditor({
                   onClick={() => addRow(axis)}
                 >
                   <Plus className="size-4" />
-                  Add breakpoint
+                  {SCREEN_SIZE_WORDS.add}
                 </Button>
                 <span className="text-xs text-muted-foreground">
                   {left <= 0
@@ -565,7 +566,7 @@ export function BreakpointEditor({
             disabled={issues.length > 0 || saving || blocked !== undefined}
             onClick={save}
           >
-            {saving ? "Saving…" : "Save breakpoints"}
+            {saving ? "Saving…" : SCREEN_SIZE_WORDS.save}
           </Button>
         </div>
       </div>

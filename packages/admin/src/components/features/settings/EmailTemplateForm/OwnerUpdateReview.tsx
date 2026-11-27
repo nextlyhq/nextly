@@ -523,7 +523,7 @@ export function OwnerUpdateReview({
         <DialogHeader className="shrink-0 border-b border-border px-6 py-4">
           <DialogTitle>Review {owner}&apos;s update</DialogTitle>
           <DialogDescription>
-            {owner} changed {name} since your site customised it. Choose, for
+            {owner} changed {name} since your site customized it. Choose, for
             each change, whether to keep your lines or use theirs.
           </DialogDescription>
         </DialogHeader>

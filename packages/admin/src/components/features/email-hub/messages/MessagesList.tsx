@@ -406,7 +406,7 @@ export function MessagesList(): JSX.Element {
           <AlertDescription className="flex flex-col items-start gap-3">
             <span>
               {updates.map(record => record.name).join(", ")} changed since you
-              customised {updates.length === 1 ? "it" : "them"}.
+              customized {updates.length === 1 ? "it" : "them"}.
             </span>
             <Button
               variant="outline"

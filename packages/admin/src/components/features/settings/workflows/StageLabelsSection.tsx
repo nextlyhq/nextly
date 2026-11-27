@@ -131,7 +131,7 @@ function StageLabelRow({
           colour={current.colour === "" ? undefined : current.colour}
         />
         <p className="text-xs text-muted-foreground">
-          In code: &ldquo;{stage.label}&rdquo;, no colour
+          In code: &ldquo;{stage.label}&rdquo;, no color
         </p>
       </div>
       {canChange ? (
@@ -268,7 +268,7 @@ function StageColourPicker({
   ];
   return (
     <fieldset>
-      <legend className="sr-only">Colour for {stage.label}</legend>
+      <legend className="sr-only">Color for {stage.label}</legend>
       <div className="flex flex-wrap gap-2">
         {options.map(option => (
           <ColourOption

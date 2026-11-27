@@ -172,7 +172,7 @@ function mountLive(store: PreferenceStore, tokens: SiteTokenSet = TOKENS) {
 }
 
 const openPicker = (): void => {
-  fireEvent.click(screen.getByRole("button", { name: /^Colour for Colour/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Colour for Color/ }));
 };
 
 const recent = (): HTMLElement =>
@@ -234,7 +234,7 @@ describe("a block's colour picker", () => {
   it("remembers a colour typed into the field, in the form it was typed", () => {
     const store = memory();
     mount(store, "#3b82f6");
-    const field = screen.getByRole("textbox", { name: "Colour" });
+    const field = screen.getByRole("textbox", { name: "Color" });
     fireEvent.change(field, { target: { value: "rgb(0 0 255)" } });
     fireEvent.blur(field);
 
@@ -246,7 +246,7 @@ describe("a block's colour picker", () => {
     // "#ff0000": only the colour the author settled on joins the list.
     const store = memory();
     mount(store, "#3b82f6");
-    const field = screen.getByRole("textbox", { name: "Colour" });
+    const field = screen.getByRole("textbox", { name: "Color" });
     let typed = "";
     for (const character of "#ff0000") {
       typed += character;
@@ -272,7 +272,7 @@ describe("a block's colour picker", () => {
       },
     };
     const live = mountLive(counted);
-    const field = screen.getByRole("textbox", { name: "Colour" });
+    const field = screen.getByRole("textbox", { name: "Color" });
     let typed = "";
     for (const character of "#ff0000") {
       typed += character;
@@ -307,7 +307,7 @@ describe("a block's colour picker", () => {
     });
     // By its label: while the variables it names are suggested under it,
     // the box is a combobox rather than a plain text box.
-    const box = () => screen.getByLabelText("Colour", { selector: "input" });
+    const box = () => screen.getByLabelText("Color", { selector: "input" });
     let typed = "";
     for (const character of "color.brand.dark") {
       typed += character;
@@ -348,7 +348,7 @@ describe("a block's colour picker", () => {
       name: /Saturation and brightness/,
     });
     fireEvent.keyDown(surface, { key: "ArrowLeft", shiftKey: true });
-    const field = screen.getByRole("textbox", { name: "Colour" });
+    const field = screen.getByRole("textbox", { name: "Color" });
     expect((field as HTMLInputElement).value).not.toBe("#00aaff");
 
     fireEvent.click(within(recent()).getByRole("button", { name: "#00aaff" }));

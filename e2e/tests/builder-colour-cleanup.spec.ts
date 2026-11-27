@@ -90,7 +90,7 @@ async function openColours(page: Page) {
       .getByRole("button", { name: "Design", exact: true })
       .click();
   }
-  await panel.getByRole("tab", { name: /^Colours/ }).click();
+  await panel.getByRole("tab", { name: /^Colors/ }).click();
   return panel;
 }
 
@@ -105,7 +105,7 @@ function listed(panel: ReturnType<Page["getByRole"]>): Promise<string[]> {
 async function openCleanUp(page: Page) {
   const panel = await openColours(page);
   await panel.getByRole("button", { name: "Clean up unused…" }).click();
-  const dialog = page.getByRole("dialog", { name: "Clean up unused colours" });
+  const dialog = page.getByRole("dialog", { name: "Clean up unused colors" });
   await expect(dialog.getByRole("checkbox", { name: "Spare two" })).toBeVisible(
     { timeout: 30_000 }
   );
@@ -234,7 +234,7 @@ test("is reached and used with the keyboard alone", async ({ page }) => {
     await expect(open).toBeFocused();
     await page.keyboard.press("Enter");
     const dialog = page.getByRole("dialog", {
-      name: "Clean up unused colours",
+      name: "Clean up unused colors",
     });
     const spareOne = dialog.getByRole("checkbox", { name: "Spare one" });
     await expect(spareOne).toBeVisible({ timeout: 30_000 });
@@ -319,7 +319,7 @@ test("at the panel's narrowest the control fits and the dialog stays in the wind
       });
       await open.click();
       const dialog = page.getByRole("dialog", {
-        name: "Clean up unused colours",
+        name: "Clean up unused colors",
       });
       await expect(
         dialog.getByRole("checkbox", { name: "Spare two" })
@@ -373,7 +373,7 @@ test("a role that may read Design but not change it is offered no clean-up, and 
     // The control: the filter is drawn, so the clean-up's absence is the
     // role's doing.
     await expect(
-      panel.getByRole("radiogroup", { name: "Show colours" })
+      panel.getByRole("radiogroup", { name: "Show colors" })
     ).toBeVisible();
     await expect(
       panel.getByRole("button", { name: "Clean up unused…" })

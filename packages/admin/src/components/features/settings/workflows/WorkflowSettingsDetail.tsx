@@ -249,7 +249,7 @@ export function WorkflowSettingsDetail({
 
         <Section
           id="workflow-labels"
-          title="Labels and colours"
+          title="Labels and colors"
           description="Shown in the editor, lists and notices. The code's names stay in the API and the types."
         >
           <StageLabelsSection

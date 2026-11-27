@@ -111,9 +111,9 @@ export function undoMessage(undo: SiteBreakpointUndo): {
   return {
     finished:
       values === 0
-        ? "The removal was undone: its breakpoints and their styles are back."
-        : `The removal was undone: its breakpoints are back with their styles, except ${values} ${values === 1 ? "value" : "values"} changed since the removal.`,
+        ? "The removal was undone: its screen sizes and their styles are back."
+        : `The removal was undone: its screen sizes are back with their styles, except ${values} ${values === 1 ? "value" : "values"} changed since the removal.`,
     going:
-      "The removal was undone: its breakpoints are back. Their styles are still being put back.",
+      "The removal was undone: its screen sizes are back. Their styles are still being put back.",
   };
 }

@@ -101,7 +101,7 @@ describe("a colour variable's picker", () => {
     render(<Hosted store={store} onChange={onChange} />);
     const editor = await openBrand();
     fireEvent.click(
-      within(editor).getByRole("button", { name: "Pick the light colour" })
+      within(editor).getByRole("button", { name: "Pick the light color" })
     );
 
     expect(within(editor).getByText("Recent colours")).toBeTruthy();

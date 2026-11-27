@@ -200,7 +200,7 @@ const selected = (): string | null =>
   screen.getByTestId("selected").textContent;
 
 const trigger = (): HTMLElement =>
-  screen.getByRole("button", { name: /^Colour for Colour/ });
+  screen.getByRole("button", { name: /^Colour for Color/ });
 
 const variables = (): HTMLElement | null =>
   screen.queryByRole("listbox", { name: "Colour variables" });
@@ -345,7 +345,7 @@ describe("Escape in a floating list that closes without marking the key handled"
 describe("Escape typed in an inspector text field", () => {
   it("never moves the selection, and focus stays in the field", () => {
     const { hostCancel } = mount();
-    const field = screen.getByRole("textbox", { name: "Colour" });
+    const field = screen.getByRole("textbox", { name: "Color" });
     field.focus();
 
     const event = pressEscape(field);

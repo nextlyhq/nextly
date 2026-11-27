@@ -155,7 +155,7 @@ describe("the layouts list", () => {
     expect(screen.getByText("Update available")).toBeTruthy();
     expect(screen.getByText("Kept as before")).toBeTruthy();
     // Changed by the site, so the brand settings don't reach it.
-    expect(screen.getByText("Customised")).toBeTruthy();
+    expect(screen.getByText("Customized")).toBeTruthy();
     expect(screen.queryByText("Built from brand settings")).toBeNull();
   });
 

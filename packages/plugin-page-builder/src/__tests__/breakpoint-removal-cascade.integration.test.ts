@@ -885,7 +885,7 @@ describe.each(getConfiguredTestDialects())(
 
       expect(second.status).toBe(409);
       expect(JSON.stringify(second.body)).toContain(
-        "Another breakpoint removal is still running. Try again when it has finished."
+        "Another screen size removal is still running. Try again when it has finished."
       );
     });
 
@@ -911,7 +911,7 @@ describe.each(getConfiguredTestDialects())(
       const readded = await save(cookie, [TABLET, MOBILE]);
       expect(readded.status).toBe(409);
       expect(JSON.stringify(readded.body)).toContain(
-        "A breakpoint in this set is still being removed."
+        "A screen size in this set is still being removed."
       );
 
       await walkToTheEnd(svc, run.id);
@@ -1114,7 +1114,7 @@ describe.each(getConfiguredTestDialects())(
       const refused = await save(cookie, [TABLET, MOBILE]);
       expect(refused.status).toBe(409);
       expect(JSON.stringify(refused.body)).toContain(
-        "Some pages still hold styles for that breakpoint (a draft is waiting to be published). Publish or discard those drafts, then add it again."
+        "Some pages still hold styles for that screen size (a draft is waiting to be published). Publish or discard those drafts, then add it again."
       );
 
       // The author publishes the draft, which the removal had stripped.
@@ -1214,7 +1214,7 @@ describe.each(getConfiguredTestDialects())(
       const refused = await save(cookie, [TABLET, MOBILE]);
       expect(refused.status).toBe(409);
       expect(JSON.stringify(refused.body)).toContain(
-        "Some content still holds styles for that breakpoint"
+        "Some content still holds styles for that screen size"
       );
 
       const carried = await carryOn(cookie, runId);
@@ -1675,7 +1675,7 @@ describe.each(getConfiguredTestDialects())(
 
       expect(confirmed.status).toBe(409);
       expect(JSON.stringify(confirmed.body)).toContain(
-        "The site's breakpoints changed after you checked what removing them drops."
+        "The site's screen sizes changed after you checked what removing them drops."
       );
       expect(unversioned.status).toBe(400);
       // Nothing opened, nothing stripped.
@@ -2356,7 +2356,7 @@ describe.each(getConfiguredTestDialects())(
         const again = await undo(cookie, removed);
         expect(again.status).toBe(409);
         expect(again.body).toMatchObject({
-          error: { message: expect.stringContaining("breakpoints again") },
+          error: { message: expect.stringContaining("screen sizes again") },
         });
       });
     });

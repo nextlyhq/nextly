@@ -706,7 +706,7 @@ describe("a block style's states and devices, in the style editor", () => {
     ).toBeTruthy();
     const text = screen.getByRole("button", { name: /^Text/ });
     if (text.getAttribute("aria-expanded") !== "true") fireEvent.click(text);
-    const colour = screen.getByRole("textbox", { name: /^Colour( |$)/ });
+    const colour = screen.getByRole("textbox", { name: /^Color( |$)/ });
     fireEvent.change(colour, { target: { value: "#ff0000" } });
     fireEvent.blur(colour);
     await waitFor(() => expect(writeStyles).toHaveBeenCalled());

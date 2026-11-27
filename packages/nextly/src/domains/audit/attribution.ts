@@ -17,8 +17,8 @@
  */
 
 import { looksLikeSecret } from "../../observability/credential-shapes";
-import { redactCredentialsInText } from "../../observability/mask-emails";
 import { getNextlyLogger } from "../../observability/logger";
+import { redactCredentialsInText } from "../../observability/mask-emails";
 import { ATTRIBUTION_NAME_LENGTH } from "../../schemas/audit/widths";
 
 /**

@@ -411,7 +411,7 @@ describe.each(getConfiguredTestDialects())(
       render(createElement(Editor));
       const editor = await openBrand();
       const swatch = within(editor).getByRole("button", {
-        name: "Pick the light colour",
+        name: "Pick the light color",
       });
       act(() => {
         fireEvent.click(swatch);

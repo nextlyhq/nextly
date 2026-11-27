@@ -31,7 +31,7 @@ const OPEN = "site";
 
 /** What a second removal, saved while one is open, is told. */
 const ANOTHER_REMOVAL_RUNNING =
-  "Another breakpoint removal is still running. Try again when it has finished.";
+  "Another screen size removal is still running. Try again when it has finished.";
 
 /** One removal, as its row stores it. */
 export interface BreakpointRun extends WalkedRun {
@@ -178,7 +178,7 @@ const RETIRE_ATTEMPTS = 5;
 
 /** What a save is told when old removals could not give up an id it re-adds. */
 const RETIRE_LOST =
-  "The site's breakpoints are being changed by someone else right now. Try saving again.";
+  "The site's screen sizes are being changed by someone else right now. Try saving again.";
 
 /** Why a document written back with removed values waits on a done run. */
 export const WRITTEN_BACK = "written-back";

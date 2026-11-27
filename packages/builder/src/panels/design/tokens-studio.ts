@@ -81,7 +81,7 @@ import {
  * own identifier.
  */
 export const TOKEN_KIND_LABELS: Readonly<Record<TokenKind, string>> = {
-  color: "Colour",
+  color: "Color",
   dimension: "Size",
   fontFamily: "Font",
   fontWeight: "Weight",
@@ -823,7 +823,7 @@ const VARIABLE_GROUPS: readonly VariableGroup[] = [
 
 /** Each group's heading, in plain words. */
 const VARIABLE_GROUP_LABELS: Readonly<Record<VariableGroup, string>> = {
-  colours: "Colours",
+  colours: "Colors",
   type: "Type scale",
   fonts: "Fonts and weights",
   spacing: "Spacing",

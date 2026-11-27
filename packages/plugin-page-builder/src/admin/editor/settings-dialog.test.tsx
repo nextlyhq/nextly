@@ -247,7 +247,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
     <>
       <output aria-label="Breakpoints status">{status}</output>
       <button type="button" onClick={() => onEditingChange?.(true)}>
-        Edit breakpoints
+        Edit screen sizes
       </button>
       <button type="button" onClick={() => onSavingChange?.(true)}>
         Start saving
@@ -987,14 +987,14 @@ describe("Site settings", () => {
     const { onOpenChange } = show();
     await openSite();
     await userEvent.click(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     );
     fireEvent.keyDown(document.activeElement ?? document.body, {
       key: "Escape",
     });
 
     const ask = await screen.findByRole("alertdialog");
-    expect(ask.textContent).toContain("Discard your breakpoint changes?");
+    expect(ask.textContent).toContain("Discard your screen size changes?");
     await userEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(screen.getByRole("dialog", { name: "Site settings" })).toBeTruthy();
     expect(onOpenChange).not.toHaveBeenCalled();
@@ -1004,7 +1004,7 @@ describe("Site settings", () => {
     const { onOpenChange } = show();
     await openSite();
     await userEvent.click(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     );
     fireEvent.keyDown(document.activeElement ?? document.body, {
       key: "Escape",
@@ -1025,7 +1025,7 @@ describe("Site settings", () => {
     show();
     await openSite();
     await userEvent.click(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     );
     // The code opens over the breakpoint draft, which stays.
     await userEvent.click(
@@ -1039,7 +1039,7 @@ describe("Site settings", () => {
     });
     const ask = await screen.findByRole("alertdialog");
     expect(ask.textContent).toContain(
-      "Discard your breakpoint and code changes?"
+      "Discard your screen size and code changes?"
     );
   });
 
@@ -1171,13 +1171,13 @@ describe("Site settings", () => {
     );
     await openSite();
     await userEvent.click(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     );
     await userEvent.click(
       screen.getByRole("button", { name: "Change in Pages ▸ Header & footer" })
     );
     const ask = await screen.findByRole("alertdialog");
-    expect(ask.textContent).toContain("Discard your breakpoint changes?");
+    expect(ask.textContent).toContain("Discard your screen size changes?");
     expect(openSets).not.toHaveBeenCalled();
     expect(onOpenChange).not.toHaveBeenCalled();
     await userEvent.click(
@@ -1235,7 +1235,7 @@ describe("Site settings", () => {
     show();
     await openSite();
     await userEvent.click(
-      screen.getByRole("button", { name: "Edit breakpoints" })
+      screen.getByRole("button", { name: "Edit screen sizes" })
     );
     await userEvent.click(screen.getByRole("button", { name: "Start saving" }));
     fireEvent.keyDown(document.activeElement ?? document.body, {
@@ -1343,7 +1343,7 @@ function lowestRatioUnderIndigo(classes: string[]): {
   const ink =
     classes.find(name => scale.has(`--color-${name.replace(/^text-/, "")}`)) ??
     "";
-  if (!ink.startsWith("text-")) throw new Error("no text colour class");
+  if (!ink.startsWith("text-")) throw new Error("no text color class");
   const token = ink.replace(/^text-/, "");
   const brand = [
     ...(getBrandingCss({ colors: { primary: "#6366f1" } }) ?? "").matchAll(

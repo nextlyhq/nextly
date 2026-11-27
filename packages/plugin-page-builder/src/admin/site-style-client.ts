@@ -376,7 +376,7 @@ const SECTION_LABELS: Readonly<Record<SiteStyleSection, string>> = {
   tokens: "A change to the site's variables",
   classes: "A change to the site's shared styles",
   fonts: "A change to the site's fonts",
-  breakpoints: "A change to the site's breakpoints",
+  breakpoints: "A change to the site's screen sizes",
 };
 
 /** A save held for the author's pause. */

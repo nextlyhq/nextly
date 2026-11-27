@@ -113,7 +113,7 @@ test("a new shadow is built with fields and layers, and its preview follows a co
       .toBe("0 4px 16px rgba(0, 0, 0, 0.12)");
 
     // Coloured by a variable with a dark value: a dark preview joins.
-    await first.getByRole("button", { name: "Colour for layer 1" }).click();
+    await first.getByRole("button", { name: "Color for layer 1" }).click();
     await page
       .getByRole("listbox", { name: "Colour variables" })
       .getByRole("option", { name: /^Text/ })

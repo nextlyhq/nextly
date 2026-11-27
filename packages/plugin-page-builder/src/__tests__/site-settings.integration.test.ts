@@ -162,7 +162,7 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(answer.status).toBe(403);
       expect(JSON.stringify(answer.body)).toContain(
-        "The site's breakpoints are changed in the page builder's Settings."
+        "The site's screen sizes are changed in the page builder's Settings."
       );
       expect(await storedBreakpoints(t)).toBeNull();
     });

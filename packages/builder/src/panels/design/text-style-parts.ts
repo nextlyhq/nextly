@@ -58,7 +58,7 @@ export const TEXT_STYLE_CASES: ReadonlyArray<readonly [string, string]> = [
   ["none", "As typed"],
   ["uppercase", "UPPERCASE"],
   ["lowercase", "lowercase"],
-  ["capitalize", "Capitalised"],
+  ["capitalize", "Capitalized"],
 ];
 
 /** The units a letter spacing is offered in, its default first. */

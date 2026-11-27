@@ -27,8 +27,8 @@ import { usageState, type VariablesAccess } from "./variable-usage";
 import { useVariableUsage } from "./variable-usage-view";
 
 /** The setting's label and hint, word for word. */
-const LABEL = "Show built-in colours";
-const HINT = "Hidden colours still work where core blocks use them";
+const LABEL = "Show built-in colors";
+const HINT = "Hidden colors still work where core blocks use them";
 
 /** No colour hidden. */
 const NONE: ReadonlySet<string> = new Set();
