@@ -78,6 +78,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@nextlyhq/ui";
+import { X } from "lucide-react";
 import * as React from "react";
 
 import { BlockIconMark } from "../../block-icon";
@@ -86,7 +87,11 @@ import { entryContentRefusal } from "../../canvas/entry-content-rules";
 import { usePreviewedCollection } from "../../canvas/previewed-entry";
 import { EDITOR_WORDS } from "../../editor-words";
 
-import { LibraryNotices, type LibraryTier } from "./insert-panel-notices";
+import {
+  LibraryNotices,
+  SliderNotice,
+  type LibraryTier,
+} from "./insert-panel-notices";
 import { useInsertOffers } from "./insert-panel-offers";
 import { useSummonAnswer } from "./insert-panel-summon";
 import {
@@ -94,7 +99,6 @@ import {
   GRID_COLUMNS,
   InsertAnnouncement,
   movesTheHighlight,
-  PICTURE_COLUMNS,
   PlacementLine,
   tileWhere,
   TilePopover,
@@ -109,6 +113,7 @@ import {
   UNCATEGORISED,
   type InsertEntry,
 } from "./inserter";
+import { asksForSlider, SLIDER_STAND_IN } from "./inserter-palette";
 
 // The panel's props, its library notices, its tiles and what it offers where
 // live in modules of their own beside it; every name this module exported
@@ -176,6 +181,8 @@ export function InsertPanel({
   // Where a dragged block's insert is counted, as a clicked one's is.
   const usage = useInsertUsage();
   const [query, setQuery] = React.useState("");
+  // The search field, which its clear button hands the cursor back to.
+  const searchField = React.useRef<HTMLInputElement | null>(null);
   // Blocks first: what an author adds most. Sections holds the patterns.
   const [tab, setTab] = usePanelTab(summoned, summonedTab);
   /*
@@ -217,14 +224,28 @@ export function InsertPanel({
   const firstBlocksField = blocksFields?.[0]?.name;
   // The tab's share of the catalog, then the query. Refused entries stay, so
   // an empty list means the query matched nothing, or the tab holds nothing.
+  const tabEntries = catalog.filter(entry => tabOf(entry) === tab);
+  const matched = filterEntries(tabEntries, query);
+  // A search for a slider that finds nothing is offered the gallery itself
+  // (not its variations), under a line that says it is not one
+  // (`SliderNotice`); only where the gallery is there to offer.
+  const standIn = tabEntries.filter(
+    entry =>
+      entry.kind === "block" &&
+      entry.blockName === SLIDER_STAND_IN &&
+      entry.variationName === undefined
+  );
+  const sliderAsked =
+    matched.length === 0 && standIn.length > 0 && asksForSlider(query);
   const groups = paletteGroups(
-    filterEntries(
-      catalog.filter(entry => tabOf(entry) === tab),
-      query
-    ),
+    sliderAsked ? standIn : matched,
     categoryOrder,
     blockOrder
   );
+  // Whether the tab's whole library is one group, before a search leaves
+  // fewer: the Saved sections tab then draws its list under no heading.
+  const oneGroup =
+    paletteGroups(tabEntries, categoryOrder, blockOrder).length === 1;
 
   /*
    * One opaque TOKEN per catalog entry, standing in for it everywhere the DOM
@@ -319,11 +340,46 @@ export function InsertPanel({
         if (movesTheHighlight(event)) setMoved("keyboard");
       }}
     >
-      <CommandInput
-        value={query}
-        onValueChange={setQuery}
-        placeholder={SEARCH_PLACEHOLDERS[tab]}
-      />
+      {/*
+        The search in a box of its own, with a clear button while it holds a
+        query: emptying it by hand is a run of backspaces, and the cursor
+        goes back to the field so the next search can be typed at once.
+      */}
+      <div className="nx-insert-panel__search">
+        <CommandInput
+          ref={searchField}
+          value={query}
+          onValueChange={setQuery}
+          placeholder={SEARCH_PLACEHOLDERS[tab]}
+        />
+        {query === "" ? null : (
+          <button
+            type="button"
+            className="nx-insert-panel__clear"
+            aria-label="Clear search"
+            onClick={() => {
+              setQuery("");
+              searchField.current?.focus();
+            }}
+            // The palette around it takes Enter for its highlighted tile and
+            // the arrows for the highlight; on the button they are its own.
+            onKeyDown={event => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                event.stopPropagation();
+                setQuery("");
+                searchField.current?.focus();
+                return;
+              }
+              if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+                event.stopPropagation();
+              }
+            }}
+          >
+            <X aria-hidden="true" size={14} />
+          </button>
+        )}
+      </div>
       <PlacementLine
         document={editor.document}
         flash={flash}
@@ -334,6 +390,7 @@ export function InsertPanel({
         offers={offers}
       />
       <LibraryNotices library={library} tier={tierOf(tab)} />
+      <SliderNotice shown={sliderAsked} />
       <CommandList
         className="nx-insert-panel__list"
         // A pointer that leaves the tiles returns the panel to rest; a
@@ -346,7 +403,13 @@ export function InsertPanel({
         {groups.map(group => (
           <CommandGroup
             key={group.category}
-            heading={groupHeading(group.category, tab)}
+            // The saved sections as one list under no heading when they
+            // are one group: a heading over the only list says nothing.
+            heading={
+              tab === "sections" && oneGroup
+                ? undefined
+                : groupHeading(group.category, tab)
+            }
           >
             {group.entries.map(entry => {
               const offer = offers.get(entry.id);
@@ -365,6 +428,10 @@ export function InsertPanel({
                   // not — two plugins may both label a block "Card".
                   key={entry.id}
                   value={token}
+                  // What the tile adds: a component's is drawn in the
+                  // component colour, as its mark on the canvas and its row
+                  // in Layers are.
+                  data-kind={entry.kind}
                   onSelect={() => insert(offer)}
                   /*
                    * NAMED by the block and DESCRIBED by its sentence, rather
@@ -500,9 +567,7 @@ export function InsertPanel({
          instead of read by the grid. */
       style={
         {
-          "--nx-insert-columns": picturesIn(tab, renderPicture)
-            ? PICTURE_COLUMNS
-            : GRID_COLUMNS,
+          "--nx-insert-columns": GRID_COLUMNS,
         } as React.CSSProperties
       }
       // The current tile is painted once the author has moved through the
@@ -568,14 +633,6 @@ function usePanelTab(
     }
   }
   return [tab, setTab];
-}
-
-/** Whether a tab's tiles draw pictures: the saved sections, given a host's. */
-function picturesIn(
-  tab: PanelTab,
-  renderPicture: InsertPanelProps["renderPicture"]
-): boolean {
-  return tab === "sections" && renderPicture !== undefined;
 }
 
 /**

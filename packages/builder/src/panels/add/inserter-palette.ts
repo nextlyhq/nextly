@@ -7,6 +7,7 @@
  */
 
 import { EDITOR_WORDS } from "../../editor-words";
+import { ADD_PANEL_WORDS } from "../../glossary";
 
 import {
   COMPONENT_CATEGORY,
@@ -35,6 +36,18 @@ export function filterEntries<TEntry extends InsertEntry>(
   return entries.filter(entry =>
     searchableWords(entry).some(field => field.toLowerCase().includes(needle))
   );
+}
+
+/**
+ * The block offered to a search for a slider: the library has no slider, and
+ * a gallery is the nearest thing an author can place, so it is offered under
+ * a line saying what it is rather than found as if it were one.
+ */
+export const SLIDER_STAND_IN = "core/gallery";
+
+/** Whether a search asks for a slider or a carousel, which no block is. */
+export function asksForSlider(query: string): boolean {
+  return /\b(?:carousel|slider)/.test(query.trim().toLowerCase());
 }
 
 /**
@@ -146,8 +159,8 @@ function inBlockOrder<TEntry extends InsertEntry>(
  * The words a category's heading is drawn with.
  *
  * The library's category ids are words for code ("content"), so the ones it
- * declares are named as an author reads them; "content" is "Text" because that
- * is what the blocks under it are. The two groups the panel itself makes are
+ * declares are named as an author reads them, in the editor's words:
+ * "content" is "Text & lists" because that is what the blocks under it are. The two groups the panel itself makes are
  * named here too. A plugin's category is a free string it chose to be read,
  * so it is drawn as written.
  */
@@ -164,7 +177,8 @@ export function categoryHeading(category: string): string {
  */
 const CATEGORY_HEADINGS: Readonly<Record<string, string>> = {
   layout: "Layout",
-  content: "Text",
+  content: ADD_PANEL_WORDS.textAndLists,
+  collections: ADD_PANEL_WORDS.collections,
   // What a template draws of the entry itself.
   entry: "Entry",
   media: "Media",

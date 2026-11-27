@@ -169,7 +169,9 @@ export const gallery: BlockDefinition<GalleryProps, PageContext> = defineBlock({
     label: "Gallery",
     icon: "gallery",
     category: MEDIA,
-    keywords: ["images", "photos", "grid", "carousel"],
+    // No "carousel" or "slider": a gallery is a grid with no slider mode, and
+    // a search for one finds no block rather than one that is not.
+    keywords: ["images", "photos", "grid"],
   },
   props: {
     as: htmlTagProp(["div", "section", "article"]),

@@ -707,6 +707,29 @@ describe("InsertPanel", () => {
     ).toHaveLength(0);
   });
 
+  it("clears the search with its × and puts the cursor back in it", () => {
+    registerBlocks(
+      [
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+        { ...base, name: "acme/box", editor: { label: "Box" } },
+      ] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    const search = screen.getByPlaceholderText("Search blocks and components");
+    // Nothing to clear while the search is empty.
+    expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
+
+    fireEvent.change(search, { target: { value: "Box" } });
+    expect(screen.queryAllByRole("option")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+
+    expect((search as HTMLInputElement).value).toBe("");
+    expect(screen.queryAllByRole("option")).toHaveLength(2);
+    expect(document.activeElement).toBe(search);
+    expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
+  });
+
   it("says nothing matched, distinctly from nothing being placeable", () => {
     registerBlocks(
       [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
@@ -724,6 +747,146 @@ describe("InsertPanel", () => {
     expect(
       within(screen.getByRole("listbox")).getByText(/No blocks match/)
     ).toBeTruthy();
+  });
+
+  it.each(["carousel", "slider"])(
+    "says there is no slider block yet for %s, and offers Gallery below",
+    word => {
+      registerBlocks(
+        [
+          { ...base, name: "acme/text", editor: { label: "Text" } },
+          {
+            ...base,
+            name: "core/gallery",
+            editor: { label: "Gallery", keywords: ["images", "grid"] },
+          },
+        ] as never,
+        { source: "acme" }
+      );
+      render(<InsertPanel editor={editorSpy(documentOf())} />);
+      fireEvent.change(
+        screen.getByPlaceholderText("Search blocks and components"),
+        { target: { value: word } }
+      );
+
+      expect(
+        screen.getByText(
+          "No slider block yet. Gallery shows pictures in a grid."
+        )
+      ).toBeTruthy();
+      expect(tile("Gallery")).toBeTruthy();
+      // Gallery alone: nothing else is offered as if it were a slider.
+      expect(screen.queryAllByRole("option")).toHaveLength(1);
+      expect(screen.queryByText(/No blocks match/)).toBeNull();
+    }
+  );
+
+  it("clears the search with Enter on its ×, inserting nothing", () => {
+    registerBlocks(
+      [{ ...base, name: "acme/box", editor: { label: "Box" } }] as never,
+      { source: "acme" }
+    );
+    const editor = editorSpy(documentOf());
+    render(<InsertPanel editor={editor} />);
+    const search = screen.getByPlaceholderText("Search blocks and components");
+    fireEvent.change(search, { target: { value: "Box" } });
+    const clear = screen.getByRole("button", { name: "Clear search" });
+    clear.focus();
+    // The palette takes Enter for its highlighted tile; on the × it clears.
+    fireEvent.keyDown(clear, { key: "Enter" });
+    expect((search as HTMLInputElement).value).toBe("");
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(search);
+  });
+
+  it("keeps the slider line's status region in the page, empty, before a search fills it", () => {
+    // A live region that is in the page before its words arrive is the one a
+    // screen reader announces; one shown along with its words may not be.
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "core/gallery",
+          editor: { label: "Gallery", keywords: ["images", "grid"] },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    const region = document.querySelector("[data-slider-notice]");
+    expect(region).not.toBeNull();
+    expect(region?.getAttribute("role")).toBe("status");
+    expect(region?.hasAttribute("hidden")).toBe(false);
+    expect(region?.textContent).toBe("");
+    fireEvent.change(
+      screen.getByPlaceholderText("Search blocks and components"),
+      { target: { value: "slider" } }
+    );
+    expect(document.querySelector("[data-slider-notice]")).toBe(region);
+    expect(region?.textContent).toBe(
+      "No slider block yet. Gallery shows pictures in a grid."
+    );
+  });
+
+  it("says nothing about a slider where no Gallery can be offered", () => {
+    // A library without Gallery: the line would point at a tile not there.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    fireEvent.change(
+      screen.getByPlaceholderText("Search blocks and components"),
+      { target: { value: "slider" } }
+    );
+    expect(screen.queryByText(/No slider block yet/)).toBeNull();
+    expect(
+      within(screen.getByRole("listbox")).getByText(/No blocks match/)
+    ).toBeTruthy();
+  });
+
+  it("offers Gallery alone for a slider, not its variations", () => {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "core/gallery",
+          editor: {
+            label: "Gallery",
+            keywords: ["images", "grid"],
+            variations: [{ name: "masonry", label: "Masonry gallery" }],
+          },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    fireEvent.change(
+      screen.getByPlaceholderText("Search blocks and components"),
+      { target: { value: "carousel" } }
+    );
+    expect(screen.queryAllByRole("option")).toHaveLength(1);
+    expect(tile("Gallery")).toBeTruthy();
+  });
+
+  it("says nothing matched, and offers no Gallery, for a search that is not for a slider", () => {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "core/gallery",
+          editor: { label: "Gallery", keywords: ["images", "grid"] },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    fireEvent.change(
+      screen.getByPlaceholderText("Search blocks and components"),
+      { target: { value: "nonexistent" } }
+    );
+    expect(screen.queryByText(/No slider block yet/)).toBeNull();
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
   });
 
   it("keeps what the place refuses in view, says why, and inserts none of it", () => {
@@ -1030,7 +1193,7 @@ describe("the panel's frame", () => {
       [...document.querySelectorAll("[cmdk-group-heading]")].map(
         heading => heading.textContent
       )
-    ).toEqual(["Layout", "Text", "Acme data", "More blocks"]);
+    ).toEqual(["Layout", "Text & lists", "Acme data", "More blocks"]);
   });
 });
 
@@ -1980,6 +2143,10 @@ describe("the component tier", () => {
     const header = tile("Header");
     expect(header.querySelector(".nx-block-icon svg")).not.toBeNull();
     expect(header.querySelector(".nx-insert-panel__tier")).toBeNull();
+    // Marked as a component, which the stylesheet draws in the component
+    // colour; a block's tile is not.
+    expect(header.getAttribute("data-kind")).toBe("component");
+    expect(tile("Box").getAttribute("data-kind")).toBe("block");
     expect(describedBy(header)).toBe(
       "Goes at the end of the page. The site header."
     );
@@ -2192,11 +2359,17 @@ describe("when the library was cut, or could not be read", () => {
   /** The notices, or none: they are status regions, so that is how they are found. */
   /** The library's notices: not the list's own line for "nothing matched". */
   function notices(): HTMLElement[] {
-    return screen
-      .queryAllByRole("status")
-      .filter(
-        status => status.getAttribute("data-slot") !== "command-empty-status"
-      );
+    return (
+      screen
+        .queryAllByRole("status")
+        // The palette's own regions, always in the page, are not notices:
+        // its empty state, and the slider line's region.
+        .filter(
+          status =>
+            status.getAttribute("data-slot") !== "command-empty-status" &&
+            !status.hasAttribute("data-slider-notice")
+        )
+    );
   }
 
   it("says nothing when every tier arrived whole, or is still arriving", () => {

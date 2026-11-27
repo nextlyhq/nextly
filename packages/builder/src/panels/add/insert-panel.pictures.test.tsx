@@ -270,4 +270,53 @@ describe("the Saved sections tab's pictures", () => {
     expect(tile("Hero").querySelector(".nx-picture")).toBeNull();
     expect(tile("Hero").querySelector(".nx-block-icon")).not.toBeNull();
   });
+
+  it("draws one group of saved sections under no heading, and two under theirs", () => {
+    registerBlocks([TEXT], { source: "acme" });
+    const headings = () =>
+      [...document.querySelectorAll("[cmdk-group-heading]")].map(
+        heading => heading.textContent
+      );
+    const view = render(<InsertPanel editor={editor()} patterns={SECTIONS} />);
+    openTab("Saved sections");
+    // One group: a heading over the only list says nothing.
+    expect(headings()).toEqual([]);
+    expect(tile("Hero")).toBeTruthy();
+    view.unmount();
+
+    render(
+      <InsertPanel
+        editor={editor()}
+        patterns={[
+          ...SECTIONS,
+          { ...section("a3", "Footer band"), category: "Footers" },
+        ]}
+      />
+    );
+    openTab("Saved sections");
+    expect(headings().length).toBe(2);
+  });
+
+  it("keeps the saved sections' headings while a search leaves one group", () => {
+    // "One group" is the library's, not what a search happens to leave.
+    registerBlocks([TEXT], { source: "acme" });
+    render(
+      <InsertPanel
+        editor={editor()}
+        patterns={[
+          ...SECTIONS,
+          { ...section("a3", "Footer band"), category: "Footers" },
+        ]}
+      />
+    );
+    openTab("Saved sections");
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "Footer" },
+    });
+    expect(
+      [...document.querySelectorAll("[cmdk-group-heading]")].map(
+        heading => heading.textContent
+      )
+    ).toEqual(["Footers"]);
+  });
 });

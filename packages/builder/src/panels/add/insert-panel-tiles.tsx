@@ -54,13 +54,6 @@ import {
 export const GRID_COLUMNS = 2;
 
 /**
- * How many tiles sit in a row where each draws a picture of its saved
- * section: two, so a picture is wide enough to read at the panel's default
- * width. Fixed per tab for the reason {@link GRID_COLUMNS} is.
- */
-export const PICTURE_COLUMNS = 2;
-
-/**
  * What a press does, for the pointer that has no other way to ask.
  *
  * A press moves the highlight, so the popover beside the panel describes the

@@ -442,3 +442,18 @@ describe("the popups the Add surfaces open", () => {
     }
   );
 });
+
+/*
+ * A component wears one purple wherever the editor draws it: the canvas's
+ * mark, its row in Layers, and its tile in the Add panel all read the one
+ * component token, so none can drift to a purple of its own.
+ */
+describe("the component colour", () => {
+  it.each([
+    /^\.nx-canvas-mark\[data-mark="selected"\]\[data-component\]\s*\{/m,
+    /^\.nx-layer-row\[data-component\] \.nx-block-icon\s*\{/m,
+    /^\.nx-insert-panel\s+\[cmdk-item\]\[data-kind="component"\]:not\(\[data-refused="true"\]\)\s+> \.nx-block-icon\s*\{/m,
+  ])("is the one component token in %s", prelude => {
+    expect(ruleBody(CHROME, prelude)).toMatch(/var\(--nx-builder-component\)/);
+  });
+});
