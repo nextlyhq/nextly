@@ -105,7 +105,15 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.spec.ts"],
-    exclude: ["node_modules", "dist", ".turbo", "**/*.d.ts"],
+    // The connection test against real servers runs in its own config,
+    // vitest.integration.config.ts, with the test databases named.
+    exclude: [
+      "node_modules",
+      "dist",
+      ".turbo",
+      "**/*.d.ts",
+      "**/*.integration.test.ts",
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html"],
