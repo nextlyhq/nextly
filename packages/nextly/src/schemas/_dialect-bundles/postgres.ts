@@ -52,6 +52,7 @@ export {
 } from "../plugin-events/postgres";
 export { nextlyLimitStore } from "../limit-store/postgres";
 export { nextlyCacheTagExpiries } from "../cache-tag-expiries/postgres";
+export { nextlyCliCredentialsPg as nextlyCliCredentials } from "../cli-credentials/postgres";
 export { nextlySpentChallenges } from "../spent-challenges/postgres";
 export { nextlySchemaOwners } from "../schema-owners/postgres";
 export { nextlyWidgetLayout } from "../widget-layout/postgres";

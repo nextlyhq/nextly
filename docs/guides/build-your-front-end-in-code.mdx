@@ -1,0 +1,503 @@
+---
+title: Build your front end in code
+description: Show your content on your own Next.js pages in a Blank project. A list page, a detail page, metadata and the sitemap, images, drafts and preview, a feed, and caching, each with a short sample.
+---
+
+A Blank project gives you Nextly's admin and an empty site. Your content lives in
+Nextly, and you write the pages that show it. This guide shows each piece once,
+with a short sample you can paste into a project made with
+`create-nextly-app --template blank`.
+
+Every page here is a Server Component that reads through the
+[Direct API](/docs/api-reference/direct-api): no HTTP calls and no API keys. The
+samples use one collection, `posts`, served at `/posts` and `/posts/<slug>`.
+Change the names to match yours.
+
+## The collection
+
+The samples read this collection. Add it to `nextly.config.ts`, or make the same
+fields in the Schema Builder:
+
+```ts title="nextly.config.ts"
+import {
+  defineCollection,
+  defineConfig,
+  richText,
+  text,
+  upload,
+} from "nextly/config";
+
+const posts = defineCollection({
+  slug: "posts",
+  labels: { singular: "Post", plural: "Posts" },
+  // Adds Draft and Published, and a Publish button in the admin.
+  status: true,
+  fields: [
+    text({ name: "title", required: true }),
+    text({ name: "slug", required: true, unique: true }),
+    text({ name: "excerpt" }),
+    upload({ name: "image", relationTo: "media" }),
+    richText({ name: "content" }),
+  ],
+});
+
+export default defineConfig({
+  collections: [posts],
+  singles: [],
+  typescript: {
+    outputFile: "./src/types/generated/nextly-types.ts",
+  },
+});
+```
+
+Fields come back as `unknown` until you run `nextly generate:types`, which is why
+the samples wrap values in `String(...)`. With generated types you can drop that.
+
+## A post's address
+
+Every sample links to a post the same way, so the address is written once. A
+slug is free text, so it is encoded as one segment of the path:
+
+```ts title="src/lib/post-path.ts"
+/** The address of the post with this slug. */
+export function postPath(slug: unknown): string {
+  return `/posts/${encodeURIComponent(String(slug))}`;
+}
+```
+
+## A list page
+
+`cachedFind` keeps the result until a post is written, so the page is built once
+and served from the cache. Tagging it with `nextlyTags("posts")` is what lets a
+publish, an edit or a delete refresh it ([caching](#caching-and-revalidation)).
+
+```tsx title="src/app/(frontend)/posts/page.tsx"
+import Link from "next/link";
+import { getNextly } from "nextly";
+import { cachedFind, nextlyTags } from "nextly/runtime";
+
+import config from "../../../../nextly.config";
+import { postPath } from "@/lib/post-path";
+
+export default async function PostsPage() {
+  const posts = await cachedFind(
+    async () => {
+      const nextly = await getNextly({ config });
+      const { items } = await nextly.find({
+        collection: "posts",
+        status: "published",
+        select: { title: true, slug: true },
+        sort: "-createdAt",
+        limit: 20,
+      });
+      return items;
+    },
+    { tags: nextlyTags("posts"), keyParts: ["posts", "list"] }
+  );
+
+  return (
+    <main>
+      <h1>Posts</h1>
+      <ul>
+        {posts.map(post => (
+          <li key={String(post.id)}>
+            <Link href={postPath(post.slug)}>
+              {String(post.title)}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </main>
+  );
+}
+```
+
+`status: "published"` is what keeps drafts off the page, a translation still in
+draft included. Leave it out and the list shows every post.
+
+These reads are trusted, as Direct API reads are unless told otherwise. That is
+right for a collection anyone may read, which is what a public page shows. If
+`posts` has read rules, members-only posts for example, don't read it this way:
+read it with `resolveContent` and the visitor's `user`, uncached (see
+[Routing and SEO](/docs/guides/routing-and-seo#resolvecontent--slug-to-a-published-entry)).
+
+## A detail page
+
+One page per post. `generateStaticParams` lists the published slugs, so
+`next build` writes each post's page ahead of time; a post published later is
+rendered on its first visit and kept.
+
+```tsx title="src/app/(frontend)/posts/[slug]/page.tsx"
+import { notFound } from "next/navigation";
+import { getNextly } from "nextly";
+import { cachedFind, nextlyTags } from "nextly/runtime";
+
+import config from "../../../../../nextly.config";
+
+type Props = { params: Promise<{ slug: string }> };
+
+async function getPost(slug: string) {
+  return cachedFind(
+    async () => {
+      const nextly = await getNextly({ config });
+      const { items } = await nextly.find({
+        collection: "posts",
+        where: { slug: { equals: slug } },
+        status: "published",
+        // Fills in the image's record, and returns rich text as HTML.
+        depth: 1,
+        richTextFormat: "html",
+        limit: 1,
+      });
+      return items[0] ?? null;
+    },
+    {
+      // The image is read with the post, so an edit to it refreshes the page.
+      tags: [...nextlyTags("posts"), ...nextlyTags("media")],
+      keyParts: ["posts", "detail", slug],
+    }
+  );
+}
+
+export async function generateStaticParams() {
+  const slugs = await cachedFind(
+    async () => {
+      const nextly = await getNextly({ config });
+      const { items } = await nextly.find({
+        collection: "posts",
+        status: "published",
+        select: { slug: true },
+        // A page holds at most 500 entries. A post not listed here is
+        // rendered on its first visit instead.
+        limit: 500,
+      });
+      return items.map(post => String(post.slug));
+    },
+    { tags: nextlyTags("posts"), keyParts: ["posts", "slugs"] }
+  );
+  // Next.js refuses an empty list here, so a site with no posts yet builds
+  // one address that answers "not found".
+  return (slugs.length > 0 ? slugs : ["_"]).map(slug => ({ slug }));
+}
+
+export default async function PostPage({ params }: Props) {
+  const { slug } = await params;
+  const post = await getPost(slug);
+  if (!post) notFound();
+
+  return (
+    <article>
+      <h1>{String(post.title)}</h1>
+      <div dangerouslySetInnerHTML={{ __html: String(post.content ?? "") }} />
+    </article>
+  );
+}
+```
+
+The HTML comes from Nextly's own rich text renderer, so it is safe to insert.
+Sanitise it if you ever render HTML from anywhere else.
+
+New projects run with Next.js
+[Cache Components](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheComponents)
+on. That is why every read above goes through `cachedFind`: a page whose reads
+are all cached is built whole. If you would rather resolve the page from its
+address with a ready-made route, see
+[Routing and SEO](/docs/guides/routing-and-seo#createcontentroute--the-optional-catch-all).
+
+## Metadata and the sitemap
+
+Add `generateMetadata` to the detail page. `buildMetadata` turns the post into
+Next.js metadata: the title, the description, the canonical address, Open Graph
+and Twitter tags. With the [SEO plugin](/docs/plugins/seo), the values an editor sets
+in the post's SEO fields win over the ones you pass here.
+
+```tsx title="src/app/(frontend)/posts/[slug]/page.tsx"
+import type { Metadata } from "next";
+import { buildMetadata, type ContentEntry } from "nextly/runtime";
+
+import { postPath } from "@/lib/post-path";
+
+type Props = { params: Promise<{ slug: string }> };
+
+// The cached read from the detail page above.
+declare function getPost(slug: string): Promise<ContentEntry | null>;
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { slug } = await params;
+  const post = await getPost(slug);
+  if (!post) return {};
+  return buildMetadata(post, {
+    fallback: {
+      title: String(post.title),
+      description: typeof post.excerpt === "string" ? post.excerpt : undefined,
+      canonical: postPath(slug),
+    },
+  });
+}
+```
+
+`nextlySitemap` serves `/sitemap.xml` from your published posts and rebuilds it
+when one changes. `@/lib/site-url` comes with every new project and turns a path
+into the site's full address.
+
+```ts title="src/app/sitemap.ts"
+import { getNextly } from "nextly";
+import { nextlySitemap, nextlyTags } from "nextly/runtime";
+
+import config from "../../nextly.config";
+import { postPath } from "@/lib/post-path";
+import { absoluteUrl } from "@/lib/site-url";
+
+export default nextlySitemap({
+  tags: nextlyTags("posts"),
+  entries: async () => {
+    const nextly = await getNextly({ config });
+    const posts = [];
+    // A page holds at most 500 entries, so read every page.
+    for (let page = 1; ; page++) {
+      const { items, meta } = await nextly.find({
+        collection: "posts",
+        status: "published",
+        select: { slug: true, updatedAt: true },
+        // A stable order, so no post moves between pages while they are read.
+        sort: "id",
+        limit: 500,
+        page,
+      });
+      posts.push(...items);
+      if (!meta.hasNext) break;
+    }
+    return [
+      { url: absoluteUrl("/posts") },
+      ...posts.map(post => ({
+        url: absoluteUrl(postPath(post.slug)),
+        // A Date, which Next.js writes as an ISO 8601 date.
+        lastModified: post.updatedAt instanceof Date ? post.updatedAt : undefined,
+      })),
+    ];
+  },
+});
+```
+
+`nextlyRobots` serves `/robots.txt`. It keeps `/admin` and `/api` out of search
+engines and points them at the sitemap:
+
+```ts title="src/app/robots.ts"
+import { nextlyRobots } from "nextly/runtime";
+
+import { absoluteUrl } from "@/lib/site-url";
+
+export default nextlyRobots({ sitemap: absoluteUrl("/sitemap.xml") });
+```
+
+## Images
+
+An upload field holds a media file's id. Read the entry with `depth: 1`, as the
+detail page does, and the field holds the file itself: its `url`, `width`,
+`height` and `altText`. Give those to `next/image`, which resizes the file for
+each screen:
+
+```tsx title="src/app/(frontend)/posts/cover.tsx"
+import Image from "next/image";
+
+/** A media file, as a populated upload field holds it. */
+type Media = { url: string; width?: number; height?: number; altText?: string };
+
+export function Cover({ image }: { image: Media | null | undefined }) {
+  if (!image) return null;
+  return (
+    <Image
+      src={image.url}
+      width={image.width ?? 1200}
+      height={image.height ?? 630}
+      alt={image.altText ?? ""}
+    />
+  );
+}
+```
+
+Show it on the detail page with `<Cover image={post.image as Media | null} />`.
+On local disk the `url` is a path such as `/uploads/2026/04/photo.jpg`; on S3,
+Vercel Blob or UploadThing it is a full address, and `next/image` needs that host
+in `images.remotePatterns`. For a full address outside your pages, in a feed or
+an email, use `toPublicMediaUrl`. See [Media & Storage](/docs/guides/media-storage#media-urls).
+
+## Drafts and preview
+
+The published pages above never show a draft. To let an editor share an
+unpublished post, add three things.
+
+The preview route, which a preview link opens:
+
+```ts title="src/app/api/preview/route.ts"
+import { createPreviewRoute } from "nextly/runtime";
+
+export const { GET } = createPreviewRoute();
+```
+
+Where a post is served, in the collection, so the admin can make a link to it:
+
+```ts title="nextly.config.ts"
+import { defineCollection } from "nextly/config";
+
+import { postPath } from "./src/lib/post-path";
+
+export const posts = defineCollection({
+  slug: "posts",
+  status: true,
+  admin: {
+    preview: {
+      url: entry =>
+        typeof entry.slug === "string" && entry.slug !== ""
+          ? postPath(entry.slug)
+          : null,
+    },
+  },
+  fields: [/* as above */],
+});
+```
+
+And in the detail page, a `getPost` that reads the draft when the visitor opened
+a preview link for this post, and the published post otherwise:
+
+```tsx title="src/app/(frontend)/posts/[slug]/page.tsx"
+import { draftMode } from "next/headers";
+import { previewDraftGate, resolveContent, type ContentEntry } from "nextly/runtime";
+
+// The cached published read from the detail page above, renamed.
+declare function getPublishedPost(slug: string): Promise<ContentEntry | null>;
+
+async function getPost(slug: string) {
+  // A preview link covers one entry. The gate checks the link, and that the
+  // person who shared it may still edit the post.
+  const grant = (await draftMode()).isEnabled
+    ? await previewDraftGate()({ collection: "posts", slug })
+    : false;
+  if (!grant) return getPublishedPost(slug);
+  return resolveContent("posts", slug, {
+    draft: true,
+    entryId: grant.entryId,
+    draftFieldAccessAs: grant.readAs,
+    overrideAccess: true,
+    trustedCollections: ["posts"],
+    depth: 1,
+    richTextFormat: "html",
+  });
+}
+```
+
+An editor opens the post, chooses **Share preview link…** beside **Show
+preview**, and sends the link. Whoever opens it sees that one draft, without
+signing in, until the link ends; everyone else still gets the published page.
+How links expire and are revoked: [Draft Preview Links](/docs/preview).
+Publishing itself: [Draft / Published Status](/docs/guides/draft-published-status).
+
+## A feed
+
+A route handler can answer with any format. This one serves an RSS feed of the
+latest posts at `/feed.xml`, cached like the pages:
+
+```ts title="src/app/(frontend)/feed.xml/route.ts"
+import { getNextly } from "nextly";
+import { cachedFind, nextlyTags } from "nextly/runtime";
+
+import config from "../../../../nextly.config";
+import { postPath } from "@/lib/post-path";
+import { absoluteUrl } from "@/lib/site-url";
+
+/** Text for XML, with the five characters XML reads as markup escaped. */
+const xml = (value: unknown) =>
+  String(value ?? "").replace(/[<>&'"]/g, c => `&#${c.charCodeAt(0)};`);
+
+export async function GET() {
+  const posts = await cachedFind(
+    async () => {
+      const nextly = await getNextly({ config });
+      const { items } = await nextly.find({
+        collection: "posts",
+        status: "published",
+        select: { title: true, slug: true, excerpt: true, firstPublishedAt: true },
+        sort: "-firstPublishedAt",
+        limit: 20,
+      });
+      return items;
+    },
+    { tags: nextlyTags("posts"), keyParts: ["posts", "feed"] }
+  );
+
+  const items = posts.map(post => {
+    const link = absoluteUrl(postPath(post.slug));
+    const published = post.firstPublishedAt;
+    return `<item>
+  <title>${xml(post.title)}</title>
+  <link>${xml(link)}</link>
+  <guid>${xml(link)}</guid>
+  <description>${xml(post.excerpt)}</description>
+  ${published instanceof Date ? `<pubDate>${published.toUTCString()}</pubDate>` : ""}
+</item>`;
+  });
+
+  return new Response(
+    `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<title>Posts</title>
+<link>${xml(absoluteUrl("/posts"))}</link>
+<description>The latest posts</description>
+${items.join("\n")}
+</channel></rss>`,
+    { headers: { "Content-Type": "application/rss+xml; charset=utf-8" } }
+  );
+}
+```
+
+`firstPublishedAt` is set when a post is first published and stays put after
+later edits, which is what a feed reader expects of a date. Dates come back as
+`Date` objects.
+
+## Caching and revalidation
+
+Every read above is cached and tagged, and nothing in this guide sets a timer or
+calls `revalidatePath`. A new project already does the rest:
+
+- `src/instrumentation.ts` registers Nextly's cache adapter, so every write made
+  in a request (the admin, the API, a Server Action) expires the tags it touches
+  once it commits.
+- `src/nextly/cached-read.ts` runs `cachedFind` reads through Next.js's
+  `"use cache"`, so a page that reads only through it is built whole.
+
+So publishing, editing or deleting a post refreshes the list, the post's page,
+the sitemap and the feed on their next visit, with no rebuild. Two things to add
+yourself:
+
+- **A read that shows other collections** also carries their tags, so an edit to
+  an author or an image refreshes it too:
+  `tags: [...nextlyTags("posts"), ...nextlyTags("authors")]`.
+- **A read that depends on who is asking** puts in `keyParts` everything its
+  access rules read: the visitor's id, and their `role` and `roles` too when a
+  rule checks them. Otherwise one visitor is served another's rows, or someone keeps what
+  they could see before a role was taken away.
+
+```ts
+import type { UserContext } from "nextly";
+import { cachedFind, nextlyTags } from "nextly/runtime";
+
+declare const user: UserContext;
+declare function findOrdersFor(user: UserContext): Promise<unknown[]>;
+
+const orders = await cachedFind(() => findOrdersFor(user), {
+  tags: nextlyTags("orders"),
+  keyParts: ["orders", "list", user.id, user.role ?? "", ...(user.roles ?? [])],
+});
+```
+
+The whole picture, writes made outside a request and opting out included:
+[ISR and caching](/docs/guides/isr-caching).
+
+## Next steps
+
+- [Routing and SEO](/docs/guides/routing-and-seo): one route for every page
+  of a collection, structured data, translated addresses.
+- [Direct API](/docs/api-reference/direct-api): every query option the samples
+  use, and the rest.
+- [Project structure](/docs/getting-started/project-structure): where
+  `nextly generate:types` writes the types that give every field its real type.

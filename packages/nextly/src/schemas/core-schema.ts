@@ -27,6 +27,7 @@ import {
   CACHE_TAG_EXPIRIES_TABLE,
   cacheTagExpiriesTables,
 } from "./cache-tag-expiries";
+import { CLI_CREDENTIALS_TABLE, cliCredentialsTables } from "./cli-credentials";
 import { contentEventsTables } from "./content-events";
 import { dashboardPinsTables } from "./dashboard-pins";
 import { dashboardPreferencesTables } from "./dashboard-preferences";
@@ -236,6 +237,10 @@ export function getCoreSchema(
     // handlers. Declared here for the same reason as its neighbours: a table
     // outside this set is never created on a real installation.
     ...Object.values(cacheTagExpiriesTables(dialect)),
+    // `nextly_cli_credentials` — the sign-ins and passes the command line and
+    // agents hold. Declared here for the same reason as its neighbours: a table
+    // outside this set is never created on a real installation.
+    ...Object.values(cliCredentialsTables(dialect)),
     // `nextly_spent_challenges` — the two-factor challenges already answered,
     // so an answer is accepted once on every instance. Declared here for the
     // same reason as its neighbours: a table outside this set is never created
@@ -397,6 +402,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   PLUGIN_EVENTS_TABLE,
   PLUGIN_EVENT_DELIVERIES_TABLE,
   LIMIT_STORE_TABLE,
+  CLI_CREDENTIALS_TABLE,
   CACHE_TAG_EXPIRIES_TABLE,
   SPENT_CHALLENGES_TABLE,
   SCHEMA_OWNERS_TABLE,

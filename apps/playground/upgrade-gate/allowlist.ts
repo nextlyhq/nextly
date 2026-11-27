@@ -69,10 +69,18 @@ const TRANSLATION_SOURCES_KEPT =
 const TRASH_CREATED =
   "Deleted entries are kept in the trash for 30 days from the first delete after the upgrade. The table is new, so nothing an installation held lives in it, and until it exists deletes stay permanent as before.";
 
+/** Why the table of command-line sign-ins and agent passes is created. */
+const CLI_CREDENTIALS_KEPT =
+  "The sign-ins and passes the command line and agents hold are stored from the first one made after the upgrade. The table is new, so nothing an installation held lives in it.";
+
 export const ALLOWED_OPERATIONS: readonly AllowedOperation[] = [
   {
     operation: "create table nextly_trash",
     reason: TRASH_CREATED,
+  },
+  {
+    operation: "create table nextly_cli_credentials",
+    reason: CLI_CREDENTIALS_KEPT,
   },
   {
     operation: "create table nextly_translation_sources",

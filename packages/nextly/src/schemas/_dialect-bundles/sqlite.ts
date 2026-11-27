@@ -37,6 +37,7 @@ export {
 } from "../plugin-events/sqlite";
 export { nextlyLimitStore } from "../limit-store/sqlite";
 export { nextlyCacheTagExpiries } from "../cache-tag-expiries/sqlite";
+export { nextlyCliCredentialsSqlite as nextlyCliCredentials } from "../cli-credentials/sqlite";
 export { nextlySpentChallenges } from "../spent-challenges/sqlite";
 export { nextlySchemaOwners } from "../schema-owners/sqlite";
 export { nextlyWidgetLayout } from "../widget-layout/sqlite";

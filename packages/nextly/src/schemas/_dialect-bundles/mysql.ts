@@ -37,6 +37,7 @@ export {
 } from "../plugin-events/mysql";
 export { nextlyLimitStore } from "../limit-store/mysql";
 export { nextlyCacheTagExpiries } from "../cache-tag-expiries/mysql";
+export { nextlyCliCredentialsMysql as nextlyCliCredentials } from "../cli-credentials/mysql";
 export { nextlySpentChallenges } from "../spent-challenges/mysql";
 export { nextlySchemaOwners } from "../schema-owners/mysql";
 export { nextlyWidgetLayout } from "../widget-layout/mysql";

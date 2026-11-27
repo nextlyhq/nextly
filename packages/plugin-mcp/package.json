@@ -27,7 +27,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.3.1",
+    "@modelcontextprotocol/server": "2.4.0",
     "zod": "^4.6.7"
   },
   "peerDependencies": {
@@ -35,6 +35,7 @@
     "nextly": "0.0.2-alpha.81"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/node": "^22.20.5",
