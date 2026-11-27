@@ -320,6 +320,62 @@ describe("getDashboardActivity", () => {
     expect(body).not.toContain(hidden);
     expect(body).not.toContain("2026-10-22T12:00:00");
   });
+
+  it("narrows the feed to one agent, or one agent session, when asked", async () => {
+    const getRecentActivity = vi
+      .fn()
+      .mockResolvedValue({ activities: [], hasMore: false });
+    serviceStub = { getRecentActivity };
+
+    await getDashboardActivity(
+      makeReq(
+        "http://x/api/dashboard/activity?agent=Claude%20Code&session=2f4e6a8c-0b1d-4e3f-9a5b-7c9d1e3f5a7b"
+      )
+    );
+    expect(getRecentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: "Claude Code",
+        agentSessionId: "2f4e6a8c-0b1d-4e3f-9a5b-7c9d1e3f5a7b",
+      })
+    );
+
+    // A session is matched in the one spelling it is stored in, so every
+    // database answers the same rows.
+    getRecentActivity.mockClear();
+    await getDashboardActivity(
+      makeReq("http://x/api/dashboard/activity?session=Run-A")
+    );
+    expect(getRecentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSessionId: "run-a" })
+    );
+
+    // Neither asked: the feed is not narrowed by an empty filter.
+    getRecentActivity.mockClear();
+    await getDashboardActivity(makeReq("http://x/api/dashboard/activity"));
+    const [options] = getRecentActivity.mock.calls[0] as [
+      Record<string, unknown>,
+    ];
+    expect(options).not.toHaveProperty("agentName");
+    expect(options).not.toHaveProperty("agentSessionId");
+  });
+
+  it.each([
+    ["an empty agent", "agent="],
+    ["an agent name too long to be stored", `agent=${"x".repeat(192)}`],
+    ["a session that is not an id", "session=nx_live_abc_def"],
+    ["a session shaped like a short credential", "session=glpat-AbCdEfGhIjKlMnOpQrSt"],
+    ["an agent name holding a NUL", "agent=%00"],
+  ])("refuses %s rather than answering everything", async (_, query) => {
+    const getRecentActivity = vi.fn();
+    serviceStub = { getRecentActivity };
+
+    const res = await getDashboardActivity(
+      makeReq(`http://x/api/dashboard/activity?${query}`)
+    );
+
+    expect(res.status).toBe(400);
+    expect(getRecentActivity).not.toHaveBeenCalled();
+  });
 });
 
 /**

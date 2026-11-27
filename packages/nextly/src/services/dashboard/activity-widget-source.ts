@@ -63,6 +63,15 @@ const ACTIVITY_FIELDS = [
   { name: "firstCreatedAt", type: "date" as const, label: "First save" },
   { name: "count", type: "number" as const, label: "Saves" },
   { name: "countAtLeast", type: "boolean" as const, label: "At least" },
+  // Who stood behind the actor, as the card says it: "Claude Code, for Sara
+  // Malik", "from the command line", "approved on phone", "Deployment
+  // (Vercel build, commit 3f2a1c9)". The trail's ids (session, credential,
+  // approval request, approver, grant) stay off the list: no card draws them.
+  { name: "agentName", type: "string" as const, label: "Agent" },
+  { name: "door", type: "string" as const, label: "Door" },
+  { name: "approvedVia", type: "string" as const, label: "Approved on" },
+  { name: "deploymentHost", type: "string" as const, label: "Deployment" },
+  { name: "deploymentCommit", type: "string" as const, label: "Commit" },
 ];
 
 /**

@@ -14,6 +14,7 @@ import type {
 } from "@admin/services/versionApi";
 
 import { REMOVAL_EVENT, SHARED_PART } from "./history-story";
+import { attributedActorName } from "./history-story-attribution";
 import { versionAuthorLabel } from "./version-author";
 
 /** A field as a comparison reports it, as much as its label needs. */
@@ -60,8 +61,22 @@ export function versionActor(
   };
 }
 
-/** An event's actor, as the list names it. */
+/**
+ * An event's actor, as the list names it, with the agent that acted for them
+ * when one did: "Claude Code, for Sara Malik", or with a key "Cursor, with
+ * Deploy key". The agent's name outlives the person's, so an event whose
+ * person is no longer named still says an agent made it.
+ */
 export function eventActor(event: DocumentEvent): StoryActor {
+  if (event.actorAgentName) {
+    return {
+      kind: event.actorKind,
+      name: attributedActorName(event.actorName || "someone not recorded", {
+        agentName: event.actorAgentName,
+        actorIsKey: event.actorKind === "apiKey",
+      }),
+    };
+  }
   if (event.actorName) return { kind: event.actorKind, name: event.actorName };
   return {
     kind: event.actorKind,

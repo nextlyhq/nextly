@@ -10,6 +10,7 @@ import {
   changeSummary,
   dayHeading,
   eventActor,
+  versionActor,
   eventSentence,
   fieldLabels,
   partsText,
@@ -129,6 +130,78 @@ describe("eventActor", () => {
     expect(eventActor(event({ actorName: null }))).toEqual({
       kind: "person",
       name: "Not recorded",
+    });
+  });
+
+  it("names the agent that acted for the person, and keeps it once the person is erased", () => {
+    expect(
+      eventActor(
+        event({ actorName: "Sara Malik", actorAgentName: "Claude Code" })
+      )
+    ).toEqual({ kind: "person", name: "Claude Code, for Sara Malik" });
+    // The person's name is erased with them (or was never recorded); the
+    // agent's, which names software, stays, so the event still says an agent
+    // did it, and claims nothing about why the person is not named.
+    expect(
+      eventActor(event({ actorName: null, actorAgentName: "Claude Code" }))
+    ).toEqual({
+      kind: "person",
+      name: "Claude Code, for someone not recorded",
+    });
+    // An agent uses a key; it does not act on the key's behalf.
+    expect(
+      eventActor(
+        event({
+          actorKind: "apiKey",
+          actorName: "Deploy key",
+          actorAgentName: "Cursor",
+        })
+      )
+    ).toEqual({ kind: "apiKey", name: "Cursor, with Deploy key" });
+    // An event from a server that does not record agents reads as before.
+    expect(eventActor(event({ actorName: "Sara Malik" }))).toEqual({
+      kind: "person",
+      name: "Sara Malik",
+    });
+  });
+});
+
+describe("versionActor", () => {
+  it("names a person's own version by the person alone", () => {
+    expect(
+      versionActor({
+        createdBy: "u1",
+        author: { kind: "person", id: "u1", name: "Sara Malik" },
+      })
+    ).toEqual({ kind: "person", name: "Sara Malik" });
+  });
+
+  it("names the agent that wrote a version for the person", () => {
+    expect(
+      versionActor({
+        createdBy: "u1",
+        author: {
+          kind: "person",
+          id: "u1",
+          name: "Sara Malik",
+          agentName: "Claude Code",
+        },
+      })
+    ).toEqual({ kind: "person", name: "Claude Code, for Sara Malik" });
+    // The agent's name outlives the person's.
+    expect(
+      versionActor({
+        createdBy: "u1",
+        author: {
+          kind: "person",
+          id: "u1",
+          name: null,
+          agentName: "Claude Code",
+        },
+      })
+    ).toEqual({
+      kind: "person",
+      name: "Claude Code, for someone not recorded",
     });
   });
 });
