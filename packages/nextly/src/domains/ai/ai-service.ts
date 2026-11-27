@@ -204,6 +204,27 @@ function unreadableAnswer(issues: unknown): NextlyError {
   });
 }
 
+/**
+ * A provider's stream, checked for what core reads from it: text it can
+ * iterate, and a usage it can wait for. Both are read later, so only their
+ * kind is checked here; the usage is parsed when it settles.
+ */
+function readStream(answer: unknown): AIProviderStream {
+  const candidate = answer as Partial<Record<"text" | "usage", unknown>> | null;
+  const text = candidate?.text as
+    | { [Symbol.asyncIterator]?: unknown }
+    | null
+    | undefined;
+  const usage = candidate?.usage as { then?: unknown } | null | undefined;
+  if (
+    typeof text?.[Symbol.asyncIterator] !== "function" ||
+    typeof usage?.then !== "function"
+  ) {
+    throw unreadableAnswer([{ message: "not a stream with text and usage" }]);
+  }
+  return answer as AIProviderStream;
+}
+
 /** A provider's answer, parsed with `schema`, or the refusal for it. */
 function readAnswer<T>(schema: z.ZodType<T>, answer: unknown): T {
   const parsed = schema.safeParse(answer);
@@ -632,11 +653,16 @@ export function createAIService(deps: AIServiceDeps): AIService {
         );
         throw error;
       }
-      let stream: AIProviderStream;
       try {
-        stream = await admitted.provider.stream(
-          providerRequest(caller, args, admitted.task)
+        // Read at the boundary, like every provider answer, and wrapped
+        // inside this failure path, so a container that is not a stream ends
+        // the run as failed rather than throwing with no event.
+        const stream = readStream(
+          await admitted.provider.stream(
+            providerRequest(caller, args, admitted.task)
+          )
         );
+        return streamed(caller, args, stream);
       } catch (error) {
         await emitEnd(
           "stream",
@@ -648,7 +674,6 @@ export function createAIService(deps: AIServiceDeps): AIService {
         );
         throw error;
       }
-      return streamed(caller, args, stream);
     },
 
     embed(caller, args) {
@@ -669,15 +694,28 @@ export function createAIService(deps: AIServiceDeps): AIService {
           }
           return provider;
         },
-        async provider =>
-          readAnswer(
+        async provider => {
+          const answer = readAnswer(
             embedOutcomeSchema,
             await provider.embed({
               texts: args.texts,
               personId: caller?.userId ?? null,
               agent: args.agent ?? null,
             })
-          )
+          );
+          // One vector per text, in order: a different count cannot be
+          // matched back to the texts, so it is refused, not guessed at.
+          if (answer.vectors.length !== args.texts.length) {
+            throw unreadableAnswer([
+              {
+                message: "vector count differs from text count",
+                texts: args.texts.length,
+                vectors: answer.vectors.length,
+              },
+            ]);
+          }
+          return answer;
+        }
       );
     },
 

@@ -621,6 +621,42 @@ describe("a provider that answers with something unreadable", () => {
     expect(events.map(e => [e.result, e.tokensIn])).toEqual([["failed", 0]]);
   });
 
+  it.each([
+    ["too few", [[0.1]]],
+    ["too many", [[0.1], [0.2], [0.3]]],
+  ])(
+    "refuses an embedding with %s vectors for the texts it was given",
+    async (_what, vectors) => {
+      const provider = stubProvider();
+      provider.embed.mockResolvedValueOnce({ vectors, usage: USAGE });
+      const { service, events } = setup({ provider });
+      const error = await refusal(
+        service.embed(person(), { texts: ["a", "b"] })
+      );
+      expect(error.code).toBe("EXTERNAL_SERVICE_ERROR");
+      expect(events.map(e => e.result)).toEqual(["failed"]);
+    }
+  );
+
+  it.each([
+    ["text that cannot be read", { text: {}, usage: Promise.resolve(USAGE) }],
+    ["no usage", { text: (async function* () {})(), usage: undefined }],
+  ])(
+    "refuses a stream answered with %s, and records it failed",
+    async (_what, answer) => {
+      const provider = stubProvider();
+      provider.stream.mockResolvedValueOnce(
+        answer as unknown as AIProviderStream
+      );
+      const { service, events } = setup({ provider });
+      const error = await refusal(service.stream(person(), summary));
+      expect(error.code).toBe("EXTERNAL_SERVICE_ERROR");
+      expect(events.map(e => [e.kind, e.result])).toEqual([
+        ["stream", "failed"],
+      ]);
+    }
+  );
+
   it("refuses an embedding whose vectors are not numbers", async () => {
     const provider = stubProvider();
     provider.embed.mockResolvedValueOnce({
