@@ -55,6 +55,9 @@ export interface OperationListSources {
 function isPlainData(value: unknown): value is object {
   if (Array.isArray(value)) return true;
   if (typeof value !== "object" || value === null) return false;
+  // A schema is kept as given, whatever it is made of: its marker may not be
+  // a property a copy would carry over.
+  if ("~standard" in value) return false;
   const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
@@ -100,11 +103,12 @@ export async function assembleOperationList(
   const contributions: OperationContribution[] = [
     {
       source: { kind: "core" },
-      operations: sources.core.map(op => frozenCopy(op)),
+      operations: frozenCopy(sources.core),
     },
     ...(sources.plugins ?? []).map(plugin => ({
       source: { kind: "plugin" as const, name: plugin.name },
-      operations: plugin.operations.map(op => frozenCopy(op)),
+      // Copied whole, list and all; one that is not a list is refused by name.
+      operations: frozenCopy(plugin.operations),
     })),
   ];
   const problems = await operationListProblems(contributions);

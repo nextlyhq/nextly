@@ -146,6 +146,7 @@ describe("a declaration plain JavaScript got wrong", () => {
     ["exitCodes", [null], "an exit code entry is not an object"],
     ["input", noValidate, "its input schema is not a Standard Schema"],
     ["output", noValidate, "its output schema is not a Standard Schema"],
+    ["chatExposed", "yes", 'its chat mark is "yes", not true or false'],
   ] satisfies [string, unknown, string][])(
     "refuses %s set to %j by name",
     async (fact, value, refusal) => {
@@ -156,6 +157,45 @@ describe("a declaration plain JavaScript got wrong", () => {
       expect(problems[0]).toContain(refusal);
     }
   );
+
+  it.each([
+    ["the operation's", "false"],
+    ["the operation's", true],
+  ])('refuses %s "Always allow" mark set to %j', async (_whose, mark) => {
+    const critical = writeOperation({ level: "critical" });
+    const problems = await problemsOf(
+      withUntyped(critical, "alwaysAllow", mark)
+    );
+    expect(problems).toEqual([
+      `Operation "posts.publish" from core: its "Always allow" mark is ${JSON.stringify(mark)}; it may only be false, or left out`,
+    ]);
+  });
+
+  it('refuses a raise rule\'s "Always allow" mark set to "false"', async () => {
+    const rule = {
+      when: "always",
+      level: "critical",
+      alwaysAllow: "false",
+      applies: () => true,
+    };
+    const problems = await problemsOf(
+      withUntyped(writeOperation(), "raise", [rule])
+    );
+    expect(problems).toEqual([
+      'Operation "posts.publish" from core: its raise rule "always" has the "Always allow" mark "false"; it may only be false, or left out',
+    ]);
+  });
+
+  it("refuses doors given as text on a project operation, by name", async () => {
+    const project = readOperation({
+      doors: ["local"],
+      permission: { kind: "project", reason: "Writes a file in the project." },
+    });
+    const problems = await problemsOf(withUntyped(project, "doors", "local"));
+    expect(problems).toEqual([
+      'Operation "posts.list" from core: it names no doors',
+    ]);
+  });
 
   it("refuses an entry that is not an operation, naming who registered it", async () => {
     const problems = await operationListProblems([

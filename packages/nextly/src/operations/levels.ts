@@ -28,7 +28,11 @@ export interface RunLevel {
 /** The part of an operation's declaration that decides a run's level. */
 interface LevelDeclaration<Input> {
   readonly level: RiskLevel;
-  readonly alwaysAllow?: false;
+  /**
+   * A declaration leaves it out or sets `false`; the list's view always says
+   * `true` or `false`. Either may be passed.
+   */
+  readonly alwaysAllow?: boolean;
   readonly raise?: readonly OperationRaise<Input>[];
 }
 

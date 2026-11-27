@@ -12,6 +12,8 @@ import {
   type OperationDefinition,
   type OperationRun,
 } from "../definition";
+import { levelForRun, type RunLevel } from "../levels";
+import type { ListedOperation } from "../list";
 
 /** The keys of `T` that a value must have. */
 type RequiredKeys<T> = {
@@ -97,3 +99,8 @@ expectTypeOf<
 
 // A typed declaration fits in the list's untyped one.
 expectTypeOf(update).toExtend<OperationDefinition>();
+
+// The list's view of an operation decides a run's level as its declaration
+// does: the view's "Always allow" mark is a plain yes or no.
+declare const listedOp: ListedOperation;
+expectTypeOf(levelForRun(listedOp, { input: {} })).toEqualTypeOf<RunLevel>();

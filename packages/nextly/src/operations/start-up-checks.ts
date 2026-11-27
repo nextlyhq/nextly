@@ -21,6 +21,8 @@ import {
   type OperationRaise,
   type OperationSource,
 } from "./definition";
+import { SLUG_PATTERN } from "../shared/slug-pattern";
+
 import { levelRank } from "./levels";
 
 /** One contributor's operations: core's, or one plugin's. */
@@ -58,6 +60,9 @@ export const DEPLOY_DOOR_OPERATIONS: ReadonlySet<string> = new Set([
   "doctor",
 ]);
 
+/** The longest permission name the permissions table stores. */
+const MAX_PERMISSION_NAME_LENGTH = 100;
+
 /** The effects every declaration states, each a yes or a no. */
 const EFFECTS = ["destroys", "idempotent", "outside", "spendsAi"] as const;
 
@@ -78,6 +83,29 @@ function isNonEmptyText(value: unknown): value is string {
 
 function quoted(value: unknown): string {
   return JSON.stringify(value) ?? String(value);
+}
+
+/**
+ * Whether an "Always allow" mark is one the list reads as declared: left out,
+ * or `false`. Anything else (`"false"`, `true`) would be read as allowing it,
+ * which is not what a declarer who wrote it meant to say.
+ */
+function isAbsentOrFalse(value: unknown): boolean {
+  return value === undefined || value === false;
+}
+
+/**
+ * Whether `name` is spelled as a stored permission: an action, a hyphen,
+ * then the slug it acts on, in the one shape a slug takes, no longer than the
+ * column that stores it. A spelling such as `posts:read` matches no stored
+ * permission, so an operation declaring it could never be allowed.
+ */
+function isStoredPermission(name: string): boolean {
+  return (
+    SLUG_PATTERN.test(name) &&
+    name.includes("-") &&
+    name.length <= MAX_PERMISSION_NAME_LENGTH
+  );
 }
 
 function isObject(value: unknown): value is object {
@@ -154,6 +182,11 @@ const levelProblems: DefinitionCheck = op => {
       `its level ${quoted(op.level)} is not one of ${RISK_LEVELS.join(", ")}`,
     ];
   }
+  if (!isAbsentOrFalse(op.alwaysAllow)) {
+    return [
+      `its "Always allow" mark is ${quoted(op.alwaysAllow)}; it may only be false, or left out`,
+    ];
+  }
   if (op.alwaysAllow === false && op.level !== "critical") {
     return [
       `it refuses "Always allow" but its level is ${op.level}, not critical`,
@@ -182,7 +215,11 @@ function raiseRuleProblems(
       `its raise rule "${rule.when}" would lower the level from ${op.level} to ${rule.level}; an input may only raise it`
     );
   }
-  if (rule.alwaysAllow === false && rule.level !== "critical") {
+  if (!isAbsentOrFalse(rule.alwaysAllow)) {
+    problems.push(
+      `its raise rule "${rule.when}" has the "Always allow" mark ${quoted(rule.alwaysAllow)}; it may only be false, or left out`
+    );
+  } else if (rule.alwaysAllow === false && rule.level !== "critical") {
     problems.push(
       `its raise rule "${rule.when}" refuses "Always allow" at ${rule.level}, not critical`
     );
@@ -219,7 +256,7 @@ const effectsProblems: DefinitionCheck = op => {
   return problems;
 };
 
-/** Its doors, and the chat mark that needs the chat door. */
+/** Its doors: a list of known doors, each named once. */
 const doorsProblems: DefinitionCheck = op => {
   if (!Array.isArray(op.doors) || op.doors.length === 0) {
     return ["it names no doors"];
@@ -230,12 +267,24 @@ const doorsProblems: DefinitionCheck = op => {
   if (new Set(op.doors).size !== op.doors.length) {
     problems.push("it names a door twice");
   }
-  if (op.chatExposed === true && !op.doors.includes("chat")) {
-    problems.push(
-      "it is marked as seen by chat apps but does not run on the chat door"
-    );
-  }
   return problems;
+};
+
+/** The chat mark: a yes or a no, and a yes only with the chat door. */
+const chatMarkProblems: DefinitionCheck = op => {
+  if (op.chatExposed === undefined) return [];
+  if (typeof op.chatExposed !== "boolean") {
+    return [`its chat mark is ${quoted(op.chatExposed)}, not true or false`];
+  }
+  if (
+    op.chatExposed &&
+    !(Array.isArray(op.doors) && op.doors.includes("chat"))
+  ) {
+    return [
+      "it is marked as seen by chat apps but does not run on the chat door",
+    ];
+  }
+  return [];
 };
 
 /** Only core's fixed set of schema operations runs on the deploy door. */
@@ -272,7 +321,9 @@ function unpermittedDoorProblems(
   kind: "project" | "maintenance"
 ): string[] {
   const allowed = DOORS_WITHOUT_PERMISSION[kind];
-  const outside = (op.doors ?? []).filter(door => !allowed.includes(door));
+  // A doors value that is not a list is refused on its own.
+  const doors: readonly string[] = Array.isArray(op.doors) ? op.doors : [];
+  const outside = doors.filter(door => !allowed.includes(door));
   if (outside.length === 0) return [];
   return [
     `a ${kind} operation runs only on ${allowed.join(" and ")}, not ${outside.join(", ")}`,
@@ -284,9 +335,12 @@ const permissionProblems: DefinitionCheck = op => {
   const permission: Partial<{ kind: unknown; name: unknown; reason: unknown }> =
     op.permission ?? {};
   if (permission.kind === "permission") {
-    return isNonEmptyText(permission.name)
+    if (!isNonEmptyText(permission.name)) return ["its permission has no name"];
+    return isStoredPermission(permission.name)
       ? []
-      : ["its permission has no name"];
+      : [
+          `its permission ${quoted(permission.name)} is not spelled as permissions are stored (<action>-<slug>, as read-posts)`,
+        ];
   }
   if (
     permission.kind !== "project" &&
@@ -409,6 +463,7 @@ const DEFINITION_CHECKS: readonly DefinitionCheck[] = [
   raiseProblems,
   effectsProblems,
   doorsProblems,
+  chatMarkProblems,
   deployDoorProblems,
   permissionProblems,
   dryRunProblems,
@@ -508,6 +563,20 @@ async function operationProblems(
   );
 }
 
+/** Why a contributor's whole registration is refused, or nothing. */
+function contributionProblem(
+  source: OperationSource,
+  operations: unknown
+): string | undefined {
+  if (!isSource(source)) {
+    return `Operations were registered by a plugin with no name: ${quoted(source)}`;
+  }
+  if (!Array.isArray(operations)) {
+    return `${describeSource(source)} registered operations that are not a list: ${quoted(operations)}`;
+  }
+  return undefined;
+}
+
 /** What earlier operations in the list have claimed. */
 interface Claims {
   readonly byId: Map<string, Claim>;
@@ -563,10 +632,9 @@ export async function operationListProblems(
   const byWords = new Map<string, Claim>();
 
   for (const { source, operations } of contributions) {
-    if (!isSource(source)) {
-      problems.push(
-        `Operations were registered by a plugin with no name: ${quoted(source)}`
-      );
+    const refused = contributionProblem(source, operations);
+    if (refused) {
+      problems.push(refused);
       continue;
     }
     const from = describeSource(source);

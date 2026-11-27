@@ -434,6 +434,34 @@ describe("the deploy door", () => {
   });
 });
 
+describe("the permission an operation needs", () => {
+  it.each(["posts:read", "Read-posts", "readposts", `read-${"x".repeat(100)}`])(
+    "is refused when %s is not spelled as permissions are stored",
+    async name => {
+      const problems = await refusal({
+        core: [readOperation({ permission: { kind: "permission", name } })],
+      });
+      expect(problems).toEqual([
+        `Operation "posts.list" from core: its permission ${JSON.stringify(name)} is not spelled as permissions are stored (<action>-<slug>, as read-posts)`,
+      ]);
+    }
+  );
+
+  it.each([
+    "read-posts",
+    "update-site_settings",
+    "publish-without-review-posts",
+  ])("is accepted as %s (control)", async name => {
+    const list = await assembleOperationList({
+      core: [readOperation({ permission: { kind: "permission", name } })],
+    });
+    expect(list.byId("posts.list")?.permission).toEqual({
+      kind: "permission",
+      name,
+    });
+  });
+});
+
 describe("who registered an operation", () => {
   it("must be core or a plugin with a name", async () => {
     const problems = await refusal({
@@ -450,6 +478,45 @@ describe("who registered an operation", () => {
     expect(problems).toEqual([
       'Operations were registered by a plugin with no name: {"kind":"plugin","name":""}',
     ]);
+  });
+});
+
+describe("a plugin whose operations are not a list", () => {
+  it.each([{}, undefined])(
+    "is refused by name when they are %j",
+    async operations => {
+      const problems = await refusal({
+        core: [],
+        plugins: [
+          {
+            name: SEO_PLUGIN,
+            operations: operations as unknown as OperationDefinition[],
+          },
+        ],
+      });
+      expect(problems).toEqual([
+        `plugin "${SEO_PLUGIN}" registered operations that are not a list: ${JSON.stringify(operations) ?? "undefined"}`,
+      ]);
+    }
+  );
+});
+
+describe("a schema made as a plain object", () => {
+  it("is kept as given, even when its marker is not enumerable", async () => {
+    const parsed = { "~standard": undefined as unknown };
+    Object.defineProperty(parsed, "~standard", {
+      enumerable: false,
+      value: {
+        version: 1,
+        vendor: "handmade",
+        validate: (value: unknown) => ({ value }),
+      },
+    });
+    const input = parsed as unknown as OperationDefinition["input"];
+    const list = await assembleOperationList({
+      core: [readOperation({ input })],
+    });
+    expect(list.byId("posts.list")?.input).toBe(input);
   });
 });
 
