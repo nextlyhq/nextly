@@ -218,6 +218,93 @@ describe("the empty box's size", () => {
   });
 });
 
+/** One breakpoint's style values, as a node stores them. */
+type StyleValues = NonNullable<
+  NonNullable<NonNullable<BlockNode["styles"]>["base"]>[string]
+>;
+
+/** A box holding `children`, laid out by `layout` at its base. */
+function boxOf(layout: StyleValues, ...children: BlockNode[]): BlockNode {
+  return {
+    id: "bar",
+    type: "core/box",
+    version: 1,
+    props: { as: "div", contained: false },
+    styles: { base: { base: layout } },
+    slots: { children },
+  };
+}
+
+/** The header's row: a flex row that wraps, its blocks centred on its line. */
+const HEADER_ROW: StyleValues = {
+  display: "flex",
+  flexDirection: "row",
+  flexWrap: "wrap",
+  alignItems: "center",
+};
+
+/** The part class the empty box wears, by its last word. */
+function boxPart(html: string): string | undefined {
+  const box = /<div class="([^"]*)" data-nx-image-empty/.exec(html)?.[1];
+  return box
+    ?.split(" ")
+    .find(name => name.startsWith("nx-bp-core--image--"))
+    ?.replace("nx-bp-core--image--", "");
+}
+
+describe("the empty box in a row", () => {
+  it("is logo-sized: 200px at most, as tall as the row's line, at no weight", async () => {
+    const html = await draw(
+      page(boxOf(HEADER_ROW, imageNode(PLACED))),
+      "canvas"
+    );
+    expect(boxPart(html)).toBe("in-row");
+    const rule = rulesIn(html).find(({ selector }) =>
+      selector.includes("nx-bp-core--image--in-row")
+    );
+    expect(rule?.body).toMatch(/(^|;)\s*width:\s*200px/);
+    expect(rule?.body).toMatch(/max-width:\s*100%/);
+    expect(rule?.body).toMatch(/align-self:\s*stretch/);
+    expect(rule?.body).not.toMatch(/aspect-ratio/);
+    // A size set on the block itself still outweighs it.
+    expect(rule?.selector).toMatch(/:where\([^)]*nx-bp-core--image--in-row/);
+  });
+
+  it("is the 16:9 box outside a row: in a stack, a grid, or a plain box", async () => {
+    const layouts: StyleValues[] = [
+      { display: "flex", flexDirection: "column" },
+      { display: "grid" },
+      {},
+    ];
+    for (const layout of layouts) {
+      const html = await draw(page(boxOf(layout, imageNode(PLACED))), "canvas");
+      expect(boxPart(html)).toBe("empty");
+    }
+    // And at the top of the page.
+    expect(boxPart(await draw(page(imageNode(PLACED)), "canvas"))).toBe(
+      "empty"
+    );
+  });
+
+  it("is the 16:9 box one level further in, inside a stack in the row", async () => {
+    const stack: BlockNode = {
+      ...boxOf({ display: "flex", flexDirection: "column" }, imageNode(PLACED)),
+      id: "stack",
+    };
+    const html = await draw(page(boxOf(HEADER_ROW, stack)), "canvas");
+    expect(boxPart(html)).toBe("empty");
+  });
+
+  it("still draws nothing in a row on the published page", async () => {
+    const html = await draw(
+      page(boxOf(HEADER_ROW, imageNode(PLACED))),
+      "published"
+    );
+    expect(html).not.toContain("data-nx-image-empty");
+    expect(html).not.toContain("<img");
+  });
+});
+
 describe("a sheet stored before an empty Image drew its box", () => {
   /**
    * The Image as it was: no `empty` part, and a declaration that a picture

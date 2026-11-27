@@ -943,6 +943,17 @@ export interface PageContext {
    */
   firstBlockId?: string;
   /**
+   * The ids of the blocks the container they sit in lines up as a row, set
+   * by that container beside its children (`childImageContext`), so an
+   * Image among them draws as one in a row does. A render is handed no
+   * parent, so the row's layout reaches its children this way.
+   *
+   * Absent outside a row.
+   *
+   * @experimental
+   */
+  rowItems?: readonly string[];
+  /**
    * The class the page's root carries beside `nx-pb-page` when its rules are
    * scoped (a page drawn inside its Layout), so a block writing a rule of its
    * own anchors it as the page's rules are. Set by the renderer, only on a

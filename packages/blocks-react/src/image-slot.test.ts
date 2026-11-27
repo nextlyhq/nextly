@@ -11,6 +11,7 @@ import {
   hasDefaultColumnGap,
   imageSizingFor,
   siteSizesBlocks,
+  type ImageSlot,
 } from "./image-slot";
 
 const BREAKPOINTS = {
@@ -304,5 +305,90 @@ describe("a site's classes and block defaults that size blocks", () => {
     expect(narrowForOwnSize(slot, wide).devices.map(d => d.width)).toEqual([
       1920, 1024, 1000,
     ]);
+  });
+});
+
+describe("the children a container lines up in a row", () => {
+  /** A context as a container is handed one, its row's ids included. */
+  type Handed = {
+    imageSlot?: ImageSlot;
+    firstBlockId?: string;
+    rowItems?: readonly string[];
+  };
+  const none: Handed = {};
+  const sizing: Handed = { imageSlot: rootImageSlot(BREAKPOINTS) };
+  const children = [{ id: "name" }, { id: "logo" }, {}];
+  const laidOut = (base: Record<string, unknown>) => ({
+    id: "bar",
+    type: "core/box",
+    styles: { base: { base: base } },
+    slots: { children },
+  });
+
+  it("are named to them, on a page that sizes images or not", () => {
+    // Layout › Row writes a flex row; a flex box with no direction is one too.
+    for (const row of [
+      { display: "flex", flexDirection: "row", flexWrap: "wrap" },
+      { display: "flex" },
+      { display: "inline-flex", flexDirection: "row-reverse" },
+    ]) {
+      expect(childImageContext(none, laidOut(row))?.rowItems).toEqual([
+        "name",
+        "logo",
+      ]);
+      const sized = childImageContext(sizing, laidOut(row));
+      expect(sized?.rowItems).toEqual(["name", "logo"]);
+      // The slot is narrowed as before, beside it.
+      expect(sized?.imageSlot?.devices.map(d => d.width)).toEqual([
+        1920, 1024, 640,
+      ]);
+    }
+  });
+
+  it("are not named by a stack, a grid, or a row set only away from the base", () => {
+    for (const container of [
+      laidOut({ display: "flex", flexDirection: "column" }),
+      laidOut({ display: "grid" }),
+      laidOut({ display: "block" }),
+      laidOut({}),
+      {
+        id: "bar",
+        type: "core/box",
+        styles: { base: { mobile: { display: "flex" } } },
+        slots: { children },
+      },
+      {
+        id: "bar",
+        type: "core/box",
+        styles: { hover: { base: { display: "flex" } } },
+        slots: { children },
+      },
+    ]) {
+      expect(childImageContext(none, container)?.rowItems).toBeUndefined();
+    }
+  });
+
+  it("name only the row's own children, not a row further out", () => {
+    // A stack inside the row hands its children no row of its own, and the
+    // row's list names the stack, not what the stack holds.
+    const row = childImageContext(none, laidOut({ display: "flex" }));
+    const inner = childImageContext(row, {
+      id: "stack",
+      type: "core/box",
+      styles: { base: { base: { display: "flex", flexDirection: "column" } } },
+      slots: { children: [{ id: "inside" }] },
+    });
+    // What the stack's children are handed: its context, else the row's.
+    const handed = inner ?? row;
+    expect(handed?.rowItems).toEqual(["name", "logo"]);
+    expect(handed?.rowItems).not.toContain("inside");
+    // A row inside the row names its own children instead.
+    const nested = childImageContext(row, {
+      id: "inner-row",
+      type: "core/box",
+      styles: { base: { base: { display: "flex" } } },
+      slots: { children: [{ id: "inside" }] },
+    });
+    expect(nested?.rowItems).toEqual(["inside"]);
   });
 });

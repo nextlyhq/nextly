@@ -202,3 +202,74 @@
     display: none;
   }
 }
+
+/* A choice's icon shows only where its words do not fit (below). */
+.nx-image-state__choice > svg {
+  display: none;
+}
+
+/* A box too small for the choices' words (`plateSize`), such as a logo's
+   place in a header row: the three choices as icons, each named by its
+   words and keeping its own 24px of room, and nothing that only explains
+   them. What needs more room than the box has, a link being typed, a link
+   that did not load, a note, drops just below the box on the editor's
+   surface, so it is never cut off. */
+.nx-image-state[data-plate-size="small"] {
+  padding: 0;
+  overflow: visible;
+}
+
+.nx-image-state[data-plate-size="small"] .nx-image-state__icon,
+.nx-image-state[data-plate-size="small"] .nx-image-state__title,
+.nx-image-state[data-plate-size="small"] .nx-image-state__hint,
+.nx-image-state[data-plate-size="small"]
+  .nx-image-state__progress
+  .nx-image-state__words {
+  display: none;
+}
+
+.nx-image-state[data-plate-size="small"] .nx-image-state__stack,
+.nx-image-state[data-plate-size="small"] .nx-image-state__progress {
+  gap: 0;
+}
+
+.nx-image-state[data-plate-size="small"] .nx-image-state__actions {
+  flex-wrap: nowrap;
+  gap: 0.25rem;
+}
+
+.nx-image-state[data-plate-size="small"] .nx-image-state__choice {
+  width: 1.25rem;
+  min-width: 0;
+  height: 1.25rem;
+  padding: 0;
+  gap: 0;
+}
+
+.nx-image-state[data-plate-size="small"] .nx-image-state__choice > svg {
+  display: block;
+}
+
+.nx-image-state[data-plate-size="small"] .nx-image-state__choice-words {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.nx-image-state[data-plate-size="small"] .nx-image-state__aside,
+.nx-image-state[data-plate-size="small"] .nx-image-state__problem {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  width: max(100%, 18rem);
+  max-width: none;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-builder-surface-raised);
+}

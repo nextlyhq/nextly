@@ -403,3 +403,191 @@ test.describe("an Image whose library file is gone", () => {
     );
   });
 });
+
+const COMPONENTS = "/admin/api/collections/components/entries";
+const LAYOUT_CHOICES =
+  "/admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/choices";
+
+/** A stored block, read without trusting its shape. */
+interface TreeNode {
+  id?: string;
+  slots?: Record<string, TreeNode[]>;
+  [key: string]: unknown;
+}
+
+/** The node with `id` in a tree, or `undefined`. */
+function nodeIn(nodes: TreeNode[], id: string): TreeNode | undefined {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    for (const children of Object.values(node.slots ?? {})) {
+      const found = nodeIn(children, id);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A component of its own holding the site's starter header with an Image put
+ * in its row, right after the site's name, and its id. Read from the header
+ * the fresh site was seeded with, so the row is the starter's own, and copied
+ * rather than changed, so the site's header stays as every other spec finds it.
+ */
+async function headerWithImage(
+  request: APIRequestContext,
+  image: Record<string, unknown>
+): Promise<string> {
+  const choices = await request.get(LAYOUT_CHOICES);
+  expect(choices.ok(), `layout choices: ${choices.status()}`).toBe(true);
+  const { items, meta } = (await choices.json()) as {
+    items: { id: string; regions: { area: string; componentId: string }[] }[];
+    meta: { defaultLayout: string | null };
+  };
+  const header = items
+    .find(item => item.id === meta.defaultLayout)
+    ?.regions.find(region => region.area === "header")?.componentId;
+  expect(header, "the site default has a header").toBeDefined();
+  const starter = await request.get(`${COMPONENTS}/${header}`);
+  expect(starter.ok(), `the starter header: ${starter.status()}`).toBe(true);
+  const content = (
+    (await starter.json()) as {
+      item: { content: { nodes: TreeNode[] } & Record<string, unknown> };
+    }
+  ).item.content;
+  // The row the site's name sits in, as the starter lays it out.
+  const row = nodeIn(content.nodes, "starter-header-start");
+  const children = row?.slots?.children;
+  expect(children?.[0]?.id, "the starter's row leads with the name").toBe(
+    "starter-header-name"
+  );
+  children?.splice(1, 0, imageNode(IMAGE, image));
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const created = await request.post(COMPONENTS, {
+    data: {
+      title: `Header with an image ${stamp}`,
+      slug: `header-with-an-image-${stamp}`,
+      status: "published",
+      content,
+    },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  return ((await created.json()) as { item: { id: string } }).item.id;
+}
+
+/** A box's place, in the canvas frame's own pixels. */
+function rectOf(
+  locator: Locator
+): Promise<{ x: number; y: number; width: number; height: number }> {
+  return locator.evaluate(element => {
+    const { x, y, width, height } = element.getBoundingClientRect();
+    return { x, y, width, height };
+  });
+}
+
+test.describe("an Image in the starter header's row", () => {
+  test.describe.configure({ timeout: 180_000 });
+
+  test("is logo-sized while empty, beside the name, with its three choices", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const id = await headerWithImage(page.request, {});
+    await gotoAdmin(
+      page,
+      `/collections/components/${id}/builder?field=content`
+    );
+    await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+      timeout: 60_000,
+    });
+    const frame = canvasFrame(page);
+    const box = emptyBox(page, IMAGE);
+    await expect(box).toHaveCount(1, { timeout: 30_000 });
+    const name = frame.locator(
+      '.nx-canvas [data-nx-node="starter-header-name"]'
+    );
+    const drawn = await rectOf(box);
+    const beside = await rectOf(name);
+    // About a logo's size: no wider than 200px, no taller than the name.
+    expect(drawn.width).toBeGreaterThan(0);
+    expect(drawn.width).toBeLessThanOrEqual(200);
+    expect(drawn.height).toBeGreaterThan(0);
+    expect(drawn.height).toBeLessThanOrEqual(beside.height + 1);
+    // On the name's line, after it: the row stays one row.
+    expect(drawn.x).toBeGreaterThan(beside.x + beside.width - 1);
+    expect(Math.abs(drawn.y - beside.y)).toBeLessThan(beside.height);
+
+    // Its three choices, as buttons named by their words.
+    const small = page.locator(
+      '.nx-image-state[data-plate-size="small"][data-image-state="empty"]'
+    );
+    await expect(small).toHaveCount(1);
+    for (const choice of ["Upload", "Media library", "Link"]) {
+      const button = small.getByRole("button", { name: choice, exact: true });
+      await expect(button).toBeVisible();
+      // Each a target of its own, inside the box.
+      const target = await button.boundingBox();
+      const plateBox = await small.boundingBox();
+      expect(target !== null && plateBox !== null).toBe(true);
+      if (target !== null && plateBox !== null) {
+        expect(target.x).toBeGreaterThanOrEqual(plateBox.x - 1);
+        expect(target.x + target.width).toBeLessThanOrEqual(
+          plateBox.x + plateBox.width + 1
+        );
+      }
+    }
+    // Link opens its address field below the box, whole and usable.
+    await small.getByRole("button", { name: "Link", exact: true }).click();
+    const address = page.getByRole("textbox", { name: "Image address" });
+    await expect(address).toBeVisible();
+    await expect(address).toBeFocused();
+  });
+
+  test("draws a 160×40 logo at its own size on the canvas, on a desktop and a phone", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const run = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const uploaded = await page.request.post("/admin/api/media", {
+      multipart: {
+        file: {
+          name: `logo-${run}.png`,
+          mimeType: "image/png",
+          buffer: pngBuffer(90, 0, { width: 160, height: 40 }),
+        },
+      },
+    });
+    expect(uploaded.ok(), `uploading: ${uploaded.status()}`).toBe(true);
+    const body = (await uploaded.json()) as {
+      item?: { id: string };
+      id?: string;
+    };
+    const id = await headerWithImage(page.request, {
+      mediaId: String(body.item?.id ?? body.id),
+      alt: "Logo",
+    });
+    await gotoAdmin(
+      page,
+      `/collections/components/${id}/builder?field=content`
+    );
+    const logo = canvasFrame(page).locator(
+      `.nx-canvas [data-nx-node="${IMAGE}"]`
+    );
+    await expect(logo).toBeVisible({ timeout: 60_000 });
+    await expect
+      .poll(async () => (await rectOf(logo)).width, { timeout: 15_000 })
+      .toBe(160);
+    expect((await rectOf(logo)).height).toBe(40);
+    await page
+      .getByRole("radiogroup", { name: "Device" })
+      .getByRole("radio", { name: /^Mobile/ })
+      .click();
+    // A phone's header row: never wider than its own 160px, as tall as its
+    // width allows.
+    await expect
+      .poll(async () => (await rectOf(logo)).width, { timeout: 15_000 })
+      .toBeLessThanOrEqual(160);
+    const phone = await rectOf(logo);
+    expect(phone.width).toBeGreaterThan(0);
+    expect(Math.abs(phone.height - phone.width / 4)).toBeLessThanOrEqual(1);
+  });
+});

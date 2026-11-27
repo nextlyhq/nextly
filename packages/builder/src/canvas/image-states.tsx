@@ -52,7 +52,7 @@ import {
   type RemotePatternInput,
 } from "@nextlyhq/blocks-react";
 import { Button } from "@nextlyhq/ui";
-import { ImageOff, ImagePlus } from "lucide-react";
+import { ImageOff, ImagePlus, Images, Link2, Upload } from "lucide-react";
 import * as React from "react";
 
 import type { EditorState } from "../editor-state";
@@ -96,6 +96,7 @@ import {
   linkAddress,
   loadsAsImage,
   pictureOp,
+  plateSize,
   takesPicture,
   type ImageEmptyReason,
 } from "./image-states-model";
@@ -763,6 +764,9 @@ function ImagePlate(props: ImagePlateProps): React.JSX.Element {
       data-image-state={plate.reason}
       data-image-activity={activity?.kind}
       data-held={held ? "" : undefined}
+      // On a box too small for its words, the choices are icons, and a link
+      // being typed or a note drops below the box (`image-states.css`).
+      data-plate-size={plateSize(plate.rect)}
       role="group"
       aria-label={
         plate.reason === "missing"
@@ -869,7 +873,7 @@ function BadLink({
   onCancel,
 }: ImagePlateProps & { readonly typed: string }): React.JSX.Element {
   return (
-    <div className="nx-image-state__stack">
+    <div className="nx-image-state__stack nx-image-state__aside">
       <p className="nx-image-state__problem" role="alert">
         {WORDS.badLink}
       </p>
@@ -1046,25 +1050,46 @@ function ChoiceButtons({
       </div>
     );
   }
+  // Each with its icon beside its word. On a box too small for the words (a
+  // logo's place in a header row), only the icons show and the words name
+  // them (`image-states.css`), so all three are still there to press.
   return (
     <div className="nx-image-state__actions">
       {canUpload ? (
-        <Button type="button" size="sm" onClick={upload}>
-          {WORDS.upload}
+        <Button
+          type="button"
+          size="sm"
+          className="nx-image-state__choice"
+          title={WORDS.upload}
+          onClick={upload}
+        >
+          <Upload aria-hidden="true" size={14} />
+          <span className="nx-image-state__choice-words">{WORDS.upload}</span>
         </Button>
       ) : null}
       {canPick ? (
-        <Button type="button" size="sm" variant="outline" onClick={onLibrary}>
-          {WORDS.library}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="nx-image-state__choice"
+          title={WORDS.library}
+          onClick={onLibrary}
+        >
+          <Images aria-hidden="true" size={14} />
+          <span className="nx-image-state__choice-words">{WORDS.library}</span>
         </Button>
       ) : null}
       <Button
         type="button"
         size="sm"
         variant="outline"
+        className="nx-image-state__choice"
+        title={WORDS.link}
         onClick={() => onLink("")}
       >
-        {WORDS.link}
+        <Link2 aria-hidden="true" size={14} />
+        <span className="nx-image-state__choice-words">{WORDS.link}</span>
       </Button>
     </div>
   );
@@ -1090,7 +1115,7 @@ function LinkForm({
   }, []);
   return (
     <form
-      className="nx-image-state__link"
+      className="nx-image-state__link nx-image-state__aside"
       onSubmit={event => {
         event.preventDefault();
         if (!activity.checking) onSubmitLink(activity.typed);

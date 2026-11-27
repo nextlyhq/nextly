@@ -32,6 +32,7 @@ import {
   linkAddress,
   loadsAsImage,
   pictureOp,
+  plateSize,
   takesPicture,
 } from "./image-states-model";
 
@@ -115,6 +116,19 @@ describe("the Image boxes waiting for a picture", () => {
         bindings: { src: { $bind: "entry.photoUrl" } },
       } as BlockNode)
     ).toBe(false);
+  });
+});
+
+describe("how a plate draws its choices", () => {
+  it("as icons on a logo's place in a row, with words on a full box", () => {
+    // The box an empty Image draws in a header row: 200px by a line.
+    expect(plateSize({ width: 200, height: 24 })).toBe("small");
+    // Wide but a line tall, and tall but narrow, are both too small.
+    expect(plateSize({ width: 600, height: 40 })).toBe("small");
+    expect(plateSize({ width: 180, height: 300 })).toBe("small");
+    // The 16:9 box at a narrow column's width, and at a wide one's.
+    expect(plateSize({ width: 240, height: 135 })).toBe("full");
+    expect(plateSize({ width: 800, height: 450 })).toBe("full");
   });
 });
 

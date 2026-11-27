@@ -387,6 +387,7 @@ describe("every default the core library declares", () => {
       "core/image#enlarge",
       "core/image#frame",
       "core/image#full",
+      "core/image#in-row",
       "core/image#lightbox",
       "core/image#lightbox-caption",
       "core/image#link",

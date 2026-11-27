@@ -128,6 +128,27 @@ export function takesPicture(node: BlockNode): boolean {
   );
 }
 
+/**
+ * The smallest box the empty state's choices fit in with their words: the
+ * three buttons, at least on two lines, inside the plate's padding. Measured
+ * in the canvas's own pixels, as a plate's rectangle is, so it holds at any
+ * zoom.
+ */
+const WORDS_FIT = { width: 240, height: 64 } as const;
+
+/**
+ * How a plate draws its choices: with their words, or, on a box too small
+ * for them (a logo's place in a header row), as icons the words name.
+ */
+export function plateSize(rect: {
+  readonly width: number;
+  readonly height: number;
+}): "full" | "small" {
+  return rect.width < WORDS_FIT.width || rect.height < WORDS_FIT.height
+    ? "small"
+    : "full";
+}
+
 /** Whether a drag carries files from outside the page. */
 export function carriesFiles(transfer: DataTransfer | null): boolean {
   if (transfer === null) return false;
