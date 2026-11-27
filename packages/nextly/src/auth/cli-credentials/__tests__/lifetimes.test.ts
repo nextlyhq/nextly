@@ -329,6 +329,65 @@ describe("revoking a credential", () => {
   });
 });
 
+describe("a person's list of credentials", () => {
+  it("lists what still stands, newest first, and nothing ended, revoked or another person's", async () => {
+    const { service, store } = setup();
+    const laptop = await service.signIn({ userId: "u1", machine: "laptop" });
+    const pass = await service.issueAgentPass({
+      from: await credentialOf(service, laptop.accessToken),
+      agentName: "Claude Code",
+      machine: "laptop",
+    });
+    if (!pass.ok) throw new Error("pass refused");
+    at(MINUTE);
+    const desktop = await service.signIn({ userId: "u1", machine: "desktop" });
+    const signedOut = await service.signIn({ userId: "u1", machine: "old" });
+    await service.revoke(
+      { credentialId: signedOut.credentialId, userId: "u1" },
+      "revoked"
+    );
+    await service.signIn({ userId: "u2", machine: "theirs" });
+
+    const listed = await service.listFor("u1");
+    expect(listed.map(held => held.credentialId)).toEqual([
+      desktop.credentialId,
+      laptop.credentialId,
+      pass.credentialId,
+    ]);
+    expect(listed[2]).toEqual({
+      credentialId: pass.credentialId,
+      purpose: "agent-pass",
+      parentId: laptop.credentialId,
+      agentName: "Claude Code",
+      machine: "laptop",
+      createdAt: START,
+      lastUsedAt: null,
+      endsAt: new Date(START.getTime() + 4 * 60 * MINUTE),
+    });
+
+    // Past the pass's 4 hours: the pass is no longer listed.
+    at(4 * 60 * MINUTE);
+    expect((await service.listFor("u1")).map(held => held.machine)).toEqual([
+      "desktop",
+      "laptop",
+    ]);
+
+    // Its sign-in revoked while the pass's own row was missed: neither
+    // is listed.
+    at(MINUTE);
+    const row = store.rows.get(laptop.credentialId);
+    if (!row) throw new Error("no sign-in row");
+    row.revokedAt = Date.now();
+    expect((await service.listFor("u1")).map(held => held.machine)).toEqual([
+      "desktop",
+    ]);
+
+    // Unused for 30 days: the sign-in is no longer listed.
+    at(MINUTE + 30 * DAY);
+    expect(await service.listFor("u1")).toEqual([]);
+  });
+});
+
 describe("an agent pass", () => {
   it("lasts 4 hours", async () => {
     const { service, store } = setup();

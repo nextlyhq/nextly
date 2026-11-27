@@ -59,6 +59,8 @@ export interface CliCredentialStore {
   insert(row: CliCredentialRow): Promise<void>;
   /** The rows with these ids that exist, in no particular order. */
   find(ids: readonly string[]): Promise<CliCredentialRow[]>;
+  /** A person's credentials not revoked yet, in no particular order. */
+  findUnrevokedFor(userId: string): Promise<CliCredentialRow[]>;
   /**
    * Replace the refresh token if the row is still at `fromGeneration` and
    * not revoked. True when this call moved it; false when another renewal
@@ -175,6 +177,21 @@ export function cliCredentialStore(
       const rows = await adapter.select<RawRow>(CLI_CREDENTIALS_TABLE, {
         columns: [...COLUMNS],
         where: { and: [{ column: "id", op: "IN", value: [...ids] }] },
+      });
+      return rows.flatMap(raw => rowFrom(raw) ?? []);
+    },
+
+    async findUnrevokedFor(userId) {
+      // By the person's index; a person holds a handful of rows, and ended
+      // ones are filtered by the service, which owns what "ended" means.
+      const rows = await adapter.select<RawRow>(CLI_CREDENTIALS_TABLE, {
+        columns: [...COLUMNS],
+        where: {
+          and: [
+            { column: "userId", op: "=", value: userId },
+            { column: "revokedAt", op: "IS NULL" },
+          ],
+        },
       });
       return rows.flatMap(raw => rowFrom(raw) ?? []);
     },

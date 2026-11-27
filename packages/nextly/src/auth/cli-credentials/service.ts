@@ -87,6 +87,21 @@ export interface VerifiedCliCredential {
   machine: string | null;
 }
 
+/** One credential a person holds, as the list of their devices shows it. */
+export interface HeldCliCredential {
+  credentialId: string;
+  purpose: CliCredentialPurpose;
+  /** The sign-in a pass came from; null for a sign-in. */
+  parentId: string | null;
+  agentName: string | null;
+  machine: string | null;
+  createdAt: Date;
+  /** The last renewal for a sign-in; null for a pass, which is not renewed. */
+  lastUsedAt: Date | null;
+  /** When it ends at the latest, unused or not. */
+  endsAt: Date;
+}
+
 export type CliCredentialResult<T> =
   | ({ ok: true } & T)
   | { ok: false; reason: CliCredentialRefusal };
@@ -129,6 +144,11 @@ export interface CliCredentialService {
    * person holds no such credential, so a known id is not enough to end
    * someone else's.
    */
+  /**
+   * The credentials a person holds that still stand, newest first: neither
+   * revoked nor ended, and, for a pass, made from a sign-in that stands.
+   */
+  listFor(userId: string): Promise<HeldCliCredential[]>;
   revoke(
     input: { credentialId: string; userId: string },
     reason: CliCredentialRevokeReason
@@ -453,6 +473,38 @@ export function createCliCredentialService(
         (row ? await familyRefusal(row) : "invalid");
       if (refusal || !row) return refused(refusal ?? "invalid");
       return { ok: true, credential: verifiedOf(row) };
+    },
+
+    async listFor(userId) {
+      const now = Date.now();
+      const rows = await store.findUnrevokedFor(userId);
+      // A sign-in stands while it can still be renewed; a pass while it has
+      // not ended and its sign-in stands, so a pass whose sign-in was
+      // revoked is not listed even if its own row was missed.
+      const standing = new Set(
+        rows
+          .filter(
+            row => row.purpose !== "agent-pass" && !signInRefusal(row, now)
+          )
+          .map(row => row.id)
+      );
+      return rows
+        .filter(row =>
+          row.purpose === "agent-pass"
+            ? now < row.endsAt && standing.has(row.familyId)
+            : standing.has(row.id)
+        )
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map(row => ({
+          credentialId: row.id,
+          purpose: row.purpose,
+          parentId: row.parentId,
+          agentName: row.agentName,
+          machine: row.machine,
+          createdAt: new Date(row.createdAt),
+          lastUsedAt: row.lastUsedAt === null ? null : new Date(row.lastUsedAt),
+          endsAt: new Date(row.endsAt),
+        }));
     },
 
     async revoke({ credentialId, userId }, reason) {

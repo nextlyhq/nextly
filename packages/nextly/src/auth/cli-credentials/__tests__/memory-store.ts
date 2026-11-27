@@ -25,6 +25,11 @@ export function memoryCliCredentialStore(): MemoryCliCredentialStore {
         return row ? [{ ...row }] : [];
       });
     },
+    async findUnrevokedFor(userId) {
+      return [...rows.values()]
+        .filter(row => row.userId === userId && row.revokedAt === null)
+        .map(row => ({ ...row }));
+    },
     async rotate(change) {
       const row = rows.get(change.id);
       if (

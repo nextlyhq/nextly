@@ -181,6 +181,51 @@ describeEachDialect("CLI credentials", dialect => {
     });
   });
 
+  describe("a person's list", () => {
+    it("holds their standing credentials and nothing revoked or another person's", async () => {
+      const other = { id: `${PERSON.id}-other`, email: "other@example.com" };
+      await current.adapter.insert("users", {
+        id: other.id,
+        email: other.email,
+        is_active: true,
+      });
+      const signIn = await service.signIn({
+        userId: PERSON.id,
+        machine: "laptop",
+      });
+      const pass = await service.issueAgentPass({
+        from: await credentialOf(service, signIn.accessToken),
+        agentName: "Claude Code",
+        machine: "laptop",
+      });
+      if (!pass.ok) throw new Error(`pass refused: ${pass.reason}`);
+      const revoked = await service.signIn({
+        userId: PERSON.id,
+        machine: "old",
+      });
+      await service.revoke(
+        { credentialId: revoked.credentialId, userId: PERSON.id },
+        "revoked"
+      );
+      const theirs = await service.signIn({ userId: other.id, machine: null });
+
+      const listed = await service.listFor(PERSON.id);
+
+      expect(listed.map(held => held.credentialId).sort()).toEqual(
+        [signIn.credentialId, pass.credentialId].sort()
+      );
+      expect(
+        (await service.listFor(other.id)).map(held => held.credentialId)
+      ).toEqual([theirs.credentialId]);
+      await current.adapter.delete(CLI_CREDENTIALS_TABLE, {
+        and: [{ column: "userId", op: "=", value: other.id }],
+      });
+      await current.adapter.delete("users", {
+        and: [{ column: "id", op: "=", value: other.id }],
+      });
+    });
+  });
+
   describe("the stored rows", () => {
     it("hold only a hash of the refresh token, and nothing of any token", async () => {
       const signIn = await service.signIn({
