@@ -40,6 +40,8 @@ perLanguageStorageSuite();
 // own slugs.
 const POSTS = "trashmove_posts";
 const SEO = "trashmove_seo";
+// A collection the probe plugin contributes, not the site.
+const PLUGIN_NOTES = "trashmove_plugin_notes";
 const LANGUAGES = { locales: ["en", "de"], defaultLocale: "en" };
 
 /** The collection service a plugin is handed, kept from its `init`. */
@@ -49,6 +51,14 @@ const probe = definePlugin({
   name: "trashmove-probe",
   version: "1.0.0",
   nextly: ">=0.0.1",
+  contributes: {
+    collections: [
+      defineCollection({
+        slug: PLUGIN_NOTES,
+        fields: [text({ name: "title" })],
+      }),
+    ],
+  },
   init: ctx => {
     services = ctx.services.collections;
   },
@@ -231,5 +241,28 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
         "en",
       ]);
     }
+  });
+
+  it("an entry of a plugin's own collection goes to the trash too", async () => {
+    const t = await boot(dialect);
+    const made = await t.nextly.create({
+      collection: PLUGIN_NOTES,
+      data: { title: "A plugin's note" },
+    });
+    const id = String(made.item.id);
+
+    await t.nextly.delete({ collection: PLUGIN_NOTES, id });
+
+    const listed = await t.nextly.find({
+      collection: PLUGIN_NOTES,
+      where: { id: { equals: id } },
+    });
+    expect(listed.items).toHaveLength(0);
+    const [record] = await trashOf(t, id);
+    expect(record).toMatchObject({
+      scopeSlug: PLUGIN_NOTES,
+      itemId: id,
+      label: "A plugin's note",
+    });
   });
 });
