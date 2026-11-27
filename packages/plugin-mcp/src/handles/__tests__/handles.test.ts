@@ -227,4 +227,25 @@ describe("a handle", () => {
     });
     expect(store.rows.size).toBe(0);
   });
+
+  it("is refused to a key caller whose key is not named, so two keys never share a binding", async () => {
+    const store = fakeSecrets();
+    const unnamedKey = (): HandleCaller => ({
+      user: { id: "alice" } as HandleCaller["user"],
+      caller: { authMethod: "api-key" } as HandleCaller["caller"],
+      security: { secrets: store.secrets },
+    });
+    // The control: a named key of the same person is served.
+    const { handle } = await PLAN.issue(
+      callerOf(store, "alice", { apiKeyId: "k1" })
+    );
+
+    await expect(PLAN.issue(unnamedKey())).rejects.toMatchObject({
+      code: "AUTH_REQUIRED",
+    });
+    await expect(PLAN.read(unnamedKey(), handle)).rejects.toMatchObject({
+      code: "AUTH_REQUIRED",
+    });
+    expect(store.rows.size).toBe(1);
+  });
 });

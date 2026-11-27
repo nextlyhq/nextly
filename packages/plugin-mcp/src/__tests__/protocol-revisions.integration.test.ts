@@ -197,7 +197,7 @@ describe.each(getConfiguredTestDialects())(
       expect(client.getServerVersion()).toMatchObject({ name: "nextly" });
     });
 
-    it("keeps no session: no session id is issued, and two clients' calls do not depend on each other", async () => {
+    it("keeps no session: no client is issued a session id", async () => {
       const seen: Exchange[] = [];
       const first = await clientOn("2025-11-25", seen);
       const second = await clientOn("2025-11-25", seen);
@@ -221,7 +221,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("marks discovery and list answers private to the caller, on every revision", async () => {
-      // The 2026 revision carries cache fields in the answer itself: the door's own hint.
+      // The 2026 revision carries cache fields in the answer itself.
       const modern: Exchange[] = [];
       await (await clientOn("2026-07-28", modern)).listTools();
       for (const method of ["server/discover", "tools/list"]) {
@@ -246,6 +246,31 @@ describe.each(getConfiguredTestDialects())(
           expectPrivateHeader(answer, `${revision} ${method}`);
         }
       }
+    });
+
+    it("counter-offers its newest 2025 revision to a client opening with an older one", async () => {
+      const response = await handlers.POST(
+        post(
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-03-26",
+              capabilities: {},
+              clientInfo: { name: "conformance-client", version: "0.0.0" },
+            },
+          },
+          bearer(key)
+        ),
+        params("mcp")
+      );
+
+      const body = (await payloadOf(response)) as {
+        result?: { protocolVersion?: string };
+      };
+      expect(response.status).toBe(200);
+      expect(body.result?.protocolVersion).toBe("2025-11-25");
     });
 
     it("refuses a revision it does not serve, naming all three it does", async () => {

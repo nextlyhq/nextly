@@ -1,6 +1,5 @@
 /**
- * Handles: opaque strings a tool hands an agent when state must outlive one call, such as an
- * approval that is still pending, a page plan being built up, or an upload link.
+ * Handles: opaque strings a tool hands an agent when state must outlive one call.
  *
  * The door keeps no session, so a later call can only find that state through something the
  * client sends back. A handle is that something, and it is only safe to send back if it is
@@ -16,9 +15,10 @@
  * ## What a handle is bound to
  *
  * The person, and the credential they arrived on: one API key is not another of the same
- * person's keys, and a key is not their signed-in session. A place is kept for the connection a
- * chat app signs in through, which is bound in as well once connections exist; until then that
- * part of the binding is empty for every caller.
+ * person's keys, and a key is not their signed-in session. A person's signed-in sessions count
+ * as one credential: the route context names no session that outlives a token refresh, so there
+ * is nothing narrower to bind to. The binding also has a part for a connection, which is empty
+ * for every caller today.
  *
  * @module handles/handles
  */
@@ -96,9 +96,12 @@ export function lifetimeInWords(ms: number): string {
 }
 
 /**
- * Who `caller` is to a handle: the person, the credential and (once connections exist) the
- * connection, as one fixed-width digest. A digest rather than the ids themselves so that its
- * length never depends on how long an id is; it is no secret, since nothing in it is.
+ * Who `caller` is to a handle: the person, the credential and the connection part (empty
+ * today), as one fixed-width digest. A digest rather than the ids themselves so that its length
+ * never depends on how long an id is; it is no secret, since nothing in it is.
+ *
+ * A key caller whose key is not named is refused rather than bound to "some key": every key of
+ * that person would then share one binding and accept each other's handles.
  */
 function bindingOf(caller: HandleCaller): string {
   const user = caller.user;
@@ -107,11 +110,15 @@ function bindingOf(caller: HandleCaller): string {
       logContext: { reason: "mcp-handle-without-caller" },
     });
   }
+  const keyId = caller.caller.apiKeyId;
+  if (caller.caller.authMethod === "api-key" && !keyId) {
+    throw NextlyError.authRequired({
+      logContext: { reason: "mcp-handle-key-without-id" },
+    });
+  }
   const credential =
-    caller.caller.authMethod === "api-key"
-      ? `key:${caller.caller.apiKeyId ?? ""}`
-      : "session";
-  // The connection's place, empty until chat-app connections exist.
+    caller.caller.authMethod === "api-key" ? `key:${keyId}` : "session";
+  // The connection part, empty for every caller today.
   const connection = "";
   return createHash("sha256")
     .update(JSON.stringify({ person: user.id, credential, connection }), "utf8")

@@ -204,24 +204,33 @@ describe.each(getConfiguredTestDialects())("handles (%s)", dialect => {
     }
   });
 
-  it("is refused when two people swap handles, each told it is not theirs", async () => {
-    const alices = await issued(handlers, aliceKey);
-    const bobs = await issued(handlers, bob);
+  it.each([
+    // Both on a session: only the person differs, so a binding that ignored the person and
+    // kept the credential's kind would pass this pair.
+    ["both signed in", () => aliceSession],
+    ["one on a key, one signed in", () => aliceKey],
+  ])(
+    "is refused when two people swap handles (%s), each told it is not theirs",
+    async (_, alicesCredential) => {
+      const alice = alicesCredential();
+      const alices = await issued(handlers, alice);
+      const bobs = await issued(handlers, bob);
 
-    const bobReadingAlices = await call(handlers, bob, "read", alices);
-    const aliceReadingBobs = await call(handlers, aliceKey, "read", bobs);
+      const bobReadingAlices = await call(handlers, bob, "read", alices);
+      const aliceReadingBobs = await call(handlers, alice, "read", bobs);
 
-    for (const refused of [bobReadingAlices, aliceReadingBobs]) {
-      expect(refused.status).toBe(403);
-      expect(refused.json.error).toMatchObject({
-        code: "MCP_HANDLE_NOT_YOURS",
-        message: expect.stringContaining("issued to someone else"),
-      });
+      for (const refused of [bobReadingAlices, aliceReadingBobs]) {
+        expect(refused.status).toBe(403);
+        expect(refused.json.error).toMatchObject({
+          code: "MCP_HANDLE_NOT_YOURS",
+          message: expect.stringContaining("issued to someone else"),
+        });
+      }
+      // The control: each still works for the person it was issued to.
+      expect((await call(handlers, alice, "read", alices)).status).toBe(200);
+      expect((await call(handlers, bob, "read", bobs)).status).toBe(200);
     }
-    // The control: each still works for the person it was issued to.
-    expect((await call(handlers, aliceKey, "read", alices)).status).toBe(200);
-    expect((await call(handlers, bob, "read", bobs)).status).toBe(200);
-  });
+  );
 
   it("is refused to the same person on another key or on their session", async () => {
     const handle = await issued(handlers, aliceKey);
