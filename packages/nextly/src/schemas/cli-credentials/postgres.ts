@@ -18,6 +18,10 @@
  *   `refresh_generation` counts its replacements: every renewal moves it,
  *   so a renewal can be a compare-and-set on it and an earlier token is
  *   recognised as replaced.
+ * - `session_epoch` is the person's session epoch (`users.session_epoch`)
+ *   when the sign-in was made, copied to its passes. Deactivating the person
+ *   or an administrator setting their password raises the user row's epoch,
+ *   and a credential made at an earlier one is refused from then on.
  * - Times are milliseconds since the epoch, the same integer on every
  *   dialect. `idle_ends_at` is when an unused sign-in ends (null on a pass);
  *   `ends_at` is the end nothing extends. `revoked_at` and `revoked_reason`
@@ -59,6 +63,7 @@ export const nextlyCliCredentialsPg = pgTable(
     machine: text("machine"),
     refreshTokenHash: varchar("refresh_token_hash", { length: 64 }),
     refreshGeneration: integer("refresh_generation").notNull().default(0),
+    sessionEpoch: integer("session_epoch").notNull().default(0),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     lastUsedAt: bigint("last_used_at", { mode: "number" }),
     idleEndsAt: bigint("idle_ends_at", { mode: "number" }),

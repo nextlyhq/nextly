@@ -17,12 +17,19 @@
  *   stored; each carries its purpose in its header and its credential's id,
  *   and the verifier reads the credential's row on every call, so a revoked
  *   credential is refused at once rather than when its token runs out.
+ * - Each credential carries its person's session epoch from when the
+ *   sign-in was made. Deactivating the person, or an administrator setting
+ *   their password, raises the epoch on the user row (as it ends the admin's
+ *   sessions), and every credential made before is refused from then on;
+ *   a renewal that meets one revokes its whole family.
  *
  * Nothing here decides what the caller may do: the door that verifies a
  * token resolves its person and runs every check as that person.
  *
  * @module auth/cli-credentials/service
  */
+import { timingSafeEqual } from "node:crypto";
+
 import { decodeProtectedHeader } from "jose";
 
 import { NextlyError } from "../../errors/nextly-error";
@@ -73,7 +80,12 @@ export type CliCredentialRefusal =
   /** A refresh token already replaced; the sign-in is now revoked. */
   | "reused"
   /** A credential for another door. */
-  | "wrong-door";
+  | "wrong-door"
+  /**
+   * The person is inactive, gone, or had their sessions ended (a new
+   * password set by an administrator, a deactivation) since it was made.
+   */
+  | "account";
 
 /** A credential an access token was accepted for. */
 export interface VerifiedCliCredential {
@@ -107,11 +119,14 @@ export type CliCredentialResult<T> =
   | { ok: false; reason: CliCredentialRefusal };
 
 export interface CliCredentialService {
-  /** Make a sign-in for a person on a machine, after they approved it. */
+  /**
+   * Make a sign-in for a person on a machine, after they approved it. Refused
+   * for a person who is not active.
+   */
   signIn(input: {
     userId: string;
     machine: string | null;
-  }): Promise<CliSignInTokens>;
+  }): Promise<CliCredentialResult<CliSignInTokens>>;
   /** Replace a sign-in's refresh token and issue a new access token. */
   renew(refreshToken: string): Promise<CliCredentialResult<CliSignInTokens>>;
   /**
@@ -139,20 +154,26 @@ export interface CliCredentialService {
     door: CliCredentialDoor
   ): Promise<CliCredentialResult<{ credential: VerifiedCliCredential }>>;
   /**
+   * The credentials a person holds that still stand, newest first: neither
+   * revoked nor ended, made at the person's current session epoch, and, for
+   * a pass, made from a sign-in that stands.
+   */
+  listFor(userId: string): Promise<HeldCliCredential[]>;
+  /**
    * End one of a person's credentials now. Ending a sign-in ends every
    * credential issued from it; ending a pass ends that pass. False when the
    * person holds no such credential, so a known id is not enough to end
    * someone else's.
    */
-  /**
-   * The credentials a person holds that still stand, newest first: neither
-   * revoked nor ended, and, for a pass, made from a sign-in that stands.
-   */
-  listFor(userId: string): Promise<HeldCliCredential[]>;
   revoke(
     input: { credentialId: string; userId: string },
     reason: CliCredentialRevokeReason
   ): Promise<boolean>;
+  /** End every credential a person holds, sign-ins and passes alike. */
+  revokeAllFor(
+    userId: string,
+    reason: CliCredentialRevokeReason
+  ): Promise<void>;
 }
 
 export interface CliCredentialServiceDeps {
@@ -242,6 +263,19 @@ function rowRefusal(
   return null;
 }
 
+/**
+ * Whether a presented refresh token is the one whose hash the row holds,
+ * compared in constant time like the tag.
+ */
+function holdsHashOf(row: CliCredentialRow, refreshToken: string): boolean {
+  if (row.refreshTokenHash === null) return false;
+  const stored = Buffer.from(row.refreshTokenHash);
+  const presented = Buffer.from(hashRefreshToken(refreshToken));
+  return (
+    stored.length === presented.length && timingSafeEqual(stored, presented)
+  );
+}
+
 /** What a door learns of an accepted credential: who, through what, never a hash. */
 function verifiedOf(row: CliCredentialRow): VerifiedCliCredential {
   return {
@@ -302,6 +336,21 @@ export function createCliCredentialService(
     if (row.familyId === row.id) return null;
     const root = await findOne(row.familyId);
     return !root || root.revokedAt !== null ? "revoked" : null;
+  }
+
+  /**
+   * Whether the person a credential belongs to may still use it: active, and
+   * at the session epoch the credential was made at. Read from the user row
+   * on every call, as the admin's sessions are judged.
+   */
+  async function accountRefusal(
+    row: CliCredentialRow
+  ): Promise<CliCredentialRefusal | null> {
+    const standing = await store.standingOf(row.userId);
+    return standing?.isActive === true &&
+      standing.sessionEpoch === row.sessionEpoch
+      ? null
+      : "account";
   }
 
   /**
@@ -367,6 +416,8 @@ export function createCliCredentialService(
 
   return {
     async signIn({ userId, machine }) {
+      const account = await store.standingOf(userId);
+      if (account?.isActive !== true) return refused("account");
       const now = Date.now();
       const id = newCredentialId();
       const refreshToken = mintRefreshToken(secret, id, 0);
@@ -381,6 +432,7 @@ export function createCliCredentialService(
         machine,
         refreshTokenHash: hashRefreshToken(refreshToken),
         refreshGeneration: 0,
+        sessionEpoch: account.sessionEpoch,
         createdAt: now,
         lastUsedAt: now,
         endsAt: now + lifetimes.signInAbsoluteMs,
@@ -394,6 +446,7 @@ export function createCliCredentialService(
       await store.insert(row);
       const access = await accessTokenFor(row);
       return {
+        ok: true,
         credentialId: id,
         accessToken: access.token,
         accessTokenExpiresAt: access.expiresAt,
@@ -408,12 +461,19 @@ export function createCliCredentialService(
       if (!parsed || !row || row.purpose !== "cli-sign-in") {
         return refused("invalid");
       }
-      if (row.refreshTokenHash !== hashRefreshToken(refreshToken)) {
+      if (!holdsHashOf(row, refreshToken)) {
         return refuseStaleToken(row, parsed);
       }
       const now = Date.now();
       const standing = signInRefusal(row, now);
-      return standing ? refused(standing) : rotate(row, now);
+      if (standing) return refused(standing);
+      if (await accountRefusal(row)) {
+        // The person's sessions were ended since this sign-in was made: it
+        // and everything from it end too, so a reactivation brings none back.
+        await store.revoke({ familyId: row.familyId }, now, "account-ended");
+        return refused("account");
+      }
+      return rotate(row, now);
     },
 
     async issueAgentPass({ from, agentName, machine }) {
@@ -429,6 +489,7 @@ export function createCliCredentialService(
       const now = Date.now();
       const standing = signInRefusal(signIn, now);
       if (standing) return refused(standing);
+      if (await accountRefusal(signIn)) return refused("account");
       const id = newCredentialId();
       const row: CliCredentialRow = {
         id,
@@ -441,6 +502,7 @@ export function createCliCredentialService(
         machine,
         refreshTokenHash: null,
         refreshGeneration: 0,
+        sessionEpoch: signIn.sessionEpoch,
         createdAt: now,
         lastUsedAt: null,
         idleEndsAt: null,
@@ -468,16 +530,25 @@ export function createCliCredentialService(
       const claims = await readAccessToken(accessToken, door, secret);
       if ("ok" in claims) return claims;
       const row = await findOne(claims.cid);
+      if (!row) return refused("invalid");
       const refusal =
         rowRefusal(row, claims, door, Date.now()) ??
-        (row ? await familyRefusal(row) : "invalid");
-      if (refusal || !row) return refused(refusal ?? "invalid");
-      return { ok: true, credential: verifiedOf(row) };
+        (await familyRefusal(row)) ??
+        (await accountRefusal(row));
+      return refusal
+        ? refused(refusal)
+        : { ok: true, credential: verifiedOf(row) };
     },
 
     async listFor(userId) {
       const now = Date.now();
-      const rows = await store.findUnrevokedFor(userId);
+      const account = await store.standingOf(userId);
+      if (account?.isActive !== true) return [];
+      // Only what was made at the person's current epoch: anything older
+      // was ended with their sessions, whether or not a call has met it yet.
+      const rows = (await store.findUnrevokedFor(userId)).filter(
+        row => row.sessionEpoch === account.sessionEpoch
+      );
       // A sign-in stands while it can still be renewed; a pass while it has
       // not ended and its sign-in stands, so a pass whose sign-in was
       // revoked is not listed even if its own row was missed.
@@ -514,6 +585,10 @@ export function createCliCredentialService(
         row.familyId === row.id ? { familyId: row.id } : { id: row.id };
       await store.revoke(match, Date.now(), reason);
       return true;
+    },
+
+    async revokeAllFor(userId, reason) {
+      await store.revoke({ userId }, Date.now(), reason);
     },
   };
 }

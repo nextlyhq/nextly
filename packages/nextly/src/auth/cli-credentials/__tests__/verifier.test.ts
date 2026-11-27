@@ -13,7 +13,11 @@ import { verifyAccessToken } from "../../jwt/verify";
 import { createCliCredentialService } from "../service";
 import type { CliCredentialRow } from "../store";
 
-import { credentialOf, memoryCliCredentialStore } from "./memory-store";
+import {
+  credentialOf,
+  memoryCliCredentialStore,
+  signedIn,
+} from "./memory-store";
 
 // A fixture signing key: long enough for HS256, plainly not a real one.
 const SECRET = "fixture-".repeat(6);
@@ -21,7 +25,7 @@ const SECRET = "fixture-".repeat(6);
 async function setup() {
   const store = memoryCliCredentialStore();
   const service = createCliCredentialService({ store, secret: SECRET });
-  const signIn = await service.signIn({ userId: "u1", machine: null });
+  const signIn = await signedIn(service, { userId: "u1", machine: null });
   const pass = await service.issueAgentPass({
     from: await credentialOf(service, signIn.accessToken),
     agentName: "Claude Code",
@@ -41,6 +45,7 @@ async function setup() {
     machine: null,
     refreshTokenHash: null,
     refreshGeneration: 0,
+    sessionEpoch: 0,
     createdAt: Date.now(),
     lastUsedAt: null,
     idleEndsAt: null,

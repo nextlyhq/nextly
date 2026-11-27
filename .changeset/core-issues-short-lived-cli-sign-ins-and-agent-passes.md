@@ -43,6 +43,9 @@ behaviour changes for a site today.
   it. A made-up token carrying a known sign-in's id is refused without
   ending anything.
 - An agent pass lasts 4 hours, never longer than the sign-in it came from.
+- Deactivating a person, or an administrator setting their password, ends
+  every sign-in and pass they hold, as it ends their admin sessions; a
+  reactivated person gets none of them back.
 - Only a SHA-256 hash of each refresh token is stored; access tokens are
   signed, never stored.
 - Each credential has one purpose and opens one door: CLI sign-ins and agent

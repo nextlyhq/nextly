@@ -884,6 +884,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "machine" TEXT,
       "refresh_token_hash" TEXT,
       "refresh_generation" INTEGER NOT NULL DEFAULT 0,
+      "session_epoch" INTEGER NOT NULL DEFAULT 0,
       "created_at" INTEGER NOT NULL,
       "last_used_at" INTEGER,
       "idle_ends_at" INTEGER,

@@ -14,6 +14,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { CLI_CREDENTIALS_TABLE } from "../../schemas/cli-credentials/table-name";
+import {
+  readSessionStanding,
+  type SessionStanding,
+} from "../session/session-standing";
 
 import { isCliCredentialPurpose, type CliCredentialPurpose } from "./purposes";
 
@@ -22,7 +26,9 @@ export type CliCredentialRevokeReason =
   /** The person signed out, or revoked it from their account. */
   | "revoked"
   /** A refresh token already replaced was presented again. */
-  | "refresh-reused";
+  | "refresh-reused"
+  /** The person was deactivated, or their sessions were ended. */
+  | "account-ended";
 
 /** One stored credential. Times are milliseconds since the epoch. */
 export interface CliCredentialRow {
@@ -36,6 +42,8 @@ export interface CliCredentialRow {
   machine: string | null;
   refreshTokenHash: string | null;
   refreshGeneration: number;
+  /** The person's session epoch when the sign-in was made. */
+  sessionEpoch: number;
   createdAt: number;
   lastUsedAt: number | null;
   idleEndsAt: number | null;
@@ -62,6 +70,12 @@ export interface CliCredentialStore {
   /** A person's credentials not revoked yet, in no particular order. */
   findUnrevokedFor(userId: string): Promise<CliCredentialRow[]>;
   /**
+   * Whether the person is active and at which session epoch, read from
+   * their user row as the admin's sessions read it; null when there is no
+   * such person.
+   */
+  standingOf(userId: string): Promise<SessionStanding | null>;
+  /**
    * Replace the refresh token if the row is still at `fromGeneration` and
    * not revoked. True when this call moved it; false when another renewal
    * got there first or the row was revoked.
@@ -69,10 +83,10 @@ export interface CliCredentialStore {
   rotate(change: CliCredentialRotation): Promise<boolean>;
   /**
    * End every credential not ended yet that matches: one credential by its
-   * id, or a whole family by its sign-in's id.
+   * id, a whole family by its sign-in's id, or everything a person holds.
    */
   revoke(
-    match: { id: string } | { familyId: string },
+    match: { id: string } | { familyId: string } | { userId: string },
     at: number,
     reason: CliCredentialRevokeReason
   ): Promise<void>;
@@ -89,6 +103,7 @@ const COLUMNS = [
   "machine",
   "refreshTokenHash",
   "refreshGeneration",
+  "sessionEpoch",
   "createdAt",
   "lastUsedAt",
   "idleEndsAt",
@@ -129,6 +144,7 @@ function rowFrom(raw: RawRow): CliCredentialRow | null {
   const familyId = text(raw.familyId);
   const door = text(raw.door);
   const refreshGeneration = time(raw.refreshGeneration);
+  const sessionEpoch = time(raw.sessionEpoch);
   const createdAt = time(raw.createdAt);
   const endsAt = time(raw.endsAt);
   if (
@@ -138,6 +154,7 @@ function rowFrom(raw: RawRow): CliCredentialRow | null {
     familyId === null ||
     door === null ||
     refreshGeneration === null ||
+    sessionEpoch === null ||
     createdAt === null ||
     endsAt === null
   ) {
@@ -154,6 +171,7 @@ function rowFrom(raw: RawRow): CliCredentialRow | null {
     machine: text(raw.machine),
     refreshTokenHash: text(raw.refreshTokenHash),
     refreshGeneration,
+    sessionEpoch,
     createdAt,
     lastUsedAt: time(raw.lastUsedAt),
     idleEndsAt: time(raw.idleEndsAt),
@@ -196,6 +214,12 @@ export function cliCredentialStore(
       return rows.flatMap(raw => rowFrom(raw) ?? []);
     },
 
+    async standingOf(userId) {
+      // The admin's own read of the two columns, uncached: a credential is
+      // judged against the row as it is now, not as a process last saw it.
+      return readSessionStanding(userId, adapter);
+    },
+
     async rotate(change) {
       const moved = await adapter.updateCount(
         CLI_CREDENTIALS_TABLE,
@@ -224,7 +248,9 @@ export function cliCredentialStore(
       const key =
         "id" in match
           ? { column: "id", op: "=" as const, value: match.id }
-          : { column: "familyId", op: "=" as const, value: match.familyId };
+          : "familyId" in match
+            ? { column: "familyId", op: "=" as const, value: match.familyId }
+            : { column: "userId", op: "=" as const, value: match.userId };
       await adapter.updateCount(
         CLI_CREDENTIALS_TABLE,
         { revokedAt: at, revokedReason: reason },

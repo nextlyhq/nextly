@@ -6,6 +6,11 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { getDialectTables } from "../../../database/index";
+import {
+  updateUserEndingSessions,
+  type PasswordWriteTx,
+} from "../../../domains/users/services/password-write";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -19,10 +24,15 @@ import {
 } from "../service";
 import { cliCredentialStore, type CliCredentialRow } from "../store";
 
-import { credentialOf } from "./memory-store";
+import { credentialOf, signedIn } from "./memory-store";
 
 const SECRET = "an-integration-secret-of-plenty-of-characters";
 const PERSON = { id: "cli-credentials-person", email: "cli@example.com" };
+
+/** The Drizzle handle's own transaction, as core's services open theirs. */
+interface Transactor {
+  transaction<T>(work: (tx: PasswordWriteTx) => Promise<T>): Promise<T>;
+}
 
 describeEachDialect("CLI credentials", dialect => {
   let current: TestNextly;
@@ -59,7 +69,7 @@ describeEachDialect("CLI credentials", dialect => {
 
   describe("a renewal", () => {
     it("replaces the stored refresh token and issues an access token the door accepts", async () => {
-      const signIn = await service.signIn({
+      const signIn = await signedIn(service, {
         userId: PERSON.id,
         machine: "laptop",
       });
@@ -91,7 +101,10 @@ describeEachDialect("CLI credentials", dialect => {
     });
 
     it("of one token presented twice at once, succeeds once and revokes the sign-in", async () => {
-      const signIn = await service.signIn({ userId: PERSON.id, machine: null });
+      const signIn = await signedIn(service, {
+        userId: PERSON.id,
+        machine: null,
+      });
 
       const results = await Promise.all([
         service.renew(signIn.refreshToken),
@@ -124,7 +137,7 @@ describeEachDialect("CLI credentials", dialect => {
         store: racing,
         secret: SECRET,
       });
-      const signIn = await racingService.signIn({
+      const signIn = await signedIn(racingService, {
         userId: PERSON.id,
         machine: null,
       });
@@ -142,7 +155,10 @@ describeEachDialect("CLI credentials", dialect => {
 
   describe("a replayed refresh token", () => {
     it("revokes the sign-in and every credential issued from it", async () => {
-      const signIn = await service.signIn({ userId: PERSON.id, machine: null });
+      const signIn = await signedIn(service, {
+        userId: PERSON.id,
+        machine: null,
+      });
       const pass = await service.issueAgentPass({
         from: await credentialOf(service, signIn.accessToken),
         agentName: "Claude Code",
@@ -150,7 +166,10 @@ describeEachDialect("CLI credentials", dialect => {
       });
       if (!pass.ok) throw new Error(`pass refused: ${pass.reason}`);
       // Another sign-in of the same person: not of this family, so it stays.
-      const other = await service.signIn({ userId: PERSON.id, machine: null });
+      const other = await signedIn(service, {
+        userId: PERSON.id,
+        machine: null,
+      });
       const renewed = await service.renew(signIn.refreshToken);
       if (!renewed.ok) throw new Error(`renewal refused: ${renewed.reason}`);
 
@@ -189,7 +208,7 @@ describeEachDialect("CLI credentials", dialect => {
         email: other.email,
         is_active: true,
       });
-      const signIn = await service.signIn({
+      const signIn = await signedIn(service, {
         userId: PERSON.id,
         machine: "laptop",
       });
@@ -199,7 +218,7 @@ describeEachDialect("CLI credentials", dialect => {
         machine: "laptop",
       });
       if (!pass.ok) throw new Error(`pass refused: ${pass.reason}`);
-      const revoked = await service.signIn({
+      const revoked = await signedIn(service, {
         userId: PERSON.id,
         machine: "old",
       });
@@ -207,7 +226,10 @@ describeEachDialect("CLI credentials", dialect => {
         { credentialId: revoked.credentialId, userId: PERSON.id },
         "revoked"
       );
-      const theirs = await service.signIn({ userId: other.id, machine: null });
+      const theirs = await signedIn(service, {
+        userId: other.id,
+        machine: null,
+      });
 
       const listed = await service.listFor(PERSON.id);
 
@@ -226,9 +248,136 @@ describeEachDialect("CLI credentials", dialect => {
     });
   });
 
+  describe("a person whose sessions are ended", () => {
+    /**
+     * The write core makes for a new password or a deactivation, in a
+     * transaction opened as the user service opens it: on SQLite, whose
+     * driver takes no async Drizzle transaction, the adapter's own over the
+     * shared handle.
+     */
+    const endSessions = async (
+      userId: string,
+      set: { passwordHash: string } | { isActive: false; deactivatedAt: Date }
+    ) => {
+      const write = (tx: PasswordWriteTx) =>
+        updateUserEndingSessions(tx, getDialectTables(dialect), dialect, {
+          userId,
+          set,
+          adapter: current.adapter,
+        });
+      if (dialect === "sqlite") {
+        await current.adapter.transaction(() =>
+          write(current.adapter.getDrizzle() as unknown as PasswordWriteTx)
+        );
+        return;
+      }
+      const db = current.adapter.getDrizzle() as unknown as Transactor;
+      await db.transaction(write);
+    };
+
+    it("loses every CLI credential made before a new password, and no one else does", async () => {
+      const other = { id: `${PERSON.id}-reset-other`, email: "ro@example.com" };
+      await current.adapter.insert("users", {
+        id: other.id,
+        email: other.email,
+        is_active: true,
+      });
+      const signIn = await signedIn(service, {
+        userId: PERSON.id,
+        machine: null,
+      });
+      const pass = await service.issueAgentPass({
+        from: await credentialOf(service, signIn.accessToken),
+        agentName: null,
+        machine: null,
+      });
+      if (!pass.ok) throw new Error(`pass refused: ${pass.reason}`);
+      const theirs = await signedIn(service, {
+        userId: other.id,
+        machine: null,
+      });
+
+      await endSessions(PERSON.id, { passwordHash: "a-new-password-hash" });
+
+      for (const token of [signIn.accessToken, pass.accessToken]) {
+        expect(await service.verify(token, "command")).toEqual({
+          ok: false,
+          reason: "account",
+        });
+      }
+      expect(await service.renew(signIn.refreshToken)).toEqual({
+        ok: false,
+        reason: "account",
+      });
+      for (const id of [signIn.credentialId, pass.credentialId]) {
+        expect((await storedRow(id))?.revokedReason).toBe("account-ended");
+      }
+      expect((await service.verify(theirs.accessToken, "command")).ok).toBe(
+        true
+      );
+      expect((await service.renew(theirs.refreshToken)).ok).toBe(true);
+      const fresh = await signedIn(service, {
+        userId: PERSON.id,
+        machine: null,
+      });
+      expect((await service.verify(fresh.accessToken, "command")).ok).toBe(
+        true
+      );
+
+      await current.adapter.delete(CLI_CREDENTIALS_TABLE, {
+        and: [{ column: "userId", op: "=", value: other.id }],
+      });
+      await current.adapter.delete("users", {
+        and: [{ column: "id", op: "=", value: other.id }],
+      });
+    });
+
+    it("deactivated and reactivated, gets none of the earlier ones back", async () => {
+      const signIn = await signedIn(service, {
+        userId: PERSON.id,
+        machine: null,
+      });
+
+      await endSessions(PERSON.id, {
+        isActive: false,
+        deactivatedAt: new Date(),
+      });
+      expect(await service.verify(signIn.accessToken, "command")).toEqual({
+        ok: false,
+        reason: "account",
+      });
+      expect(
+        await service.signIn({ userId: PERSON.id, machine: null })
+      ).toEqual({ ok: false, reason: "account" });
+
+      // Reactivated the way an administrator does: the account is active
+      // again, and its epoch stays where the deactivation left it.
+      await current.adapter.update(
+        "users",
+        { is_active: true, deactivated_at: null },
+        { and: [{ column: "id", op: "=", value: PERSON.id }] }
+      );
+      expect(await service.verify(signIn.accessToken, "command")).toEqual({
+        ok: false,
+        reason: "account",
+      });
+      expect(await service.renew(signIn.refreshToken)).toEqual({
+        ok: false,
+        reason: "account",
+      });
+      const fresh = await signedIn(service, {
+        userId: PERSON.id,
+        machine: null,
+      });
+      expect((await service.verify(fresh.accessToken, "command")).ok).toBe(
+        true
+      );
+    });
+  });
+
   describe("the stored rows", () => {
     it("hold only a hash of the refresh token, and nothing of any token", async () => {
-      const signIn = await service.signIn({
+      const signIn = await signedIn(service, {
         userId: PERSON.id,
         machine: "laptop",
       });

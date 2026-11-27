@@ -31,6 +31,7 @@ export const nextlyCliCredentialsSqlite = sqliteTable(
     machine: text("machine"),
     refreshTokenHash: text("refresh_token_hash"),
     refreshGeneration: integer("refresh_generation").notNull().default(0),
+    sessionEpoch: integer("session_epoch").notNull().default(0),
     createdAt: integer("created_at").notNull(),
     lastUsedAt: integer("last_used_at"),
     idleEndsAt: integer("idle_ends_at"),

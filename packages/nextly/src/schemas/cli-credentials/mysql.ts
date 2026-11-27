@@ -37,6 +37,7 @@ export const nextlyCliCredentialsMysql = mysqlTable(
     machine: text("machine"),
     refreshTokenHash: varchar("refresh_token_hash", { length: 64 }),
     refreshGeneration: int("refresh_generation").notNull().default(0),
+    sessionEpoch: int("session_epoch").notNull().default(0),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     lastUsedAt: bigint("last_used_at", { mode: "number" }),
     idleEndsAt: bigint("idle_ends_at", { mode: "number" }),
