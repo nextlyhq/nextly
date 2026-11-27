@@ -1,8 +1,11 @@
 /**
- * The last good copy of each root file the plugin lists pages in (the
- * sitemap's files and the llms files), kept beside the address record so it
+ * The last good copy of the root files the plugin lists pages in (each of
+ * the sitemap's files and llms.txt), kept beside the address record so it
  * can be served while the record catches up, rather than asking readers to
  * come back: a sitemap a few minutes old serves a crawler better than a 503.
+ * Only lists are kept, never a file carrying pages' words (llms-full.txt):
+ * a copy is served without the public-access checks a fresh answer makes,
+ * and any answer given once the record is ready replaces it.
  *
  * A copy is kept only from an answer given while the record was up to date,
  * for the site's own origin (never one a request's host chose), and written
@@ -16,7 +19,7 @@
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
 import { sha256 } from "../address-record/rows";
-import { noteKey, putNote, readNotes } from "../address-record/store";
+import { noteKey, putNotesTogether, readNotes } from "../address-record/store";
 
 /** A root file as it was answered. */
 export interface FileCopy {
@@ -52,11 +55,13 @@ export async function keepCopy(
     const stored = notes.get(digestKey(file)) ?? undefined;
     if (stored !== digest) {
       const kept: KeptCopy = { ...copy, keptAt: new Date().toISOString() };
-      const absent = stored === undefined;
-      // The copy before its digest: a write stopped between the two leaves
-      // a digest that matches no copy, and the next answer writes both.
-      await putNote(ctx, copyKey(file), JSON.stringify(kept), { absent });
-      await putNote(ctx, digestKey(file), digest, { absent });
+      // Written together, so the digest kept is always the copy's own: one
+      // matching a copy another answer wrote over would stop every later
+      // answer with the same words from keeping them.
+      await putNotesTogether(ctx, [
+        { key: copyKey(file), value: JSON.stringify(kept) },
+        { key: digestKey(file), value: digest },
+      ]);
     }
   } catch (error) {
     ctx.logger.warn("The SEO plugin could not keep a copy of a root file", {

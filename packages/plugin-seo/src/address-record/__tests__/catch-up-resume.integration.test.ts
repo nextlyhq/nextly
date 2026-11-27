@@ -46,9 +46,11 @@ afterEach(async () => {
 
 /**
  * How long each page's claim takes, by the clock, while `ticking`: a plugin
- * told of every claim moves the clock on, standing for a slow page.
+ * told of every claim moves the clock on, standing for a slow page. While
+ * `slowReads`, each read of a page moves it past a request's whole wait,
+ * standing for a site whose listing alone outlasts it.
  */
-const clock = { ticking: false, perClaimMs: 2000 };
+const clock = { ticking: false, perClaimMs: 2000, slowReads: false };
 
 /** A plugin taking part in the address record, moving the clock on each claim. */
 const slowPages = definePlugin({
@@ -84,6 +86,15 @@ async function behindSite(
         status: true,
         fields: [text({ name: "title" }), text({ name: "slug" })],
         publicAddress: "/{slug}",
+        hooks: {
+          beforeRead: [
+            async () => {
+              if (clock.slowReads) {
+                vi.setSystemTime(Date.now() + RECORD_WAIT_MS + 1000);
+              }
+            },
+          ],
+        },
       }),
     ],
   });
@@ -166,6 +177,32 @@ describe.each(getConfiguredTestDialects())(
       }
       expect(await recordedRows()).toEqual(whole);
       expect(await fingerprintStored()).toBe(true);
+    });
+
+    it("moves the record on by a page each request even where reading the pages alone outlasts the request's wait", async () => {
+      const whole = await behindSite(dialect);
+      await catchUp({ stopNow: () => true });
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      clock.slowReads = true;
+      try {
+        // The listing is read whole, past the deadline, and the first claim
+        // is still made: a run stopped before it would leave nothing done
+        // for the next, and no request would ever finish the catch-up.
+        expect(await addressRecordReadyWithin(RECORD_WAIT_MS)).toBe(false);
+        expect(await lastCatchUp()).toMatchObject({
+          finished: false,
+          recorded: 1,
+        });
+        // A page a request, then: the requests finish it.
+        for (let left = SLUGS.length; left > 0; left -= 1) {
+          if (await addressRecordReadyWithin(RECORD_WAIT_MS)) break;
+        }
+      } finally {
+        clock.slowReads = false;
+      }
+      expect(addressRecordReady()).toBe(true);
+      expect(await recordedRows()).toEqual(whole);
     });
   }
 );

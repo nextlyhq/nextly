@@ -247,15 +247,18 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
       "list of pages",
       config,
       rules => rules.llmsTxt === true,
-      llmsTxtOf
+      llmsTxtOf,
+      true
     ),
-    // Every listed page's words in one file: only beside llms.txt.
+    // Every listed page's words in one file: only beside llms.txt. Never
+    // kept: a copy would go on serving words the public may no longer read.
     llmsRoute(
       "/llms-full.txt",
       "file of every page",
       config,
       rules => rules.llmsTxt === true && rules.llmsFullTxt === true,
-      llmsFullTxtOf
+      llmsFullTxtOf,
+      false
     )
   );
   return routes;
@@ -264,7 +267,8 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
 /**
  * A route serving one of the llms files, only once switched on in the SEO
  * settings, so it is not found until then; it lists what the sitemap lists,
- * narrowed as it is.
+ * narrowed as it is. Where `keep`, its last good answer is kept, to be served
+ * while the address record catches up.
  */
 function llmsRoute(
   path: string,
@@ -276,7 +280,8 @@ function llmsRoute(
     origin: string,
     outputs: AiOutputsConfig,
     rules: SiteRules
-  ) => Promise<string | null>
+  ) => Promise<string | null>,
+  keep: boolean
 ): PluginRoute {
   return {
     method: "GET",
@@ -293,7 +298,7 @@ function llmsRoute(
         "text/plain; charset=utf-8"
       );
       const { origin, headers } = site;
-      const file = fileName(path, site);
+      const file = keep ? fileName(path, site) : undefined;
       const waiting = await catchingUp(ctx, what, file);
       if (waiting !== null) return waiting;
       const body = await write(

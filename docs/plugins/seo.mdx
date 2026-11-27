@@ -805,7 +805,8 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
   the same rules, so a draft, a hidden page or a page whose canonical points elsewhere is
   never in it. Until it is switched on, `/llms.txt` is not found. Like the sitemap, it
   waits for the address record at start, and while the record catches up it is served from
-  the copy kept from its last answer, or answers `503` where none is kept.
+  the copy kept from its last answer, or answers `503` where none is kept. `llms-full.txt`,
+  which carries the pages' words, is never kept: it answers `503` while the record catches up.
   **What AI tools should know**, on the same tab, is the site's own words placed under the
   summary, as the proposal allows: plain sentences and lists, a line beginning with `#`
   escaped so it never becomes a heading.

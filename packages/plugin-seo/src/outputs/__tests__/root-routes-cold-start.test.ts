@@ -9,7 +9,11 @@ import type { PluginContext, PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 /** The notes the stored gate reads: a run that finished, at fingerprint `fp`. */
-const stored = vi.hoisted(() => ({ notes: new Map<string, string>() }));
+const stored = vi.hoisted(() => ({
+  notes: new Map<string, string>(),
+  /** How many notes each answer kept, by the file asked for. */
+  written: 0,
+}));
 
 vi.mock("../../address-record/store", async importOriginal => {
   const store =
@@ -29,6 +33,13 @@ vi.mock("../../address-record/store", async importOriginal => {
     }),
     putNote: async (_ctx: unknown, key: string, value: string) => {
       stored.notes.set(key, value);
+    },
+    putNotesTogether: async (
+      _ctx: unknown,
+      entries: readonly { key: string; value: string }[]
+    ) => {
+      for (const { key, value } of entries) stored.notes.set(key, value);
+      stored.written += entries.length;
     },
     earlierWritesSince: async () => undefined,
   };
@@ -77,7 +88,7 @@ function justStarted(): { ctx: PluginContext; read: () => void } {
 
 const routes = rootFileRoutes({
   origin: SITE,
-  readRules: async () => ({ patterns: {}, llmsTxt: true }),
+  readRules: async () => ({ patterns: {}, llmsTxt: true, llmsFullTxt: true }),
   sitemap: { limits: SITEMAP_LIMITS },
 });
 
@@ -111,5 +122,27 @@ describe("a server just started, the stored fingerprint current", () => {
     const answer = await firstAnswer("/llms.txt");
     expect(answer.status).toBe(200);
     expect(await answer.text()).toBe("# Acme\n");
+  });
+});
+
+describe("the copies kept to serve while the record catches up", () => {
+  /** How many notes an answer at `path`, from a record up to date, kept. */
+  async function keptBy(path: string): Promise<number> {
+    // Only the gate's two notes stay: no copy is kept yet.
+    for (const key of [...stored.notes.keys()].slice(2)) {
+      stored.notes.delete(key);
+    }
+    const before = stored.written;
+    expect((await firstAnswer(path)).status).toBe(200);
+    return stored.written - before;
+  }
+
+  it("keeps the sitemap and llms.txt, which list pages", async () => {
+    expect(await keptBy("/sitemap.xml")).toBeGreaterThan(0);
+    expect(await keptBy("/llms.txt")).toBeGreaterThan(0);
+  });
+
+  it("never keeps llms-full.txt, which carries pages' words", async () => {
+    expect(await keptBy("/llms-full.txt")).toBe(0);
   });
 });
