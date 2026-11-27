@@ -24,6 +24,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runAsPrincipal } from "../../../auth/principal-scope";
 import type { RequestActor } from "../../../auth/request-actor";
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import { container } from "../../../di/container";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
@@ -34,6 +35,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ActivityLogService } from "../../../services/dashboard/activity-log-service";
+import { allResources } from "../../../services/dashboard/readable-resources";
 import type { ActorAttribution } from "../attribution";
 import { buildAuditLogWriter } from "../audit-log-writer";
 
@@ -376,6 +378,66 @@ describe.each(getConfiguredTestDialects())(
       });
       const [audit] = await auditRows(t);
       expect(audit).toMatchObject({ agentName: "Cursor", credentialId: null });
+    });
+
+    it("narrows the feed to one agent, or to one agent session", async () => {
+      const t = await boot(dialect);
+      const claude = (sessionId: string): ActorAttribution => ({
+        door: "command",
+        agent: { name: "Claude Code", sessionId },
+        credentialId: PASS_ID,
+      });
+      await createAs(t, claude(SESSION_ID), "first session");
+      await createAs(
+        t,
+        claude("d4e6f8a0-2b3c-4d5e-9f7a-1b2c3d4e5f6a"),
+        "second session"
+      );
+      await createAs(
+        t,
+        { door: "chat-app", agent: { name: "ChatGPT", sessionId: "s-gpt" } },
+        "another agent"
+      );
+      await createAs(t, undefined, "by hand");
+      // The feed authorizes each row's document as its reader: the person
+      // reads the collection by a grant, as a reader on a real site would.
+      await grantTo(t, PERSON.id, "read", ["posts"]);
+
+      const feed = (filters: { agentName?: string; agentSessionId?: string }) =>
+        t
+          .getService("activityLogService")
+          .getRecentActivity({
+            ...filters,
+            limit: 20,
+            scope: allResources(),
+            caller: { user: { id: PERSON.id, roles: [] } },
+          })
+          .then(result =>
+            result.activities.map(row => [row.entryTitle, row.agentName])
+          );
+
+      expect((await feed({})).length).toBe(4);
+      expect((await feed({ agentName: "Claude Code" })).sort()).toEqual([
+        ["first session", "Claude Code"],
+        ["second session", "Claude Code"],
+      ]);
+      expect(await feed({ agentSessionId: SESSION_ID })).toEqual([
+        ["first session", "Claude Code"],
+      ]);
+      // Each row says who stood behind it, as the readers draw it.
+      const [row] = (
+        await t.getService("activityLogService").getRecentActivity({
+          agentName: "ChatGPT",
+          scope: allResources(),
+          caller: { user: { id: PERSON.id, roles: [] } },
+        })
+      ).activities;
+      expect(row).toMatchObject({
+        userName: PERSON.name,
+        agentName: "ChatGPT",
+        door: "chat-app",
+        approvedVia: null,
+      });
     });
 
     it("still records no activity row for a plugin-defined person's write", async () => {

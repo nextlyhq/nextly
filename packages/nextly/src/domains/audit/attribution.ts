@@ -141,10 +141,31 @@ const COMMIT_PATTERN = /^[0-9a-f]{7,40}$/i;
  */
 type Refused = string[];
 
+/**
+ * Whether `value` is an id as the attribution columns store one. Exported so
+ * a reader filtering by one (an agent session) refuses exactly what a writer
+ * would never have stored.
+ */
+export function isAttributionId(value: unknown): value is string {
+  return typeof value === "string" && ID_PATTERN.test(value);
+}
+
+/**
+ * A name as the attribution columns store one, trimmed, or `undefined` when
+ * empty or too long to store. Exported so a reader filtering by an agent's
+ * name matches it as it was stored.
+ */
+export function storedName(value: unknown): string | undefined {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed !== "" && trimmed.length <= ATTRIBUTION_NAME_LENGTH
+    ? trimmed
+    : undefined;
+}
+
 /** An id-valued part: stored when it is an id, refused when given and not. */
 function idOf(refused: Refused, field: string, value: unknown): string | null {
   if (value === undefined) return null;
-  if (typeof value === "string" && ID_PATTERN.test(value)) return value;
+  if (isAttributionId(value)) return value;
   refused.push(field);
   return null;
 }
@@ -155,10 +176,8 @@ function nameOf(
   field: string,
   value: unknown
 ): string | null {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  if (trimmed !== "" && trimmed.length <= ATTRIBUTION_NAME_LENGTH) {
-    return trimmed;
-  }
+  const name = storedName(value);
+  if (name !== undefined) return name;
   refused.push(field);
   return null;
 }

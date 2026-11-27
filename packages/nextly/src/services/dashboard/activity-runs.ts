@@ -47,6 +47,13 @@ function instantOf(value: unknown): number | undefined {
 }
 
 /**
+ * How many parts a run key has, for the check that a key handed back is one
+ * `runKeyOf` wrote: kind, reference, agent, agent session, subject kind,
+ * collection and entry.
+ */
+export const RUN_KEY_PARTS = 7;
+
+/**
  * Who saved which document, for a row that may join a run; `undefined` for
  * one that never does.
  *
@@ -61,7 +68,11 @@ function instantOf(value: unknown): number | undefined {
  * nothing: it cannot show it was not a publish, and a run would hide one if it
  * was. A Single's rows written before they recorded either still join, as they
  * always have. The actor is the kind and the reference together, as a row
- * written before the kind was recorded is a person's.
+ * written before the kind was recorded is a person's, with the agent that
+ * acted for them and its session: a person's own saves and their agent's are
+ * the same actor's, and only these keep the agent's edits from being shown as
+ * the person's own. The agent's name is in the key too, so an agent whose
+ * session was not recorded is still not taken for the person.
  */
 export function runKeyOf(row: Record<string, unknown>): string | undefined {
   if (row.action !== "update") return undefined;
@@ -75,6 +86,8 @@ export function runKeyOf(row: Record<string, unknown>): string | undefined {
   return JSON.stringify([
     row.actorType ?? "user",
     row.userId,
+    row.agentName ?? null,
+    row.agentSessionId ?? null,
     row.subjectKind ?? null,
     row.collection,
     row.entryId,
