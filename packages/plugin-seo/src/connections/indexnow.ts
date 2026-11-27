@@ -48,7 +48,7 @@ import { isRecord } from "../plain-values";
 import { idOf } from "../problems/hooks";
 import { fetchAs, type FetchOptions } from "../received/fetch";
 import { originsOf } from "../received/route";
-import { proxySeenNotes, type ProxySeenNotes } from "../redirects/proxy-seen";
+import { NOT_NOTED, type ProxySeenNotes } from "../redirects/proxy-seen";
 import type { ReadRules } from "../resolver/provider";
 
 import {
@@ -579,7 +579,7 @@ export function indexNowKeyRoutes(setup: IndexNowSetup): PluginRoute[] {
  */
 export function indexNowKeyProxyHandler(
   setup: IndexNowSetup,
-  seen: ProxySeenNotes = proxySeenNotes()
+  seen: ProxySeenNotes = NOT_NOTED
 ): PluginProxyHandler {
   return {
     name: "indexnow-key",

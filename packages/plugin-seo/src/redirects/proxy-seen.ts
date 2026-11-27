@@ -94,6 +94,14 @@ export function proxySeenNotes(now: () => number = Date.now): ProxySeenNotes {
   };
 }
 
+/**
+ * A note-taker that notes nothing, for a handler used on its own: the
+ * plugin hands each of its handlers the one it shares.
+ */
+export const NOT_NOTED: ProxySeenNotes = Object.freeze({
+  note: () => Promise.resolve(),
+});
+
 /** Whether the Proxy runs, as its last note says, judged at `now`. */
 export async function readProxyStatus(
   ctx: PluginContext,

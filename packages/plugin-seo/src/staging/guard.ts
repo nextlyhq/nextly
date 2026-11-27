@@ -22,7 +22,7 @@ import type { PluginContext, PluginProxyHandler } from "@nextlyhq/plugin-sdk";
 import { addNoteOnce, noteKey, readNotes } from "../address-record/store";
 import { productionAddressesOf } from "../canonical";
 import { keptValue } from "../kept-value";
-import { proxySeenNotes, type ProxySeenNotes } from "../redirects/proxy-seen";
+import { NOT_NOTED, type ProxySeenNotes } from "../redirects/proxy-seen";
 import type { ReadRules } from "../resolver/provider";
 
 /**
@@ -141,7 +141,7 @@ async function fromDatabase(
  */
 export function stagingGuard(
   readRules: ReadRules,
-  seen: ProxySeenNotes = proxySeenNotes()
+  seen: ProxySeenNotes = NOT_NOTED
 ): PluginProxyHandler {
   let latest: PluginContext | undefined;
   const judged = keptValue(

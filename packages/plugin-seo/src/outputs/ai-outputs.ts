@@ -37,7 +37,7 @@ import type { StatedMarkdown } from "../code-pages/stated";
 import { onceEach, resolveIn, servedAt } from "../languages/versions";
 import { originOf } from "../origin";
 import { isRecord, textOf } from "../plain-values";
-import { proxySeenNotes, type ProxySeenNotes } from "../redirects/proxy-seen";
+import { NOT_NOTED, type ProxySeenNotes } from "../redirects/proxy-seen";
 import type { SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import { TITLE_FIELDS } from "../settings/patterns";
@@ -1133,7 +1133,7 @@ async function waitForRecord(
  */
 export function plainCopyProxyHandler(
   config: AiOutputsConfig,
-  seen: ProxySeenNotes = proxySeenNotes()
+  seen: ProxySeenNotes = NOT_NOTED
 ): PluginProxyHandler {
   return {
     name: "plain-text-copies",
