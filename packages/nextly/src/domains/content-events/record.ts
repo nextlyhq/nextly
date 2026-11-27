@@ -9,6 +9,7 @@
  */
 
 import { NextlyError } from "../../errors";
+import { ATTRIBUTION_NAME_LENGTH } from "../../schemas/audit/widths";
 import {
   CONTENT_EVENTS_TABLE,
   CONTENT_EVENT_PARTS_TABLE,
@@ -107,6 +108,7 @@ const FIELD_LIMITS = {
   subjectId: 255,
   actorId: 255,
   actorName: 255,
+  actorAgentName: ATTRIBUTION_NAME_LENGTH,
   actorPrincipalKind: CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH,
   fromState: 64,
   toState: 64,
@@ -302,6 +304,7 @@ export async function recordContentEvent(
     subjectId: subject.id,
     actorId: actor.kind === "system" ? null : actor.id,
     actorName: actor.name ?? null,
+    actorAgentName: actor.kind === "system" ? null : (actor.agentName ?? null),
     actorPrincipalKind: actor.kind === "principal" ? actor.principalKind : null,
     fromState: input.fromState ?? null,
     toState: input.toState ?? null,

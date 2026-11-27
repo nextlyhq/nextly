@@ -15,11 +15,23 @@
 
 import type { VersionMeta } from "@admin/services/versionApi";
 
+import { attributedActorName } from "./history-story-attribution";
+
 /** What history shows a version's author as. */
 export function versionAuthorLabel(
   version: Pick<VersionMeta, "author" | "createdBy">
 ): string {
   const name = version.author?.name;
+  // An agent that wrote the version for its author is named beside them,
+  // through the one wording the history and Team activity share. Its name
+  // outlives the author's, so a version an agent wrote still says so.
+  const agentName = version.author?.agentName;
+  if (agentName) {
+    return attributedActorName(name || "someone not recorded", {
+      agentName,
+      actorIsKey: version.author?.kind === "apiKey",
+    });
+  }
   if (name) return name;
   return version.createdBy ? "Author unavailable" : "Author not recorded";
 }

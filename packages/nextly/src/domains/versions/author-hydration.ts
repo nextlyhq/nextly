@@ -40,6 +40,12 @@ export interface VersionAuthor {
   /** The person's or key's id; null for the system. */
   id: string | null;
   name: string | null;
+  /**
+   * The agent that wrote the version for this author ("Claude Code"), from
+   * the event that produced it. Absent when none did, and on a version no
+   * event names.
+   */
+  agentName?: string;
 }
 
 /** A version row carrying its resolved author, if one could be resolved. */
@@ -199,5 +205,8 @@ function authorFromProducer(
     kind: producer.actorKind,
     id: producer.actorId,
     name: current?.name ?? producer.actorName,
+    // The person stays the author; the agent that wrote for them is named
+    // beside them, as the event that produced the version records it.
+    ...(producer.actorAgentName ? { agentName: producer.actorAgentName } : {}),
   };
 }
