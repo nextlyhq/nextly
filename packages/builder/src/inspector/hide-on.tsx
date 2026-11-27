@@ -70,9 +70,9 @@ export interface HideOnProps {
 const STATUS_WORDS: Readonly<
   Record<Exclude<BreakpointsStatus, "ready">, string>
 > = {
-  loading: "Reading the site's breakpoints…",
+  loading: "Reading the site's screen sizes…",
   unavailable:
-    "The site's breakpoints could not be read, so where this block shows can't be changed here. Reload to try again.",
+    "The site's screen sizes could not be read, so where this block shows can't be changed here. Reload to try again.",
 };
 
 /** Said under the toggles: a press hides that device alone. */

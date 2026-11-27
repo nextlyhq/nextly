@@ -154,7 +154,7 @@ describe("Clean up unused…", () => {
       expect(within(dialog).queryByRole("checkbox", { name })).toBeNull();
     }
     expect(
-      within(dialog).getByRole("button", { name: "Remove 2 colours" })
+      within(dialog).getByRole("button", { name: "Remove 2 colors" })
     ).toBeDefined();
   });
 
@@ -164,7 +164,7 @@ describe("Clean up unused…", () => {
     const dialog = await openCleanUp();
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Extra" }));
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "Remove 1 colour" })
+      within(dialog).getByRole("button", { name: "Remove 1 color" })
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(onCleanUp).toHaveBeenCalledTimes(1);
@@ -195,9 +195,9 @@ describe("Clean up unused…", () => {
     );
     const dialog = await openCleanUp();
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "Remove 2 colours" })
+      within(dialog).getByRole("button", { name: "Remove 2 colors" })
     );
-    expect(await within(dialog).findByText("Removed 1 colour.")).toBeDefined();
+    expect(await within(dialog).findByText("Removed 1 color.")).toBeDefined();
     expect(within(dialog).getByText("Kept, as it's in use now:")).toBeDefined();
     expect(within(dialog).getByText("Extra is used on Home.")).toBeDefined();
     fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
@@ -215,7 +215,7 @@ describe("Clean up unused…", () => {
     );
     const dialog = await openCleanUp();
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "Remove 2 colours" })
+      within(dialog).getByRole("button", { name: "Remove 2 colors" })
     );
     expect((await within(dialog).findByRole("alert")).textContent).toBe(
       "You can't change this site's design."
@@ -232,7 +232,7 @@ describe("Clean up unused…", () => {
     expect(await within(dialog).findByText("Counting usage…")).toBeDefined();
     expect(within(dialog).queryAllByRole("checkbox")).toHaveLength(0);
     expect(
-      within(dialog).getByRole("button", { name: "Remove 0 colours" })
+      within(dialog).getByRole("button", { name: "Remove 0 colors" })
     ).toHaveProperty("disabled", true);
   });
 
@@ -252,7 +252,7 @@ describe("Clean up unused…", () => {
     );
     const dialog = await screen.findByRole("dialog");
     expect(
-      await within(dialog).findByText("Every colour you made is in use.")
+      await within(dialog).findByText("Every color you made is in use.")
     ).toBeDefined();
   });
 
@@ -281,13 +281,13 @@ describe("Clean up unused…", () => {
 
   it("is offered only where the host can clean up and the author may change Design", async () => {
     const { unmount } = render(<Panel />);
-    await screen.findByRole("radiogroup", { name: "Show colours" });
+    await screen.findByRole("radiogroup", { name: "Show colors" });
     expect(
       screen.queryByRole("button", { name: "Clean up unused…" })
     ).toBeNull();
     unmount();
     render(<Panel readOnly onCleanUp={async () => done([])} />);
-    await screen.findByRole("radiogroup", { name: "Show colours" });
+    await screen.findByRole("radiogroup", { name: "Show colors" });
     expect(
       screen.queryByRole("button", { name: "Clean up unused…" })
     ).toBeNull();

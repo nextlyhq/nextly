@@ -29,7 +29,7 @@ const NODES = [
   },
 ];
 
-const TABS = ["Colours", "Type", "Spacing", "Styles"] as const;
+const TABS = ["Colors", "Type", "Spacing", "Styles"] as const;
 
 async function openDesign(page: Page): Promise<void> {
   const panel = page.getByRole("region", { name: "Design panel" });
@@ -209,7 +209,7 @@ test("keeps the rows' columns where they were across all four tabs, at the defau
         )
         .toBeLessThanOrEqual(240);
     }
-    await switchTo(page, "Colours");
+    await switchTo(page, "Colors");
     const before = await firstRowColumns(page);
     // Measured while each tab is open: every variable row spans the same
     // room, and every tab's body is as wide as Colours'.
@@ -227,7 +227,7 @@ test("keeps the rows' columns where they were across all four tabs, at the defau
       }
     }
     // And back on Colours, the same columns as before.
-    await switchTo(page, "Colours");
+    await switchTo(page, "Colors");
     expect(await firstRowColumns(page), `at the ${width} width`).toEqual(
       before
     );

@@ -353,7 +353,7 @@ export function MediaFocalPoint({
                 onClick={() => setDraft({ focalX: CENTRE, focalY: CENTRE })}
                 disabled={saving}
               >
-                Centre
+                Center
               </Button>
               <Button
                 type="button"

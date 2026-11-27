@@ -356,7 +356,7 @@ export function removedIdsIn(
 
 /** Why a value this version cannot interpret is left as it is. */
 const UNREADABLE_VALUE =
-  "This content was saved by a different version of the page builder, so the styles under the removed breakpoints were left in it. Open it in the editor and save it again.";
+  "This content was saved by a different version of the page builder, so the styles under the removed screen sizes were left in it. Open it in the editor and save it again.";
 
 /**
  * The step a removal's walk rewrites every host with: the stored value

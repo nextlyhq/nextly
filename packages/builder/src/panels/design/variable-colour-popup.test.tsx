@@ -128,10 +128,10 @@ describe("a colour's popup", () => {
       expect(label?.querySelector(`[data-mode-icon="${mode}"]`)).not.toBeNull();
     }
     expect(
-      within(editor).getByRole("button", { name: /^Pick the light colour/ })
+      within(editor).getByRole("button", { name: /^Pick the light color/ })
     ).toBeDefined();
     expect(
-      within(editor).getByRole("button", { name: /^Pick the dark colour/ })
+      within(editor).getByRole("button", { name: /^Pick the dark color/ })
     ).toBeDefined();
   });
 
@@ -183,7 +183,7 @@ describe("a colour's popup", () => {
 
   it("follows a new colour's name with its code name on every keystroke, until it is saved", async () => {
     render(<Hosted tokens={SITE} />);
-    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add color" }));
     const editor = await screen.findByRole("dialog", {
       name: "Edit New colour",
     });

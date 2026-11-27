@@ -234,7 +234,7 @@ describe("a breakpoint save racing another save of the site style", () => {
 
     expect(refused).toMatchObject({ code: "CONFLICT" });
     expect(String((refused as Error).message)).toContain(
-      "The site's breakpoints were changed while this was being saved."
+      "The site's screen sizes were changed while this was being saved."
     );
     expect(single.doc.breakpoints).toEqual(set(DESKTOP, TABLET, MOBILE));
     expect(abandon).toHaveBeenCalledWith("run-1");

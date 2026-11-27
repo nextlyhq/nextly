@@ -180,7 +180,7 @@ describe("MessagesList", () => {
     const rowOf = (name: string) =>
       within(table()).getByText(name).closest("tr") as HTMLElement;
     expect(within(rowOf("Password reset")).getByText("Default")).toBeTruthy();
-    expect(within(rowOf("Welcome")).getByText("Customised")).toBeTruthy();
+    expect(within(rowOf("Welcome")).getByText("Customized")).toBeTruthy();
     expect(within(rowOf("Welcome")).getByText("Set in code")).toBeTruthy();
     expect(
       within(rowOf("Reset a password")).getByText("Update available")

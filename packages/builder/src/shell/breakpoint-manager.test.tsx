@@ -35,14 +35,16 @@ const defined = (): BreakpointSet => ({
 const empty = (): BreakpointSet => ({ viewport: [], container: [] });
 
 const trigger = (): HTMLButtonElement =>
-  screen.getByRole("button", { name: "Edit breakpoints" }) as HTMLButtonElement;
+  screen.getByRole("button", {
+    name: "Edit screen sizes",
+  }) as HTMLButtonElement;
 
 /** How many breakpoints the section lists, the base (Desktop) not counted. */
 const listed = (): number => screen.getAllByRole("listitem").length - 1;
 
 /** Whether the editor, rather than the list, is on screen. */
 const editorShown = (): boolean =>
-  screen.queryByRole("button", { name: /save breakpoints|saving/i }) !== null;
+  screen.queryByRole("button", { name: /save screen sizes|saving/i }) !== null;
 
 describe("the breakpoint trigger", () => {
   it("cannot be opened before the saved set has been read", () => {
@@ -111,7 +113,7 @@ describe("the breakpoint trigger", () => {
     fireEvent.click(trigger());
     fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
     fireEvent.click(
-      screen.getByRole("button", { name: /save breakpoints|saving/i })
+      screen.getByRole("button", { name: /save screen sizes|saving/i })
     );
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
 
@@ -222,7 +224,7 @@ describe("the breakpoint trigger", () => {
     expect(
       (
         screen.getByRole("button", {
-          name: /save breakpoints|saving/i,
+          name: /save screen sizes|saving/i,
         }) as HTMLButtonElement
       ).disabled
     ).toBe(false);
@@ -257,7 +259,7 @@ describe("the breakpoint trigger", () => {
     fireEvent.click(trigger());
     fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
     fireEvent.click(
-      screen.getByRole("button", { name: /save breakpoints|saving/i })
+      screen.getByRole("button", { name: /save screen sizes|saving/i })
     );
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
@@ -297,7 +299,7 @@ describe("the breakpoint trigger", () => {
     fireEvent.click(trigger());
     fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
     fireEvent.click(
-      screen.getByRole("button", { name: /save breakpoints|saving/i })
+      screen.getByRole("button", { name: /save screen sizes|saving/i })
     );
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
 
@@ -374,12 +376,12 @@ describe("the Site tab's breakpoints section", () => {
     );
     fireEvent.click(trigger());
     fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
-    fireEvent.click(screen.getByRole("button", { name: /save breakpoints/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save screen sizes/i }));
     await waitFor(() =>
       expect(
         (
           screen.getByRole("button", {
-            name: /save breakpoints/i,
+            name: /save screen sizes/i,
           }) as HTMLButtonElement
         ).disabled
       ).toBe(false)
@@ -401,15 +403,17 @@ describe("the Site tab's breakpoints section", () => {
         value={defined()}
         onSave={vi.fn()}
         status="ready"
-        blocked="Breakpoints can be changed again once it has finished."
+        blocked="Screen sizes can be changed again once it has finished."
       />
     );
     const save = screen.getByRole("button", {
-      name: /save breakpoints/i,
+      name: /save screen sizes/i,
     }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
     expect(
-      screen.getByText("Breakpoints can be changed again once it has finished.")
+      screen.getByText(
+        "Screen sizes can be changed again once it has finished."
+      )
     ).toBeDefined();
     // The draft is still the author's, Mobile still removed from it.
     expect(screen.queryByRole("button", { name: "Remove Mobile" })).toBeNull();
@@ -505,13 +509,13 @@ describe("the Site tab's breakpoints section", () => {
     );
     fireEvent.click(trigger());
     fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
-    fireEvent.click(screen.getByRole("button", { name: /save breakpoints/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save screen sizes/i }));
     // Refused: still editing, with the reason, and no "Saved" anywhere.
     await screen.findByText("The server refused it.");
     expect(editorShown()).toBe(true);
     expect(screen.queryByText("Saved")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /save breakpoints/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save screen sizes/i }));
     await waitFor(() => expect(editorShown()).toBe(false));
     expect(screen.getByRole("status").textContent).toBe("Saved");
   });

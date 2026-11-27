@@ -616,11 +616,11 @@ const X_POINTS = ["left", "center", "right"] as const;
 const Y_POINTS = ["top", "middle", "bottom"] as const;
 const POINT_NAMES: Readonly<Record<AlignY, Readonly<Record<AlignX, string>>>> =
   {
-    top: { left: "Top left", center: "Top centre", right: "Top right" },
-    middle: { left: "Middle left", center: "Centre", right: "Middle right" },
+    top: { left: "Top left", center: "Top center", right: "Top right" },
+    middle: { left: "Middle left", center: "Center", right: "Middle right" },
     bottom: {
       left: "Bottom left",
-      center: "Bottom centre",
+      center: "Bottom center",
       right: "Bottom right",
     },
   };

@@ -64,7 +64,7 @@ describe("its case", () => {
       ["none", "As typed"],
       ["uppercase", "UPPERCASE"],
       ["lowercase", "lowercase"],
-      ["capitalize", "Capitalised"],
+      ["capitalize", "Capitalized"],
     ]);
   });
 });

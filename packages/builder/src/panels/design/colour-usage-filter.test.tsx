@@ -146,7 +146,7 @@ function listed(): string[] {
   ].map(name => name.textContent ?? "");
 }
 
-const filter = () => screen.getByRole("radiogroup", { name: "Show colours" });
+const filter = () => screen.getByRole("radiogroup", { name: "Show colors" });
 const option = (name: string) => within(filter()).getByRole("radio", { name });
 
 describe("the Colours tab's usage filter", () => {
@@ -195,7 +195,7 @@ describe("the Colours tab's usage filter", () => {
     render(<Panel usage={access()} />);
     fireEvent.click(option("Unused"));
     await waitFor(() => expect(listed()).toEqual(["Spare", "Button"]));
-    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add color" }));
     expect(
       await screen.findByRole("dialog", { name: "Edit New colour" })
     ).toBeDefined();

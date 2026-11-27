@@ -112,7 +112,7 @@ test("a colour is renamed in place: Enter and leaving the field keep the name, E
   await seed(page, { tokens: TOKENS });
   await page.setViewportSize({ width: 1280, height: 720 });
   await openEditorWith(page, NODES, "rows-text");
-  await openDesign(page, "Colours");
+  await openDesign(page, "Colors");
   const panel = page.getByRole("region", { name: "Design panel" });
 
   // From the ⋯ menu's Rename: the field is in the row, and Enter keeps it.
@@ -135,7 +135,7 @@ test("a colour is renamed in place: Enter and leaving the field keep the name, E
   const text = panel.getByRole("textbox", { name: "Name of Text" });
   await expect(text).toBeFocused();
   await text.fill("Paper ink");
-  await page.getByRole("tab", { name: /^Colours/ }).click();
+  await page.getByRole("tab", { name: /^Colors/ }).click();
   await expect(
     panel.getByRole("button", { name: /^Paper ink,/ })
   ).toBeVisible();
@@ -171,7 +171,7 @@ function colours(count: number) {
   };
 }
 
-test("+ Add colour keeps the search and the list's place, and opens the new colour beside its row with its name focused", async ({
+test("+ Add color keeps the search and the list's place, and opens the new colour beside its row with its name focused", async ({
   page,
 }) => {
   // Thirty colours seeded and read back, then restored: slow on a busy
@@ -181,7 +181,7 @@ test("+ Add colour keeps the search and the list's place, and opens the new colo
   await seed(page, colours(30));
   await page.setViewportSize({ width: 1280, height: 720 });
   await openEditorWith(page, NODES, "rows-text");
-  await openDesign(page, "Colours");
+  await openDesign(page, "Colors");
   // By its element rather than its role: the open editor hides the rest from
   // the tree, and a role query for the panel would then wait out the test.
   const panel = page.locator('section[aria-label="Design panel"]');
@@ -191,7 +191,7 @@ test("+ Add colour keeps the search and the list's place, and opens the new colo
   await expect(panel.locator(".nx-vars__row")).toHaveCount(30);
   const body = panel.locator(".nx-vars__body").first();
   // Part way down, where the add row is in view.
-  const add = panel.getByRole("button", { name: "Add colour" });
+  const add = panel.getByRole("button", { name: "Add color" });
   await add.scrollIntoViewIfNeeded();
   const scrolled = await body.evaluate(
     element => element.scrollTop,
@@ -244,10 +244,10 @@ test("a new colour's code name follows each keystroke of its name, and a saved o
   await seed(page, { tokens: TOKENS });
   await page.setViewportSize({ width: 1280, height: 720 });
   await openEditorWith(page, NODES, "rows-text");
-  await openDesign(page, "Colours");
+  await openDesign(page, "Colors");
   const panel = page.getByRole("region", { name: "Design panel" });
 
-  await panel.getByRole("button", { name: "Add colour" }).click();
+  await panel.getByRole("button", { name: "Add color" }).click();
   const editor = page.getByRole("dialog", { name: "Edit New colour" });
   await expect(editor).toBeVisible();
   const code = page.locator(".nx-vars-editor .nx-vars-editor__code code");

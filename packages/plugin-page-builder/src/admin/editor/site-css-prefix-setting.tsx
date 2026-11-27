@@ -86,9 +86,9 @@ function shadowsNote(uses: number, complete: boolean): string | null {
   const count = complete ? `${uses}` : `At least ${uses}`;
   const shadows =
     uses === 1
-      ? "shadow uses a colour variable"
-      : "shadows use a colour variable";
-  return `${count} ${shadows} through the old prefix. They lose that colour until you pick it again.`;
+      ? "shadow uses a color variable"
+      : "shadows use a color variable";
+  return `${count} ${shadows} through the old prefix. They lose that color until you pick it again.`;
 }
 
 /**

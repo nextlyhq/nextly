@@ -268,7 +268,7 @@ test("the prefix changes to --brand- in Settings, and the canvas and the publish
       .getByRole("button", { name: "Design", exact: true })
       .click();
   }
-  await panel.getByRole("tab", { name: /^Colours/ }).click();
+  await panel.getByRole("tab", { name: /^Colors/ }).click();
   // The variable's own row, by its key: colours sit in named groups, and a
   // group's heading can share the variable's name.
   await panel.locator('[data-variable-key="color.brand"]').click();

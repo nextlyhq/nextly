@@ -8,7 +8,7 @@
  * "Variables" rather than tokens, "Saved sections" rather than patterns.
  *
  * The words for what a variable gives the places using it are here too, by
- * kind, for the same reason: "colour" rather than color, "size" rather than
+ * kind, for the same reason, in US spelling: "color", and "size" rather than
  * dimension, said one way wherever a variable's loss is.
  *
  * @module editor-words
@@ -22,7 +22,7 @@ export const EDITOR_WORDS = {
   components: "Components",
   design: "Design",
   // The Design panel's tabs, by kind.
-  colours: "Colours",
+  colours: "Colors",
   type: "Type",
   spacing: "Spacing",
   styles: "Styles",
@@ -89,7 +89,7 @@ export const FONT_ROLE_WORDS = {
 export const VARIABLE_LOSS_WORDS: Readonly<
   Record<TokenKind | "lineHeight", string>
 > = {
-  color: "colour",
+  color: "color",
   dimension: "size",
   fontFamily: "font",
   fontWeight: "font weight",

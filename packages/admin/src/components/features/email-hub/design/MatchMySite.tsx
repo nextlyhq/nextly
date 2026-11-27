@@ -72,7 +72,7 @@ function Swatch({ colour }: { colour: string }) {
 function SiteColours({ colours }: { colours: SiteColour[] }) {
   return (
     <ul
-      aria-label="Your site's colours"
+      aria-label="Your site's colors"
       className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-muted/40 p-3 sm:grid-cols-4"
     >
       {colours.map(colour => (
@@ -294,7 +294,7 @@ export function MatchMySite({
           <DialogHeader>
             <DialogTitle>Match my site</DialogTitle>
             <DialogDescription>
-              Pick one of your site&apos;s colours for each part of the email.
+              Pick one of your site&apos;s colors for each part of the email.
               These are the light-theme values of your site&apos;s design
               variables.
             </DialogDescription>

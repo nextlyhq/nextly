@@ -29,7 +29,7 @@ const BLOCK_STYLE_WORDS: Readonly<
   "core/divider": {
     border: {
       labels: {
-        color: "Line colour",
+        color: "Line color",
         "width.blockStart": "Thickness",
         style: "Line style",
       },

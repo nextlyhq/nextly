@@ -44,7 +44,7 @@ function DefaultLayoutBadge({ layout }: { layout: EmailTemplateRecord }) {
         variant="warning"
         title="Your site's version. The brand settings don't reach it."
       >
-        Customised
+        Customized
       </Badge>
     );
   }
@@ -62,7 +62,7 @@ function LayoutBadges({ layout }: { layout: EmailTemplateRecord }) {
       {isDefault && <DefaultLayoutBadge layout={layout} />}
       {!isDefault && layout.overridden && (
         <Badge variant="outline" title={STATE_HELP.customised}>
-          Customised
+          Customized
         </Badge>
       )}
       {!layout.isActive && <Badge variant="outline">Off</Badge>}
@@ -207,7 +207,7 @@ function UpdateNotice({ layouts }: { layouts: EmailTemplateRecord[] }) {
       </AlertTitle>
       <AlertDescription>
         {layouts.map(layout => layout.name).join(", ")} changed since you
-        customised {one ? "it" : "them"}. Open {one ? "it" : "each one"} to
+        customized {one ? "it" : "them"}. Open {one ? "it" : "each one"} to
         review the change.
       </AlertDescription>
     </Alert>

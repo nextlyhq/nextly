@@ -94,9 +94,9 @@ function borderLabels(): (string | null)[] {
 }
 
 describe("a Divider's line", () => {
-  it("is Line colour, Thickness and Line style, and no box's sides", () => {
+  it("is Line color, Thickness and Line style, and no box's sides", () => {
     mount("core/divider");
-    expect(borderLabels()).toEqual(["Line colour", "Thickness", "Line style"]);
+    expect(borderLabels()).toEqual(["Line color", "Thickness", "Line style"]);
   });
 
   it("says the line is the divider's top border", () => {
@@ -116,7 +116,7 @@ describe("a Divider's line", () => {
     });
     expect(borderLabels()).toHaveLength(4);
     expect(borderLabels().slice(0, 3)).toEqual([
-      "Line colour",
+      "Line color",
       "Thickness",
       "Line style",
     ]);

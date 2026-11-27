@@ -841,10 +841,10 @@ function refusedAddition(
   room: number
 ): string | undefined {
   if (!mayAdd)
-    return "Adding a breakpoint needs the right to manage site settings.";
+    return "Adding a screen size needs the right to manage site settings.";
   if (room > 0) return undefined;
   const kind = entry.axis === "viewport" ? "device" : "container";
-  return `This site already has ${String(MAX_BREAKPOINTS_PER_AXIS)} ${kind} breakpoints, the most it can hold.`;
+  return `This site already has ${String(MAX_BREAKPOINTS_PER_AXIS)} ${kind} screen sizes, the most it can hold.`;
 }
 
 /** What stops an unmatched breakpoint's choice, if anything does. */
@@ -856,13 +856,13 @@ function breakpointProblem(
   if (choice === undefined) {
     return {
       code: "BREAKPOINT_UNDECIDED",
-      message: `Choose whether to add the "${entry.label}" breakpoint (${String(entry.maxWidth)}px) or drop its styles.`,
+      message: `Choose whether to add the "${entry.label}" screen size (${String(entry.maxWidth)}px) or drop its styles.`,
     };
   }
   if (choice === "add" && whyNotAdd !== undefined) {
     return {
       code: "BREAKPOINT_NOT_ADDABLE",
-      message: `The "${entry.label}" breakpoint cannot be added: ${whyNotAdd}`,
+      message: `The "${entry.label}" screen size cannot be added: ${whyNotAdd}`,
     };
   }
   return undefined;

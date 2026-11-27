@@ -158,7 +158,7 @@ const PLAIN_WHY: readonly (readonly [
   ],
   [
     /^is a colour Figma cannot read/,
-    "Figma takes colours written as hex or rgb().",
+    "Figma takes colors written as hex or rgb().",
   ],
   [
     /^is not a list of font names Figma can read/,
@@ -206,7 +206,7 @@ const PLAIN_WHY: readonly (readonly [
  * among them.
  */
 export const KEPT_WHY: Readonly<Record<TokenKind, string>> = {
-  color: "Design tools can't read this colour as it is written.",
+  color: "Design tools can't read this color as it is written.",
   dimension: "Design tools take sizes in px or rem only.",
   fontFamily: "Design tools can't read this font list as it is written.",
   fontWeight: "Design tools can't read this font weight as it is written.",

@@ -213,7 +213,7 @@ describe("the panel's header", () => {
     renderPanel("colours");
     const heading = screen.getByRole("heading", { name: "Design" });
     const tabs = screen.getAllByRole("tab").map(tab => tab.textContent);
-    expect(tabs).toEqual(["Colours", "Type", "Spacing", "Styles"]);
+    expect(tabs).toEqual(["Colors", "Type", "Spacing", "Styles"]);
     expect(
       heading.compareDocumentPosition(screen.getByRole("tablist")) &
         Node.DOCUMENT_POSITION_FOLLOWING
@@ -317,15 +317,15 @@ describe("the Design panel's search and folds", () => {
     renderBrowsing();
     const search = screen.getByRole("searchbox", { name: "Search Design" });
     // No counts while nothing is searched.
-    expect(tabText("Colours")).toBe("Colours");
+    expect(tabText("Colors")).toBe("Colors");
     fireEvent.change(search, { target: { value: "brand" } });
-    expect(tabText("Colours")).toBe("Colours, 3 matches");
+    expect(tabText("Colors")).toBe("Colors, 3 matches");
     expect(tabText("Type")).toBe("Type, 1 match");
     expect(tabText("Spacing")).toBe("Spacing, 0 matches");
     // A tab that reports nothing shows no count.
     expect(tabText("Styles")).toBe("Styles");
     fireEvent.change(search, { target: { value: "" } });
-    expect(tabText("Colours")).toBe("Colours");
+    expect(tabText("Colors")).toBe("Colors");
   });
 
   it("opens a folded group while a search is on, and folds it again once cleared", () => {

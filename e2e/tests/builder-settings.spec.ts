@@ -136,7 +136,7 @@ async function openSettings(page: Page, id: string): Promise<void> {
 /** Site settings, with its breakpoints open for editing. */
 async function editBreakpoints(page: Page): Promise<Locator> {
   const dialog = await showSiteSettings(page);
-  await dialog.getByRole("button", { name: "Edit breakpoints" }).click();
+  await dialog.getByRole("button", { name: "Edit screen sizes" }).click();
   return dialog;
 }
 
@@ -155,7 +155,7 @@ async function saveBreakpoints(page: Page, dialog: Locator): Promise<void> {
       storesSet(response.request()) &&
       response.ok()
   );
-  await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+  await dialog.getByRole("button", { name: "Save screen sizes" }).click();
   await saved;
   await expect(
     dialog.getByRole("status").filter({ hasText: "Saved" })
@@ -181,7 +181,7 @@ async function paintText(page: Page): Promise<void> {
   }
   const color = page
     .getByRole("region", { name: /^Text(\s?has changes)?$/ })
-    .getByRole("textbox", { name: "Colour", exact: true });
+    .getByRole("textbox", { name: "Color", exact: true });
   await color.fill("#1155cc");
   await color.press("Enter");
   await expect(await block(page, TEXT_ID)).toHaveCSS("color", BLUE);
@@ -272,9 +272,9 @@ test.describe("Settings", () => {
         dialog.getByText("Changes here apply to the live site immediately.")
       ).toBeVisible();
 
-      await dialog.getByRole("button", { name: "Edit breakpoints" }).click();
+      await dialog.getByRole("button", { name: "Edit screen sizes" }).click();
       await dialog
-        .getByRole("button", { name: "Add breakpoint" })
+        .getByRole("button", { name: "Add screen size" })
         .first()
         .click();
       await dialog
@@ -287,7 +287,7 @@ test.describe("Settings", () => {
           new URL(response.url()).pathname.endsWith("/site/breakpoints") &&
           response.ok()
       );
-      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      await dialog.getByRole("button", { name: "Save screen sizes" }).click();
       await saved;
       await expect(
         dialog.getByRole("status").filter({ hasText: "Saved" })
@@ -446,7 +446,7 @@ test.describe("Settings", () => {
 
       const dialog = await editBreakpoints(page);
       await dialog
-        .getByRole("button", { name: "Add breakpoint" })
+        .getByRole("button", { name: "Add screen size" })
         .first()
         .click();
       await dialog
@@ -528,11 +528,11 @@ test.describe("Settings", () => {
         dialog.getByRole("button", { name: "Site settings" })
       ).toHaveCount(0);
       await expect(
-        dialog.getByRole("button", { name: "Edit breakpoints" })
+        dialog.getByRole("button", { name: "Edit screen sizes" })
       ).toHaveCount(0);
       // Nor does the top bar offer a way round it.
       await expect(
-        authorPage.getByRole("button", { name: "Edit breakpoints" })
+        authorPage.getByRole("button", { name: "Edit screen sizes" })
       ).toHaveCount(0);
       // And the route that stores them refuses this role's write.
       const csrf = await author.context.request.get("/admin/api/auth/csrf");
@@ -664,7 +664,7 @@ test.describe("Removing a breakpoint in Settings", () => {
         BREAKPOINTS_ROUTE,
         body => body.dryRun === true
       );
-      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      await dialog.getByRole("button", { name: "Save screen sizes" }).click();
       await checked.seen;
       await expect(
         step(dialog, "checking").getByText(
@@ -673,7 +673,7 @@ test.describe("Removing a breakpoint in Settings", () => {
       ).toBeVisible();
       await expect(
         step(dialog, "checking").getByRole("button", {
-          name: "Save breakpoints",
+          name: "Save screen sizes",
         })
       ).toBeDisabled();
       checked.release();
@@ -696,7 +696,7 @@ test.describe("Removing a breakpoint in Settings", () => {
       // Back: the draft as it was, Small still removed from it.
       await dialog.getByRole("button", { name: "Back" }).click();
       await expect(
-        dialog.getByRole("button", { name: "Save breakpoints" })
+        dialog.getByRole("button", { name: "Save screen sizes" })
       ).toBeEnabled();
       await expect(
         dialog.getByRole("button", { name: "Remove Small" })
@@ -728,7 +728,7 @@ test.describe("Removing a breakpoint in Settings", () => {
         }
       });
       const carried = await hold(page, `${BREAKPOINTS_ROUTE}/removal`);
-      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      await dialog.getByRole("button", { name: "Save screen sizes" }).click();
       await dialog
         .getByRole("button", { name: "Remove Small and its styles" })
         .click();
@@ -772,7 +772,7 @@ test.describe("Removing a breakpoint in Settings", () => {
       await openEditor(page, id);
       const dialog = await editBreakpoints(page);
       await dialog.getByRole("button", { name: "Remove Small" }).click();
-      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      await dialog.getByRole("button", { name: "Save screen sizes" }).click();
       await dialog
         .getByRole("button", { name: "Remove Small and its styles" })
         .click();
@@ -825,7 +825,7 @@ test.describe("Removing a breakpoint in Settings", () => {
       await openEditor(page, id);
       const dialog = await editBreakpoints(page);
       await dialog.getByRole("button", { name: "Remove Small" }).click();
-      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      await dialog.getByRole("button", { name: "Save screen sizes" }).click();
       await expect(
         dialog.getByRole("button", { name: "Remove Small and its styles" })
       ).toBeVisible();
@@ -845,11 +845,13 @@ test.describe("Removing a breakpoint in Settings", () => {
       const refused = step(dialog, "refused");
       await expect(refused.getByText("Nothing was removed")).toBeVisible();
       await expect(refused).toContainText(
-        "The site's breakpoints changed after you checked what removing them drops. Check again before removing them."
+        "The site's screen sizes changed after you checked what removing them drops. Check again before removing them."
       );
       expect((await storedTextStyles(page.request, id))[small]).toBeDefined();
 
-      await refused.getByRole("button", { name: "Reload breakpoints" }).click();
+      await refused
+        .getByRole("button", { name: "Reload screen sizes" })
+        .click();
       await expect(
         dialog.getByRole("listitem").filter({ hasText: "Tiny" })
       ).toContainText("up to 360 pixels");
@@ -857,10 +859,10 @@ test.describe("Removing a breakpoint in Settings", () => {
         dialog.getByRole("listitem").filter({ hasText: "Small" })
       ).toContainText("up to 480 pixels");
       await expect(
-        dialog.getByRole("button", { name: "Edit breakpoints" })
+        dialog.getByRole("button", { name: "Edit screen sizes" })
       ).toBeEnabled();
       await expect(
-        dialog.getByRole("button", { name: "Save breakpoints" })
+        dialog.getByRole("button", { name: "Save screen sizes" })
       ).toHaveCount(0);
     } finally {
       await storeSiteBreakpoints(page.request, null);
@@ -884,7 +886,7 @@ test.describe("Removing a breakpoint in Settings", () => {
           new URL(response.url()).pathname.endsWith("/site/breakpoints") &&
           storesSet(response.request())
       );
-      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      await dialog.getByRole("button", { name: "Save screen sizes" }).click();
       const answer = (await (await stored).json()) as {
         item: { removal?: { runId: string } };
       };
@@ -935,11 +937,11 @@ test.describe("Removing a breakpoint in Settings", () => {
           "Small's styles are still being removed"
         )
       ).toBeVisible();
-      const edit = again.getByRole("button", { name: "Edit breakpoints" });
+      const edit = again.getByRole("button", { name: "Edit screen sizes" });
       await expect(edit).toBeDisabled();
       await expect(edit).toHaveAttribute(
         "title",
-        "Breakpoints can be changed again once it has finished."
+        "Screen sizes can be changed again once it has finished."
       );
       stillOpen = false;
       carried.release();
@@ -965,7 +967,7 @@ test.describe("Removing a breakpoint in Settings", () => {
         await openEditor(page, id, theme);
         const dialog = await editBreakpoints(page);
         await dialog.getByRole("button", { name: "Remove Small" }).click();
-        await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+        await dialog.getByRole("button", { name: "Save screen sizes" }).click();
         await expect(
           dialog.getByRole("button", { name: "Remove Small and its styles" })
         ).toBeVisible();
@@ -997,7 +999,7 @@ test.describe("Removing a breakpoint in Settings", () => {
       await openEditor(page, id);
       const dialog = await editBreakpoints(page);
       await dialog.getByRole("button", { name: "Remove Small" }).click();
-      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      await dialog.getByRole("button", { name: "Save screen sizes" }).click();
       await expect(
         dialog.getByText("1 page has a draft waiting to be published.")
       ).toBeVisible();

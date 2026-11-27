@@ -436,7 +436,7 @@ describe("removing a variable in use", () => {
     await waitFor(() => expect(document.activeElement).toBe(heading));
     expect(
       within(editor).getByText(
-        "It's used in 14 places, and they would lose this colour:"
+        "It's used in 14 places, and they would lose this color:"
       )
     ).toBeDefined();
     // No confirm, and nothing removed.
@@ -473,7 +473,7 @@ describe("removing a variable in use", () => {
 
     const card = within(editor).getByRole("button", { name: "Card" });
     expect(card.closest("li")?.textContent).toBe(
-      "Card · shared style · sets text colour"
+      "Card · shared style · sets text color"
     );
     fireEvent.click(card);
     expect(openSharedStyle).toHaveBeenCalledWith("c-card");
@@ -757,7 +757,7 @@ describe("a block look using a variable", () => {
       name: "Primary",
     });
     const line = primary.closest("li")?.textContent ?? "";
-    expect(line).toMatch(/^Primary · .+ look · sets text colour$/);
+    expect(line).toMatch(/^Primary · .+ look · sets text color$/);
     expect(line).toContain("Button look");
     fireEvent.click(primary);
     expect(openLook).toHaveBeenCalledWith({

@@ -74,7 +74,7 @@ export const STAGE_SWATCHES: readonly StageSwatch[] = [
 
 /** The neutral swatch: a stage with no colour, or one outside the palette. */
 export const NEUTRAL_SWATCH = {
-  name: "No colour",
+  name: "No color",
   surface: "bg-muted border-border",
   label: "text-foreground",
   dot: "border border-muted-foreground bg-transparent",

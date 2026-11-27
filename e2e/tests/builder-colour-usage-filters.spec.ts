@@ -29,7 +29,7 @@ async function openColours(page: Page): Promise<Locator> {
       .getByRole("button", { name: "Design", exact: true })
       .click();
   }
-  await panel.getByRole("tab", { name: /^Colours/ }).click();
+  await panel.getByRole("tab", { name: /^Colors/ }).click();
   return panel;
 }
 
@@ -47,7 +47,7 @@ test("Used on this page lists a colour as soon as a block on the page takes it",
   await page.setViewportSize({ width: 1280, height: 720 });
   await openEditorWith(page, NODES, "filter-text");
   const panel = await openColours(page);
-  const filter = panel.getByRole("radiogroup", { name: "Show colours" });
+  const filter = panel.getByRole("radiogroup", { name: "Show colors" });
   await expect(filter.getByRole("radio", { name: "All" })).toHaveAttribute(
     "aria-checked",
     "true"

@@ -175,12 +175,15 @@ function claimLabel(
 ): { code: BreakpointIssueCode; message: string } | undefined {
   const key = label.trim().toLowerCase();
   if (key.length === 0) {
-    return { code: "label-required", message: "Give this breakpoint a label." };
+    return {
+      code: "label-required",
+      message: "Give this screen size a label.",
+    };
   }
   if (seen.has(key)) {
     return {
       code: "label-duplicate",
-      message: `Another breakpoint is already called "${label.trim()}".`,
+      message: `Another screen size is already called "${label.trim()}".`,
     };
   }
   seen.add(key);
@@ -241,7 +244,7 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
       // is not editable the author would have no way to answer either.
       const id = def.id;
       if (id.length === 0) {
-        at("id", "id-required", "Give this breakpoint an id.");
+        at("id", "id-required", "Give this screen size an id.");
       } else if (id.length > MAX_BREAKPOINT_ID_LENGTH) {
         /*
          * The COMPILER's limit, not one chosen here. `namedDefinition` drops a
@@ -259,13 +262,13 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
         at(
           "id",
           "id-reserved",
-          `"${BASE_BREAKPOINT}" is the built-in unconditional breakpoint. Choose another id.`
+          `"${BASE_BREAKPOINT}" is the built-in unconditional screen size. Choose another id.`
         );
       } else if (claimedIds.has(id)) {
         at(
           "id",
           "id-duplicate",
-          `Another breakpoint already uses the id "${id}". Ids must be unique across both axes.`
+          `Another screen size already uses the id "${id}". Ids must be unique across both axes.`
         );
       } else {
         claimedIds.add(id);
@@ -287,7 +290,7 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
           at(
             "maxWidth",
             "second-unbounded-container",
-            "Another container breakpoint is already unbounded. Two cover the same range and one would silently win."
+            "Another container size is already unbounded. Two cover the same range and one would silently win."
           );
         } else {
           unboundedSeen = true;
@@ -302,7 +305,7 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
         at(
           "maxWidth",
           "width-duplicate",
-          `Another ${axis} breakpoint already ends at ${def.maxWidth}px. Both would produce the same query and one would silently win.`
+          `Another ${axis} screen size already ends at ${def.maxWidth}px. Both would produce the same query and one would silently win.`
         );
       } else {
         widthsSeen.add(def.maxWidth);
@@ -312,7 +315,7 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
         at(
           "id",
           "over-axis-limit",
-          `An axis holds at most ${limit} breakpoints, widest kept. This one would be dropped.`
+          `An axis holds at most ${limit} screen sizes, widest kept. This one would be dropped.`
         );
       }
     });

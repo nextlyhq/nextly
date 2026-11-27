@@ -271,7 +271,7 @@ describe("the Variables studio's usage", () => {
     // What Card sets with Brand, from the site's styles the studio handed on.
     const card = await within(editor).findByRole("button", { name: "Card" });
     expect(card.closest("li")?.textContent).toBe(
-      "Card · shared style · sets text colour"
+      "Card · shared style · sets text color"
     );
     fireEvent.click(card);
 
@@ -322,7 +322,7 @@ describe("the Variables studio's usage", () => {
     );
     await screen.findByRole("dialog", { name: "Card" });
 
-    openTab("Colours");
+    openTab("Colors");
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Card" })).toBeNull()
     );
@@ -348,6 +348,6 @@ describe("the Variables studio's usage", () => {
       blockType: "core/button",
     });
     // The Colours tab stays: a look does not open in Styles.
-    expect(tab("Colours").getAttribute("aria-selected")).toBe("true");
+    expect(tab("Colors").getAttribute("aria-selected")).toBe("true");
   });
 });

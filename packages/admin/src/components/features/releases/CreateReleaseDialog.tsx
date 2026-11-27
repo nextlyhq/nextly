@@ -104,7 +104,7 @@ export function CreateReleaseDialog({
           <DialogHeader>
             <DialogTitle>New release</DialogTitle>
             <DialogDescription>
-              Give it a name you will recognise on the day. You will add
+              Give it a name you will recognize on the day. You will add
               documents and choose the moment next.
             </DialogDescription>
           </DialogHeader>

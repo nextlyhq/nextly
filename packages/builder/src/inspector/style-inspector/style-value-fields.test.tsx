@@ -157,7 +157,7 @@ describe("spell-check on the inspector's fields", () => {
     if (typography.getAttribute("aria-expanded") !== "true") {
       fireEvent.click(typography);
     }
-    fireEvent.click(screen.getByRole("button", { name: /^Colour for Colour/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Colour for Color/ }));
     fireEvent.click(screen.getByRole("button", { name: "Custom colour" }));
     const layer = document.querySelector("[data-radix-popper-content-wrapper]");
     if (!(layer instanceof HTMLElement)) throw new Error("no picker layer");

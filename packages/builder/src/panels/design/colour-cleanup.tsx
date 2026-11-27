@@ -74,7 +74,7 @@ export type CleanUpColours = (
 
 /** "1 colour", "2 colours". */
 function coloursWord(count: number): string {
-  return `${count} ${count === 1 ? "colour" : "colours"}`;
+  return `${count} ${count === 1 ? "color" : "colors"}`;
 }
 
 /** One listed colour: its row, its identity and the swatch it shows. */
@@ -222,10 +222,10 @@ function CleanUpDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Clean up unused colours</DialogTitle>
+            <DialogTitle>Clean up unused colors</DialogTitle>
             <DialogDescription>
-              Colours you made that nothing on the site uses. Untick any you
-              want to keep.
+              Colors you made that nothing on the site uses. Untick any you want
+              to keep.
             </DialogDescription>
           </DialogHeader>
           {settled === undefined ? (
@@ -309,7 +309,7 @@ function CleanUpChoices({
       ) : null}
       {listed.length === 0 && !counting ? (
         <p className="nx-colour-cleanup__note">
-          Every colour you made is in use.
+          Every color you made is in use.
         </p>
       ) : null}
       {listed.length === 0 ? null : (
@@ -356,7 +356,7 @@ function CleanUpSettled({ settled }: { settled: Settled }): React.JSX.Element {
     <div className="nx-colour-cleanup" role="status">
       <p className="nx-colour-cleanup__note">
         {settled.removed === 0
-          ? "No colour was removed."
+          ? "No color was removed."
           : `Removed ${coloursWord(settled.removed)}.`}
       </p>
       <p className="nx-colour-cleanup__note">

@@ -214,7 +214,7 @@ export function ScheduleReleaseDialog({
               >
                 {zoneUsable
                   ? "The time above is read in this zone, and stored with it — so a daylight-saving change does not move the launch."
-                  : "Not a timezone this browser recognises. Use an IANA name such as Europe/Berlin."}
+                  : "Not a timezone this browser recognizes. Use an IANA name such as Europe/Berlin."}
               </p>
             </div>
 

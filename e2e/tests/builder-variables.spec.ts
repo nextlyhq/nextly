@@ -124,7 +124,7 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
 
     // "+" opens the new variable's editor with focus on its name.
     const added = styleWrite(page);
-    await page.getByRole("button", { name: "Add colour" }).click();
+    await page.getByRole("button", { name: "Add color" }).click();
     await added;
     await expect(
       page.getByRole("dialog", { name: "Edit New colour" })
@@ -529,7 +529,7 @@ function canvasValue(page: Page, property: string): Promise<string> {
 
 /** The add rows the Variables lists end with, every way to add a variable. */
 const ADD_LABELS = [
-  "Add colour",
+  "Add color",
   "Add type size",
   "Add spacing",
   "Add radius",

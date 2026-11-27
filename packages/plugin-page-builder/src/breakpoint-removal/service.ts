@@ -79,9 +79,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** What an undo that cannot be made is told, by why. */
 const CANNOT_UNDO = {
   "not-a-done-removal":
-    "This removal can't be undone: it isn't a finished breakpoint removal.",
+    "This removal can't be undone: it isn't a finished screen size removal.",
   "a-newer-removal":
-    "This removal can't be undone: only the newest removal can be, and a breakpoint was removed after it.",
+    "This removal can't be undone: only the newest removal can be, and a screen size was removed after it.",
   "already-undone": "This removal can't be undone: it was undone already.",
 } as const;
 

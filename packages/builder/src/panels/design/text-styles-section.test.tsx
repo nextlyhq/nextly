@@ -303,7 +303,7 @@ describe("a text style's parts", () => {
   it("sets its case", () => {
     const { writeStyles } = mount();
     openParts();
-    fireEvent.click(screen.getByRole("radio", { name: "Capitalised" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Capitalized" }));
     expect(writeStyles.mock.lastCall?.[0]).toBe("t-eyebrow");
     expect(written(writeStyles)?.base?.[BASE_BREAKPOINT]).toMatchObject({
       textTransform: "capitalize",
@@ -565,7 +565,7 @@ describe("read-only", () => {
     expect(
       screen.getByText("You can't change this site's design.")
     ).toBeDefined();
-    const caps = screen.getByRole("radio", { name: "Capitalised" });
+    const caps = screen.getByRole("radio", { name: "Capitalized" });
     expect((caps as HTMLInputElement).disabled).toBe(true);
     fireEvent.click(caps);
     expect(writeStyles).not.toHaveBeenCalled();

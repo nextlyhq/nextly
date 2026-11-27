@@ -51,7 +51,7 @@ test("shows a changed accent in the live preview before it is saved", async ({
     .toContain("<");
   expect((await previewHtml(page)).toLowerCase()).not.toContain(ACCENT);
 
-  const accent = page.getByLabel("Accent colour", { exact: true });
+  const accent = page.getByLabel("Accent color", { exact: true });
   await accent.fill(ACCENT);
 
   await expect
@@ -96,7 +96,7 @@ for (const size of WIDTHS) {
     await openDesign(page);
     await expect(page.getByRole("heading", { name: "Layouts" })).toBeVisible();
     await expect(
-      page.getByLabel("Accent colour", { exact: true })
+      page.getByLabel("Accent color", { exact: true })
     ).toBeVisible();
 
     expect(

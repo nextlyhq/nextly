@@ -125,7 +125,7 @@ const items = (menu: HTMLElement): string[] =>
 describe("a colour row", () => {
   it("shows one swatch, its name and a ⋯ button, with no second swatch, count or hint", () => {
     render(<Hosted tokens={SITE} />);
-    const colours = screen.getByRole("region", { name: "Colours" });
+    const colours = screen.getByRole("region", { name: "Colors" });
     const brand = itemOf(/^Brand/);
     expect(brand.querySelectorAll(".nx-vars__swatch")).toHaveLength(1);
     expect(within(brand).getByText("Brand")).toBeDefined();

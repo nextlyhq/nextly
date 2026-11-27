@@ -240,7 +240,7 @@ async function typeAccent(
   user: ReturnType<typeof userEvent.setup>,
   hex: string
 ) {
-  const field = screen.getByLabelText("Accent colour");
+  const field = screen.getByLabelText("Accent color");
   await user.clear(field);
   await user.click(field);
   await user.paste(hex);
@@ -272,7 +272,7 @@ describe("the brand settings", () => {
 
     await user.click(screen.getByRole("button", { name: "Discard" }));
     expect(
-      (screen.getByLabelText("Accent colour") as HTMLInputElement).value
+      (screen.getByLabelText("Accent color") as HTMLInputElement).value
     ).toBe("#18181b");
     expect(screen.queryByText("Unsaved")).toBeNull();
   });
@@ -283,7 +283,7 @@ describe("the brand settings", () => {
 
     await typeAccent(user, "green");
 
-    expect(screen.getByText("Use a hex colour, like #2f6b4f.")).toBeTruthy();
+    expect(screen.getByText("Use a hex color, like #2f6b4f.")).toBeTruthy();
     expect(lastPreviewBrand()).toBeUndefined();
   });
 
@@ -293,7 +293,7 @@ describe("the brand settings", () => {
     render(<BrandDesign />);
 
     expect(
-      (screen.getByLabelText("Accent colour") as HTMLInputElement).disabled
+      (screen.getByLabelText("Accent color") as HTMLInputElement).disabled
     ).toBe(true);
     expect(screen.queryByRole("button", { name: "Match my site" })).toBeNull();
   });
@@ -398,7 +398,7 @@ describe("Match my site", () => {
     );
 
     // Light values only: the email has no dark theme of the site's.
-    const swatches = screen.getByRole("list", { name: "Your site's colours" });
+    const swatches = screen.getByRole("list", { name: "Your site's colors" });
     expect(swatches.textContent).toContain("#2f6b4f");
     expect(swatches.textContent).not.toContain("#7fd1a8");
     expect(screen.getAllByText("Suggested")).toHaveLength(3);

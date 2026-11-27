@@ -12,6 +12,7 @@
  * @module admin/editor/breakpoint-undo-step
  * @experimental
  */
+import { SCREEN_SIZE_WORDS } from "@nextlyhq/builder";
 import { Button } from "@nextlyhq/ui";
 import { Check, Loader2, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, type JSX } from "react";
@@ -120,7 +121,7 @@ export function UndoStepPanel({
               onEditBreakpoints();
             }}
           >
-            Edit breakpoints
+            {SCREEN_SIZE_WORDS.edit}
           </Button>
         ) : (
           <Button type="button" onClick={undo.reload}>

@@ -565,7 +565,7 @@ describe("variables, grouped as the Design panel shows them", () => {
 
   it("puts each variable in one of eight groups, in the panel's order", () => {
     expect(variableGroups(SET).map(group => group.heading)).toEqual([
-      "Colours",
+      "Colors",
       "Type scale",
       "Fonts and weights",
       "Spacing",

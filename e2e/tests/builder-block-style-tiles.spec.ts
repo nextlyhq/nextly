@@ -124,7 +124,7 @@ test.describe("the Block style section", () => {
       await toggle.click();
     }
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await panel.getByRole("tab", { name: /^Colours/ }).click();
+    await panel.getByRole("tab", { name: /^Colors/ }).click();
     await expect(group).toHaveCount(0);
 
     await styleTabOf(page, FIRST);

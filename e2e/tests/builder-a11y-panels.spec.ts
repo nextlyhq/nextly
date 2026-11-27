@@ -114,7 +114,7 @@ const SURFACES: ReadonlyArray<{
       await expect(page.getByRole("tree", { name: "Layers" })).toBeVisible();
     },
   },
-  ...["Colours", "Type", "Spacing", "Styles"].map(tab => ({
+  ...["Colors", "Type", "Spacing", "Styles"].map(tab => ({
     name: `Design, ${tab}`,
     open: async (page: Page) => {
       await railButton(page, "Design").click();

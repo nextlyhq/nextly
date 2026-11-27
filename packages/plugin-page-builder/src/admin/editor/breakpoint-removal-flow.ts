@@ -284,9 +284,9 @@ export function confirmWords(
       found?.axis ?? "viewport",
       baseLabel
     );
-    intro = `Everything set for ${names} is deleted from the whole site, so the pages show their ${fallback} styles at that width. If you add a ${names} breakpoint again later, it starts empty.`;
+    intro = `Everything set for ${names} is deleted from the whole site, so the pages show their ${fallback} styles at that width. If you add a ${names} screen size again later, it starts empty.`;
   } else {
-    intro = `Everything set for ${names} is deleted from the whole site, so the pages show the styles of the next wider breakpoint at those widths. If you add them again later, they start empty.`;
+    intro = `Everything set for ${names} is deleted from the whole site, so the pages show the styles of the next wider screen size at those widths. If you add them again later, they start empty.`;
   }
   const notes: RemovalNote[] = [];
   if (!dryRun.complete) {
@@ -409,7 +409,7 @@ export function removingWords(labels: readonly string[]): {
     title: one
       ? `Removing ${names}'s styles`
       : `Removing the styles of ${names}`,
-    body: `${names} ${one ? "is" : "are"} gone from the site's breakpoints. ${one ? "Its" : "Their"} styles are being removed from each page, component and saved section.`,
+    body: `${names} ${one ? "is" : "are"} gone from the site's screen sizes. ${one ? "Its" : "Their"} styles are being removed from each page, component and saved section.`,
     hint: "On a large site this takes a few minutes. You can close Settings; it carries on in the background.",
   };
 }
@@ -419,7 +419,7 @@ export function resumedWords(labels: readonly string[]): StatusWords {
   const names = joinNames(labels);
   return {
     title: `${names}'s styles are still being removed`,
-    hint: "Breakpoints can be changed again once it has finished.",
+    hint: "Screen sizes can be changed again once it has finished.",
   };
 }
 

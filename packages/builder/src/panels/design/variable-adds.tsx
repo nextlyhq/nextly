@@ -28,8 +28,8 @@ export const ADDS: Readonly<
   Record<VariableGroup, { rows: readonly AddRowSpec[]; empty: string }>
 > = {
   colours: {
-    rows: [{ label: "Add colour", options: [["colour", "Colour"]] }],
-    empty: "No colours yet.",
+    rows: [{ label: "Add color", options: [["colour", "Color"]] }],
+    empty: "No colors yet.",
   },
   type: {
     rows: [{ label: "Add type size", options: [["type size", "Type size"]] }],

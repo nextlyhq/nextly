@@ -731,7 +731,7 @@ export function defaultSiteTokens(): SiteToken[] {
       name: "content.width",
       kind: "dimension",
       values: { light: "72rem" },
-      description: "How wide a centred container may grow.",
+      description: "How wide a centered container may grow.",
     },
     // The brand colour first: the Design panel lists the site's colours in
     // this order, and "Brand" comes before "Text and surfaces".

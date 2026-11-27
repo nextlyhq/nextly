@@ -87,7 +87,7 @@ export function OwnershipNotices({
           <Info className="h-4 w-4" />
           <AlertDescription className="flex flex-1 flex-wrap items-center gap-3">
             <span className="flex-1">
-              {owner} updated this email since your site customised it.
+              {owner} updated this email since your site customized it.
             </span>
             <Button type="button" size="sm" onClick={onReview}>
               Review the changes

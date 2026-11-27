@@ -114,7 +114,7 @@ export const KEPT_HELP =
 export const STATE_FILTER_LABELS: Record<StateFilter, string> = {
   all: "Any state",
   default: "Default",
-  customised: "Customised",
+  customised: "Customized",
   update: "Update available",
   kept: "Kept as before",
   off: "Off",
@@ -122,7 +122,7 @@ export const STATE_FILTER_LABELS: Record<StateFilter, string> = {
 
 export const STATE_LABELS: Record<EmailState, string> = {
   default: "Default",
-  customised: "Customised",
+  customised: "Customized",
   update: "Update available",
   own: "On",
 };
@@ -130,7 +130,7 @@ export const STATE_LABELS: Record<EmailState, string> = {
 export const STATE_HELP: Record<EmailState, string> = {
   default: "The owner's version, kept up to date by the owner.",
   customised: "Your site's version. The owner's updates wait for your review.",
-  update: "The owner changed this email since you customised it.",
+  update: "The owner changed this email since you customized it.",
   own: "One of this site's own emails.",
 };
 

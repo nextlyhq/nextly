@@ -200,7 +200,7 @@ describe("the CSS variable prefix setting", () => {
     await user.type(field(), "--brand-{Enter}");
     const question = await screen.findByRole("alertdialog");
     expect(question.textContent).toContain(
-      "2 shadows use a colour variable through the old prefix. They lose that colour until you pick it again."
+      "2 shadows use a color variable through the old prefix. They lose that color until you pick it again."
     );
   });
 
@@ -212,7 +212,7 @@ describe("the CSS variable prefix setting", () => {
     await user.type(field(), "--brand-{Enter}");
     const question = await screen.findByRole("alertdialog");
     expect(question.textContent).toContain(
-      "At least 1 shadow uses a colour variable through the old prefix."
+      "At least 1 shadow uses a color variable through the old prefix."
     );
   });
 

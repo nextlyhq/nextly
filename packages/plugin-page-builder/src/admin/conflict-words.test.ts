@@ -292,7 +292,7 @@ describe("naming an entry", () => {
     ).toBe("c9");
   });
 
-  it("names the colour order in words", () => {
+  it("names the color order in words", () => {
     const order: EntryConflict = {
       key: "order",
       setting: true,
@@ -303,11 +303,11 @@ describe("naming an entry", () => {
       theirs: ["b"],
     };
     expect(conflictWords("tokens", bySam(order))).toBe(
-      "Sam changed the colour order while you were editing. Your value was kept. Undo puts theirs back."
+      "Sam changed the color order while you were editing. Your value was kept. Undo puts theirs back."
     );
   });
 
-  it("names the built-in colours setting in words", () => {
+  it("names the built-in colors setting in words", () => {
     const shown: EntryConflict = {
       key: "builtInColoursShown",
       setting: true,
@@ -318,7 +318,7 @@ describe("naming an entry", () => {
       theirs: true,
     };
     expect(conflictWords("tokens", bySam(shown))).toBe(
-      "Sam changed the built-in colours setting while you were editing. Your value was kept. Undo puts theirs back."
+      "Sam changed the built-in colors setting while you were editing. Your value was kept. Undo puts theirs back."
     );
   });
 

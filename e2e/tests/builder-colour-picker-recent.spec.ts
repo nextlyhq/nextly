@@ -145,7 +145,7 @@ test("the colour picker takes any notation, and Recent colours outlast a reload"
   await expect(recent(page)).toHaveCount(0);
   const field = page
     .getByTestId("inspector")
-    .getByRole("textbox", { name: "Colour" });
+    .getByRole("textbox", { name: "Color" });
   await expect(field).toHaveValue("#00aaff");
 
   // A colour typed into the field joins too, as it was typed.
@@ -179,7 +179,7 @@ test("the colour picker takes any notation, and Recent colours outlast a reload"
       .click();
   }
   await expect(panel).toBeVisible();
-  await panel.getByRole("tab", { name: /^Colours/ }).click();
+  await panel.getByRole("tab", { name: /^Colors/ }).click();
   // Colours are listed in their groups ("Brand", "Text and surfaces"), each
   // open to start with: the first colour's row opens its editor.
   const row = panel.locator(".nx-vars__row").first();
@@ -187,7 +187,7 @@ test("the colour picker takes any notation, and Recent colours outlast a reload"
   await row.click();
   const editor = page.getByRole("dialog");
   await expect(editor).toBeVisible();
-  await editor.getByRole("button", { name: "Pick the light colour" }).click();
+  await editor.getByRole("button", { name: "Pick the light color" }).click();
   await expect(editor.getByText("Recent colours")).toBeVisible();
   await expect(editor.getByRole("button", { name: "#00aaff" })).toBeVisible();
   await expect(

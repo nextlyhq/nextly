@@ -620,7 +620,7 @@ function useCleanUp(
 /** The answer of a clean-up the history never ran. */
 const NOT_ASKED: CleanUpResult = {
   kind: "refused",
-  reason: "The colours could not be removed. Try again.",
+  reason: "The colors could not be removed. Try again.",
 };
 
 /**

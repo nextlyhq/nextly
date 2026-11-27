@@ -261,7 +261,7 @@ describe("Stack", () => {
 
   it("becomes a flex column for its Align, and still reads as Stack", () => {
     mount();
-    choose("Align", "Centre");
+    choose("Align", "Center");
     expect(stored()).toMatchObject({
       display: "flex",
       flexDirection: "column",
@@ -277,13 +277,13 @@ describe("Stack", () => {
     const points = within(group("Align")).getAllByRole("radio");
     expect(points.map(point => point.getAttribute("aria-label"))).toEqual([
       "Top left",
-      "Top centre",
+      "Top center",
       "Top right",
       "Middle left",
-      "Centre",
+      "Center",
       "Middle right",
       "Bottom left",
-      "Bottom centre",
+      "Bottom center",
       "Bottom right",
     ]);
     expect(arrange().textContent).toContain("Fills the width");

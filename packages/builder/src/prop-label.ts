@@ -22,16 +22,14 @@ export function fieldLabel(name: string): string {
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/[-_]+/g, " ")
     .trim();
-  const label = spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
-  // The editor's spelling, which its own words ("Colour for", the Colour
-  // form) already use: a key's American "color" read beside them as the same
-  // word spelled two ways in one panel.
-  return label.replace(/\b([Cc])olor\b/g, "$1olour");
+  // The editor spells in US English, as a key's "color" already is, so the
+  // label keeps the key's own spelling.
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
 }
 
 /**
  * What an author calls a prop: the label its block gives it, or its name,
- * spaced and capitalised, when the block gives none.
+ * spaced and capitalized, when the block gives none.
  */
 export function propLabel(name: string, schema: PropSchema): string {
   const given = schema.label;

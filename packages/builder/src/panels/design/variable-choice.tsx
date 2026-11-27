@@ -154,7 +154,7 @@ function variableKindWord(variable: SiteVariable): string {
 
 /** Each group's variable in words; type and fonts are told apart above. */
 const GROUP_KIND_WORDS: Readonly<Record<VariableGroup, string>> = {
-  colours: "Colour",
+  colours: "Color",
   type: "Type size",
   fonts: "Font",
   spacing: "Spacing",

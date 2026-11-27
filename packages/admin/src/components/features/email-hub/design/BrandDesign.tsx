@@ -228,7 +228,7 @@ function BrandEditor({
   const onMatch = (match: SiteMatch) => {
     apply(match);
     toast.success(
-      "Your site's colours and font are in the draft. Save to use them."
+      "Your site's colors and font are in the draft. Save to use them."
     );
   };
 

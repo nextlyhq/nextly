@@ -411,7 +411,7 @@ function withinBreakpoints(
   if (left.size === 0) return style;
   for (const breakpoint of left) {
     notes.push(
-      `“${name}”'s values for the “${breakpoint}” breakpoint were left out: this site has no such breakpoint.`
+      `“${name}”'s values for the “${breakpoint}” screen size were left out: this site has no such screen size.`
     );
   }
   return withoutFluidSizesAt({ ...style, styles }, left);
@@ -516,7 +516,7 @@ export function siteDataLines(site: DtcgSiteData | undefined): string[] {
     ).map(role => SITE_TEXT_LABELS[role]);
     if (rows.length > 0) lines.push(`Site text: ${rows.join(", ")}`);
   }
-  if (site.order !== undefined) lines.push("The order of your colours");
+  if (site.order !== undefined) lines.push("The order of your colors");
   if (site.fluidRange !== undefined) {
     lines.push(
       `Fluid sizes grow from ${String(site.fluidRange.min)}px to ${String(site.fluidRange.max)}px wide`
@@ -525,8 +525,8 @@ export function siteDataLines(site: DtcgSiteData | undefined): string[] {
   if (site.builtInColoursShown !== undefined) {
     lines.push(
       site.builtInColoursShown
-        ? "Built-in colours are shown"
-        : "Built-in colours are hidden"
+        ? "Built-in colors are shown"
+        : "Built-in colors are hidden"
     );
   }
   return lines;

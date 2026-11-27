@@ -344,10 +344,10 @@ export function variableLossSentence(
  * style property that names it. A property not listed is said as "uses it".
  */
 const PROPERTY_WORDS: Readonly<Record<string, string>> = {
-  color: "text colour",
-  linkColor: "link colour",
-  linkColorHover: "hovered link colour",
-  backgroundColor: "background colour",
+  color: "text color",
+  linkColor: "link color",
+  linkColorHover: "hovered link color",
+  backgroundColor: "background color",
   background: "background",
   backgroundGradient: "background gradient",
   border: "border",

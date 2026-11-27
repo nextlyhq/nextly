@@ -44,7 +44,7 @@ const REMOVED_BREAKPOINT = "removed-breakpoint";
 
 /** What an author holding a stale editor is told. */
 const REMOVED_BREAKPOINT_MESSAGE =
-  "That breakpoint was removed from the site. Reload to keep editing.";
+  "That screen size was removed from the site. Reload to keep editing.";
 
 /**
  * Every breakpoint id a stored blocks value keeps a style or a per-device

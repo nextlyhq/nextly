@@ -64,7 +64,7 @@ export function useBreakpointWriter(
        */
       const emptied = next.viewport.length === 0 && next.container.length === 0;
       if (emptied && configured) {
-        return "Your site's configuration defines these breakpoints, so removing them all here would restore them. Remove them from the config instead.";
+        return "Your site's configuration defines these screen sizes, so removing them all here would restore them. Remove them from the config instead.";
       }
       const result = await saveSiteStyle("breakpoints", next);
       if (result.saved) return undefined;
@@ -74,7 +74,7 @@ export function useBreakpointWriter(
       // which is the one outcome that must never be silent.
       return reasons.length > 0
         ? reasons.join(" ")
-        : "These breakpoints could not be saved.";
+        : "These screen sizes could not be saved.";
     },
     [saveSiteStyle, configured]
   );

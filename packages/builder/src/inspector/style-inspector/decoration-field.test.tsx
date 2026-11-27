@@ -187,7 +187,7 @@ describe("DecorationField", () => {
       ).toBe(true);
       expect(
         screen
-          .getByRole("textbox", { name: "Line colour" })
+          .getByRole("textbox", { name: "Line color" })
           .hasAttribute("disabled")
       ).toBe(true);
       cleanup();
@@ -230,7 +230,7 @@ describe("DecorationField", () => {
     openStyle();
     onCommit.rerender("underline 3px blue");
     const thickness = screen.getByRole("textbox", { name: "Thickness" });
-    const colour = screen.getByRole("textbox", { name: "Line colour" });
+    const colour = screen.getByRole("textbox", { name: "Line color" });
     expect((thickness as HTMLInputElement).value).toBe("3px");
     expect((colour as HTMLInputElement).value).toBe("blue");
     fireEvent.blur(thickness);
@@ -250,7 +250,7 @@ describe("DecorationField", () => {
     expect(onCommit).toHaveBeenLastCalledWith("underline 1vw");
 
     onCommit.mockClear();
-    const colour = screen.getByRole("textbox", { name: "Line colour" });
+    const colour = screen.getByRole("textbox", { name: "Line color" });
     fireEvent.change(colour, { target: { value: "inherit" } });
     fireEvent.blur(colour);
     expect(onCommit).not.toHaveBeenCalled();
@@ -273,7 +273,7 @@ describe("DecorationField", () => {
     // next part starts from what is stored, not from the queue.
     onCommit.rerender("underline wavy");
     onCommit.rerender("overline");
-    const colour = screen.getByRole("textbox", { name: "Line colour" });
+    const colour = screen.getByRole("textbox", { name: "Line color" });
     fireEvent.change(colour, { target: { value: "red" } });
     fireEvent.blur(colour);
     expect(onCommit).toHaveBeenLastCalledWith("overline red");
@@ -365,7 +365,7 @@ describe("DecorationField", () => {
     for (const control of [
       screen.getByRole("combobox", { name: "Line style" }),
       screen.getByRole("textbox", { name: "Thickness" }),
-      screen.getByRole("textbox", { name: "Line colour" }),
+      screen.getByRole("textbox", { name: "Line color" }),
       screen.getByRole("textbox", { name: "Decoration as CSS" }),
     ]) {
       expect(control.hasAttribute("disabled")).toBe(true);
@@ -392,7 +392,7 @@ describe("DecorationField", () => {
     for (const control of [
       screen.getByRole("combobox", { name: "Line style" }),
       screen.getByRole("textbox", { name: "Thickness" }),
-      screen.getByRole("textbox", { name: "Line colour" }),
+      screen.getByRole("textbox", { name: "Line color" }),
       screen.getByRole("textbox", { name: "Decoration as CSS" }),
     ]) {
       expect(control.getAttribute("aria-describedby")).toBe("decoration-error");
@@ -412,7 +412,7 @@ describe("DecorationField", () => {
     fireEvent.blur(thickness);
     expect(onCommit).toHaveBeenLastCalledWith("underline wavy 2px");
 
-    const colour = screen.getByRole("textbox", { name: "Line colour" });
+    const colour = screen.getByRole("textbox", { name: "Line color" });
     fireEvent.change(colour, { target: { value: "red" } });
     fireEvent.blur(colour);
     expect(onCommit).toHaveBeenLastCalledWith("underline wavy 2px red");

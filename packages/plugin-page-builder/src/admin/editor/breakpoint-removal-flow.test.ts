@@ -158,7 +158,7 @@ describe("the confirm step's words", () => {
     );
     expect(words.title).toBe("Remove Mobile and the styles set for it?");
     expect(words.intro).toBe(
-      "Everything set for Mobile is deleted from the whole site, so the pages show their Tablet styles at that width. If you add a Mobile breakpoint again later, it starts empty."
+      "Everything set for Mobile is deleted from the whole site, so the pages show their Tablet styles at that width. If you add a Mobile screen size again later, it starts empty."
     );
     const [summary] = words.removed;
     expect(summary?.rows).toEqual([
@@ -383,12 +383,12 @@ describe("the other steps' words", () => {
   it("says a removal is going, and what holds the breakpoints meanwhile", () => {
     expect(removingWords(["Mobile"])).toEqual({
       title: "Removing Mobile's styles",
-      body: "Mobile is gone from the site's breakpoints. Its styles are being removed from each page, component and saved section.",
+      body: "Mobile is gone from the site's screen sizes. Its styles are being removed from each page, component and saved section.",
       hint: "On a large site this takes a few minutes. You can close Settings; it carries on in the background.",
     });
     expect(resumedWords(["Mobile"])).toEqual({
       title: "Mobile's styles are still being removed",
-      hint: "Breakpoints can be changed again once it has finished.",
+      hint: "Screen sizes can be changed again once it has finished.",
     });
   });
 

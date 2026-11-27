@@ -111,7 +111,7 @@ function rowWords(row: SiteTextRowView): string {
   if (row.role !== "link" || row.pair === SITE_OWN_WORDS) return row.pair;
   const underline = row.entry?.underline;
   return underline === undefined
-    ? "Colour"
+    ? "Color"
     : `Underline ${UNDERLINE_WORDS[underline].toLowerCase()}`;
 }
 
@@ -510,14 +510,14 @@ function LinkFields({
   return (
     <>
       <LinkColour
-        label="Colour"
+        label="Color"
         value={entry.color}
         tokens={tokens}
         readOnly={readOnly}
         onValue={color => write({ ...entry, color })}
       />
       <LinkColour
-        label="Colour on hover"
+        label="Color on hover"
         value={entry.hoverColor}
         tokens={tokens}
         readOnly={readOnly}

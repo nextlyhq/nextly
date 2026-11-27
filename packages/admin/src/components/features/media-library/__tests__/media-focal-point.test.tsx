@@ -127,7 +127,7 @@ describe("setting the focus point", () => {
       focalY: 90,
     });
     fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
-    fireEvent.click(screen.getByRole("button", { name: "Centre" }));
+    fireEvent.click(screen.getByRole("button", { name: "Center" }));
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
     await vi.waitFor(() =>
@@ -192,7 +192,7 @@ describe("the focus point when nothing changed", () => {
   it("finishes without saving when Centre is pressed on a point already in the middle", () => {
     const { onSave } = renderLaidOut(box(0, 0, 400, 400));
     fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
-    fireEvent.click(screen.getByRole("button", { name: "Centre" }));
+    fireEvent.click(screen.getByRole("button", { name: "Center" }));
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
     expect(

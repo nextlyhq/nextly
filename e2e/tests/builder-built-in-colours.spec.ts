@@ -69,8 +69,8 @@ const NODES = [
   },
 ];
 
-const SETTING = "Show built-in colours";
-const HINT = "Hidden colours still work where core blocks use them";
+const SETTING = "Show built-in colors";
+const HINT = "Hidden colors still work where core blocks use them";
 
 interface StoredSet {
   tokens?: unknown[];
@@ -157,7 +157,7 @@ async function openColours(page: Page): Promise<Locator> {
       .getByRole("button", { name: "Design", exact: true })
       .click();
   }
-  await panel.getByRole("tab", { name: /^Colours/ }).click();
+  await panel.getByRole("tab", { name: /^Colors/ }).click();
   return panel;
 }
 
@@ -310,7 +310,7 @@ test("is reached and changed with the keyboard alone", async ({ page }) => {
     const panel = await openColours(page);
     const setting = panel.getByRole("checkbox", { name: SETTING });
     // Tab from the add row that ends the list reaches the setting.
-    await panel.getByRole("button", { name: "Add colour" }).last().focus();
+    await panel.getByRole("button", { name: "Add color" }).last().focus();
     for (let step = 0; step < 6; step += 1) {
       if (await setting.evaluate(box => box === document.activeElement)) break;
       await page.keyboard.press("Tab");
