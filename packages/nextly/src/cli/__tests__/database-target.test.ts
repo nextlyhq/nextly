@@ -8,11 +8,14 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { databaseTarget } from "../database-target";
+import { databaseTarget, type DatabaseTarget } from "../database-target";
 
 const FOLDER = resolve("/srv/app");
+/** The dialect and the target, as one phrase, for the checks below. */
+const phrase = ({ dialect, target }: DatabaseTarget) =>
+  dialect === undefined ? target : `${dialect} ${target}`;
 const target = (url: string | undefined, dialect?: string) =>
-  databaseTarget({ url, dialect, folder: FOLDER });
+  phrase(databaseTarget({ url, dialect, folder: FOLDER }));
 
 /** Every secret the URLs below carry: none may reach a line. */
 const SECRETS = ["appuser", "s3cr3t", "hunter2", "sslmode", "password"];
@@ -96,7 +99,7 @@ describe("the database a command names", () => {
   it("fills what a PostgreSQL URL leaves out from the variables its driver reads", () => {
     const pg = { PGHOST: "pg.internal", PGPORT: "6432", PGDATABASE: "ledger" };
     const withEnv = (url: string) =>
-      databaseTarget({ url, folder: FOLDER, env: pg });
+      phrase(databaseTarget({ url, folder: FOLDER, env: pg }));
     expect(withEnv("postgres://appuser:s3cr3t@db.internal/shop")).toBe(
       "PostgreSQL db.internal:6432/shop"
     );
@@ -168,5 +171,22 @@ describe("the database a command names", () => {
       "(database not recognised)"
     );
     expect(target(undefined)).toBe("none");
+  });
+
+  it("judges the place from the same reading it names, never a second one", () => {
+    const place = (url: string, env = {}) =>
+      databaseTarget({ url, folder: FOLDER, env }).place;
+    // The URL names localhost, the parameter another server: the driver goes there.
+    expect(
+      place("postgres://appuser:s3cr3t@localhost/shop?host=db.internal")
+    ).toBe("live");
+    // No host in the URL: PGHOST decides, a socket here and a server there.
+    expect(place("postgres:///shop", { PGHOST: "/var/run/postgresql" })).toBe(
+      "local"
+    );
+    expect(place("postgres:///shop", { PGHOST: "db.internal" })).toBe("live");
+    // What cannot be named cannot be called local.
+    expect(place("postgres://appuser:s3cr3t@[::bad/shop")).toBe("live");
+    expect(place("file:./data/app.db")).toBe("local");
   });
 });
