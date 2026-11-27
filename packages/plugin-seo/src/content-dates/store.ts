@@ -27,8 +27,8 @@ export function pageDateKey(holder: AddressHolder, locale: string): string {
   return sha256(`${holder.collection}|${holder.id}|${locale}`);
 }
 
-/** A stored date, as ISO text. */
-function isoOf(value: unknown): string | undefined {
+/** A stored date, as ISO text; none where `value` is not one. */
+export function isoOf(value: unknown): string | undefined {
   const date =
     value instanceof Date
       ? value

@@ -8,6 +8,7 @@
  * @module plugin
  */
 import { createRequire } from "node:module";
+import { resolve } from "node:path";
 
 import {
   definePlugin,
@@ -47,6 +48,7 @@ import {
 } from "./address-record/store";
 import { BULK_PAGE } from "./bulk/contract";
 import { bulkRoutes } from "./bulk/route";
+import { readCodeListing } from "./code-pages/code-listing";
 import { codePagesCollection } from "./code-pages/collection";
 import {
   keepCodeRoutes,
@@ -54,7 +56,11 @@ import {
 } from "./code-pages/connections";
 import { PAGES_PAGE, PAGES_PAGE_HREF } from "./code-pages/contract";
 import { codePageRoutes } from "./code-pages/route";
-import { readCodeBuild, type CodeRoute } from "./code-pages/routes";
+import { readCodeBuild, type ReadCodeRoutes } from "./code-pages/routes";
+import {
+  statedAddressesOf,
+  type CodeAddressesOption,
+} from "./code-pages/stated";
 import { codeAddressOf } from "./code-pages/store";
 import {
   indexNowKeyProxyHandler,
@@ -375,6 +381,35 @@ export interface SeoPluginOptions {
    */
   nextBuildDir?: string;
   /**
+   * @experimental Pages built in code that no build names, and the Markdown
+   * a page built in code's plain-text copy is made of, by route as Next.js
+   * names it, route groups left out. A route's params, as its
+   * `generateStaticParams` would name them, list its pages in the sitemap,
+   * llms.txt and Pages: for a route rendered on demand, such as one whose
+   * pages come from a database. Stating a route says it calls
+   * `seoMetadata`. A `markdown` function makes the copy of any page the
+   * route serves, from its address and params; the plugin adds the front
+   * matter. Params missing a part of the route list no page, with a
+   * warning.
+   *
+   * ```ts
+   * seoPlugin({
+   *   codeAddresses: {
+   *     "/products/[slug]": async () =>
+   *       (await products()).map(product => ({ slug: product.slug })),
+   *     "/docs/[[...slug]]": {
+   *       params: () => source.generateParams(),
+   *       markdown: ({ params }) => docsMarkdown(params.slug),
+   *     },
+   *   },
+   * });
+   * ```
+   *
+   * A page a production build rendered with `seoMetadata` needs no entry
+   * here: the build records it, in the database, for the running site.
+   */
+  codeAddresses?: CodeAddressesOption;
+  /**
    * @experimental The address of the site's own page to show for an address
    * made Gone on SEO › Redirects, such as `"/gone"`. The Proxy reads that
    * page and answers with it and status 410, so a visitor following an old
@@ -574,13 +609,13 @@ function rootFilesConfig(
     readStructuredDataRules: ReadStructuredDataRules;
   },
   collections: readonly string[] | undefined,
-  codeRoutes: () => readonly CodeRoute[]
+  code: Pick<RootFilesConfig, "codeRoutes" | "codeMarkdown">
 ): RootFilesConfig {
   const sitemap = sitemapConfig(options, collections);
   return {
     ...configuredOrigin(options, sitemap),
     ...readers,
-    codeRoutes,
+    ...code,
     ...(sitemap === undefined ? {} : { sitemap }),
     ...(options.robots === false
       ? {}
@@ -600,9 +635,9 @@ function siteFileRoutes(
     readStructuredDataRules: ReadStructuredDataRules;
   },
   collections: readonly string[] | undefined,
-  codeRoutes: () => readonly CodeRoute[]
+  code: Pick<RootFilesConfig, "codeRoutes" | "codeMarkdown">
 ): PluginRoute[] {
-  const config = rootFilesConfig(options, readers, collections, codeRoutes);
+  const config = rootFilesConfig(options, readers, collections, code);
   const routes = rootFileRoutes(config);
   const { sitemap } = config;
   if (sitemap !== undefined) {
@@ -626,7 +661,7 @@ function ownRulesCheckRoute(
   readers: {
     readRules: ReadRules;
     readStructuredDataRules: ReadStructuredDataRules;
-    codeRoutes: () => readonly CodeRoute[];
+    codeRoutes: ReadCodeRoutes;
     sitemapSubset: readonly string[] | undefined;
   }
 ): PluginRoute {
@@ -810,7 +845,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         ? {}
         : { buildDir: options.nextBuildDir }
     );
-  const codeRoutes = () => codeBuild().routes;
+  // Where the build is, where `next build` writes its id.
+  const buildDir = () =>
+    resolve(process.cwd(), options.nextBuildDir ?? ".next");
+  // What the site states in its options, checked here so a mistyped route
+  // fails when the site starts.
+  const stated = statedAddressesOf(options.codeAddresses);
+  // Every page built in code the running site has: what its build files
+  // name, what the build being served recorded, and what the options state.
+  const codeListing = (ctx: PluginContext) =>
+    readCodeListing(ctx, { build: codeBuild, buildDir, stated });
+  const codeRoutes: ReadCodeRoutes = async ctx =>
+    (await codeListing(ctx)).routes;
   // The site's configured origin, where the sitemap is served and a baseUrl
   // is set, for every output that names the site's addresses.
   const siteOrigin = configuredOrigin(
@@ -821,8 +867,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // answers them and the head that links them make one decision.
   const plainCopies = {
     readRules,
-    // A page built in code is copied too, from the page as it renders.
+    // A page built in code is copied too, from the Markdown the options
+    // give for it, else from the page as it renders.
     codeRoutes,
+    // The pages the build's files name, which the Proxy reads before
+    // anything has started.
+    builtRoutes: () => codeBuild().routes,
+    codeMarkdown: stated.markdownAt,
     ...siteOrigin,
     ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
   };
@@ -1154,7 +1205,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         readStructuredDataRules: problemChecks.readers.readStructuredDataRules,
       },
       sitemapSubset,
-      codeRoutes
+      // The llms files link a page's copy where its Markdown is given.
+      { codeRoutes, codeMarkdown: stated.markdownAt }
     ),
     shareImageRoute(options.baseUrl),
     // The cards a page's own picture is served as where networks would not
@@ -1201,7 +1253,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // entry's SEO.
     ...codePageRoutes({
       readRules,
-      build: codeBuild,
+      build: codeListing,
       origin: () =>
         options.baseUrl === undefined
           ? undefined
@@ -1227,6 +1279,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       readBrand: ctx => readBrandFacts(ctx),
       readSetupWaiting: setupWaiting,
       importSetup,
+      codeListing,
     })
   );
 
@@ -1317,7 +1370,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       registerSeoPageChecks(ctx, problemChecks);
       // Each saved page's sitemap date moved only where its content changed.
       watchContentDates(ctx, types);
-      keepCodeRoutes(codeRoutes);
+      keepCodeRoutes({ read: codeRoutes, buildDir });
       // Changed pages noted for IndexNow, told once they settle.
       stopIndexNow = watchForIndexNow(ctx, { readRules, ...siteOrigin }, types);
     },

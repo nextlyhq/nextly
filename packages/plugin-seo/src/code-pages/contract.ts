@@ -68,9 +68,27 @@ export interface UnreadableBuild {
   problem: "missing" | "unreadable" | "no-routes";
 }
 
-/** What the build route answers: what the build couldn't say, where it couldn't. */
+/**
+ * What the build being served recorded of its pages built in code while it
+ * rendered the site: its id, how many it recorded, and when it first did.
+ */
+export interface BuildRecordStatus {
+  build: string;
+  pages: number;
+  /** As ISO text; none where it recorded nothing. */
+  at?: string;
+}
+
+/**
+ * What the build route answers: what the build couldn't say, where it
+ * couldn't; what the build being served recorded, where its id was read;
+ * and how many of its routes have a variable part, whose addresses only
+ * the build names.
+ */
 export interface BuildStatusBody {
   unreadable?: UnreadableBuild;
+  recorded?: BuildRecordStatus;
+  dynamicRoutes?: number;
 }
 
 /**
@@ -147,6 +165,13 @@ export interface SiteAddress {
   source: AddressSource;
   /** The entry's content type, or the file of the route that serves it. */
   from: string;
+  /**
+   * For a page built in code that the build's files don't name: recorded by
+   * the build being served (`build-record`, with the build's id in
+   * `build`), or stated in the plugin's options (`options`).
+   */
+  listedBy?: "build-record" | "options";
+  build?: string;
   standing: AddressStanding;
   /** The title search engines are given, where there is one. */
   title?: string;

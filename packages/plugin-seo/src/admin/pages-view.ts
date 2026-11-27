@@ -9,7 +9,10 @@
  */
 import type {
   AutomaticValue,
+  BuildRecordStatus,
+  BuildStatusBody,
   SiteAddress,
+  UnreadableBuild,
   ValueSource as SourceLevel,
 } from "../code-pages/contract";
 import {
@@ -344,4 +347,50 @@ export function valueSource(
     return { kind: "pattern", pattern: automatic.pattern };
   }
   return { kind: "site", field, found: automatic !== undefined };
+}
+
+/**
+ * What the line above the list says of the build being served: how many
+ * pages built in code it recorded, and when; a warning where nothing it
+ * recorded or wrote names the addresses its routes with a variable part
+ * serve, which are then listed unconfirmed and left out of the sitemap;
+ * nothing where there is nothing to say.
+ */
+export type BuildLine =
+  | { kind: "recorded"; recorded: BuildRecordStatus }
+  | { kind: "unconfirmed"; unreadable: UnreadableBuild };
+
+/** The line {@link BuildLine} describes, from what the build route answers. */
+export function buildLineOf(
+  body: BuildStatusBody | undefined
+): BuildLine | undefined {
+  if (body === undefined) return undefined;
+  if (body.recorded !== undefined && body.recorded.pages > 0) {
+    return { kind: "recorded", recorded: body.recorded };
+  }
+  // Only a build with routes with a variable part has pages left unconfirmed.
+  if (body.unreadable !== undefined && (body.dynamicRoutes ?? 0) > 0) {
+    return { kind: "unconfirmed", unreadable: body.unreadable };
+  }
+  return undefined;
+}
+
+/**
+ * Where a page's address comes from, as the side panel heads it: an entry,
+ * a route with no variable part, an address the build's files name, one the
+ * build being served recorded (with its id), or one the options state.
+ */
+export function addressSourceText(
+  item: Pick<SiteAddress, "source" | "listedBy" | "build">
+): string {
+  if (item.listedBy === "options") return "Stated in the plugin's options";
+  if (item.listedBy === "build-record") {
+    return item.build === undefined
+      ? "Recorded by the build"
+      : `Recorded by build ${item.build}`;
+  }
+  if (item.source === "entry") return "Entry";
+  return item.source === "built"
+    ? "Built route"
+    : "Declared by a dynamic route";
 }

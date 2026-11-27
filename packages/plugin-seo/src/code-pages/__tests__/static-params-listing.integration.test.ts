@@ -71,7 +71,7 @@ describe.each(getConfiguredTestDialects())(
       const at = build;
       const { pages } = await listPages(seo, {
         origin: "https://acme.example",
-        codeRoutes: () => readCodeRoutes({ buildDir: at }),
+        codeRoutes: () => Promise.resolve(readCodeRoutes({ buildDir: at })),
       });
       expect(pages.map(page => page.loc)).toContain(
         "https://acme.example/topics/seo"

@@ -70,7 +70,7 @@ describe("a copy asked for before the address record is ready", () => {
     // A page built in code at `/guide.md`: the site's, whatever the record says.
     const handler = plainCopyProxyHandler({
       readRules: async () => ({ patterns: {}, plainTextCopies: true }),
-      codeRoutes: () => [
+      builtRoutes: () => [
         { path: "/guide.md", source: "built", route: "app/guide.md/page.tsx" },
       ],
     });

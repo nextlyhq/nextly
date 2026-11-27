@@ -161,6 +161,7 @@
     // workers build the output, never the output.
     "NEXTLY_LOCAL_MAX_WORKERS",
     "NEXT_PHASE", // nextly boot: a production build seeds no permissions or roles
+    "NEXT_DEPLOYMENT_ID", // plugin-seo: tells builds apart that share one BUILD_ID
     "GITHUB_ACTOR", // nextly migrate: appliedBy actor in CI
     "USER", // nextly migrate: appliedBy actor on dev laptops
     "DEBUG",

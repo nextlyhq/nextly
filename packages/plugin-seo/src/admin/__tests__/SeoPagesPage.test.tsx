@@ -270,6 +270,9 @@ describe("the list", () => {
                   file: ".next/prerender-manifest.json",
                   problem: "missing",
                 },
+                // The build being served recorded nothing.
+                recorded: { build: "abc123", pages: 0 },
+                dynamicRoutes: 1,
               }
             : { items: [...ITEMS, unconfirmed] },
       pending: false,
@@ -290,6 +293,58 @@ describe("the list", () => {
       name: "SEO for /integrations/webflow",
     });
     expect(within(panel).getByText(/isn't confirmed/)).toBeTruthy();
+  });
+
+  it("says how many pages the build being served recorded, from which build, with no warning", async () => {
+    const recorded: SiteAddress = {
+      path: "/docs/start",
+      name: "Start",
+      source: "dynamic",
+      from: "app/docs/[[...slug]]/page.tsx",
+      listedBy: "build-record",
+      build: "abc123",
+      standing: "listed",
+      title: "Start | Acme",
+      sources: { title: "code" },
+      seo: {
+        typed: { hidden: false },
+        automatic: { title: { value: "Start | Acme", from: "code" } },
+        siteName: "Acme",
+      },
+    };
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+      data:
+        args.path === "/problems"
+          ? PROBLEMS
+          : args.path === "/pages/build"
+            ? {
+                unreadable: {
+                  file: ".next/prerender-manifest.json",
+                  problem: "missing",
+                },
+                recorded: {
+                  build: "abc123",
+                  pages: 395,
+                  at: "2026-11-28T09:14:00.000Z",
+                },
+                dynamicRoutes: 4,
+              }
+            : { items: [...ITEMS, recorded] },
+      pending: false,
+      error: null,
+      refetch: () => {},
+      fetching: false,
+    })) as unknown as typeof usePluginRoute);
+    render(<SeoPagesPage />);
+
+    expect(screen.getByRole("status").textContent).toMatch(
+      /^395 pages built in code from build abc123, recorded .+\.$/
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await editSeo("Start");
+    const panel = screen.getByRole("dialog", { name: "SEO for /docs/start" });
+    expect(within(panel).getByText(/Recorded by build abc123/)).toBeTruthy();
   });
 
   it("says nothing of the build where the server read it", () => {

@@ -379,6 +379,7 @@ in `optionalDependsOn`.
 | `socialCard`      | `{ siteName, language, xAccount }`                               | none               | The site's name, language and X account on every page's [social card](#social-cards)                             |
 | `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                              |
 | `nextBuildDir`    | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code) |
+| `codeAddresses`   | `{ [route]: params function, or { params, markdown } }`          | none               | Experimental. [Pages built in code no build names](#pages-a-build-cant-name), and the Markdown of their copies   |
 | `gonePage`        | `string`                                                         | none               | Experimental. The site's own page shown with a [Gone (410)](#redirects) answer, such as `"/gone"`                |
 | `urlFor`          | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                                        |
 | `basePath`        | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                                          |
@@ -948,9 +949,11 @@ declares. Each row shows the title and description search is given for the page,
 comes from (its own value, the page's code, or the pattern it was made from), and its **Status**:
 the most serious problem the [problem list](#problems) holds for the page, else **Not connected**
 for a page built in code whose route doesn't call the plugin, **Hidden** for a page kept out of
-search, or **Good**. **Unconfirmed** marks a page a route with a variable part recorded while the
-server can't read the build's list of the addresses those routes declare
-([why](#pages-built-in-code)). A page no check has reached for you says **Not checked** rather than **Good**:
+search, or **Good**. **Unconfirmed** marks a page a route with a variable part recorded while
+nothing confirms the build being served has it ([why](#pages-built-in-code)). Above the list, a
+line says how many pages built in code the build being served recorded, from which build and
+when (`395 pages built in code from build abc123, recorded 28 Nov 2026, 09:14`); it is a warning
+only where that build recorded none and the server can't read its prerender manifest either. A page no check has reached for you says **Not checked** rather than **Good**:
 no problem listed for it is no evidence of none. **Links** says how many other pages link to the
 page and how many it links to (`3 in · 5 out`), counting each page once, however many links it
 holds, from the links in each page's content in the same language; a dash for a page built in
@@ -2211,14 +2214,31 @@ needs (`.next/required-server-files.json`), so a Vercel deployment and a `standa
 carry them with no setting. A deploy that copies only part of `.next` must keep both: without
 the app paths manifest the screen lists no page built in code.
 
+A host may not ship the prerender manifest with the server all the same. So `next build` also
+records, in the site's database, each page built in code it renders whose route calls
+`seoMetadata`, and each address a route wrapped in [`seoStaticParams`](#pages-a-sitemap-lists-while-next-build-runs)
+declares, under the build's own id (`.next/BUILD_ID`, which every Next.js server reads to
+start). The running site lists the pages the build it serves recorded, whatever build files it
+has: a page prerendered once and never rendered again included. Pages lists each with
+**Recorded by build** and the build's id. This needs the database while the site is built, as
+the build's own reads of content do; a build with no database records nothing, and its server
+lists from the prerender manifest alone. The plugin's table for it (`seo__code_addresses`) is
+created by its migration: run `nextly migrate` after upgrading. Rows of other builds are
+dropped once they are 90 days old.
+
+The prerender manifest stays the cross-check where it is there: an address it says answered not
+found is left out, however else it is known, and so is an address no route of the build serves.
+
 Without a readable prerender manifest (missing, not JSON, or listing no pages on a production
-server), the addresses routes with a variable part declared can't be confirmed. The screen then
-shows a banner naming the file, and the server logs one warning saying so. Each route with no
-variable part is still listed. Each address such a route recorded when it last rendered, which
-`next build` does for every page it renders, is listed as **Unconfirmed** when a route of this
-build could serve it, and a recorded address no route could serve is left out. What is set for
-an unconfirmed page still reaches it whenever its route serves it. The sitemap, `llms.txt` and
-the plain-text copies list confirmed pages only, so they leave it out until the file can be read.
+server) and with nothing recorded by the build being served, the addresses routes with a
+variable part declared can't be confirmed. The screen then shows a warning naming the file, and
+the server logs one warning saying so. Each route with no variable part is still listed. Each
+address such a route recorded when it last rendered is listed as **Unconfirmed** when a route of
+this build could serve it, and a recorded address no route could serve is left out. What is set
+for an unconfirmed page still reaches it whenever its route serves it. The sitemap, `llms.txt`
+and the plain-text copies list confirmed pages only, so they leave it out. The Overview's setup
+checklist, on a site whose build has routes with a variable part, says whether those pages are
+listed, and how many pages built in code are.
 
 What is set there reaches the page once its route adds one line, calling `seoMetadata` with
 its address:
@@ -2369,6 +2389,53 @@ A sitemap rendered per request needs none of this: the plugin's own `/sitemap.xm
 per request, as is a site's `app/sitemap.ts` with `export const dynamic = "force-dynamic"`. One
 with a `revalidate` is still first made during the build, so without `seoStaticParams` it lists
 those pages only from its first refresh.
+
+### Pages a build can't name
+
+A route rendered on demand, with no `generateStaticParams`, such as one whose pages come from the
+database, has addresses no build names. State them in the plugin's `codeAddresses` option
+(experimental), by route as Next.js names it, route groups left out, with a function returning
+the route's params as `generateStaticParams` would:
+
+```ts
+seoPlugin({
+  codeAddresses: {
+    "/products/[slug]": async () =>
+      (await products()).map(product => ({ slug: product.slug })),
+  },
+});
+```
+
+Each page the params make is listed in the sitemap, `llms.txt` and Pages (**Stated in the
+plugin's options**), as a page whose route calls `seoMetadata`: the plugin can't see the route,
+so stating it says so. The params are read again at most once a minute. Params missing a part of
+the route list no page, and the server logs a warning naming the route; a function that throws
+lists none of its pages, with a warning, and changes nothing else.
+
+The same option gives the Markdown a page built in code's [plain-text copy](#llmstxt-and-plain-text-copies)
+is made of, for any page its route serves, however the page is listed. Without it the copy is
+made from the page as it renders: its `<main>`, or its body without the shared header and footer,
+which on a page laid out without `<main>` can hold its navigation and sidebars too. With it, the
+copy says only what the site wrote for it:
+
+```ts
+seoPlugin({
+  codeAddresses: {
+    "/docs/[[...slug]]": {
+      // Optional: the build lists the docs it renders.
+      params: () => source.generateParams(),
+      markdown: ({ params }) => docsMarkdown(params.slug),
+    },
+  },
+});
+```
+
+`markdown` is handed the page's `path` and its `params`, and returns the copy's Markdown, or
+nothing to fall back to the rendered page. The plugin adds the front matter (`title`,
+`description`, `url`, `last_updated`) from the page's head, and never renders the page for it, so
+the copy is served, and linked from `llms.txt`, even where the site names no address of its own. A route is checked when the
+site starts: one that isn't from the root, or has a catch-all before its last segment, fails the
+start with a message naming it.
 
 <Callout type="info">
 **The list of routes comes from the build.** The plugin reads the routes and the addresses

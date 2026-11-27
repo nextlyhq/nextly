@@ -28,7 +28,7 @@ import {
   resolveIn,
   servedAt,
 } from "../languages/versions";
-import { candidates, type Candidate } from "../outputs/listing";
+import { callsMetadata, candidates, type Candidate } from "../outputs/listing";
 import { isRecord, textOf } from "../plain-values";
 import { singleKey } from "../problems/page-types";
 import type { SeoAnswer, Sourced } from "../resolver/order";
@@ -41,6 +41,7 @@ import {
   resolveCodePage,
   type CodePage,
 } from "./answers";
+import type { CodeListing } from "./code-listing";
 import type {
   AddressStanding,
   AutomaticValue,
@@ -186,7 +187,9 @@ function standingOfCodePage(
   unconfirmed: ReadonlySet<string>
 ): AddressStanding {
   if (unconfirmed.has(page.route.path)) return "unconfirmed";
-  return page.row?.connected === true
+  // As the sitemap decides it: a call recorded, or a page the build or the
+  // options say its route calls.
+  return callsMetadata(page.route, page.row)
     ? standingOfAnswer(page.answer)
     : "not-connected";
 }
@@ -199,6 +202,8 @@ async function codeAddressOf(
     origin: string;
     name: string | undefined;
     unconfirmed: ReadonlySet<string>;
+    /** The id of the build being served, which recorded what it lists. */
+    build?: string;
   },
   readRules: ReadRules | undefined
 ): Promise<SiteAddress> {
@@ -213,6 +218,10 @@ async function codeAddressOf(
     name: row?.name ?? nameOfAddress(route.path),
     source: route.source,
     from: route.route,
+    ...(route.listedBy === undefined ? {} : { listedBy: route.listedBy }),
+    ...(route.listedBy === "build-record" && site.build !== undefined
+      ? { build: site.build }
+      : {}),
     standing: standingOfCodePage(page, site.unconfirmed),
     sources: sourcesOf(answer),
     ...present({
@@ -470,7 +479,7 @@ export async function siteAddresses(
   ctx: PluginContext,
   options: {
     origin: string;
-    build: Pick<CodeBuild, "routes" | "dynamic" | "unreadable">;
+    build: Pick<CodeListing, "routes" | "dynamic" | "unreadable" | "recorded">;
     readRules?: ReadRules;
     readable: ReadableEntries;
   }
@@ -504,6 +513,9 @@ export async function siteAddresses(
     origin: options.origin,
     name: rules?.siteName,
     unconfirmed: new Set(unconfirmed.map(route => route.path)),
+    ...(options.build.recorded === undefined
+      ? {}
+      : { build: options.build.recorded.build }),
   };
   const code: SiteAddress[] = [];
   for (const page of pages) {

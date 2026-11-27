@@ -11,7 +11,7 @@ import {
   RECORD_WAIT_MS,
   addressRecordReadyWithin,
 } from "../address-record/catch-up";
-import type { CodeRoute } from "../code-pages/routes";
+import type { ReadCodeRoutes } from "../code-pages/routes";
 import type { SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import { ROBOTS_SERVED_BY_HEADER } from "../settings/robots-rules";
@@ -40,7 +40,9 @@ export interface RootFilesConfig {
   /** Whether robots.txt is served, and what it asks AI crawlers. */
   robots?: { aiCrawlers: AiCrawlerChoice };
   /** The pages the site's routes render from their own code. */
-  codeRoutes?: () => readonly CodeRoute[];
+  codeRoutes?: ReadCodeRoutes;
+  /** The Markdown the options give for a page built in code, which its copy is made of. */
+  codeMarkdown?: AiOutputsConfig["codeMarkdown"];
 }
 
 /**
@@ -304,6 +306,9 @@ function llmsRoute(
           ...(config.codeRoutes === undefined
             ? {}
             : { codeRoutes: config.codeRoutes }),
+          ...(config.codeMarkdown === undefined
+            ? {}
+            : { codeMarkdown: config.codeMarkdown }),
           ...(config.sitemap?.collections === undefined
             ? {}
             : { collections: config.sitemap.collections }),

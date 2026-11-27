@@ -8,9 +8,11 @@ import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 import migration0 from "./20261112_221359_851_create_not_found_log";
 import migration1 from "./20261112_234352_301_create_address_record";
 import migration2 from "./20261113_182206_964_create_content_dates";
+import migration3 from "./20261127_144245_447_create_code_addresses";
 
 export const migrations: PluginMigration[] = [
   migration0,
   migration1,
   migration2,
+  migration3,
 ];
