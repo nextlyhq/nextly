@@ -60,7 +60,7 @@ export type AIModelRole = (typeof AI_MODEL_ROLES)[number];
  * names no permission for them: the package that provides AI registers its
  * own and says which one stands for each ({@link AIProvider.permissions}).
  */
-export const AI_PERMISSION_KEYS = ["use", "bulk", "manage"] as const;
+const AI_PERMISSION_KEYS = ["use", "bulk", "manage"] as const;
 
 /** @experimental One of {@link AI_PERMISSION_KEYS}. */
 export type AIPermissionKey = (typeof AI_PERMISSION_KEYS)[number];

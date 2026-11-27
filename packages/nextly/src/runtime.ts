@@ -89,6 +89,7 @@ export type {
   AIModelRole,
   AINotConfiguredReason,
   AIPermissionKey,
+  AIPermissionRef,
   AIProvider,
   AIProviderEmbedOutcome,
   AIProviderEmbedRequest,
