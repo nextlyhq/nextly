@@ -53,6 +53,18 @@ export default defineConfig({
 Fields come back as `unknown` until you run `nextly generate:types`, which is why
 the samples wrap values in `String(...)`. With generated types you can drop that.
 
+## A post's address
+
+Every sample links to a post the same way, so the address is written once. A
+slug is free text, so it is encoded as one segment of the path:
+
+```ts title="src/lib/post-path.ts"
+/** The address of the post with this slug. */
+export function postPath(slug: unknown): string {
+  return `/posts/${encodeURIComponent(String(slug))}`;
+}
+```
+
 ## A list page
 
 `cachedFind` keeps the result until a post is written, so the page is built once
@@ -65,6 +77,7 @@ import { getNextly } from "nextly";
 import { cachedFind, nextlyTags } from "nextly/runtime";
 
 import config from "../../../../nextly.config";
+import { postPath } from "@/lib/post-path";
 
 export default async function PostsPage() {
   const posts = await cachedFind(
@@ -73,6 +86,7 @@ export default async function PostsPage() {
       const { items } = await nextly.find({
         collection: "posts",
         status: "published",
+        select: { title: true, slug: true },
         sort: "-createdAt",
         limit: 20,
       });
@@ -87,7 +101,7 @@ export default async function PostsPage() {
       <ul>
         {posts.map(post => (
           <li key={String(post.id)}>
-            <Link href={`/posts/${String(post.slug)}`}>
+            <Link href={postPath(post.slug)}>
               {String(post.title)}
             </Link>
           </li>
@@ -201,6 +215,8 @@ in the post's SEO fields win over the ones you pass here.
 import type { Metadata } from "next";
 import { buildMetadata, type ContentEntry } from "nextly/runtime";
 
+import { postPath } from "@/lib/post-path";
+
 type Props = { params: Promise<{ slug: string }> };
 
 // The cached read from the detail page above.
@@ -214,7 +230,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     fallback: {
       title: String(post.title),
       description: typeof post.excerpt === "string" ? post.excerpt : undefined,
-      canonical: `/posts/${slug}`,
+      canonical: postPath(slug),
     },
   });
 }
@@ -229,6 +245,7 @@ import { getNextly } from "nextly";
 import { nextlySitemap, nextlyTags } from "nextly/runtime";
 
 import config from "../../nextly.config";
+import { postPath } from "@/lib/post-path";
 import { absoluteUrl } from "@/lib/site-url";
 
 export default nextlySitemap({
@@ -242,6 +259,8 @@ export default nextlySitemap({
         collection: "posts",
         status: "published",
         select: { slug: true, updatedAt: true },
+        // A stable order, so no post moves between pages while they are read.
+        sort: "id",
         limit: 500,
         page,
       });
@@ -251,7 +270,7 @@ export default nextlySitemap({
     return [
       { url: absoluteUrl("/posts") },
       ...posts.map(post => ({
-        url: absoluteUrl(`/posts/${String(post.slug)}`),
+        url: absoluteUrl(postPath(post.slug)),
         // A Date, which Next.js writes as an ISO 8601 date.
         lastModified: post.updatedAt instanceof Date ? post.updatedAt : undefined,
       })),
@@ -321,6 +340,8 @@ Where a post is served, in the collection, so the admin can make a link to it:
 ```ts title="nextly.config.ts"
 import { defineCollection } from "nextly/config";
 
+import { postPath } from "./src/lib/post-path";
+
 export const posts = defineCollection({
   slug: "posts",
   status: true,
@@ -328,7 +349,7 @@ export const posts = defineCollection({
     preview: {
       url: entry =>
         typeof entry.slug === "string" && entry.slug !== ""
-          ? `/posts/${encodeURIComponent(entry.slug)}`
+          ? postPath(entry.slug)
           : null,
     },
   },
@@ -381,6 +402,7 @@ import { getNextly } from "nextly";
 import { cachedFind, nextlyTags } from "nextly/runtime";
 
 import config from "../../../../nextly.config";
+import { postPath } from "@/lib/post-path";
 import { absoluteUrl } from "@/lib/site-url";
 
 /** Text for XML, with the five characters XML reads as markup escaped. */
@@ -394,6 +416,7 @@ export async function GET() {
       const { items } = await nextly.find({
         collection: "posts",
         status: "published",
+        select: { title: true, slug: true, excerpt: true, firstPublishedAt: true },
         sort: "-firstPublishedAt",
         limit: 20,
       });
@@ -403,7 +426,7 @@ export async function GET() {
   );
 
   const items = posts.map(post => {
-    const link = absoluteUrl(`/posts/${String(post.slug)}`);
+    const link = absoluteUrl(postPath(post.slug));
     const published = post.firstPublishedAt;
     return `<item>
   <title>${xml(post.title)}</title>
