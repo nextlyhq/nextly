@@ -50,9 +50,15 @@ import {
   idsPresent,
   putBackIncoming,
   putBackLinks,
-  relationsGone,
-  relationTargetsOf,
 } from "./put-back-references";
+import {
+  clearGone,
+  goneTargets,
+  incomingStillHolding,
+  relationColumnsOf,
+  targetSlugsOf,
+  type EntityFieldsOf,
+} from "./restore-relations";
 import { readTrashRecord, type TrashRecord } from "./trash-records";
 
 /** The status a restored entry takes where it had been published. */
@@ -78,6 +84,8 @@ export interface RestoreCollection {
    * named `status` is the author's own, kept as it was.
    */
   lifecycle: boolean;
+  /** Its registry id: another collection made under the same slug has another. */
+  id?: string;
 }
 
 /** What a restore reads besides the database. */
@@ -88,6 +96,12 @@ export interface RestoreDeps {
   >;
   /** The collection `slug` as it is now; undefined where it is gone. */
   collectionOf(slug: string): Promise<RestoreCollection | undefined>;
+  /** Every field group's table and fields, as they are now. */
+  fieldGroups(): Promise<
+    readonly { tableName: string; fields: readonly RestoreField[] }[]
+  >;
+  /** The fields of a collection or Single, as they are now. */
+  entityFieldsOf: EntityFieldsOf;
 }
 
 /** One value another entry has taken since the item was trashed. */
@@ -323,15 +337,12 @@ function rowToPutBack(
   asked: {
     conflicts: readonly TrashConflict[];
     values: Readonly<Record<string, unknown>>;
-    /** The entry's relation fields whose target is gone, put back empty. */
-    cleared: readonly string[];
   }
 ): Record<string, unknown> {
   const row = rowGivenBack(kept);
   const companion = `${collection.tableName}${STORAGE_FORMAT.companionSuffix}`;
   if (table === collection.tableName) {
     asDraft(row, "status", collection.lifecycle);
-    for (const field of asked.cleared) row[field] = null;
     return withNewValues(row, asked.conflicts, asked.values, undefined);
   }
   if (table === companion) {
@@ -552,12 +563,12 @@ function documentAsRestored(
 async function targetTablesOf(
   deps: RestoreDeps,
   record: TrashRecord,
-  targets: ReadonlyMap<string, string>
+  relationTargets: readonly string[]
 ): Promise<Map<string, string | undefined>> {
   const tables = new Map<string, string | undefined>();
   const slugs = [
     ...record.stored.links.map(links => links.targetSlug),
-    ...targets.values(),
+    ...relationTargets,
   ];
   for (const slug of slugs) {
     if (!tables.has(slug)) {
@@ -603,14 +614,33 @@ export async function restoreTrashedEntry(
   }
   const collection = await deps.collectionOf(first.scopeSlug);
   const ownTable = first.stored.tables[0]?.table;
-  if (collection === undefined || collection.tableName !== ownTable) {
+  // The collection the entry was deleted from, not one made since under its
+  // slug, which would take another collection's entry into its own access.
+  const sameCollection =
+    first.stored.collectionId === undefined ||
+    collection?.id === undefined ||
+    collection.id === first.stored.collectionId;
+  if (
+    collection === undefined ||
+    collection.tableName !== ownTable ||
+    !sameCollection
+  ) {
     throw NextlyError.conflict({
-      message: `The collection "${first.scopeSlug}" this entry belonged to is gone or stores its entries elsewhere now, so it cannot be restored.`,
+      message: `The collection "${first.scopeSlug}" this entry belonged to is gone, was made again, or stores its entries elsewhere now, so it cannot be restored.`,
       logContext: { trashId: input.trashId, table: ownTable },
     });
   }
-  const targets = relationTargetsOf(collection.fields);
-  const targetTables = await targetTablesOf(deps, first, targets);
+  const columns = relationColumnsOf(collection, await deps.fieldGroups());
+  const targetTables = await targetTablesOf(
+    deps,
+    first,
+    targetSlugsOf(columns)
+  );
+  const holds = await incomingStillHolding(
+    first.stored.incoming ?? [],
+    first.scopeSlug,
+    deps.entityFieldsOf
+  );
   const values = input.values ?? {};
 
   return deps.adapter.transaction(async tx => {
@@ -642,29 +672,29 @@ export async function restoreTrashedEntry(
     }
     // Where the entry's own values are taken: where the new ones go.
     const taken = await conflictsOf(tx, record, collection, {});
-    const own = keptRowsOf(record.stored, collection.tableName)[0];
-    const cleared =
-      own === undefined
-        ? []
-        : await relationsGone(tx, rowGivenBack(own), targets, targetTables);
+    // Every relation of every row put back whose target is gone since.
+    const gone = await goneTargets(tx, record.stored, columns, targetTables);
+    const cleared = new Set<string>();
+    const clearedOwn = new Set<string>();
 
     for (const kept of record.stored.tables) {
       await putBackTable(
         tx,
         deps,
         kept.table,
-        kept.rows.map(row =>
-          rowToPutBack(
+        kept.rows.map(row => {
+          const back = rowToPutBack(
             kept.table,
             row,
             { ...collection, slug: record.scopeSlug },
-            {
-              conflicts: taken,
-              values,
-              cleared,
-            }
-          )
-        )
+            { conflicts: taken, values }
+          );
+          for (const field of clearGone(kept.table, back, columns, gone)) {
+            cleared.add(field);
+            if (kept.table === collection.tableName) clearedOwn.add(field);
+          }
+          return back;
+        })
       );
     }
     let linksLeftOut = 0;
@@ -681,7 +711,8 @@ export async function restoreTrashedEntry(
       tx,
       deps.adapter,
       record.stored.incoming ?? [],
-      record.itemId
+      record.itemId,
+      holds
     );
     await tx.delete(TRASH_TABLE, {
       and: [{ column: "id", op: "=", value: record.id }],
@@ -720,7 +751,7 @@ export async function restoreTrashedEntry(
         },
         data: documentAsRestored(record, {
           lifecycle: collection.lifecycle,
-          cleared,
+          cleared: [...clearedOwn],
           taken,
           values,
         }),
@@ -734,8 +765,13 @@ export async function restoreTrashedEntry(
       restored: true,
       collection: record.scopeSlug,
       id: record.itemId,
-      ...(linksLeftOut > 0 || cleared.length > 0
-        ? { notPutBack: { links: linksLeftOut, relationsCleared: cleared } }
+      ...(linksLeftOut > 0 || cleared.size > 0
+        ? {
+            notPutBack: {
+              links: linksLeftOut,
+              relationsCleared: [...cleared],
+            },
+          }
         : {}),
     } as const;
   });

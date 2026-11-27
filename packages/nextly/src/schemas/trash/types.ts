@@ -59,14 +59,34 @@ export type KeptIncoming =
       /** The other entries' table, and their ids. */
       sourceTable: string;
       sourceIds: string[];
+      /** The entity and field that held the links, checked again on restore. */
+      source?: IncomingSource;
     }
   | {
       kind: "column";
-      /** The other entries' table, the column, and their ids. */
+      /**
+       * The table holding the column: the other entity's own table, or its
+       * table of rows per language for a translated relation.
+       */
       table: string;
       column: string;
+      /** The rows of the other entity's own table that held the id. */
       ids: string[];
+      /**
+       * The rows per language that held it, by entity id and language: a
+       * language row has no id of its own.
+       */
+      languageRows?: { parent: string; locale: string }[];
+      /** The entity and field that held the id, checked again on restore. */
+      source?: IncomingSource;
     };
+
+/** The entity and field a kept reference came from. */
+export interface IncomingSource {
+  kind: "collection" | "single";
+  slug: string;
+  field: string;
+}
 
 /**
  * Everything a trashed entry stored, as its rows were: its own row, its rows
@@ -80,6 +100,12 @@ export interface TrashedEntry {
   links: KeptLinks[];
   /** What other entries held pointing at it; absent where none was kept. */
   incoming?: KeptIncoming[];
+  /**
+   * The registry id of the collection it was deleted from: a collection
+   * deleted and made again under the same slug is another collection, which
+   * the entry is never restored into.
+   */
+  collectionId?: string;
   /**
    * The entry in the shape a read gives it, as its deleted event carried it:
    * what a restore's created event carries.

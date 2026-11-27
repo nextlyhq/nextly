@@ -31,6 +31,7 @@ import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 import {
   defineCollection,
   defineFieldGroup,
+  defineSingle,
   fieldGroup,
   relationship,
   text,
@@ -76,6 +77,10 @@ const PAGES = "trashref_pages";
 const NOTES = "trashref_notes";
 const PRIVATE = "trashref_private";
 const META = "trashref_meta";
+// A Single relating to a page.
+const FEATURED = "trashref_featured";
+// A translated collection relating to a page, its relation kept per language.
+const LNOTES = "trashref_lnotes";
 // A collection without the Draft/Published lifecycle, with a field of its own
 // named `status`.
 const PLAIN = "trashref_plain";
@@ -96,10 +101,26 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [
           text({ name: "note" }),
           text({ name: "token", admin: { hidden: true } }),
+          relationship({ name: "badge", relationTo: TAGS }),
         ],
       }),
     ],
+    localization: { locales: ["en", "de"], defaultLocale: "en" },
+    singles: [
+      defineSingle({
+        slug: FEATURED,
+        fields: [relationship({ name: "page", relationTo: PAGES })],
+      }),
+    ],
     collections: [
+      defineCollection({
+        slug: LNOTES,
+        localized: true,
+        fields: [
+          text({ name: "title", localized: true }),
+          relationship({ name: "page", relationTo: PAGES, localized: true }),
+        ],
+      }),
       defineCollection({ slug: TAGS, fields: [text({ name: "title" })] }),
       defineCollection({
         slug: PAGES,
@@ -539,6 +560,114 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
 
     expect(result).toEqual({ restored: true, collection: PAGES, id });
     expect((await read(t, PAGES, id)).owner).toBe(owner);
+  });
+
+  it("puts back a Single's relation, and a translated relation, where they still hold nothing", async () => {
+    const t = await boot(dialect);
+    const id = await make(t, PAGES, { title: "Featured", slug: "featured" });
+    await t.nextly.updateSingle({
+      slug: FEATURED,
+      data: { page: id, _overwrite: true },
+    } as never);
+    const note = await make(t, LNOTES, { title: "Note", page: id });
+
+    await t.nextly.delete({ collection: PAGES, id });
+    // What a foreign key set to `set null` leaves, on the Single's row and on
+    // the translated relation's row per language.
+    await t.adapter.update(
+      `single_${FEATURED}`,
+      { page: null },
+      {
+        and: [{ column: "page", op: "=", value: id }],
+      }
+    );
+    await t.adapter.update(
+      `dc_${LNOTES}_locales`,
+      { page: null },
+      {
+        and: [{ column: "_parent", op: "=", value: note }],
+      }
+    );
+
+    await restoreOf(t, { id });
+
+    const [single] = await t.adapter.select<{ page: unknown }>(
+      `single_${FEATURED}`,
+      {}
+    );
+    expect(single.page).toBe(id);
+    const [language] = await t.adapter.select<{ page: unknown }>(
+      `dc_${LNOTES}_locales`,
+      { where: { and: [{ column: "_parent", op: "=", value: note }] } }
+    );
+    expect(language.page).toBe(id);
+  });
+
+  it("puts a field group's relation back empty where its target was deleted since", async () => {
+    const t = await boot(dialect);
+    const badge = await make(t, TAGS, { title: "Badge" });
+    const id = await make(t, PAGES, {
+      title: "Badged",
+      slug: "badged",
+      meta: { note: "n", badge },
+    });
+    await t.nextly.delete({ collection: PAGES, id });
+    await t.nextly.delete({ collection: TAGS, id: badge });
+    await emptyOf(t, { collection: TAGS });
+
+    const result = await restoreOf(t, { id });
+
+    expect(result).toMatchObject({
+      restored: true,
+      notPutBack: { relationsCleared: ["badge"] },
+    });
+  });
+
+  it("leaves out a reference whose field is gone since, and an entry whose collection was made again", async () => {
+    const t = await boot(dialect);
+    const id = await make(t, PAGES, { title: "Kept", slug: "kept" });
+    await make(t, NOTES, { title: "Points", page: id });
+    await t.nextly.delete({ collection: PAGES, id });
+    const [row] = await t.adapter.select<{ id: string; stored: unknown }>(
+      TRASH_TABLE,
+      { where: { and: [{ column: "itemId", op: "=", value: id }] } }
+    );
+    const stored = (
+      typeof row.stored === "string" ? JSON.parse(row.stored) : row.stored
+    ) as TrashedEntry;
+    const save = (next: TrashedEntry) =>
+      t.adapter.update(
+        TRASH_TABLE,
+        { stored: next },
+        {
+          and: [{ column: "id", op: "=", value: row.id }],
+        }
+      );
+
+    // A collection made again under the slug has another registry id.
+    await save({ ...stored, collectionId: "another-collection" });
+    const refused = await restoreOf(t, { id }).then(
+      () => "restored",
+      (error: unknown) => (NextlyError.is(error) ? error.statusCode : error)
+    );
+    expect(refused).toBe(409);
+
+    // The note's field renamed since: its kept reference names a field the
+    // collection no longer has.
+    const incoming = (stored.incoming ?? []).map(kept =>
+      kept.source === undefined
+        ? kept
+        : { ...kept, source: { ...kept.source, field: "renamed_since" } }
+    );
+    expect(incoming.length).toBeGreaterThan(0);
+    await save({ ...stored, incoming });
+
+    const result = await restoreOf(t, { id });
+
+    expect(result).toMatchObject({
+      restored: true,
+      notPutBack: { links: 1 },
+    });
   });
 
   it("puts a relation back empty where its target was deleted since, and says so", async () => {

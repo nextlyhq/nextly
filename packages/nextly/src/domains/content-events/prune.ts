@@ -117,15 +117,34 @@ async function oldestEndedSubject(
  */
 async function deleteEvents(
   db: ContentEventsPruneDb,
-  ids: string[]
+  ids: string[],
+  endedBy: string
 ): Promise<void> {
   await db.transaction(async tx => {
+    // Only those still stamped by the deletion: a restore from the trash
+    // that committed since the batch was read re-opened its life
+    // (`reopen-life`), and none of it is removed.
+    const still = (
+      await tx.select<{ id: string }>(CONTENT_EVENTS_TABLE, {
+        columns: ["id"],
+        where: {
+          and: [
+            { column: "id", op: "IN", value: ids },
+            { column: "endedBy", op: "=", value: endedBy },
+          ],
+        },
+      })
+    ).map(row => row.id);
+    if (still.length === 0) return;
     // Parts first, so no part row is left naming an event that is gone.
     await tx.delete(CONTENT_EVENT_PARTS_TABLE, {
-      and: [{ column: "eventId", op: "IN", value: ids }],
+      and: [{ column: "eventId", op: "IN", value: still }],
     });
     await tx.delete(CONTENT_EVENTS_TABLE, {
-      and: [{ column: "id", op: "IN", value: ids }],
+      and: [
+        { column: "id", op: "IN", value: still },
+        { column: "endedBy", op: "=", value: endedBy },
+      ],
     });
   });
 }
@@ -156,7 +175,7 @@ async function deleteEndedBatch(
   // A batch with room left holds the rest of the life, so the deletion goes
   // with it; a full one leaves the deletion to be found by the next.
   if (ids.length < CONTENT_EVENT_PRUNE_BATCH) ids.push(ended.id);
-  await deleteEvents(db, ids);
+  await deleteEvents(db, ids, ended.id);
   return ids.length;
 }
 

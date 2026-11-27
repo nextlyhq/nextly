@@ -185,6 +185,7 @@ async function collectionOf(
     tableName: collectionTableName(record, slug),
     fields: record.fields ?? [],
     lifecycle: record.status === true,
+    id: record.id,
   };
 }
 
@@ -233,6 +234,31 @@ async function afterRestore(collection: string, id: string): Promise<void> {
     committedWrite: true,
     recordedEvent: true,
   });
+}
+
+/** Every field group's table and fields, as the registry holds them now. */
+async function fieldGroups(): Promise<
+  { tableName: string; fields: RestoreCollection["fields"] }[]
+> {
+  const groups = await getService(
+    "fieldGroupRegistryService"
+  ).getAllComponents();
+  return groups.map(group => ({
+    tableName: group.tableName,
+    fields: (group.fields ?? []) as RestoreCollection["fields"],
+  }));
+}
+
+/** A collection's or Single's fields, as its registry holds them now. */
+async function entityFieldsOf(
+  kind: "collection" | "single",
+  slug: string
+): Promise<RestoreCollection["fields"] | undefined> {
+  const record =
+    kind === "collection"
+      ? await getService("collectionRegistryService").getCollectionBySlug(slug)
+      : await getService("singleRegistryService").getSingleBySlug(slug);
+  return record === null ? undefined : (record.fields ?? []);
 }
 
 /** What a restore names: a trash record, or a trashed entry by its id. */
@@ -343,7 +369,7 @@ export async function restoreFor(
     });
   }
   const result = await restoreTrashedEntry(
-    { adapter: adapter(), collectionOf },
+    { adapter: adapter(), collectionOf, fieldGroups, entityFieldsOf },
     {
       trashId: record.id,
       ...(values === undefined ? {} : { values }),

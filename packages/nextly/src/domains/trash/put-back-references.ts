@@ -16,7 +16,9 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { missingSchemaObject } from "../../database/missing-column";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { KeptIncoming, KeptLinks } from "../../schemas/trash";
+import { COMPANION_PARENT_COLUMN } from "../i18n/companion-columns";
 import { fieldsStoredOnRow } from "../schema/services/field-column-descriptor";
 
 import type { CapturedField } from "./capture-entry";
@@ -28,6 +30,9 @@ export type ReferencesDb = Pick<
   "tableExistsThrough" | "getCapabilities"
 >;
 
+/** Ids asked about in one statement. */
+const ID_CHUNK = 200;
+
 /** The ids of `table` among `ids` that are there now. */
 export async function idsPresent(
   tx: TransactionContext,
@@ -36,11 +41,21 @@ export async function idsPresent(
 ): Promise<Set<string>> {
   if (ids.length === 0) return new Set();
   try {
-    const rows = await tx.select<{ id: unknown }>(table, {
-      where: { and: [{ column: "id", op: "IN", value: [...ids] }] },
-      columns: ["id"],
-    });
-    return new Set(rows.map(row => String(row.id)));
+    const present = new Set<string>();
+    // In bounded statements, as the capture reads: a long list of links
+    // would pass a driver's limit on bound values in one.
+    for (let at = 0; at < ids.length; at += ID_CHUNK) {
+      const rows = await tx.select<{ id: unknown }>(table, {
+        where: {
+          and: [
+            { column: "id", op: "IN", value: ids.slice(at, at + ID_CHUNK) },
+          ],
+        },
+        columns: ["id"],
+      });
+      for (const row of rows) present.add(String(row.id));
+    }
+    return present;
   } catch (error) {
     // A table this process has not registered holds no row it could read.
     if (missingSchemaObject(error)?.object === "unregistered") return new Set();
@@ -119,17 +134,7 @@ async function putBackOneIncoming(
   entryId: string
 ): Promise<number> {
   if (incoming.kind === "column") {
-    // Nothing to count: a row gone or changed since is left as it is.
-    await tx.update(
-      incoming.table,
-      { [incoming.column]: entryId },
-      {
-        and: [
-          { column: "id", op: "IN", value: incoming.ids },
-          { column: incoming.column, op: "IS NULL" },
-        ],
-      }
-    );
+    await putBackColumn(tx, incoming, entryId);
     return 0;
   }
   if (!(await db.tableExistsThrough(tx, incoming.table))) {
@@ -153,15 +158,63 @@ async function putBackOneIncoming(
   return incoming.sourceIds.length - present.size;
 }
 
-/** {@link putBackOneIncoming} for each; answers how many it could not. */
+/**
+ * The entry's id back into another entity's relation column, where it still
+ * holds nothing: on the entity's own rows, and on its rows per language for
+ * a translated relation. A row gone or changed since is left as it is. Built
+ * statements, as the capture read them: the language table is keyed by its
+ * entity and language, not an id.
+ */
+async function putBackColumn(
+  tx: TransactionContext,
+  incoming: Extract<KeptIncoming, { kind: "column" }>,
+  entryId: string
+): Promise<void> {
+  const column = sql.identifier(incoming.column);
+  for (let at = 0; at < incoming.ids.length; at += ID_CHUNK) {
+    const ids = incoming.ids.slice(at, at + ID_CHUNK);
+    await tx.runStatement(
+      sql`UPDATE ${sql.identifier(incoming.table)} SET ${column} = ${entryId} WHERE ${sql.identifier("id")} IN (${sql.join(
+        ids.map(id => sql`${id}`),
+        sql`, `
+      )}) AND ${column} IS NULL`
+    );
+  }
+  const companion = sql.identifier(
+    `${incoming.table}${STORAGE_FORMAT.companionSuffix}`
+  );
+  for (const row of incoming.languageRows ?? []) {
+    await tx.runStatement(
+      sql`UPDATE ${companion} SET ${column} = ${entryId} WHERE ${sql.identifier(COMPANION_PARENT_COLUMN)} = ${row.parent} AND ${sql.identifier("_locale")} = ${row.locale} AND ${column} IS NULL`
+    );
+  }
+}
+
+/** How many references `incoming` holds. */
+function referencesIn(incoming: KeptIncoming): number {
+  return incoming.kind === "links"
+    ? incoming.sourceIds.length
+    : incoming.ids.length + (incoming.languageRows?.length ?? 0);
+}
+
+/**
+ * {@link putBackOneIncoming} for each one `stillHolds` (the field that held
+ * it still exists and still points at this collection, checked against the
+ * current definitions before the transaction); answers how many it could not.
+ */
 export async function putBackIncoming(
   tx: TransactionContext,
   db: ReferencesDb,
   incoming: readonly KeptIncoming[],
-  entryId: string
+  entryId: string,
+  stillHolds: (kept: KeptIncoming) => boolean
 ): Promise<number> {
   let leftOut = 0;
   for (const each of incoming) {
+    if (!stillHolds(each)) {
+      leftOut += referencesIn(each);
+      continue;
+    }
     try {
       leftOut += await putBackOneIncoming(tx, db, each, entryId);
     } catch (error) {
@@ -169,8 +222,7 @@ export async function putBackIncoming(
       // statement, so the transaction is still usable, and nothing of it
       // could be put back.
       if (missingSchemaObject(error)?.object !== "unregistered") throw error;
-      leftOut +=
-        each.kind === "links" ? each.sourceIds.length : each.ids.length;
+      leftOut += referencesIn(each);
     }
   }
   return leftOut;
@@ -188,31 +240,4 @@ export function relationTargetsOf(
     }
   }
   return targets;
-}
-
-/**
- * The entry's own relation columns whose target has been deleted since: the
- * fields to put back empty, as the database would have left them.
- */
-export async function relationsGone(
-  tx: TransactionContext,
-  row: Record<string, unknown>,
-  targets: ReadonlyMap<string, string>,
-  targetTables: ReadonlyMap<string, string | undefined>
-): Promise<string[]> {
-  const gone: string[] = [];
-  for (const [field, targetSlug] of targets) {
-    // A single relation column holds one id, as text or a number.
-    const raw = row[field];
-    const value =
-      typeof raw === "string" || typeof raw === "number" ? `${raw}` : "";
-    if (value === "") continue;
-    const table = targetTables.get(targetSlug);
-    const present =
-      table === undefined
-        ? new Set<string>()
-        : await idsPresent(tx, table, [value]);
-    if (!present.has(value)) gone.push(field);
-  }
-  return gone;
 }

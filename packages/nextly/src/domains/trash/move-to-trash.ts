@@ -58,6 +58,8 @@ export interface MoveEntryToTrashInput {
   sensitiveFields: readonly SensitiveFieldSource[];
   /** The entry in the shape a read gives it, as its deleted event carries it. */
   document: Record<string, unknown>;
+  /** The collection's registry id, which a restore checks it still has. */
+  collectionId?: string;
   /** Who deleted it, as the delete records it. */
   actor: RequestActor;
   /** The person's name, where a person deleted it. */
@@ -141,6 +143,9 @@ export async function moveEntryToTrash(
     label: trashLabelOf(input.collection, input.document, input.fields),
     stored: {
       ...captured,
+      ...(input.collectionId === undefined
+        ? {}
+        : { collectionId: input.collectionId }),
       document: sanitizedChange({
         data: input.document,
         sensitiveFields: sensitiveFieldPaths(input.sensitiveFields),

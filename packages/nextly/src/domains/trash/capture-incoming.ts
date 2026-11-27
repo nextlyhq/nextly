@@ -21,7 +21,9 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { missingSchemaObject } from "../../database/missing-column";
-import type { KeptIncoming } from "../../schemas/trash";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import type { IncomingSource, KeptIncoming } from "../../schemas/trash";
+import { COMPANION_PARENT_COLUMN } from "../i18n/companion-columns";
 import {
   relationHoldsReferenceList,
   usesJunctionTable,
@@ -34,11 +36,18 @@ import {
 
 import type { CapturedField } from "./capture-entry";
 
-/** The collections registry, as every collection's own row records it. */
-const REGISTRY_TABLE = "dynamic_collections";
+/**
+ * The registries of the entities whose fields can point at an entry: every
+ * collection's, and every Single's.
+ */
+const REGISTRIES = [
+  { kind: "collection", table: "dynamic_collections" },
+  { kind: "single", table: "dynamic_singles" },
+] as const;
 
-/** One collection as the registry stores it. */
+/** One entity as its registry stores it. */
 interface RegistryRow {
+  kind: "collection" | "single";
   slug: string;
   tableName: string;
   fields: unknown;
@@ -91,11 +100,21 @@ export function singleRelationTarget(field: CapturedField): string | undefined {
   return typeof target === "string" && target !== "" ? target : undefined;
 }
 
-/** Every collection's slug, table and fields, read on the transaction. */
-async function collectionsOn(tx: TransactionContext): Promise<RegistryRow[]> {
-  return tx.select<RegistryRow>(REGISTRY_TABLE, {
-    columns: ["slug", "tableName", "fields"],
-  });
+/** Every collection's and Single's slug, table and fields, read on the transaction. */
+async function entitiesOn(tx: TransactionContext): Promise<RegistryRow[]> {
+  const entities: RegistryRow[] = [];
+  for (const registry of REGISTRIES) {
+    const rows = await tx.select<Omit<RegistryRow, "kind">>(registry.table, {
+      columns: ["slug", "tableName", "fields"],
+    });
+    for (const row of rows) entities.push({ ...row, kind: registry.kind });
+  }
+  return entities;
+}
+
+/** Where a kept reference came from: the entity and its field. */
+function sourceOf(source: RegistryRow, field: string): IncomingSource {
+  return { kind: source.kind, slug: source.slug, field };
 }
 
 /** The junction rows from other entries of `source` to the entry. */
@@ -125,27 +144,46 @@ async function incomingLinks(
     targetColumn,
     sourceTable: source.tableName,
     sourceIds: rows.map(row => String(row.source_id)),
+    source: sourceOf(source, String(field.name)),
   };
 }
 
-/** The other entries of `source` whose column `name` holds the entry's id. */
-async function incomingColumn(
+/** The rows of `source`'s own table whose column `name` holds the entry's id. */
+async function incomingOwnRows(
   tx: TransactionContext,
   source: RegistryRow,
   name: string,
   entryId: string
-): Promise<KeptIncoming | undefined> {
-  const rows = await tx.select<{ id: unknown }>(source.tableName, {
-    columns: ["id"],
-    where: { and: [{ column: name, op: "=", value: entryId }] },
-  });
-  if (rows.length === 0) return undefined;
-  return {
-    kind: "column",
-    table: source.tableName,
-    column: name,
-    ids: rows.map(row => String(row.id)),
-  };
+): Promise<string[]> {
+  // A built statement, as a junction is read: a column the table does not
+  // have is then the database's own answer, which `tolerantly` knows.
+  const rows = await tx.queryStatement<{ id: unknown }>(
+    sql`SELECT ${sql.identifier("id")} AS id FROM ${sql.identifier(source.tableName)} WHERE ${sql.identifier(name)} = ${entryId}`
+  );
+  return rows.map(row => String(row.id));
+}
+
+/**
+ * The rows per language of `source` whose column `name` holds the entry's
+ * id: where a translated relation keeps its value. None where there is no
+ * such table, or it has no such column.
+ */
+async function incomingLanguageRows(
+  tx: TransactionContext,
+  source: RegistryRow,
+  name: string,
+  entryId: string,
+  tableExists: (table: string) => Promise<boolean>
+): Promise<{ parent: string; locale: string }[]> {
+  const companion = `${source.tableName}${STORAGE_FORMAT.companionSuffix}`;
+  if (!(await tableExists(companion))) return [];
+  const rows = await tx.queryStatement<{ parent: unknown; locale: unknown }>(
+    sql`SELECT ${sql.identifier(COMPANION_PARENT_COLUMN)} AS parent, ${sql.identifier("_locale")} AS locale FROM ${sql.identifier(companion)} WHERE ${sql.identifier(name)} = ${entryId}`
+  );
+  return rows.map(row => ({
+    parent: String(row.parent),
+    locale: String(row.locale),
+  }));
 }
 
 /** The savepoint a read of another collection runs under. */
@@ -214,50 +252,106 @@ function pointsBy(
     : undefined;
 }
 
+/** What a capture of the references to one entry is given. */
+interface IncomingInput {
+  collection: string;
+  tableName: string;
+  entryId: string;
+  tableExists: (table: string) => Promise<boolean>;
+}
+
+/** One field of another entity that can point at the entry, and how. */
+interface PointingField {
+  field: CapturedField;
+  name: string;
+  by: "links" | "column";
+}
+
+/** The fields of `source` that can point at the entry; none read yet. */
+function pointingFieldsOf(
+  source: RegistryRow,
+  input: IncomingInput
+): PointingField[] {
+  return fieldsStoredOnRow(storedFields(source.fields)).flatMap(field => {
+    const by =
+      typeof field.name === "string"
+        ? pointsBy(source, field, input)
+        : undefined;
+    return by === undefined ? [] : [{ field, name: String(field.name), by }];
+  });
+}
+
+/**
+ * The rows of `source` whose single relation column `name` holds the entry:
+ * on the entity's own rows, or, translated, on its rows per language. Each
+ * is read under its own savepoint, so the one that has no such column costs
+ * the other nothing.
+ */
+async function incomingColumn(
+  tx: TransactionContext,
+  source: RegistryRow,
+  name: string,
+  input: IncomingInput
+): Promise<KeptIncoming | undefined> {
+  const ids =
+    (await tolerantly(tx, () =>
+      incomingOwnRows(tx, source, name, input.entryId)
+    )) ?? [];
+  const languageRows =
+    (await tolerantly(tx, () =>
+      incomingLanguageRows(tx, source, name, input.entryId, input.tableExists)
+    )) ?? [];
+  if (ids.length === 0 && languageRows.length === 0) return undefined;
+  return {
+    kind: "column",
+    table: source.tableName,
+    column: name,
+    ids,
+    ...(languageRows.length === 0 ? {} : { languageRows }),
+    source: sourceOf(source, name),
+  };
+}
+
+/** What one field of `source` holds pointing at the entry. */
+function incomingThrough(
+  tx: TransactionContext,
+  source: RegistryRow,
+  pointing: PointingField,
+  input: IncomingInput
+): Promise<KeptIncoming | undefined> {
+  if (pointing.by === "column") {
+    return incomingColumn(tx, source, pointing.name, input);
+  }
+  return tolerantly(tx, () =>
+    incomingLinks(
+      tx,
+      source,
+      pointing.field,
+      { slug: input.collection, entryId: input.entryId },
+      input.tableExists
+    )
+  );
+}
+
 /**
  * What every other entry holds pointing at `entryId` of `collection`, whose
  * own table is `tableName`.
  */
 export async function captureIncoming(
   tx: TransactionContext,
-  input: {
-    collection: string;
-    tableName: string;
-    entryId: string;
-    tableExists: (table: string) => Promise<boolean>;
-  }
+  input: IncomingInput
 ): Promise<KeptIncoming[]> {
   const kept: KeptIncoming[] = [];
-  for (const source of await collectionsOn(tx)) {
-    // Only the fields that can point at the entry are read, and only a
-    // collection with one is asked whether its table is there: a delete
-    // costs a query per relation to this collection, not one per collection.
-    const pointing = fieldsStoredOnRow(storedFields(source.fields)).flatMap(
-      field => {
-        const by =
-          typeof field.name === "string"
-            ? pointsBy(source, field, input)
-            : undefined;
-        return by === undefined
-          ? []
-          : [{ field, name: String(field.name), by }];
-      }
-    );
+  for (const source of await entitiesOn(tx)) {
+    // Only the fields that can point at the entry are read, and only an
+    // entity with one is asked whether its table is there: a delete costs a
+    // query per relation to this collection, not one per collection.
+    const pointing = pointingFieldsOf(source, input);
     if (pointing.length === 0) continue;
-    // A collection whose table is not there yet holds nothing.
+    // An entity whose table is not there yet holds nothing.
     if (!(await input.tableExists(source.tableName))) continue;
-    for (const { field, name, by } of pointing) {
-      const found = await tolerantly(tx, () =>
-        by === "links"
-          ? incomingLinks(
-              tx,
-              source,
-              field,
-              { slug: input.collection, entryId: input.entryId },
-              input.tableExists
-            )
-          : incomingColumn(tx, source, name, input.entryId)
-      );
+    for (const each of pointing) {
+      const found = await incomingThrough(tx, source, each, input);
       if (found !== undefined) kept.push(found);
     }
   }

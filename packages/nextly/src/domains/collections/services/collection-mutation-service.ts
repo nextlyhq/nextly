@@ -2713,8 +2713,14 @@ export class CollectionMutationService extends BaseService {
       document: Record<string, unknown>;
       actor: RequestActor;
       actorName: string | null;
+      /** The collection's registry row, whose id the trash record keeps. */
+      collection: unknown;
     }
   ): Promise<string | undefined> {
+    const registryId =
+      typeof args.collection === "object" && args.collection !== null
+        ? (args.collection as { id?: unknown }).id
+        : undefined;
     const moved = await moveEntryToTrash(
       tx,
       this.adapter,
@@ -2727,6 +2733,7 @@ export class CollectionMutationService extends BaseService {
         document: args.document,
         actor: args.actor,
         actorName: args.actorName,
+        ...(typeof registryId === "string" ? { collectionId: registryId } : {}),
       },
       this.logger
     );
@@ -23011,6 +23018,7 @@ export class CollectionMutationService extends BaseService {
             document: deletedDocument,
             actor: actorForWrite(params.actor, params.user),
             actorName: params.user?.name ?? null,
+            collection,
           });
 
           if (this.fieldGroupDataService) {
@@ -26435,6 +26443,7 @@ export class CollectionMutationService extends BaseService {
         document: deletedDocument,
         actor: actorForWrite(params.actor, params.user),
         actorName: params.user?.name ?? null,
+        collection,
       });
 
       // Cascade delete component data before deleting the main entry
