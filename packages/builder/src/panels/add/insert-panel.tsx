@@ -86,7 +86,11 @@ import { entryContentRefusal } from "../../canvas/entry-content-rules";
 import { usePreviewedCollection } from "../../canvas/previewed-entry";
 import { EDITOR_WORDS } from "../../editor-words";
 
-import { LibraryNotices, type LibraryTier } from "./insert-panel-notices";
+import {
+  LibraryNotices,
+  SliderNotice,
+  type LibraryTier,
+} from "./insert-panel-notices";
 import { useInsertOffers } from "./insert-panel-offers";
 import { useSummonAnswer } from "./insert-panel-summon";
 import {
@@ -109,6 +113,7 @@ import {
   UNCATEGORISED,
   type InsertEntry,
 } from "./inserter";
+import { asksForSlider, SLIDER_STAND_IN } from "./inserter-palette";
 
 // The panel's props, its library notices, its tiles and what it offers where
 // live in modules of their own beside it; every name this module exported
@@ -217,11 +222,17 @@ export function InsertPanel({
   const firstBlocksField = blocksFields?.[0]?.name;
   // The tab's share of the catalog, then the query. Refused entries stay, so
   // an empty list means the query matched nothing, or the tab holds nothing.
+  const tabEntries = catalog.filter(entry => tabOf(entry) === tab);
+  const matched = filterEntries(tabEntries, query);
+  // A search for a slider that finds nothing is offered the gallery, under a
+  // line that says it is not one (`SliderNotice`).
+  const sliderAsked = matched.length === 0 && asksForSlider(query);
   const groups = paletteGroups(
-    filterEntries(
-      catalog.filter(entry => tabOf(entry) === tab),
-      query
-    ),
+    sliderAsked
+      ? tabEntries.filter(
+          entry => entry.kind === "block" && entry.blockName === SLIDER_STAND_IN
+        )
+      : matched,
     categoryOrder,
     blockOrder
   );
@@ -334,6 +345,7 @@ export function InsertPanel({
         offers={offers}
       />
       <LibraryNotices library={library} tier={tierOf(tab)} />
+      <SliderNotice shown={sliderAsked} />
       <CommandList
         className="nx-insert-panel__list"
         // A pointer that leaves the tiles returns the panel to rest; a

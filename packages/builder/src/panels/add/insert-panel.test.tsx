@@ -726,6 +726,58 @@ describe("InsertPanel", () => {
     ).toBeTruthy();
   });
 
+  it.each(["carousel", "slider"])(
+    "says there is no slider block yet for %s, and offers Gallery below",
+    word => {
+      registerBlocks(
+        [
+          { ...base, name: "acme/text", editor: { label: "Text" } },
+          {
+            ...base,
+            name: "core/gallery",
+            editor: { label: "Gallery", keywords: ["images", "grid"] },
+          },
+        ] as never,
+        { source: "acme" }
+      );
+      render(<InsertPanel editor={editorSpy(documentOf())} />);
+      fireEvent.change(
+        screen.getByPlaceholderText("Search blocks and components"),
+        { target: { value: word } }
+      );
+
+      expect(
+        screen.getByText(
+          "No slider block yet. Gallery shows pictures in a grid."
+        )
+      ).toBeTruthy();
+      expect(tile("Gallery")).toBeTruthy();
+      // Gallery alone: nothing else is offered as if it were a slider.
+      expect(screen.queryAllByRole("option")).toHaveLength(1);
+      expect(screen.queryByText(/No blocks match/)).toBeNull();
+    }
+  );
+
+  it("says nothing matched, and offers no Gallery, for a search that is not for a slider", () => {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "core/gallery",
+          editor: { label: "Gallery", keywords: ["images", "grid"] },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    fireEvent.change(
+      screen.getByPlaceholderText("Search blocks and components"),
+      { target: { value: "nonexistent" } }
+    );
+    expect(screen.queryByText(/No slider block yet/)).toBeNull();
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+  });
+
   it("keeps what the place refuses in view, says why, and inserts none of it", () => {
     /*
      * The rule reaches the rendered list, rather than being applied somewhere

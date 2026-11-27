@@ -52,6 +52,24 @@ export function LibraryNotices({
   );
 }
 
+/**
+ * What a search for a slider is told: there is no slider block, and the
+ * gallery offered below it is a grid. Without it the gallery would answer as
+ * if it were the slider asked for.
+ */
+export function SliderNotice({
+  shown,
+}: {
+  shown: boolean;
+}): React.JSX.Element | null {
+  if (!shown) return null;
+  return (
+    <p role="status" className="nx-insert-panel__note">
+      No slider block yet. Gallery shows pictures in a grid.
+    </p>
+  );
+}
+
 /** A tier of the host's library, as a notice names it. */
 export type LibraryTier = "patterns" | "components";
 

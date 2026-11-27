@@ -39,6 +39,18 @@ export function filterEntries<TEntry extends InsertEntry>(
 }
 
 /**
+ * The block offered to a search for a slider: the library has no slider, and
+ * a gallery is the nearest thing an author can place, so it is offered under
+ * a line saying what it is rather than found as if it were one.
+ */
+export const SLIDER_STAND_IN = "core/gallery";
+
+/** Whether a search asks for a slider or a carousel, which no block is. */
+export function asksForSlider(query: string): boolean {
+  return /\b(?:carousel|slider)/.test(query.trim().toLowerCase());
+}
+
+/**
  * The words one entry is matched on.
  *
  * A block additionally carries its namespaced name because that is what appears
