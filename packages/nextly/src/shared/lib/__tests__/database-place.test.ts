@@ -43,10 +43,16 @@ describe("where a database is", () => {
       vi.stubEnv("NODE_ENV", mode);
       const env = { NODE_ENV: mode };
       expect(
-        databasePlace({ url: "postgresql://sam:secret@db.example.com:5432/app", env })
+        databasePlace({
+          url: "postgresql://sam:secret@db.example.com:5432/app",
+          env,
+        })
       ).toBe("live");
       expect(
-        databasePlace({ url: "postgresql://sam:secret@127.0.0.1:5432/app", env })
+        databasePlace({
+          url: "postgresql://sam:secret@127.0.0.1:5432/app",
+          env,
+        })
       ).toBe("local");
     }
   );

@@ -147,7 +147,9 @@ describe.each(["migrate:status", "migrate"])("nextly %s", command => {
           "process"
         );
         expect(first, all).toMatch(
-          new RegExp(`^● LIVE database ${host.replace(/\./g, "\\.")}:1/shop · PostgreSQL `)
+          new RegExp(
+            `^● LIVE database ${host.replace(/\./g, "\\.")}:1/shop · PostgreSQL `
+          )
         );
       }
     },
@@ -160,7 +162,9 @@ describe.each(["migrate:status", "migrate"])("nextly %s", command => {
       const { first, second, all } = await run(command, REMOTE, "file", {
         CI: "true",
       });
-      expect(first, all).toMatch(/^● LIVE database db\.prod\.invalid:5432\/app /);
+      expect(first, all).toMatch(
+        /^● LIVE database db\.prod\.invalid:5432\/app /
+      );
       expect(all).not.toContain(LIVE_HINT);
       expect(second ?? "", all).not.toMatch(/mark-dev/);
     },

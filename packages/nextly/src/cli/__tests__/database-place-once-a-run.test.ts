@@ -14,11 +14,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  loadCliEnvironment,
-  modeLine,
-  runDatabasePlace,
-} from "../environment";
+import { loadCliEnvironment, modeLine, runDatabasePlace } from "../environment";
 
 const LOCAL = "postgresql://app:pw@127.0.0.1:5432/shop";
 const REMOTE = "postgresql://app:pw@db.example.com:5432/shop";
@@ -57,7 +53,9 @@ describe("where a run's database is", () => {
     vi.stubEnv("DATABASE_URL", REMOTE);
     loadCliEnvironment(undefined, folder);
     expect(runDatabasePlace()).toBe("live");
-    expect(modeLine()).toMatch(/^● LIVE database db\.example\.com:5432\/shop · /);
+    expect(modeLine()).toMatch(
+      /^● LIVE database db\.example\.com:5432\/shop · /
+    );
   });
 
   it.each(["development", "production", "test"])(
