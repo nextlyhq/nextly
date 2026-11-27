@@ -134,10 +134,16 @@ export function withRouteValues(
       try {
         const page = await routeValuesPageOf(ctx, input, types);
         // The name the route gives the page in structured data is kept with
-        // its values, so the outputs name the page as structured data does.
-        const name = textOf(input.structuredDataHints?.name);
+        // its values, so the outputs name the page as structured data does;
+        // only the call that works structured data out tells it.
+        const hints = input.structuredDataHints;
         if (page !== undefined) {
-          await recordRouteValues(ctx, page, input.code, name);
+          await recordRouteValues(
+            ctx,
+            page,
+            input.code,
+            hints === undefined ? undefined : { name: textOf(hints.name) }
+          );
         }
       } catch (error) {
         ctx.logger.warn("What a page's route supplies could not be recorded", {

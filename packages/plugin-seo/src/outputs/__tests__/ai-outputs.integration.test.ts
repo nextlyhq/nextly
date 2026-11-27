@@ -787,7 +787,17 @@ describe.each(getConfiguredTestDialects())(
           language: await ctx.publicAddresses.defaultLanguage(),
         },
         { title: "Jasper vs Rext AI | Acme" },
-        "Jasper or Rext AI?"
+        { name: "Jasper or Rext AI?" }
+      );
+      // The head's own call, which tells no name, keeps it.
+      await recordRouteValues(
+        ctx,
+        {
+          type: "posts",
+          id,
+          language: await ctx.publicAddresses.defaultLanguage(),
+        },
+        { title: "Jasper vs Rext AI | Acme" }
       );
       await switches(t, { llmsTxt: true, plainTextCopies: true });
 

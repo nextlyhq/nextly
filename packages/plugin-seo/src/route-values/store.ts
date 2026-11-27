@@ -186,15 +186,19 @@ export async function recordRouteValues(
   ctx: PluginContext,
   page: RouteValuesPage,
   values: PageMetadataValues,
-  name?: string
+  hints?: { name?: string }
 ): Promise<void> {
   const key = routeValuesKey(page);
+  const row = (await rowsOf(ctx, [key])).get(key);
+  // The route tells its page's name in structured data only on the call
+  // that works it out (`hints`); a head's call, which tells none, keeps the
+  // name kept, so the two calls never rewrite the row in turn.
+  const name = hints === undefined ? row?.record.name : textOf(hints.name);
   const kept = recordOf({
     ...values,
     ...(name === undefined ? {} : { name }),
   });
   const json = sortedJson(storedOf(kept));
-  const row = (await rowsOf(ctx, [key])).get(key);
   if (row !== undefined) {
     if (sortedJson(storedOf(row.record)) !== json) {
       await rewrite(ctx, row.id, kept);

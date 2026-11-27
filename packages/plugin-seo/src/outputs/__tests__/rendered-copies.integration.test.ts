@@ -47,7 +47,7 @@ import { createDynamicHandlers, createNextlyProxy } from "nextly/runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
-import { seoMetadata } from "../../code-pages/metadata";
+import { seoMetadata, seoStructuredData } from "../../code-pages/metadata";
 import { seoPlugin } from "../../plugin";
 import {
   pageRefKey,
@@ -574,6 +574,24 @@ describe.each(getConfiguredTestDialects())(
       expect(await llmsTxt()).toContain(`- [Plans](${SITE}/pricing.md)`);
       expect(await rootFile("llms-full.txt")).toContain(
         `# Plans\n\nSource: ${SITE}/pricing\n\n`
+      );
+    });
+
+    it("names a page built in code by the name its route gives it in structured data, as structured data does", async () => {
+      await boot(dialect);
+      const call = {
+        structuredDataHints: { name: "Plans" },
+        metadata: { title: "Pricing", description: "Plans and prices." },
+      };
+      // The page's render: its head, then its structured data, which is the
+      // call that tells the name; a later head's call keeps it.
+      await seoMetadata("/pricing", call);
+      await seoStructuredData("/pricing", call);
+      await seoMetadata("/pricing", call);
+      renderedSite({});
+      expect(await llmsTxt()).toContain(`- [Plans](${SITE}/pricing.md)`);
+      expect((await ask("/pricing.md")).body).toContain(
+        "---\n\n# Plans\n\nPlans and prices.\n"
       );
     });
 

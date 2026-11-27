@@ -768,10 +768,12 @@ async function codeHeadsOf(
   )) {
     const title = answer.title?.value;
     const codeTitle = row?.code.title;
-    // Named from what structured data names it by: the page's record (the
-    // name its route gives it, else one from its address), its route's own
-    // title and its head's.
+    // Named from what structured data names it by: the name its route gives
+    // it there, the page's record (the name its route gives it, else one
+    // from its address), its route's own title and its head's.
+    const hint = row?.structuredDataName;
     const name = pageNameOf({
+      ...(hint === undefined ? {} : { hint }),
       home: route.path === "/",
       document: codePageDocument(route.path, row, undefined),
       fields,

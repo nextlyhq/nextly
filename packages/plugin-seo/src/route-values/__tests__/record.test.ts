@@ -194,7 +194,7 @@ describe("recording as the head is answered", () => {
       ctx,
       { type: "posts", id: "p1", language: "en" },
       code,
-      "Plans"
+      { name: "Plans" }
     );
 
     recorded.mockClear();
