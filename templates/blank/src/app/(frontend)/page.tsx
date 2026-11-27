@@ -119,6 +119,19 @@ export default function HomePage() {
           collection or read the docs to see what Nextly can do.
         </p>
 
+        {/* The next step for this start: its pages are written in code, and
+            this guide shows how to read the content into them. */}
+        <p className="mt-3 mx-auto text-slate-500 dark:text-slate-400 max-w-[42ch] text-[clamp(14px,1.6vw,16px)] leading-[1.6]">
+          Then show it on your site:{" "}
+          <Link
+            href="https://nextlyhq.com/docs/guides/build-your-front-end-in-code"
+            className="text-foreground underline underline-offset-4 decoration-foreground/30 hover:decoration-foreground transition-colors"
+          >
+            Build your front end in code
+          </Link>
+          .
+        </p>
+
         <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
           {/* "/admin" redirects to setup while there is no super-admin, so the
               fallback link works before the read answers. */}

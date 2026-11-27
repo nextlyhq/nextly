@@ -4,8 +4,8 @@
  * was something they had not chosen.
  *
  * Compared by the marks the server describes the parts with, which only say whether a part was
- * saved since. What moves no part's mark, a live shared field or a component, is what is left when
- * the document changed and none of them did.
+ * saved since: each language chosen, and the shared fields. What moves no mark (a live shared
+ * field, a component, a language not chosen) is "something else".
  *
  * @module components/features/entries/publish-parts/described-changes
  */
@@ -26,16 +26,13 @@ function changedParts(
     ...Object.keys(before.languages)
       .filter(locale => now.languages[locale] !== before.languages[locale])
       .map(labelOf),
-    ...(before.shared !== undefined && now.shared !== before.shared
-      ? ["the shared fields"]
-      : []),
+    ...(now.shared !== before.shared ? ["the shared fields"] : []),
   ];
 }
 
 /** Whether nothing the marks cover was saved between two descriptions of the same parts. */
 export function sameMarks(before: PartMarks, now: PartMarks): boolean {
   return (
-    before.rest === now.rest &&
     before.shared === now.shared &&
     Object.keys({ ...before.languages, ...now.languages }).every(
       locale => before.languages[locale] === now.languages[locale]
@@ -58,10 +55,7 @@ function whatChanged(
   labelOf: LanguageLabel
 ): string {
   const parts = changedParts(before, now, labelOf);
-  if (parts.length > 0) return listed(parts);
-  return now.rest === before.rest
-    ? "the shared fields or a component"
-    : "something else in this document";
+  return parts.length > 0 ? listed(parts) : "something else in this document";
 }
 
 /** The sentence a refused move is told, from the description it was made of and the one now. */

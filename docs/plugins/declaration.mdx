@@ -1,0 +1,130 @@
+---
+title: The plugin declaration
+description: Say what a plugin needs in its package.json, so Nextly can read it before any of the plugin's code runs, and check it against the plugin's code in your tests.
+---
+
+A plugin says what it needs in the `nextly` key of its package.json: the Nextly versions and
+databases it works with, how it is placed in the config, the packages and plugins it needs, its
+env vars, tables and collections, the files it adds to a project, and what it may access. Nextly
+reads this as data. Nothing in the plugin runs to find out what it needs, so the declaration can
+be read before the package is installed.
+
+<Callout type="warn">
+  The declaration is experimental. Its format may change before it is stable,
+  and every change is a new format number, so a Nextly never misreads a format
+  it does not know.
+</Callout>
+
+```jsonc
+// package.json
+{
+  "name": "@acme/nextly-plugin-redirects",
+  "nextly": {
+    "format": 1,
+    "core": "^0.0.2-alpha.81",
+    "databases": ["postgresql", "mysql", "sqlite"],
+    "plugin": { "export": "redirectsPlugin", "call": true },
+    "env": [
+      {
+        "name": "REDIRECTS_API_KEY",
+        "description": "The key for the link checker",
+        "required": false,
+        "secret": true,
+      },
+    ],
+    "collections": ["redirects"],
+    "steps": { "install": true, "uninstall": false },
+    "access": {
+      "content": { "reads": [{ "every": ["collection", "single"] }] },
+      "outbound": ["api.linkchecker.example"],
+    },
+    "beforeRemove": ["Export your redirects if you want to keep them."],
+  },
+}
+```
+
+## The fields
+
+`format`, `core` and `databases` are required. Every other field may be left out, and one left
+out means none: no tables, no access, no install step.
+
+| Field               | What it says                                                                                                                                                                                                                                                                                                         |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `format`            | The declaration's format. `1` is the only one today.                                                                                                                                                                                                                                                                 |
+| `core`              | The Nextly versions the plugin works with, as a version range. The same range as the plugin's `nextly` in `definePlugin`.                                                                                                                                                                                            |
+| `databases`         | The databases it works with: `postgresql`, `mysql` and `sqlite`, at least one.                                                                                                                                                                                                                                       |
+| `plugin`            | How it is placed in `nextly.config.ts`: `export`, `call` and `options`, as described in [Declaring how a plugin is added](/docs/plugins/distribution#declaring-how-a-plugin-is-added).                                                                                                                               |
+| `companions`        | Packages it needs installed beside it, each with a version range.                                                                                                                                                                                                                                                    |
+| `plugins.requires`  | Plugins it needs, by package name, each with a version range: the plugin's `dependsOn`.                                                                                                                                                                                                                              |
+| `plugins.worksWith` | Plugins it works with when they are there: the plugin's `optionalDependsOn`.                                                                                                                                                                                                                                         |
+| `plugins.conflicts` | Plugins it cannot be used with.                                                                                                                                                                                                                                                                                      |
+| `env`               | The environment variables it reads: `name`, `description`, and whether it is `required` and `secret`.                                                                                                                                                                                                                |
+| `tables`            | The tables it adds, as `contributes.schema.tables` names them.                                                                                                                                                                                                                                                       |
+| `collections`       | The collections it adds, by slug.                                                                                                                                                                                                                                                                                    |
+| `singles`           | The Singles it adds, by slug.                                                                                                                                                                                                                                                                                        |
+| `extends`           | The content types it adds fields to: a slug, or a scope such as `{ "every": ["collection"], "except": ["users"] }`, as `contributes.extend` names them.                                                                                                                                                              |
+| `files`             | Files it adds to a project: `{ "from": "<path in the package>", "to": "<path in the project>" }`, or a wrap of an existing file such as `next.config.ts`: `{ "edit": "wrap", "to": "next.config.ts", "wrapper": { "import": "<module>", "export": "<function>" } }`. Paths are relative and never leave the project. |
+| `conflictingFiles`  | Files of the project's own that stop it working, each with the `reason`.                                                                                                                                                                                                                                             |
+| `commands`          | The commands it adds.                                                                                                                                                                                                                                                                                                |
+| `agentTools`        | The agent tools it adds.                                                                                                                                                                                                                                                                                             |
+| `steps`             | Whether it has an `install` step (`onInstall`) and an `uninstall` step (`onUninstall`).                                                                                                                                                                                                                              |
+| `liveSwitch`        | Whether it only changes settings, so it can be switched on and off on a running site.                                                                                                                                                                                                                                |
+| `access`            | What it may access: the `content` it `reads` and `writes`, the `publicAddresses` it adds to the site, the `outbound` hosts it calls, the `secrets` it keeps, and whether it runs raw SQL (`rawSql`) or decides who is signed in (`login`).                                                                           |
+| `beforeRemove`      | Steps a person takes before removing it.                                                                                                                                                                                                                                                                             |
+
+A package whose `nextly` key has no `format` is read as before: only its `plugin` block, if it
+has one, is used.
+
+## The declaration and the plugin's code
+
+The same facts live in the declaration and in the plugin's definition. The definition is what a
+site enforces when it starts; the declaration is a promise about it, and never widens what the
+plugin may do. A host listed under `access.outbound` that the definition's
+`capabilities.net.outbound` does not list is still refused by `ctx.fetch`.
+
+So the two are compared, and each difference is named: the Nextly range, the plugins it requires
+or works with, what it may access, its tables, collections and Singles, the content types it
+extends, its install and uninstall steps, and the commands and agent tools it adds. Run the same
+comparison in the plugin's own tests, so it cannot be published with a declaration that disagrees
+with its code:
+
+```ts
+// src/declaration.test.ts
+import { readFileSync } from "node:fs";
+
+import { checkPluginPackageDeclaration } from "@nextlyhq/plugin-sdk";
+import { getConfiguredTestDialects } from "@nextlyhq/plugin-sdk/testing";
+import { expect, it } from "vitest";
+
+import * as entry from "./index";
+
+const manifest: unknown = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8")
+);
+
+it("declares in package.json what the plugin does", () => {
+  expect(
+    checkPluginPackageDeclaration(manifest, entry.redirectsPlugin(), {
+      databases: getConfiguredTestDialects(),
+      exports: entry,
+    })
+  ).toEqual([]);
+});
+```
+
+`checkPluginPackageDeclaration` returns each problem as a sentence that names what to change, such
+as `The declaration lists the table "redirects_log", which the plugin's definition does not have.`
+With `databases`, each database the suite boots the plugin on (pass the list its other tests run
+on, as the Plugin start does) must be among the declared ones. With `exports`, the registration is
+checked against the entry: the export is there, a function when it is called, and otherwise the
+plugin itself. A plugin made with `create-nextly-app`'s Plugin start comes with this test and a declaration that passes it.
+
+`readPluginPackageDeclaration` reads a package.json's `nextly` key, and
+`pluginPackageDeclarationJsonSchema()` returns its JSON Schema for editors and other tools. Both
+are exported from `@nextlyhq/plugin-sdk`, with the declaration's type, `PluginPackageDeclaration`.
+
+## A newer format
+
+A declaration in a format newer than the running Nextly reads is refused, with the format and the
+Nextly versions the declaration says it works with:
+[PLUGIN_DECLARATION_FORMAT_NEWER](/docs/cli/errors/plugin-declaration-format-newer).

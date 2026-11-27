@@ -24,7 +24,10 @@ import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-gro
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
-import { keepDeniedAtStored } from "../../../shared/lib/denied-change";
+import {
+  keepDeniedAtStored,
+  type UnreadValues,
+} from "../../../shared/lib/denied-change";
 import {
   validateEntryData,
   type EntryWriteContext,
@@ -64,6 +67,10 @@ import {
   COMPANION_LOCALE_COLUMN,
   COMPANION_PARENT_COLUMN,
 } from "../../i18n/companion-columns";
+import {
+  fillCompanionFields,
+  type LocalizedFieldRef,
+} from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
   type LocalizationSource,
@@ -93,7 +100,9 @@ import {
 import {
   applyInlineFieldGroupWriteAccess,
   directFieldGroupFields,
+  unreadBy,
 } from "../field-group-write-access";
+import type { FieldGroupFieldsSource } from "../live-read-access";
 import {
   raiseIfMoved,
   refusalAfterFollowing,
@@ -349,6 +358,29 @@ function storedContainers(
   return Object.keys(found).length > 0 ? found : undefined;
 }
 
+/**
+ * Every value an instance's own row holds of `fields`, by field name: a container opened from its
+ * JSON column, any other value as stored, a null as null, as a read of it serves them.
+ */
+function storedFieldValues(
+  row: Record<string, unknown> | undefined,
+  fields: readonly FieldConfig[]
+): Record<string, unknown> {
+  const found: Record<string, unknown> = {};
+  if (!row) return found;
+  for (const field of fieldsStoredOnRow(fields)) {
+    const name = (field as { name?: unknown }).name;
+    if (typeof name !== "string") continue;
+    const column = row[toSnakeCase(name)];
+    const value =
+      column === null || containerName(field) === undefined
+        ? column
+        : parsedColumn(column);
+    if (value !== undefined) found[name] = value;
+  }
+  return found;
+}
+
 /** A field's name where it is a group or repeater, which holds fields. */
 function containerName(field: FieldConfig): string | undefined {
   const { name, fields } = field as { name?: unknown; fields?: unknown };
@@ -380,17 +412,20 @@ function reachOf(nested: ComponentFieldResolver | undefined): FieldGroupReach {
  * Judge `instance` with its container columns' denied children kept at their
  * stored values, in place: a container column is written whole, so a denied
  * child removed from the update would be erased from the row, where a denied
- * top-level field keeps its value by not being written.
+ * top-level field keeps its value by not being written. A child the writer may
+ * not read, and sends none of, keeps its stored value too.
  */
 async function keepContainersAtStored(
   instance: Record<string, unknown>,
   stored: Record<string, unknown>,
-  judge: (data: Record<string, unknown>) => Promise<void>
+  judge: (data: Record<string, unknown>) => Promise<void>,
+  unread: UnreadValues | undefined
 ): Promise<void> {
   const { kept } = await keepDeniedAtStored({
     update: instance,
     stored,
     applyRules: judge,
+    unread,
   });
   for (const key of Object.keys(instance)) delete instance[key];
   Object.assign(instance, kept);
@@ -2719,11 +2754,23 @@ export class FieldGroupMutationService extends BaseService {
       mode === "update" && storedId !== undefined
         ? await this.storedContainerValues(slug, storedId, componentFields)
         : undefined;
-    if (!stored) {
+    if (!stored || storedId === undefined) {
       await judge(instance);
       return new Set();
     }
-    await keepContainersAtStored(instance, stored, judge);
+    const instanceId = storedId;
+    const unread = await unreadBy({
+      entity: { kind: "fieldGroup", slug },
+      id: instanceId,
+      // The whole instance, as a read of it is judged: a rule on a container
+      // reads its plain siblings too.
+      stored: () => this.storedInstance(slug, instanceId, componentFields),
+      fields: componentFields,
+      source: this.nestedFieldsSource(),
+      access,
+      executor: writeScope.getStore()?.executor,
+    });
+    await keepContainersAtStored(instance, stored, judge, unread);
     // The stored hashes the write may put back, so the hashing pass leaves
     // them as they are: at every depth, as the hashing pass reaches them.
     return storedPasswordValues(
@@ -2757,16 +2804,75 @@ export class FieldGroupMutationService extends BaseService {
   }
 
   /**
+   * Every value a stored instance holds, by field name, as a read of it in the
+   * write's language serves it: its own row, with each translated field put
+   * together from its companion row in that language as a read puts it
+   * (`fillCompanionFields`), a container's structure with that language's text
+   * laid over it.
+   */
+  private async storedInstance(
+    slug: string,
+    instanceId: string,
+    componentFields: readonly FieldConfig[]
+  ): Promise<Record<string, unknown>> {
+    const instance = {
+      ...storedFieldValues(
+        writeScope.getStore()?.stored.get(instanceId),
+        componentFields
+      ),
+      id: instanceId,
+    };
+    const translated = await this.translatedRow(
+      slug,
+      instanceId,
+      componentFields
+    );
+    if (translated) {
+      fillCompanionFields({
+        rows: [instance],
+        companionRows: translated.row ? [translated.row] : [],
+        localizedFields: translated.localizedFields,
+        localeChain: [translated.locale],
+      });
+    }
+    return instance;
+  }
+
+  /**
    * The translated containers a localized field group's stored instance holds
    * on its companion row in the write's language, or nothing where it has
-   * none. Read on the write's own connection; a failed read fails the write
-   * rather than leaving a denied child unrestored.
+   * none.
    */
   private async translatedContainers(
     slug: string,
     instanceId: string,
     componentFields: readonly FieldConfig[]
   ): Promise<Record<string, unknown> | undefined> {
+    return storedContainers(
+      (await this.translatedRow(slug, instanceId, componentFields))?.row,
+      componentFields
+    );
+  }
+
+  /**
+   * A localized field group's stored instance's companion row in the write's
+   * language (`row`, absent where it has none), where its containers are
+   * translated, with the fields that row translates and the language. Read on
+   * the write's own connection; a failed read fails the write rather than
+   * leaving a denied child unrestored.
+   */
+  private async translatedRow(
+    slug: string,
+    instanceId: string,
+    componentFields: readonly FieldConfig[]
+  ): Promise<
+    | {
+        row: Record<string, unknown> | undefined;
+        localizedFields: LocalizedFieldRef[];
+        locale: string;
+      }
+    | undefined
+  > {
     const scope = writeScope.getStore();
     if (!scope || !this.localization) return undefined;
     if (
@@ -2800,16 +2906,31 @@ export class FieldGroupMutationService extends BaseService {
           })
         : cachedCompanionReadiness(this.adapter, schema.companionTableName);
     if (readiness !== "ready") return undefined;
+    const locale = resolveRequestedLocale(this.localization, scope.locale);
     const rows = await scope.select(schema.companionTableName, {
       where: this.whereAnd({
         [COMPANION_PARENT_COLUMN]: instanceId,
-        [COMPANION_LOCALE_COLUMN]: resolveRequestedLocale(
-          this.localization,
-          scope.locale
-        ),
+        [COMPANION_LOCALE_COLUMN]: locale,
       }),
     });
-    return storedContainers(rows[0], componentFields);
+    return {
+      row: rows[0],
+      // With the shapes of the field groups its containers hold, as a read lays text over them.
+      localizedFields: await withComponentShapes(
+        schema.localizedFields,
+        scope.executor
+      ),
+      locale,
+    };
+  }
+
+  /** Where the fields of a field group placed in an instance are read from. */
+  private nestedFieldsSource(): FieldGroupFieldsSource {
+    return {
+      getComponentFields: async (slug, executor) =>
+        (await this.registryService.getComponentBySlug(slug, executor))
+          ?.fields ?? null,
+    };
   }
 
   /**
@@ -2825,11 +2946,7 @@ export class FieldGroupMutationService extends BaseService {
     await applyInlineFieldGroupWriteAccess({
       data: instance,
       fields: componentFields,
-      source: {
-        getComponentFields: async (nestedSlug, executor) =>
-          (await this.registryService.getComponentBySlug(nestedSlug, executor))
-            ?.fields ?? null,
-      },
+      source: this.nestedFieldsSource(),
       operation: "create",
       access: scope.access,
       executor: scope.executor,
