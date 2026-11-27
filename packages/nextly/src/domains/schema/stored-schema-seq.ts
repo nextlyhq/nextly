@@ -23,7 +23,10 @@
  *   `nextly migrate` has not prepared, a dropped connection, or a database
  *   handle that is not an adapter), the answer is undefined, kept for the
  *   interval like a read, so a failing read is tried again after it rather
- *   than by every caller.
+ *   than by every caller. A failure is logged with its code when it begins,
+ *   or when its code changes, rather than once per interval while it lasts:
+ *   a read that waited out the pool's acquire bound, or a lost connection,
+ *   would otherwise leave every request slow with nothing in the log.
  *
  * - **Followed once read.** A caller may ask only where the count is already
  *   followed (`followedOnly`): one that has never been read for a database is
@@ -40,12 +43,15 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { safeCode } from "../../database/errors";
+import { firstAnswer } from "../../database/missing-column";
 import {
   followedState,
   followValue,
   markFollowedChanged,
   type FollowedState,
 } from "../../shared/lib/followed-value";
+import { consoleLogger } from "../../shared/types";
 
 import type { StoredSchemaVersion } from "./schema-version";
 
@@ -147,9 +153,35 @@ async function readStoredSeq(
       database.getCapabilities().dialect
     );
     lastRead.set(database, { stored, marks });
+    readFailureLogged.delete(database);
     // No stored version: no registry write has recorded one yet.
     return stored.present ? (stored.version?.seq ?? 0) : 0;
-  } catch {
+  } catch (error) {
+    logReadFailure(database, error);
     return undefined;
   }
+}
+
+/**
+ * The code of each database's read failure last logged, until a read of it
+ * succeeds: a failure that lasts is logged when it begins, and again only
+ * when its code changes.
+ */
+const readFailureLogged = new WeakMap<object, string>();
+
+/**
+ * Log a failed read of the stored version: the driver's or the adapter's
+ * code from anywhere in the error's cause chain (`NEXTLY_POOL_WAIT_TIMEOUT`
+ * for a read that waited out the pool's acquire bound), and the message,
+ * which the console logger strips of credentials. The caller still answers
+ * unknown and keeps serving what it has; this only makes the failure visible.
+ */
+function logReadFailure(database: object, error: unknown): void {
+  const code = firstAnswer(error, safeCode) ?? "no code";
+  if (readFailureLogged.get(database) === code) return;
+  readFailureLogged.set(database, code);
+  const message = error instanceof Error ? error.message : String(error);
+  consoleLogger.warn(
+    `[Nextly] Could not read the stored schema version (${code}), so this process serves the schema it has and reads it again after ${SCHEMA_VERSION_READ_INTERVAL_MS} ms: ${message}`
+  );
 }

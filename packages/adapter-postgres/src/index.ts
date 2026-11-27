@@ -573,7 +573,8 @@ export class PostgresAdapter extends DrizzleAdapter {
         // fails as busy, not as an unexplained driver error.
         this.pool = reportPoolWaitTimeout(
           new Pool(poolConfig),
-          poolConfig.connectionTimeoutMillis
+          poolConfig.connectionTimeoutMillis,
+          this.config.logger
         );
 
         // Handle pool errors (background errors on idle clients)

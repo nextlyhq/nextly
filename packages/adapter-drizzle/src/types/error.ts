@@ -4,6 +4,8 @@
  * @packageDocumentation
  */
 
+import type { AdapterLogger } from "./config";
+
 /**
  * Database error classification.
  *
@@ -227,6 +229,41 @@ export function poolWaitTimeoutError(
     message: `Waited ${boundMs} ms for a database connection, and none was free`,
     cause,
   });
+}
+
+/** Where a pool-wait timeout is logged ({@link poolWaitTimedOut}). */
+export interface PoolWaitLog {
+  /** The database, as the log line names it. */
+  dialect: string;
+  /** The adapter's logger; the console when it has none. */
+  logger?: AdapterLogger | undefined;
+}
+
+/**
+ * {@link poolWaitTimeoutError}, logged as a warning first: what every adapter
+ * raises when a request has waited out its bound for a connection.
+ *
+ * Logged where it is raised, rather than left to whoever catches it, because
+ * a caller may answer it without passing it on (a check that fails open, say),
+ * and then a pool whose connections are all held leaves requests slow with
+ * nothing in the log to say why. The line names the bound and the database,
+ * and nothing about the connection itself.
+ *
+ * @param boundMs - The bound it waited, `pool.connectionTimeoutMs`
+ * @param log - The database and the logger to warn on
+ * @param cause - The driver's own error, when the driver raised one
+ *
+ * @public
+ */
+export function poolWaitTimedOut(
+  boundMs: number,
+  log: PoolWaitLog,
+  cause?: Error
+): DatabaseError {
+  const message = `[nextly] A ${log.dialect} request waited ${boundMs} ms for a database connection and none was free, so it fails as database busy. Every connection in the pool was held: raise the pool size, or look for work holding connections while it waits on something else.`;
+  if (log.logger?.warn) log.logger.warn(message);
+  else console.warn(message);
+  return poolWaitTimeoutError(boundMs, cause);
 }
 
 /**

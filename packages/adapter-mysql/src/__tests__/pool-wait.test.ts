@@ -71,14 +71,18 @@ class TracingPool extends FakePool {
   }
 }
 
+/** The warnings the bound logged, on the logger each test's pool is given. */
+const warn = vi.fn();
+
 function bounded(pool: FakePool, boundMs: number): FakePool {
-  boundPoolWait(pool, boundMs);
+  boundPoolWait(pool, boundMs, { warn });
   return pool;
 }
 
 describe("a request waiting in mysql2's queue for a connection", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    warn.mockReset();
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -103,6 +107,11 @@ describe("a request waiting in mysql2's queue for a connection", () => {
     // It left the queue rather than waiting there for a connection it will
     // never use.
     expect(pool._connectionQueue.length).toBe(0);
+    // And said so, once, on the adapter's logger.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain(
+      "A MySQL request waited 1000 ms for a database connection"
+    );
   });
 
   it("hands a released connection to the request still waiting, past one that gave up", () => {

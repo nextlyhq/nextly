@@ -51,13 +51,29 @@ describe("a pg pool's failure to hand out a connection", () => {
     );
   });
 
-  it("leaves a connection that could not be opened as pg-pool reported it", async () => {
+  it("logs the queue wait timeout once on the adapter's logger, naming the bound", async () => {
+    const warn = vi.fn();
+    const pool = reportPoolWaitTimeout(
+      failingPool(new Error(QUEUE_TIMEOUT)),
+      1000,
+      { warn }
+    );
+    await pool.connect().catch(() => undefined);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain(
+      "A PostgreSQL request waited 1000 ms for a database connection"
+    );
+  });
+
+  it("leaves a connection that could not be opened as pg-pool reported it, and logs no wait", async () => {
     // A database that cannot be reached is not busy.
     const handshake = new Error(
       "Connection terminated due to connection timeout"
     );
-    const pool = reportPoolWaitTimeout(failingPool(handshake), 1000);
+    const warn = vi.fn();
+    const pool = reportPoolWaitTimeout(failingPool(handshake), 1000, { warn });
     await expect(pool.connect()).rejects.toBe(handshake);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("passes a connection through when there is one", async () => {

@@ -40,7 +40,7 @@ import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import {
   createDatabaseError,
   isDatabaseError,
-  poolWaitTimeoutError,
+  poolWaitTimedOut,
   type SqliteAdapterConfig,
   type ConnectionInspection,
   type DatabaseCapabilities,
@@ -645,7 +645,11 @@ export class SqliteAdapter extends DrizzleAdapter {
     // The one connection is this queue's to hand out, so its wait is the
     // wait `pool.connectionTimeoutMs` bounds on the other dialects: past it,
     // the turn fails as busy without having begun.
-    const next = waitForTurn(previous, this.transactionWaitMs()).then(run);
+    const next = waitForTurn(
+      previous,
+      this.transactionWaitMs(),
+      this.config.logger
+    ).then(run);
     // The queue moves on once the turn before this one AND this one are
     // done. One that gave up waiting never ran, and the next must still wait
     // for the one it gave up on, or it would begin inside it.
@@ -1234,15 +1238,20 @@ export function isSqliteAdapter(value: unknown): value is SqliteAdapter {
 }
 
 /**
- * Settles once `turn` does, or rejects with the pool-wait timeout error once
- * `boundMs` passes first. A bound of 0 waits without limit, as pg-pool reads a
- * `connectionTimeoutMillis` of 0.
+ * Settles once `turn` does, or rejects with the pool-wait timeout error,
+ * logged as a warning on `logger` (the console when there is none), once
+ * `boundMs` passes first. A bound of 0 waits without limit, as pg-pool reads
+ * a `connectionTimeoutMillis` of 0.
  */
-function waitForTurn(turn: Promise<unknown>, boundMs: number): Promise<void> {
+function waitForTurn(
+  turn: Promise<unknown>,
+  boundMs: number,
+  logger: AdapterLogger | undefined
+): Promise<void> {
   if (boundMs <= 0) return turn.then(() => undefined);
   return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(
-      () => reject(poolWaitTimeoutError(boundMs)),
+      () => reject(poolWaitTimedOut(boundMs, { dialect: "SQLite", logger })),
       boundMs
     );
     // A pending wait never keeps the process alive on its own.

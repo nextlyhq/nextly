@@ -13,7 +13,10 @@
  * connection that cannot be opened is a database that cannot be reached
  * rather than one that is busy.
  */
-import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
+import {
+  type AdapterLogger,
+  poolWaitTimedOut,
+} from "@nextlyhq/adapter-drizzle/types";
 
 /** A connection the pool hands out, as far as the bound needs one. */
 interface QueuedConnection {
@@ -63,7 +66,8 @@ function leaveQueue(pool: QueueingPool, waiting: GetConnectionCallback) {
 
 /**
  * Makes `pool` fail a request that has waited `boundMs` in its queue for a
- * connection, and returns it. A bound of 0 leaves the wait unbounded, as
+ * connection, logged as a warning on `logger` (the console when there is
+ * none), and returns it. A bound of 0 leaves the wait unbounded, as
  * pg-pool reads a `connectionTimeoutMillis` of 0.
  *
  * Replaces the pool's own `getConnection`, which its `query` and `execute`
@@ -77,7 +81,8 @@ function leaveQueue(pool: QueueingPool, waiting: GetConnectionCallback) {
  */
 export function boundPoolWait<P extends QueueingPool>(
   pool: P,
-  boundMs: number
+  boundMs: number,
+  logger?: AdapterLogger
 ): P {
   if (boundMs <= 0) return pool;
   const getConnection = pool.getConnection.bind(pool);
@@ -105,7 +110,7 @@ export function boundPoolWait<P extends QueueingPool>(
     wait.timer = setTimeout(() => {
       answered = true;
       leaveQueue(pool, waiting);
-      callback(poolWaitTimeoutError(boundMs));
+      callback(poolWaitTimedOut(boundMs, { dialect: "MySQL", logger }));
     }, boundMs);
   };
   pool.getConnection = bounded;
