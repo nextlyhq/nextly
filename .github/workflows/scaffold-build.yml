@@ -1242,6 +1242,11 @@ jobs:
     if: ${{ !inputs.versions }}
     runs-on: windows-latest
     timeout-minutes: 45
+    # The registry action lists each tarball by the path node prints, which on Windows starts
+    # with a drive letter. Git Bash's GNU tar reads `C:` as a remote host unless told the file
+    # is local; GNU tar reads this variable, and Windows' own tar ignores it.
+    env:
+      TAR_OPTIONS: --force-local
     strategy:
       fail-fast: false
       matrix:

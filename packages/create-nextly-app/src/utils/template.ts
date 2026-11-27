@@ -1452,8 +1452,8 @@ export async function generatePackageJson(
       // with NODE_ENV unset, and without a mode the CLI picks its environment
       // files from NODE_ENV, so it would read `.env.development` and migrate
       // the development database while the `next build` after it reads
-      // `.env.production`. The flag goes last on each step, where
-      // `nextly plugins add` looks for it when it adds an install step.
+      // `.env.production`. `nextly plugins add` copies the migrate step's
+      // mode onto each install step it adds.
       build: [
         ...["nextly migrate", ...pluginInstalls].map(
           step => `${step} --mode production`

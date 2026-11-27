@@ -461,7 +461,8 @@ The default scaffold ships this `build` script in `package.json`:
 
 Every `nextly` step in the script carries `--mode production`, so it reads the same environment
 files as the `next build` after it. A project whose config registers plugins also has a
-`nextly plugins install <package> --mode production` step before `next build`.
+`nextly plugins install <package> --mode production` step for each before `next build`, or one
+`nextly plugins install --all --mode production` where the config lists a plugin the site wrote itself.
 
 **Upgrading a project made before the flag:** its script reads `nextly migrate && next build`. Where
 the build takes `DATABASE_URL` from a file and runs with `NODE_ENV` unset, that `nextly migrate`
@@ -1906,7 +1907,7 @@ script installs each plugin its config registers. Adding a plugin to an
 existing app? Add its install to your build, after `nextly migrate`:
 
 ```bash
-nextly migrate && nextly plugins install <name> && next build
+nextly migrate --mode production && nextly plugins install <name> --mode production && next build
 ```
 
 A first install, and one after an uninstall, records one row in
