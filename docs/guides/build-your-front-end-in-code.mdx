@@ -72,7 +72,7 @@ export default async function PostsPage() {
       const nextly = await getNextly({ config });
       const { items } = await nextly.find({
         collection: "posts",
-        where: { status: { equals: "published" } },
+        status: "published",
         sort: "-createdAt",
         limit: 20,
       });
@@ -98,8 +98,14 @@ export default async function PostsPage() {
 }
 ```
 
-`where: { status: { equals: "published" } }` is what keeps drafts off the page.
-Leave it out and the list shows every post.
+`status: "published"` is what keeps drafts off the page, a translation still in
+draft included. Leave it out and the list shows every post.
+
+These reads are trusted, as Direct API reads are unless told otherwise. That is
+right for a collection anyone may read, which is what a public page shows. If
+`posts` has read rules, members-only posts for example, don't read it this way:
+read it with `resolveContent` and the visitor's `user`, uncached (see
+[Routing and SEO](/docs/guides/routing-and-seo#resolvecontent--slug-to-a-published-entry)).
 
 ## A detail page
 
@@ -122,7 +128,8 @@ async function getPost(slug: string) {
       const nextly = await getNextly({ config });
       const { items } = await nextly.find({
         collection: "posts",
-        where: { slug: { equals: slug }, status: { equals: "published" } },
+        where: { slug: { equals: slug } },
+        status: "published",
         // Fills in the image's record, and returns rich text as HTML.
         depth: 1,
         richTextFormat: "html",
@@ -130,7 +137,11 @@ async function getPost(slug: string) {
       });
       return items[0] ?? null;
     },
-    { tags: nextlyTags("posts"), keyParts: ["posts", "detail", slug] }
+    {
+      // The image is read with the post, so an edit to it refreshes the page.
+      tags: [...nextlyTags("posts"), ...nextlyTags("media")],
+      keyParts: ["posts", "detail", slug],
+    }
   );
 }
 
@@ -140,8 +151,11 @@ export async function generateStaticParams() {
       const nextly = await getNextly({ config });
       const { items } = await nextly.find({
         collection: "posts",
-        where: { status: { equals: "published" } },
-        limit: 1000,
+        status: "published",
+        select: { slug: true },
+        // A page holds at most 500 entries. A post not listed here is
+        // rendered on its first visit instead.
+        limit: 500,
       });
       return items.map(post => String(post.slug));
     },
@@ -221,14 +235,22 @@ export default nextlySitemap({
   tags: nextlyTags("posts"),
   entries: async () => {
     const nextly = await getNextly({ config });
-    const { items } = await nextly.find({
-      collection: "posts",
-      where: { status: { equals: "published" } },
-      limit: 1000,
-    });
+    const posts = [];
+    // A page holds at most 500 entries, so read every page.
+    for (let page = 1; ; page++) {
+      const { items, meta } = await nextly.find({
+        collection: "posts",
+        status: "published",
+        select: { slug: true, updatedAt: true },
+        limit: 500,
+        page,
+      });
+      posts.push(...items);
+      if (!meta.hasNext) break;
+    }
     return [
       { url: absoluteUrl("/posts") },
-      ...items.map(post => ({
+      ...posts.map(post => ({
         url: absoluteUrl(`/posts/${String(post.slug)}`),
         // A Date, which Next.js writes as an ISO 8601 date.
         lastModified: post.updatedAt instanceof Date ? post.updatedAt : undefined,
@@ -371,7 +393,7 @@ export async function GET() {
       const nextly = await getNextly({ config });
       const { items } = await nextly.find({
         collection: "posts",
-        where: { status: { equals: "published" } },
+        status: "published",
         sort: "-firstPublishedAt",
         limit: 20,
       });
