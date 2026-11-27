@@ -106,8 +106,8 @@ async function forYouOf(owner: LimitedUser): Promise<{
   const page = await owner.context.newPage();
   await page.setViewportSize({ width: 1440, height: 900 });
   await gotoAdmin(page, "");
-  await page.getByTestId("notification-bell").click();
-  const forYou = page.getByRole("region", { name: "For you" });
+  await page.getByTestId("inbox-button").click();
+  const forYou = page.getByRole("tabpanel", { name: /For you/ });
   await expect(forYou).toBeVisible();
   return { page, forYou };
 }

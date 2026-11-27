@@ -1,6 +1,6 @@
 ---
 title: Notices
-description: Each admin user's own list of notices — what happened to their work that they should know about.
+description: Each admin user's own Inbox of notices — what happened to their work that they should know about.
 ---
 
 A notice tells one person something about their work: for example, that a release they own
@@ -16,6 +16,30 @@ sees anyone else's.
 | Once  | A notice is stored once per occurrence: a release that stops twice gives two notices, and the same stop seen twice gives one |
 | Read  | Each notice records when its person first read it                                                                            |
 
+## The Inbox
+
+Every admin user has an **Inbox** button, a tray icon at the foot of the left rail, showing how many
+of their notices are unread ("Inbox, 3 unread" to a screen reader). It opens a list with two tabs:
+
+- **For you**: what people did that involves you, such as a review assigned to you, or a release of
+  yours that stopped or is late.
+- **Alerts**: what on the site needs fixing. It is empty for now; each notice so far is in For you.
+
+The Inbox opens on Alerts while Alerts has unread notices, and on For you otherwise. Each tab shows
+its own unread count.
+
+A notice is read when you open it, by clicking it or pressing Enter on it, which also takes you to
+what it is about. Showing a notice in the Inbox never marks it read. **Mark all read** marks every
+unread notice in the tab shown, including those further down than the Inbox shows, and none in the
+other tab. A read notice's menu has **Mark as unread**.
+
+Whether a notice is read is kept on the server, not in the browser, so the count is the same in every
+browser and on every device you sign in on. The count is asked for again when you come back to the
+admin's browser tab, and every minute while it is open.
+
+A plugin that hides the admin's `notifications` control, through `hide` or `hideDefaults` in its
+`contributes.admin.header`, hides the Inbox button.
+
 Notices are kept for as long as the [activity log](/docs/audit-log) keeps its records (90 days by
 default, set by `audit.retention`), and a person's notices are deleted with their account.
 
@@ -24,11 +48,15 @@ default, set by `audit.retention`), and a person's notices are deleted with thei
 Over REST, for the signed-in person. The person is always the one signed in: no request can name
 someone else. API keys are refused, since a notice belongs to a person's own inbox.
 
-| Request                                                               | Answer                                                           |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `GET /api/notices?unread=true&page=1&limit=20`                        | The standard list envelope, newest first. `limit` is at most 100 |
-| `GET /api/notices/count?unread=true`                                  | `{ "total": 3 }`                                                 |
-| `POST /api/notices/read` with `{ "ids": ["…"] }` or `{ "all": true }` | How many were marked. Ids that are not yours are ignored         |
+| Request                                                                                                   | Answer                                                              |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `GET /api/notices?tab=for-you&unread=true&page=1&limit=20`                                                | The standard list envelope, newest first. `limit` is at most 100    |
+| `GET /api/notices/count?tab=for-you&unread=true`                                                          | `{ "total": 3 }`                                                    |
+| `POST /api/notices/read` with `{ "ids": ["…"] }`, `{ "all": true }` or `{ "all": true, "tab": "alerts" }` | How many were marked. Ids that are not yours are ignored            |
+| `POST /api/notices/unread` with `{ "ids": ["…"] }`                                                        | How many were made unread again. Ids that are not yours are ignored |
+
+`tab` is `for-you` or `alerts`; leave it out for both. `tab` and `/api/notices/unread` are
+experimental: they may change until the Inbox is complete.
 
 Each notice has its `title` and optional `body`, its `kind`, and its `subject`: its `type`, `id`,
 a `link` into the admin, and `gone: true` once the subject no longer exists.
@@ -46,6 +74,15 @@ const userId = "the person's user id";
 const { items, meta } = await nextly.notices.find({ userId, unread: true });
 const unread = await nextly.notices.count({ userId, unread: true });
 await nextly.notices.markRead({ userId, all: true });
+
+// Experimental: one tab at a time, and making a notice unread again.
+const forYou = await nextly.notices.count({
+  userId,
+  tab: "for-you",
+  unread: true,
+});
+await nextly.notices.markRead({ userId, all: true, tab: "for-you" });
+await nextly.notices.markUnread({ userId, ids: [items[0].id] });
 ```
 
 ## Before `nextly migrate`
