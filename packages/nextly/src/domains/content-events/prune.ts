@@ -6,6 +6,9 @@
  * stored as one that ends its subject, and stamps every event of the life it
  * ends; once that event is older than the activity log's window, the stamped
  * events are removed with their parts in bounded batches, the deletion last.
+ * A deletion whose entry is in the trash is kept, whatever the window: a
+ * restore re-opens its life (`reopen-life`); once the entry leaves the trash,
+ * restored or removed for good, the window applies to it again.
  * A subject recreated under the same id keeps the events of its new life,
  * which its earlier deletion never stamped.
  *
@@ -18,6 +21,7 @@ import {
   CONTENT_EVENTS_TABLE,
   CONTENT_EVENT_PARTS_TABLE,
 } from "../../schemas/content-events";
+import { TRASH_TABLE } from "../../schemas/trash/table-name";
 import type { Logger } from "../../shared/types";
 import type { NoticesPruneDb } from "../notices/notices-service";
 import { warnQuietly } from "../retention/safe-log";
@@ -40,23 +44,67 @@ interface EndedSubject {
   id: string;
 }
 
-/** The oldest deletion event past `before`, if any. */
+/** Deletion events looked at per read while finding one not in the trash. */
+const ENDED_SCAN_BATCH = 100;
+
+/**
+ * Of `ids`, the deletions whose entry is in the trash now: its record names
+ * the deletion, and a restore re-opens that life, so it is kept whatever the
+ * activity log's window. Once the entry is restored, emptied or purged, no
+ * record names it and the window applies again. None on a database the trash
+ * has not reached yet.
+ */
+async function heldByTrash(
+  db: ContentEventsPruneDb,
+  ids: string[]
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  if (db.tableExists && !(await db.tableExists(TRASH_TABLE))) return new Set();
+  const rows = await db.select<{ deletedEventId: string | null }>(
+    TRASH_TABLE,
+    {
+      columns: ["deletedEventId"],
+      where: { and: [{ column: "deletedEventId", op: "IN", value: ids }] },
+    }
+  );
+  return new Set(rows.map(row => String(row.deletedEventId)));
+}
+
+/**
+ * The oldest deletion event past `before` whose entry is not in the trash, if
+ * any. Event ids are time-ordered, so the scan walks them in order, a batch
+ * at a time, past those the trash holds.
+ */
 async function oldestEndedSubject(
   db: ContentEventsPruneDb,
   before: Date
 ): Promise<EndedSubject | undefined> {
-  const [ended] = await db.select<EndedSubject>(CONTENT_EVENTS_TABLE, {
-    columns: ["id"],
-    where: {
-      and: [
-        { column: "endsSubject", op: "=", value: true },
-        { column: "occurredAt", op: "<", value: before },
-      ],
-    },
-    orderBy: [{ column: "occurredAt", direction: "asc" }],
-    limit: 1,
-  });
-  return ended;
+  let after: string | undefined;
+  for (;;) {
+    const batch = await db.select<EndedSubject>(CONTENT_EVENTS_TABLE, {
+      columns: ["id"],
+      where: {
+        and: [
+          { column: "endsSubject", op: "=", value: true },
+          { column: "occurredAt", op: "<", value: before },
+          ...(after === undefined
+            ? []
+            : [{ column: "id", op: ">" as const, value: after }]),
+        ],
+      },
+      orderBy: [{ column: "id", direction: "asc" }],
+      limit: ENDED_SCAN_BATCH,
+    });
+    if (batch.length === 0) return undefined;
+    const held = await heldByTrash(
+      db,
+      batch.map(ended => ended.id)
+    );
+    const free = batch.find(ended => !held.has(ended.id));
+    if (free !== undefined) return free;
+    if (batch.length < ENDED_SCAN_BATCH) return undefined;
+    after = batch[batch.length - 1].id;
+  }
 }
 
 /**

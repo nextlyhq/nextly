@@ -236,4 +236,7 @@ export const TRASH_INDEXES = [
   { name: "nextly_trash_purge_idx", columns: ["purgeAt"] },
   // The list, newest first.
   { name: "nextly_trash_trashed_at_idx", columns: ["trashedAt"] },
+  // Whether a deletion's history is still held by an entry in the trash,
+  // which the history's retention asks before removing it.
+  { name: "nextly_trash_deleted_event_idx", columns: ["deletedEventId"] },
 ] as const satisfies readonly CoreIndex<string>[];

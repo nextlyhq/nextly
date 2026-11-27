@@ -539,7 +539,10 @@ import {
   closeReviewOnDiscard,
   removeDeletedDocumentReviewStates,
 } from "../../workflows/review-state-cleanup";
-import { moveEntryToTrash } from "../../trash/move-to-trash";
+import {
+  moveEntryToTrash,
+  noteTrashedEntryDeletion,
+} from "../../trash/move-to-trash";
 import {
   localizedFilterContext,
   type FilterConditionSources,
@@ -2621,7 +2624,7 @@ export class CollectionMutationService extends BaseService {
    * Move an entry being deleted to the trash, on the delete's transaction and
    * before anything of it is removed: every row it stores is copied into one
    * trash record (`moveEntryToTrash`), and the delete then removes them as it
-   * always has. Answers whether it went to the trash: false on a database the
+   * always has. Answers the trash record's id; undefined on a database the
    * trash table has not reached yet, where the delete stays permanent.
    */
   private async moveDeletedEntryToTrash(
@@ -2635,7 +2638,7 @@ export class CollectionMutationService extends BaseService {
       actor: RequestActor;
       actorName: string | null;
     }
-  ): Promise<boolean> {
+  ): Promise<string | undefined> {
     const moved = await moveEntryToTrash(
       tx,
       this.adapter,
@@ -2650,7 +2653,7 @@ export class CollectionMutationService extends BaseService {
       },
       this.logger
     );
-    return moved.trashed;
+    return moved.trashed ? moved.trashId : undefined;
   }
 
   /**
@@ -22909,20 +22912,23 @@ export class CollectionMutationService extends BaseService {
             params.entryId
           );
 
-          // The document's history event: moved to the trash, its history
-          // kept whole until it leaves the trash for good; or, on a database
-          // without the trash, deleted, its history kept for the activity log's
-          // window from here.
-          await this.recordHistoryEvent(
+          // The document's last history event: the whole document, every
+          // language, is gone. Its history is kept for the activity log's window
+          // from here, and at least as long as the trash keeps the document; a
+          // restore goes on from this event.
+          const deletedEvent = await this.recordHistoryEvent(
             tx,
             params.collectionName,
             params.entryId,
             {
-              kind: trashed ? "trashed" : "deleted",
+              kind: "deleted",
               actor: actorForWrite(params.actor, params.user),
               personName: params.user?.name ?? null,
             }
           );
+          if (trashed !== undefined) {
+            await noteTrashedEntryDeletion(tx, trashed, deletedEvent.id);
+          }
 
           // The removed document's final state ships as `data`; there is no
           // post-delete state, so `previous` is null (mirroring create, which
@@ -26331,12 +26337,20 @@ export class CollectionMutationService extends BaseService {
       // Where its translated values came from; see the single-delete path.
       await this.forgetTranslationRecords(tx, params.collectionName, entryId);
 
-      // The document's history event; see the single-delete path.
-      await this.recordHistoryEvent(tx, params.collectionName, entryId, {
-        kind: trashed ? "trashed" : "deleted",
-        actor: actorForWrite(params.actor, params.user),
-        personName: params.user?.name ?? null,
-      });
+      // The document's last history event; see the single-delete path.
+      const deletedEvent = await this.recordHistoryEvent(
+        tx,
+        params.collectionName,
+        entryId,
+        {
+          kind: "deleted",
+          actor: actorForWrite(params.actor, params.user),
+          personName: params.user?.name ?? null,
+        }
+      );
+      if (trashed !== undefined) {
+        await noteTrashedEntryDeletion(tx, trashed, deletedEvent.id);
+      }
 
       // Append the outbox event in the same transaction so a batch delete
       // through this helper is observable too, in the same shape as the

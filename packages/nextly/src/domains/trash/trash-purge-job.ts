@@ -19,10 +19,7 @@ import { purgeExpiredTrash } from "./trash-records";
 export const TRASH_PURGE_JOB = "trash:purge";
 
 export function createTrashPurgeJob(deps: {
-  adapter: () => Pick<
-    DrizzleAdapter,
-    "select" | "transaction" | "getCapabilities" | "tableExists"
-  >;
+  adapter: () => Pick<DrizzleAdapter, "select" | "transaction" | "tableExists">;
   now?: () => Date;
 }): JobDefinition {
   return defineJob({

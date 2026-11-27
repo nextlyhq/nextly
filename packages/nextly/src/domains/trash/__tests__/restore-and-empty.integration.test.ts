@@ -33,7 +33,9 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { CONTENT_EVENTS_TABLE } from "../../../schemas/content-events";
 import { TRASH_TABLE } from "../../../schemas/trash";
+import { pruneContentEventsSafely } from "../../content-events/prune";
 import type { WebhookEvent } from "../../webhooks/types";
 import { purgeExpiredTrash } from "../trash-records";
 
@@ -134,6 +136,20 @@ async function createdEvents(
     .filter(event => event.type === "entry.created" && event.resource.id === id);
 }
 
+interface StoredEvent {
+  endedBy: string | null;
+  endsSubject: boolean | number;
+}
+
+/** The entry's history events that a deletion's stamp ends. */
+async function endedEvents(t: TestNextly, id: string): Promise<StoredEvent[]> {
+  const rows = await t.adapter.select<StoredEvent>(CONTENT_EVENTS_TABLE, {
+    columns: ["endedBy", "endsSubject"],
+    where: { and: [{ column: "subjectId", op: "=", value: id }] },
+  });
+  return rows.filter(row => row.endedBy !== null);
+}
+
 /** A user holding the preset role `slug`; their id. */
 async function withPreset(t: TestNextly, slug: string): Promise<string> {
   const tables = getDialectTables(t.adapter.dialect);
@@ -190,10 +206,28 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     });
     expect(await stored(t, id, "de")).toMatchObject({ title: "Hallo" });
     expect(await trashed(t, id)).toBe(0);
-    // One life: the events before the trash, the trash, and the restore.
+    // One life: the events before the delete, the delete, and the restore.
     const kinds = await historyKinds(t, id);
     expect(kinds[0]).toBe("created");
-    expect(kinds.slice(-2)).toEqual(["trashed", "restored-from-trash"]);
+    expect(kinds.slice(-2)).toEqual(["deleted", "restored-from-trash"]);
+  });
+
+  it("a restore re-opens only its own entry's life; another deleted entry's stays ended", async () => {
+    const t = await boot(dialect);
+    const restored = await post(t, "one-life");
+    const other = await post(t, "stays-gone");
+    await t.nextly.delete({ collection: POSTS, id: restored });
+    await t.nextly.delete({ collection: POSTS, id: other });
+
+    await t.nextly.trash.restore({ id: restored });
+
+    // Every event of the restored entry is in its current life again.
+    expect(await endedEvents(t, restored)).toEqual([]);
+    // The other's events are all still stamped by its deletion.
+    const stillEnded = await endedEvents(t, other);
+    expect(stillEnded.length).toBeGreaterThan(1);
+    expect(new Set(stillEnded.map(e => e.endedBy)).size).toBe(1);
+    expect(stillEnded.some(e => e.endsSubject)).toBe(true);
   });
 
   it("a published entry comes back as a draft", async () => {
@@ -260,11 +294,8 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     expect(removed.map(item => item.itemId)).toEqual([id]);
     expect(await trashed(t, id)).toBe(0);
     expect(await outcome(() => t.nextly.trash.restore({ id }))).toBe(404);
-    // Its history ends with its deletion, after the trash.
-    expect((await historyKinds(t, id)).slice(-2)).toEqual([
-      "trashed",
-      "deleted",
-    ]);
+    // Its history ended with its deletion, and nothing re-opened it.
+    expect((await historyKinds(t, id)).slice(-1)).toEqual(["deleted"]);
   });
 
   it("the daily clean-up removes what is past its thirty days, and nothing younger", async () => {
@@ -285,6 +316,28 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
 
     expect(purged.map(item => item.itemId)).toEqual([id]);
     expect(await trashed(t, id)).toBe(0);
+  });
+
+  it("a trashed entry's history outlives a shorter activity window while it is in the trash, and not after", async () => {
+    const t = await boot(dialect);
+    const id = await post(t, "window");
+    await t.nextly.delete({ collection: POSTS, id });
+    const now = Date.now();
+    const prune = (at: number) =>
+      pruneContentEventsSafely(
+        { db: t.adapter, now: () => new Date(at) },
+        7 * DAY_MS,
+        10
+      );
+
+    // Day 8 on a 7-day window: in the trash, so kept.
+    await prune(now + 8 * DAY_MS);
+    expect((await endedEvents(t, id)).length).toBeGreaterThan(0);
+
+    // Purged at day 31; the next run removes its history.
+    await purgeExpiredTrash(t.adapter, new Date(now + 31 * DAY_MS));
+    await prune(now + 31 * DAY_MS);
+    expect(await endedEvents(t, id)).toEqual([]);
   });
 
   it("the preset Editor restores and empties; the preset Author is refused both", async () => {

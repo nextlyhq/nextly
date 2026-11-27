@@ -48,6 +48,9 @@ export const nextlyTrashMysql = mysqlTable(
     trashedByKind: varchar("trashed_by_kind", { length: 32 }),
     trashedById: varchar("trashed_by_id", { length: 255 }),
     trashedByName: varchar("trashed_by_name", { length: 255 }),
+    // The history event that recorded the entry's deletion, whose life a
+    // restore goes on with.
+    deletedEventId: varchar("deleted_event_id", { length: 36 }),
     trashedAt: datetime("trashed_at", { fsp: 3 }).notNull(),
     // When it leaves the trash for good, unless restored first.
     purgeAt: datetime("purge_at", { fsp: 3 }).notNull(),

@@ -30,6 +30,7 @@ import {
   type TrashedEntry,
 } from "../../schemas/trash";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { reopenEndedLife } from "../content-events/reopen-life";
 import { recordWriteEvent } from "../content-events/write-event";
 import { COMPANION_PARENT_COLUMN } from "../i18n/companion-columns";
 import { fieldProducesColumn } from "../schema/field-rules";
@@ -431,7 +432,11 @@ export async function restoreTrashedEntry(
       and: [{ column: "id", op: "=", value: record.id }],
     });
 
-    // Its history goes on from where it was: the restore is its next event.
+    // Its history goes on from where it was: the life its deletion ended is
+    // its current one again, and the restore is its next event.
+    if (record.deletedEventId !== null) {
+      await reopenEndedLife(tx, record.deletedEventId);
+    }
     await recordWriteEvent(
       tx,
       { adapter: deps.adapter },

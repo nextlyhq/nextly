@@ -127,6 +127,9 @@ export function createMockAdapter(db: MockRecord): MockRecord {
     dialect: "postgresql",
     // No transaction is open around a call these tests make.
     transactionOpenInFlow: vi.fn().mockReturnValue(false),
+    // No optional core table is there, the trash included: a delete here is
+    // permanent, as on a database `nextly migrate` has not reached.
+    tableExistsThrough: vi.fn().mockResolvedValue(false),
     insert: vi.fn().mockResolvedValue({
       id: "new-entry-id",
       title: "Test",

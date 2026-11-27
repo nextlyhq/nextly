@@ -131,8 +131,27 @@ export async function moveEntryToTrash(
     storageKey: null,
     madePrivate: false,
     ...trashActorColumns(input.actor, input.actorName ?? null),
+    // Set once the delete records its history event, below the copy.
+    deletedEventId: null,
     trashedAt,
     purgeAt: new Date(trashedAt.getTime() + TRASH_KEEP_DAYS * DAY_MS),
   });
   return { trashed: true, trashId };
+}
+
+/**
+ * Record on the trash record `trashId` the history event that recorded its
+ * entry's deletion, on the delete's own transaction: the life a restore goes
+ * on with, and whose history retention keeps while the entry is in the trash.
+ */
+export async function noteTrashedEntryDeletion(
+  tx: TransactionContext,
+  trashId: string,
+  deletedEventId: string
+): Promise<void> {
+  await tx.update(
+    TRASH_TABLE,
+    { deletedEventId },
+    { and: [{ column: "id", op: "=", value: trashId }] }
+  );
 }

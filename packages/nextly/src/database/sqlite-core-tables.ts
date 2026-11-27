@@ -544,6 +544,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "trashed_by_kind" TEXT,
       "trashed_by_id" TEXT,
       "trashed_by_name" TEXT,
+      "deleted_event_id" TEXT,
       "trashed_at" INTEGER NOT NULL,
       "purge_at" INTEGER NOT NULL
     )`,
@@ -553,6 +554,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_trash" ("purge_at")`,
     `CREATE INDEX IF NOT EXISTS "nextly_trash_trashed_at_idx"
       ON "nextly_trash" ("trashed_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_trash_deleted_event_idx"
+      ON "nextly_trash" ("deleted_event_id")`,
     // What admins change for each workflow. Columns match schemas/workflow-settings/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_workflow_settings" (
       "id" TEXT PRIMARY KEY NOT NULL,

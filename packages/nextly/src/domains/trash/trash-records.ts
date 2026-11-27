@@ -2,9 +2,9 @@
  * Reading and removing the trash's records.
  *
  * A record leaves the trash for good when it is emptied or when its purge
- * date passes. The item's history, kept whole while it was in the trash,
- * ends then: its `deleted` event is recorded, and the history is kept for
- * the activity log's window from it, as a delete's always was.
+ * date passes. The item's history ended at its delete, as a delete's always
+ * did; while the item is in the trash, retention keeps that history whatever
+ * the activity log's window, and once it leaves, the window applies again.
  *
  * @module domains/trash/trash-records
  */
@@ -14,13 +14,11 @@ import type {
   WhereClause,
 } from "@nextlyhq/adapter-drizzle/types";
 
-import { SYSTEM_ACTOR, type RequestActor } from "../../auth/request-actor";
 import {
   TRASH_TABLE,
   type TrashedEntry,
   type TrashKind,
 } from "../../schemas/trash";
-import { recordWriteEvent } from "../content-events/write-event";
 
 /** One trash record, its stored rows parsed. */
 export interface TrashRecord {
@@ -33,6 +31,8 @@ export interface TrashRecord {
   trashedByKind: string | null;
   trashedById: string | null;
   trashedByName: string | null;
+  /** The history event that recorded the entry's deletion, where recorded. */
+  deletedEventId: string | null;
   trashedAt: Date;
   purgeAt: Date;
 }
@@ -50,6 +50,7 @@ const LIST_COLUMNS = [
   "trashedByKind",
   "trashedById",
   "trashedByName",
+  "deletedEventId",
   "trashedAt",
   "purgeAt",
 ] as const;
@@ -73,6 +74,7 @@ function listItemOf(row: Record<string, unknown>): TrashListItem {
     trashedByKind: (row.trashedByKind as string | null) ?? null,
     trashedById: (row.trashedById as string | null) ?? null,
     trashedByName: (row.trashedByName as string | null) ?? null,
+    deletedEventId: (row.deletedEventId as string | null) ?? null,
     trashedAt: asDate(row.trashedAt),
     purgeAt: asDate(row.purgeAt),
   };
@@ -162,22 +164,13 @@ export async function listTrash(
 /** Records removed per transaction, so one emptying never holds a long lock. */
 const REMOVE_BATCH = 100;
 
-/** What removing records for good records, and by whom. */
-export interface RemoveFromTrashOptions {
-  /** Who emptied the trash; the system for the daily clean-up. */
-  actor?: RequestActor;
-  actorName?: string | null;
-}
-
 /**
- * Remove the records `selection` takes for good, in batches, recording each
- * entry's `deleted` event in the same transaction as its record's removal.
- * Returns the records removed.
+ * Remove the records `selection` takes for good, in batches. Returns the
+ * records removed.
  */
 export async function removeFromTrash(
-  db: Pick<DrizzleAdapter, "select" | "transaction" | "getCapabilities">,
-  selection: TrashSelection,
-  options: RemoveFromTrashOptions = {}
+  db: Pick<DrizzleAdapter, "select" | "transaction">,
+  selection: TrashSelection
 ): Promise<TrashListItem[]> {
   if (selectsNothing(selection)) return [];
   const removed: TrashListItem[] = [];
@@ -196,25 +189,8 @@ export async function removeFromTrash(
         const gone = await tx.delete(TRASH_TABLE, {
           and: [{ column: "id", op: "=", value: item.id }],
         });
-        // Restored or removed by another caller since the read: nothing of
-        // its history ends here.
+        // Restored or removed by another caller since the read.
         if (gone === 0) continue;
-        if (item.kind === "entry") {
-          await recordWriteEvent(
-            tx,
-            { adapter: db },
-            {
-              subject: {
-                kind: "collection",
-                slug: item.scopeSlug,
-                id: item.itemId,
-              },
-              kind: "deleted",
-              actor: options.actor ?? SYSTEM_ACTOR,
-              personName: options.actorName ?? null,
-            }
-          );
-        }
         removed.push(item);
       }
     });
@@ -228,10 +204,7 @@ export async function removeFromTrash(
  * Safe to run again: a record already removed is not there to remove twice.
  */
 export async function purgeExpiredTrash(
-  db: Pick<
-    DrizzleAdapter,
-    "select" | "transaction" | "getCapabilities" | "tableExists"
-  >,
+  db: Pick<DrizzleAdapter, "select" | "transaction" | "tableExists">,
   now: Date = new Date()
 ): Promise<TrashListItem[]> {
   // A database the trash has not reached yet has nothing to clean up.

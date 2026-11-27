@@ -306,12 +306,8 @@ export async function emptyTrashFor(
     }
     collections = allowed;
   }
-  return removeFromTrash(
-    adapter(),
-    {
-      ...(collections === undefined ? {} : { collections }),
-      ...(query.ids === undefined ? {} : { ids: query.ids }),
-    },
-    { actor: actorOf(caller), actorName: caller.user?.name ?? null }
-  );
+  return removeFromTrash(adapter(), {
+    ...(collections === undefined ? {} : { collections }),
+    ...(query.ids === undefined ? {} : { ids: query.ids }),
+  });
 }

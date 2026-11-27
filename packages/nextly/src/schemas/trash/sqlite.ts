@@ -42,6 +42,9 @@ export const nextlyTrashSqlite = sqliteTable(
     trashedByKind: text("trashed_by_kind"),
     trashedById: text("trashed_by_id"),
     trashedByName: text("trashed_by_name"),
+    // The history event that recorded the entry's deletion, whose life a
+    // restore goes on with.
+    deletedEventId: text("deleted_event_id"),
     trashedAt: integer("trashed_at", { mode: "timestamp" }).notNull(),
     // When it leaves the trash for good, unless restored first.
     purgeAt: integer("purge_at", { mode: "timestamp" }).notNull(),

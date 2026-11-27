@@ -40,6 +40,9 @@ export const nextlyTrashPg = pgTable(
     trashedByKind: text("trashed_by_kind"),
     trashedById: text("trashed_by_id"),
     trashedByName: text("trashed_by_name"),
+    // The history event that recorded the entry's deletion, whose life a
+    // restore goes on with.
+    deletedEventId: text("deleted_event_id"),
     trashedAt: timestamp("trashed_at", { withTimezone: true }).notNull(),
     // When it leaves the trash for good, unless restored first.
     purgeAt: timestamp("purge_at", { withTimezone: true }).notNull(),
