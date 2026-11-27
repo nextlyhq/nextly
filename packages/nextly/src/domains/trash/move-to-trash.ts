@@ -21,7 +21,7 @@ import { captureEntry, type CapturedField } from "./capture-entry";
 import { trashActorColumns } from "./trash-actor";
 
 /** How long an item stays in the trash before it leaves for good. */
-export const TRASH_KEEP_DAYS = 30;
+const TRASH_KEEP_DAYS = 30;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -61,16 +61,11 @@ export type MoveEntryToTrashResult =
 
 let warnedNoTrash = false;
 
-/** Forget that the missing table was reported. Test seam. */
-export function resetTrashNoticeForTests(): void {
-  warnedNoTrash = false;
-}
-
 /**
  * What a list names the item by: its title, else its slug, as text, cut to
  * the column's length.
  */
-export function trashLabelOf(document: Record<string, unknown>): string | null {
+function trashLabelOf(document: Record<string, unknown>): string | null {
   for (const key of ["title", "name", "slug"]) {
     const value = document[key];
     if (typeof value === "string" && value.trim() !== "") {

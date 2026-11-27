@@ -16,7 +16,7 @@ import { defineJob, type JobDefinition } from "../jobs/job-registry";
 
 import { purgeExpiredTrash } from "./trash-records";
 
-export const TRASH_PURGE_JOB = "trash:purge";
+const TRASH_PURGE_JOB = "trash:purge";
 
 export function createTrashPurgeJob(deps: {
   adapter: () => Pick<DrizzleAdapter, "select" | "transaction" | "tableExists">;

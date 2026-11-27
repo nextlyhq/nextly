@@ -63,6 +63,8 @@ async function heldByTrash(
   const rows = await db.select<{ deletedEventId: string | null }>(TRASH_TABLE, {
     columns: ["deletedEventId"],
     where: { and: [{ column: "deletedEventId", op: "IN", value: ids }] },
+    orderBy: [{ column: "deletedEventId", direction: "asc" }],
+    limit: ids.length,
   });
   return new Set(rows.map(row => String(row.deletedEventId)));
 }
@@ -84,23 +86,27 @@ async function oldestEndedSubject(
         and: [
           { column: "endsSubject", op: "=", value: true },
           { column: "occurredAt", op: "<", value: before },
+          // From the last id looked at, which comes back first and is
+          // dropped below: the read's operators stop at `>=`.
           ...(after === undefined
             ? []
-            : [{ column: "id", op: ">" as const, value: after }]),
+            : [{ column: "id", op: ">=" as const, value: after }]),
         ],
       },
       orderBy: [{ column: "id", direction: "asc" }],
       limit: ENDED_SCAN_BATCH,
     });
-    if (batch.length === 0) return undefined;
+    const fresh =
+      after === undefined ? batch : batch.filter(ended => ended.id !== after);
+    if (fresh.length === 0) return undefined;
     const held = await heldByTrash(
       db,
-      batch.map(ended => ended.id)
+      fresh.map(ended => ended.id)
     );
-    const free = batch.find(ended => !held.has(ended.id));
+    const free = fresh.find(ended => !held.has(ended.id));
     if (free !== undefined) return free;
     if (batch.length < ENDED_SCAN_BATCH) return undefined;
-    after = batch[batch.length - 1].id;
+    after = fresh[fresh.length - 1].id;
   }
 }
 

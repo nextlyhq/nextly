@@ -168,6 +168,62 @@ async function valueTaken(
   return rows.length > 0;
 }
 
+/** One kept row that may hold a unique value, and the language it is in. */
+interface UniquePlace {
+  table: string;
+  row: KeptRow;
+  /** Set for a row of the language table. */
+  locale?: string;
+}
+
+/** The entry's own row and its rows in each language, where kept. */
+function placesOf(
+  record: TrashRecord,
+  collection: RestoreCollection
+): UniquePlace[] {
+  const companion = `${collection.tableName}${STORAGE_FORMAT.companionSuffix}`;
+  return [
+    ...keptRowsOf(record.stored, collection.tableName)
+      .slice(0, 1)
+      .map(row => ({ table: collection.tableName, row })),
+    ...keptRowsOf(record.stored, companion).map(row => ({
+      table: companion,
+      row,
+      locale: String(keptColumn(row, "_locale")),
+    })),
+  ];
+}
+
+/**
+ * Whether another entry holds `value` in `name` where `place` would put it
+ * back: on another row of the entry's table, or on another entry's row in
+ * the same language.
+ */
+async function conflictAt(
+  tx: TransactionContext,
+  place: UniquePlace,
+  name: string,
+  value: unknown,
+  itemId: string
+): Promise<TrashConflict | undefined> {
+  if (value === undefined || value === null) return undefined;
+  const where: NonNullable<WhereClause["and"]> =
+    place.locale === undefined
+      ? [
+          { column: name, op: "=", value: asParam(value) },
+          { column: "id", op: "!=", value: itemId },
+        ]
+      : [
+          { column: name, op: "=", value: asParam(value) },
+          { column: "_locale", op: "=", value: place.locale },
+          { column: COMPANION_PARENT_COLUMN, op: "!=", value: itemId },
+        ];
+  if (!(await valueTaken(tx, place.table, where))) return undefined;
+  return place.locale === undefined
+    ? { field: name, value }
+    : { field: name, value, locale: place.locale };
+}
+
 /**
  * The unique values the entry held that another entry holds now, after the
  * values asked for are put in: on its own row, and, for a translated field,
@@ -180,39 +236,17 @@ async function conflictsOf(
   values: Readonly<Record<string, unknown>>
 ): Promise<TrashConflict[]> {
   const conflicts: TrashConflict[] = [];
-  const own = keptRowsOf(record.stored, collection.tableName)[0];
-  const companion = `${collection.tableName}${STORAGE_FORMAT.companionSuffix}`;
+  const places = placesOf(record, collection);
   for (const field of uniqueFields(collection.fields)) {
     const name = String(field.name);
     const asked = Object.prototype.hasOwnProperty.call(values, name);
-    // Asked only of the rows that hold the column: a translated field lives
-    // in the language rows, not the entry's own.
-    const ownHolds = own !== undefined && name in own;
-    const ownValue = asked ? values[name] : own && keptColumn(own, name);
-    if (ownHolds && ownValue !== undefined && ownValue !== null) {
-      const taken = await valueTaken(tx, collection.tableName, [
-        { column: name, op: "=", value: asParam(ownValue) },
-        { column: "id", op: "!=", value: record.itemId },
-      ]);
-      if (taken) conflicts.push({ field: name, value: ownValue });
-    }
-    for (const row of keptRowsOf(record.stored, companion)) {
-      if (!(name in row)) continue;
-      const locale = String(keptColumn(row, "_locale"));
-      const value = asked ? values[name] : keptColumn(row, name);
-      if (value === undefined || value === null) continue;
-      try {
-        const taken = await valueTaken(tx, companion, [
-          { column: name, op: "=", value: asParam(value) },
-          { column: "_locale", op: "=", value: locale },
-          { column: COMPANION_PARENT_COLUMN, op: "!=", value: record.itemId },
-        ]);
-        if (taken) conflicts.push({ field: name, value, locale });
-      } catch (error) {
-        // A companion without the column keeps the field on the main row,
-        // which is asked above.
-        if (!isUnregisteredTable(error)) throw error;
-      }
+    for (const place of places) {
+      // Asked only of the rows that hold the column: a translated field lives
+      // in the language rows, not the entry's own.
+      if (!(name in place.row)) continue;
+      const value = asked ? values[name] : keptColumn(place.row, name);
+      const conflict = await conflictAt(tx, place, name, value, record.itemId);
+      if (conflict !== undefined) conflicts.push(conflict);
     }
   }
   return conflicts;
@@ -269,10 +303,53 @@ async function idsPresent(
 }
 
 /**
- * Put one kept table's rows back. A table no longer in the database held a
- * field the collection has since dropped, and is skipped; a core table not in
- * the database yet is skipped too. A media
- * item's use is put back only where the item is still in the library.
+ * The rows of `table` to put back: a media item's use only where the item
+ * is still in the library, since its row there is what the use points at.
+ */
+async function rowsStillValid(
+  tx: TransactionContext,
+  table: string,
+  rows: Record<string, unknown>[]
+): Promise<Record<string, unknown>[]> {
+  if (table !== MEDIA_USAGE_TABLE) return rows;
+  const present = await idsPresent(
+    tx,
+    "media",
+    rows.map(row => String(row.mediaId))
+  );
+  return rows.filter(row => present.has(String(row.mediaId)));
+}
+
+/**
+ * Put one row back. Answers false, writing nothing, for a table no longer in
+ * the database, which held a field the collection has since dropped. A table
+ * still there but not loaded by this process would lose its rows if skipped,
+ * so the restore stops instead and nothing is written.
+ */
+async function putBackRow(
+  tx: TransactionContext,
+  deps: RestoreDeps,
+  table: string,
+  row: Record<string, unknown>
+): Promise<boolean> {
+  try {
+    await tx.insert(table, row);
+    return true;
+  } catch (error) {
+    if (!isUnregisteredTable(error)) throw error;
+    // The refusal comes before any statement, so the transaction is still
+    // usable to ask.
+    if (!(await deps.adapter.tableExistsThrough(tx, table))) return false;
+    throw NextlyError.internal({
+      logContext: { reason: "restore-table-not-loaded", table },
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+}
+
+/**
+ * Put one kept table's rows back. A core table not in the database yet is
+ * skipped, as is a table gone since (`putBackRow`).
  */
 async function putBackTable(
   tx: TransactionContext,
@@ -280,36 +357,14 @@ async function putBackTable(
   table: string,
   rows: Record<string, unknown>[]
 ): Promise<void> {
-  let kept = rows;
-  if (table.startsWith("nextly_")) {
-    if (!(await deps.adapter.tableExistsThrough(tx, table))) return;
+  if (
+    table.startsWith("nextly_") &&
+    !(await deps.adapter.tableExistsThrough(tx, table))
+  ) {
+    return;
   }
-  if (table === MEDIA_USAGE_TABLE) {
-    const present = await idsPresent(
-      tx,
-      "media",
-      rows.map(row => String(row.mediaId))
-    );
-    kept = rows.filter(row => present.has(String(row.mediaId)));
-  }
-  for (const row of kept) {
-    try {
-      await tx.insert(table, row);
-    } catch (error) {
-      if (!isUnregisteredTable(error)) throw error;
-      // The refusal comes before any statement, so the transaction is still
-      // usable to ask. A table gone from the database held a field dropped
-      // since; one still there but not loaded by this process would lose
-      // its rows if skipped, so the restore stops and nothing is written.
-      if (!(await deps.adapter.tableExistsThrough(tx, table))) return;
-      throw NextlyError.internal({
-        logContext: {
-          reason: "restore-table-not-loaded",
-          table,
-        },
-        cause: error instanceof Error ? error : undefined,
-      });
-    }
+  for (const row of await rowsStillValid(tx, table, rows)) {
+    if (!(await putBackRow(tx, deps, table, row))) return;
   }
 }
 

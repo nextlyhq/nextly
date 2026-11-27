@@ -31,7 +31,6 @@ import {
   restoreFor,
   type TrashCaller,
 } from "../../domains/trash/trash-service";
-import { NextlyError } from "../../errors";
 import { getCachedNextly } from "../../init";
 import { resolveRoleSlugs } from "../../services/lib/permissions";
 import { readJsonBody } from "../read-json-body";
@@ -42,6 +41,7 @@ import {
 } from "../response-shapes";
 import { requireRouteAuthentication } from "../route-auth";
 import { withErrorHandler } from "../with-error-handler";
+import { nextlyValidationFromZod } from "../zod-to-nextly-error";
 
 import { paginationMetaOf } from "./trash-page";
 
@@ -71,13 +71,7 @@ const EmptyBody = z.object({
 function parsed<T>(schema: z.ZodType<T>, input: unknown): T {
   const result = schema.safeParse(input);
   if (result.success) return result.data;
-  throw NextlyError.validation({
-    errors: result.error.issues.map(issue => ({
-      path: issue.path.join("."),
-      code: issue.code,
-      message: issue.message,
-    })),
-  });
+  throw nextlyValidationFromZod(result.error);
 }
 
 /** Who is asking, resolved as every read resolves its caller. */

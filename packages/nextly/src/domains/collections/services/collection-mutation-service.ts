@@ -2621,6 +2621,32 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Record an entry's deletion in its history, on the delete's transaction,
+   * and where the entry went to the trash, name that event on its trash
+   * record: the life a restore goes on with.
+   */
+  private async recordDeletion(
+    tx: TransactionContext,
+    collectionName: string,
+    entryId: string,
+    args: {
+      actor?: RequestActor;
+      user?: UserContext;
+      /** The entry's trash record; undefined where the delete is permanent. */
+      trashId: string | undefined;
+    }
+  ): Promise<void> {
+    const deleted = await this.recordHistoryEvent(tx, collectionName, entryId, {
+      kind: "deleted",
+      actor: actorForWrite(args.actor, args.user),
+      personName: args.user?.name ?? null,
+    });
+    if (args.trashId !== undefined) {
+      await noteTrashedEntryDeletion(tx, args.trashId, deleted.id);
+    }
+  }
+
+  /**
    * Move an entry being deleted to the trash, on the delete's transaction and
    * before anything of it is removed: every row it stores is copied into one
    * trash record (`moveEntryToTrash`), and the delete then removes them as it
@@ -22916,19 +22942,11 @@ export class CollectionMutationService extends BaseService {
           // language, is gone. Its history is kept for the activity log's window
           // from here, and at least as long as the trash keeps the document; a
           // restore goes on from this event.
-          const deletedEvent = await this.recordHistoryEvent(
-            tx,
-            params.collectionName,
-            params.entryId,
-            {
-              kind: "deleted",
-              actor: actorForWrite(params.actor, params.user),
-              personName: params.user?.name ?? null,
-            }
-          );
-          if (trashed !== undefined) {
-            await noteTrashedEntryDeletion(tx, trashed, deletedEvent.id);
-          }
+          await this.recordDeletion(tx, params.collectionName, params.entryId, {
+            actor: params.actor,
+            user: params.user,
+            trashId: trashed,
+          });
 
           // The removed document's final state ships as `data`; there is no
           // post-delete state, so `previous` is null (mirroring create, which
@@ -26338,19 +26356,11 @@ export class CollectionMutationService extends BaseService {
       await this.forgetTranslationRecords(tx, params.collectionName, entryId);
 
       // The document's last history event; see the single-delete path.
-      const deletedEvent = await this.recordHistoryEvent(
-        tx,
-        params.collectionName,
-        entryId,
-        {
-          kind: "deleted",
-          actor: actorForWrite(params.actor, params.user),
-          personName: params.user?.name ?? null,
-        }
-      );
-      if (trashed !== undefined) {
-        await noteTrashedEntryDeletion(tx, trashed, deletedEvent.id);
-      }
+      await this.recordDeletion(tx, params.collectionName, entryId, {
+        actor: params.actor,
+        user: params.user,
+        trashId: trashed,
+      });
 
       // Append the outbox event in the same transaction so a batch delete
       // through this helper is observable too, in the same shape as the
