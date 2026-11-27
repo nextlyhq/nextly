@@ -65,7 +65,15 @@ export const UPGRADE_CONSENT: readonly string[] = [
 const TRANSLATION_SOURCES_KEPT =
   "The source text each translation is made from is kept from the first translation saved after the upgrade. The table is new, so nothing an installation held lives in it.";
 
+/** Why the trash's table is created. */
+const TRASH_CREATED =
+  "Deleted entries are kept in the trash for 30 days from the first delete after the upgrade. The table is new, so nothing an installation held lives in it, and until it exists deletes stay permanent as before.";
+
 export const ALLOWED_OPERATIONS: readonly AllowedOperation[] = [
+  {
+    operation: "create table nextly_trash",
+    reason: TRASH_CREATED,
+  },
   {
     operation: "create table nextly_translation_sources",
     reason: TRANSLATION_SOURCES_KEPT,

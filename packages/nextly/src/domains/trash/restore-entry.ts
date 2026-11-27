@@ -13,6 +13,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
+  SqlParam,
   TransactionContext,
   WhereClause,
 } from "@nextlyhq/adapter-drizzle/types";
@@ -42,14 +43,14 @@ import { readTrashRecord, type TrashRecord } from "./trash-records";
 const DRAFT = "draft";
 const PUBLISHED = "published";
 
-/** A field of the collection as the restore reads it. */
-export interface RestoreField extends SensitiveFieldSource {
-  name?: string;
-  type?: unknown;
+/**
+ * A field of the collection as the restore reads it: what the site's event
+ * strips by, and whether its value is unique.
+ */
+export type RestoreField = SensitiveFieldSource & {
   options?: unknown;
   unique?: unknown;
-  localized?: unknown;
-}
+};
 
 /** The collection a trashed entry belonged to, as it is now. */
 export interface RestoreCollection {
@@ -134,6 +135,25 @@ function withNewValues(
   return out;
 }
 
+/**
+ * A kept value as a statement parameter: a scalar or a date as itself, and
+ * anything else (a JSON value) as its JSON text, which is how a unique
+ * column holding one would compare.
+ */
+function asParam(value: unknown): SqlParam {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value instanceof Date
+  ) {
+    return value;
+  }
+  return JSON.stringify(value);
+}
+
 /** Whether another row of `table` than the entry's own holds `value`. */
 async function valueTaken(
   tx: TransactionContext,
@@ -170,7 +190,7 @@ async function conflictsOf(
     const ownValue = asked ? values[name] : own && keptColumn(own, name);
     if (ownHolds && ownValue !== undefined && ownValue !== null) {
       const taken = await valueTaken(tx, collection.tableName, [
-        { column: name, op: "=", value: ownValue },
+        { column: name, op: "=", value: asParam(ownValue) },
         { column: "id", op: "!=", value: record.itemId },
       ]);
       if (taken) conflicts.push({ field: name, value: ownValue });
@@ -182,7 +202,7 @@ async function conflictsOf(
       if (value === undefined || value === null) continue;
       try {
         const taken = await valueTaken(tx, companion, [
-          { column: name, op: "=", value },
+          { column: name, op: "=", value: asParam(value) },
           { column: "_locale", op: "=", value: locale },
           { column: COMPANION_PARENT_COLUMN, op: "!=", value: record.itemId },
         ]);

@@ -152,7 +152,10 @@ export async function listTrash(
     limit: page.limit,
     offset: page.offset,
   });
-  const total = await db.count(TRASH_TABLE, where);
+  const total = await db.count(
+    TRASH_TABLE,
+    where === undefined ? undefined : { where }
+  );
   return { items: rows.map(listItemOf), total };
 }
 

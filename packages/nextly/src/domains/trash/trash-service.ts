@@ -27,8 +27,8 @@ import { NextlyError } from "../../errors";
 import { TRASH_TABLE } from "../../schemas/trash";
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
-import type { UserContext } from "../../shared/types";
 import { mayReadDeletedDocument } from "../content-events/deleted-document-access";
+import type { UserContext } from "../collections/services/collection-types";
 import { collectionTableName } from "../collections/services/collection-utils";
 
 import {
