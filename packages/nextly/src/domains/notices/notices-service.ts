@@ -139,6 +139,25 @@ export interface NoticeView {
   readAt: Date | null;
 }
 
+/**
+ * The Inbox's tabs: "For you", what people did that involves the person, and
+ * "Alerts", what on the site needs fixing.
+ *
+ * @experimental
+ */
+export const NOTICE_TABS = ["for-you", "alerts"] as const;
+
+/** @experimental */
+export type NoticeTab = (typeof NOTICE_TABS)[number];
+
+/** Which of a person's notices a read, a count or a mark covers. */
+interface NoticeFilter {
+  /** Only unread ones; absent or false means read and unread alike. */
+  unread?: boolean;
+  /** Only one tab's; absent means both. */
+  tab?: NoticeTab;
+}
+
 /** A page of a person's notices. */
 export interface NoticePage {
   rows: NoticeView[];
@@ -341,17 +360,14 @@ export class NoticesService {
     return row ?? null;
   }
 
-  /** A page of this person's notices, newest first. */
-  async find(query: {
-    userId: string;
-    unread?: boolean;
-    page?: number;
-    limit?: number;
-  }): Promise<NoticePage> {
+  /** A page of this person's notices, newest first: all of them, or one tab's. */
+  async find(
+    query: { userId: string; page?: number; limit?: number } & NoticeFilter
+  ): Promise<NoticePage> {
     const page = query.page ?? 1;
     const limit = query.limit ?? DEFAULT_NOTICE_PAGE_SIZE;
     assertPaging(page, limit);
-    const where = await this.whereFor(query.userId, query.unread);
+    const where = await this.whereFor(query.userId, query);
     if (where === null) return { rows: [], total: 0, page, limit };
 
     const [rows, total] = await Promise.all([
@@ -371,45 +387,62 @@ export class NoticesService {
     };
   }
 
-  /** How many notices this person has, or how many are unread. */
-  async count(query: { userId: string; unread?: boolean }): Promise<number> {
-    const where = await this.whereFor(query.userId, query.unread);
+  /** How many notices this person has, or how many are unread, in both tabs or one. */
+  async count(query: { userId: string } & NoticeFilter): Promise<number> {
+    const where = await this.whereFor(query.userId, query);
     return where === null ? 0 : this.deps.db.count(NOTICES_TABLE, { where });
   }
 
   /**
-   * Mark this person's notices read: the ones named, or all of them.
+   * Mark this person's notices read: the ones named, or every unread one,
+   * in both tabs or in one ("Mark all read" marks the tab shown).
    *
-   * Only the person's own rows, and only unread ones, so a notice keeps the
-   * time it was first read, and an id that belongs to someone else changes
-   * nothing and says nothing about whether it exists.
+   * Only the person's own rows, only unread ones, and only what they may see
+   * now, by the rule `find` and `count` apply: a notice keeps the time it was
+   * first read, one hidden by its kind is not marked read unseen, and an id
+   * that belongs to someone else changes nothing and says nothing about
+   * whether it exists. "Every unread one" is decided in the query, so it
+   * reaches the notices no page has loaded.
    *
    * @returns how many notices this call marked.
    */
   async markRead(
-    input: { userId: string } & ({ ids: string[] } | { all: true })
+    input: { userId: string } & (
+      | { ids: string[] }
+      | { all: true; tab?: NoticeTab }
+    )
   ): Promise<number> {
-    if (!(await this.tablePresent())) return 0;
-    // Only notices the person may see now, by the rule `find` and `count`
-    // apply: one hidden by its kind is not marked read unseen.
-    const kinds = await visibleKinds(input.userId);
-    if (kinds.length === 0) return 0;
-    const conditions: VersionsWhereCondition[] = [
-      { column: "userId", op: "=", value: input.userId },
-      { column: "kind", op: "IN", value: kinds },
-      { column: "readAt", op: "IS NULL" },
-    ];
-    if ("ids" in input) {
-      if (input.ids.length === 0) return 0;
-      conditions.push({
-        column: "id",
-        op: "IN",
-        value: [...new Set(input.ids)],
-      });
-    }
+    if ("ids" in input && input.ids.length === 0) return 0;
+    const conditions = await this.conditionsFor(input.userId, {
+      unread: true,
+      tab: "tab" in input ? input.tab : undefined,
+    });
+    if (conditions === null) return 0;
+    if ("ids" in input) conditions.push(idIn(input.ids));
     return this.deps.db.updateCount(
       NOTICES_TABLE,
       { readAt: new Date() },
+      { and: conditions }
+    );
+  }
+
+  /**
+   * Make this person's named notices unread again ("Mark as unread").
+   *
+   * The same reach as `markRead`: the person's own rows, of a kind they may
+   * see now; an id that is someone else's, or already unread, changes nothing.
+   *
+   * @returns how many notices this call made unread.
+   * @experimental
+   */
+  async markUnread(input: { userId: string; ids: string[] }): Promise<number> {
+    if (input.ids.length === 0) return 0;
+    const conditions = await this.conditionsFor(input.userId, {});
+    if (conditions === null) return 0;
+    conditions.push({ column: "readAt", op: "IS NOT NULL" }, idIn(input.ids));
+    return this.deps.db.updateCount(
+      NOTICES_TABLE,
+      { readAt: null },
       { and: conditions }
     );
   }
@@ -428,22 +461,38 @@ export class NoticesService {
 
   /**
    * This person's notices that they may see: their own, of a registered kind
-   * whose `visible` says yes. Decided in the query, so the total, the page and
-   * the count agree. `null` when there is nothing they can see.
+   * whose `visible` says yes, narrowed by `filter`. Decided in the query, so
+   * the total, the page, the count and a mark agree. `null` when there is
+   * nothing they can see.
    */
   private async whereFor(
     userId: string,
-    unread?: boolean
+    filter: NoticeFilter
   ): Promise<VersionsWhere | null> {
+    const conditions = await this.conditionsFor(userId, filter);
+    return conditions === null ? null : { and: conditions };
+  }
+
+  /** `whereFor`'s conditions, for a caller that adds its own. */
+  private async conditionsFor(
+    userId: string,
+    filter: NoticeFilter
+  ): Promise<VersionsWhereCondition[] | null> {
     if (!(await this.tablePresent())) return null;
+    // Every kind recorded so far reports what a person did, so every notice
+    // is in "For you" and "Alerts" holds none. Once a kind can report a site
+    // problem, the tab is stored on each notice and filtered here.
+    if (filter.tab === "alerts") return null;
     const kinds = await visibleKinds(userId);
     if (kinds.length === 0) return null;
     const conditions: VersionsWhereCondition[] = [
       { column: "userId", op: "=", value: userId },
       { column: "kind", op: "IN", value: kinds },
     ];
-    if (unread === true) conditions.push({ column: "readAt", op: "IS NULL" });
-    return { and: conditions };
+    if (filter.unread === true) {
+      conditions.push({ column: "readAt", op: "IS NULL" });
+    }
+    return conditions;
   }
 
   /**
@@ -557,6 +606,11 @@ export class NoticesService {
     }
     return false;
   }
+}
+
+/** The notices a mark names, each once. */
+function idIn(ids: string[]): VersionsWhereCondition {
+  return { column: "id", op: "IN", value: [...new Set(ids)] };
 }
 
 /** What a notice that cannot be shown to its person says in its place. */

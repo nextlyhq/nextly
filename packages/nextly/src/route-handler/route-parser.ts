@@ -3348,6 +3348,7 @@ function parseWebhookRoutes(
  *   GET  /api/notices        → getNotices
  *   GET  /api/notices/count  → getNoticeCount
  *   POST /api/notices/read   → markNoticesRead
+ *   POST /api/notices/unread → markNoticesUnread
  *
  * The handler owns its own auth: the person is always the signed-in user, so
  * no route carries a user.
@@ -3358,13 +3359,14 @@ function parseNoticeRoutes(
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
-  // Only the three documented paths: a trailing segment is a different path,
+  // Only the documented paths: a trailing segment is a different path,
   // and `POST /api/notices/read/anything` must not mark anything read.
   if (extra.some(segment => segment !== undefined)) return null;
   const routes: Record<string, { operation: OperationType; method: string }> = {
     "GET ": { operation: "list", method: "getNotices" },
     "GET count": { operation: "count", method: "getNoticeCount" },
     "POST read": { operation: "update", method: "markNoticesRead" },
+    "POST unread": { operation: "update", method: "markNoticesUnread" },
   };
   const route = routes[`${httpMethod} ${id ?? ""}`];
   return route === undefined

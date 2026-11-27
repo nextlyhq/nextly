@@ -83,7 +83,12 @@ import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
 import { withLanguageCodeDeprecation } from "./api/language-code-deprecation";
 import { changeLanguages, getLanguages } from "./api/languages";
-import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
+import {
+  getNoticeCount,
+  getNotices,
+  markNoticesRead,
+  markNoticesUnread,
+} from "./api/notices";
 import { getPluginPanelNumbers } from "./api/plugin-panel-numbers";
 import {
   listPreviewLinks,
@@ -618,6 +623,8 @@ async function handleNoticesRequest(
       return getNoticeCount(req);
     case "markNoticesRead":
       return markNoticesRead(req);
+    case "markNoticesUnread":
+      return markNoticesUnread(req);
     default:
       // Thrown, not answered by hand, so the shared handler supplies the
       // canonical envelope, request id and status, as for the jobs routes.

@@ -1,7 +1,7 @@
 /**
  * Direct API `nextly.notices.*` — a person's own notices, from server code.
  *
- * The same three reads and writes as `/api/notices`, for code running in the
+ * The same reads and writes as `/api/notices`, for code running in the
  * server process. REST takes the person from the session; here the caller
  * names them, because the Direct API is a trusted in-process caller that acts
  * for whoever it says it is acting for — a route handler passes the signed-in
@@ -16,24 +16,51 @@ import { container } from "../../di/container";
 import { toPaginationMeta } from "../../dispatcher/helpers/service-envelope";
 import type {
   NoticesService,
+  NoticeTab,
   NoticeView,
 } from "../../domains/notices/notices-service";
 import type { ListResult, MutationResult } from "../types/shared";
 
 export interface NoticesNamespace {
-  /** A page of this person's notices, newest first, as `{ items, meta }`. */
+  /**
+   * A page of this person's notices, newest first, as `{ items, meta }`.
+   * `tab` (experimental) narrows it to the Inbox's "For you" or "Alerts".
+   */
   find(args: {
     userId: string;
+    tab?: NoticeTab;
     unread?: boolean;
     page?: number;
     limit?: number;
   }): Promise<ListResult<NoticeView>>;
-  /** How many notices this person has, or how many are unread. */
-  count(args: { userId: string; unread?: boolean }): Promise<number>;
-  /** Mark this person's notices read: the ones named, or all of them. */
+  /**
+   * How many notices this person has, or how many are unread, in both tabs
+   * or, with `tab` (experimental), in one.
+   */
+  count(args: {
+    userId: string;
+    tab?: NoticeTab;
+    unread?: boolean;
+  }): Promise<number>;
+  /**
+   * Mark this person's notices read: the ones named, or all of them, in both
+   * tabs or, with `tab` (experimental), in one.
+   */
   markRead(
-    args: { userId: string } & ({ ids: string[] } | { all: true })
+    args: { userId: string } & (
+      | { ids: string[] }
+      | { all: true; tab?: NoticeTab }
+    )
   ): Promise<MutationResult<{ marked: number }>>;
+  /**
+   * Make this person's named notices unread again.
+   *
+   * @experimental
+   */
+  markUnread(args: {
+    userId: string;
+    ids: string[];
+  }): Promise<MutationResult<{ marked: number }>>;
 }
 
 function service(): NoticesService {
@@ -63,6 +90,16 @@ export function createNoticesNamespace(): NoticesNamespace {
           marked === 1
             ? "1 notice marked read."
             : `${marked} notices marked read.`,
+        item: { marked },
+      };
+    },
+    markUnread: async args => {
+      const marked = await service().markUnread(args);
+      return {
+        message:
+          marked === 1
+            ? "1 notice marked unread."
+            : `${marked} notices marked unread.`,
         item: { marked },
       };
     },
