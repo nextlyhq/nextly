@@ -291,6 +291,9 @@ export const NEVER_BUNDLE = [
   // Native binaries that can't be bundled
   "sharp",
   "esbuild",
+  // The system keychain's binding, loaded only when the command line keeps
+  // a sign-in, so a platform without its prebuilt binary still starts.
+  "@napi-rs/keyring",
   // Database adapter packages - installed separately based on user's DB choice
   "@nextlyhq/adapter-drizzle",
   "@nextlyhq/adapter-mysql",
