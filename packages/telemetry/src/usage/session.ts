@@ -14,7 +14,12 @@ import {
 import { isSwitchedOn, type Env } from "./env-flags.js";
 import { resolveSiteUsage, type SiteDecision } from "./guard-site.js";
 import { resolveToolsUsage, type ToolsDecision } from "./guard-tools.js";
-import { createSender, type UsageProject, type WireEvent } from "./sender.js";
+import {
+  createSender,
+  type Sender,
+  type UsageProject,
+  type WireEvent,
+} from "./sender.js";
 import { basePropertiesFor, checkEvent } from "./validate.js";
 
 // A run's usage data, from the guard's decision to the last flush. The
@@ -101,6 +106,46 @@ function inertSession<D>(decision: D): UsageSession<never, D> {
   };
 }
 
+/**
+ * The sender for a live session, or null in debug mode, which never creates
+ * one so it cannot send by mistake.
+ */
+function senderFor(env: Env, opts: CommonOptions): Sender | null {
+  if (isSwitchedOn(env.NEXTLY_TELEMETRY_DEBUG)) return null;
+  const project: UsageProject =
+    env.NEXTLY_TELEMETRY_PROJECT?.trim().toLowerCase() === "test"
+      ? "test"
+      : "production";
+  return createSender({
+    project,
+    ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
+    ...(opts.fetch ? { fetch: opts.fetch } : {}),
+    ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+  });
+}
+
+/** A machine's id from the tools, a site's from a site: never the other. */
+function isSourceId(source: UsageSource, id: string): boolean {
+  return new RegExp(
+    DISTINCT_ID_PATTERNS[source === "site" ? "site" : "tools"]
+  ).test(id);
+}
+
+/**
+ * A caller's properties without any base property, which is the session's
+ * alone, or null when plain JavaScript passed something that is not an
+ * object.
+ */
+function callerProperties(
+  properties: unknown,
+  baseKeys: ReadonlySet<string>
+): Record<string, unknown> | null {
+  if (typeof properties !== "object" || properties === null) return null;
+  return Object.fromEntries(
+    Object.entries(properties).filter(([key]) => !baseKeys.has(key))
+  );
+}
+
 function liveSession<E extends string, D>(
   source: UsageSource,
   decision: D,
@@ -109,27 +154,10 @@ function liveSession<E extends string, D>(
   opts: CommonOptions,
   defaultDebugWrite: (line: string) => void
 ): UsageSession<E, D> {
-  const env = opts.env ?? process.env;
-  const debug = isSwitchedOn(env.NEXTLY_TELEMETRY_DEBUG);
+  const sender = senderFor(opts.env ?? process.env, opts);
   const debugWrite = opts.debugWrite ?? defaultDebugWrite;
-  const project: UsageProject =
-    env.NEXTLY_TELEMETRY_PROJECT?.trim().toLowerCase() === "test"
-      ? "test"
-      : "production";
-  // Debug mode never creates a sender, so it cannot send by mistake.
-  const sender = debug
-    ? null
-    : createSender({
-        project,
-        ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
-        ...(opts.fetch ? { fetch: opts.fetch } : {}),
-        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-      });
   const now = opts.now ?? (() => new Date());
-  // A machine's id from the tools, a site's from a site: never the other.
-  const validId = new RegExp(
-    DISTINCT_ID_PATTERNS[source === "site" ? "site" : "tools"]
-  ).test(distinctId);
+  const validId = isSourceId(source, distinctId);
   // Every base property is the session's alone: a caller's value for one, even
   // an optional one the session left out (`agent` on a person's run), is
   // dropped rather than merged.
@@ -143,11 +171,8 @@ function liveSession<E extends string, D>(
     decision,
     capture(event, properties) {
       if (!validId) return;
-      // Plain JavaScript can pass anything; only an object has properties.
-      if (typeof properties !== "object" || properties === null) return;
-      const own = Object.fromEntries(
-        Object.entries(properties).filter(([key]) => !baseKeys.has(key))
-      );
+      const own = callerProperties(properties, baseKeys);
+      if (!own) return;
       const checked = checkEvent(source, event, { ...own, ...base });
       if (!checked) return;
       if (!sender) {

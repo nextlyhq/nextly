@@ -560,7 +560,7 @@ export type UsageEventFor<S extends UsageSource> = {
 }[UsageEventName];
 
 /** The value a property spec allows. */
-export type ValueOf<P> = P extends {
+type ValueOf<P> = P extends {
   type: "enum";
   values: readonly (infer V)[];
 }
